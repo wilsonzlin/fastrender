@@ -9,7 +9,7 @@
 use crate::css::properties::{parse_calc_function_length, parse_length, MathFn};
 use crate::css::types::{Declaration, PropertyValue};
 use crate::geometry::Size;
-use crate::style::color::Rgba;
+use crate::style::color::{Color, Rgba};
 use crate::style::content::{parse_content, ContentValue};
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
@@ -543,6 +543,70 @@ fn parse_cursor(value: &PropertyValue) -> Option<(Vec<CursorImage>, CursorKeywor
     Some((images, fallback.unwrap_or(CursorKeyword::Auto)))
 }
 
+fn parse_color_scheme(value: &PropertyValue) -> Option<ColorSchemePreference> {
+    let tokens: Vec<String> = match value {
+        PropertyValue::Keyword(kw) => kw
+            .split_whitespace()
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string())
+            .collect(),
+        PropertyValue::Multiple(values) => {
+            let mut out = Vec::new();
+            for v in values {
+                if let PropertyValue::Keyword(k) = v {
+                    if k == "," {
+                        return None;
+                    }
+                    out.push(k.clone());
+                } else {
+                    return None;
+                }
+            }
+            out
+        }
+        _ => return None,
+    };
+
+    parse_color_scheme_tokens(&tokens)
+}
+
+fn parse_color_scheme_tokens(tokens: &[String]) -> Option<ColorSchemePreference> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("normal") {
+        return Some(ColorSchemePreference::Normal);
+    }
+
+    let mut only = false;
+    let mut schemes: Vec<ColorSchemeEntry> = Vec::new();
+    for raw in tokens {
+        if raw.eq_ignore_ascii_case("only") {
+            only = true;
+            continue;
+        }
+        if raw.eq_ignore_ascii_case("normal") {
+            return None;
+        }
+        let lower = raw.to_ascii_lowercase();
+        let entry = match lower.as_str() {
+            "light" => ColorSchemeEntry::Light,
+            "dark" => ColorSchemeEntry::Dark,
+            _ => ColorSchemeEntry::Custom(lower),
+        };
+        if !schemes.contains(&entry) {
+            schemes.push(entry);
+        }
+    }
+
+    if schemes.is_empty() {
+        return None;
+    }
+
+    Some(ColorSchemePreference::Supported { schemes, only })
+}
+
 fn content_value_from_property(value: &PropertyValue) -> Option<ContentValue> {
     let css_text = match value {
         PropertyValue::String(s) => format!("\"{}\"", s),
@@ -598,6 +662,15 @@ fn parse_background_image_list(value: &PropertyValue) -> Option<Vec<Option<Backg
             BackgroundImage::None => vec![None],
             other => vec![Some(other)],
         }),
+    }
+}
+
+fn parse_overscroll_keyword(kw: &str) -> Option<OverscrollBehavior> {
+    match kw.to_ascii_lowercase().as_str() {
+        "auto" => Some(OverscrollBehavior::Auto),
+        "contain" => Some(OverscrollBehavior::Contain),
+        "none" => Some(OverscrollBehavior::None),
+        _ => None,
     }
 }
 
@@ -987,8 +1060,12 @@ fn is_inherited_property(name: &str) -> bool {
     matches!(
         name,
         "color"
+            | "color-scheme"
+            | "caret-color"
+            | "accent-color"
             | "cursor"
             | "visibility"
+            | "pointer-events"
             | "direction"
             | "writing-mode"
             | "font"
@@ -1151,6 +1228,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "overflow-x" => styles.overflow_x = source.overflow_x,
         "overflow-y" => styles.overflow_y = source.overflow_y,
         "position" => styles.position = source.position,
+        "appearance" => styles.appearance = source.appearance.clone(),
         "box-sizing" => styles.box_sizing = source.box_sizing,
         "top" => set_inset_side(styles, crate::style::PhysicalSide::Top, source.top, order),
         "right" => set_inset_side(styles, crate::style::PhysicalSide::Right, source.right, order),
@@ -2089,6 +2167,14 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "table-layout" => styles.table_layout = source.table_layout,
         "empty-cells" => styles.empty_cells = source.empty_cells,
         "caption-side" => styles.caption_side = source.caption_side,
+        "scroll-behavior" => styles.scroll_behavior = source.scroll_behavior,
+        "overscroll-behavior" => {
+            styles.overscroll_behavior_x = source.overscroll_behavior_x;
+            styles.overscroll_behavior_y = source.overscroll_behavior_y;
+        }
+        "overscroll-behavior-x" => styles.overscroll_behavior_x = source.overscroll_behavior_x,
+        "overscroll-behavior-y" => styles.overscroll_behavior_y = source.overscroll_behavior_y,
+        "pointer-events" => styles.pointer_events = source.pointer_events,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
             styles.vertical_align_specified = source.vertical_align_specified;
@@ -2160,6 +2246,9 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.cursor = source.cursor;
             styles.cursor_images = source.cursor_images.clone();
         }
+        "accent-color" => styles.accent_color = source.accent_color,
+        "caret-color" => styles.caret_color = source.caret_color,
+        "color-scheme" => styles.color_scheme = source.color_scheme.clone(),
         "color" => styles.color = source.color,
         "background-color" => styles.background_color = source.background_color,
         "background-image" => {
@@ -5358,6 +5447,17 @@ pub fn apply_declaration_with_base(
                 };
             }
         }
+        "appearance" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if kw.eq_ignore_ascii_case("auto") {
+                    styles.appearance = Appearance::Auto;
+                } else if kw.eq_ignore_ascii_case("none") {
+                    styles.appearance = Appearance::None;
+                } else {
+                    styles.appearance = Appearance::Keyword(kw.to_ascii_lowercase());
+                }
+            }
+        }
         "text-overflow" => {
             let parse_side = |value: &PropertyValue| -> Option<TextOverflowSide> {
                 match value {
@@ -5417,8 +5517,87 @@ pub fn apply_declaration_with_base(
                 styles.cursor = keyword;
             }
         }
+        "caret-color" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if kw.eq_ignore_ascii_case("auto") {
+                    styles.caret_color = CaretColor::Auto;
+                } else if let Some(c) = resolve_color_value(&PropertyValue::Keyword(kw.clone())) {
+                    styles.caret_color = CaretColor::Color(c);
+                } else if let Ok(parsed) = Color::parse(kw) {
+                    styles.caret_color = CaretColor::Color(parsed.to_rgba(styles.color));
+                }
+            } else if let Some(c) = resolve_color_value(&resolved_value) {
+                styles.caret_color = CaretColor::Color(c);
+            }
+        }
+        "accent-color" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if kw.eq_ignore_ascii_case("auto") {
+                    styles.accent_color = AccentColor::Auto;
+                } else if let Some(c) = resolve_color_value(&PropertyValue::Keyword(kw.clone())) {
+                    styles.accent_color = AccentColor::Color(c);
+                } else if let Ok(parsed) = Color::parse(kw) {
+                    styles.accent_color = AccentColor::Color(parsed.to_rgba(styles.color));
+                }
+            } else if let Some(c) = resolve_color_value(&resolved_value) {
+                styles.accent_color = AccentColor::Color(c);
+            }
+        }
+        "scroll-behavior" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.scroll_behavior = match kw.as_str() {
+                    "auto" => ScrollBehavior::Auto,
+                    "smooth" => ScrollBehavior::Smooth,
+                    _ => styles.scroll_behavior,
+                }
+            }
+        }
+        "overscroll-behavior" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(val) = parse_overscroll_keyword(kw) {
+                    styles.overscroll_behavior_x = val;
+                    styles.overscroll_behavior_y = val;
+                }
+            }
+        }
+        "overscroll-behavior-x" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(val) = parse_overscroll_keyword(kw) {
+                    styles.overscroll_behavior_x = val;
+                }
+            }
+        }
+        "overscroll-behavior-y" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(val) = parse_overscroll_keyword(kw) {
+                    styles.overscroll_behavior_y = val;
+                }
+            }
+        }
+        "pointer-events" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.pointer_events = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => PointerEvents::Auto,
+                    "none" => PointerEvents::None,
+                    "visiblepainted" => PointerEvents::VisiblePainted,
+                    "visiblefill" => PointerEvents::VisibleFill,
+                    "visiblestroke" => PointerEvents::VisibleStroke,
+                    "visible" => PointerEvents::Visible,
+                    "painted" => PointerEvents::Painted,
+                    "fill" => PointerEvents::Fill,
+                    "stroke" => PointerEvents::Stroke,
+                    "all" => PointerEvents::All,
+                    _ => styles.pointer_events,
+                }
+            }
+        }
 
         // Color
+        "color-scheme" => {
+            if let Some(pref) = parse_color_scheme(&resolved_value) {
+                styles.color_scheme = pref;
+            }
+        }
         "color" => {
             if let Some(c) = resolve_color_value(&resolved_value) {
                 styles.color = c;
@@ -10453,6 +10632,491 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.aspect_ratio, AspectRatio::Auto));
+    }
+
+    #[test]
+    fn parses_color_scheme_lists_and_only() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "color-scheme".to_string(),
+                value: PropertyValue::Keyword("light dark".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            style.color_scheme,
+            ColorSchemePreference::Supported {
+                schemes: vec![ColorSchemeEntry::Light, ColorSchemeEntry::Dark],
+                only: false
+            }
+        );
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "color-scheme".to_string(),
+                value: PropertyValue::Keyword("only dark".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(
+            style.color_scheme,
+            ColorSchemePreference::Supported {
+                schemes: vec![ColorSchemeEntry::Dark],
+                only: true
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_color_scheme_without_schemes() {
+        let mut style = ComputedStyle::default();
+        style.color_scheme = ColorSchemePreference::Supported {
+            schemes: vec![ColorSchemeEntry::Light],
+            only: false,
+        };
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "color-scheme".to_string(),
+                value: PropertyValue::Keyword("only".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(
+            style.color_scheme,
+            ColorSchemePreference::Supported {
+                schemes: vec![ColorSchemeEntry::Light],
+                only: false
+            }
+        );
+    }
+
+    #[test]
+    fn caret_color_parses_auto_and_colors() {
+        let mut style = ComputedStyle::default();
+        // auto leaves the value at Auto
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "caret-color".into(),
+                value: PropertyValue::Keyword("auto".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.caret_color, CaretColor::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "caret-color".into(),
+                value: PropertyValue::Keyword("red".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.caret_color, CaretColor::Color(c) if c.r == 255 && c.g == 0 && c.b == 0));
+
+        let mut with_color = ComputedStyle::default();
+        with_color.color = Rgba::new(0, 128, 0, 1.0);
+        apply_declaration(
+            &mut with_color,
+            &Declaration {
+                property: "caret-color".into(),
+                value: PropertyValue::Keyword("currentColor".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(with_color.caret_color, CaretColor::Color(c) if c.g == 128 && c.r == 0 && c.b == 0));
+    }
+
+    #[test]
+    fn caret_color_inherit_and_initial() {
+        let parent = ComputedStyle {
+            caret_color: CaretColor::Color(Rgba::new(0, 0, 255, 1.0)),
+            ..ComputedStyle::default()
+        };
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "caret-color".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.caret_color, parent.caret_color);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "caret-color".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.caret_color, CaretColor::Auto));
+    }
+
+    #[test]
+    fn accent_color_parses_and_inherits() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "accent-color".into(),
+                value: PropertyValue::Keyword("auto".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.accent_color, AccentColor::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "accent-color".into(),
+                value: PropertyValue::Keyword("blue".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.accent_color, AccentColor::Color(c) if c.b == 255));
+
+        let parent = ComputedStyle {
+            accent_color: AccentColor::Color(Rgba::new(10, 20, 30, 1.0)),
+            ..ComputedStyle::default()
+        };
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "accent-color".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.accent_color, parent.accent_color);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "accent-color".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.accent_color, AccentColor::Auto));
+    }
+
+    #[test]
+    fn appearance_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "appearance".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.appearance, Appearance::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "appearance".into(),
+                value: PropertyValue::Keyword("auto".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.appearance, Appearance::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "appearance".into(),
+                value: PropertyValue::Keyword("textfield".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.appearance, Appearance::Keyword(ref k) if k == "textfield"));
+    }
+
+    #[test]
+    fn scroll_behavior_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-behavior".into(),
+                value: PropertyValue::Keyword("smooth".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.scroll_behavior, ScrollBehavior::Smooth));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-behavior".into(),
+                value: PropertyValue::Keyword("auto".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.scroll_behavior, ScrollBehavior::Auto));
+
+        let parent = ComputedStyle {
+            scroll_behavior: ScrollBehavior::Smooth,
+            ..ComputedStyle::default()
+        };
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-behavior".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scroll_behavior, parent.scroll_behavior);
+    }
+
+    #[test]
+    fn overscroll_behavior_parses_and_splits() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "overscroll-behavior".into(),
+                value: PropertyValue::Keyword("contain".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.overscroll_behavior_x, OverscrollBehavior::Contain));
+        assert!(matches!(style.overscroll_behavior_y, OverscrollBehavior::Contain));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "overscroll-behavior-x".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.overscroll_behavior_x, OverscrollBehavior::None));
+        assert!(matches!(style.overscroll_behavior_y, OverscrollBehavior::Contain));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "overscroll-behavior-y".into(),
+                value: PropertyValue::Keyword("auto".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.overscroll_behavior_y, OverscrollBehavior::Auto));
+    }
+
+    #[test]
+    fn pointer_events_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "pointer-events".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.pointer_events, PointerEvents::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "pointer-events".into(),
+                value: PropertyValue::Keyword("visibleFill".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.pointer_events, PointerEvents::VisibleFill));
+
+        let parent = ComputedStyle {
+            pointer_events: PointerEvents::Painted,
+            ..ComputedStyle::default()
+        };
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "pointer-events".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.pointer_events, PointerEvents::Painted));
+    }
+
+    #[test]
+    fn color_scheme_inherit_and_initial() {
+        let parent = ComputedStyle {
+            color_scheme: ColorSchemePreference::Supported {
+                schemes: vec![ColorSchemeEntry::Dark],
+                only: false,
+            },
+            ..ComputedStyle::default()
+        };
+
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "color-scheme".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.color_scheme, parent.color_scheme);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "color-scheme".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.color_scheme, ColorSchemePreference::Normal);
+    }
+
+    #[test]
+    fn all_resets_color_scheme() {
+        let parent = ComputedStyle::default();
+        let mut style = ComputedStyle {
+            color_scheme: ColorSchemePreference::Supported {
+                schemes: vec![ColorSchemeEntry::Dark],
+                only: true,
+            },
+            ..ComputedStyle::default()
+        };
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "all".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.color_scheme, ColorSchemePreference::Normal);
     }
 
     #[test]

@@ -549,6 +549,117 @@ pub enum Isolation {
     Isolate,
 }
 
+/// Authored color scheme preferences (CSS `color-scheme`)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColorSchemeEntry {
+    Light,
+    Dark,
+    Custom(String),
+}
+
+/// Computed value for `color-scheme`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColorSchemePreference {
+    /// UA defaults (`color-scheme: normal`)
+    Normal,
+    /// Explicit list of supported schemes, with optional `only` flag
+    Supported { schemes: Vec<ColorSchemeEntry>, only: bool },
+}
+
+impl Default for ColorSchemePreference {
+    fn default() -> Self {
+        ColorSchemePreference::Normal
+    }
+}
+
+/// Computed caret color (`caret-color`)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CaretColor {
+    Auto,
+    Color(Rgba),
+}
+
+impl Default for CaretColor {
+    fn default() -> Self {
+        CaretColor::Auto
+    }
+}
+
+/// Computed accent color (`accent-color`)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AccentColor {
+    Auto,
+    Color(Rgba),
+}
+
+impl Default for AccentColor {
+    fn default() -> Self {
+        AccentColor::Auto
+    }
+}
+
+/// Computed value for `appearance`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Appearance {
+    Auto,
+    None,
+    Keyword(String),
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Appearance::Auto
+    }
+}
+
+/// Scroll-behavior property
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollBehavior {
+    Auto,
+    Smooth,
+}
+
+impl Default for ScrollBehavior {
+    fn default() -> Self {
+        ScrollBehavior::Auto
+    }
+}
+
+/// overscroll-behavior values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    Auto,
+    Contain,
+    None,
+}
+
+impl Default for OverscrollBehavior {
+    fn default() -> Self {
+        OverscrollBehavior::Auto
+    }
+}
+
+/// CSS `pointer-events`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerEvents {
+    Auto,
+    None,
+    VisiblePainted,
+    VisibleFill,
+    VisibleStroke,
+    Visible,
+    Painted,
+    Fill,
+    Stroke,
+    All,
+}
+
+impl Default for PointerEvents {
+    fn default() -> Self {
+        PointerEvents::Auto
+    }
+}
+
 /// Cursor keywords (fallbacks for custom cursor images)
 ///
 /// CSS UI Level 4 cursor values (subset relevant to rendering hints)

@@ -30,19 +30,20 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use types::{
-    AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
-    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderImage, BorderStyle, BoxSizing,
-    CaptionSide, ClipPath, ClipRect, ContainerType, Containment, CursorImage, CursorKeyword, Direction, EmptyCells,
-    FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride,
-    FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
-    FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, FontVariationSetting, FontWeight, GridTrack, HyphensMode, ImageOrientation, ImageRendering,
-    ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
-    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
-    TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
-    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform,
-    TextUnderlineOffset, TextUnderlinePosition, TransformBox, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace,
-    WillChange, WordBreak, WritingMode,
+    AccentColor, AlignContent, AlignItems, Appearance, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage,
+    BackgroundLayer, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderImage, BorderStyle,
+    BoxSizing, CaptionSide, CaretColor, ClipPath, ClipRect, ColorSchemePreference, ContainerType, Containment,
+    CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
+    FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle,
+    FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantEmoji,
+    FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, GridTrack,
+    HyphensMode, ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight,
+    ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
+    OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents, ScrollBehavior, TabSize, TableLayout,
+    TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition,
+    TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset,
+    TextUnderlinePosition, TransformBox, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange,
+    WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -234,6 +235,11 @@ pub struct ComputedStyle {
     // Display and positioning
     pub display: Display,
     pub position: Position,
+    pub appearance: Appearance,
+    pub scroll_behavior: ScrollBehavior,
+    pub overscroll_behavior_x: OverscrollBehavior,
+    pub overscroll_behavior_y: OverscrollBehavior,
+    pub pointer_events: PointerEvents,
     pub top: Option<Length>,
     pub right: Option<Length>,
     pub bottom: Option<Length>,
@@ -407,6 +413,9 @@ pub struct ComputedStyle {
     pub counters: CounterProperties,
 
     // Color and background
+    pub color_scheme: ColorSchemePreference,
+    pub caret_color: CaretColor,
+    pub accent_color: AccentColor,
     pub color: Rgba,
     pub background_color: Rgba,
     /// Author-specified background values (lists preserved for layer repetition rules)
@@ -474,6 +483,11 @@ impl Default for ComputedStyle {
         Self {
             display: Display::Inline,
             position: Position::Static,
+            appearance: Appearance::Auto,
+            scroll_behavior: ScrollBehavior::Auto,
+            overscroll_behavior_x: OverscrollBehavior::Auto,
+            overscroll_behavior_y: OverscrollBehavior::Auto,
+            pointer_events: PointerEvents::Auto,
             top: None,
             right: None,
             bottom: None,
@@ -621,6 +635,9 @@ impl Default for ComputedStyle {
             list_style_image: ListStyleImage::None,
             counters: CounterProperties::default(),
 
+            color_scheme: ColorSchemePreference::Normal,
+            caret_color: CaretColor::Auto,
+            accent_color: AccentColor::Auto,
             color: Rgba::BLACK,
             background_color: Rgba::TRANSPARENT,
             background_images: vec![default_layer.image.clone()],
