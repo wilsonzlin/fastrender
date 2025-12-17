@@ -43,7 +43,7 @@ use crate::text::pipeline::{ShapedRun, ShapingPipeline};
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use unicode_bidi::{BidiInfo, Level};
 
 fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
@@ -128,7 +128,7 @@ impl InlineItem {
 
     /// Returns true if this item can be broken (for text)
     pub fn is_breakable(&self) -> bool {
-        matches!(self, InlineItem::Text(_))
+        matches!(self, InlineItem::Text(_) | InlineItem::InlineBox(_))
     }
 
     pub fn direction(&self) -> Direction {
@@ -172,6 +172,15 @@ impl InlineItem {
 
 fn allows_soft_wrap(style: &ComputedStyle) -> bool {
     !matches!(style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre) && !matches!(style.text_wrap, TextWrap::NoWrap)
+}
+
+pub(crate) fn log_line_width_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+        std::env::var("FASTR_LOG_LINE_WIDTH")
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+    })
 }
 
 /// A shaped text item
@@ -1498,6 +1507,26 @@ impl<'a> LineBuilder<'a> {
         let (item, item_width) = item.resolve_width_at(self.current_x);
         let line_width = self.current_line_width();
 
+        let kind = match &item {
+            InlineItem::Text(_) => "text",
+            InlineItem::Tab(_) => "tab",
+            InlineItem::InlineBox(_) => "inline-box",
+            InlineItem::InlineBlock(_) => "inline-block",
+            InlineItem::Replaced(_) => "replaced",
+            InlineItem::Floating(_) => "floating",
+        };
+
+        if log_line_width_enabled() {
+            eprintln!(
+                "[line-add] kind={} line_width={:.2} current_x={:.2} item_width={:.2} breakable={}",
+                kind,
+                line_width,
+                self.current_x,
+                item_width,
+                item.is_breakable()
+            );
+        }
+
         // Check if item fits
         if self.current_x + item_width <= line_width {
             // Item fits
@@ -1519,10 +1548,19 @@ impl<'a> LineBuilder<'a> {
         }
     }
 
-    /// Adds a breakable item (text), handling line breaking
+    /// Adds a breakable item (text or inline box), handling line breaking
     fn add_breakable_item(&mut self, item: InlineItem) {
         if let InlineItem::Text(text_item) = item {
             let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
+
+            if log_line_width_enabled() {
+                eprintln!(
+                    "[line-width] remaining {:.2} advance {:.2} breaks {}",
+                    remaining_width,
+                    text_item.advance_for_layout,
+                    text_item.break_opportunities.len()
+                );
+            }
 
             let mut break_opportunity = text_item.find_break_point(remaining_width);
             if break_opportunity.is_none() && self.current_line.is_empty() {
@@ -1580,6 +1618,30 @@ impl<'a> LineBuilder<'a> {
                     self.finish_line();
                     self.add_item(InlineItem::Text(text_item));
                 }
+            }
+        } else if let InlineItem::InlineBox(inline_box) = item {
+            let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
+            let total_width = inline_box.width();
+
+            if total_width <= remaining_width {
+                self.place_item_with_width(InlineItem::InlineBox(inline_box), total_width);
+                return;
+            }
+
+            // If nothing has been placed yet, flatten the inline box and lay out its children so they can break.
+            if !self.current_line.is_empty() {
+                self.finish_line();
+            }
+
+            let inline_box = inline_box;
+            if inline_box.start_edge > 0.0 {
+                self.current_x += inline_box.start_edge;
+            }
+            for child in inline_box.children {
+                self.add_item(child);
+            }
+            if inline_box.end_edge > 0.0 {
+                self.current_x += inline_box.end_edge;
             }
         }
     }

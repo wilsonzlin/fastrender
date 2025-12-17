@@ -2266,6 +2266,23 @@ impl InlineFormattingContext {
         float_ctx: Option<&'a FloatContext>,
         float_base_y: f32,
     ) -> Vec<Line> {
+        let mut subsequent_line_width = subsequent_line_width;
+
+        let fallback_width = self.viewport_size.width.max(0.0);
+        if !first_line_width.is_finite() || first_line_width <= 0.0 {
+            first_line_width = fallback_width;
+        }
+        if !subsequent_line_width.is_finite() || subsequent_line_width <= 0.0 {
+            subsequent_line_width = fallback_width;
+        }
+        let clamp_limit = fallback_width;
+        if first_line_width.is_finite() && first_line_width > clamp_limit * 5.0 {
+            first_line_width = clamp_limit;
+        }
+        if subsequent_line_width.is_finite() && subsequent_line_width > clamp_limit * 5.0 {
+            subsequent_line_width = clamp_limit;
+        }
+
         if start_is_para_start && matches!(text_wrap, TextWrap::Balance | TextWrap::Pretty) {
             first_line_width = subsequent_line_width;
         }
@@ -3251,7 +3268,11 @@ fn resolve_length_for_width(
     font_context: &FontContext,
     viewport: crate::geometry::Size,
 ) -> f32 {
-    let base = if percentage_base.is_finite() { Some(percentage_base) } else { None };
+    let base = if percentage_base.is_finite() {
+        Some(percentage_base)
+    } else {
+        None
+    };
     resolve_length_with_percentage_metrics(
         length,
         base,
@@ -4848,15 +4869,39 @@ impl InlineFormattingContext {
         }
         let style = &box_node.style;
         let inline_vertical = is_vertical_writing_mode(style.writing_mode);
-        let available_inline = if inline_vertical {
-            constraints.height().unwrap_or(f32::MAX)
-        } else {
-            constraints.width().unwrap_or(f32::MAX)
+        let mut available_inline = match constraints.available_width {
+            AvailableSpace::Definite(w) => w,
+            _ => constraints.inline_percentage_base.unwrap_or_else(|| {
+                if inline_vertical {
+                    self.viewport_size.height
+                } else {
+                    self.viewport_size.width
+                }
+            }),
         };
-        let available_block = if inline_vertical {
-            constraints.width().unwrap_or(f32::MAX)
-        } else {
-            constraints.height().unwrap_or(f32::MAX)
+        if !available_inline.is_finite() || available_inline <= 0.0 {
+            available_inline = if inline_vertical {
+                self.viewport_size.height
+            } else {
+                self.viewport_size.width
+            }
+            .max(0.0);
+        }
+        if crate::layout::contexts::inline::line_builder::log_line_width_enabled() {
+            eprintln!(
+                "[ifc-width] box_id={} available_inline={:.2} avail_variant={:?} percent_base={:?}",
+                box_node.id, available_inline, constraints.available_width, constraints.inline_percentage_base
+            );
+        }
+        let available_block = match constraints.available_height {
+            AvailableSpace::Definite(h) => h,
+            _ => constraints.inline_percentage_base.unwrap_or_else(|| {
+                if inline_vertical {
+                    self.viewport_size.width
+                } else {
+                    self.viewport_size.height
+                }
+            }),
         };
         let available_height = if inline_vertical {
             Some(available_block)
@@ -6314,8 +6359,8 @@ mod tests {
     use super::*;
     use crate::geometry::Size;
     use crate::layout::formatting_context::IntrinsicSizingMode;
-    use crate::style::display::{Display, FormattingContextType};
     use crate::style::color::Rgba;
+    use crate::style::display::{Display, FormattingContextType};
     use crate::style::types::FontSizeAdjust;
     use crate::style::types::{
         CaseTransform, HyphensMode, ListStylePosition, Overflow, OverflowWrap, TextCombineUpright, TextOverflow,
@@ -7694,7 +7739,10 @@ mod tests {
         eprintln!("items len={}", first_line.items.len());
         let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
         let extra_space = first_line.available_width - total_width;
-        assert!(extra_space > 1.0, "expected extra space to distribute (extra={extra_space})");
+        assert!(
+            extra_space > 1.0,
+            "expected extra space to distribute (extra={extra_space})"
+        );
         assert!(
             has_justify_opportunities(&first_line.items, TextJustify::InterCharacter),
             "expected justify opportunities across inline boundaries"
@@ -7743,8 +7791,19 @@ mod tests {
         let a = bounds[0];
         let b = bounds[1];
         let gap = b.x() - (a.x() + a.width());
-        eprintln!("bounds: a=({:.2},{:.2},{:.2}), b=({:.2},{:.2},{:.2}), extra={extra_space}", a.x(), a.width(), a.height(), b.x(), b.width(), b.height());
-        assert!(gap > 10.0, "inter-character justify should expand space between styled spans; gap={gap}");
+        eprintln!(
+            "bounds: a=({:.2},{:.2},{:.2}), b=({:.2},{:.2},{:.2}), extra={extra_space}",
+            a.x(),
+            a.width(),
+            a.height(),
+            b.x(),
+            b.width(),
+            b.height()
+        );
+        assert!(
+            gap > 10.0,
+            "inter-character justify should expand space between styled spans; gap={gap}"
+        );
     }
 
     #[test]
@@ -8299,7 +8358,10 @@ mod tests {
         let root = BoxNode::new_block(
             Arc::new(container_style),
             FormattingContextType::Block,
-            vec![BoxNode::new_text(Arc::new(text_style), "this will overflow visibly".repeat(3))],
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "this will overflow visibly".repeat(3),
+            )],
         );
         let constraints = LayoutConstraints::definite_width(60.0);
         let ifc = InlineFormattingContext::new();
