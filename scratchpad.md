@@ -1,3 +1,4 @@
+- Added fetch_pages targets: elpais.com, ndtv.com, stackexchange.com, rust-lang.org, tesco.com. `cargo check --bin fetch_pages` passes.
 - Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
 # Scratchpad – rendering engine session notes
 - Replaced-element box-sizing fix: percentage padding on replaced elements now resolves against the containing block width in both axes when computing content size (compute_replaced_size). Added regression `compute_replaced_border_box_padding_uses_width_base` covering border-box height with 10% top padding and differing width/height bases.
