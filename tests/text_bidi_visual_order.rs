@@ -53,3 +53,39 @@ fn bidi_visual_order_handles_mixed_arabic_ltr() {
     // Visual order should keep the LTR run first, then the embedded digits together, then trailing B.
     assert_eq!(labels, "A 123B");
 }
+
+#[test]
+fn bidi_isolate_keeps_neutral_brackets_outside() {
+    // In LTR text, an RTL isolate should not flip surrounding neutral parentheses.
+    let mut rtl_isolate = fastrender::ComputedStyle::default();
+    rtl_isolate.direction = Direction::Rtl;
+    rtl_isolate.unicode_bidi = UnicodeBidi::Isolate;
+    let rtl_isolate = Arc::new(rtl_isolate);
+
+    let root = BoxNode::new_block(
+        default_style(),
+        FormattingContextType::Block,
+        vec![
+            BoxNode::new_text(default_style(), "(".to_string()),
+            BoxNode::new_inline(rtl_isolate.clone(), vec![BoxNode::new_text(rtl_isolate.clone(), "אב".to_string())]),
+            BoxNode::new_text(default_style(), ")".to_string()),
+        ],
+    );
+
+    let ifc = InlineFormattingContext::new();
+    let constraints = LayoutConstraints::definite_width(400.0);
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+    let mut texts = collect_text_with_x(&fragment);
+    texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    assert!(texts.len() >= 3, "expected at least three text fragments");
+    assert_eq!(texts.first().unwrap().0, "(");
+    assert_eq!(texts.last().unwrap().0, ")");
+    // The isolate should stay grouped between the parentheses; the glyph order inside the RTL run can be visual (e.g. "בא").
+    let middle: String = texts[1..texts.len() - 1]
+        .iter()
+        .map(|(t, _)| t.as_str())
+        .collect();
+    assert!(middle.contains('א') && middle.contains('ב'));
+}
