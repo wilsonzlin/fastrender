@@ -887,19 +887,46 @@ impl<'a> ElementRef<'a> {
     }
 
     fn is_target(&self) -> bool {
+        current_target_fragment()
+            .as_deref()
+            .map(|target| Self::node_matches_target(self.node, target))
+            .unwrap_or(false)
+    }
+
+    fn subtree_contains_target(&self) -> bool {
         let Some(target) = current_target_fragment() else {
             return false;
         };
-        if self.node.get_attribute("id").as_deref() == Some(target.as_str()) {
+        Self::subtree_has_target(self.node, target.as_str())
+    }
+
+    fn subtree_has_target(node: &DomNode, target: &str) -> bool {
+        if Self::node_matches_target(node, target) {
             return true;
         }
-        if let Some(tag) = self.node.tag_name() {
-            if matches!(tag.to_ascii_lowercase().as_str(), "a" | "area") {
-                if self.node.get_attribute("name").as_deref() == Some(target.as_str()) {
-                    return true;
+        node.children
+            .iter()
+            .any(|child| Self::subtree_has_target(child, target))
+    }
+
+    fn node_matches_target(node: &DomNode, target: &str) -> bool {
+        if let Some(id) = node.get_attribute("id") {
+            if id == target {
+                return true;
+            }
+        }
+
+        if let Some(tag) = node.tag_name() {
+            let lower = tag.to_ascii_lowercase();
+            if matches!(lower.as_str(), "a" | "area") {
+                if let Some(name) = node.get_attribute("name") {
+                    if name == target {
+                        return true;
+                    }
                 }
             }
         }
+
         false
     }
 }
@@ -1215,6 +1242,7 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Dir(dir) => self.direction() == *dir,
             PseudoClass::AnyLink => self.is_link(),
             PseudoClass::Target => self.is_target(),
+            PseudoClass::TargetWithin => self.subtree_contains_target(),
             PseudoClass::Scope => self.all_ancestors.is_empty(),
             PseudoClass::Empty => self.is_empty(),
             PseudoClass::Disabled => self.supports_disabled() && self.is_disabled(),
@@ -2551,6 +2579,47 @@ mod tests {
         };
         with_target_fragment(Some("anchor"), || {
             assert!(matches(&anchor, &[], &PseudoClass::Target));
+        });
+    }
+
+    #[test]
+    fn target_within_matches_descendants() {
+        let target = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("id".to_string(), "section".to_string())],
+            },
+            children: vec![],
+        };
+        let container = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "main".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![target],
+        };
+        let other = element("p", vec![]);
+        let root = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "body".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![container, other],
+        };
+
+        let children = &root.children;
+        let container_ref = children.get(0).unwrap();
+        let target_ref = container_ref.children.get(0).unwrap();
+        let other_ref = children.get(1).unwrap();
+
+        with_target_fragment(Some("#section"), || {
+            assert!(matches(&root, &[], &PseudoClass::TargetWithin));
+            assert!(matches(&container_ref, &[&root], &PseudoClass::TargetWithin));
+            assert!(matches(target_ref, &[&root, container_ref], &PseudoClass::TargetWithin));
+            assert!(!matches(&other_ref, &[&root], &PseudoClass::TargetWithin));
         });
     }
 

@@ -58,6 +58,7 @@ pub enum PseudoClass {
     Dir(TextDirection),
     AnyLink,
     Target,
+    TargetWithin,
     Scope,
     Empty,
     Hover,
@@ -136,6 +137,7 @@ impl ToCss for PseudoClass {
             },
             PseudoClass::AnyLink => dest.write_str(":any-link"),
             PseudoClass::Target => dest.write_str(":target"),
+            PseudoClass::TargetWithin => dest.write_str(":target-within"),
             PseudoClass::Scope => dest.write_str(":scope"),
             PseudoClass::Empty => dest.write_str(":empty"),
             PseudoClass::Hover => dest.write_str(":hover"),
@@ -243,6 +245,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "visited" => Ok(PseudoClass::Visited),
             "any-link" => Ok(PseudoClass::AnyLink),
             "target" => Ok(PseudoClass::Target),
+            "target-within" => Ok(PseudoClass::TargetWithin),
             "scope" => Ok(PseudoClass::Scope),
             _ => Err(ParseError {
                 kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(Token::Ident(
@@ -395,6 +398,11 @@ mod tests {
             .expect("root pseudo should parse");
         assert_eq!(root, PseudoClass::Root);
 
+        let target_within = parser
+            .parse_non_ts_pseudo_class(loc, cssparser::CowRcStr::from("TARGET-WITHIN"))
+            .expect("target-within pseudo should parse");
+        assert_eq!(target_within, PseudoClass::TargetWithin);
+
         let mut input = ParserInput::new("2n+1");
         let mut css_parser = Parser::new(&mut input);
         let nth = parser
@@ -439,6 +447,7 @@ mod tests {
         assert_eq!(PseudoClass::Dir(TextDirection::Ltr).to_css_string(), ":dir(ltr)");
         assert_eq!(PseudoClass::AnyLink.to_css_string(), ":any-link");
         assert_eq!(PseudoClass::Target.to_css_string(), ":target");
+        assert_eq!(PseudoClass::TargetWithin.to_css_string(), ":target-within");
         assert_eq!(PseudoClass::Scope.to_css_string(), ":scope");
         assert_eq!(PseudoClass::Disabled.to_css_string(), ":disabled");
         assert_eq!(PseudoClass::Enabled.to_css_string(), ":enabled");

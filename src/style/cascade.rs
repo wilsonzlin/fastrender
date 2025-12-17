@@ -1318,7 +1318,6 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.font_stretch = parent.font_stretch;
     styles.font_kerning = parent.font_kerning;
     styles.line_height = parent.line_height.clone();
-    styles.text_size_adjust = parent.text_size_adjust;
     styles.direction = parent.direction;
     styles.text_align = parent.text_align;
     styles.text_align_last = parent.text_align_last;
@@ -3344,6 +3343,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "scrollbar-color: rgb(10, 20, 30) rgb(40, 50, 60);".to_string(),
@@ -3352,6 +3352,7 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
