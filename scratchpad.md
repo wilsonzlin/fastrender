@@ -9,6 +9,8 @@ Calc-length percentages now require a finite base: CalcLength::resolve returns N
 - Replaced min-height percentage with aspect ratio: percentage min-height on a definite base expands height and adjusts width via the aspect ratio; regression `compute_replaced_min_height_percentage_expands_with_ratio` locks height=150px and width=300px for a 2:1 ratio with 50% of a 300px base.
 - Replaced height percentage derives width from ratio: with a definite percentage height and aspect-ratio, width derives from the resolved height. Regression `compute_replaced_height_percentage_derives_width_from_ratio` covers height 60% of 300px → 180px and width 225px at 1.25 ratio.
 - Flex align-self adjustment now zips against the in-flow children (sorted by order) instead of all box children, so positioned siblings no longer misapply alignment after Taffy order sorting. Added regression `align_self_respects_in_flow_child_order` covering a positioned sibling before flex items. Commit 8937693 (pushed).
+- Added mozilla.org, theguardian.com, washingtonpost.com, fandom.com, ikea.com, and bing.com to the fetch_pages target list; `cargo check --bin fetch_pages` passes. Push attempts are timing out; branch remains ahead by local commits.
+Idle; no current tasks. Available for new tasks.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
