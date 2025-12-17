@@ -1,7 +1,7 @@
 From 78b3ca9a33b76dee60bbde36e29608a76ac91e82 Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 14:59:44 -0500
-Subject: [PATCH 13/15] Update scratchpad for refreshed 11-patch archive
+Subject: [PATCH 13/18] Update scratchpad for refreshed 11-patch archive
 
 ---
  scratchpad.md | 2 +-

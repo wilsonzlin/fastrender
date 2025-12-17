@@ -1,7 +1,7 @@
 From 66fb0b5c3a42e6b4da73ea857a5ca69b613bf85f Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 15:00:42 -0500
-Subject: [PATCH 15/15] Simplify scratchpad patch archive note
+Subject: [PATCH 15/18] Simplify scratchpad patch archive note
 
 ---
  scratchpad.md | 2 +-
