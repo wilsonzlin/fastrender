@@ -1,12 +1,18 @@
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::{DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem};
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
-use fastrender::style::types::{BackgroundPosition, BackgroundPositionComponent, BasicShape, ClipPath, ShapeRadius};
+use fastrender::style::types::{
+    BackgroundImage, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage, BorderImageSlice,
+    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, ShapeRadius,
+};
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::Rgba;
+use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder, RgbaImage};
 use std::sync::Arc;
 
 fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
@@ -162,6 +168,73 @@ fn builder_clip_path_masks_rendered_output() {
     // Center pixel should be clipped in, corner should remain the clear background.
     assert_eq!(pixel(&pixmap, 5, 5), (255, 0, 0, 255));
     assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+}
+
+#[test]
+fn display_list_border_image_nine_slice() {
+    // Construct a 3x3 image with distinct corners/edges to verify nine-slice placement.
+    let mut img = RgbaImage::new(3, 3);
+    img.put_pixel(0, 0, image::Rgba([255, 0, 0, 255])); // TL red
+    img.put_pixel(2, 0, image::Rgba([0, 0, 255, 255])); // TR blue
+    img.put_pixel(0, 2, image::Rgba([0, 255, 0, 255])); // BL green
+    img.put_pixel(2, 2, image::Rgba([255, 255, 0, 255])); // BR yellow
+    let edge = image::Rgba([0, 255, 255, 255]);
+    img.put_pixel(1, 0, edge);
+    img.put_pixel(1, 2, edge);
+    img.put_pixel(0, 1, edge);
+    img.put_pixel(2, 1, edge);
+    img.put_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
+
+    let mut buf = Vec::new();
+    PngEncoder::new(&mut buf)
+        .write_image(img.as_raw(), 3, 3, ExtendedColorType::Rgba8)
+        .unwrap();
+    let data_url = format!("data:image/png;base64,{}", STANDARD.encode(&buf));
+
+    let mut style = fastrender::ComputedStyle::default();
+    style.border_top_width = Length::px(4.0);
+    style.border_right_width = Length::px(4.0);
+    style.border_bottom_width = Length::px(4.0);
+    style.border_left_width = Length::px(4.0);
+    style.border_top_style = BorderStyle::Solid;
+    style.border_right_style = BorderStyle::Solid;
+    style.border_bottom_style = BorderStyle::Solid;
+    style.border_left_style = BorderStyle::Solid;
+    style.border_image = BorderImage {
+        source: BorderImageSource::Image(BackgroundImage::Url(data_url)),
+        slice: BorderImageSlice {
+            top: BorderImageSliceValue::Number(1.0),
+            right: BorderImageSliceValue::Number(1.0),
+            bottom: BorderImageSliceValue::Number(1.0),
+            left: BorderImageSliceValue::Number(1.0),
+            fill: false,
+        },
+        ..BorderImage::default()
+    };
+
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(16, 16, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    let tl = pixel(&pixmap, 0, 0);
+    let tr = pixel(&pixmap, 15, 0);
+    let bl = pixel(&pixmap, 0, 15);
+    let br = pixel(&pixmap, 15, 15);
+    assert_eq!(tl, (255, 0, 0, 255));
+    assert_eq!(tr, (0, 0, 255, 255));
+    assert_eq!(bl, (0, 255, 0, 255));
+    assert_eq!(br, (255, 255, 0, 255));
+
+    let edge_top = pixel(&pixmap, 8, 1);
+    let edge_left = pixel(&pixmap, 1, 8);
+    assert_eq!(edge_top, (0, 255, 255, 255));
+    assert_eq!(edge_left, (0, 255, 255, 255));
 }
 
 #[test]

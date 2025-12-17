@@ -3,6 +3,7 @@ Idle; no current tasks. Available for new tasks.
 - text-align-last now allows `justify-all` to justify the final line even when `text-align-last:auto`; last-line justification is blocked only for `justify`+auto. Static-position alignment uses the same gating, and a regression covers justify-all single-line justification.
 - Added a regression to ensure `text-align: justify` with `text-align-last:auto` keeps single-line paragraphs start-aligned (no justification); `cargo test text_align_justify_single_line_respects_auto_last_line --quiet` passes after the change.
 - Added a display-list renderer regression for clip-path from the builder: `builder_clip_path_masks_rendered_output` builds a stacking tree with a circular clip-path and ensures the rendered output is clipped (center red, corners white).
+- Added a display-list renderer regression for border images: `display_list_border_image_nine_slice` encodes a 3×3 PNG with distinct corners/edges, builds via DisplayListBuilder, renders, and asserts the nine-slice corners/edges land in the correct pixels.
 - Added gitlab.com/weebly.com/weibo.cn to fetch_pages PAGES; `cargo check --bin fetch_pages` passes.
 - Added nhk.or.jp to fetch_pages targets to extend vertical/intl coverage.
 - Added image-orientation inheritance, tokenized multi-keyword parsing for image-orientation/image-resolution (fixes "90deg flip" parsing), cascade/css parser tests, and a cascade inheritance test. `cargo test image_orientation -- --nocapture` and `cargo test tokenizes_image_resolution_multi_keyword -- --nocapture` pass.
