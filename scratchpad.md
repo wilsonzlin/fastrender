@@ -1,5 +1,5 @@
 # Scratchpad – rendering engine session notes
-Idle; no current tasks.
+Idle; no current tasks. Available for new tasks.
 
 - 2027-XX-XX: Fixed style rebase fallout (restored `text_rendering`/`overflow_anchor` fields in `ComputedStyle`, removed duplicate `text-size-adjust` definitions, added missing namespaces in scrollbar-color cascade test). Block layout now reserves scrollbar gutters: overflow-y scroll adds a directional inline gutter via resolved scrollbar width, overflow-x scroll adds a bottom gutter; added unit tests.
 - 2027-XX-XX: Flex style fingerprints now include overflow axes and `scrollbar-width`, and a regression test ensures cache keys change when scrollbars/overflow differ. This prevents flex cache reuse across differing scrollbar gutters.
