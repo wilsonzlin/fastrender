@@ -199,6 +199,56 @@ struct RuleIndex<'a> {
     pseudo_buckets: HashMap<PseudoElement, PseudoBuckets>,
 }
 
+struct MatchIndex {
+    positions: Vec<usize>,
+    touched: Vec<usize>,
+}
+
+impl MatchIndex {
+    fn new(rule_count: usize) -> Self {
+        Self {
+            positions: vec![usize::MAX; rule_count],
+            touched: Vec::new(),
+        }
+    }
+
+    fn get(&self, idx: usize) -> Option<usize> {
+        let value = *self.positions.get(idx).unwrap_or(&usize::MAX);
+        if value == usize::MAX {
+            None
+        } else {
+            Some(value)
+        }
+    }
+
+    fn insert(&mut self, idx: usize, value: usize) {
+        if self.positions[idx] == usize::MAX {
+            self.touched.push(idx);
+        }
+        self.positions[idx] = value;
+    }
+
+    fn reset(&mut self) {
+        for idx in self.touched.drain(..) {
+            self.positions[idx] = usize::MAX;
+        }
+    }
+}
+
+struct CascadeScratch {
+    candidates: Vec<usize>,
+    match_index: MatchIndex,
+}
+
+impl CascadeScratch {
+    fn new(rule_count: usize) -> Self {
+        Self {
+            candidates: Vec::new(),
+            match_index: MatchIndex::new(rule_count),
+        }
+    }
+}
+
 fn selector_key(selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>) -> SelectorKey {
     use selectors::parser::Component;
 
@@ -630,6 +680,7 @@ pub fn apply_styles_with_media_target_and_imports(
     let styled = with_target_fragment(target_fragment, || {
         with_image_set_dpr(media_ctx.device_pixel_ratio, || {
             let mut selector_caches = SelectorCaches::default();
+            let mut scratch = CascadeScratch::new(rule_index.rules.len());
             let mut node_counter: usize = 1;
             let mut ancestor_ids: Vec<usize> = Vec::new();
             let mut reuse_counter_opt = if container_scope.is_some() || reuse_map.is_some() {
@@ -642,6 +693,7 @@ pub fn apply_styles_with_media_target_and_imports(
                 dom,
                 &rule_index,
                 &mut selector_caches,
+                &mut scratch,
                 &ComputedStyle::default(),
                 &ComputedStyle::default(),
                 16.0,
@@ -877,6 +929,7 @@ fn apply_styles_internal(
     node: &DomNode,
     rules: &RuleIndex<'_>,
     selector_caches: &mut SelectorCaches,
+    scratch: &mut CascadeScratch,
     parent_styles: &ComputedStyle,
     parent_ua_styles: &ComputedStyle,
     root_font_size: f32,
@@ -902,6 +955,7 @@ fn apply_styles_internal(
         node,
         rules,
         selector_caches,
+        scratch,
         &ancestors,
         ancestor_ids,
         node_id,
@@ -1030,6 +1084,7 @@ fn apply_styles_internal(
             node,
             rules,
             selector_caches,
+            scratch,
             ancestors.as_slice(),
             &styles,
             &ua_styles,
@@ -1046,6 +1101,7 @@ fn apply_styles_internal(
             node,
             rules,
             selector_caches,
+            scratch,
             ancestors.as_slice(),
             &styles,
             &ua_styles,
@@ -1061,6 +1117,7 @@ fn apply_styles_internal(
         node,
         rules,
         selector_caches,
+        scratch,
         ancestors.as_slice(),
         &styles,
         &ua_styles,
@@ -1083,6 +1140,7 @@ fn apply_styles_internal(
             child,
             rules,
             selector_caches,
+            scratch,
             &styles,
             &ua_styles,
             current_root_font_size,
@@ -1117,6 +1175,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     node: &'a DomNode,
     rules: &RuleIndex<'_>,
     selector_caches: &mut SelectorCaches,
+    scratch: &mut CascadeScratch,
     parent_styles: &ComputedStyle,
     parent_ua_styles: &ComputedStyle,
     root_font_size: f32,
@@ -1169,6 +1228,7 @@ fn apply_styles_internal_with_ancestors<'a>(
         node,
         rules,
         selector_caches,
+        scratch,
         ancestors.as_slice(),
         ancestor_ids,
         node_id,
@@ -1286,6 +1346,7 @@ fn apply_styles_internal_with_ancestors<'a>(
             node,
             rules,
             selector_caches,
+            scratch,
             ancestors.as_slice(),
             &styles,
             &ua_styles,
@@ -1302,6 +1363,7 @@ fn apply_styles_internal_with_ancestors<'a>(
             node,
             rules,
             selector_caches,
+            scratch,
             ancestors.as_slice(),
             &styles,
             &ua_styles,
@@ -1317,6 +1379,7 @@ fn apply_styles_internal_with_ancestors<'a>(
         node,
         rules,
         selector_caches,
+        scratch,
         ancestors.as_slice(),
         &styles,
         &ua_styles,
@@ -1339,6 +1402,7 @@ fn apply_styles_internal_with_ancestors<'a>(
             child,
             rules,
             selector_caches,
+            scratch,
             &styles,
             &ua_styles,
             current_root_font_size,
@@ -4674,10 +4738,12 @@ mod tests {
             "selector should match the originating element"
         );
         let mut caches = SelectorCaches::default();
+        let mut scratch = CascadeScratch::new(rule_index.rules.len());
         let marker_matches = find_pseudo_element_rules(
             &dom.children[0],
             &rule_index,
             &mut caches,
+            &mut scratch,
             &ancestors,
             &PseudoElement::Marker,
         );
@@ -5034,6 +5100,32 @@ mod tests {
     }
 
     #[test]
+    fn highest_specificity_selector_in_rule_wins() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("id".to_string(), "target".to_string()),
+                    ("class".to_string(), "foo bar".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet(
+            r#"
+            #target, .foo { color: red; }
+            .bar { color: blue; }
+        "#,
+        )
+        .unwrap();
+
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.color, Rgba::RED);
+    }
+
+    #[test]
     fn font_weight_relative_keywords_follow_css_fonts_table() {
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: bolder;"), 400);
         assert_eq!(child_font_weight("font-weight: 50;", "font-weight: lighter;"), 50);
@@ -5063,6 +5155,7 @@ fn find_matching_rules<'a>(
     node: &DomNode,
     rules: &'a RuleIndex<'a>,
     selector_caches: &mut SelectorCaches,
+    scratch: &mut CascadeScratch,
     ancestors: &[&DomNode],
     ancestor_ids: &[usize],
     node_id: usize,
@@ -5073,13 +5166,14 @@ fn find_matching_rules<'a>(
     }
     let profiling = cascade_profile_enabled();
     let start = profiling.then(|| Instant::now());
-    let mut candidates = Vec::new();
-    rules.selector_candidates(node, &mut candidates);
+    let candidates = &mut scratch.candidates;
+    candidates.clear();
+    rules.selector_candidates(node, candidates);
     if candidates.is_empty() {
+        scratch.match_index.reset();
         return Vec::new();
     }
     let mut matches: Vec<MatchedRule<'a>> = Vec::new();
-    let mut match_indices: HashMap<usize, usize> = HashMap::with_capacity(candidates.len());
 
     // Build ElementRef chain with proper parent links
     let element_ref = build_element_ref_chain(node, ancestors);
@@ -5094,12 +5188,12 @@ fn find_matching_rules<'a>(
         selectors::matching::MatchingForInvalidation::No,
     );
 
-    for &selector_idx in &candidates {
+    for &selector_idx in candidates.iter() {
         let indexed = &rules.selectors[selector_idx];
         let selector = indexed.selector;
         if matches_selector(selector, 0, None, &element_ref, &mut context) {
             let spec = indexed.specificity;
-            if let Some(&pos) = match_indices.get(&indexed.rule_idx) {
+            if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
                 if spec > matches[pos].specificity {
                     matches[pos].specificity = spec;
                 }
@@ -5112,7 +5206,7 @@ fn find_matching_rules<'a>(
                     }
                 }
                 let pos = matches.len();
-                match_indices.insert(indexed.rule_idx, pos);
+                scratch.match_index.insert(indexed.rule_idx, pos);
                 matches.push(MatchedRule {
                     origin: rule.origin,
                     specificity: spec,
@@ -5126,6 +5220,7 @@ fn find_matching_rules<'a>(
 
     // Sort by specificity (lower specificity first, so later rules override), then document order.
     matches.sort_by(|a, b| a.specificity.cmp(&b.specificity).then(a.order.cmp(&b.order)));
+    scratch.match_index.reset();
 
     if profiling {
         record_matching_stats(candidates.len(), matches.len(), start.map(|s| s.elapsed()));
@@ -5139,6 +5234,7 @@ fn find_pseudo_element_rules<'a>(
     node: &DomNode,
     rules: &'a RuleIndex<'a>,
     selector_caches: &mut SelectorCaches,
+    scratch: &mut CascadeScratch,
     ancestors: &[&DomNode],
     pseudo: &PseudoElement,
 ) -> Vec<MatchedRule<'a>> {
@@ -5147,13 +5243,14 @@ fn find_pseudo_element_rules<'a>(
     }
     let profiling = cascade_profile_enabled();
     let start = profiling.then(|| Instant::now());
-    let mut candidates = Vec::new();
-    rules.pseudo_candidates(node, pseudo, &mut candidates);
+    let candidates = &mut scratch.candidates;
+    candidates.clear();
+    rules.pseudo_candidates(node, pseudo, candidates);
     if candidates.is_empty() {
+        scratch.match_index.reset();
         return Vec::new();
     }
     let mut matches: Vec<MatchedRule<'a>> = Vec::new();
-    let mut match_indices: HashMap<usize, usize> = HashMap::with_capacity(candidates.len());
 
     // Build ElementRef chain with proper parent links
     let element_ref = build_element_ref_chain(node, ancestors);
@@ -5168,19 +5265,19 @@ fn find_pseudo_element_rules<'a>(
         selectors::matching::MatchingForInvalidation::No,
     );
 
-    for &selector_idx in &candidates {
+    for &selector_idx in candidates.iter() {
         let indexed = &rules.pseudo_selectors[selector_idx];
         let selector = indexed.selector;
         if matches_selector(selector, 0, None, &element_ref, &mut context) {
             let spec = indexed.specificity;
-            if let Some(&pos) = match_indices.get(&indexed.rule_idx) {
+            if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
                 if spec > matches[pos].specificity {
                     matches[pos].specificity = spec;
                 }
             } else {
                 let rule = &rules.rules[indexed.rule_idx];
                 let pos = matches.len();
-                match_indices.insert(indexed.rule_idx, pos);
+                scratch.match_index.insert(indexed.rule_idx, pos);
                 matches.push(MatchedRule {
                     origin: rule.origin,
                     specificity: spec,
@@ -5193,6 +5290,7 @@ fn find_pseudo_element_rules<'a>(
     }
 
     matches.sort_by(|a, b| a.specificity.cmp(&b.specificity).then(a.order.cmp(&b.order)));
+    scratch.match_index.reset();
 
     if profiling {
         record_matching_stats(candidates.len(), matches.len(), start.map(|s| s.elapsed()));
@@ -5784,6 +5882,7 @@ fn compute_pseudo_element_styles(
     node: &DomNode,
     rules: &RuleIndex<'_>,
     selector_caches: &mut SelectorCaches,
+    scratch: &mut CascadeScratch,
     ancestors: &[&DomNode],
     parent_styles: &ComputedStyle,
     ua_parent_styles: &ComputedStyle,
@@ -5796,7 +5895,7 @@ fn compute_pseudo_element_styles(
         return None;
     }
     // Find rules matching this pseudo-element
-    let matching_rules = find_pseudo_element_rules(node, rules, selector_caches, ancestors, pseudo);
+    let matching_rules = find_pseudo_element_rules(node, rules, selector_caches, scratch, ancestors, pseudo);
 
     if matching_rules.is_empty() {
         return None;
@@ -5873,6 +5972,7 @@ fn compute_marker_styles(
     node: &DomNode,
     rules: &RuleIndex<'_>,
     selector_caches: &mut SelectorCaches,
+    scratch: &mut CascadeScratch,
     ancestors: &[&DomNode],
     list_item_styles: &ComputedStyle,
     ua_list_item_styles: &ComputedStyle,
@@ -5885,7 +5985,7 @@ fn compute_marker_styles(
     }
 
     let matching_rules = if rules.has_pseudo_rules(&PseudoElement::Marker) {
-        find_pseudo_element_rules(node, rules, selector_caches, ancestors, &PseudoElement::Marker)
+        find_pseudo_element_rules(node, rules, selector_caches, scratch, ancestors, &PseudoElement::Marker)
     } else {
         Vec::new()
     };
