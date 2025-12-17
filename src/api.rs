@@ -59,7 +59,7 @@ use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
-use crate::geometry::Size;
+use crate::geometry::{Point, Size};
 use crate::image_loader::ImageCache;
 use crate::image_output::{encode_image, OutputFormat};
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
@@ -68,7 +68,7 @@ use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::layout::flex_profile::{flex_profile_enabled, log_flex_profile, reset_flex_profile};
 use crate::layout::formatting_context::{intrinsic_cache_clear, intrinsic_cache_reset_counters, intrinsic_cache_stats};
 use crate::layout::profile::{layout_profile_enabled, log_layout_profile, reset_layout_profile};
-use crate::paint::painter::paint_tree_with_resources_scaled;
+use crate::paint::painter::{paint_tree_with_resources_scaled, paint_tree_with_resources_scaled_offset};
 use crate::resource::{HttpFetcher, ResourceFetcher};
 use crate::style::cascade::{
     apply_styles_with_media_and_target, apply_styles_with_media_target_and_imports, ContainerQueryContext,
@@ -532,6 +532,15 @@ impl FastRender {
     /// - Painting fails
     /// - Invalid dimensions (width or height is 0)
     pub fn render_html(&mut self, html: &str, width: u32, height: u32) -> Result<Pixmap> {
+        self.render_html_internal(html, width, height, 0.0)
+    }
+
+    /// Renders HTML with a vertical scroll offset applied to the viewport
+    pub fn render_html_with_scroll(&mut self, html: &str, width: u32, height: u32, scroll_y: f32) -> Result<Pixmap> {
+        self.render_html_internal(html, width, height, scroll_y)
+    }
+
+    fn render_html_internal(&mut self, html: &str, width: u32, height: u32, scroll_y: f32) -> Result<Pixmap> {
         // Validate dimensions
         if width == 0 || height == 0 {
             return Err(Error::Render(RenderError::InvalidParameters {
@@ -715,7 +724,8 @@ impl FastRender {
         };
 
         // Paint to pixmap
-        let pixmap = self.paint(&fragment_tree, target_width, target_height)?;
+        let offset = Point::new(0.0, -scroll_y);
+        let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
 
         if let Some(start) = stage_start {
             let now = Instant::now();
@@ -1294,6 +1304,26 @@ impl FastRender {
         )
     }
 
+    /// Paints a fragment tree with an additional translation applied to all fragments.
+    pub fn paint_with_offset(
+        &self,
+        fragment_tree: &FragmentTree,
+        width: u32,
+        height: u32,
+        offset: Point,
+    ) -> Result<Pixmap> {
+        paint_tree_with_resources_scaled_offset(
+            fragment_tree,
+            width,
+            height,
+            self.background_color,
+            self.font_context.clone(),
+            self.image_cache.clone(),
+            self.device_pixel_ratio,
+            offset,
+        )
+    }
+
     /// Returns a reference to the font context
     ///
     /// Useful for querying available fonts or font metrics.
@@ -1569,6 +1599,12 @@ impl FastRender {
     /// ```
     pub fn render_to_png(&mut self, html: &str, width: u32, height: u32) -> Result<Vec<u8>> {
         let pixmap = self.render_html(html, width, height)?;
+        encode_image(&pixmap, OutputFormat::Png)
+    }
+
+    /// Renders HTML to PNG bytes with a vertical scroll offset
+    pub fn render_to_png_with_scroll(&mut self, html: &str, width: u32, height: u32, scroll_y: f32) -> Result<Vec<u8>> {
+        let pixmap = self.render_html_with_scroll(html, width, height, scroll_y)?;
         encode_image(&pixmap, OutputFormat::Png)
     }
 
@@ -2812,6 +2848,42 @@ mod tests {
         // Zero height
         let result = renderer.render_html("<div>Test</div>", 800, 0);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn render_html_with_scroll_offsets_viewport() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                body { margin: 0; }
+                .top { height: 50px; background: rgb(255, 0, 0); }
+                .bottom { height: 50px; background: rgb(0, 255, 0); }
+            </style>
+            <div class="top"></div>
+            <div class="bottom"></div>
+        "#;
+
+        let top = renderer
+            .render_html_with_scroll(html, 10, 50, 0.0)
+            .expect("render at scroll 0");
+        let scrolled = renderer
+            .render_html_with_scroll(html, 10, 50, 50.0)
+            .expect("render with scroll offset");
+
+        let pixel = |pixmap: &Pixmap| {
+            let data = pixmap.data();
+            let a = data[3];
+            if a == 0 {
+                return (0u8, 0u8, 0u8, 0u8);
+            }
+            let r = ((data[0] as u16 * 255) / a as u16) as u8;
+            let g = ((data[1] as u16 * 255) / a as u16) as u8;
+            let b = ((data[2] as u16 * 255) / a as u16) as u8;
+            (r, g, b, a)
+        };
+
+        assert_eq!(pixel(&top), (255, 0, 0, 255));
+        assert_eq!(pixel(&scrolled), (0, 255, 0, 255));
     }
 
     #[test]

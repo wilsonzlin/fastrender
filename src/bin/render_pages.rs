@@ -1,6 +1,6 @@
 //! Render all cached pages in parallel
 //!
-//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT]
+//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-y PX]
 //!
 //! Renders all HTML files in fetches/html/ to fetches/renders/
 //! Logs per-page to fetches/renders/{name}.log
@@ -32,12 +32,13 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-y PX]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
     println!("  --pages a,b,c     Render only the listed cached pages (use cache stems like cnn.com)");
     println!("  --dpr FLOAT       Device pixel ratio for media queries/srcset (default: 1.0)");
+    println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
 }
 
 struct PageResult {
@@ -60,6 +61,7 @@ fn main() {
     let mut timeout_secs: Option<u64> = None;
     let mut viewport: Option<(u32, u32)> = None;
     let mut device_pixel_ratio: f32 = 1.0;
+    let mut scroll_y: f32 = 0.0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -109,6 +111,15 @@ fn main() {
                         }
                     }
                     page_filter = Some(filter);
+                }
+            }
+            "--scroll-y" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<f32>() {
+                        if parsed.is_finite() {
+                            scroll_y = parsed;
+                        }
+                    }
                 }
             }
             _ => {}
@@ -187,11 +198,11 @@ fn main() {
                 let html = match fs::read_to_string(&path) {
                     Ok(h) => h,
                     Err(e) => {
-                log.push_str(&format!("Read error: {}\n", e));
-                let _ = fs::write(&log_path, &log);
-                results.lock().unwrap().push(PageResult {
-                    name,
-                    status: Status::Error(format!("read: {}", e)),
+                        log.push_str(&format!("Read error: {}\n", e));
+                        let _ = fs::write(&log_path, &log);
+                        results.lock().unwrap().push(PageResult {
+                            name,
+                            status: Status::Error(format!("read: {}", e)),
                             time_ms: 0,
                             size: None,
                         });
@@ -200,6 +211,7 @@ fn main() {
                 };
                 log.push_str(&format!("HTML size: {} bytes\n", html.len()));
                 log.push_str(&format!("Viewport: {}x{}\n", viewport_w, viewport_h));
+                log.push_str(&format!("Scroll-Y: {}px\n", scroll_y));
 
                 let input_url = format!("file://{}", path.display());
                 let resource_base = infer_base_url(&html, &input_url).into_owned();
@@ -270,7 +282,7 @@ fn main() {
                             .device_pixel_ratio(device_pixel_ratio)
                             .build()
                             .expect("create renderer");
-                        renderer.render_to_png(&html_for_render, viewport_w, viewport_h)
+                        renderer.render_to_png_with_scroll(&html_for_render, viewport_w, viewport_h, scroll_y)
                     };
 
                     let (tx, rx) = channel();

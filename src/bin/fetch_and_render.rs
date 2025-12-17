@@ -336,7 +336,7 @@ fn usage(program: &str) {
     eprintln!("  width: viewport width (default: 1200)");
     eprintln!("  height: viewport height (default: 800)");
     eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
-    eprintln!("  scroll_y: vertical scroll offset (default: 0; not yet supported)");
+    eprintln!("  scroll_y: vertical scroll offset (default: 0)");
 }
 
 fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32, dpr: f32) -> Result<()> {
@@ -392,14 +392,13 @@ fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32, 
         html
     };
 
-    println!("Rendering to image ({}x{} viewport)...", width, height);
+    println!(
+        "Rendering to image ({}x{} viewport, scroll_y={})...",
+        width, height, scroll_y
+    );
     let mut renderer = FastRender::builder().device_pixel_ratio(dpr).build()?;
     renderer.set_base_url(resource_base.clone());
-    // Note: scroll_y is currently not supported, will render from top
-    if scroll_y != 0 {
-        eprintln!("Warning: scroll_y parameter is not yet supported, rendering from top");
-    }
-    let png_data = renderer.render_to_png(&html_with_css, width, height)?;
+    let png_data = renderer.render_to_png_with_scroll(&html_with_css, width, height, scroll_y as f32)?;
 
     println!("Saving to {}...", output);
     std::fs::write(&output, png_data)?;

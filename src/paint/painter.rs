@@ -709,7 +709,12 @@ impl Painter {
     }
 
     /// Paints a fragment tree and returns the resulting pixmap
-    pub fn paint(mut self, tree: &FragmentTree) -> Result<Pixmap> {
+    pub fn paint(self, tree: &FragmentTree) -> Result<Pixmap> {
+        self.paint_with_offset(tree, Point::ZERO)
+    }
+
+    /// Paints a fragment tree with an additional offset applied to all fragments.
+    pub fn paint_with_offset(mut self, tree: &FragmentTree, offset: Point) -> Result<Pixmap> {
         let profiling = std::env::var("FASTR_PAINT_STATS")
             .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
             .unwrap_or(false);
@@ -733,7 +738,7 @@ impl Painter {
         // Build display list in stacking-context order then paint
         let mut items = Vec::new();
         let collect_start = Instant::now();
-        self.collect_stacking_context(&tree.root, Point::ZERO, None, true, &mut items);
+        self.collect_stacking_context(&tree.root, offset, None, true, &mut items);
         if profiling {
             stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
         }
@@ -7306,8 +7311,31 @@ pub fn paint_tree_with_resources_scaled(
     image_cache: ImageCache,
     scale: f32,
 ) -> Result<Pixmap> {
+    paint_tree_with_resources_scaled_offset(
+        tree,
+        width,
+        height,
+        background,
+        font_ctx,
+        image_cache,
+        scale,
+        Point::ZERO,
+    )
+}
+
+/// Paints a fragment tree at a device scale with an additional translation applied.
+pub fn paint_tree_with_resources_scaled_offset(
+    tree: &FragmentTree,
+    width: u32,
+    height: u32,
+    background: Rgba,
+    font_ctx: FontContext,
+    image_cache: ImageCache,
+    scale: f32,
+    offset: Point,
+) -> Result<Pixmap> {
     let painter = Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
-    painter.paint(tree)
+    painter.paint_with_offset(tree, offset)
 }
 
 /// Scales a pixmap by the given device pixel ratio, returning a new pixmap.
