@@ -102,6 +102,8 @@ const PAGES: &[&str] = &[
     "https://cloudflare.com",
     "https://aliexpress.com",
     "https://apnews.com",
+    "https://aljazeera.com",
+    "https://tripadvisor.com",
 ];
 
 fn url_to_filename(url: &str) -> String {
