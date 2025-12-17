@@ -694,6 +694,9 @@ fn append_presentational_hints<'a>(
     if let Some(presentational_rule) = nowrap_presentational_hint(node, 10) {
         matching_rules.push(presentational_rule);
     }
+    if let Some(presentational_rule) = hidden_presentational_hint(node, 11) {
+        matching_rules.push(presentational_rule);
+    }
 }
 
 fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedRule<'static>> {
@@ -2914,6 +2917,35 @@ mod tests {
         let stylesheet = parse_stylesheet("div { background-color: rgb(0, 0, 255); }").unwrap();
         let styled = apply_styles(&dom, &stylesheet);
         assert_eq!(styled.styles.background_color, Rgba::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn hidden_presentational_hint_sets_display_none() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("hidden".to_string(), "".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.display, Display::None);
+    }
+
+    #[test]
+    fn author_css_overrides_hidden_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("hidden".to_string(), "".to_string())],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("div[hidden] { display: block; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+        assert_eq!(styled.styles.display, Display::Block);
     }
 
     #[test]
@@ -5322,6 +5354,20 @@ fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRul
         order,
         layer_order: vec![u32::MAX],
         declarations: Cow::Owned(parse_declarations("white-space: nowrap;")),
+    })
+}
+
+fn hidden_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+    if node.get_attribute("hidden").is_none() {
+        return None;
+    }
+
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations("display: none;")),
     })
 }
 
