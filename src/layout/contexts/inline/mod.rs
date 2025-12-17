@@ -8545,6 +8545,54 @@ mod tests {
     }
 
     #[test]
+    fn tab_width_respects_length_tab_size() {
+        let mut style = ComputedStyle::default();
+        style.white_space = WhiteSpace::Pre;
+        style.tab_size = TabSize::Length(Length::px(24.0));
+        let node = BoxNode::new_text(Arc::new(style.clone()), "ab\tc".to_string());
+
+        let ifc = InlineFormattingContext::new();
+        let mut items = ifc.create_inline_items_for_text(&node, "ab\tc", false).unwrap();
+        let strut = ifc.compute_strut_metrics(&node.style);
+        let lines = ifc.build_lines(
+            std::mem::take(&mut items),
+            1000.0,
+            1000.0,
+            true,
+            node.style.text_wrap,
+            0.0,
+            false,
+            false,
+            &strut,
+            None,
+            node.style.direction,
+            node.style.unicode_bidi,
+            None,
+            0.0,
+        );
+        let line = &lines[0];
+        assert_eq!(line.items.len(), 3);
+
+        let interval = match &line.items[1].item {
+            InlineItem::Tab(tab) => tab.interval(),
+            _ => panic!("expected tab item"),
+        };
+        let first_width = line.items[0].item.width();
+        let tab_width = line.items[1].item.width();
+        let expected = if interval > 0.0 {
+            let remainder = first_width.rem_euclid(interval);
+            if remainder == 0.0 {
+                interval
+            } else {
+                interval - remainder
+            }
+        } else {
+            0.0
+        };
+        assert!((tab_width - expected).abs() < 0.05);
+    }
+
+    #[test]
     fn inline_lines_carry_float_left_offset() {
         let mut float_ctx = crate::layout::float_context::FloatContext::new(200.0);
         float_ctx.add_float_at(crate::layout::float_context::FloatSide::Left, 0.0, 0.0, 80.0, 20.0);
