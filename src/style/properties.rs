@@ -2283,6 +2283,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "filter" => styles.filter = source.filter.clone(),
         "backdrop-filter" => styles.backdrop_filter = source.backdrop_filter.clone(),
         "clip-path" => styles.clip_path = source.clip_path.clone(),
+        "clip" => styles.clip = source.clip.clone(),
         "transform-origin" => styles.transform_origin = source.transform_origin.clone(),
         "mix-blend-mode" => styles.mix_blend_mode = source.mix_blend_mode,
         "isolation" => styles.isolation = source.isolation,
@@ -5653,6 +5654,11 @@ pub fn apply_declaration_with_base(
                 styles.clip_path = path;
             }
         }
+        "clip" => {
+            if let Some(value) = parse_clip_value(&resolved_value) {
+                styles.clip = value;
+            }
+        }
         "transform-origin" => {
             if let Some(origin) = parse_transform_origin(&resolved_value) {
                 styles.transform_origin = origin;
@@ -8383,6 +8389,65 @@ fn parse_clip_path_value(value: &PropertyValue) -> Option<ClipPath> {
     }
 }
 
+fn parse_clip_value(value: &PropertyValue) -> Option<Option<ClipRect>> {
+    match value {
+        PropertyValue::Keyword(raw) => {
+            let mut input = ParserInput::new(raw);
+            let mut parser = Parser::new(&mut input);
+
+            if parser.try_parse(|p| p.expect_ident_matching("auto")).is_ok() {
+                return Some(None);
+            }
+
+            if parser.try_parse(|p| p.expect_function_matching("rect")).is_ok() {
+                return parser
+                    .parse_nested_block(|p| -> Result<_, cssparser::ParseError<'_, ()>> {
+                        let top = match parse_clip_component(p) {
+                            Some(c) => c,
+                            None => return Ok(None),
+                        };
+                        let _ = p.try_parse(|p| p.expect_comma());
+                        let right = match parse_clip_component(p) {
+                            Some(c) => c,
+                            None => return Ok(None),
+                        };
+                        let _ = p.try_parse(|p| p.expect_comma());
+                        let bottom = match parse_clip_component(p) {
+                            Some(c) => c,
+                            None => return Ok(None),
+                        };
+                        let _ = p.try_parse(|p| p.expect_comma());
+                        let left = match parse_clip_component(p) {
+                            Some(c) => c,
+                            None => return Ok(None),
+                        };
+                        Ok(Some(ClipRect { top, right, bottom, left }))
+                    })
+                    .ok()
+                    .flatten()
+                    .map(Some);
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_clip_component(parser: &mut Parser<'_, '_>) -> Option<ClipComponent> {
+    if let Ok(len) = parser.try_parse(|p| parse_length_component(p)) {
+        return Some(ClipComponent::Length(len));
+    }
+
+    if let Ok(ident) = parser.try_parse(|p| p.expect_ident_cloned()) {
+        if ident.eq_ignore_ascii_case("auto") {
+            return Some(ClipComponent::Auto);
+        }
+    }
+
+    None
+}
+
 fn parse_clip_path_str(input_str: &str) -> Option<ClipPath> {
     let mut input = ParserInput::new(input_str);
     let mut parser = Parser::new(&mut input);
@@ -9672,6 +9737,33 @@ mod tests {
             }
             other => panic!("unexpected clip-path parsed: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_clip_rect_values() {
+        let decl = Declaration {
+            property: "clip".to_string(),
+            value: PropertyValue::Keyword("rect(1px, 10px, 9px, 2px)".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        let mut style = ComputedStyle::default();
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        let rect = style.clip.as_ref().expect("clip parsed");
+        assert_eq!(rect.top, ClipComponent::Length(Length::px(1.0)));
+        assert_eq!(rect.right, ClipComponent::Length(Length::px(10.0)));
+        assert_eq!(rect.bottom, ClipComponent::Length(Length::px(9.0)));
+        assert_eq!(rect.left, ClipComponent::Length(Length::px(2.0)));
+
+        let auto_decl = Declaration {
+            property: "clip".to_string(),
+            value: PropertyValue::Keyword("auto".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &auto_decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(style.clip.is_none());
     }
 
     #[test]

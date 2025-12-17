@@ -32,7 +32,7 @@ use std::collections::HashMap;
 use types::{
     AlignContent, AlignItems, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderImage, BorderStyle, BoxSizing,
-    CaptionSide, ClipPath, ContainerType, Containment, CursorImage, CursorKeyword, Direction, EmptyCells,
+    CaptionSide, ClipPath, ClipRect, ContainerType, Containment, CursorImage, CursorKeyword, Direction, EmptyCells,
     FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride,
     FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
     FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
@@ -432,6 +432,8 @@ pub struct ComputedStyle {
     pub backdrop_filter: Vec<FilterFunction>,
     /// Clip-path applied to the element and its contents
     pub clip_path: ClipPath,
+    /// Legacy clip property (rect())
+    pub clip: Option<ClipRect>,
     pub mix_blend_mode: MixBlendMode,
     pub isolation: Isolation,
     /// Author hints for upcoming changes
@@ -643,6 +645,7 @@ impl Default for ComputedStyle {
             filter: Vec::new(),
             backdrop_filter: Vec::new(),
             clip_path: ClipPath::None,
+            clip: None,
             mix_blend_mode: MixBlendMode::Normal,
             isolation: Isolation::Auto,
             will_change: WillChange::Auto,

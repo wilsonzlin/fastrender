@@ -45,9 +45,9 @@ use crate::style::position::Position;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
     BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderImage, BorderImageOutsetValue,
-    BorderImageRepeat, BorderImageSource, BorderImageWidthValue, BorderStyle as CssBorderStyle, ImageOrientation,
-    ImageRendering, ObjectFit, OrientationTransform, TextDecorationLine, TextDecorationSkipInk, TextDecorationStyle,
-    TextDecorationThickness,
+    BorderImageRepeat, BorderImageSource, BorderImageWidthValue, BorderStyle as CssBorderStyle, ClipComponent,
+    ImageOrientation, ImageRendering, ObjectFit, OrientationTransform, TextDecorationLine, TextDecorationSkipInk,
+    TextDecorationStyle, TextDecorationThickness,
 };
 use crate::style::types::{FilterColor, FilterFunction, MixBlendMode, Overflow, TransformBox};
 use crate::style::values::{Length, LengthUnit};
@@ -1239,28 +1239,79 @@ impl Painter {
                 style.overflow_y,
                 Overflow::Hidden | Overflow::Scroll | Overflow::Auto | Overflow::Clip
             ) || style.containment.paint;
-            if !clip_x && !clip_y {
-                return None;
+            let overflow_clip = if clip_x || clip_y {
+                let rects = background_rects(
+                    abs_bounds.x(),
+                    abs_bounds.y(),
+                    abs_bounds.width(),
+                    abs_bounds.height(),
+                    style,
+                    Some((self.css_width, self.css_height)),
+                );
+                let clip_rect = rects.padding;
+                if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+                    None
+                } else {
+                    let clip_radii = resolve_clip_radii(
+                        style,
+                        &rects,
+                        crate::style::types::BackgroundBox::PaddingBox,
+                        Some((self.css_width, self.css_height)),
+                    );
+                    Some((clip_rect, clip_radii, clip_x, clip_y))
+                }
+            } else {
+                None
+            };
+
+            let clip_property = style.clip.as_ref().and_then(|clip| {
+                let font_size = style.font_size;
+                let root_font = style.root_font_size;
+                let viewport = (self.css_width, self.css_height);
+                let width = abs_bounds.width();
+                let height = abs_bounds.height();
+
+                let left = match &clip.left {
+                    ClipComponent::Auto => abs_bounds.x(),
+                    ClipComponent::Length(len) => {
+                        abs_bounds.x() + resolve_length_for_paint(len, font_size, root_font, width, viewport)
+                    }
+                };
+                let top = match &clip.top {
+                    ClipComponent::Auto => abs_bounds.y(),
+                    ClipComponent::Length(len) => {
+                        abs_bounds.y() + resolve_length_for_paint(len, font_size, root_font, height, viewport)
+                    }
+                };
+                let right = match &clip.right {
+                    ClipComponent::Auto => abs_bounds.x() + width,
+                    ClipComponent::Length(len) => {
+                        abs_bounds.x() + resolve_length_for_paint(len, font_size, root_font, width, viewport)
+                    }
+                };
+                let bottom = match &clip.bottom {
+                    ClipComponent::Auto => abs_bounds.y() + height,
+                    ClipComponent::Length(len) => {
+                        abs_bounds.y() + resolve_length_for_paint(len, font_size, root_font, height, viewport)
+                    }
+                };
+
+                let clip_rect = Rect::from_xywh(left, top, right - left, bottom - top);
+                if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+                    None
+                } else {
+                    Some(clip_rect)
+                }
+            });
+
+            match (overflow_clip, clip_property) {
+                (Some((rect, _radii, _cx, _cy)), Some(prop_rect)) => {
+                    rect.intersection(prop_rect).map(|r| (r, BorderRadii::ZERO, true, true))
+                }
+                (Some((rect, radii, cx, cy)), None) => Some((rect, radii, cx, cy)),
+                (None, Some(prop_rect)) => Some((prop_rect, BorderRadii::ZERO, true, true)),
+                (None, None) => None,
             }
-            let rects = background_rects(
-                abs_bounds.x(),
-                abs_bounds.y(),
-                abs_bounds.width(),
-                abs_bounds.height(),
-                style,
-                Some((self.css_width, self.css_height)),
-            );
-            let clip_rect = rects.padding;
-            if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
-                return None;
-            }
-            let clip_radii = resolve_clip_radii(
-                style,
-                &rects,
-                crate::style::types::BackgroundBox::PaddingBox,
-                Some((self.css_width, self.css_height)),
-            );
-            Some((clip_rect, clip_radii, clip_x, clip_y))
         });
         let clip_path = style_ref
             .and_then(|style| resolve_clip_path(style, abs_bounds, (self.css_width, self.css_height), &self.font_ctx));
@@ -1615,11 +1666,13 @@ impl Painter {
                     ),
                 };
                 let device_root_rect = self.device_rect(root_rect);
+                let has_clip = clip.is_some();
                 let (mut unclipped, clipped): (Vec<DisplayCommand>, Vec<DisplayCommand>) =
                     translated.into_iter().partition(|cmd| match cmd {
                         DisplayCommand::Outline { .. } => true,
                         DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. } => {
-                            (rect.x() - root_rect.x()).abs() < f32::EPSILON
+                            !has_clip
+                                && (rect.x() - root_rect.x()).abs() < f32::EPSILON
                                 && (rect.y() - root_rect.y()).abs() < f32::EPSILON
                                 && (rect.width() - root_rect.width()).abs() < f32::EPSILON
                                 && (rect.height() - root_rect.height()).abs() < f32::EPSILON
@@ -8809,6 +8862,28 @@ mod tests {
         assert_eq!(color_at(&pixmap, 10, 10), (255, 0, 0, 255));
         assert_eq!(color_at(&pixmap, 10, 25), (255, 255, 255, 255));
         assert_eq!(color_at(&pixmap, 22, 10), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn clip_rect_clips_contents() {
+        let mut style = ComputedStyle::default();
+        style.position = Position::Absolute;
+        style.background_color = Rgba::RED;
+        style.clip = Some(style::types::ClipRect {
+            top: ClipComponent::Length(Length::px(5.0)),
+            right: ClipComponent::Length(Length::px(15.0)),
+            bottom: ClipComponent::Length(Length::px(15.0)),
+            left: ClipComponent::Length(Length::px(5.0)),
+        });
+        let fragment =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+
+        // Outside the clip rect should stay white; inside should paint red.
+        assert_eq!(color_at(&pixmap, 2, 2), (255, 255, 255, 255));
+        assert_eq!(color_at(&pixmap, 10, 10), (255, 0, 0, 255));
     }
 
     #[test]

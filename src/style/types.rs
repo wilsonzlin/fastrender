@@ -2045,6 +2045,20 @@ pub struct BackgroundLayer {
     pub blend_mode: MixBlendMode,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipComponent {
+    Auto,
+    Length(Length),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClipRect {
+    pub top: ClipComponent,
+    pub right: ClipComponent,
+    pub bottom: ClipComponent,
+    pub left: ClipComponent,
+}
+
 impl Default for BackgroundLayer {
     fn default() -> Self {
         Self {
