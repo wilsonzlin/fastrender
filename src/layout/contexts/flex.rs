@@ -1824,6 +1824,9 @@ fn flex_style_fingerprint(style: &ComputedStyle) -> u64 {
     hash_length(&style.border_right_width, &mut h);
     hash_length(&style.border_bottom_width, &mut h);
     hash_length(&style.border_left_width, &mut h);
+    hash_enum_discriminant(&style.overflow_x, &mut h);
+    hash_enum_discriminant(&style.overflow_y, &mut h);
+    hash_enum_discriminant(&style.scrollbar_width, &mut h);
     hash_enum_discriminant(&style.flex_direction, &mut h);
     hash_enum_discriminant(&style.flex_wrap, &mut h);
     hash_enum_discriminant(&style.justify_content, &mut h);
@@ -3950,6 +3953,27 @@ mod tests {
         assert_eq!(taffy_style.scrollbar_width, resolve_scrollbar_width(&node.style));
         assert_eq!(taffy_style.overflow.x, TaffyOverflow::Scroll);
         assert_eq!(taffy_style.overflow.y, TaffyOverflow::Hidden);
+    }
+
+    #[test]
+    fn flex_style_fingerprint_accounts_for_scrollbar_and_overflow() {
+        let mut style_a = ComputedStyle::default();
+        style_a.display = Display::Flex;
+        style_a.overflow_x = Overflow::Hidden;
+        style_a.scrollbar_width = ScrollbarWidth::Auto;
+
+        let mut style_b = style_a.clone();
+        style_b.scrollbar_width = ScrollbarWidth::Thin;
+
+        let mut style_c = style_a.clone();
+        style_c.overflow_x = Overflow::Scroll;
+
+        let fp_a = super::flex_style_fingerprint(&style_a);
+        let fp_b = super::flex_style_fingerprint(&style_b);
+        let fp_c = super::flex_style_fingerprint(&style_c);
+
+        assert_ne!(fp_a, fp_b, "scrollbar width should affect flex style fingerprint");
+        assert_ne!(fp_a, fp_c, "overflow should affect flex style fingerprint");
     }
 
     #[test]
