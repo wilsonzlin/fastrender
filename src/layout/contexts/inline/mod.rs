@@ -7079,6 +7079,57 @@ mod tests {
     }
 
     #[test]
+    fn marker_inside_consumes_inline_space_in_vertical_rl() {
+        let ifc = InlineFormattingContext::new();
+
+        let mut marker_style = ComputedStyle::default();
+        marker_style.writing_mode = WritingMode::VerticalRl;
+        marker_style.list_style_position = ListStylePosition::Inside;
+        marker_style.font_size = 16.0;
+        let marker_style = Arc::new(marker_style);
+
+        let marker = BoxNode::new_marker(
+            marker_style,
+            MarkerContent::Image(ReplacedBox {
+                replaced_type: ReplacedType::Image {
+                    src: String::new(),
+                    alt: None,
+                    sizes: None,
+                    srcset: Vec::new(),
+                },
+                intrinsic_size: Some(Size::new(10.0, 10.0)),
+                aspect_ratio: Some(1.0),
+            }),
+        );
+
+        let mut text_style = ComputedStyle::default();
+        text_style.writing_mode = WritingMode::VerticalRl;
+        let text = BoxNode::new_text(Arc::new(text_style), "content".to_string());
+
+        let mut root_style = ComputedStyle::default();
+        root_style.writing_mode = WritingMode::VerticalRl;
+        let root_style = Arc::new(root_style);
+
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+
+        // Constrain inline axis (height) so marker and text must share the inline space.
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(120.0), AvailableSpace::Definite(200.0));
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_y, text_y) = marker_and_text_positions_vertical(line);
+        let marker_y = marker_y.expect("marker y");
+        let text_y = text_y.expect("text y");
+
+        // Marker should consume inline space so text starts after it (marker height + default gap ~8px).
+        assert!(
+            text_y - marker_y > 15.0,
+            "inside marker should consume inline space in vertical-rl; marker_y={}, text_y={}",
+            marker_y,
+            text_y
+        );
+    }
+
+    #[test]
     fn marker_outside_positions_inline_start_in_sideways_rl_rtl_direction() {
         let ifc = InlineFormattingContext::new();
         let mut root_style = ComputedStyle::default();
@@ -8377,7 +8428,12 @@ mod tests {
                 );
                 for (i, child) in line.children.iter().enumerate() {
                     if let FragmentContent::Text { text, .. } = &child.content {
-                        eprintln!("child#{i} text='{}' x={} w={} ", text, child.bounds.x(), child.bounds.width());
+                        eprintln!(
+                            "child#{i} text='{}' x={} w={} ",
+                            text,
+                            child.bounds.x(),
+                            child.bounds.width()
+                        );
                     }
                 }
             }
