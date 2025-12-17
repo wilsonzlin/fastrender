@@ -1,6 +1,7 @@
 # Scratchpad – rendering engine session notes
 - Added gitlab.com/weebly.com/weibo.cn to fetch_pages PAGES; `cargo check --bin fetch_pages` passes. Currently idle/available for new tasks.
 - Added image-orientation inheritance, tokenized multi-keyword parsing for image-orientation/image-resolution (fixes "90deg flip" parsing), cascade/css parser tests, and a cascade inheritance test. `cargo test image_orientation -- --nocapture` and `cargo test tokenizes_image_resolution_multi_keyword -- --nocapture` pass.
+- Added display-list coverage for image-set backgrounds/content to ensure high-DPR candidates are selected in the display list path (data-URL PNGs in DisplayListBuilder tests).
 - Inline line-height negative leading is now honored: half-leading is no longer clamped in inline baseline logic, strut initialization, painter, and display list builder, so line-height values smaller than ascent+descent shrink the line box instead of inflating to content height. Added regressions for BaselineMetrics and BaselineAligner to cover negative leading behavior. Git pull/push currently timing out; commit is local only for now.
 - Ran `cargo test baseline --quiet` to cover baseline suite; all passing. Git push still timing out.
 - Row-spanning baseline cells now reserve height in the first row (baseline splitting feeds row sizing), but row baselines still ignore spanning cells per CSS 2.1. Added a regression to ensure rowspans don't set the table baseline and renamed the old rowspan baseline test.
