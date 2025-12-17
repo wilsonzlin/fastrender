@@ -1498,3 +1498,4 @@ Actionable borrowings:
 - Added a TextRun regression ensuring half-leading can be negative when line-height is smaller than text height (test_text_run_negative_half_leading).
 - Inline bidi: added layout regression `bidi_isolate_positions_between_surrounding_runs` to ensure a unicode-bidi:isolate RTL run stays contiguous and is positioned between surrounding LTR text in visual order.
 - Display-list outlines bypass clip masks like CSS outlines; regression `outline_ignores_clip_region` ensures outlines extend outside clipped regions.
+# Added painter background image-rendering coverage: pixelated backgrounds now have a regression ensuring nearest-neighbor sampling/snap-upscale is applied (`cargo test background_image_rendering_pixelated_uses_nearest_sampling --quiet`).
