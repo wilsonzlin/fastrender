@@ -1078,6 +1078,35 @@ mod tests {
     }
 
     #[test]
+    fn compute_replaced_min_height_percentage_expands_with_ratio() {
+        let mut style = ComputedStyle::default();
+        style.min_height = Some(Length::percent(50.0));
+        style.aspect_ratio = crate::style::types::AspectRatio::Ratio(2.0);
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            intrinsic_size: Some(Size::new(80.0, 60.0)),
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(
+            &style,
+            &replaced,
+            Some(Size::new(300.0, 300.0)),
+            Size::new(800.0, 600.0),
+        );
+
+        // Min-height 50% of 300px yields 150px; aspect ratio expands width to 300px.
+        assert!((size.height - 150.0).abs() < 0.01);
+        assert!((size.width - 300.0).abs() < 0.01);
+    }
+
+    #[test]
     fn resolves_scrollbar_width_keywords() {
         let mut style = ComputedStyle::default();
         style.scrollbar_width = ScrollbarWidth::Auto;
