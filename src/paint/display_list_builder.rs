@@ -27,6 +27,7 @@
 //! ```
 
 use crate::css::types::ColorStop;
+use crate::css::types::Transform as CssTransform;
 use crate::css::types::{RadialGradientShape, RadialGradientSize};
 use crate::geometry::{Point, Rect, Size};
 use crate::image_loader::ImageCache;
@@ -48,7 +49,7 @@ use crate::style::color::Rgba;
 use crate::style::types::{
     BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
     BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderImageSource, ImageOrientation,
-    ImageRendering, Isolation, MixBlendMode, ObjectFit, ResolvedTextDecoration, TextDecorationLine,
+    BackfaceVisibility, ImageRendering, Isolation, MixBlendMode, ObjectFit, ResolvedTextDecoration, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle,
     TextUnderlineOffset, TextUnderlinePosition, TransformBox,
 };
@@ -232,6 +233,9 @@ impl DisplayListBuilder {
             if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
                 return;
             }
+            if Self::backface_culled(style) {
+                return;
+            }
         }
 
         let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
@@ -280,6 +284,9 @@ impl DisplayListBuilder {
     fn build_fragment_with_clips(&mut self, fragment: &FragmentNode, offset: Point, clips: &HashSet<Option<usize>>) {
         if let Some(style) = fragment.style.as_deref() {
             if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
+                return;
+            }
+            if Self::backface_culled(style) {
                 return;
             }
         }
@@ -1325,6 +1332,62 @@ impl DisplayListBuilder {
 
     fn border_side_visible(side: &BorderSide) -> bool {
         side.width > 0.0 && Self::border_style_visible(side.style) && !side.color.is_transparent()
+    }
+
+    fn backface_culled(style: &ComputedStyle) -> bool {
+        if !matches!(style.backface_visibility, BackfaceVisibility::Hidden) {
+            return false;
+        }
+        if style.transform.is_empty() {
+            return false;
+        }
+
+        let mut normal = [0.0_f32, 0.0_f32, 1.0_f32];
+        for t in &style.transform {
+            match t {
+                CssTransform::RotateX(deg) => {
+                    let rad = deg.to_radians();
+                    let cos = rad.cos();
+                    let sin = rad.sin();
+                    let ny = normal[1] * cos - normal[2] * sin;
+                    let nz = normal[1] * sin + normal[2] * cos;
+                    normal[1] = ny;
+                    normal[2] = nz;
+                }
+                CssTransform::RotateY(deg) => {
+                    let rad = deg.to_radians();
+                    let cos = rad.cos();
+                    let sin = rad.sin();
+                    let nx = normal[0] * cos + normal[2] * sin;
+                    let nz = -normal[0] * sin + normal[2] * cos;
+                    normal[0] = nx;
+                    normal[2] = nz;
+                }
+                CssTransform::Rotate3d(x, y, z, deg) => {
+                    let len = (x * x + y * y + z * z).sqrt();
+                    if len > f32::EPSILON {
+                        let ax = *x / len;
+                        let ay = *y / len;
+                        let az = *z / len;
+                        let rad = deg.to_radians();
+                        let cos = rad.cos();
+                        let sin = rad.sin();
+                        let dot = ax * normal[0] + ay * normal[1] + az * normal[2];
+                        let cross = [
+                            ay * normal[2] - az * normal[1],
+                            az * normal[0] - ax * normal[2],
+                            ax * normal[1] - ay * normal[0],
+                        ];
+                        normal[0] = normal[0] * cos + cross[0] * sin + ax * dot * (1.0 - cos);
+                        normal[1] = normal[1] * cos + cross[1] * sin + ay * dot * (1.0 - cos);
+                        normal[2] = normal[2] * cos + cross[2] * sin + az * dot * (1.0 - cos);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        normal[2] < 0.0
     }
 
     fn build_transform(style: &ComputedStyle, bounds: Rect, viewport: Option<(f32, f32)>) -> Option<Transform2D> {
@@ -4441,5 +4504,24 @@ mod tests {
 
         assert!((transform.e + 15.0).abs() < 1e-3);
         assert!((transform.f).abs() < 1e-3);
+    }
+
+    #[test]
+    fn backface_hidden_skips_display_items() {
+        let mut style = ComputedStyle::default();
+        style.backface_visibility = BackfaceVisibility::Hidden;
+        style.transform.push(Transform::RotateY(180.0));
+        style.background_color = Rgba::BLACK;
+
+        let fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+            vec![],
+            Arc::new(style),
+        );
+
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+
+        assert!(list.is_empty(), "backface hidden element should not emit display items");
     }
 }

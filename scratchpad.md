@@ -1,5 +1,7 @@
 # Scratchpad – rendering engine session notes
 Idle; no current tasks. Available for new tasks.
+- Backface visibility implemented: backface-visibility:hidden now culls fragments when 3D rotations flip the normal (rotateX/Y/3d). Painter/display list skip culled faces and tests cover display list emission and painter output.
+- Added a collapsed-border regression to ensure corner winners retain style/width/color (dotted 2px case).
 - Added a display-list regression for `background-attachment: local`: display-list builder/renderer keep backgrounds clipped to the padding box for scrollable elements (border stays transparent, padding paints red). `cargo test background_attachment_local_clips_to_padding_box_in_display_list -- --nocapture` passes.
 - Added a display-list regression for `background-attachment: fixed` that renders two adjacent fragments through the display list renderer; fixed backgrounds stay anchored to the viewport (colors differ across x). `cargo test background_attachment_fixed_anchors_to_viewport_in_display_list -- --nocapture` passes.
 - text-align-last now allows `justify-all` to justify the final line even when `text-align-last:auto`; last-line justification is blocked only for `justify`+auto. Static-position alignment uses the same gating, and a regression covers justify-all single-line justification.
@@ -24,7 +26,15 @@ Idle; no current tasks. Available for new tasks.
 - Inline line-height negative leading is now honored: half-leading is no longer clamped in inline baseline logic, strut initialization, painter, and display list builder, so line-height values smaller than ascent+descent shrink the line box instead of inflating to content height. Added regressions for BaselineMetrics and BaselineAligner to cover negative leading behavior.
 - Ran `cargo test baseline --quiet` to cover baseline suite; all passing. Git push still timing out.
 - Row-spanning baseline cells now reserve height in the first row (baseline splitting feeds row sizing), but row baselines still ignore spanning cells per CSS 2.1. Added a regression to ensure rowspans don't set the table baseline and renamed the old rowspan baseline test.
+<<<<<<< HEAD
 - Media: added coverage for `FASTR_PREFERS_REDUCED_TRANSPARENCY=no-preference` so env overrides handle both CLI flag values (`reduce`/`no-preference`).
+=======
+<<<<<<< HEAD
+=======
+- Backface visibility implemented: backface-visibility:hidden now culls fragments when 3D rotations flip the normal (rotateX/Y/3d). Painter/display list skip culled faces and tests cover display list emission and painter output.
+- Collapsed border corners now have regression coverage to ensure the winning style/width/color carry through (dotted 2px case), guarding corner styling preservation.
+>>>>>>> e73d235 (Add backface-visibility culling and tests)
+>>>>>>> 9a354fb (Add backface-visibility culling and tests)
 - Decoupled `text-align` from `text-align-last` so setting `text-align` no longer clobbers inherited/explicit last-line alignment; layout now justifies the final line for `text-align: justify-all` even when `text-align-last` stays `auto`. Added cascade regressions (`text_align_does_not_reset_text_align_last`, `text_align_justify_all_respects_explicit_last_line_alignment`) and IFC tests for explicit last-line overrides and justify-all default justification.
 - Added cascade regression for `text-align: match-parent` with RTL + `text-align: end`: children inherit the resolved left alignment from the parent's direction when using match-parent.
 - UA link states: added user-agent CSS for `a:link`/`:visited`/`:active` colors, exposed test flags via `data-fastr-visited`/`data-fastr-active` pseudo matching, and added cascade/DOM regressions to ensure unvisited links get blue/underline/pointer and visited/active flags pick purple/red.
