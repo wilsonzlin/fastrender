@@ -3,6 +3,7 @@
 - Replaced-element min-height coverage: percentage min-height with an indefinite height base is ignored; added regression `compute_replaced_ignores_min_height_percentage_without_base` to lock the behavior.
 - Replaced aspect-ratio + padding coverage: border-box width with percent padding derives content size before applying the aspect ratio; regression `compute_replaced_border_box_ratio_respects_padding` checks a 200px box with 10% padding yields a 160px content width and 80px content height.
 - Replaced max-height percentage coverage: when max-height uses a definite percentage base, it clamps height while leaving specified width unchanged; regression `compute_replaced_max_height_percentage_resolves_with_base` covers a 360px wide, 1.5 ratio image with max-height:50% of a 300px base.
+- Replaced intrinsic size unaffected by padding: compute_replaced_size returns content-box dimensions; percent padding doesn’t inflate intrinsic size. Regression `compute_replaced_intrinsic_size_unaffected_by_padding` checks intrinsic 120×80 remains unchanged with padding set.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.

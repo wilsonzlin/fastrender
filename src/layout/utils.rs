@@ -1047,6 +1047,37 @@ mod tests {
     }
 
     #[test]
+    fn compute_replaced_intrinsic_size_unaffected_by_padding() {
+        let mut style = ComputedStyle::default();
+        style.padding_left = Length::percent(10.0);
+        style.padding_right = Length::percent(5.0);
+        style.padding_top = Length::percent(10.0);
+        style.padding_bottom = Length::percent(5.0);
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            intrinsic_size: Some(Size::new(120.0, 80.0)),
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(
+            &style,
+            &replaced,
+            Some(Size::new(200.0, 300.0)),
+            Size::new(800.0, 600.0),
+        );
+
+        // compute_replaced_size returns the content box; padding is applied by callers.
+        assert!((size.width - 120.0).abs() < 0.01);
+        assert!((size.height - 80.0).abs() < 0.01);
+    }
+
+    #[test]
     fn resolves_scrollbar_width_keywords() {
         let mut style = ComputedStyle::default();
         style.scrollbar_width = ScrollbarWidth::Auto;
