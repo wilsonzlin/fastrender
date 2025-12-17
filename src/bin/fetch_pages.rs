@@ -64,6 +64,7 @@ const PAGES: &[&str] = &[
     "https://quora.com",
     "https://twitch.tv",
     "https://dropbox.com",
+    "https://stripe.com",
     "https://shopify.com",
     "https://weebly.com",
     "https://etsy.com",
