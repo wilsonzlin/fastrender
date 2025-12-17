@@ -3826,6 +3826,46 @@ mod tests {
         assert_eq!(para2_text, expected_para2);
     }
 
+    #[test]
+    fn bidi_isolate_does_not_affect_following_paragraph() {
+        // An isolate in the first paragraph should not alter the base direction of the next paragraph.
+        let mut builder = make_builder(200.0);
+
+        let mut para1 = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::Isolate,
+        );
+        para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+        builder.add_item(InlineItem::InlineBox(para1));
+        builder.force_break();
+
+        builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 2);
+
+        let para1_text: String = lines[0]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+        let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{2067}', '\u{2069}'), Some(Level::ltr()));
+        assert_eq!(para1_text, expected_para1);
+
+        let para2_text: String = lines[1]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+        assert_eq!(para2_text, "DEF".to_string());
+    }
+
     fn nested_inline_box_with_depth(
         depth: usize,
         ub: UnicodeBidi,
