@@ -1985,84 +1985,120 @@ impl MediaContext {
         match feature {
             // Width features
             MediaFeature::Width(length) => {
-                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
-                (self.viewport_width - target).abs() < 0.5
+                self
+                    .resolve_length(length, self.viewport_width, self.viewport_height)
+                    .map(|target| (self.viewport_width - target).abs() < 0.5)
+                    .unwrap_or(false)
             }
             MediaFeature::MinWidth(length) => {
-                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
-                self.viewport_width >= target
+                self
+                    .resolve_length(length, self.viewport_width, self.viewport_height)
+                    .map(|target| self.viewport_width >= target)
+                    .unwrap_or(false)
             }
             MediaFeature::MaxWidth(length) => {
-                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
-                self.viewport_width <= target
+                self
+                    .resolve_length(length, self.viewport_width, self.viewport_height)
+                    .map(|target| self.viewport_width <= target)
+                    .unwrap_or(false)
             }
 
             // Inline-size (alias of width for container queries)
             MediaFeature::InlineSize(length) => {
-                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
-                (self.viewport_width - target).abs() < 0.5
+                self
+                    .resolve_length(length, self.viewport_width, self.viewport_height)
+                    .map(|target| (self.viewport_width - target).abs() < 0.5)
+                    .unwrap_or(false)
             }
             MediaFeature::MinInlineSize(length) => {
-                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
-                self.viewport_width >= target
+                self
+                    .resolve_length(length, self.viewport_width, self.viewport_height)
+                    .map(|target| self.viewport_width >= target)
+                    .unwrap_or(false)
             }
             MediaFeature::MaxInlineSize(length) => {
-                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
-                self.viewport_width <= target
+                self
+                    .resolve_length(length, self.viewport_width, self.viewport_height)
+                    .map(|target| self.viewport_width <= target)
+                    .unwrap_or(false)
             }
 
             // Height features
             MediaFeature::Height(length) => {
-                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
-                (self.viewport_height - target).abs() < 0.5
+                self
+                    .resolve_length(length, self.viewport_height, self.viewport_width)
+                    .map(|target| (self.viewport_height - target).abs() < 0.5)
+                    .unwrap_or(false)
             }
             MediaFeature::MinHeight(length) => {
-                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
-                self.viewport_height >= target
+                self
+                    .resolve_length(length, self.viewport_height, self.viewport_width)
+                    .map(|target| self.viewport_height >= target)
+                    .unwrap_or(false)
             }
             MediaFeature::MaxHeight(length) => {
-                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
-                self.viewport_height <= target
+                self
+                    .resolve_length(length, self.viewport_height, self.viewport_width)
+                    .map(|target| self.viewport_height <= target)
+                    .unwrap_or(false)
             }
 
             // Block-size (alias of height for container queries)
             MediaFeature::BlockSize(length) => {
-                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
-                (self.viewport_height - target).abs() < 0.5
+                self
+                    .resolve_length(length, self.viewport_height, self.viewport_width)
+                    .map(|target| (self.viewport_height - target).abs() < 0.5)
+                    .unwrap_or(false)
             }
             MediaFeature::MinBlockSize(length) => {
-                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
-                self.viewport_height >= target
+                self
+                    .resolve_length(length, self.viewport_height, self.viewport_width)
+                    .map(|target| self.viewport_height >= target)
+                    .unwrap_or(false)
             }
             MediaFeature::MaxBlockSize(length) => {
-                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
-                self.viewport_height <= target
+                self
+                    .resolve_length(length, self.viewport_height, self.viewport_width)
+                    .map(|target| self.viewport_height <= target)
+                    .unwrap_or(false)
             }
 
             // Device dimensions
             MediaFeature::DeviceWidth(length) => {
-                let target = self.resolve_length(length, self.device_width, self.device_height);
-                (self.device_width - target).abs() < 0.5
+                self
+                    .resolve_length(length, self.device_width, self.device_height)
+                    .map(|target| (self.device_width - target).abs() < 0.5)
+                    .unwrap_or(false)
             }
             MediaFeature::MinDeviceWidth(length) => {
-                let target = self.resolve_length(length, self.device_width, self.device_height);
-                self.device_width >= target
+                self
+                    .resolve_length(length, self.device_width, self.device_height)
+                    .map(|target| self.device_width >= target)
+                    .unwrap_or(false)
             }
             MediaFeature::MaxDeviceWidth(length) => {
-                let target = self.resolve_length(length, self.device_width, self.device_height);
-                self.device_width <= target
+                self
+                    .resolve_length(length, self.device_width, self.device_height)
+                    .map(|target| self.device_width <= target)
+                    .unwrap_or(false)
             }
             MediaFeature::DeviceHeight(length) => {
-                let target = self.resolve_length(length, self.device_height, self.device_width);
-                (self.device_height - target).abs() < 0.5
+                self
+                    .resolve_length(length, self.device_height, self.device_width)
+                    .map(|target| (self.device_height - target).abs() < 0.5)
+                    .unwrap_or(false)
             }
             MediaFeature::MinDeviceHeight(length) => {
-                let target = self.resolve_length(length, self.device_height, self.device_width);
-                self.device_height >= target
+                self
+                    .resolve_length(length, self.device_height, self.device_width)
+                    .map(|target| self.device_height >= target)
+                    .unwrap_or(false)
             }
             MediaFeature::MaxDeviceHeight(length) => {
-                let target = self.resolve_length(length, self.device_height, self.device_width);
-                self.device_height <= target
+                self
+                    .resolve_length(length, self.device_height, self.device_width)
+                    .map(|target| self.device_height <= target)
+                    .unwrap_or(false)
             }
 
             // Orientation
@@ -2180,28 +2216,40 @@ impl MediaContext {
             },
             MediaFeature::Range { feature, op, value } => match (feature, value) {
                 (RangeFeature::Width, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len, self.viewport_width, self.viewport_height);
-                    compare_with_op(*op, self.viewport_width, target)
+                    self
+                        .resolve_length(len, self.viewport_width, self.viewport_height)
+                        .map(|target| compare_with_op(*op, self.viewport_width, target))
+                        .unwrap_or(false)
                 }
                 (RangeFeature::InlineSize, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len, self.viewport_width, self.viewport_height);
-                    compare_with_op(*op, self.viewport_width, target)
+                    self
+                        .resolve_length(len, self.viewport_width, self.viewport_height)
+                        .map(|target| compare_with_op(*op, self.viewport_width, target))
+                        .unwrap_or(false)
                 }
                 (RangeFeature::BlockSize, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len, self.viewport_height, self.viewport_width);
-                    compare_with_op(*op, self.viewport_height, target)
+                    self
+                        .resolve_length(len, self.viewport_height, self.viewport_width)
+                        .map(|target| compare_with_op(*op, self.viewport_height, target))
+                        .unwrap_or(false)
                 }
                 (RangeFeature::Height, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len, self.viewport_height, self.viewport_width);
-                    compare_with_op(*op, self.viewport_height, target)
+                    self
+                        .resolve_length(len, self.viewport_height, self.viewport_width)
+                        .map(|target| compare_with_op(*op, self.viewport_height, target))
+                        .unwrap_or(false)
                 }
                 (RangeFeature::DeviceWidth, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len, self.device_width, self.device_height);
-                    compare_with_op(*op, self.device_width, target)
+                    self
+                        .resolve_length(len, self.device_width, self.device_height)
+                        .map(|target| compare_with_op(*op, self.device_width, target))
+                        .unwrap_or(false)
                 }
                 (RangeFeature::DeviceHeight, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len, self.device_height, self.device_width);
-                    compare_with_op(*op, self.device_height, target)
+                    self
+                        .resolve_length(len, self.device_height, self.device_width)
+                        .map(|target| compare_with_op(*op, self.device_height, target))
+                        .unwrap_or(false)
                 }
                 (RangeFeature::AspectRatio, RangeValue::AspectRatio(w, h)) => {
                     let target_ratio = *w as f32 / *h as f32;
@@ -2222,52 +2270,56 @@ impl MediaContext {
         }
     }
 
-    fn resolve_length(&self, length: &Length, inline_base: f32, block_base: f32) -> f32 {
+    fn resolve_length(&self, length: &Length, inline_base: f32, block_base: f32) -> Option<f32> {
         // For media/container queries, resolve lengths to pixels using the
         // context viewport and base font size (em/rem derived from the query context).
         use crate::style::values::LengthUnit;
 
-        let base_font = if self.base_font_size.is_finite() && self.base_font_size > 0.0 {
-            self.base_font_size
-        } else {
-            16.0
-        };
+        let base_font = self
+            .base_font_size
+            .is_finite()
+            .then_some(self.base_font_size)
+            .filter(|v| *v > 0.0)
+            .unwrap_or(16.0);
+
+        let vw = self.viewport_width.is_finite().then_some(self.viewport_width)?;
+        let vh = self.viewport_height.is_finite().then_some(self.viewport_height)?;
+        let inline = inline_base.is_finite().then_some(inline_base)?;
+        let block = block_base.is_finite().then_some(block_base)?;
 
         if length.unit == LengthUnit::Calc {
-            return length
-                .resolve_with_context(
-                    Some(inline_base),
-                    inline_base,
-                    block_base,
-                    base_font,
-                    base_font,
-                )
-                .unwrap_or(0.0);
+            return length.resolve_with_context(
+                Some(inline),
+                inline,
+                block,
+                base_font,
+                base_font,
+            );
         }
         match length.unit {
-            LengthUnit::Px => length.value,
-            LengthUnit::Em => length.value * base_font,
-            LengthUnit::Rem => length.value * base_font,
-            LengthUnit::Percent => length.value / 100.0 * inline_base,
-            LengthUnit::Vw => length.value / 100.0 * self.viewport_width,
-            LengthUnit::Vh => length.value / 100.0 * self.viewport_height,
+            LengthUnit::Px => Some(length.value),
+            LengthUnit::Em => Some(length.value * base_font),
+            LengthUnit::Rem => Some(length.value * base_font),
+            LengthUnit::Percent => Some(length.value / 100.0 * inline),
+            LengthUnit::Vw => Some(length.value / 100.0 * vw),
+            LengthUnit::Vh => Some(length.value / 100.0 * vh),
             LengthUnit::Vmin => {
-                let min_dimension = self.viewport_width.min(self.viewport_height);
-                length.value / 100.0 * min_dimension
+                let min_dimension = vw.min(vh);
+                Some(length.value / 100.0 * min_dimension)
             }
             LengthUnit::Vmax => {
-                let max_dimension = self.viewport_width.max(self.viewport_height);
-                length.value / 100.0 * max_dimension
+                let max_dimension = vw.max(vh);
+                Some(length.value / 100.0 * max_dimension)
             }
-            LengthUnit::Pt => length.value * 96.0 / 72.0,
-            LengthUnit::Cm => length.value * 96.0 / 2.54,
-            LengthUnit::Mm => length.value * 96.0 / 25.4,
-            LengthUnit::Q => length.value * 96.0 / 101.6, // 1Q = 0.25mm = 1/40th cm
-            LengthUnit::In => length.value * 96.0,
-            LengthUnit::Pc => length.value * 16.0,
-            LengthUnit::Ex => length.value * (base_font * 0.5), // Approximate: half of em
-            LengthUnit::Ch => length.value * (base_font * 0.5), // Approximate: width of '0'
-            LengthUnit::Calc => 0.0,
+            LengthUnit::Pt => Some(length.value * 96.0 / 72.0),
+            LengthUnit::Cm => Some(length.value * 96.0 / 2.54),
+            LengthUnit::Mm => Some(length.value * 96.0 / 25.4),
+            LengthUnit::Q => Some(length.value * 96.0 / 101.6), // 1Q = 0.25mm = 1/40th cm
+            LengthUnit::In => Some(length.value * 96.0),
+            LengthUnit::Pc => Some(length.value * 16.0),
+            LengthUnit::Ex => Some(length.value * (base_font * 0.5)), // Approximate: half of em
+            LengthUnit::Ch => Some(length.value * (base_font * 0.5)), // Approximate: width of '0'
+            LengthUnit::Calc => None,
         }
     }
 }
@@ -3306,6 +3358,18 @@ mod tests {
         assert!(!printer.evaluate(&fine_query));
         assert!(!printer.evaluate(&coarse_query));
         assert!(printer.evaluate(&none_query));
+    }
+
+    #[test]
+    fn media_query_with_non_finite_viewport_does_not_match() {
+        let mut ctx = MediaContext::screen(f32::NAN, 800.0);
+        let width_query = MediaQuery::parse("(min-width: 10vw)").unwrap();
+        assert!(!ctx.evaluate(&width_query));
+
+        ctx.viewport_width = 800.0;
+        ctx.viewport_height = f32::NAN;
+        let height_query = MediaQuery::parse("(min-height: 10vh)").unwrap();
+        assert!(!ctx.evaluate(&height_query));
     }
 
     #[test]

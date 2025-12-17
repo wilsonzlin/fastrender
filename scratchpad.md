@@ -1488,3 +1488,4 @@ Actionable borrowings:
 # Added painter background image-rendering coverage: pixelated backgrounds now have a regression ensuring nearest-neighbor sampling/snap-upscale is applied (`cargo test background_image_rendering_pixelated_uses_nearest_sampling --quiet`).
 - Media queries: `any-pointer` now matches only the available pointer capability (fine/coarse/none) instead of treating fine pointers as coarse; added regression `test_evaluate_any_pointer` covering desktop/mobile/print contexts.
 - Media queries: `any-pointer` now tracks coarse/fine availability separately; hybrid devices can satisfy both coarse and fine, and regression `test_evaluate_any_pointer_hybrid` covers the combined case.
+- Media queries: length resolution now returns None when viewport bases are non-finite; vw/vh/percent/calc queries fail gracefully instead of propagating NaNs. Regression `media_query_with_non_finite_viewport_does_not_match` added.
