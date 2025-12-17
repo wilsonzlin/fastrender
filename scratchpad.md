@@ -1,3 +1,4 @@
+# Calc helpers now require proper context: calc lengths with percentage/viewport/font terms return None in viewport/font resolvers when bases are missing, and a regression `calc_resolution_helpers_require_context` covers the helpers.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # Color-scheme inheritance still validated; further palette audits ongoing.
 # Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
