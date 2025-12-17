@@ -1641,24 +1641,37 @@ fn mix_colors(space: ColorMixSpace, first: &(Box<Color>, f32), second: &(Box<Col
         ColorMixSpace::Srgb => {
             let c0 = first.0.to_rgba(current);
             let c1 = second.0.to_rgba(current);
-            let r = ((c0.r as f32 * w0 + c1.r as f32 * w1).round()).clamp(0.0, 255.0) as u8;
-            let g = ((c0.g as f32 * w0 + c1.g as f32 * w1).round()).clamp(0.0, 255.0) as u8;
-            let b = ((c0.b as f32 * w0 + c1.b as f32 * w1).round()).clamp(0.0, 255.0) as u8;
-            let a = c0.a * w0 + c1.a * w1;
-            Rgba::new(r, g, b, a)
+            let premix = |c: u8, a: f32| (c as f32 / 255.0) * a;
+            let alpha = (c0.a * w0 + c1.a * w1).clamp(0.0, 1.0);
+            if alpha == 0.0 {
+                return Rgba::TRANSPARENT;
+            }
+            let r = (premix(c0.r, c0.a) * w0 + premix(c1.r, c1.a) * w1) / alpha;
+            let g = (premix(c0.g, c0.a) * w0 + premix(c1.g, c1.a) * w1) / alpha;
+            let b = (premix(c0.b, c0.a) * w0 + premix(c1.b, c1.a) * w1) / alpha;
+            Rgba::new(
+                (r * 255.0).round().clamp(0.0, 255.0) as u8,
+                (g * 255.0).round().clamp(0.0, 255.0) as u8,
+                (b * 255.0).round().clamp(0.0, 255.0) as u8,
+                alpha,
+            )
         }
         ColorMixSpace::SrgbLinear => {
             let c0 = first.0.to_rgba(current);
             let c1 = second.0.to_rgba(current);
-            let r = srgb_to_linear_component(c0.r) * w0 + srgb_to_linear_component(c1.r) * w1;
-            let g = srgb_to_linear_component(c0.g) * w0 + srgb_to_linear_component(c1.g) * w1;
-            let b = srgb_to_linear_component(c0.b) * w0 + srgb_to_linear_component(c1.b) * w1;
-            let a = c0.a * w0 + c1.a * w1;
+            let premix = |c: u8, a: f32| srgb_to_linear_component(c) * a;
+            let alpha = (c0.a * w0 + c1.a * w1).clamp(0.0, 1.0);
+            if alpha == 0.0 {
+                return Rgba::TRANSPARENT;
+            }
+            let r = (premix(c0.r, c0.a) * w0 + premix(c1.r, c1.a) * w1) / alpha;
+            let g = (premix(c0.g, c0.a) * w0 + premix(c1.g, c1.a) * w1) / alpha;
+            let b = (premix(c0.b, c0.a) * w0 + premix(c1.b, c1.a) * w1) / alpha;
             Rgba::new(
                 linear_to_srgb_component(r),
                 linear_to_srgb_component(g),
                 linear_to_srgb_component(b),
-                a,
+                alpha,
             )
         }
         ColorMixSpace::Lab => {

@@ -10,10 +10,11 @@ use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Color;
 use fastrender::style::types::{
-    BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage,
-    BorderImageSlice, BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius,
-    TextDecorationStyle,
+    BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundPositionComponent, BackgroundRepeat, BasicShape,
+    BorderImage, BorderImageSlice, BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule,
+    ShapeRadius, TextDecorationStyle,
 };
+use fastrender::ComputedStyle;
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::fragment_tree::FragmentNode;
@@ -1090,4 +1091,39 @@ fn color_mix_oklch_renders_expected_color() {
         pixel(&pixmap, 0, 0),
         (expected.r, expected.g, expected.b, expected.alpha_u8())
     );
+}
+
+#[test]
+fn color_mix_handles_transparent_components() {
+    let mut style = ComputedStyle::default();
+    style.color = Rgba::BLACK;
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: Color::parse("color-mix(in srgb, rgba(255, 0, 0, 0.0) 50%, rgba(0, 0, 255, 1) 50%)")
+                        .unwrap(),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color::parse("color-mix(in srgb, rgba(255, 0, 0, 0.0) 50%, rgba(0, 0, 255, 1) 50%)")
+                        .unwrap(),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        repeat: BackgroundRepeat::no_repeat(),
+        ..BackgroundLayer::default()
+    }]);
+
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![], Arc::new(style));
+
+    let list = DisplayListBuilder::new().build(&fragment);
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::TRANSPARENT, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    let (r, g, b, a) = pixel(&pixmap, 1, 1);
+    assert_eq!((r, g, b, a), (0, 0, 128, 128));
 }
