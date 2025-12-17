@@ -3979,6 +3979,37 @@ mod tests {
     }
 
     #[test]
+    fn resolve_intrinsic_sizes_ignore_stroke_bounds() {
+        let renderer = FastRender::new().expect("init renderer");
+        let mut node = BoxNode::new_replaced(
+            Arc::new(ComputedStyle::default()),
+            ReplacedType::Svg {
+                content: r#"
+                    <svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='0 0 20 10'>
+                        <rect x='0' y='0' width='20' height='10' stroke='black' stroke-width='50' fill='none'/>
+                    </svg>
+                "#
+                .to_string(),
+            },
+            None,
+            None,
+        );
+
+        renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
+        let replaced = match node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+
+        assert_eq!(
+            replaced.intrinsic_size,
+            Some(Size::new(20.0, 10.0)),
+            "stroke should not inflate SVG intrinsic size"
+        );
+        assert_eq!(replaced.aspect_ratio, Some(2.0));
+    }
+
+    #[test]
     fn image_resolution_scales_intrinsic_size() {
         let renderer = FastRender::new().expect("init renderer");
 
