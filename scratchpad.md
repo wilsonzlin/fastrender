@@ -1,4 +1,5 @@
 # Added background image-rendering coverage: display-list builder regression ensures pixelated backgrounds use nearest-neighbor sampling; roadmap marks image-rendering implemented. `cargo test background_image_rendering_pixelated_sets_nearest_filter_quality --quiet` passes.
+# Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # Color-scheme inheritance still validated; further palette audits ongoing.
 # Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
