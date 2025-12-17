@@ -283,7 +283,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
 ];
 
 fn is_known_property(property: &str) -> bool {
-    KNOWN_PROPERTIES.binary_search(&property).is_ok()
+    KNOWN_PROPERTIES.contains(&property)
 }
 
 fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
@@ -767,6 +767,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "border-spacing"
                 | "background-position"
                 | "transform-origin"
+                | "touch-action"
                 | "list-style"
                 | "background"
                 | "background-image"
@@ -1551,6 +1552,18 @@ mod tests {
             matches!(list[1], PropertyValue::Length(len) if (len.value - 25.0).abs() < 0.01 && len.unit.is_percentage())
                 || matches!(list[1], PropertyValue::Percentage(p) if (p - 25.0).abs() < 0.01)
         );
+    }
+
+    #[test]
+    fn parses_touch_action_keyword_list() {
+        let parsed = parse_property_value("touch-action", "pan-x pan-y pinch-zoom");
+        let PropertyValue::Multiple(list) = parsed.expect("parsed") else {
+            panic!("expected Multiple");
+        };
+        assert_eq!(list.len(), 3);
+        assert!(matches!(&list[0], PropertyValue::Keyword(k) if k == "pan-x"));
+        assert!(matches!(&list[1], PropertyValue::Keyword(k) if k == "pan-y"));
+        assert!(matches!(&list[2], PropertyValue::Keyword(k) if k == "pinch-zoom"));
     }
 
     #[test]
