@@ -12,6 +12,7 @@ use fastrender::style::color::Color;
 use fastrender::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage, BorderImageSlice,
     BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius, TextDecorationStyle,
+    BackgroundLayer,
 };
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
@@ -814,4 +815,33 @@ fn filter_blur_not_clipped_to_bounds() {
         r > g && r > b && (g < 250 || b < 250),
         "expected red-dominant blur outside bounds; got ({r},{g},{b})"
     );
+}
+
+#[test]
+fn color_mix_background_renders_purple() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![ColorStop {
+                color: fastrender::Color::parse("color-mix(in srgb, red 50%, blue 50%)").unwrap(),
+                position: Some(0.0),
+            }],
+        }),
+        ..Default::default()
+    }]);
+
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build(&fragment);
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    let (r, g, b, _) = pixel(&pixmap, 2, 2);
+    assert!(r > 0 && b > 0 && (r as i32 - b as i32).abs() <= 1, "expected purple mix, got ({r},{g},{b})");
+    assert_eq!(g, 0);
 }
