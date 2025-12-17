@@ -3144,10 +3144,10 @@ impl TableFormattingContext {
             }
             let effective_max = if has_max_cap { max_w } else { f32::INFINITY };
             let specified_width = cell_box.style.width.as_ref().and_then(|width| match width.unit {
-                LengthUnit::Percent => {
-                    percent_base.map(|base| ((width.value / 100.0) * base).clamp(min_w, effective_max))
-                }
-                _ => Some(width.to_px().clamp(min_w, effective_max)),
+                LengthUnit::Percent => percent_base.map(|base| {
+                    crate::layout::utils::clamp_with_order((width.value / 100.0) * base, min_w, effective_max)
+                }),
+                _ => Some(crate::layout::utils::clamp_with_order(width.to_px(), min_w, effective_max)),
             });
             let span_specified_width = if width_is_percent && cell.colspan > 1 {
                 None
@@ -3174,7 +3174,7 @@ impl TableFormattingContext {
                             col.max_width = col.max_width.max(max_w);
                         }
                         _ => {
-                            let px = width.to_px().clamp(min_w, effective_max);
+                            let px = crate::layout::utils::clamp_with_order(width.to_px(), min_w, effective_max);
                             let col = &mut constraints[cell.col];
                             col.fixed_width = Some(px);
                             col.min_width = col.min_width.max(min_w);
@@ -5541,10 +5541,10 @@ mod tests {
         let span_box = tfc.get_cell_box(&table, &structure.cells[0]).expect("span cell");
         let (span_min, span_max) = tfc.measure_cell_intrinsic_widths(span_box, structure.border_collapse);
         let resolved_width = span_box.style.width.as_ref().and_then(|width| match width.unit {
-            LengthUnit::Percent => {
-                percent_base.map(|base| ((width.value / 100.0) * base).clamp(span_min, f32::INFINITY))
-            }
-            _ => Some(width.to_px().clamp(span_min, f32::INFINITY)),
+            LengthUnit::Percent => percent_base.map(|base| {
+                crate::layout::utils::clamp_with_order((width.value / 100.0) * base, span_min, f32::INFINITY)
+            }),
+            _ => Some(crate::layout::utils::clamp_with_order(width.to_px(), span_min, f32::INFINITY)),
         });
         tfc.populate_column_constraints(
             &table,

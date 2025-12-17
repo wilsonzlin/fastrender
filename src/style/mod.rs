@@ -381,10 +381,7 @@ pub struct ComputedStyle {
     pub text_align_last: TextAlignLast,
     pub text_justify: TextJustify,
     pub text_rendering: TextRendering,
-<<<<<<< HEAD
-=======
     pub text_indent: TextIndent,
->>>>>>> f749693 (Apply color-scheme preference to root defaults)
     pub text_size_adjust: TextSizeAdjust,
     pub text_overflow: TextOverflow,
     pub text_decoration: TextDecoration,
