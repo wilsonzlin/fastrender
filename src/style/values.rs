@@ -284,7 +284,7 @@ impl CalcLength {
         let mut total = 0.0;
         for term in self.terms() {
             let resolved = match term.unit {
-                LengthUnit::Percent => percentage_base.map(|b| (term.value / 100.0) * b),
+                LengthUnit::Percent => Some((term.value / 100.0) * percentage_base.unwrap_or(0.0)),
                 u if u.is_absolute() => Some(Length::new(term.value, u).to_px()),
                 u if u.is_viewport_relative() => {
                     Length::new(term.value, u).resolve_with_viewport(viewport_width, viewport_height)
@@ -774,7 +774,7 @@ impl Length {
             LengthUnit::Vmin => Some((self.value / 100.0) * viewport_width.min(viewport_height)),
             LengthUnit::Vmax => Some((self.value / 100.0) * viewport_width.max(viewport_height)),
             _ if self.unit.is_absolute() => Some(self.to_px()),
-            _ => None,
+            _ => Some(self.value),
         }
     }
 
@@ -800,7 +800,7 @@ impl Length {
         }
 
         if self.unit.is_percentage() {
-            percentage_base.map(|b| (self.value / 100.0) * b)
+            Some((self.value / 100.0) * percentage_base.unwrap_or(0.0))
         } else if self.unit.is_viewport_relative() {
             self.resolve_with_viewport(viewport_width, viewport_height)
         } else if self.unit.is_font_relative() {
@@ -962,7 +962,9 @@ impl LengthOrAuto {
     /// assert_eq!(LengthOrAuto::Auto.resolve_against(200.0), None);
     /// ```
     pub fn resolve_against(self, percentage_base: f32) -> Option<f32> {
-        self.length().and_then(|length| length.resolve_against(percentage_base))
+        self.length()
+            .and_then(|length| length.resolve_against(percentage_base))
+            .or_else(|| self.length().map(|length| length.to_px()))
     }
 
     /// Resolves this value, substituting a default for Auto
