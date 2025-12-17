@@ -1,4 +1,4 @@
-# Notes and recent work are tracked upstream; marker geometry/paint review still pending after gap/property regressions. Idle; no current tasks.
+# Notes and recent work are tracked upstream. Idle; no current tasks. Marker geometry/paint review still pending after gap/property regressions.
 # Marker outline ignored: marker cascade now resets outline properties; regression ensures authored/inherited outlines are cleared on ::marker.
 # Added hanging text-indent soft-wrap regression: soft-wrapped lines now explicitly covered when text-indent:hanging is set (first line unindented, subsequent soft wraps indented). `cargo test text_indent_hanging_indents_soft_wrapped_lines --quiet` passes.
 # Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.
