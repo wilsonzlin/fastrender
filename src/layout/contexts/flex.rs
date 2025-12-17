@@ -3397,6 +3397,26 @@ impl FlexFormattingContext {
             let drift_limit = rect.width().max(1.0) * 4.0;
             if min_x.is_finite() && min_x > drift_limit && max_x.is_finite() {
                 let dx = min_x;
+                static LOG_DRIFT: OnceLock<bool> = OnceLock::new();
+                let log_drift = *LOG_DRIFT
+                    .get_or_init(|| std::env::var("FASTR_LOG_FLEX_DRIFT").map(|v| v != "0").unwrap_or(false));
+                if log_drift {
+                    let selector = box_node
+                        .debug_info
+                        .as_ref()
+                        .map(|d| d.to_selector())
+                        .unwrap_or_else(|| "<anon>".to_string());
+                    eprintln!(
+                        "[flex-drift-clamp] id={} selector={} min_x={:.1} max_x={:.1} rect_w={:.1} dx={:.1} children={}",
+                        box_node.id,
+                        selector,
+                        min_x,
+                        max_x,
+                        rect.width(),
+                        dx,
+                        children.len()
+                    );
+                }
                 for child in &mut children {
                     child.bounds = Rect::new(
                         Point::new(child.bounds.x() - dx, child.bounds.y()),
