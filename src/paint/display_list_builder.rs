@@ -1200,7 +1200,18 @@ impl DisplayListBuilder {
     ) -> (f32, f32) {
         let resolve_axis = |comp: crate::style::types::BackgroundPositionComponent, area: f32, tile: f32| -> f32 {
             let available = area - tile;
-            let (vw, vh) = viewport.unwrap_or((area_w, area_h));
+            let needs_viewport = comp.offset.unit.is_viewport_relative()
+                || comp
+                    .offset
+                    .calc
+                    .as_ref()
+                    .map(|c| c.has_viewport_relative())
+                    .unwrap_or(false);
+            let (vw, vh) = match viewport {
+                Some(vp) => vp,
+                None if needs_viewport => (f32::NAN, f32::NAN),
+                None => (0.0, 0.0),
+            };
             let offset = comp
                 .offset
                 .resolve_with_context(Some(available), vw, vh, font_size, root_font_size)
@@ -1293,7 +1304,17 @@ impl DisplayListBuilder {
         percentage_base: f32,
         viewport: Option<(f32, f32)>,
     ) -> f32 {
-        let (vw, vh) = viewport.unwrap_or((percentage_base, percentage_base));
+        let needs_viewport = len.unit.is_viewport_relative()
+            || len
+                .calc
+                .as_ref()
+                .map(|c| c.has_viewport_relative())
+                .unwrap_or(false);
+        let (vw, vh) = match viewport {
+            Some(vp) => vp,
+            None if needs_viewport => (f32::NAN, f32::NAN),
+            None => (percentage_base, percentage_base),
+        };
         let resolved = len
             .resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
             .unwrap_or_else(|| {
@@ -4839,6 +4860,31 @@ mod tests {
         // 50% of 200 = 100; 2em at 10px = 20 -> total 120.
         assert!((transform.e - 120.0).abs() < 1e-3);
         assert!((transform.f).abs() < 1e-3);
+    }
+
+    #[test]
+    fn background_position_calc_vw_requires_viewport() {
+        let pos = BackgroundPosition::Position {
+            x: crate::style::types::BackgroundPositionComponent {
+                alignment: 0.0,
+                offset: Length::calc(CalcLength::single(LengthUnit::Vw, 10.0)),
+            },
+            y: crate::style::types::BackgroundPositionComponent {
+                alignment: 0.0,
+                offset: Length::percent(0.0),
+            },
+        };
+
+        // With a 200px viewport, 10vw = 20px offset along the x-axis.
+        let (x, y) = DisplayListBuilder::resolve_background_offset(pos, 100.0, 100.0, 0.0, 0.0, 16.0, 16.0, Some((200.0, 100.0)));
+        assert!((x - 20.0).abs() < 0.01);
+        assert!((y - 0.0).abs() < 0.01);
+
+        // Without a viewport, viewport-relative calc stays unresolved and falls back to zero.
+        let (x, y) =
+            DisplayListBuilder::resolve_background_offset(pos, 100.0, 100.0, 0.0, 0.0, 16.0, 16.0, None);
+        assert!((x - 0.0).abs() < 0.01);
+        assert!((y - 0.0).abs() < 0.01);
     }
 
     #[test]
