@@ -1200,7 +1200,8 @@ impl BlockFormattingContext {
                     .map(|w| border_size_from_box_sizing(w, horizontal_edges, child.style.box_sizing))
                     .unwrap_or(f32::INFINITY);
 
-                let available = (containing_width - margin_left - margin_right).max(0.0);
+                let (_, float_available_width) = float_ctx.available_width_at_y(current_y);
+                let available = (float_available_width - margin_left - margin_right).max(0.0);
                 let used_border_box = if let Some(specified) = specified_width {
                     crate::layout::utils::clamp_with_order(specified, min_width, max_width)
                 } else {
@@ -2702,6 +2703,74 @@ mod tests {
             line.bounds.x() >= 79.9,
             "line should start after the float; got x={}",
             line.bounds.x()
+        );
+    }
+
+    #[test]
+    fn float_auto_width_shrinks_to_available_space_next_to_float() {
+        let bfc = BlockFormattingContext::new();
+
+        let mut wide_style = ComputedStyle::default();
+        wide_style.display = Display::Block;
+        wide_style.float = Float::Left;
+        wide_style.width = Some(Length::px(120.0));
+        wide_style.height = Some(Length::px(20.0));
+        let wide_float = BoxNode::new_block(Arc::new(wide_style), FormattingContextType::Block, vec![]);
+
+        let mut auto_style = ComputedStyle::default();
+        auto_style.display = Display::Block;
+        auto_style.float = Float::Left;
+        let text = BoxNode::new_text(default_style(), "word ".repeat(20));
+        let auto_float = BoxNode::new_block(
+            Arc::new(auto_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_inline(default_style(), vec![text])],
+        );
+
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![wide_float, auto_float],
+        );
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite);
+
+        let fragment = bfc.layout(&root, &constraints).unwrap();
+
+        let floats: Vec<_> = fragment
+            .children
+            .iter()
+            .filter(|child| child.style.as_ref().map(|s| s.float.is_floating()).unwrap_or(false))
+            .collect();
+
+        assert_eq!(floats.len(), 2);
+
+        let mut wide = None;
+        let mut auto = None;
+        for float in floats {
+            if (float.bounds.width() - 120.0).abs() < 0.5 {
+                wide = Some(float);
+            } else {
+                auto = Some(float);
+            }
+        }
+
+        let wide = wide.expect("wide float fragment");
+        let auto = auto.expect("auto float fragment");
+
+        assert!(
+            auto.bounds.y() < 0.01,
+            "auto float should stay alongside the existing float; got y={}",
+            auto.bounds.y()
+        );
+        assert!(
+            (auto.bounds.x() - wide.bounds.width()).abs() < 0.5,
+            "auto float should start after the first float; got x={}",
+            auto.bounds.x()
+        );
+        assert!(
+            auto.bounds.width() <= 90.0,
+            "auto float should shrink to the available 80px space; got {}",
+            auto.bounds.width()
         );
     }
 
