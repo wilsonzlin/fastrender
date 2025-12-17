@@ -8408,6 +8408,48 @@ mod tests {
     }
 
     #[test]
+    fn bidi_isolate_override_does_not_reorder_surrounding_ltr() {
+        // Override inside an isolate must not affect surrounding LTR order.
+        let mut rtl_override = ComputedStyle::default();
+        rtl_override.direction = crate::style::types::Direction::Rtl;
+        rtl_override.unicode_bidi = crate::style::types::UnicodeBidi::IsolateOverride;
+        let rtl_override = Arc::new(rtl_override);
+
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![
+                BoxNode::new_text(default_style(), "AAA ".to_string()),
+                BoxNode::new_inline(
+                    rtl_override.clone(),
+                    vec![BoxNode::new_text(rtl_override.clone(), "DEF".to_string())],
+                ),
+                BoxNode::new_text(default_style(), " BBB".to_string()),
+            ],
+        );
+
+        let ifc = InlineFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(400.0);
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_with_x(&fragment, &mut texts);
+        texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let labels: Vec<_> = texts.iter().map(|(t, _)| t.clone()).collect();
+        let joined = labels.join("");
+        // Collapsed whitespace may drop the space between the isolate and trailing run; just
+        // assert ordering and isolation of the reversed run.
+        let a_pos = joined.find("AAA").expect("leading run present");
+        let fed_pos = joined.find("FED").expect("isolate reversed run present");
+        let b_pos = joined.find("BBB").expect("trailing run present");
+        assert!(a_pos < fed_pos && fed_pos < b_pos);
+
+        // Ensure outside LTR runs stay on either side of the isolate in visual positioning too.
+        assert!(texts[0].1 < texts[1].1 && texts[1].1 < texts[2].1);
+    }
+
+    #[test]
     fn mandatory_breaks_survive_added_anywhere_breaks() {
         // Combine a mandatory break with word-break:anywhere additions at the same offset.
         let text = "a\nb";
