@@ -2224,6 +2224,8 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "touch-action" => styles.touch_action = source.touch_action,
         "user-select" => styles.user_select = source.user_select,
         "scrollbar-width" => styles.scrollbar_width = source.scrollbar_width,
+        "scrollbar-color" => styles.scrollbar_color = source.scrollbar_color,
+        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
             styles.vertical_align_specified = source.vertical_align_specified;
@@ -5720,6 +5722,27 @@ pub fn apply_declaration_with_base(
                     "none" => ScrollbarWidth::None,
                     _ => styles.scrollbar_width,
                 }
+            }
+        }
+        "scrollbar-color" => {
+            if let Some((thumb, track)) = extract_color_pair_with(&resolved_value, &resolve_color_value) {
+                styles.scrollbar_color = ScrollbarColor::Colors { thumb, track };
+            } else if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.scrollbar_color = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => ScrollbarColor::Auto,
+                    "dark" => ScrollbarColor::Dark,
+                    "light" => ScrollbarColor::Light,
+                    _ => styles.scrollbar_color,
+                };
+            }
+        }
+        "forced-color-adjust" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => ForcedColorAdjust::Auto,
+                    "none" => ForcedColorAdjust::None,
+                    _ => styles.forced_color_adjust,
+                };
             }
         }
         "resize" => {
@@ -11777,6 +11800,74 @@ mod tests {
         );
 
         assert_eq!(style.scrollbar_color, parent.scrollbar_color);
+    }
+
+    #[test]
+    fn forced_color_adjust_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("auto".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
+    }
+
+    #[test]
+    fn forced_color_adjust_inherits_and_resets() {
+        let parent = ComputedStyle {
+            forced_color_adjust: ForcedColorAdjust::None,
+            ..ComputedStyle::default()
+        };
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.forced_color_adjust, parent.forced_color_adjust);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
     }
 
     #[test]

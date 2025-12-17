@@ -143,6 +143,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "font-variant-position",
     "font-variation-settings",
     "font-weight",
+    "forced-color-adjust",
     "grid",
     "grid-area",
     "grid-auto-columns",

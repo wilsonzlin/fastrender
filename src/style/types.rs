@@ -650,6 +650,13 @@ pub enum ScrollbarColor {
     Colors { thumb: Rgba, track: Rgba },
 }
 
+/// forced-color-adjust property
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForcedColorAdjust {
+    Auto,
+    None,
+}
+
 impl TouchAction {
     pub fn auto() -> Self {
         Self {
@@ -721,6 +728,12 @@ impl Default for ScrollBehavior {
 impl Default for ScrollbarColor {
     fn default() -> Self {
         ScrollbarColor::Auto
+    }
+}
+
+impl Default for ForcedColorAdjust {
+    fn default() -> Self {
+        ForcedColorAdjust::Auto
     }
 }
 
@@ -2050,6 +2063,12 @@ pub enum WordBreak {
 pub enum OverflowAnchor {
     Auto,
     None,
+}
+
+impl Default for OverflowAnchor {
+    fn default() -> Self {
+        OverflowAnchor::Auto
+    }
 }
 
 /// CSS `overflow-wrap` (formerly `word-wrap`)

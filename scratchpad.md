@@ -482,7 +482,7 @@ Inline coordinate fix (Mar 2026):
 - Latest run: `FASTR_RENDER_TIMINGS=1 FASTR_INTRINSIC_STATS=1 target/release/fetch_and_render file:///root/r/fastrender/fetches/html/cnn.com.html` → parse ~30–36ms, cascade ~4.4–5.8s, box_tree ~0.9–1.1s, box_count 8715, layout ~1.4–1.7s, paint ~22–29s, total ~30–55s. Intrinsic stats stable: lookups ~58k, hits ~38k (65%), stores ~15k, block_calls ~52k, flex_calls ~460, inline_calls ~5k. Paint remains dominant bottleneck.
 
 ## Recent changes (this branch)
-- Fixed merge fallout: deduped `TextSizeAdjust` definition, added missing `text_rendering`/`overflow_anchor` fields to `ComputedStyle` (defaults, hashing), and updated cascade tests for DOM namespace; tree now builds/tests again.
+- Fixed merge fallout: deduped `TextSizeAdjust` definition, added missing `text_rendering`/`overflow_anchor` fields to computed/positioned styles (defaults, hashing), updated cascade tests for DOM namespaces, and added `forced-color-adjust` support (auto/none, inherited) with parsing/cascade wiring and regression coverage. `cargo test --quiet` now passes.
 - Added `color-gamut` media feature support: parse/evaluate against MediaContext (srgb/p3/rec2020), env override via `FASTR_COLOR_GAMUT`, and regression tests.
 - Text decoration keyword parsing is now ASCII case-insensitive (line/style/thickness/skip-ink/underline-position), with regression coverage for uppercase inputs.
 - text-decoration-color now treats currentColor case-insensitively; parsing accepts any casing of the keyword and the regression for decoration longhands covers CurrentColor.

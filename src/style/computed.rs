@@ -29,8 +29,9 @@ use crate::style::color::{Color, Rgba};
 use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
-    BoxSizing, Containment, FilterFunction, FontSizeAdjust, FontStretch, Isolation, MixBlendMode, Overflow,
-    ScrollbarColor, ScrollbarWidth, TextAlignLast, TextIndent, TextJustify, TouchAction, UserSelect, WillChange,
+    BoxSizing, Containment, FilterFunction, FontSizeAdjust, FontStretch, ForcedColorAdjust, Isolation,
+    MixBlendMode, Overflow, OverflowAnchor, ScrollbarColor, ScrollbarWidth, TextAlignLast, TextIndent, TextJustify,
+    TextRendering, TouchAction, UserSelect, WillChange,
 };
 use crate::style::values::{Length, LengthOrAuto};
 
@@ -251,6 +252,12 @@ pub struct PositionedStyle {
     /// Initial: visible
     pub overflow_y: Overflow,
 
+    /// Scroll anchoring behavior
+    ///
+    /// CSS: `overflow-anchor`
+    /// Initial: auto
+    pub overflow_anchor: OverflowAnchor,
+
     /// User-select behavior
     ///
     /// CSS: `user-select`
@@ -259,6 +266,7 @@ pub struct PositionedStyle {
     pub touch_action: TouchAction,
     pub scrollbar_width: ScrollbarWidth,
     pub scrollbar_color: ScrollbarColor,
+    pub forced_color_adjust: ForcedColorAdjust,
 
     // ===== COLORS =====
     /// Text color
@@ -333,6 +341,11 @@ pub struct PositionedStyle {
     /// CSS: `text-justify`
     /// Initial: auto
     pub text_justify: TextJustify,
+    /// Rendering quality hint
+    ///
+    /// CSS: `text-rendering`
+    /// Initial: auto
+    pub text_rendering: TextRendering,
     /// Indentation
     ///
     /// CSS: `text-indent`
@@ -536,10 +549,12 @@ impl Default for PositionedStyle {
             transform: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            overflow_anchor: OverflowAnchor::Auto,
             user_select: UserSelect::Auto,
             touch_action: TouchAction::auto(),
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: ScrollbarColor::Auto,
+            forced_color_adjust: ForcedColorAdjust::Auto,
 
             // Color defaults
             color: Color::Rgba(Rgba::BLACK),
@@ -558,6 +573,7 @@ impl Default for PositionedStyle {
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
             text_justify: TextJustify::Auto,
+            text_rendering: TextRendering::Auto,
             text_indent: TextIndent::default(),
 
             // Flexbox defaults

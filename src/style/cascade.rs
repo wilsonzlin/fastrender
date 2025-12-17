@@ -1324,7 +1324,6 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.text_justify = parent.text_justify;
     styles.text_rendering = parent.text_rendering;
     styles.text_indent = parent.text_indent;
-    styles.text_size_adjust = parent.text_size_adjust;
     styles.text_decoration_skip_ink = parent.text_decoration_skip_ink;
     styles.text_underline_offset = parent.text_underline_offset;
     styles.text_underline_position = parent.text_underline_position;
@@ -1355,6 +1354,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.cursor = parent.cursor;
     styles.cursor_images = parent.cursor_images.clone();
     styles.scrollbar_color = parent.scrollbar_color;
+    styles.forced_color_adjust = parent.forced_color_adjust;
 
     // Color inherits
     styles.color = parent.color;
