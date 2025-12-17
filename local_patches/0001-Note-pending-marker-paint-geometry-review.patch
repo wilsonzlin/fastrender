@@ -1,0 +1,25 @@
+From 43d3d178d91bf45755abf5c17177471ec0d746a4 Mon Sep 17 00:00:00 2001
+From: Wilson Lin <code@wilsonl.in>
+Date: Wed, 17 Dec 2025 15:27:58 -0500
+Subject: [PATCH] Note pending marker paint/geometry review
+
+---
+ scratchpad.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scratchpad.md b/scratchpad.md
+index 7cb886a..d886215 100644
+--- a/scratchpad.md
++++ b/scratchpad.md
+@@ -12,7 +12,7 @@ Idle; no current tasks. Available for new tasks.
+ - Pull/push to origin have been failing (SSH timeouts/HTTPS creds). A full patch series for all local commits lives in `local_patches/` (0001–0018) so others can apply while pushes are blocked.
+ - Fixed display-list underline currentColor test to assert resolved color/thickness and remove unused vars; warnings cleared.
+ - PositionedLayout absolute helper delegates to AbsoluteLayout for spec-accurate shrink-to-fit/auto-margin handling; positioned layout tests updated (shrink-to-fit expectation) and an auto-margin centering regression added. `cargo test --quiet test_absolute_position_left_right_shrink_to_fit` and `cargo test --quiet absolute_position_auto_margins_center_between_insets` pass.
+-- ::marker coverage improved: property-filtering regressions ensure markers ignore box/background sizing/padding overrides and allow text-affecting properties; marker gap asserted for horizontal LTR (inline-end), horizontal RTL (inline-start), and vertical-lr (block-end) margins, ignoring block-axis margins.
++- ::marker coverage improved: property-filtering regressions ensure markers ignore box/background sizing/padding overrides and allow text-affecting properties; marker gap asserted for horizontal LTR (inline-end), horizontal RTL (inline-start), and vertical-lr (block-end) margins, ignoring block-axis margins. More marker paint/geometry review pending.
+ - Pull from origin currently times out (ssh fetch). Commit `f888136` is local; push pending once network permits.
+ - Push over SSH still timing out; HTTPS requires creds. Origin reset to SSH. Commits `f888136` and `d47eb9a` remain local.
+ - Archived local commits as patches in `local_patches/` (full series covering all local commits) so others can apply while pushes are blocked. Push over SSH still timing out; HTTPS requires creds.
+-- 
+2.43.0
+
