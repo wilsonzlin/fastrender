@@ -680,20 +680,20 @@ impl<'a> TrackListParser<'a> {
             return Some(ParsedTracks {
                 tracks: vec![GridTrack::RepeatAutoFill {
                     tracks: pattern.tracks,
-                    line_names: pattern.line_names,
+                    line_names: pattern.line_names.clone(),
                 }],
-                named_lines: HashMap::new(),
-                line_names: vec![Vec::new(); 2],
+                named_lines: pattern.named_lines,
+                line_names: pattern.line_names,
             });
         }
         if count_str.eq_ignore_ascii_case("auto-fit") {
             return Some(ParsedTracks {
                 tracks: vec![GridTrack::RepeatAutoFit {
                     tracks: pattern.tracks,
-                    line_names: pattern.line_names,
+                    line_names: pattern.line_names.clone(),
                 }],
-                named_lines: HashMap::new(),
-                line_names: vec![Vec::new(); 2],
+                named_lines: pattern.named_lines,
+                line_names: pattern.line_names,
             });
         }
 
@@ -974,6 +974,33 @@ mod tests {
         assert_eq!(tracks_fill.len(), 1);
         assert!(matches!(tracks_fill[0], GridTrack::RepeatAutoFill { .. }));
         assert!(names_fill.is_empty());
+    }
+
+    #[test]
+    fn auto_fit_repeat_keeps_named_lines() {
+        let (_tracks, names, line_names) =
+            parse_grid_tracks_with_names("repeat(auto-fit, [col-start] 10px [col-end])");
+        assert_eq!(names.get("col-start"), Some(&vec![0]));
+        assert_eq!(names.get("col-end"), Some(&vec![1]));
+        assert!(line_names[0].contains(&"col-start".to_string()));
+        assert!(line_names[1].contains(&"col-end".to_string()));
+        assert_eq!(parse_grid_line("col-start", &names), 1);
+        assert_eq!(parse_grid_line("col-end", &names), 2);
+    }
+
+    #[test]
+    fn auto_fill_repeat_keeps_named_lines() {
+        let (_tracks, names, line_names) =
+            parse_grid_tracks_with_names("repeat(auto-fill, [a] 20px [b c])");
+        assert_eq!(names.get("a"), Some(&vec![0]));
+        assert_eq!(names.get("b"), Some(&vec![1]));
+        assert_eq!(names.get("c"), Some(&vec![1]));
+        assert!(line_names[0].contains(&"a".to_string()));
+        assert!(line_names[1].contains(&"b".to_string()));
+        assert!(line_names[1].contains(&"c".to_string()));
+        assert_eq!(parse_grid_line("a", &names), 1);
+        assert_eq!(parse_grid_line("b", &names), 2);
+        assert_eq!(parse_grid_line("c", &names), 2);
     }
 
     #[test]
