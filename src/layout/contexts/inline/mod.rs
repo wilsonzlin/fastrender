@@ -2261,9 +2261,10 @@ impl InlineFormattingContext {
     fn build_lines<'a>(
         &self,
         items: Vec<InlineItem>,
-        first_line_width: f32,
+        mut first_line_width: f32,
         subsequent_line_width: f32,
         start_is_para_start: bool,
+        text_wrap: TextWrap,
         indent: f32,
         indent_hanging: bool,
         indent_each_line: bool,
@@ -2274,11 +2275,15 @@ impl InlineFormattingContext {
         float_ctx: Option<&'a FloatContext>,
         float_base_y: f32,
     ) -> Vec<Line> {
+        if start_is_para_start && matches!(text_wrap, TextWrap::Balance | TextWrap::Pretty) {
+            first_line_width = subsequent_line_width;
+        }
         let float_integration = float_ctx.map(InlineFloatIntegration::new);
         let mut builder: LineBuilder<'a> = LineBuilder::new(
             first_line_width,
             subsequent_line_width,
             start_is_para_start,
+            text_wrap,
             indent,
             indent_hanging,
             indent_each_line,
@@ -4211,6 +4216,7 @@ impl InlineFormattingContext {
         use_first_line_width: bool,
         first_line_width: f32,
         subsequent_line_width: f32,
+        text_wrap: TextWrap,
         indent: f32,
         indent_hanging: bool,
         indent_each_line: bool,
@@ -4221,16 +4227,21 @@ impl InlineFormattingContext {
         float_ctx: Option<&FloatContext>,
         float_base_y: f32,
     ) -> Vec<Line> {
-        let first_width = if use_first_line_width {
+        let mut first_width = if use_first_line_width {
             first_line_width
         } else {
             subsequent_line_width
         };
+
+        if matches!(text_wrap, TextWrap::Balance | TextWrap::Pretty) {
+            first_width = subsequent_line_width;
+        }
         self.build_lines(
             items.to_vec(),
             first_width,
             subsequent_line_width,
             use_first_line_width,
+            text_wrap,
             indent,
             indent_hanging,
             indent_each_line,
@@ -5004,6 +5015,7 @@ impl InlineFormattingContext {
                 *use_first_line_width,
                 first_line_width,
                 subsequent_line_width,
+                style.text_wrap,
                 indent_value,
                 indent_hanging,
                 indent_each_line,
@@ -7238,6 +7250,7 @@ mod tests {
             constraints.width().unwrap(),
             constraints.width().unwrap(),
             true,
+            root.style.text_wrap,
             0.0,
             false,
             false,
@@ -7328,6 +7341,7 @@ mod tests {
             constraints.width().unwrap(),
             constraints.width().unwrap(),
             true,
+            root.style.text_wrap,
             0.0,
             false,
             false,
@@ -7986,6 +8000,7 @@ mod tests {
             true,
             200.0,
             200.0,
+            ComputedStyle::default().text_wrap,
             0.0,
             false,
             false,
@@ -8437,6 +8452,7 @@ mod tests {
             1000.0,
             1000.0,
             true,
+            node.style.text_wrap,
             0.0,
             false,
             false,
@@ -8490,6 +8506,7 @@ mod tests {
             200.0,
             200.0,
             true,
+            container.style.text_wrap,
             0.0,
             false,
             false,
@@ -8512,6 +8529,34 @@ mod tests {
             "available width should be shortened by float; got {}",
             first.available_width
         );
+    }
+
+    #[test]
+    fn text_wrap_balance_uses_subsequent_width_on_first_line() {
+        let ifc = InlineFormattingContext::new();
+        let mut style = ComputedStyle::default();
+        style.text_wrap = TextWrap::Balance;
+        let node = BoxNode::new_text(Arc::new(style.clone()), "hello world".to_string());
+        let items = ifc.create_inline_items_for_text(&node, "hello world", false).unwrap();
+        let strut = ifc.compute_strut_metrics(&style);
+        let lines = ifc.build_lines(
+            items,
+            50.0,
+            100.0,
+            true,
+            style.text_wrap,
+            0.0,
+            false,
+            false,
+            &strut,
+            Some(unicode_bidi::Level::ltr()),
+            style.direction,
+            style.unicode_bidi,
+            None,
+            0.0,
+        );
+
+        assert_eq!(lines.first().unwrap().box_width, 100.0);
     }
 
     #[test]
