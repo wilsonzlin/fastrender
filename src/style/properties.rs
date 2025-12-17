@@ -2273,6 +2273,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.text_emphasis_color = source.text_emphasis_color;
             styles.text_emphasis_position = source.text_emphasis_position;
         }
+        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "text-decoration" => {
             styles.text_decoration = source.text_decoration.clone();
             styles.text_decoration_line_specified = source.text_decoration_line_specified;
