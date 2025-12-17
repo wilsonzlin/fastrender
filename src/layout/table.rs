@@ -375,7 +375,7 @@ fn distribute_rowspan_targets(
             None => current.max(1.0), // Uncapped rows fall back to their current height weighting.
         };
         weights.push(weight);
-        caps.push(max_opt);
+        caps.push(headroom);
     }
 
     let mut total_weight: f32 = weights.iter().sum();
@@ -8816,6 +8816,39 @@ mod tests {
             structure.rows[1].computed_height > 70.0 && structure.rows[1].computed_height < 80.0,
             "row 1 should share the spanning height (got {:.2})",
             structure.rows[1].computed_height
+        );
+    }
+
+    #[test]
+    fn calculate_row_heights_respects_max_caps_when_distributing_rowspan() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].min_height = 20.0;
+        structure.rows[0].author_max_height = Some(SpecifiedHeight::Fixed(40.0));
+        structure.rows[1].min_height = 0.0;
+        structure.border_spacing = (0.0, 0.0);
+        structure.cells = vec![CellInfo {
+            index: 0,
+            source_row: 0,
+            source_col: 0,
+            row: 0,
+            col: 0,
+            rowspan: 2,
+            colspan: 1,
+            box_index: 0,
+            min_width: 0.0,
+            max_width: 0.0,
+            min_height: 120.0,
+            bounds: Rect::ZERO,
+        }];
+
+        calculate_row_heights(&mut structure, None);
+
+        assert!(structure.rows[0].computed_height <= 40.01, "row 0 should respect its max cap");
+        assert!(
+            structure.rows[1].computed_height >= 79.0,
+            "remaining spanning height should flow to uncapped rows"
         );
     }
 
