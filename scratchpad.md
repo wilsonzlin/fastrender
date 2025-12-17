@@ -39,6 +39,8 @@ Idle; no current tasks.
 
 ## Session notes (latest)
 
+- Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
+
 - Fixed stacking context bounds computation to recurse into children and avoid the implicit zero origin (paint containment clip test now passes).
 - Added regression test to ensure stacking context bounds include child contexts without precomputed bounds.
 
