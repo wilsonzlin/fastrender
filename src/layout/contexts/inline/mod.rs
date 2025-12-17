@@ -4080,9 +4080,6 @@ fn apply_break_properties(
             // word-break:anywhere follows the same behavior.
             result.extend(char_boundary_breaks(text));
         }
-        WordBreak::Anywhere => {
-            result.extend(char_boundary_breaks(text));
-        }
         WordBreak::KeepAll => {
             result.retain(|brk| {
                 if brk.break_type == BreakType::Mandatory {

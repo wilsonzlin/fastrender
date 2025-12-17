@@ -2090,7 +2090,6 @@ pub enum WordBreak {
     Normal,
     BreakAll,
     KeepAll,
-    Anywhere,
     BreakWord,
     Anywhere,
 }

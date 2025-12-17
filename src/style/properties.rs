@@ -5219,6 +5219,7 @@ pub fn apply_declaration_with_base(
                 PropertyValue::Percentage(p) if *p >= 0.0 => TextSizeAdjust::Percentage(*p),
                 _ => styles.text_size_adjust,
             };
+        }
         "text-wrap" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.text_wrap = match kw.as_str() {
