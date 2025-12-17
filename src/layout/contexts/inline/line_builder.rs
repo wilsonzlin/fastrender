@@ -35,7 +35,7 @@ use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
 use crate::geometry::Size;
 use crate::layout::inline::float_integration::{InlineFloatIntegration, LineSpaceOptions};
 use crate::style::display::Display;
-use crate::style::types::{Direction, ListStylePosition, OverflowWrap, UnicodeBidi, WhiteSpace, WordBreak};
+use crate::style::types::{Direction, ListStylePosition, OverflowWrap, TextWrap, UnicodeBidi, WhiteSpace, WordBreak};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::text::line_break::{BreakOpportunity, BreakType};
@@ -171,7 +171,7 @@ impl InlineItem {
 }
 
 fn allows_soft_wrap(style: &ComputedStyle) -> bool {
-    !matches!(style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre)
+    !matches!(style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre) && !matches!(style.text_wrap, TextWrap::Nowrap)
 }
 
 /// A shaped text item
@@ -1535,7 +1535,7 @@ impl<'a> LineBuilder<'a> {
                 break_opportunity = text_item.break_opportunities.first().copied();
                 if break_opportunity.is_none()
                     && allows_soft_wrap(text_item.style.as_ref())
-                    && text_item.style.word_break == WordBreak::BreakWord
+                    && matches!(text_item.style.word_break, WordBreak::BreakWord | WordBreak::Anywhere)
                 {
                     if let Some((idx, _)) = text_item.text.char_indices().nth(1) {
                         break_opportunity = Some(BreakOpportunity::allowed(idx));

@@ -61,6 +61,9 @@ Idle; no current tasks. Available for new tasks.
 - Media env overrides now accept `FASTR_COLOR_DEPTH`, `FASTR_COLOR_INDEX`, and `FASTR_MONOCHROME_DEPTH` to drive color/monochrome media features; added helper setters and tests for overrides/invalid values.
 - Added CSS `forced-colors` media feature support: parses/evaluates via MediaContext (with `FASTR_FORCED_COLORS` env override), plus regression tests for matching and overrides.
 
+- Implemented CSS `text-wrap` property: computed enum (auto/wrap alias, nowrap, balance, pretty, stable) with parsing, inheritance, defaults, and known-property list. Inline layout honors `text-wrap: nowrap` by disabling soft wrapping while keeping mandatory breaks. Parsing/layout regressions added.
+- Added `word-break:anywhere` support: parse to computed styles, treat like anywhere breaks in inline layout/overflow fallback, and added regression tests for parsing, overflow wrapping, min-content sizing, and grapheme-safe break insertion.
+
 - Fixed stacking context bounds computation to recurse into children and avoid the implicit zero origin (paint containment clip test now passes).
 - Added regression test to ensure stacking context bounds include child contexts without precomputed bounds.
 

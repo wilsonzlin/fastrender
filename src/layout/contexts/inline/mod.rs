@@ -4074,9 +4074,10 @@ fn apply_break_properties(
         WordBreak::BreakAll => {
             result.extend(char_boundary_breaks(text));
         }
-        WordBreak::BreakWord => {
+        WordBreak::Anywhere | WordBreak::BreakWord => {
             // CSS Text Level 4: break-word behaves like overflow-wrap:anywhere in addition
             // to word-break: normal, so add break opportunities at every character boundary.
+            // word-break:anywhere follows the same behavior.
             result.extend(char_boundary_breaks(text));
         }
         WordBreak::Anywhere => {
@@ -6258,7 +6259,7 @@ mod tests {
     use crate::style::types::FontSizeAdjust;
     use crate::style::types::{
         CaseTransform, HyphensMode, ListStylePosition, Overflow, OverflowWrap, TextCombineUpright, TextOverflow,
-        TextOverflowSide, TextTransform, WhiteSpace, WordBreak, WritingMode,
+        TextOverflowSide, TextTransform, TextWrap, WhiteSpace, WordBreak, WritingMode,
     };
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
@@ -7771,6 +7772,51 @@ mod tests {
     }
 
     #[test]
+    fn word_break_anywhere_splits_when_overflowing() {
+        let mut text_style = ComputedStyle::default();
+        text_style.word_break = WordBreak::Anywhere;
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() > 1,
+            "word-break:anywhere should allow breaking long tokens when they overflow"
+        );
+    }
+
+    #[test]
+    fn word_break_anywhere_respects_nowrap() {
+        let mut text_style = ComputedStyle::default();
+        text_style.word_break = WordBreak::Anywhere;
+        text_style.white_space = WhiteSpace::Nowrap;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert_eq!(
+            fragment.children.len(),
+            1,
+            "nowrap should suppress word-break:anywhere emergency breaks"
+        );
+    }
+
+    #[test]
     fn line_break_anywhere_breaks_long_words() {
         let mut text_style = ComputedStyle::default();
         text_style.line_break = LineBreak::Anywhere;
@@ -8029,6 +8075,29 @@ mod tests {
             !offsets_bw.contains(&1),
             "break-word should not create intra-grapheme break opportunities"
         );
+
+        let mut anywhere_style = ComputedStyle::default();
+        anywhere_style.word_break = WordBreak::Anywhere;
+        anywhere_style.white_space = WhiteSpace::Normal;
+        let root_anywhere = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(anywhere_style), text.to_string())],
+        );
+        let items_anywhere = ifc
+            .collect_inline_items(&root_anywhere, 800.0, Some(800.0))
+            .expect("collect items");
+        let offsets_anywhere: Vec<usize> = items_anywhere
+            .iter()
+            .find_map(|item| match item {
+                InlineItem::Text(t) => Some(t.break_opportunities.iter().map(|b| b.byte_offset).collect::<Vec<_>>()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(
+            !offsets_anywhere.contains(&1),
+            "word-break:anywhere should not create intra-grapheme break opportunities"
+        );
     }
 
     #[test]
@@ -8036,7 +8105,7 @@ mod tests {
         // Combine a mandatory break with word-break:anywhere-style additions at the same offset.
         let text = "a\nb";
         let mut style = ComputedStyle::default();
-        style.word_break = WordBreak::BreakWord; // adds anywhere breaks
+        style.word_break = WordBreak::Anywhere; // adds anywhere breaks
         style.white_space = WhiteSpace::PreWrap; // preserves newline as mandatory
         let root = BoxNode::new_block(
             default_style(),
@@ -8147,6 +8216,41 @@ mod tests {
             anywhere_min < normal_min * 0.75,
             "word-break:anywhere should shrink min-content width with added break opportunities"
         );
+    }
+
+    #[test]
+    fn text_wrap_nowrap_suppresses_soft_wraps() {
+        let mut text_style = ComputedStyle::default();
+        text_style.text_wrap = TextWrap::Nowrap;
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert_eq!(fragment.children.len(), 1, "text-wrap:nowrap should prevent soft wrapping");
+    }
+
+    #[test]
+    fn text_wrap_nowrap_keeps_mandatory_breaks() {
+        let mut text_style = ComputedStyle::default();
+        text_style.text_wrap = TextWrap::Nowrap;
+        text_style.white_space = WhiteSpace::PreWrap; // preserves newline as mandatory
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "a\nb".to_string())],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() > 1, "mandatory breaks should still split lines");
     }
 
     #[test]

@@ -256,6 +256,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "text-emphasis-style",
     "text-indent",
     "text-justify",
+    "text-wrap",
     "text-orientation",
     "text-overflow",
     "text-rendering",

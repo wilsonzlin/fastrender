@@ -1152,6 +1152,7 @@ fn is_inherited_property(name: &str) -> bool {
             | "text-emphasis-position"
             | "text-transform"
             | "text-combine-upright"
+            | "text-wrap"
             | "letter-spacing"
             | "word-spacing"
             | "white-space"
@@ -5218,6 +5219,17 @@ pub fn apply_declaration_with_base(
                 PropertyValue::Percentage(p) if *p >= 0.0 => TextSizeAdjust::Percentage(*p),
                 _ => styles.text_size_adjust,
             };
+        "text-wrap" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.text_wrap = match kw.as_str() {
+                    "wrap" | "auto" | "normal" => TextWrap::Auto,
+                    "nowrap" => TextWrap::Nowrap,
+                    "balance" => TextWrap::Balance,
+                    "pretty" => TextWrap::Pretty,
+                    "stable" => TextWrap::Stable,
+                    _ => styles.text_wrap,
+                };
+            }
         }
         "text-wrap" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -5522,6 +5534,7 @@ pub fn apply_declaration_with_base(
                     "normal" => WordBreak::Normal,
                     "break-all" => WordBreak::BreakAll,
                     "keep-all" => WordBreak::KeepAll,
+                    "anywhere" => WordBreak::Anywhere,
                     "break-word" => WordBreak::BreakWord,
                     _ => styles.word_break,
                 };
@@ -13633,6 +13646,120 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.word_spacing + 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn word_break_parses_anywhere_and_inherits() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "word-break".to_string(),
+                value: PropertyValue::Keyword("anywhere".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.word_break, WordBreak::Anywhere));
+
+        let parent = ComputedStyle {
+            word_break: WordBreak::BreakAll,
+            ..ComputedStyle::default()
+        };
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "word-break".to_string(),
+                value: PropertyValue::Keyword("inherit".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.word_break, WordBreak::BreakAll));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "word-break".to_string(),
+                value: PropertyValue::Keyword("initial".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.word_break, WordBreak::Normal));
+    }
+
+    #[test]
+    fn text_wrap_parses_and_inherits() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("nowrap".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_wrap, TextWrap::Nowrap));
+
+        let parent = ComputedStyle {
+            text_wrap: TextWrap::Balance,
+            ..ComputedStyle::default()
+        };
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("inherit".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_wrap, TextWrap::Balance));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("auto".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_wrap, TextWrap::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("initial".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_wrap, TextWrap::Auto));
     }
 
     #[test]

@@ -2032,6 +2032,25 @@ pub enum WhiteSpace {
     BreakSpaces,
 }
 
+/// Text wrap mode
+///
+/// CSS: `text-wrap`
+/// Reference: CSS Text Module Level 4
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextWrap {
+    Auto,
+    Nowrap,
+    Balance,
+    Pretty,
+    Stable,
+}
+
+impl Default for TextWrap {
+    fn default() -> Self {
+        TextWrap::Auto
+    }
+}
+
 /// Line break strictness
 ///
 /// CSS: `line-break`
@@ -2071,6 +2090,7 @@ pub enum WordBreak {
     Normal,
     BreakAll,
     KeepAll,
+    Anywhere,
     BreakWord,
     Anywhere,
 }
