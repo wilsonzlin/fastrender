@@ -15485,6 +15485,29 @@ mod tests {
     }
 
     #[test]
+    fn font_style_oblique_angle_rejects_out_of_range_calc() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-style".to_string(),
+            value: PropertyValue::Keyword("oblique 10deg".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 10.0).abs() < 0.01));
+
+        let invalid = Declaration {
+            property: "font-style".to_string(),
+            value: PropertyValue::Keyword("oblique calc(120deg - 10deg)".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &invalid, &ComputedStyle::default(), 16.0, 16.0);
+        // Calculated angle (110deg) is out of range, so the declaration is ignored.
+        assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 10.0).abs() < 0.01));
+    }
+
+    #[test]
     fn font_shorthand_oblique_angle_parses_and_rejects_out_of_range() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
@@ -15506,6 +15529,30 @@ mod tests {
         apply_declaration(&mut style, &invalid, &ComputedStyle::default(), 16.0, 16.0);
         // Invalid oblique angle makes the declaration invalid; style stays unchanged.
         assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 15.0).abs() < 0.01));
+        assert!((style.font_size - 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn font_shorthand_oblique_angle_rejects_out_of_range_calc() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("oblique 12deg 16px serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 12.0).abs() < 0.01));
+
+        let invalid = Declaration {
+            property: "font".to_string(),
+            value: PropertyValue::Keyword("oblique calc(95deg + 10deg) 18px serif".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+        apply_declaration(&mut style, &invalid, &ComputedStyle::default(), 16.0, 16.0);
+        // Out-of-range calc angle invalidates the font shorthand; previous values remain.
+        assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 12.0).abs() < 0.01));
         assert!((style.font_size - 16.0).abs() < 0.01);
     }
 
