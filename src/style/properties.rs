@@ -2175,6 +2175,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "overscroll-behavior-x" => styles.overscroll_behavior_x = source.overscroll_behavior_x,
         "overscroll-behavior-y" => styles.overscroll_behavior_y = source.overscroll_behavior_y,
         "pointer-events" => styles.pointer_events = source.pointer_events,
+        "user-select" => styles.user_select = source.user_select,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
             styles.vertical_align_specified = source.vertical_align_specified;
@@ -5589,6 +5590,18 @@ pub fn apply_declaration_with_base(
                     "all" => PointerEvents::All,
                     _ => styles.pointer_events,
                 }
+            }
+        }
+        "user-select" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.user_select = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => UserSelect::Auto,
+                    "text" => UserSelect::Text,
+                    "none" => UserSelect::None,
+                    "all" => UserSelect::All,
+                    "contain" => UserSelect::Contain,
+                    _ => styles.user_select,
+                };
             }
         }
 
@@ -11050,6 +11063,56 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.pointer_events, PointerEvents::Painted));
+    }
+
+    #[test]
+    fn user_select_parses_keywords_and_inherit() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "user-select".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.user_select, UserSelect::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "user-select".into(),
+                value: PropertyValue::Keyword("all".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.user_select, UserSelect::All));
+
+        let parent = ComputedStyle {
+            user_select: UserSelect::Contain,
+            ..ComputedStyle::default()
+        };
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "user-select".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.user_select, UserSelect::Contain));
     }
 
     #[test]

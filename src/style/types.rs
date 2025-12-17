@@ -619,6 +619,15 @@ pub enum ScrollBehavior {
     Smooth,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserSelect {
+    Auto,
+    Text,
+    None,
+    All,
+    Contain,
+}
+
 impl Default for ScrollBehavior {
     fn default() -> Self {
         ScrollBehavior::Auto

@@ -30,7 +30,7 @@ use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
     BoxSizing, Containment, FilterFunction, FontSizeAdjust, FontStretch, Isolation, MixBlendMode, Overflow,
-    TextAlignLast, TextIndent, TextJustify, WillChange,
+    TextAlignLast, TextIndent, TextJustify, UserSelect, WillChange,
 };
 use crate::style::values::{Length, LengthOrAuto};
 
@@ -250,6 +250,12 @@ pub struct PositionedStyle {
     /// CSS: `overflow-y`
     /// Initial: visible
     pub overflow_y: Overflow,
+
+    /// User-select behavior
+    ///
+    /// CSS: `user-select`
+    /// Initial: auto
+    pub user_select: UserSelect,
 
     // ===== COLORS =====
     /// Text color
@@ -527,6 +533,7 @@ impl Default for PositionedStyle {
             transform: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            user_select: UserSelect::Auto,
 
             // Color defaults
             color: Color::Rgba(Rgba::BLACK),

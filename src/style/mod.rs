@@ -42,8 +42,8 @@ use types::{
     OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents, ScrollBehavior, TabSize, TableLayout,
     TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition,
     TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset,
-    TextUnderlinePosition, TransformBox, TransformOrigin, UnicodeBidi, VerticalAlign, WhiteSpace, WillChange,
-    WordBreak, WritingMode,
+    TextUnderlinePosition, TransformBox, TransformOrigin, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace,
+    WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -240,6 +240,7 @@ pub struct ComputedStyle {
     pub overscroll_behavior_x: OverscrollBehavior,
     pub overscroll_behavior_y: OverscrollBehavior,
     pub pointer_events: PointerEvents,
+    pub user_select: UserSelect,
     pub top: Option<Length>,
     pub right: Option<Length>,
     pub bottom: Option<Length>,
@@ -488,6 +489,7 @@ impl Default for ComputedStyle {
             overscroll_behavior_x: OverscrollBehavior::Auto,
             overscroll_behavior_y: OverscrollBehavior::Auto,
             pointer_events: PointerEvents::Auto,
+            user_select: UserSelect::Auto,
             top: None,
             right: None,
             bottom: None,
