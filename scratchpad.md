@@ -442,6 +442,7 @@ Inline coordinate fix (Mar 2026):
 
 ## Recent changes (this branch)
 - Transform parsing now accepts common 3D functions: translateZ/translate3d, scaleZ/scale3d, rotateX/rotateY/rotate3d, perspective, and matrix3d. These parse to new Transform variants; build_transform in the painter/display-list maps them to 2D equivalents (rotate3d about z → rotate, translate/scale ignore z, others become identity; matrix3d collapses to 2D when compatible). Transform hashes updated and parsing tests cover 3D functions/matrix3d with commas accepted via expect_comma.
+- Added parsing for rotateZ and skew() functions; skew resolves to a new Transform::Skew and maps to 2D skew in painter/display list (rotateZ maps to rotate). Transform hashing updated and parsing tests cover skew single/two-arg and rotateZ acceptance.
 - Pseudo-element selector matching now reports support for ::before/::after/::marker instead of rejecting all pseudo-elements; added a dom test to cover match_pseudo_element for these pseudos.
 - CSS pseudo-class/element parsing is now ASCII case-insensitive (e.g., `:ROOT`, `:NTH-CHILD`, `::BEFORE` parse correctly); added parser tests to lock case-insensitive handling.
 - HTML `nowrap` presentational hint now maps `td`/`th` `nowrap` attributes to `white-space: nowrap`, and UA defaults set `<nobr>` to `white-space: nowrap`; cascade tests cover the hint, override, and nobr default.
