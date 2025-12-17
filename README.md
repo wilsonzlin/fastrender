@@ -92,6 +92,18 @@ FASTR_PREFERS_REDUCED_TRANSPARENCY=reduce ./target/release/inspect_frag fetches/
 ```
 
 Accepted values are `reduce` and `no-preference` (default). Flags are also available on `inspect_frag`.
+
+Environment variables are also supported when invoking the API directly:
+
+```
+FASTR_PREFERS_COLOR_SCHEME=dark \
+FASTR_PREFERS_REDUCED_MOTION=reduce \
+FASTR_PREFERS_CONTRAST=more \
+FASTR_PREFERS_REDUCED_TRANSPARENCY=reduce \
+cargo run --release --bin fetch_and_render -- https://example.com
+```
+
+Unset or invalid values fall back to defaults.
 ```
 
 ### API Usage
