@@ -42,6 +42,7 @@ Idle; no current tasks.
 - Added CSS `text-rendering`: new computed type/default (auto), inherited, property parsing (optimizeSpeed/optimizeLegibility/geometricPrecision), property lists, and regression tests. `cargo test text_rendering --quiet` passes.
 
 - Added regression for `scrollbar-width` global keywords (inherit/revert/revert-layer/unset) to lock cascade behavior; no functional change needed.
+- Flex pass-cache now keys on the measurement-adjusted style and seeds from the shared measure cache so intrinsic probes reuse cached sizes/fragments even when we clone styles (aimed at the CNN carousel flex hotspots).
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
 - Implemented `text-size-adjust`: parses auto/none/percentage, cascades/inherits with regression coverage.
 

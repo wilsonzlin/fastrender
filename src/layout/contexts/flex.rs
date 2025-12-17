@@ -636,18 +636,6 @@ impl FormattingContext for FlexFormattingContext {
                         }
                     }
                     }
-                    if let Some(ptr) = node_ptr {
-                        let box_node = unsafe { &*ptr };
-                        let cache_id = flex_cache_key(box_node);
-                        if let Some((size, _)) = pass_cache.get(&cache_id).and_then(|m| m.get(&key)).cloned() {
-                            record_node_measure_hit(box_node.id);
-                            flex_profile::record_measure_hit();
-                            flex_profile::record_measure_bucket_hit(w_state, h_state);
-                            flex_profile::record_measure_time(measure_timer);
-                            *pass_hits.entry(cache_id).or_insert(0) += 1;
-                            return taffy::geometry::Size { width: size.width, height: size.height };
-                        }
-                    }
                     if let (Some(w), Some(h)) = (known_dimensions.width, known_dimensions.height) {
                         let size = taffy::geometry::Size { width: w, height: h };
                         flex_profile::record_measure_time(measure_timer);
@@ -794,8 +782,21 @@ impl FormattingContext for FlexFormattingContext {
                         box_node
                     };
                     let cache_key = flex_cache_key(measure_box);
+                    if let Some((size, _)) = pass_cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
+                        record_node_measure_hit(measure_box.id);
+                        flex_profile::record_measure_hit();
+                        flex_profile::record_measure_bucket_hit(w_state, h_state);
+                        flex_profile::record_measure_time(measure_timer);
+                        *pass_hits.entry(cache_key).or_insert(0) += 1;
+                        return taffy::geometry::Size { width: size.width, height: size.height };
+                    }
                     if let Ok(mut cache) = measured_fragments.lock() {
-                        if let Some((size, _)) = cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
+                        if let Some((size, frag)) = cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
+                            pass_cache
+                                .entry(cache_key)
+                                .or_default()
+                                .entry(key)
+                                .or_insert_with(|| (size, std::sync::Arc::clone(&frag)));
                             record_node_measure_hit(measure_box.id);
                             flex_profile::record_measure_hit();
                             flex_profile::record_measure_time(measure_timer);
@@ -814,6 +815,11 @@ impl FormattingContext for FlexFormattingContext {
                                 flex_profile::record_measure_time(measure_timer);
                                 let cached = cache.entry(cache_key).or_default();
                                 cached
+                                    .entry(key)
+                                    .or_insert_with(|| (stored_size, std::sync::Arc::clone(&frag)));
+                                pass_cache
+                                    .entry(cache_key)
+                                    .or_default()
                                     .entry(key)
                                     .or_insert_with(|| (stored_size, std::sync::Arc::clone(&frag)));
                                 return taffy::geometry::Size {
