@@ -1827,25 +1827,9 @@ pub enum TextUnderlinePosition {
     UnderRight,
 }
 
-/// CSS `text-size-adjust`
-///
-/// Controls font inflation on mobile/zoomed environments.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TextSizeAdjust {
-    Auto,
-    None,
-    Percentage(f32),
-}
-
 impl Default for TextUnderlinePosition {
     fn default() -> Self {
         TextUnderlinePosition::Auto
-    }
-}
-
-impl Default for TextSizeAdjust {
-    fn default() -> Self {
-        TextSizeAdjust::Auto
     }
 }
 

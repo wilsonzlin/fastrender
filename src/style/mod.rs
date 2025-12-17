@@ -42,9 +42,9 @@ use types::{
     ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
     OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarColor, ScrollbarWidth, TabSize, TableLayout,
     TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition,
-    TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextSizeAdjust, TextTransform,
-    TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox, TransformOrigin, TransformStyle,
-    UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextRendering, TextSizeAdjust,
+    TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox, TransformOrigin,
+    TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -381,6 +381,7 @@ pub struct ComputedStyle {
     pub text_justify: TextJustify,
     pub text_indent: TextIndent,
     pub text_size_adjust: TextSizeAdjust,
+    pub text_rendering: TextRendering,
     pub text_overflow: TextOverflow,
     pub text_decoration: TextDecoration,
     /// Whether a text-decoration line declaration was authored (shorthand or longhand).
@@ -619,6 +620,7 @@ impl Default for ComputedStyle {
             text_justify: TextJustify::Auto,
             text_indent: TextIndent::default(),
             text_size_adjust: TextSizeAdjust::Auto,
+            text_rendering: TextRendering::Auto,
             text_overflow: TextOverflow::clip(),
             text_decoration: TextDecoration::default(),
             text_decoration_line_specified: false,
