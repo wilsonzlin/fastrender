@@ -3572,6 +3572,19 @@ mod tests {
     }
 
     #[test]
+    fn range_length_rejects_percentage_and_invalid_units() {
+        assert!(MediaQuery::parse("(width > 50%)").is_err());
+        assert!(MediaQuery::parse("(50% < width < 100%)").is_err());
+        assert!(MediaQuery::parse("(width > 10foo)").is_err());
+    }
+
+    #[test]
+    fn range_resolution_rejects_invalid_units() {
+        assert!(MediaQuery::parse("(resolution < 2abc)").is_err());
+        assert!(MediaQuery::parse("(2abc < resolution)").is_err());
+    }
+
+    #[test]
     fn env_overrides_color_scheme_and_motion() {
         let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("dark"));
         let guard_motion = EnvGuard::new("FASTR_PREFERS_REDUCED_MOTION", Some("reduce"));

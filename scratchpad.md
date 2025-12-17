@@ -1505,3 +1505,4 @@ Actionable borrowings:
 - Media queries: `any-pointer` now matches only the available pointer capability (fine/coarse/none) instead of treating fine pointers as coarse; added regression `test_evaluate_any_pointer` covering desktop/mobile/print contexts.
 - Media queries: `any-pointer` now tracks coarse/fine availability separately; hybrid devices can satisfy both coarse and fine, and regression `test_evaluate_any_pointer_hybrid` covers the combined case.
 - Media queries: length resolution now returns None when viewport bases are non-finite; vw/vh/percent/calc queries fail gracefully instead of propagating NaNs. Regression `media_query_with_non_finite_viewport_does_not_match` added.
+- Media queries: range syntax now has regressions ensuring invalid percentage/unknown-unit lengths and bad resolution units fail to parse (`range_length_rejects_percentage_and_invalid_units`, `range_resolution_rejects_invalid_units`).
