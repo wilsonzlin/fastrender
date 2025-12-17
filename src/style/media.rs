@@ -1239,7 +1239,7 @@ impl MediaContext {
             any_can_hover: true,
             pointer: PointerCapability::Fine,
             any_pointer: PointerCapability::Fine,
-            prefers_color_scheme: None,
+            prefers_color_scheme: Some(ColorScheme::NoPreference),
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
@@ -1268,7 +1268,7 @@ impl MediaContext {
             self.prefers_color_scheme = match v.as_str() {
                 "light" => Some(ColorScheme::Light),
                 "dark" => Some(ColorScheme::Dark),
-                "no-preference" => None,
+                "no-preference" => Some(ColorScheme::NoPreference),
                 _ => self.prefers_color_scheme,
             };
         }
@@ -1383,7 +1383,7 @@ impl MediaContext {
             any_can_hover: false,
             pointer: PointerCapability::None,
             any_pointer: PointerCapability::None,
-            prefers_color_scheme: None,
+            prefers_color_scheme: Some(ColorScheme::NoPreference),
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
@@ -1422,7 +1422,7 @@ impl MediaContext {
             any_can_hover: false,
             pointer: PointerCapability::Coarse,
             any_pointer: PointerCapability::Coarse,
-            prefers_color_scheme: None,
+            prefers_color_scheme: Some(ColorScheme::NoPreference),
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
@@ -1685,7 +1685,10 @@ impl MediaContext {
             }
 
             // User preferences
-            MediaFeature::PrefersColorScheme(scheme) => self.prefers_color_scheme == Some(*scheme),
+            MediaFeature::PrefersColorScheme(scheme) => match self.prefers_color_scheme {
+                Some(current) => current == *scheme,
+                None => matches!(scheme, ColorScheme::NoPreference),
+            },
             MediaFeature::PrefersReducedMotion(motion) => match motion {
                 ReducedMotion::NoPreference => !self.prefers_reduced_motion,
                 ReducedMotion::Reduce => self.prefers_reduced_motion,
@@ -2504,6 +2507,9 @@ mod tests {
     fn test_media_feature_parse_prefers_color_scheme() {
         let feature = MediaFeature::parse("prefers-color-scheme", Some("dark")).unwrap();
         assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::Dark));
+
+        let feature = MediaFeature::parse("prefers-color-scheme", Some("no-preference")).unwrap();
+        assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::NoPreference));
     }
 
     // ============================================================================
@@ -2709,13 +2715,25 @@ mod tests {
 
     #[test]
     fn test_evaluate_prefers_color_scheme() {
-        let ctx = MediaContext::screen(1024.0, 768.0).with_color_scheme(ColorScheme::Dark);
+        let dark_ctx = MediaContext::screen(1024.0, 768.0).with_color_scheme(ColorScheme::Dark);
+        let light_ctx = MediaContext::screen(1024.0, 768.0).with_color_scheme(ColorScheme::Light);
+        let no_pref_ctx = MediaContext::screen(1024.0, 768.0);
 
-        let query = MediaQuery::parse("(prefers-color-scheme: dark)").unwrap();
-        assert!(ctx.evaluate(&query));
+        let dark_query = MediaQuery::parse("(prefers-color-scheme: dark)").unwrap();
+        let light_query = MediaQuery::parse("(prefers-color-scheme: light)").unwrap();
+        let no_pref_query = MediaQuery::parse("(prefers-color-scheme: no-preference)").unwrap();
 
-        let query = MediaQuery::parse("(prefers-color-scheme: light)").unwrap();
-        assert!(!ctx.evaluate(&query));
+        assert!(dark_ctx.evaluate(&dark_query));
+        assert!(!dark_ctx.evaluate(&light_query));
+        assert!(!dark_ctx.evaluate(&no_pref_query));
+
+        assert!(light_ctx.evaluate(&light_query));
+        assert!(!light_ctx.evaluate(&dark_query));
+        assert!(!light_ctx.evaluate(&no_pref_query));
+
+        assert!(no_pref_ctx.evaluate(&no_pref_query));
+        assert!(!no_pref_ctx.evaluate(&dark_query));
+        assert!(!no_pref_ctx.evaluate(&light_query));
     }
 
     #[test]
@@ -2897,6 +2915,23 @@ mod tests {
         drop(guard_color_index);
         drop(guard_mono);
         drop(guard_forced);
+    }
+
+    #[test]
+    fn env_overrides_color_scheme_to_no_preference() {
+        let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("no-preference"));
+
+        let dark_query = MediaQuery::parse("(prefers-color-scheme: dark)").unwrap();
+        let no_pref_query = MediaQuery::parse("(prefers-color-scheme: no-preference)").unwrap();
+
+        let ctx = MediaContext::screen(800.0, 600.0)
+            .with_color_scheme(ColorScheme::Dark)
+            .with_env_overrides();
+        assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::NoPreference));
+        assert!(ctx.evaluate(&no_pref_query));
+        assert!(!ctx.evaluate(&dark_query));
+
+        drop(guard_scheme);
     }
 
     #[test]

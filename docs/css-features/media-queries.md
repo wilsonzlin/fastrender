@@ -697,7 +697,7 @@ impl MediaContext {
             color_depth: 8,
             can_hover: true,
             pointer_accuracy: PointerCapability::Fine,
-            prefers_color_scheme: None,
+            prefers_color_scheme: Some(ColorScheme::NoPreference),
             prefers_reduced_motion: false,
         }
     }
@@ -712,7 +712,7 @@ impl MediaContext {
             color_depth: 0, // Assume black & white
             can_hover: false,
             pointer_accuracy: PointerCapability::None,
-            prefers_color_scheme: None,
+            prefers_color_scheme: Some(ColorScheme::NoPreference),
             prefers_reduced_motion: false,
         }
     }
@@ -852,9 +852,10 @@ impl MediaContext {
                 self.pointer_accuracy == *capability
             }
 
-            MediaFeature::PrefersColorScheme(scheme) => {
-                self.prefers_color_scheme == Some(*scheme)
-            }
+            MediaFeature::PrefersColorScheme(scheme) => match self.prefers_color_scheme {
+                Some(current) => current == *scheme,
+                None => matches!(scheme, ColorScheme::NoPreference),
+            },
 
             MediaFeature::PrefersReducedMotion(motion) => {
                 match motion {

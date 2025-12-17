@@ -41,11 +41,19 @@ Idle; no current tasks.
 - Added CSS `text-size-adjust`: new computed type/default (auto), inherited, parsed keywords/percentages, property list updates, and cascade tests. `cargo test text_size_adjust --quiet` passes.
 - Added CSS `text-rendering`: new computed type/default (auto), inherited, property parsing (optimizeSpeed/optimizeLegibility/geometricPrecision), property lists, and regression tests. `cargo test text_rendering --quiet` passes.
 
+<<<<<<< HEAD
 - Added `:target-within` pseudo-class: selector parsing/serialization, DOM subtree target detection, and parsing/matching regression covering ancestors and target elements.
 
 - Added regression for `scrollbar-width` global keywords (inherit/revert/revert-layer/unset) to lock cascade behavior; no functional change needed.
 - Flex pass-cache now keys on the measurement-adjusted style and seeds from the shared measure cache so intrinsic probes reuse cached sizes/fragments even when we clone styles (aimed at the CNN carousel flex hotspots).
 - Flex pass-cache now tolerance-matches stored layouts within a size epsilon to reuse cached fragments across near-identical probes; deduped `text-size-adjust` type definition and restored missing `text-rendering`/`overflow-anchor` computed fields after merge.
+=======
+<<<<<<< HEAD
+=======
+- Added regression for `scrollbar-width` global keywords (inherit/revert/revert-layer/unset) to lock cascade behavior; no functional change needed.
+- Flex pass-cache now keys on the measurement-adjusted style and seeds from the shared measure cache so intrinsic probes reuse cached sizes/fragments even when we clone styles (aimed at the CNN carousel flex hotspots).
+>>>>>>> ce14d68 (Handle prefers-color-scheme no-preference and fix duplicate fields)
+>>>>>>> d09aa31 (Handle prefers-color-scheme no-preference and fix duplicate fields)
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
 - Implemented `text-size-adjust`: parses auto/none/percentage, cascades/inherits with regression coverage.
 
@@ -480,6 +488,8 @@ Inline coordinate fix (Mar 2026):
 ## Recent changes (this branch)
 - Fixed length resolution crash paths: percentage/viewport/font-relative calc terms now fall back to 0/raw values when context is missing, and missing overflow_anchor duplication cleaned up after merges.
 - Fixed merge fallout: deduped `TextSizeAdjust` definition, added missing `text_rendering`/`overflow_anchor` fields to `ComputedStyle` (defaults, hashing), and updated cascade tests for DOM namespace; tree now builds/tests again.
+- Media `prefers-color-scheme` now defaults to `no-preference`; env overrides accept `no-preference`, evaluation treats missing prefs as no-preference, and tests cover parsing/evaluation/env handling.
+- Fixed merge fallout: deduped `TextSizeAdjust`, restored missing `text_rendering`/`overflow_anchor` fields in computed styles, and added `forced-color-adjust` (auto/none, non-inherited) with parsing/cascade wiring and regression coverage; cascade scrollbar-color test now includes the HTML namespace.
 - Added `color-gamut` media feature support: parse/evaluate against MediaContext (srgb/p3/rec2020), env override via `FASTR_COLOR_GAMUT`, and regression tests.
 - Text decoration keyword parsing is now ASCII case-insensitive (line/style/thickness/skip-ink/underline-position), with regression coverage for uppercase inputs.
 - text-decoration-color now treats currentColor case-insensitively; parsing accepts any casing of the keyword and the regression for decoration longhands covers CurrentColor.
@@ -489,7 +499,6 @@ Inline coordinate fix (Mar 2026):
 - text-decoration-color now treats currentColor case-insensitively; parsing accepts any casing of the keyword and the regression for decoration longhands covers CurrentColor.
 - Text decoration keyword parsing is now ASCII case-insensitive: lines/style/thickness/skip-ink/underline-position all accept upper/mixed-case values, with a regression test covering uppercase inputs.
 - Stacking context bounds computation now recurses into children and seeds from the first encountered rect instead of unioning with a zero rect, fixing paint-containment clipping in the display list (StackingContext::compute_bounds). `cargo test --quiet` passes.
-- Media `prefers-color-scheme` supports `no-preference` (parse/evaluate/env overrides); default context uses `no-preference` and tests cover parsing/evaluation/env handling.
 - Letter/word spacing in cascade resolves calc/viewport/percentage lengths with the available context; added regression covering calc + viewport units.
 - Added CSS UI plumbing for `resize` (ComputedStyle field + keyword parsing/tests) and kept `user-select` in computed styles; deduped the DOM `is_indeterminate` helper (checkbox/radio/progress handling).
 - Transform parsing now accepts common 3D functions: translateZ/translate3d, scaleZ/scale3d, rotateX/rotateY/rotate3d, perspective, and matrix3d. These parse to new Transform variants; build_transform in the painter/display-list maps them to 2D equivalents (rotate3d about z → rotate, translate/scale ignore z, others become identity; matrix3d collapses to 2D when compatible). Transform hashes updated and parsing tests cover 3D functions/matrix3d with commas accepted via expect_comma.
