@@ -8,6 +8,7 @@ use crate::resource::{FetchedResource, HttpFetcher, ResourceFetcher};
 use crate::style::types::{ImageResolution, OrientationTransform};
 use exif;
 use image::{imageops, DynamicImage, GenericImageView, RgbaImage};
+use roxmltree::Document;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -25,6 +26,12 @@ pub struct CachedImage {
     pub resolution: Option<f32>,
     /// Whether this image originated from a vector source (SVG).
     pub is_vector: bool,
+    /// Intrinsic aspect ratio when known. SVGs that opt out of aspect-ratio preservation keep this
+    /// as `None` and set `aspect_ratio_none` to true.
+    pub intrinsic_ratio: Option<f32>,
+    /// True when the resource explicitly disables aspect-ratio preservation (e.g., SVG
+    /// `preserveAspectRatio="none"`).
+    pub aspect_ratio_none: bool,
 }
 
 impl CachedImage {
@@ -65,6 +72,29 @@ impl CachedImage {
             return None;
         }
         Some((w as f32 / used, h as f32 / used))
+    }
+
+    /// Intrinsic aspect ratio, adjusted for EXIF orientation when present.
+    pub fn intrinsic_ratio(&self, transform: OrientationTransform) -> Option<f32> {
+        if self.aspect_ratio_none {
+            return None;
+        }
+
+        let mut ratio = self.intrinsic_ratio;
+        if ratio.is_none() {
+            let (w, h) = self.oriented_dimensions(transform);
+            if h > 0 {
+                ratio = Some(w as f32 / h as f32);
+            }
+        }
+
+        if let Some(r) = ratio {
+            if transform.quarter_turns % 2 == 1 {
+                return Some(1.0 / r);
+            }
+        }
+
+        ratio
     }
 
     pub fn to_oriented_rgba(&self, transform: OrientationTransform) -> RgbaImage {
@@ -225,7 +255,8 @@ impl ImageCache {
         let resource = self.fetcher.fetch(&resolved_url)?;
 
         // Decode the image
-        let (img, orientation, resolution, is_vector) = self.decode_resource(&resource, &resolved_url)?;
+        let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none) =
+            self.decode_resource(&resource, &resolved_url)?;
 
         // Cache it (using resolved URL as key)
         let img_arc = Arc::new(CachedImage {
@@ -233,6 +264,8 @@ impl ImageCache {
             orientation,
             resolution,
             is_vector,
+            intrinsic_ratio,
+            aspect_ratio_none,
         });
         {
             let mut cache = self.cache.lock().unwrap();
@@ -244,12 +277,14 @@ impl ImageCache {
 
     /// Render raw SVG content to an image (uncached).
     pub fn render_svg(&self, svg_content: &str) -> Result<Arc<CachedImage>> {
-        let img = self.render_svg_to_image(svg_content)?;
+        let (img, intrinsic_ratio, aspect_ratio_none) = self.render_svg_to_image(svg_content)?;
         Ok(Arc::new(CachedImage {
             image: Arc::new(img),
             orientation: None,
             resolution: None,
             is_vector: true,
+            intrinsic_ratio,
+            aspect_ratio_none,
         }))
     }
 
@@ -258,7 +293,7 @@ impl ImageCache {
         &self,
         resource: &FetchedResource,
         url: &str,
-    ) -> Result<(DynamicImage, Option<OrientationTransform>, Option<f32>, bool)> {
+    ) -> Result<(DynamicImage, Option<OrientationTransform>, Option<f32>, bool, Option<f32>, bool)> {
         let bytes = &resource.bytes;
         let content_type = resource.content_type.as_deref();
 
@@ -277,13 +312,15 @@ impl ImageCache {
                     reason: format!("SVG not valid UTF-8: {}", e),
                 })
             })?;
-            return self.render_svg_to_image(content).map(|img| (img, None, None, true));
+            return self
+                .render_svg_to_image(content)
+                .map(|(img, ratio, aspect_none)| (img, None, None, true, ratio, aspect_none));
         }
 
         // Regular image - extract EXIF metadata and decode
         let (orientation, resolution) = Self::exif_metadata(bytes);
         image::load_from_memory(bytes)
-            .map(|img| (img, orientation, resolution, false))
+            .map(|img| (img, orientation, resolution, false, None, false))
             .map_err(|e| {
                 Error::Image(ImageError::DecodeFailed {
                     url: url.to_string(),
@@ -391,9 +428,12 @@ impl ImageCache {
         Self::exif_metadata(bytes).0
     }
 
-    /// Renders raw SVG content to a raster image.
-    pub fn render_svg_to_image(&self, svg_content: &str) -> Result<DynamicImage> {
+    /// Renders raw SVG content to a raster image, returning any parsed intrinsic aspect ratio
+    /// information.
+    pub fn render_svg_to_image(&self, svg_content: &str) -> Result<(DynamicImage, Option<f32>, bool)> {
         use resvg::usvg;
+
+        let parsed_ratio = svg_intrinsic_aspect_ratio(svg_content);
 
         // Parse SVG
         let options = usvg::Options::default();
@@ -424,12 +464,91 @@ impl ImageCache {
         let img = image::RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
             Error::Image(ImageError::DecodeFailed {
                 url: "SVG content".to_string(),
-                reason: "Failed to create image from SVG pixmap".to_string(),
-            })
+            reason: "Failed to create image from SVG pixmap".to_string(),
+        })
         })?;
 
-        Ok(image::DynamicImage::ImageRgba8(img))
+        let ratio = match parsed_ratio {
+            Some(r) => r,
+            None => {
+                if height > 0 {
+                    Some(width as f32 / height as f32)
+                } else {
+                    None
+                }
+            }
+        };
+
+        Ok((image::DynamicImage::ImageRgba8(img), ratio, matches!(parsed_ratio, Some(None))))
     }
+}
+
+fn parse_svg_length(value: &str) -> Option<f32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.ends_with('%') {
+        return None;
+    }
+
+    let mut end = 0;
+    for (idx, ch) in trimmed.char_indices() {
+        if matches!(ch, '0'..='9' | '+' | '-' | '.' | 'e' | 'E') {
+            end = idx + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if end == 0 {
+        return None;
+    }
+
+    trimmed[..end].parse::<f32>().ok()
+}
+
+/// Returns `Some(None)` when the SVG explicitly disables aspect-ratio preservation via
+/// `preserveAspectRatio="none"`, `Some(Some(ratio))` when a ratio can be determined, and `None`
+/// when parsing fails.
+fn svg_intrinsic_aspect_ratio(svg_content: &str) -> Option<Option<f32>> {
+    let doc = Document::parse(svg_content).ok()?;
+    let root = doc.root_element();
+    if !root.tag_name().name().eq_ignore_ascii_case("svg") {
+        return None;
+    }
+
+    if let Some(par) = root.attribute("preserveAspectRatio") {
+        if par
+            .split_whitespace()
+            .next()
+            .map(|v| v.eq_ignore_ascii_case("none"))
+            .unwrap_or(false)
+        {
+            return Some(None);
+        }
+    }
+
+    let width = root.attribute("width").and_then(parse_svg_length);
+    let height = root.attribute("height").and_then(parse_svg_length);
+    if let (Some(w), Some(h)) = (width, height) {
+        if h > 0.0 {
+            return Some(Some(w / h));
+        }
+    }
+
+    if let Some(view_box) = root.attribute("viewBox") {
+        let mut parts = view_box
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse::<f32>().ok());
+        let _ = parts.next();
+        let _ = parts.next();
+        if let (Some(w), Some(h)) = (parts.next(), parts.next()) {
+            if h > 0.0 {
+                return Some(Some(w / h));
+            }
+        }
+    }
+
+    None
 }
 
 // ============================================================================
@@ -498,9 +617,11 @@ mod tests {
     fn render_inline_svg_returns_image() {
         let cache = ImageCache::new();
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"></svg>"#;
-        let image = cache.render_svg_to_image(svg).expect("svg render");
+        let (image, ratio, aspect_none) = cache.render_svg_to_image(svg).expect("svg render");
         assert_eq!(image.width(), 10);
         assert_eq!(image.height(), 5);
+        assert_eq!(ratio, Some(2.0));
+        assert!(!aspect_none);
     }
 
     #[test]

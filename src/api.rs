@@ -1437,6 +1437,7 @@ impl FastRender {
         alt: Option<&str>,
         viewport: Size,
     ) {
+        let mut explicit_no_ratio = false;
         let replaced_type_snapshot = replaced_box.replaced_type.clone();
         match replaced_type_snapshot {
             ReplacedType::Image {
@@ -1464,6 +1465,7 @@ impl FastRender {
                 if let Some(selected) = selected {
                     if let Ok(image) = self.image_cache.load(selected.url) {
                         let orientation = style.image_orientation.resolve(image.orientation, false);
+                        explicit_no_ratio = image.aspect_ratio_none;
                         if let Some((w, h)) = image.css_dimensions(
                             orientation,
                             &style.image_resolution,
@@ -1471,8 +1473,11 @@ impl FastRender {
                             selected.resolution,
                         ) {
                             replaced_box.intrinsic_size = Some(Size::new(w, h));
-                            if h > 0.0 {
-                                replaced_box.aspect_ratio = Some(w / h);
+                            if !explicit_no_ratio {
+                                replaced_box.aspect_ratio = replaced_box
+                                    .aspect_ratio
+                                    .or_else(|| image.intrinsic_ratio(orientation))
+                                    .or_else(|| if h > 0.0 { Some(w / h) } else { None });
                             }
                             have_resource_dimensions = true;
                         }
@@ -1503,6 +1508,7 @@ impl FastRender {
                         };
                         if let Ok(image) = image {
                             let orientation = style.image_orientation.resolve(image.orientation, false);
+                            explicit_no_ratio = image.aspect_ratio_none;
                             if let Some((w, h)) = image.css_dimensions(
                                 orientation,
                                 &style.image_resolution,
@@ -1512,8 +1518,10 @@ impl FastRender {
                                 if needs_intrinsic {
                                     replaced_box.intrinsic_size = Some(Size::new(w, h));
                                 }
-                                if needs_ratio && h > 0.0 {
-                                    replaced_box.aspect_ratio = Some(w / h);
+                                if needs_ratio && !explicit_no_ratio {
+                                    replaced_box.aspect_ratio = image
+                                        .intrinsic_ratio(orientation)
+                                        .or_else(|| if h > 0.0 { Some(w / h) } else { None });
                                 }
                             }
                         }
@@ -1539,14 +1547,17 @@ impl FastRender {
 
                     if let Ok(image) = image {
                         let orientation = style.image_orientation.resolve(image.orientation, false);
+                        explicit_no_ratio = image.aspect_ratio_none;
                         if let Some((w, h)) =
                             image.css_dimensions(orientation, &style.image_resolution, self.device_pixel_ratio, None)
                         {
                             if needs_intrinsic {
                                 replaced_box.intrinsic_size = Some(Size::new(w, h));
                             }
-                            if needs_ratio && h > 0.0 {
-                                replaced_box.aspect_ratio = Some(w / h);
+                            if needs_ratio && !explicit_no_ratio {
+                                replaced_box.aspect_ratio = image
+                                    .intrinsic_ratio(orientation)
+                                    .or_else(|| if h > 0.0 { Some(w / h) } else { None });
                             }
                         }
                     }
@@ -1563,14 +1574,17 @@ impl FastRender {
                     };
                     if let Ok(image) = image {
                         let orientation = style.image_orientation.resolve(image.orientation, false);
+                        explicit_no_ratio = image.aspect_ratio_none;
                         if let Some((w, h)) =
                             image.css_dimensions(orientation, &style.image_resolution, self.device_pixel_ratio, None)
                         {
                             if needs_intrinsic {
                                 replaced_box.intrinsic_size = Some(Size::new(w, h));
                             }
-                            if needs_ratio && h > 0.0 {
-                                replaced_box.aspect_ratio = Some(w / h);
+                            if needs_ratio && !explicit_no_ratio {
+                                replaced_box.aspect_ratio = image
+                                    .intrinsic_ratio(orientation)
+                                    .or_else(|| if h > 0.0 { Some(w / h) } else { None });
                             }
                         }
                     }
@@ -1580,7 +1594,7 @@ impl FastRender {
         }
 
         // If only intrinsic size is present, ensure aspect ratio is recorded
-        if replaced_box.aspect_ratio.is_none() {
+        if replaced_box.aspect_ratio.is_none() && !explicit_no_ratio {
             if let Some(size) = replaced_box.intrinsic_size {
                 if size.height > 0.0 {
                     replaced_box.aspect_ratio = Some(size.width / size.height);
@@ -3910,6 +3924,58 @@ mod tests {
             Some(20.0 / 12.0),
             "inline svg should populate aspect ratio"
         );
+    }
+
+    #[test]
+    fn resolve_intrinsic_sizes_respects_preserve_aspect_ratio_none() {
+        let renderer = FastRender::new().expect("init renderer");
+        let mut node = BoxNode::new_replaced(
+            Arc::new(ComputedStyle::default()),
+            ReplacedType::Svg {
+                content:
+                    r#"<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100' viewBox='0 0 50 100' preserveAspectRatio='none'></svg>"#
+                        .to_string(),
+            },
+            None,
+            None,
+        );
+
+        renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
+        let replaced = match node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+
+        assert_eq!(
+            replaced.intrinsic_size,
+            Some(Size::new(200.0, 100.0)),
+            "inline svg should still populate intrinsic size"
+        );
+        assert_eq!(
+            replaced.aspect_ratio, None,
+            "preserveAspectRatio='none' should drop intrinsic ratio"
+        );
+    }
+
+    #[test]
+    fn resolve_intrinsic_sizes_use_viewbox_ratio() {
+        let renderer = FastRender::new().expect("init renderer");
+        let mut node = BoxNode::new_replaced(
+            Arc::new(ComputedStyle::default()),
+            ReplacedType::Svg {
+                content: r#"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 100'></svg>"#.to_string(),
+            },
+            None,
+            None,
+        );
+
+        renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
+        let replaced = match node.box_type {
+            BoxType::Replaced(ref r) => r,
+            _ => panic!("not replaced"),
+        };
+
+        assert_eq!(replaced.aspect_ratio, Some(0.5));
     }
 
     #[test]
