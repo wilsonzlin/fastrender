@@ -2285,13 +2285,13 @@ impl MediaContext {
         let vw = self.viewport_width.is_finite().then_some(self.viewport_width)?;
         let vh = self.viewport_height.is_finite().then_some(self.viewport_height)?;
         let inline = inline_base.is_finite().then_some(inline_base)?;
-        let block = block_base.is_finite().then_some(block_base)?;
+        let _block = block_base.is_finite().then_some(block_base)?;
 
         if length.unit == LengthUnit::Calc {
             return length.resolve_with_context(
                 Some(inline),
-                inline,
-                block,
+                vw,
+                vh,
                 base_font,
                 base_font,
             );
@@ -2914,6 +2914,8 @@ fn parse_length(s: &str) -> Option<Length> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::values::CalcLength;
+    use crate::LengthUnit;
     use std::env;
 
     struct EnvGuard {
@@ -3050,6 +3052,15 @@ mod tests {
         assert_eq!(Resolution::dppx(2.0).to_dppx(), 2.0);
         assert!((Resolution::dpi(96.0).to_dppx() - 1.0).abs() < 0.01);
         assert!((Resolution::dpi(192.0).to_dppx() - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calc_length_media_resolution_uses_viewport_units() {
+        let ctx = MediaContext::screen(200.0, 100.0);
+        let calc = Length::calc(CalcLength::single(LengthUnit::Vw, 10.0));
+
+        let resolved = ctx.resolve_length(&calc, ctx.viewport_width, ctx.viewport_height);
+        assert_eq!(resolved, Some(20.0));
     }
 
     // ============================================================================
