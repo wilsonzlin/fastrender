@@ -431,6 +431,22 @@ impl TextRasterizer {
                 glyph_y,
                 run.synthetic_oblique,
             ) {
+                let mut path = path;
+                if !matches!(run.rotation, crate::text::pipeline::RunRotation::None) {
+                    let angle = match run.rotation {
+                        crate::text::pipeline::RunRotation::Ccw90 => -90.0_f32.to_radians(),
+                        crate::text::pipeline::RunRotation::Cw90 => 90.0_f32.to_radians(),
+                        crate::text::pipeline::RunRotation::None => 0.0,
+                    };
+                    let (sin, cos) = angle.sin_cos();
+                    let tx = x - x * cos + baseline_y * sin;
+                    let ty = baseline_y - x * sin - baseline_y * cos;
+                    let rotate = Transform::from_row(cos, sin, -sin, cos, tx, ty);
+                    if let Some(rotated) = path.clone().transform(rotate) {
+                        path = rotated;
+                    }
+                }
+
                 // Render the path
                 pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
                 if run.synthetic_bold > 0.0 {

@@ -34,6 +34,31 @@ fn has_changed_pixels(pixmap: &Pixmap) -> bool {
         .any(|pixel| pixel[0] != 255 || pixel[1] != 255 || pixel[2] != 255)
 }
 
+fn painted_bounds(pixmap: &Pixmap) -> Option<(u32, u32, u32, u32)> {
+    let mut min_x = u32::MAX;
+    let mut min_y = u32::MAX;
+    let mut max_x = 0;
+    let mut max_y = 0;
+
+    for (idx, chunk) in pixmap.data().chunks(4).enumerate() {
+        if chunk[0] == 255 && chunk[1] == 255 && chunk[2] == 255 {
+            continue;
+        }
+        let x = (idx as u32) % pixmap.width();
+        let y = (idx as u32) / pixmap.width();
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+
+    if min_x == u32::MAX {
+        None
+    } else {
+        Some((min_x, max_x, min_y, max_y))
+    }
+}
+
 // ============================================================================
 // TextRasterizer Tests
 // ============================================================================
@@ -147,6 +172,47 @@ fn test_render_multiple_glyphs() {
 
     assert!(result.is_ok());
     assert!(has_changed_pixels(&pixmap));
+}
+
+#[test]
+fn renders_rotated_runs_for_vertical_text() {
+    if get_test_font().is_none() {
+        return;
+    }
+
+    let mut style = ComputedStyle::default();
+    style.writing_mode = fastrender::style::types::WritingMode::HorizontalTb;
+    let style = Arc::new(style);
+
+    let pipeline = ShapingPipeline::new();
+    let font_ctx = FontContext::new();
+    let runs = pipeline.shape("HI", &style, &font_ctx).unwrap();
+    let run = &runs[0];
+
+    let mut rasterizer = TextRasterizer::new();
+    let mut pixmap_normal = create_test_pixmap(120, 120);
+    let mut pixmap_rotated = create_test_pixmap(120, 120);
+
+    rasterizer
+        .render_shaped_run(run, 20.0, 60.0, Rgba::BLACK, &mut pixmap_normal)
+        .unwrap();
+
+    let mut rotated = run.clone();
+    rotated.rotation = RunRotation::Cw90;
+    rasterizer
+        .render_shaped_run(&rotated, 20.0, 60.0, Rgba::BLACK, &mut pixmap_rotated)
+        .unwrap();
+
+    let bbox_normal = painted_bounds(&pixmap_normal).expect("normal run should paint");
+    let bbox_rotated = painted_bounds(&pixmap_rotated).expect("rotated run should paint");
+
+    let normal_w = bbox_normal.1 - bbox_normal.0;
+    let normal_h = bbox_normal.3 - bbox_normal.2;
+    let rotated_w = bbox_rotated.1 - bbox_rotated.0;
+    let rotated_h = bbox_rotated.3 - bbox_rotated.2;
+
+    assert!(rotated_h > normal_h, "rotated text should extend further vertically");
+    assert!(rotated_w < normal_w, "rotated text should shrink horizontally when rotated");
 }
 
 #[test]
