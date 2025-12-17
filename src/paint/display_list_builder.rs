@@ -444,12 +444,48 @@ impl DisplayListBuilder {
                 })
             }
         });
+        let overflow_clip = root_style.and_then(|style| {
+            let clip_x = matches!(
+                style.overflow_x,
+                crate::style::types::Overflow::Hidden
+                    | crate::style::types::Overflow::Scroll
+                    | crate::style::types::Overflow::Auto
+                    | crate::style::types::Overflow::Clip
+            ) || style.containment.paint;
+            let clip_y = matches!(
+                style.overflow_y,
+                crate::style::types::Overflow::Hidden
+                    | crate::style::types::Overflow::Scroll
+                    | crate::style::types::Overflow::Auto
+                    | crate::style::types::Overflow::Clip
+            ) || style.containment.paint;
+            if !clip_x && !clip_y {
+                return None;
+            }
+
+            let rects = Self::background_rects(context_bounds, style, self.viewport);
+            let clip_rect = rects.padding;
+            if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+                return None;
+            }
+            let radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
+            Some(ClipItem {
+                shape: ClipShape::Rect {
+                    rect: clip_rect,
+                    radii: if radii.is_zero() { None } else { Some(radii) },
+                },
+            })
+        });
 
         let mut pushed_clips = 0;
         if let Some(path) = clip_path {
             self.list.push(DisplayItem::PushClip(ClipItem {
                 shape: ClipShape::Path { path },
             }));
+            pushed_clips += 1;
+        }
+        if let Some(clip) = overflow_clip {
+            self.list.push(DisplayItem::PushClip(clip));
             pushed_clips += 1;
         }
         if let Some(clip) = clip_rect {
@@ -3577,6 +3613,20 @@ mod tests {
             left: crate::style::types::ClipComponent::Length(Length::px(5.0)),
         });
         style.background_color = Rgba::RED;
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+
+        let builder = DisplayListBuilder::new();
+        let list = builder.build_with_stacking_tree(&fragment);
+
+        assert!(list.items().iter().any(|item| matches!(item, DisplayItem::PushClip(_))));
+    }
+
+    #[test]
+    fn overflow_hidden_emits_clip_item() {
+        let mut style = ComputedStyle::default();
+        style.overflow_x = crate::style::types::Overflow::Hidden;
+        style.overflow_y = crate::style::types::Overflow::Hidden;
+        style.background_color = Rgba::BLUE;
         let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
 
         let builder = DisplayListBuilder::new();
