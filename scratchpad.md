@@ -1369,3 +1369,4 @@ Actionable borrowings:
 - render_pages CLI gained `--scroll-y` support and passes the offset through `render_to_png_with_scroll`; per-page logs include the scroll value.
 - Added prefers-contrast media coverage: MediaContext setter, evaluation regression, and env override invalid-value guard.
 - Inline line-height negative leading is now honored: half-leading is no longer clamped in inline baseline logic, strut initialization, painter, and display list builder, so line-height values smaller than ascent+descent shrink the line box instead of inflating to content height. Added regressions for BaselineMetrics and BaselineAligner to cover negative leading behavior. `cargo test baseline --quiet` passes.
+- Added a TextRun regression ensuring half-leading can be negative when line-height is smaller than text height (test_text_run_negative_half_leading).
