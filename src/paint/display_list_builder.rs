@@ -1302,6 +1302,7 @@ impl DisplayListBuilder {
         let percentage_height = reference.height();
 
         let mut ts = Transform2D::identity();
+        const EPS: f32 = 1e-6;
         for component in &style.transform {
             let next = match component {
                 crate::css::types::Transform::Translate(x, y) => {
@@ -1317,12 +1318,31 @@ impl DisplayListBuilder {
                     let ty = Self::resolve_transform_length(y, style.font_size, percentage_height);
                     Transform2D::translate(0.0, ty)
                 }
+                crate::css::types::Transform::TranslateZ(_) => Transform2D::identity(),
+                crate::css::types::Transform::Translate3d(x, y, _) => {
+                    let tx = Self::resolve_transform_length(x, style.font_size, percentage_width);
+                    let ty = Self::resolve_transform_length(y, style.font_size, percentage_height);
+                    Transform2D::translate(tx, ty)
+                }
                 crate::css::types::Transform::Scale(sx, sy) => Transform2D::scale(*sx, *sy),
                 crate::css::types::Transform::ScaleX(sx) => Transform2D::scale(*sx, 1.0),
                 crate::css::types::Transform::ScaleY(sy) => Transform2D::scale(1.0, *sy),
+                crate::css::types::Transform::ScaleZ(_) => Transform2D::identity(),
+                crate::css::types::Transform::Scale3d(sx, sy, _) => Transform2D::scale(*sx, *sy),
                 crate::css::types::Transform::Rotate(deg) => Transform2D::rotate(*deg),
+                crate::css::types::Transform::RotateX(_) => Transform2D::identity(),
+                crate::css::types::Transform::RotateY(_) => Transform2D::identity(),
+                crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
+                    if (*x).abs() < EPS && (*y).abs() < EPS && (*z).abs() > EPS {
+                        let sign = if *z >= 0.0 { 1.0 } else { -1.0 };
+                        Transform2D::rotate(*deg * sign)
+                    } else {
+                        Transform2D::identity()
+                    }
+                }
                 crate::css::types::Transform::SkewX(deg) => Transform2D::skew(deg.to_radians().tan(), 0.0),
                 crate::css::types::Transform::SkewY(deg) => Transform2D::skew(0.0, deg.to_radians().tan()),
+                crate::css::types::Transform::Perspective(_) => Transform2D::identity(),
                 crate::css::types::Transform::Matrix(a, b, c, d, e, f) => Transform2D {
                     a: *a,
                     b: *b,
@@ -1331,6 +1351,48 @@ impl DisplayListBuilder {
                     e: *e,
                     f: *f,
                 },
+                crate::css::types::Transform::Matrix3d(values) => {
+                    let m11 = values[0];
+                    let m12 = values[1];
+                    let m13 = values[2];
+                    let m14 = values[3];
+                    let m21 = values[4];
+                    let m22 = values[5];
+                    let m23 = values[6];
+                    let m24 = values[7];
+                    let m31 = values[8];
+                    let m32 = values[9];
+                    let m33 = values[10];
+                    let m34 = values[11];
+                    let m41 = values[12];
+                    let m42 = values[13];
+                    let m43 = values[14];
+                    let m44 = values[15];
+
+                    let compatible_2d = m13.abs() < EPS
+                        && m14.abs() < EPS
+                        && m23.abs() < EPS
+                        && m24.abs() < EPS
+                        && m31.abs() < EPS
+                        && m32.abs() < EPS
+                        && (m33 - 1.0).abs() < EPS
+                        && m34.abs() < EPS
+                        && m43.abs() < EPS
+                        && (m44 - 1.0).abs() < EPS;
+
+                    if compatible_2d {
+                        Transform2D {
+                            a: m11,
+                            b: m12,
+                            c: m21,
+                            d: m22,
+                            e: m41,
+                            f: m42,
+                        }
+                    } else {
+                        Transform2D::identity()
+                    }
+                }
             };
             ts = ts.multiply(&next);
         }
@@ -1347,9 +1409,7 @@ impl DisplayListBuilder {
     fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
         match len.unit {
             LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
-            LengthUnit::Em | LengthUnit::Rem => {
-                len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size)
-            }
+            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size),
             _ if len.unit.is_absolute() => len.to_px(),
             _ => len.value,
         }

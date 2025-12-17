@@ -2051,39 +2051,84 @@ fn hash_transform(transform: &crate::css::types::Transform, hasher: &mut Default
             2u8.hash(hasher);
             hash_length(y, hasher);
         }
-        Scale(x, y) => {
+        TranslateZ(z) => {
             3u8.hash(hasher);
+            hash_length(z, hasher);
+        }
+        Translate3d(x, y, z) => {
+            4u8.hash(hasher);
+            hash_length(x, hasher);
+            hash_length(y, hasher);
+            hash_length(z, hasher);
+        }
+        Scale(x, y) => {
+            5u8.hash(hasher);
             hash_f32(*x, hasher);
             hash_f32(*y, hasher);
         }
         ScaleX(x) => {
-            4u8.hash(hasher);
+            6u8.hash(hasher);
             hash_f32(*x, hasher);
         }
         ScaleY(y) => {
-            5u8.hash(hasher);
+            7u8.hash(hasher);
             hash_f32(*y, hasher);
         }
+        ScaleZ(z) => {
+            8u8.hash(hasher);
+            hash_f32(*z, hasher);
+        }
+        Scale3d(x, y, z) => {
+            9u8.hash(hasher);
+            hash_f32(*x, hasher);
+            hash_f32(*y, hasher);
+            hash_f32(*z, hasher);
+        }
         Rotate(r) => {
-            6u8.hash(hasher);
+            10u8.hash(hasher);
+            hash_f32(*r, hasher);
+        }
+        RotateX(r) => {
+            11u8.hash(hasher);
+            hash_f32(*r, hasher);
+        }
+        RotateY(r) => {
+            12u8.hash(hasher);
+            hash_f32(*r, hasher);
+        }
+        Rotate3d(x, y, z, r) => {
+            13u8.hash(hasher);
+            hash_f32(*x, hasher);
+            hash_f32(*y, hasher);
+            hash_f32(*z, hasher);
             hash_f32(*r, hasher);
         }
         SkewX(x) => {
-            7u8.hash(hasher);
+            14u8.hash(hasher);
             hash_f32(*x, hasher);
         }
         SkewY(y) => {
-            8u8.hash(hasher);
+            15u8.hash(hasher);
             hash_f32(*y, hasher);
         }
+        Perspective(len) => {
+            16u8.hash(hasher);
+            hash_length(len, hasher);
+        }
         Matrix(a, b, c, d, e, f) => {
-            9u8.hash(hasher);
+            17u8.hash(hasher);
             hash_f32(*a, hasher);
             hash_f32(*b, hasher);
             hash_f32(*c, hasher);
             hash_f32(*d, hasher);
             hash_f32(*e, hasher);
             hash_f32(*f, hasher);
+        }
+        Matrix3d(values) => {
+            18u8.hash(hasher);
+            for v in values {
+                hash_f32(*v, hasher);
+            }
         }
     }
 }

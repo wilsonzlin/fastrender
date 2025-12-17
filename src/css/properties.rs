@@ -376,13 +376,22 @@ pub(crate) fn parse_transform_list(value: &str) -> Option<Vec<Transform>> {
                             "translate" => parse_translate(p),
                             "translatex" => parse_translate_x(p),
                             "translatey" => parse_translate_y(p),
+                            "translatez" => parse_translate_z(p),
+                            "translate3d" => parse_translate_3d(p),
                             "scale" => parse_scale(p),
                             "scalex" => parse_scale_x(p),
                             "scaley" => parse_scale_y(p),
+                            "scalez" => parse_scale_z(p),
+                            "scale3d" => parse_scale_3d(p),
                             "rotate" => parse_rotate(p),
+                            "rotatex" => parse_rotate_x(p),
+                            "rotatey" => parse_rotate_y(p),
+                            "rotate3d" => parse_rotate_3d(p),
                             "skewx" => parse_skew_x(p),
                             "skewy" => parse_skew_y(p),
                             "matrix" => parse_matrix(p),
+                            "matrix3d" => parse_matrix_3d(p),
+                            "perspective" => parse_perspective(p),
                             _ => Err(()),
                         }
                         .map_err(|_| p.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid))
@@ -467,7 +476,7 @@ fn parse_angle_component(parser: &mut Parser) -> Result<f32, ()> {
 fn parse_translate(parser: &mut Parser) -> Result<Transform, ()> {
     let x = parse_length_component(parser)?;
     parser.skip_whitespace();
-    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let _ = parser.try_parse(|p| p.expect_comma());
     let y = if parser.is_exhausted() {
         Length::px(0.0)
     } else {
@@ -487,10 +496,36 @@ fn parse_translate_y(parser: &mut Parser) -> Result<Transform, ()> {
     Ok(Transform::TranslateY(y))
 }
 
+fn parse_translate_z(parser: &mut Parser) -> Result<Transform, ()> {
+    let z = parse_length_component(parser)?;
+    Ok(Transform::TranslateZ(z))
+}
+
+fn parse_translate_3d(parser: &mut Parser) -> Result<Transform, ()> {
+    let x = parse_length_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let y = if parser.is_exhausted() {
+        Length::px(0.0)
+    } else {
+        parser.skip_whitespace();
+        parse_length_component(parser)?
+    };
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let z = if parser.is_exhausted() {
+        Length::px(0.0)
+    } else {
+        parser.skip_whitespace();
+        parse_length_component(parser)?
+    };
+    Ok(Transform::Translate3d(x, y, z))
+}
+
 fn parse_scale(parser: &mut Parser) -> Result<Transform, ()> {
     let sx = parse_number_component(parser)?;
     parser.skip_whitespace();
-    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let _ = parser.try_parse(|p| p.expect_comma());
     let sy = if parser.is_exhausted() {
         sx
     } else {
@@ -510,9 +545,59 @@ fn parse_scale_y(parser: &mut Parser) -> Result<Transform, ()> {
     Ok(Transform::ScaleY(s))
 }
 
+fn parse_scale_z(parser: &mut Parser) -> Result<Transform, ()> {
+    let s = parse_number_component(parser)?;
+    Ok(Transform::ScaleZ(s))
+}
+
+fn parse_scale_3d(parser: &mut Parser) -> Result<Transform, ()> {
+    let sx = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let sy = if parser.is_exhausted() {
+        sx
+    } else {
+        parser.skip_whitespace();
+        parse_number_component(parser)?
+    };
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let sz = if parser.is_exhausted() {
+        sx
+    } else {
+        parser.skip_whitespace();
+        parse_number_component(parser)?
+    };
+    Ok(Transform::Scale3d(sx, sy, sz))
+}
+
 fn parse_rotate(parser: &mut Parser) -> Result<Transform, ()> {
     let deg = parse_angle_component(parser)?;
     Ok(Transform::Rotate(deg))
+}
+
+fn parse_rotate_x(parser: &mut Parser) -> Result<Transform, ()> {
+    let deg = parse_angle_component(parser)?;
+    Ok(Transform::RotateX(deg))
+}
+
+fn parse_rotate_y(parser: &mut Parser) -> Result<Transform, ()> {
+    let deg = parse_angle_component(parser)?;
+    Ok(Transform::RotateY(deg))
+}
+
+fn parse_rotate_3d(parser: &mut Parser) -> Result<Transform, ()> {
+    let x = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let y = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let z = parse_number_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let deg = parse_angle_component(parser)?;
+    Ok(Transform::Rotate3d(x, y, z, deg))
 }
 
 fn parse_skew_x(parser: &mut Parser) -> Result<Transform, ()> {
@@ -528,21 +613,38 @@ fn parse_skew_y(parser: &mut Parser) -> Result<Transform, ()> {
 fn parse_matrix(parser: &mut Parser) -> Result<Transform, ()> {
     let a = parse_number_component(parser)?;
     parser.skip_whitespace();
-    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let _ = parser.try_parse(|p| p.expect_comma());
     let b = parse_number_component(parser)?;
     parser.skip_whitespace();
-    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let _ = parser.try_parse(|p| p.expect_comma());
     let c = parse_number_component(parser)?;
     parser.skip_whitespace();
-    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let _ = parser.try_parse(|p| p.expect_comma());
     let d = parse_number_component(parser)?;
     parser.skip_whitespace();
-    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let _ = parser.try_parse(|p| p.expect_comma());
     let e = parse_number_component(parser)?;
     parser.skip_whitespace();
-    let _ = parser.try_parse(|p| p.expect_delim(','));
+    let _ = parser.try_parse(|p| p.expect_comma());
     let f = parse_number_component(parser)?;
     Ok(Transform::Matrix(a, b, c, d, e, f))
+}
+
+fn parse_matrix_3d(parser: &mut Parser) -> Result<Transform, ()> {
+    let mut values = [0.0f32; 16];
+    for i in 0..16 {
+        values[i] = parse_number_component(parser)?;
+        if i < 15 {
+            parser.skip_whitespace();
+            let _ = parser.try_parse(|p| p.expect_comma());
+        }
+    }
+    Ok(Transform::Matrix3d(values))
+}
+
+fn parse_perspective(parser: &mut Parser) -> Result<Transform, ()> {
+    let len = parse_length_component(parser)?;
+    Ok(Transform::Perspective(len))
 }
 
 fn parse_number_component(parser: &mut Parser) -> Result<f32, ()> {
@@ -1639,6 +1741,51 @@ mod tests {
 
         assert!(parse_length("calc(10px * 5px)").is_none());
         assert!(parse_length("calc(10px / 0px)").is_none());
+    }
+
+    #[test]
+    fn parses_common_3d_transforms() {
+        assert!(parse_transform_list("translate3d(10px, 20px, 30px)").is_some());
+        assert!(parse_transform_list("translateZ(5px)").is_some());
+        assert!(parse_transform_list("scale3d(2, 3, 4)").is_some());
+        assert!(parse_transform_list("scaleZ(5)").is_some());
+        assert!(parse_transform_list("rotateX(10deg)").is_some());
+        assert!(parse_transform_list("rotateY(20deg)").is_some());
+        assert!(parse_transform_list("rotate3d(0, 0, 1, 45deg)").is_some());
+        assert!(parse_transform_list("perspective(500px)").is_some());
+
+        let transforms = parse_transform_list(
+            "translate3d(10px, 20px, 30px) translateZ(5px) scale3d(2, 3, 4) scaleZ(5) rotateX(10deg) rotateY(20deg) rotate3d(0, 0, 1, 45deg) perspective(500px)",
+        )
+        .expect("parsed transforms");
+
+        assert!(matches!(transforms[0], Transform::Translate3d(x, y, z)
+            if x == Length::px(10.0) && y == Length::px(20.0) && z == Length::px(30.0)));
+        assert!(matches!(transforms[1], Transform::TranslateZ(z) if z == Length::px(5.0)));
+        assert!(matches!(transforms[2], Transform::Scale3d(sx, sy, sz)
+            if (sx - 2.0).abs() < 0.001 && (sy - 3.0).abs() < 0.001 && (sz - 4.0).abs() < 0.001));
+        assert!(matches!(transforms[3], Transform::ScaleZ(sz) if (sz - 5.0).abs() < 0.001));
+        assert!(matches!(transforms[4], Transform::RotateX(deg) if (deg - 10.0).abs() < 0.001));
+        assert!(matches!(transforms[5], Transform::RotateY(deg) if (deg - 20.0).abs() < 0.001));
+        assert!(matches!(transforms[6], Transform::Rotate3d(x, y, z, deg)
+            if (x.abs() < 0.001) && (y.abs() < 0.001) && (z - 1.0).abs() < 0.001 && (deg - 45.0).abs() < 0.001));
+        assert!(matches!(transforms[7], Transform::Perspective(len) if len == Length::px(500.0)));
+    }
+
+    #[test]
+    fn parses_matrix3d_with_translation() {
+        let transforms = parse_transform_list("matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 5,6,0,1)").expect("parsed matrix3d");
+        match &transforms[0] {
+            Transform::Matrix3d(values) => {
+                assert_eq!(values[0], 1.0);
+                assert_eq!(values[5], 1.0);
+                assert_eq!(values[10], 1.0);
+                assert_eq!(values[12], 5.0);
+                assert_eq!(values[13], 6.0);
+                assert_eq!(values[15], 1.0);
+            }
+            other => panic!("unexpected transform {other:?}"),
+        }
     }
 
     #[test]

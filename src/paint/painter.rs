@@ -5445,6 +5445,7 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
     let percentage_height = reference.height();
 
     let mut ts = Transform::identity();
+    const EPS: f32 = 1e-6;
     for component in &style.transform {
         let next = match component {
             crate::css::types::Transform::Translate(x, y) => {
@@ -5460,13 +5461,67 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
                 let ty = resolve_transform_length(y, style.font_size, percentage_height);
                 Transform::from_translate(0.0, ty)
             }
+            crate::css::types::Transform::TranslateZ(_) => Transform::identity(),
+            crate::css::types::Transform::Translate3d(x, y, _) => {
+                let tx = resolve_transform_length(x, style.font_size, percentage_width);
+                let ty = resolve_transform_length(y, style.font_size, percentage_height);
+                Transform::from_translate(tx, ty)
+            }
             crate::css::types::Transform::Scale(sx, sy) => Transform::from_scale(*sx, *sy),
             crate::css::types::Transform::ScaleX(sx) => Transform::from_scale(*sx, 1.0),
             crate::css::types::Transform::ScaleY(sy) => Transform::from_scale(1.0, *sy),
+            crate::css::types::Transform::ScaleZ(_) => Transform::identity(),
+            crate::css::types::Transform::Scale3d(sx, sy, _) => Transform::from_scale(*sx, *sy),
             crate::css::types::Transform::Rotate(deg) => Transform::from_rotate(*deg),
+            crate::css::types::Transform::RotateX(_) => Transform::identity(),
+            crate::css::types::Transform::RotateY(_) => Transform::identity(),
+            crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
+                if (*x).abs() < EPS && (*y).abs() < EPS && (*z).abs() > EPS {
+                    let sign = if *z >= 0.0 { 1.0 } else { -1.0 };
+                    Transform::from_rotate(*deg * sign)
+                } else {
+                    Transform::identity()
+                }
+            }
             crate::css::types::Transform::SkewX(deg) => Transform::from_skew(deg.to_radians().tan(), 0.0),
             crate::css::types::Transform::SkewY(deg) => Transform::from_skew(0.0, deg.to_radians().tan()),
+            crate::css::types::Transform::Perspective(_) => Transform::identity(),
             crate::css::types::Transform::Matrix(a, b, c, d, e, f) => Transform::from_row(*a, *b, *c, *d, *e, *f),
+            crate::css::types::Transform::Matrix3d(values) => {
+                let m11 = values[0];
+                let m12 = values[1];
+                let m13 = values[2];
+                let m14 = values[3];
+                let m21 = values[4];
+                let m22 = values[5];
+                let m23 = values[6];
+                let m24 = values[7];
+                let m31 = values[8];
+                let m32 = values[9];
+                let m33 = values[10];
+                let m34 = values[11];
+                let m41 = values[12];
+                let m42 = values[13];
+                let m43 = values[14];
+                let m44 = values[15];
+
+                let compatible_2d = m13.abs() < EPS
+                    && m14.abs() < EPS
+                    && m23.abs() < EPS
+                    && m24.abs() < EPS
+                    && m31.abs() < EPS
+                    && m32.abs() < EPS
+                    && (m33 - 1.0).abs() < EPS
+                    && m34.abs() < EPS
+                    && m43.abs() < EPS
+                    && (m44 - 1.0).abs() < EPS;
+
+                if compatible_2d {
+                    Transform::from_row(m11, m12, m21, m22, m41, m42)
+                } else {
+                    Transform::identity()
+                }
+            }
         };
         ts = ts.pre_concat(next);
     }
