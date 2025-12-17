@@ -3035,6 +3035,10 @@ mod tests {
         assert_eq!(upper.value, 1.0);
         assert_eq!(upper.unit, ResolutionUnit::Dpi);
 
+        // High-precision fractional values are preserved
+        let precise = Resolution::parse("1.3333dppx").unwrap();
+        assert!((precise.value - 1.3333).abs() < 1e-6);
+
         // Zero is valid
         let zero = Resolution::parse("0dppx").unwrap();
         assert_eq!(zero.value, 0.0);
