@@ -1,5 +1,5 @@
 # Scratchpad – rendering engine session notes
-
+Idle; no current tasks.
 ## Current Status (Dec 2025)
 - **39 pages tested**: 39 pass, 0 crash, 0 error (latest sweep Dec 15)
 - **Testing**: `cargo run --release --bin render_pages` → see `fetches/renders/_summary.log` (latest run: 207.1s; amazon/walmart/cnn still slow)
