@@ -39,6 +39,9 @@
 
 ## Session notes (latest)
 
+- Added presentational hint for the HTML `hidden` attribute: `[hidden]` maps to `display: none` at low specificity and can be overridden by author CSS. Cascade tests cover default hiding and overrides.
+- Cleaned up duplicate `:indeterminate` parsing/tests and added parsing/serialization for `:focus-within`/`:focus-visible` (DOM matching returns false in static rendering). Reintroduced a single `is_indeterminate` helper.
+
 - Added `:placeholder-shown` selector support: parsed/serialized, DOM matching approximates HTML behavior (input/textarea with placeholder and empty value/content, supported text-like input types). Tests cover parsing and matching.
 - Added `:read-only` / `:read-write` pseudo-classes: parsing/serialization plus DOM matching for text-like inputs/textarea/select/contenteditable. Disabled or readonly controls match `:read-only`; editable text controls and select/contenteditable match `:read-write`. Tests cover form controls and contenteditable cases.
 - Added `:required` / `:optional` pseudo-classes: parsing/serialization and DOM matching for form controls that support the required attribute (most inputs except button/submit/reset/image/hidden, plus select/textarea). Disabled controls are excluded; required is true only when the attribute is present, optional when eligible and not required. Tests cover required/optional inputs, disabled required, submit exclusion, and select cases. Fieldset-disabled descendants are treated as disabled (legend exception considered).

@@ -63,6 +63,8 @@ pub enum PseudoClass {
     Hover,
     Active,
     Focus,
+    FocusWithin,
+    FocusVisible,
     Disabled,
     Enabled,
     Required,
@@ -89,7 +91,14 @@ impl selectors::parser::NonTSPseudoClass for PseudoClass {
     }
 
     fn is_user_action_state(&self) -> bool {
-        matches!(self, PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus)
+        matches!(
+            self,
+            PseudoClass::Hover
+                | PseudoClass::Active
+                | PseudoClass::Focus
+                | PseudoClass::FocusWithin
+                | PseudoClass::FocusVisible
+        )
     }
 }
 
@@ -131,6 +140,8 @@ impl ToCss for PseudoClass {
             PseudoClass::Hover => dest.write_str(":hover"),
             PseudoClass::Active => dest.write_str(":active"),
             PseudoClass::Focus => dest.write_str(":focus"),
+            PseudoClass::FocusWithin => dest.write_str(":focus-within"),
+            PseudoClass::FocusVisible => dest.write_str(":focus-visible"),
             PseudoClass::Disabled => dest.write_str(":disabled"),
             PseudoClass::Enabled => dest.write_str(":enabled"),
             PseudoClass::Required => dest.write_str(":required"),
@@ -209,6 +220,8 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "hover" => Ok(PseudoClass::Hover),
             "active" => Ok(PseudoClass::Active),
             "focus" => Ok(PseudoClass::Focus),
+            "focus-within" => Ok(PseudoClass::FocusWithin),
+            "focus-visible" => Ok(PseudoClass::FocusVisible),
             "disabled" => Ok(PseudoClass::Disabled),
             "enabled" => Ok(PseudoClass::Enabled),
             "required" => Ok(PseudoClass::Required),
@@ -433,6 +446,8 @@ mod tests {
         assert_eq!(PseudoClass::InRange.to_css_string(), ":in-range");
         assert_eq!(PseudoClass::OutOfRange.to_css_string(), ":out-of-range");
         assert_eq!(PseudoClass::Indeterminate.to_css_string(), ":indeterminate");
+        assert_eq!(PseudoClass::FocusWithin.to_css_string(), ":focus-within");
+        assert_eq!(PseudoClass::FocusVisible.to_css_string(), ":focus-visible");
         assert_eq!(PseudoClass::ReadOnly.to_css_string(), ":read-only");
         assert_eq!(PseudoClass::ReadWrite.to_css_string(), ":read-write");
         assert_eq!(PseudoClass::PlaceholderShown.to_css_string(), ":placeholder-shown");
