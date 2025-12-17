@@ -315,6 +315,22 @@ input[type="hidden"] {
     display: none;
 }
 
+input:disabled,
+textarea:disabled,
+select:disabled,
+button:disabled {
+    color: gray;
+    background-color: rgb(240, 240, 240);
+    border-color: rgb(192, 192, 192);
+    cursor: default;
+}
+
+option:disabled,
+optgroup:disabled {
+    color: gray;
+    cursor: default;
+}
+
 option {
     display: block;
     white-space: pre;

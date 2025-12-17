@@ -3138,6 +3138,56 @@ mod tests {
     }
 
     #[test]
+    fn disabled_form_controls_use_ua_styles() {
+        let disabled_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("type".to_string(), "text".to_string()),
+                    ("disabled".to_string(), "".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let disabled_select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("disabled".to_string(), "".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "option".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled_input = apply_styles(&disabled_input, &StyleSheet::new());
+        assert_eq!(styled_input.styles.color, Rgba::rgb(128, 128, 128));
+        assert_eq!(styled_input.styles.background_color, Rgba::rgb(240, 240, 240));
+        assert!(matches!(
+            styled_input.styles.cursor,
+            crate::style::types::CursorKeyword::Default
+        ));
+
+        let styled_select = apply_styles(&disabled_select, &StyleSheet::new());
+        assert_eq!(styled_select.styles.color, Rgba::rgb(128, 128, 128));
+        assert_eq!(styled_select.styles.background_color, Rgba::rgb(240, 240, 240));
+        assert!(matches!(
+            styled_select.styles.cursor,
+            crate::style::types::CursorKeyword::Default
+        ));
+
+        let styled_option = styled_select.children.first().expect("option");
+        assert_eq!(styled_option.styles.color, Rgba::rgb(128, 128, 128));
+    }
+
+    #[test]
     fn table_header_defaults_apply() {
         let th = DomNode {
             node_type: DomNodeType::Element {
