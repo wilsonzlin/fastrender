@@ -6,6 +6,7 @@
 - Pushing `agent13/marker-gap` is currently timing out; remote branch may lag the latest scratchpad note/commit.
 # Scratchpad – rendering engine session notes
 Idle; no current tasks. Available for new tasks.
+- SVG focusability gated: :focus matches SVG only when `focusable="true"`; `focusable="false"` or absent blocks focus even if flagged. Added DOM regressions for focusable true/false/default. Branch `agent13/svg-focus` carries the change (main push pending).
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
