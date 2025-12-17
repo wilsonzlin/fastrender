@@ -555,6 +555,30 @@ mod tests {
     }
 
     #[test]
+    fn calc_length_percentage_base_rejects_infinite() {
+        let mut calc = CalcLength::empty();
+        calc.push(LengthUnit::Percent, 50.0).unwrap();
+        let length = Length::calc(calc);
+
+        assert_eq!(
+            length.resolve_with_context(Some(f32::INFINITY), 800.0, 600.0, 16.0, 16.0),
+            None,
+            "infinite bases should reject percentage calc resolution"
+        );
+        assert_eq!(
+            length.resolve_with_context(Some(f32::NEG_INFINITY), 800.0, 600.0, 16.0, 16.0),
+            None,
+            "-infinite bases should reject percentage calc resolution"
+        );
+
+        // Finite still works
+        assert_eq!(
+            length.resolve_with_context(Some(100.0), 800.0, 600.0, 16.0, 16.0),
+            Some(50.0)
+        );
+    }
+
+    #[test]
     fn test_length_or_auto_from_length() {
         let length = Length::px(100.0);
         let auto_length: LengthOrAuto = length.into();

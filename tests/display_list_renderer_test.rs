@@ -1033,6 +1033,42 @@ fn color_mix_background_renders_purple() {
 }
 
 #[test]
+fn blend_mode_multiply_modulates_destination() {
+    // Red source over green destination with multiply should produce black in the overlap.
+    let mut list = DisplayList::new();
+    // Destination: green rect at the top-left.
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+        color: Rgba::GREEN,
+    }));
+    // Source: red rect overlapping destination at (0,0)-(2,2).
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Multiply,
+        is_isolated: false,
+        transform: None,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Top-left pixel should be the multiply of red over green -> black.
+    assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 0, 255));
+    // Outside the overlap, destination remains green.
+    assert_eq!(pixel(&pixmap, 3, 3), (0, 255, 0, 255));
+}
+
+#[test]
 fn color_mix_oklch_renders_expected_color() {
     let mut style = fastrender::ComputedStyle::default();
     style.background_color = Color::parse("color-mix(in oklch, red 40%, blue 60%)")
