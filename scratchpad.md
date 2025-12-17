@@ -3,6 +3,13 @@
 # Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
 # Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
 # Rendered https://www.aljazeera.com at 1200×800 (aljazeera.png); page loads but renders mostly blank white with sparse text (likely heavy client-side content). Potential issue: critical content missing without JS; leaving as observation for now (no code change).
+# Attempted https://www.nationalgeographic.com at 1200×800 (natgeo.png) with 60s timeout; render timed out after loading many CSS assets. Needs further investigation (possible heavy/JS-driven layout or performance issue).
+# Attempted https://www.wsj.com at 1200×800; fetch failed with 401 (likely paywall/auth). Skipped for now.
+# Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
+# Color-scheme inheritance still validated; further palette audits ongoing.
+# Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
+# Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
+# Rendered https://www.aljazeera.com at 1200×800 (aljazeera.png); page loads but renders mostly blank white with sparse text (likely heavy client-side content). Potential issue: critical content missing without JS; leaving as observation for now (no code change).
 - CSS URL extraction now unescapes JS-escaped URLs (e.g., `\u0026` ampersands) in both link hrefs and embedded/script sources, preventing missing stylesheets (e.g., bing.com). Regressions added for link and embedded CSS URL unescaping.
 # Scratchpad – rendering engine session notes
 - Scroll snapping now honors scroll-padding and scroll-margin: CSS parsing/cascade accept physical scroll-padding/scroll-margin properties, layout fingerprints include them, and snap target computation accounts for container padding insets and target margins. Added scroll snap regressions for padding/margin alignment.
