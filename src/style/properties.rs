@@ -908,12 +908,10 @@ fn extract_color_pair_with(
     resolver: &dyn Fn(&PropertyValue) -> Option<Rgba>,
 ) -> Option<(Rgba, Rgba)> {
     extract_color_values_with(value, resolver).and_then(|colors| {
-        if colors.is_empty() {
+        if colors.len() < 2 {
             None
         } else {
-            let first = colors[0];
-            let second = *colors.get(1).unwrap_or(&first);
-            Some((first, second))
+            Some((colors[0], colors[1]))
         }
     })
 }
@@ -12550,6 +12548,25 @@ mod tests {
         );
 
         assert_eq!(style.scrollbar_color, parent.scrollbar_color);
+    }
+
+    #[test]
+    fn scrollbar_color_ignores_single_value() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-color".into(),
+                value: PropertyValue::Color(Color::Rgba(Rgba::from_rgba8(10, 20, 30, 255))),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert!(matches!(style.scrollbar_color, ScrollbarColor::Auto));
     }
 
     #[test]
