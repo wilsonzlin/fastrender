@@ -67,6 +67,10 @@ pub enum PseudoClass {
     Enabled,
     Required,
     Optional,
+    Valid,
+    Invalid,
+    InRange,
+    OutOfRange,
     ReadOnly,
     ReadWrite,
     PlaceholderShown,
@@ -128,6 +132,10 @@ impl ToCss for PseudoClass {
             PseudoClass::Enabled => dest.write_str(":enabled"),
             PseudoClass::Required => dest.write_str(":required"),
             PseudoClass::Optional => dest.write_str(":optional"),
+            PseudoClass::Valid => dest.write_str(":valid"),
+            PseudoClass::Invalid => dest.write_str(":invalid"),
+            PseudoClass::InRange => dest.write_str(":in-range"),
+            PseudoClass::OutOfRange => dest.write_str(":out-of-range"),
             PseudoClass::ReadOnly => dest.write_str(":read-only"),
             PseudoClass::ReadWrite => dest.write_str(":read-write"),
             PseudoClass::PlaceholderShown => dest.write_str(":placeholder-shown"),
@@ -199,6 +207,10 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "enabled" => Ok(PseudoClass::Enabled),
             "required" => Ok(PseudoClass::Required),
             "optional" => Ok(PseudoClass::Optional),
+            "valid" => Ok(PseudoClass::Valid),
+            "invalid" => Ok(PseudoClass::Invalid),
+            "in-range" => Ok(PseudoClass::InRange),
+            "out-of-range" => Ok(PseudoClass::OutOfRange),
             "read-only" => Ok(PseudoClass::ReadOnly),
             "read-write" => Ok(PseudoClass::ReadWrite),
             "placeholder-shown" => Ok(PseudoClass::PlaceholderShown),
@@ -407,6 +419,10 @@ mod tests {
         assert_eq!(PseudoClass::Enabled.to_css_string(), ":enabled");
         assert_eq!(PseudoClass::Required.to_css_string(), ":required");
         assert_eq!(PseudoClass::Optional.to_css_string(), ":optional");
+        assert_eq!(PseudoClass::Valid.to_css_string(), ":valid");
+        assert_eq!(PseudoClass::Invalid.to_css_string(), ":invalid");
+        assert_eq!(PseudoClass::InRange.to_css_string(), ":in-range");
+        assert_eq!(PseudoClass::OutOfRange.to_css_string(), ":out-of-range");
         assert_eq!(PseudoClass::ReadOnly.to_css_string(), ":read-only");
         assert_eq!(PseudoClass::ReadWrite.to_css_string(), ":read-write");
         assert_eq!(PseudoClass::PlaceholderShown.to_css_string(), ":placeholder-shown");

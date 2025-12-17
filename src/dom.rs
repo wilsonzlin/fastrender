@@ -465,6 +465,196 @@ impl<'a> ElementRef<'a> {
         self.supports_required() && !self.is_disabled() && self.node.get_attribute("required").is_some()
     }
 
+    fn supports_validation(&self) -> bool {
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+        let lower = tag.to_ascii_lowercase();
+        match lower.as_str() {
+            "textarea" | "select" => true,
+            "input" => {
+                let t = self
+                    .node
+                    .get_attribute("type")
+                    .map(|s| s.to_ascii_lowercase())
+                    .unwrap_or_else(|| "text".to_string());
+                !matches!(t.as_str(), "button" | "reset" | "submit" | "image" | "hidden")
+            }
+            _ => false,
+        }
+    }
+
+    fn control_value(&self) -> Option<String> {
+        let tag = self.node.tag_name()?.to_ascii_lowercase();
+        if tag == "textarea" {
+            let mut combined = String::new();
+            for child in &self.node.children {
+                if let DomNodeType::Text { content } = &child.node_type {
+                    combined.push_str(content);
+                }
+            }
+            return Some(combined);
+        }
+        if tag == "select" {
+            return self.select_value();
+        }
+        if tag == "input" {
+            return Some(self.node.get_attribute("value").unwrap_or_default());
+        }
+        None
+    }
+
+    fn select_value(&self) -> Option<String> {
+        let mut first_option: Option<String> = None;
+        let mut selected: Option<String> = None;
+
+        for child in &self.node.children {
+            if let DomNodeType::Element { tag_name, attributes } = &child.node_type {
+                if tag_name.eq_ignore_ascii_case("option") {
+                    let value = attributes
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("value"))
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_else(|| {
+                            child
+                                .children
+                                .iter()
+                                .filter_map(|c| match &c.node_type {
+                                    DomNodeType::Text { content } => Some(content.clone()),
+                                    _ => None,
+                                })
+                                .collect()
+                        });
+
+                    if first_option.is_none() {
+                        first_option = Some(value.clone());
+                    }
+
+                    let is_selected = attributes.iter().any(|(k, _)| k.eq_ignore_ascii_case("selected"));
+                    if is_selected {
+                        selected = Some(value);
+                        break;
+                    }
+                }
+            }
+        }
+
+        selected.or(first_option)
+    }
+
+    fn parse_number(value: &str) -> Option<f64> {
+        value.trim().parse::<f64>().ok()
+    }
+
+    fn numeric_in_range(&self, value: f64) -> Option<bool> {
+        let min = self.node.get_attribute("min").and_then(|m| Self::parse_number(&m));
+        let max = self.node.get_attribute("max").and_then(|m| Self::parse_number(&m));
+
+        if min.is_none() && max.is_none() {
+            return None;
+        }
+
+        if let Some(min) = min {
+            if value < min {
+                return Some(false);
+            }
+        }
+        if let Some(max) = max {
+            if value > max {
+                return Some(false);
+            }
+        }
+        Some(true)
+    }
+
+    fn is_valid_control(&self) -> bool {
+        if self.is_disabled() {
+            return true;
+        }
+        if !self.supports_validation() {
+            return false;
+        }
+
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+        let lower = tag.to_ascii_lowercase();
+
+        let value = self.control_value().unwrap_or_default();
+
+        if self.is_required() && value.trim().is_empty() {
+            return false;
+        }
+
+        if lower == "select" {
+            return true;
+        }
+
+        if lower == "textarea" {
+            return true;
+        }
+
+        if lower == "input" {
+            let input_type = self
+                .node
+                .get_attribute("type")
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+
+            if matches!(
+                input_type.as_str(),
+                "text" | "search" | "url" | "tel" | "email" | "password"
+            ) {
+                return true;
+            }
+
+            if matches!(input_type.as_str(), "number" | "range") {
+                if value.trim().is_empty() {
+                    return !self.is_required();
+                }
+                if let Some(num) = Self::parse_number(&value) {
+                    return self.numeric_in_range(num).unwrap_or(true);
+                }
+                return false;
+            }
+
+            if matches!(input_type.as_str(), "checkbox" | "radio") {
+                if self.is_required() {
+                    return self.node.get_attribute("checked").is_some();
+                }
+                return true;
+            }
+
+            return true;
+        }
+
+        true
+    }
+
+    fn range_state(&self) -> Option<bool> {
+        let Some(tag) = self.node.tag_name() else {
+            return None;
+        };
+        if !tag.eq_ignore_ascii_case("input") {
+            return None;
+        }
+        let input_type = self
+            .node
+            .get_attribute("type")
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_else(|| "text".to_string());
+        if !matches!(input_type.as_str(), "number" | "range") {
+            return None;
+        }
+
+        let value = self.node.get_attribute("value").unwrap_or_default();
+        let Some(num) = Self::parse_number(&value) else {
+            return None;
+        };
+
+        self.numeric_in_range(num)
+    }
+
     /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
     fn direction(&self) -> TextDirection {
         if let Some(dir) = self.dir_attribute(self.node, self.node) {
@@ -762,6 +952,13 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Enabled => self.supports_disabled() && !self.is_disabled(),
             PseudoClass::Required => self.is_required(),
             PseudoClass::Optional => self.supports_required() && !self.is_disabled() && !self.is_required(),
+            PseudoClass::Valid => {
+                (self.supports_validation() && self.is_disabled())
+                    || (self.supports_validation() && self.is_valid_control())
+            }
+            PseudoClass::Invalid => self.supports_validation() && !self.is_disabled() && !self.is_valid_control(),
+            PseudoClass::InRange => !self.is_disabled() && self.range_state() == Some(true),
+            PseudoClass::OutOfRange => !self.is_disabled() && self.range_state() == Some(false),
             PseudoClass::ReadOnly => !self.is_read_write(),
             PseudoClass::ReadWrite => self.is_read_write(),
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
@@ -1395,6 +1592,87 @@ mod tests {
         let legend_child_ref = &fieldset.children[0].children[0];
         assert!(!matches(legend_child_ref, &anc_legend, &PseudoClass::Disabled));
         assert!(matches(legend_child_ref, &anc_legend, &PseudoClass::Enabled));
+    }
+
+    #[test]
+    fn valid_invalid_and_range_match_controls() {
+        let text_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "text".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&text_input, &[], &PseudoClass::Valid));
+        assert!(!matches(&text_input, &[], &PseudoClass::Invalid));
+
+        let required_empty = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("required".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&required_empty, &[], &PseudoClass::Invalid));
+        assert!(!matches(&required_empty, &[], &PseudoClass::Valid));
+
+        let number_in_range = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "number".to_string()),
+                    ("value".to_string(), "5".to_string()),
+                    ("min".to_string(), "1".to_string()),
+                    ("max".to_string(), "10".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&number_in_range, &[], &PseudoClass::Valid));
+        assert!(matches(&number_in_range, &[], &PseudoClass::InRange));
+        assert!(!matches(&number_in_range, &[], &PseudoClass::OutOfRange));
+
+        let number_out_of_range = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "number".to_string()),
+                    ("value".to_string(), "15".to_string()),
+                    ("min".to_string(), "1".to_string()),
+                    ("max".to_string(), "10".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&number_out_of_range, &[], &PseudoClass::Invalid));
+        assert!(matches(&number_out_of_range, &[], &PseudoClass::OutOfRange));
+        assert!(!matches(&number_out_of_range, &[], &PseudoClass::InRange));
+
+        let number_nan = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "number".to_string()),
+                    ("value".to_string(), "abc".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&number_nan, &[], &PseudoClass::Invalid));
+        assert!(!matches(&number_nan, &[], &PseudoClass::Valid));
+
+        let disabled_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("required".to_string(), "true".to_string()),
+                    ("disabled".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&disabled_input, &[], &PseudoClass::Valid));
+        assert!(!matches(&disabled_input, &[], &PseudoClass::Invalid));
     }
 
     #[test]
