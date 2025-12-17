@@ -7949,6 +7949,58 @@ mod tests {
     }
 
     #[test]
+    fn text_overflow_start_value_elides_from_inline_start_in_vertical_writing_mode() {
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.writing_mode = WritingMode::VerticalRl;
+        container_style.overflow_y = Overflow::Hidden;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Ellipsis,
+            inline_end: TextOverflowSide::Clip,
+        };
+
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = container_style.white_space;
+        text_style.writing_mode = container_style.writing_mode;
+
+        let root = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "content that should be trimmed at the start when vertical".to_string(),
+            )],
+        );
+
+        let constraints = LayoutConstraints::new(
+            AvailableSpace::Definite(80.0),
+            AvailableSpace::Definite(40.0),
+        );
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_fragments(&fragment, &mut texts);
+        assert!(
+            texts.first().map(|t| t.contains('…')).unwrap_or(false),
+            "inline-start ellipsis should appear first in vertical writing"
+        );
+        assert!(
+            !texts.iter().skip(1).any(|t| t.contains('…')),
+            "ellipsis should only appear once on the inline-start edge"
+        );
+        let line_fragment = fragment
+            .children
+            .iter()
+            .find(|c| matches!(c.content, FragmentContent::Line { .. }))
+            .expect("line fragment");
+        assert!(
+            line_fragment.bounds.height() <= 40.1,
+            "line inline-axis extent should clamp to the available height in vertical writing"
+        );
+    }
+
+    #[test]
     fn unicode_bidi_plaintext_uses_per_paragraph_base_direction() {
         let mut container_style = ComputedStyle::default();
         container_style.unicode_bidi = crate::style::types::UnicodeBidi::Plaintext;
