@@ -128,23 +128,29 @@ fn test_phone_number_in_arabic() {
 fn override_does_not_leak_to_next_paragraph_with_embed() {
     // First paragraph forces RTL override; second paragraph contains an embedded LTR run.
     // Visual order should keep paragraphs independent (no override leak).
-    let para1 = "ABC";
+    let para1 = "\u{202E}ABC\u{202C}"; // RLO ... PDF
     let para2 = "\u{202A}DEF\u{202C}"; // LRE ... PDF
     let text = format!("{para1}\n{para2}");
 
     let runs = analyze_bidi(&text, Direction::Ltr);
 
     // Split runs by paragraph
-    let (first_para, second_para): (Vec<_>, Vec<_>) = runs
-        .into_iter()
-        .partition(|r| r.text.contains('A') || r.text.contains('C'));
+    let mut first_para = String::new();
+    let mut second_para = String::new();
+    for run in runs {
+        if run.text.contains('A') || run.text.contains('C') {
+            first_para.push_str(&run.text);
+        } else {
+            second_para.push_str(&run.text);
+        }
+    }
 
-    let combined_first: String = first_para.iter().map(|r| r.text.as_str()).collect();
-    assert!(combined_first.contains("ABC"), "override paragraph should stay RTL but complete");
+    assert!(first_para.contains("ABC"), "override paragraph should keep its content");
+    assert!(!first_para.contains("CBA"), "override should stay local to paragraph");
 
-    let combined_second: String = second_para.iter().map(|r| r.text.as_str()).collect();
-    // The embedded LTR run should surface as DEF in visual order without reversal.
-    assert!(combined_second.contains("DEF"), "embedded LTR run should stay LTR in its paragraph");
+    // The embedded LTR run should surface as DEF in visual order without reversal and without picking up override.
+    assert!(second_para.contains("DEF"), "embedded LTR run should stay LTR in its paragraph");
+    assert!(!second_para.contains("FED"));
 }
 
 // =============================================================================
