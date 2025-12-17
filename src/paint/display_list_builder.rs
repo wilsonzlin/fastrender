@@ -3845,6 +3845,59 @@ mod tests {
     }
 
     #[test]
+    fn list_style_image_image_set_respects_device_pixel_ratio() {
+        let low = data_url_for_color([255, 0, 0, 255]);
+        let high = data_url_for_color([0, 255, 0, 255]);
+
+        let mut style = ComputedStyle::default();
+        with_image_set_dpr(2.0, || {
+            apply_declaration(
+                &mut style,
+                &Declaration {
+                    property: "list-style-image".to_string(),
+                    value: PropertyValue::Keyword(format!(
+                        "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
+                        low, high
+                    )),
+                    raw_value: String::new(),
+                    important: false,
+                },
+                &ComputedStyle::default(),
+                16.0,
+                16.0,
+            );
+        });
+
+        let chosen = match &style.list_style_image {
+            crate::style::types::ListStyleImage::Url(url) => url.clone(),
+            other => panic!("unexpected list-style-image: {other:?}"),
+        };
+
+        let mut fragment = FragmentNode::new_replaced(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            ReplacedType::Image {
+                src: chosen,
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+        );
+        fragment.style = Some(Arc::new(style));
+
+        let list = DisplayListBuilder::with_image_cache(ImageCache::new()).build(&fragment);
+        let image = list
+            .items()
+            .iter()
+            .find_map(|item| match item {
+                DisplayItem::Image(img) => Some(img),
+                _ => None,
+            })
+            .expect("marker image should emit an image item");
+
+        assert_eq!(&image.image.pixels[..4], &[0, 255, 0, 255]);
+    }
+
+    #[test]
     fn test_emit_border() {
         let mut builder = DisplayListBuilder::new();
         builder.emit_border(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 2.0, Rgba::BLACK);
