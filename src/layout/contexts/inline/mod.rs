@@ -5426,7 +5426,11 @@ impl InlineFormattingContext {
             for child in positioned_children {
                 let mut layout_child = child.clone();
                 let mut child_style = (*layout_child.style).clone();
-                child_style.position = crate::style::position::Position::Static;
+                child_style.position = crate::style::position::Position::Relative;
+                child_style.top = None;
+                child_style.right = None;
+                child_style.bottom = None;
+                child_style.left = None;
                 layout_child.style = Arc::new(child_style);
 
                 let factory = FormattingContextFactory::with_font_context_viewport_and_cb(

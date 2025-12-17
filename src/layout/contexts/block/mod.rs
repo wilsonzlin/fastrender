@@ -1968,7 +1968,11 @@ impl FormattingContext for BlockFormattingContext {
                 // Layout the child as if it were in normal flow to obtain its intrinsic size.
                 let mut layout_child = child.clone();
                 let mut style = (*layout_child.style).clone();
-                style.position = Position::Static;
+                style.position = Position::Relative;
+                style.top = None;
+                style.right = None;
+                style.bottom = None;
+                style.left = None;
                 layout_child.style = Arc::new(style);
 
                 let fc_type = layout_child

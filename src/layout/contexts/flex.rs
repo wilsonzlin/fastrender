@@ -1605,16 +1605,22 @@ impl FormattingContext for FlexFormattingContext {
                 self.nearest_positioned_cb
             };
 
-            let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_and_viewport(
-                self.font_context.clone(),
-                self.viewport_size,
-            );
+            let factory =
+                crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+                    self.font_context.clone(),
+                    self.viewport_size,
+                    cb,
+                );
 
             for child in positioned_children {
                 // Layout child as static to obtain intrinsic size.
                 let mut layout_child = child.clone();
                 let mut style = (*layout_child.style).clone();
-                style.position = crate::style::position::Position::Static;
+                style.position = crate::style::position::Position::Relative;
+                style.top = None;
+                style.right = None;
+                style.bottom = None;
+                style.left = None;
                 layout_child.style = Arc::new(style);
 
                 let fc_type = layout_child

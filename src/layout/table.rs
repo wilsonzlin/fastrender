@@ -3602,7 +3602,11 @@ impl FormattingContext for TableFormattingContext {
             for child in &positioned_children {
                 let mut layout_child = child.clone();
                 let mut style = (*layout_child.style).clone();
-                style.position = crate::style::position::Position::Static;
+                style.position = crate::style::position::Position::Relative;
+                style.top = None;
+                style.right = None;
+                style.bottom = None;
+                style.left = None;
                 layout_child.style = Arc::new(style);
 
                 let factory = self.factory.with_positioned_cb(cb);
