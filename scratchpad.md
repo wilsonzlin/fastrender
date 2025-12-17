@@ -8,6 +8,7 @@
 # Attempted https://www.theverge.com at 1200×800; render timed out after fetching CSS (likely heavy client-side). No output produced.
 # Sticky positioning: fixed a bug where sticky elements with all-auto offsets were still clamped to the viewport/container (unwrap_or(0)), causing unintended movement. Now we only clamp axes with specified offsets. Added regression ensuring a sticky box with no offsets stays put.
 # Added background image-rendering coverage: display-list builder regression ensures pixelated backgrounds use nearest-neighbor sampling; roadmap marks image-rendering implemented. `cargo test background_image_rendering_pixelated_sets_nearest_filter_quality --quiet` passes.
+# Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Added hanging text-indent soft-wrap regression: soft-wrapped lines now explicitly covered when text-indent:hanging is set (first line unindented, subsequent soft wraps indented). `cargo test text_indent_hanging_indents_soft_wrapped_lines --quiet` passes.
 # Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.
