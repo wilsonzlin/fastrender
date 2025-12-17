@@ -2522,6 +2522,12 @@ impl FlexFormattingContext {
                                 }
                                 let mut origin_x = child_layout.location.x;
                                 let mut origin_y = child_layout.location.y;
+                                if main_axis_is_row && rect.height().is_finite() {
+                                    let limit = rect.height().max(1.0) * 5.0;
+                                    if origin_y.abs() > limit {
+                                        origin_y = rect.origin.y;
+                                    }
+                                }
                                 if resolved_width <= eps && main_axis_is_row {
                                     manual_row_positions = true;
                                 }
@@ -2820,6 +2826,12 @@ impl FlexFormattingContext {
                         }
                         let mut origin_x = child_layout.location.x;
                         let mut origin_y = child_layout.location.y;
+                        if main_axis_is_row && rect.height().is_finite() {
+                            let limit = rect.height().max(1.0) * 5.0;
+                            if origin_y.abs() > limit {
+                                origin_y = rect.origin.y;
+                            }
+                        }
                         if resolved_width <= eps && main_axis_is_row {
                             manual_row_positions = true;
                         }
