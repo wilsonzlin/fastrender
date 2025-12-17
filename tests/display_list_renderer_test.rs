@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use fastrender::css::types::ColorStop;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::{DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem};
 use fastrender::paint::display_list_builder::DisplayListBuilder;
@@ -235,6 +236,62 @@ fn display_list_border_image_nine_slice() {
     let edge_left = pixel(&pixmap, 1, 8);
     assert_eq!(edge_top, (0, 255, 255, 255));
     assert_eq!(edge_left, (0, 255, 255, 255));
+}
+
+#[test]
+fn display_list_border_image_generated_uniform_color() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.border_top_width = Length::px(4.0);
+    style.border_right_width = Length::px(4.0);
+    style.border_bottom_width = Length::px(4.0);
+    style.border_left_width = Length::px(4.0);
+    style.border_top_style = BorderStyle::Solid;
+    style.border_right_style = BorderStyle::Solid;
+    style.border_bottom_style = BorderStyle::Solid;
+    style.border_left_style = BorderStyle::Solid;
+    style.border_image = BorderImage {
+        source: BorderImageSource::Image(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: fastrender::Color::Rgba(Rgba::RED),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: fastrender::Color::Rgba(Rgba::RED),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        slice: BorderImageSlice {
+            top: BorderImageSliceValue::Number(1.0),
+            right: BorderImageSliceValue::Number(1.0),
+            bottom: BorderImageSliceValue::Number(1.0),
+            left: BorderImageSliceValue::Number(1.0),
+            fill: false,
+        },
+        ..BorderImage::default()
+    };
+
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(16, 16, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Uniform gradient should behave like a solid image for border painting.
+    let tl = pixel(&pixmap, 0, 0);
+    let tr = pixel(&pixmap, 15, 0);
+    let bl = pixel(&pixmap, 0, 15);
+    let br = pixel(&pixmap, 15, 15);
+    assert_eq!(tl, (255, 0, 0, 255));
+    assert_eq!(tr, (255, 0, 0, 255));
+    assert_eq!(bl, (255, 0, 0, 255));
+    assert_eq!(br, (255, 0, 0, 255));
 }
 
 #[test]
