@@ -4640,6 +4640,44 @@ mod tests {
     }
 
     #[test]
+    fn stacking_context_multiply_blend_darkens_background() {
+        let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        // Gray backdrop (50% luminance)
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            color: Rgba::from_rgba8(128, 128, 128, 255),
+        }));
+
+        // Child stacking context with multiply blend paints solid red.
+        list.push(DisplayItem::PushStackingContext(
+            crate::paint::display_list::StackingContextItem {
+                z_index: 0,
+                creates_stacking_context: true,
+                bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+                mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
+                is_isolated: false,
+                transform: None,
+                filters: Vec::new(),
+                backdrop_filters: Vec::new(),
+                radii: BorderRadii::ZERO,
+            },
+        ));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            color: Rgba::rgb(255, 0, 0),
+        }));
+        list.push(DisplayItem::PopStackingContext);
+
+        let pixmap = renderer.render(&list).unwrap();
+        let px = pixel(&pixmap, 0, 0);
+        // Multiply of red (1,0,0) on 50% gray (0.5,0.5,0.5) yields ~128 red, zero green/blue.
+        assert!((px.0 as i32 - 128).abs() <= 2, "red channel should be ~128 (got {:?})", px);
+        assert!(px.1 < 5 && px.2 < 5, "green/blue should be near zero (got {:?})", px);
+        assert_eq!(px.3, 255, "alpha should remain opaque (got {:?})", px);
+    }
+
+    #[test]
     fn opacity_groups_composite_as_layers() {
         let renderer = DisplayListRenderer::new(8, 8, Rgba::WHITE, FontContext::new()).unwrap();
         let mut list = DisplayList::new();
