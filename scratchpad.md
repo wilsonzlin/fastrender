@@ -38,6 +38,7 @@ Idle; no current tasks. Available for new tasks.
 ## Current Status (Dec 2025)
 - **39 pages tested**: 39 pass, 0 crash, 0 error (latest sweep Dec 15)
 - **Testing**: `cargo run --release --bin render_pages` → see `fetches/renders/_summary.log` (latest run: 207.1s; amazon/walmart/cnn still slow)
+- Latest: Added a TextRun regression for negative leading and kept inline half-leading signed; no active tasks (idle).
 
 ## Context
 - Project: Rust HTML/CSS renderer (`fastrender`); current harness: danger-full-access FS, network enabled, approval policy `never`.
