@@ -370,7 +370,12 @@ impl InlineFormattingContext {
                         inherited_boundary
                     };
                     let normalized = normalize_text_for_white_space(
-                        &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
+                        &apply_text_transform(
+                            &text_box.text,
+                            child.style.text_transform,
+                            child.style.white_space,
+                            &child.style.language,
+                        ),
                         child.style.white_space,
                     );
                     let mut produced = self.create_inline_items_from_normalized_with_base(
@@ -945,7 +950,12 @@ impl InlineFormattingContext {
                         inherited_boundary
                     };
                     let normalized = normalize_text_for_white_space(
-                        &apply_text_transform(&text_box.text, child.style.text_transform, child.style.white_space),
+                        &apply_text_transform(
+                            &text_box.text,
+                            child.style.text_transform,
+                            child.style.white_space,
+                            &child.style.language,
+                        ),
                         child.style.white_space,
                     );
                     if dump_text_enabled() && normalized.text.is_empty() && !text_box.text.is_empty() {
@@ -1643,7 +1653,7 @@ impl InlineFormattingContext {
         boundary: CombineBoundary,
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
-        let transformed = apply_text_transform(text, style.text_transform, style.white_space);
+        let transformed = apply_text_transform(text, style.text_transform, style.white_space, &style.language);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
         self.create_inline_items_from_normalized_with_base(
             box_node,
@@ -1775,7 +1785,7 @@ impl InlineFormattingContext {
         base_direction: crate::style::types::Direction,
     ) -> Result<TextItem, LayoutError> {
         let style = &box_node.style;
-        let transformed = apply_text_transform(text, style.text_transform, style.white_space);
+        let transformed = apply_text_transform(text, style.text_transform, style.white_space, &style.language);
         let normalized = normalize_text_for_white_space(&transformed, style.white_space);
         self.create_text_item_from_normalized(
             &box_node.style,
@@ -3573,30 +3583,14 @@ fn merge_breaks(
     base
 }
 
-fn apply_text_transform(text: &str, transform: TextTransform, white_space: WhiteSpace) -> String {
+fn apply_text_transform(text: &str, transform: TextTransform, white_space: WhiteSpace, language: &str) -> String {
     use crate::style::types::CaseTransform;
 
     let mut out = match transform.case {
         CaseTransform::None => text.to_string(),
-        CaseTransform::Uppercase => {
-            let mut out = String::with_capacity(text.len());
-            for ch in text.chars() {
-                for up in ch.to_uppercase() {
-                    out.push(up);
-                }
-            }
-            out
-        }
-        CaseTransform::Lowercase => {
-            let mut out = String::with_capacity(text.len());
-            for ch in text.chars() {
-                for low in ch.to_lowercase() {
-                    out.push(low);
-                }
-            }
-            out
-        }
-        CaseTransform::Capitalize => capitalize_words(text),
+        CaseTransform::Uppercase => locale_uppercase(text, language),
+        CaseTransform::Lowercase => locale_lowercase(text, language),
+        CaseTransform::Capitalize => capitalize_words(text, language),
     };
 
     if transform.full_width {
@@ -3611,6 +3605,100 @@ fn apply_text_transform(text: &str, transform: TextTransform, white_space: White
         out = apply_full_size_kana(&out);
     }
 
+    out
+}
+
+fn is_turkic_language(language: &str) -> bool {
+    language.starts_with("tr") || language.starts_with("az")
+}
+
+fn locale_uppercase(text: &str, language: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let turkic = is_turkic_language(language);
+
+    for ch in text.chars() {
+        if turkic {
+            match ch {
+                'i' => {
+                    out.push('\u{0130}');
+                    continue;
+                }
+                '\u{0131}' => {
+                    out.push('I');
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        for up in ch.to_uppercase() {
+            out.push(up);
+        }
+    }
+
+    out
+}
+
+fn lowercase_word(word: &str, turkic: bool) -> String {
+    let chars: Vec<char> = word.chars().collect();
+    let mut out = String::new();
+
+    for (idx, ch) in chars.iter().enumerate() {
+        if turkic && *ch == 'I' {
+            out.push('\u{0131}');
+            continue;
+        }
+
+        if *ch == '\u{03A3}' {
+            let has_prev = chars[..idx].iter().rev().any(|c| c.is_alphabetic());
+            let has_next = chars[idx + 1..].iter().any(|c| c.is_alphabetic());
+            if has_prev && !has_next {
+                out.push('\u{03C2}');
+            } else {
+                out.push('\u{03C3}');
+            }
+            continue;
+        }
+
+        for low in ch.to_lowercase() {
+            out.push(low);
+        }
+    }
+
+    out
+}
+
+fn locale_lowercase(text: &str, language: &str) -> String {
+    let turkic = is_turkic_language(language);
+    let mut out = String::with_capacity(text.len());
+
+    for segment in unicode_segmentation::UnicodeSegmentation::split_word_bounds(text) {
+        if segment.chars().any(|c| c.is_alphabetic()) {
+            out.push_str(&lowercase_word(segment, turkic));
+        } else {
+            out.push_str(segment);
+        }
+    }
+
+    out
+}
+
+fn capitalize_words(text: &str, language: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for word in unicode_segmentation::UnicodeSegmentation::split_word_bounds(text) {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            if first.is_alphabetic() {
+                let upper = locale_uppercase(&first.to_string(), language);
+                out.push_str(&upper);
+                for rest in chars {
+                    out.push(rest);
+                }
+                continue;
+            }
+        }
+        out.push_str(word);
+    }
     out
 }
 
@@ -3951,26 +4039,6 @@ fn map_small_kana(ch: char) -> Option<char> {
         '\u{31FF}' => Some('\u{30ED}'), // ㇿ -> ロ
         _ => None,
     }
-}
-
-fn capitalize_words(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for word in unicode_segmentation::UnicodeSegmentation::split_word_bounds(text) {
-        let mut chars = word.chars();
-        if let Some(first) = chars.next() {
-            if first.is_alphabetic() {
-                for up in first.to_uppercase() {
-                    out.push(up);
-                }
-                for rest in chars {
-                    out.push(rest);
-                }
-                continue;
-            }
-        }
-        out.push_str(word);
-    }
-    out
 }
 
 fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
@@ -5631,7 +5699,12 @@ fn edge_combinability(node: &BoxNode, mode: TextCombineUpright, edge: CombineEdg
     }
     match &node.box_type {
         BoxType::Text(text_box) => {
-            let transformed = apply_text_transform(&text_box.text, node.style.text_transform, node.style.white_space);
+            let transformed = apply_text_transform(
+                &text_box.text,
+                node.style.text_transform,
+                node.style.white_space,
+                &node.style.language,
+            );
             let normalized = normalize_text_for_white_space(&transformed, node.style.white_space);
             let mut saw_whitespace = match edge {
                 CombineEdge::Leading => normalized.leading_collapsible,
@@ -9220,6 +9293,62 @@ mod tests {
         let item = ifc.create_text_item(&node, text).unwrap();
 
         assert_eq!(item.text, "Foo Bar");
+    }
+
+    #[test]
+    fn text_transform_uppercase_respects_turkish_i() {
+        let mut style = ComputedStyle::default();
+        style.language = "tr".to_string();
+        style.text_transform = TextTransform::with_case(CaseTransform::Uppercase);
+        let text = "iyi ıi";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "İYİ Iİ");
+    }
+
+    #[test]
+    fn text_transform_lowercase_respects_turkish_i() {
+        let mut style = ComputedStyle::default();
+        style.language = "tr".to_string();
+        style.text_transform = TextTransform::with_case(CaseTransform::Lowercase);
+        let text = "IİI";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "ıi̇ı");
+    }
+
+    #[test]
+    fn text_transform_lowercase_uses_final_sigma_at_word_end() {
+        let mut style = ComputedStyle::default();
+        style.language = "el".to_string();
+        style.text_transform = TextTransform::with_case(CaseTransform::Lowercase);
+        let text = "ΣΣ";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "σς");
+    }
+
+    #[test]
+    fn text_transform_final_sigma_resets_at_word_boundaries() {
+        let mut style = ComputedStyle::default();
+        style.language = "el".to_string();
+        style.text_transform = TextTransform::with_case(CaseTransform::Lowercase);
+        let text = "Σ Σ";
+
+        let ifc = InlineFormattingContext::new();
+        let node = BoxNode::new_text(Arc::new(style), text.to_string());
+        let item = ifc.create_text_item(&node, text).unwrap();
+
+        assert_eq!(item.text, "σ σ");
     }
 
     #[test]
