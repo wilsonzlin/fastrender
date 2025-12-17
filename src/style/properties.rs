@@ -5601,6 +5601,7 @@ pub fn apply_declaration_with_base(
                     "keep-all" => WordBreak::KeepAll,
                     "anywhere" => WordBreak::Anywhere,
                     "break-word" => WordBreak::BreakWord,
+                    "anywhere" => WordBreak::Anywhere,
                     _ => styles.word_break,
                 };
             }
@@ -10089,10 +10090,16 @@ mod tests {
         AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FlexDirection,
         FlexWrap, FontStretch, FontVariant, GridAutoFlow, GridTrack, ImageOrientation, ImageRendering, ImageResolution,
         JustifyContent, ListStylePosition, ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent,
+<<<<<<< HEAD
         PositionKeyword, ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, TextCombineUpright,
         TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
         TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextOverflowSide, TextSizeAdjust, TextTransform,
-        TransformBox, WritingMode,
+        TextWrap, TransformBox, WordBreak, WritingMode,
+=======
+        PositionKeyword, TextCombineUpright, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+        TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation,
+        TextOverflowSide, TextSizeAdjust, TextTransform, TextWrap, TransformBox, WordBreak, WritingMode,
+>>>>>>> 855d7ea (Support word-break:anywhere)
     };
     use cssparser::{Parser, ParserInput};
 
@@ -10143,6 +10150,82 @@ mod tests {
     }
 
     #[test]
+    fn parses_text_wrap_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("nowrap".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.text_wrap, TextWrap::NoWrap);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("balance".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.text_wrap, TextWrap::Balance);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("pretty".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.text_wrap, TextWrap::Pretty);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("wrap".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.text_wrap, TextWrap::Wrap);
+    }
+
+    #[test]
+    fn parses_word_break_anywhere() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "word-break".to_string(),
+                value: PropertyValue::Keyword("anywhere".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.word_break, WordBreak::Anywhere));
+    }
     fn parses_flex_flow_shorthand() {
         let mut style = ComputedStyle::default();
         apply_declaration(

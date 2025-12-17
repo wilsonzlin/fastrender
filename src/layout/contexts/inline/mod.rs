@@ -4074,8 +4074,8 @@ fn apply_break_properties(
         WordBreak::BreakAll => {
             result.extend(char_boundary_breaks(text));
         }
-        WordBreak::Anywhere | WordBreak::BreakWord => {
-            // CSS Text Level 4: break-word behaves like overflow-wrap:anywhere in addition
+        WordBreak::BreakWord | WordBreak::Anywhere => {
+            // CSS Text Level 4: break-word/anywhere behave like overflow-wrap:anywhere in addition
             // to word-break: normal, so add break opportunities at every character boundary.
             // word-break:anywhere follows the same behavior.
             result.extend(char_boundary_breaks(text));
@@ -7746,6 +7746,28 @@ mod tests {
     }
 
     #[test]
+    fn word_break_anywhere_splits_when_overflowing() {
+        let mut text_style = ComputedStyle::default();
+        text_style.word_break = WordBreak::Anywhere;
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(
+            fragment.children.len() > 1,
+            "word-break:anywhere should allow breaking long tokens when they overflow"
+        );
+    }
+
+    #[test]
     fn word_break_break_word_respects_nowrap() {
         let mut text_style = ComputedStyle::default();
         text_style.word_break = WordBreak::BreakWord;
@@ -7809,7 +7831,7 @@ mod tests {
         assert_eq!(
             fragment.children.len(),
             1,
-            "nowrap should suppress word-break:anywhere emergency breaks"
+            "nowrap should suppress anywhere forced wraps"
         );
     }
 
@@ -8073,6 +8095,7 @@ mod tests {
             "break-word should not create intra-grapheme break opportunities"
         );
 
+        // anywhere behaves like break-word and should also respect grapheme boundaries.
         let mut anywhere_style = ComputedStyle::default();
         anywhere_style.word_break = WordBreak::Anywhere;
         anywhere_style.white_space = WhiteSpace::Normal;
@@ -8099,7 +8122,7 @@ mod tests {
 
     #[test]
     fn mandatory_breaks_survive_added_anywhere_breaks() {
-        // Combine a mandatory break with word-break:anywhere-style additions at the same offset.
+        // Combine a mandatory break with word-break:anywhere additions at the same offset.
         let text = "a\nb";
         let mut style = ComputedStyle::default();
         style.word_break = WordBreak::Anywhere; // adds anywhere breaks
@@ -8156,6 +8179,19 @@ mod tests {
         assert!(
             breaking_min < normal_min * 0.75,
             "break-word should add anywhere-style break opportunities and shrink min-content width"
+        );
+
+        let mut anywhere_style = text_style;
+        anywhere_style.word_break = WordBreak::Anywhere;
+        let anywhere = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(anywhere_style), "longtoken".to_string())],
+        );
+        let anywhere_min = ifc.calculate_intrinsic_width(&anywhere, IntrinsicSizingMode::MinContent);
+        assert!(
+            anywhere_min < normal_min * 0.75,
+            "word-break:anywhere should also shrink the min-content width"
         );
     }
 
