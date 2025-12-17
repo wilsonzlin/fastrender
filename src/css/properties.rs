@@ -859,7 +859,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         if let Ok(color) = Color::parse(value_str) {
             return match color {
                 Color::CurrentColor => Some(PropertyValue::Keyword("currentColor".to_string())),
-                _ => Some(PropertyValue::Color(color.to_rgba(Rgba::BLACK))),
+                _ => Some(PropertyValue::Color(color)),
             };
         }
     }
@@ -933,7 +933,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
             } else if let Ok(color) = Color::parse(&token) {
                 match color {
                     Color::CurrentColor => parts.push(PropertyValue::Keyword("currentColor".to_string())),
-                    _ => parts.push(PropertyValue::Color(color.to_rgba(Rgba::BLACK))),
+                    _ => parts.push(PropertyValue::Color(color)),
                 }
             } else {
                 parts.push(PropertyValue::Keyword(token));
@@ -1081,7 +1081,7 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
     if let Ok(color) = Color::parse(value_str) {
         return match color {
             Color::CurrentColor => Some(PropertyValue::Keyword("currentColor".to_string())),
-            _ => Some(PropertyValue::Color(color.to_rgba(Rgba::BLACK))),
+            _ => Some(PropertyValue::Color(color)),
         };
     }
 

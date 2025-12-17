@@ -3134,7 +3134,7 @@ pub fn apply_declaration_with_base(
 
     let resolve_color_value = |value: &PropertyValue| -> Option<Rgba> {
         match value {
-            PropertyValue::Color(c) => Some(*c),
+            PropertyValue::Color(c) => Some(c.to_rgba(styles.color)),
             PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(styles.color),
             _ => None,
         }
@@ -3375,7 +3375,7 @@ pub fn apply_declaration_with_base(
                 styles.outline_color = OutlineColor::Invert;
             }
             PropertyValue::Color(c) => {
-                styles.outline_color = OutlineColor::Color(*c);
+                styles.outline_color = OutlineColor::Color(c.to_rgba(styles.color));
             }
             _ => {}
         },
@@ -4112,7 +4112,7 @@ pub fn apply_declaration_with_base(
                                 style_val = Some(parse_border_style(kw));
                             }
                         }
-                        PropertyValue::Color(c) => color = Some(*c),
+                        PropertyValue::Color(c) => color = Some(c.to_rgba(current_color)),
                         _ => {}
                     }
                 }
@@ -5463,7 +5463,7 @@ pub fn apply_declaration_with_base(
             }
         }
         "text-decoration-color" => {
-            if let Some(color) = parse_text_decoration_color(&resolved_value) {
+            if let Some(color) = parse_text_decoration_color(&resolved_value, styles.color) {
                 styles.text_decoration.color = color;
             }
         }
@@ -5493,7 +5493,7 @@ pub fn apply_declaration_with_base(
             }
         }
         "text-emphasis-color" => {
-            if let Some(color) = parse_text_emphasis_color(&resolved_value) {
+            if let Some(color) = parse_text_emphasis_color(&resolved_value, styles.color) {
                 styles.text_emphasis_color = color;
             }
         }
@@ -5503,7 +5503,7 @@ pub fn apply_declaration_with_base(
             }
         }
         "text-emphasis" => {
-            if let Some((style_val, color_val)) = parse_text_emphasis_shorthand(&resolved_value) {
+            if let Some((style_val, color_val)) = parse_text_emphasis_shorthand(&resolved_value, styles.color) {
                 if let Some(emph_style) = style_val {
                     styles.text_emphasis_style = emph_style;
                 } else {
@@ -5538,7 +5538,7 @@ pub fn apply_declaration_with_base(
                     decoration.style = style;
                     continue;
                 }
-                if let Some(color) = parse_text_decoration_color(&token) {
+                if let Some(color) = parse_text_decoration_color(&token, styles.color) {
                     decoration.color = color;
                     continue;
                 }
@@ -9520,9 +9520,9 @@ fn parse_text_decoration_style(value: &PropertyValue) -> Option<TextDecorationSt
     }
 }
 
-fn parse_text_decoration_color(value: &PropertyValue) -> Option<Option<Rgba>> {
+fn parse_text_decoration_color(value: &PropertyValue, current_color: Rgba) -> Option<Option<Rgba>> {
     match value {
-        PropertyValue::Color(c) => Some(Some(*c)),
+        PropertyValue::Color(c) => Some(Some(c.to_rgba(current_color))),
         PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(None),
         _ => None,
     }
@@ -9672,9 +9672,9 @@ fn parse_text_emphasis_style(value: &PropertyValue) -> Option<TextEmphasisStyle>
     }
 }
 
-fn parse_text_emphasis_color(value: &PropertyValue) -> Option<Option<Rgba>> {
+fn parse_text_emphasis_color(value: &PropertyValue, current_color: Rgba) -> Option<Option<Rgba>> {
     match value {
-        PropertyValue::Color(c) => Some(Some(*c)),
+        PropertyValue::Color(c) => Some(Some(c.to_rgba(current_color))),
         PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(None),
         PropertyValue::Keyword(kw) => match crate::style::color::Color::parse(kw) {
             Ok(crate::style::color::Color::Rgba(c)) => Some(Some(c)),
@@ -9770,7 +9770,10 @@ fn parse_text_emphasis_position(value: &PropertyValue) -> Option<TextEmphasisPos
     }
 }
 
-fn parse_text_emphasis_shorthand(value: &PropertyValue) -> Option<(Option<TextEmphasisStyle>, Option<Option<Rgba>>)> {
+fn parse_text_emphasis_shorthand(
+    value: &PropertyValue,
+    current_color: Rgba,
+) -> Option<(Option<TextEmphasisStyle>, Option<Option<Rgba>>)> {
     let values: Vec<&PropertyValue> = match value {
         PropertyValue::Multiple(vals) => vals.iter().collect(),
         other => vec![other],
@@ -9785,7 +9788,7 @@ fn parse_text_emphasis_shorthand(value: &PropertyValue) -> Option<(Option<TextEm
 
     for v in values {
         if color.is_none() {
-            if let Some(c) = parse_text_emphasis_color(v) {
+            if let Some(c) = parse_text_emphasis_color(v, current_color) {
                 color = Some(c);
                 continue;
             }
@@ -10223,7 +10226,7 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
     for token in tokens {
         match token {
             PropertyValue::Color(c) => {
-                color = Some(OutlineColor::Color(c));
+                color = Some(OutlineColor::Color(c.to_rgba(styles.color)));
             }
             PropertyValue::Keyword(ref kw) if kw.eq_ignore_ascii_case("currentcolor") => {
                 color = Some(OutlineColor::CurrentColor);
@@ -12346,7 +12349,7 @@ mod tests {
             &Declaration {
                 property: "scrollbar-color".into(),
                 value: PropertyValue::Multiple(vec![
-                    PropertyValue::Color(Rgba::from_rgba8(255, 0, 0, 255)),
+                    PropertyValue::Color(Color::Rgba(Rgba::from_rgba8(255, 0, 0, 255))),
                     PropertyValue::Keyword("currentColor".into()),
                 ]),
                 raw_value: String::new(),
@@ -12832,7 +12835,7 @@ mod tests {
             &mut style,
             &Declaration {
                 property: "outline".to_string(),
-                value: PropertyValue::Color(Rgba::RED),
+                value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
                 raw_value: String::new(),
                 important: false,
             },
@@ -13429,7 +13432,7 @@ mod tests {
 
         let decl = Declaration {
             property: "text-decoration-color".to_string(),
-            value: PropertyValue::Color(Rgba::BLUE),
+            value: PropertyValue::Color(Color::Rgba(Rgba::BLUE)),
             raw_value: String::new(),
             important: false,
         };
@@ -13509,7 +13512,7 @@ mod tests {
 
         let decl = Declaration {
             property: "text-emphasis-color".to_string(),
-            value: PropertyValue::Color(Rgba::RED),
+            value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
             raw_value: String::new(),
             important: false,
         };
@@ -13532,7 +13535,7 @@ mod tests {
             property: "text-emphasis".to_string(),
             value: PropertyValue::Multiple(vec![
                 PropertyValue::Keyword("circle".to_string()),
-                PropertyValue::Color(Rgba::BLUE),
+                PropertyValue::Color(Color::Rgba(Rgba::BLUE)),
             ]),
             raw_value: String::new(),
             important: false,
@@ -13725,7 +13728,7 @@ mod tests {
             value: PropertyValue::Multiple(vec![
                 PropertyValue::Keyword("underline".to_string()),
                 PropertyValue::Keyword("dotted".to_string()),
-                PropertyValue::Color(Rgba::RED),
+                PropertyValue::Color(Color::Rgba(Rgba::RED)),
             ]),
             raw_value: String::new(),
             important: false,
@@ -13761,7 +13764,7 @@ mod tests {
             value: PropertyValue::Multiple(vec![
                 PropertyValue::Keyword("overline".to_string()),
                 PropertyValue::Keyword("double".to_string()),
-                PropertyValue::Color(Rgba::GREEN),
+                PropertyValue::Color(Color::Rgba(Rgba::GREEN)),
                 PropertyValue::Length(Length::px(3.2)),
             ]),
             raw_value: String::new(),
@@ -14396,7 +14399,7 @@ mod tests {
                 PropertyValue::Keyword("fixed".to_string()),
                 PropertyValue::Keyword("content-box".to_string()),
                 PropertyValue::Keyword("padding-box".to_string()),
-                PropertyValue::Color(Rgba::RED),
+                PropertyValue::Color(Color::Rgba(Rgba::RED)),
             ]),
             raw_value: String::new(),
             important: false,
@@ -14746,7 +14749,7 @@ mod tests {
 
         let decl = Declaration {
             property: "background".to_string(),
-            value: PropertyValue::Color(Rgba::RED),
+            value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
             raw_value: String::new(),
             important: false,
         };
@@ -16539,7 +16542,7 @@ fn parse_background_shorthand(tokens: &[PropertyValue], current_color: Rgba) -> 
         // Color
         if shorthand.color.is_none() {
             let parsed_color = match token {
-                PropertyValue::Color(c) => Some(*c),
+                PropertyValue::Color(c) => Some(c.to_rgba(current_color)),
                 PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(current_color),
                 PropertyValue::Keyword(kw) => crate::style::color::Color::parse(kw)
                     .ok()

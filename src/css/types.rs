@@ -1011,7 +1011,7 @@ impl LayerNode {
 /// CSS property values
 #[derive(Debug, Clone)]
 pub enum PropertyValue {
-    Color(Rgba),
+    Color(Color),
     Length(Length),
     Percentage(f32),
     Number(f32),

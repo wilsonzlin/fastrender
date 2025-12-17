@@ -3292,7 +3292,11 @@ mod tests {
         };
 
         let styled = apply_styles(&dom, &StyleSheet::new());
-        assert_ne!(styled.styles.display, Display::None, "aria-label should not hide elements");
+        assert_ne!(
+            styled.styles.display,
+            Display::None,
+            "aria-label should not hide elements"
+        );
     }
 
     #[test]
@@ -4518,12 +4522,10 @@ mod tests {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
                     namespace: HTML_NAMESPACE.to_string(),
-                    attributes: vec![
-                        (
-                            "style".to_string(),
-                            "text-align: match-parent; text-align-last: match-parent;".to_string(),
-                        ),
-                    ],
+                    attributes: vec![(
+                        "style".to_string(),
+                        "text-align: match-parent; text-align-last: match-parent;".to_string(),
+                    )],
                 },
                 children: vec![],
             }],
@@ -4707,12 +4709,10 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![
-                    (
-                        "style".to_string(),
-                        "direction: rtl; text-align: end; text-align-last: end;".to_string(),
-                    ),
-                ],
+                attributes: vec![(
+                    "style".to_string(),
+                    "direction: rtl; text-align: end; text-align-last: end;".to_string(),
+                )],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
@@ -4770,7 +4770,7 @@ mod tests {
         let decls = parse_declarations("color: red;");
         assert_eq!(decls.len(), 1);
         if let crate::css::types::PropertyValue::Color(c) = decls[0].value {
-            assert_eq!(c, Rgba::RED);
+            assert_eq!(c, crate::style::color::Color::Rgba(Rgba::RED));
         } else {
             panic!("color did not parse");
         }
@@ -5393,6 +5393,48 @@ mod tests {
         let dom = element_with_style("font-weight: 1200;");
         let styled = apply_styles(&dom, &StyleSheet::new());
         assert_eq!(styled.styles.font_weight.to_u16(), 400);
+    }
+
+    #[test]
+    fn color_mix_uses_inherited_current_color() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("style".to_string(), "color: red;".to_string())],
+            },
+            children: vec![
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "p".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
+                        attributes: vec![(
+                            "style".to_string(),
+                            "background-color: color-mix(in srgb, currentColor 50%, blue);".to_string(),
+                        )],
+                    },
+                    children: vec![],
+                },
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "span".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
+                        attributes: vec![(
+                            "style".to_string(),
+                            "color: color-mix(in srgb, currentColor 25%, white);".to_string(),
+                        )],
+                    },
+                    children: vec![],
+                },
+            ],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let first = styled.children.first().expect("first child");
+        assert_eq!(first.styles.background_color, Rgba::from_rgba8(128, 0, 128));
+
+        let second = styled.children.get(1).expect("second child");
+        assert_eq!(second.styles.color, Rgba::from_rgba8(255, 191, 191));
     }
 }
 

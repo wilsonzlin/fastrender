@@ -1,5 +1,5 @@
 use fastrender::css::types::{Declaration, PropertyValue};
-use fastrender::style::color::Rgba;
+use fastrender::style::color::{Color, Rgba};
 use fastrender::style::properties::{apply_declaration, resolve_pending_logical_properties};
 use fastrender::style::types::{Direction, WritingMode};
 use fastrender::style::values::Length;
@@ -74,8 +74,8 @@ fn logical_border_inline_colors_follow_writing_mode() {
     apply_declaration(&mut style, &decl(
             "border-inline-color",
             PropertyValue::Multiple(vec![
-                PropertyValue::Color(Rgba::RED),
-                PropertyValue::Color(Rgba::GREEN),
+                PropertyValue::Color(Color::Rgba(Rgba::RED)),
+                PropertyValue::Color(Color::Rgba(Rgba::GREEN)),
             ]),
         ), &ComputedStyle::default(), 16.0, 16.0);
     resolve_pending_logical_properties(&mut style);
