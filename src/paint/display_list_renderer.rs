@@ -1101,6 +1101,8 @@ impl DisplayListRenderer {
         let opacity = self.canvas.opacity().clamp(0.0, 1.0);
         // CSS outlines should not be clipped by overflow/clip regions.
         let clip = None;
+        self.canvas.save();
+        self.canvas.clear_clip();
         let transform = self.canvas.transform();
         let color = item.color;
 
@@ -1172,6 +1174,7 @@ impl DisplayListRenderer {
             clip.as_ref(),
             transform,
         );
+        self.canvas.restore();
     }
 
     fn render_border_image(

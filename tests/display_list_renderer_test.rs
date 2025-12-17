@@ -3,8 +3,8 @@ use base64::Engine;
 use fastrender::css::types::ColorStop;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::{
-    DecorationPaint, DecorationStroke, DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem,
-    TextDecorationItem,
+    ClipItem, ClipShape, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, FillRectItem, OutlineItem,
+    ResolvedFilter, StackingContextItem, TextDecorationItem,
 };
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
@@ -1342,4 +1342,47 @@ fn color_mix_handles_transparent_components() {
 
     let (r, g, b, a) = pixel(&pixmap, 1, 1);
     assert_eq!((r, g, b, a), (0, 0, 128, 128));
+}
+
+#[test]
+fn outline_ignores_clip_path() {
+    let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+
+    let triangle = fastrender::paint::clip_path::ResolvedClipPath::Polygon {
+        points: vec![
+            fastrender::geometry::Point::new(10.0, 10.0),
+            fastrender::geometry::Point::new(14.0, 10.0),
+            fastrender::geometry::Point::new(10.0, 14.0),
+        ],
+        fill_rule: tiny_skia::FillRule::Winding,
+    };
+    list.push(DisplayItem::PushClip(ClipItem {
+        shape: ClipShape::Path { path: triangle },
+    }));
+    list.push(DisplayItem::Outline(OutlineItem {
+        rect: Rect::from_xywh(5.0, 5.0, 20.0, 20.0),
+        width: 4.0,
+        style: BorderStyle::Solid,
+        color: Rgba::RED,
+        offset: 0.0,
+        invert: false,
+    }));
+    list.push(DisplayItem::PopClip);
+
+    let pixmap = renderer.render(&list).expect("render");
+    // Find any red stroke pixel in the band left of the clip path (x < 8) to verify it isn't clipped.
+    let mut found = false;
+    for y in 0..40 {
+        for x in 0..8 {
+            if pixel(&pixmap, x, y) == (255, 0, 0, 255) {
+                found = true;
+                break;
+            }
+        }
+        if found {
+            break;
+        }
+    }
+    assert!(found, "outline stroke should be visible outside the clip path");
 }
