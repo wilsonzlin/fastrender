@@ -386,7 +386,9 @@ pub(crate) fn parse_transform_list(value: &str) -> Option<Vec<Transform>> {
                             "rotate" => parse_rotate(p),
                             "rotatex" => parse_rotate_x(p),
                             "rotatey" => parse_rotate_y(p),
+                            "rotatez" => parse_rotate_z(p),
                             "rotate3d" => parse_rotate_3d(p),
+                            "skew" => parse_skew(p),
                             "skewx" => parse_skew_x(p),
                             "skewy" => parse_skew_y(p),
                             "matrix" => parse_matrix(p),
@@ -576,6 +578,11 @@ fn parse_rotate(parser: &mut Parser) -> Result<Transform, ()> {
     Ok(Transform::Rotate(deg))
 }
 
+fn parse_rotate_z(parser: &mut Parser) -> Result<Transform, ()> {
+    let deg = parse_angle_component(parser)?;
+    Ok(Transform::RotateZ(deg))
+}
+
 fn parse_rotate_x(parser: &mut Parser) -> Result<Transform, ()> {
     let deg = parse_angle_component(parser)?;
     Ok(Transform::RotateX(deg))
@@ -608,6 +615,19 @@ fn parse_skew_x(parser: &mut Parser) -> Result<Transform, ()> {
 fn parse_skew_y(parser: &mut Parser) -> Result<Transform, ()> {
     let deg = parse_angle_component(parser)?;
     Ok(Transform::SkewY(deg))
+}
+
+fn parse_skew(parser: &mut Parser) -> Result<Transform, ()> {
+    let ax = parse_angle_component(parser)?;
+    parser.skip_whitespace();
+    let _ = parser.try_parse(|p| p.expect_comma());
+    let ay = if parser.is_exhausted() {
+        0.0
+    } else {
+        parser.skip_whitespace();
+        parse_angle_component(parser)?
+    };
+    Ok(Transform::Skew(ax, ay))
 }
 
 fn parse_matrix(parser: &mut Parser) -> Result<Transform, ()> {
@@ -1751,8 +1771,10 @@ mod tests {
         assert!(parse_transform_list("scaleZ(5)").is_some());
         assert!(parse_transform_list("rotateX(10deg)").is_some());
         assert!(parse_transform_list("rotateY(20deg)").is_some());
+        assert!(parse_transform_list("rotateZ(30deg)").is_some());
         assert!(parse_transform_list("rotate3d(0, 0, 1, 45deg)").is_some());
         assert!(parse_transform_list("perspective(500px)").is_some());
+        assert!(parse_transform_list("skew(10deg, 5deg)").is_some());
 
         let transforms = parse_transform_list(
             "translate3d(10px, 20px, 30px) translateZ(5px) scale3d(2, 3, 4) scaleZ(5) rotateX(10deg) rotateY(20deg) rotate3d(0, 0, 1, 45deg) perspective(500px)",
@@ -1786,6 +1808,18 @@ mod tests {
             }
             other => panic!("unexpected transform {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_skew_function() {
+        let transforms = parse_transform_list("skew(10deg, 20deg)").expect("parsed skew");
+        assert!(
+            matches!(transforms[0], Transform::Skew(ax, ay) if (ax - 10.0).abs() < 0.01 && (ay - 20.0).abs() < 0.01)
+        );
+
+        // Single-argument skew should default the second angle to 0.
+        let transforms_single = parse_transform_list("skew(15deg)").expect("parsed skew");
+        assert!(matches!(transforms_single[0], Transform::Skew(ax, ay) if (ax - 15.0).abs() < 0.01 && ay.abs() < 0.01));
     }
 
     #[test]

@@ -5473,6 +5473,7 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
             crate::css::types::Transform::ScaleZ(_) => Transform::identity(),
             crate::css::types::Transform::Scale3d(sx, sy, _) => Transform::from_scale(*sx, *sy),
             crate::css::types::Transform::Rotate(deg) => Transform::from_rotate(*deg),
+            crate::css::types::Transform::RotateZ(deg) => Transform::from_rotate(*deg),
             crate::css::types::Transform::RotateX(_) => Transform::identity(),
             crate::css::types::Transform::RotateY(_) => Transform::identity(),
             crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
@@ -5485,6 +5486,9 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
             }
             crate::css::types::Transform::SkewX(deg) => Transform::from_skew(deg.to_radians().tan(), 0.0),
             crate::css::types::Transform::SkewY(deg) => Transform::from_skew(0.0, deg.to_radians().tan()),
+            crate::css::types::Transform::Skew(ax, ay) => {
+                Transform::from_skew(ax.to_radians().tan(), ay.to_radians().tan())
+            }
             crate::css::types::Transform::Perspective(_) => Transform::identity(),
             crate::css::types::Transform::Matrix(a, b, c, d, e, f) => Transform::from_row(*a, *b, *c, *d, *e, *f),
             crate::css::types::Transform::Matrix3d(values) => {

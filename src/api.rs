@@ -2088,35 +2088,44 @@ fn hash_transform(transform: &crate::css::types::Transform, hasher: &mut Default
             10u8.hash(hasher);
             hash_f32(*r, hasher);
         }
-        RotateX(r) => {
+        RotateZ(r) => {
             11u8.hash(hasher);
             hash_f32(*r, hasher);
         }
-        RotateY(r) => {
+        RotateX(r) => {
             12u8.hash(hasher);
             hash_f32(*r, hasher);
         }
-        Rotate3d(x, y, z, r) => {
+        RotateY(r) => {
             13u8.hash(hasher);
+            hash_f32(*r, hasher);
+        }
+        Rotate3d(x, y, z, r) => {
+            14u8.hash(hasher);
             hash_f32(*x, hasher);
             hash_f32(*y, hasher);
             hash_f32(*z, hasher);
             hash_f32(*r, hasher);
         }
         SkewX(x) => {
-            14u8.hash(hasher);
+            15u8.hash(hasher);
             hash_f32(*x, hasher);
         }
         SkewY(y) => {
-            15u8.hash(hasher);
+            16u8.hash(hasher);
             hash_f32(*y, hasher);
         }
+        Skew(ax, ay) => {
+            17u8.hash(hasher);
+            hash_f32(*ax, hasher);
+            hash_f32(*ay, hasher);
+        }
         Perspective(len) => {
-            16u8.hash(hasher);
+            18u8.hash(hasher);
             hash_length(len, hasher);
         }
         Matrix(a, b, c, d, e, f) => {
-            17u8.hash(hasher);
+            19u8.hash(hasher);
             hash_f32(*a, hasher);
             hash_f32(*b, hasher);
             hash_f32(*c, hasher);
@@ -2125,7 +2134,7 @@ fn hash_transform(transform: &crate::css::types::Transform, hasher: &mut Default
             hash_f32(*f, hasher);
         }
         Matrix3d(values) => {
-            18u8.hash(hasher);
+            20u8.hash(hasher);
             for v in values {
                 hash_f32(*v, hasher);
             }

@@ -1330,6 +1330,7 @@ impl DisplayListBuilder {
                 crate::css::types::Transform::ScaleZ(_) => Transform2D::identity(),
                 crate::css::types::Transform::Scale3d(sx, sy, _) => Transform2D::scale(*sx, *sy),
                 crate::css::types::Transform::Rotate(deg) => Transform2D::rotate(*deg),
+                crate::css::types::Transform::RotateZ(deg) => Transform2D::rotate(*deg),
                 crate::css::types::Transform::RotateX(_) => Transform2D::identity(),
                 crate::css::types::Transform::RotateY(_) => Transform2D::identity(),
                 crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
@@ -1342,6 +1343,9 @@ impl DisplayListBuilder {
                 }
                 crate::css::types::Transform::SkewX(deg) => Transform2D::skew(deg.to_radians().tan(), 0.0),
                 crate::css::types::Transform::SkewY(deg) => Transform2D::skew(0.0, deg.to_radians().tan()),
+                crate::css::types::Transform::Skew(ax, ay) => {
+                    Transform2D::skew(ax.to_radians().tan(), ay.to_radians().tan())
+                }
                 crate::css::types::Transform::Perspective(_) => Transform2D::identity(),
                 crate::css::types::Transform::Matrix(a, b, c, d, e, f) => Transform2D {
                     a: *a,
