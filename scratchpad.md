@@ -1,4 +1,5 @@
 # Cascade performance: cached UA default form declarations, bypassed full rule matching for non-element nodes, added zero-declaration fast path in apply_cascaded_declarations, and added a text-node inheritance regression.
+# Cascade perf: UA stylesheet is now parsed once via a cached OnceLock instead of per-cascade parsing.
 # Calc helpers now require proper context: calc lengths with percentage/viewport/font terms return None in viewport/font resolvers when bases are missing, and a regression `calc_resolution_helpers_require_context` covers the helpers. Transform/object-fit/clip-path now resolve calc lengths via context-aware helpers (avoiding raw-value fallbacks); added builder/painter/object-fit regressions for calc translate/object-position.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # Color-scheme inheritance still validated; further palette audits ongoing.
