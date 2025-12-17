@@ -2479,7 +2479,9 @@ impl InlineFormattingContext {
             if is_justify_align(base_align) && matches!(resolved_justify, TextJustify::None) {
                 base_align = map_text_align(TextAlign::Start, line_direction);
             }
-            let allow_justify = !is_last_line || !matches!(text_align_last, crate::style::types::TextAlignLast::Auto);
+            let align_last_auto = matches!(text_align_last, crate::style::types::TextAlignLast::Auto);
+            let allow_justify =
+                !is_last_line || !align_last_auto || matches!(text_align, TextAlign::JustifyAll);
             let has_justify = if !allow_justify || matches!(resolved_justify, TextJustify::None) {
                 false
             } else {
@@ -9171,6 +9173,79 @@ mod tests {
         assert!(
             right_edge > last_line.bounds.width() * 0.8,
             "text-align-last should override base alignment even when text-align is not justify; right_edge={}, line_width={}",
+            right_edge,
+            last_line.bounds.width()
+        );
+    }
+
+    #[test]
+    fn text_align_last_overrides_justify_alignment() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Right;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "foo bar\nbaz qux".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(140.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let last_line = fragment.children.last().expect("last line");
+        let min_x = last_line
+            .children
+            .iter()
+            .map(|child| child.bounds.x())
+            .fold(f32::INFINITY, f32::min);
+        let right_edge = last_line
+            .children
+            .iter()
+            .map(|child| child.bounds.x() + child.bounds.width())
+            .fold(0.0, f32::max);
+        let content_width = right_edge - min_x;
+        let expected_start = last_line.bounds.width() - content_width;
+        assert!(
+            (min_x - expected_start).abs() < 1.0,
+            "explicit text-align-last should right-align the final line even when text-align is justify; start={}, expected_start={}, width={}",
+            min_x,
+            expected_start,
+            last_line.bounds.width()
+        );
+    }
+
+    #[test]
+    fn text_align_justify_all_auto_justifies_last_line() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::JustifyAll;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "word word\nword word".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(120.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let last_line = fragment.children.last().expect("last line");
+        assert!(last_line.children.len() >= 2);
+        let last_child = last_line.children.last().expect("text fragment");
+        let right_edge = last_child.bounds.x() + last_child.bounds.width();
+        assert!(
+            right_edge > last_line.bounds.width() * 0.8,
+            "justify-all should stretch the final line by default; right_edge={}, line_width={}",
             right_edge,
             last_line.bounds.width()
         );

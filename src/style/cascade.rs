@@ -3899,7 +3899,7 @@ mod tests {
     }
 
     #[test]
-    fn text_align_shorthand_resets_text_align_last_to_auto() {
+    fn text_align_does_not_reset_text_align_last() {
         let dom = element_with_style("text-align-last: right; text-align: center;");
         let styled = apply_styles(&dom, &StyleSheet::new());
         assert!(matches!(
@@ -3908,7 +3908,7 @@ mod tests {
         ));
         assert!(matches!(
             styled.styles.text_align_last,
-            crate::style::types::TextAlignLast::Auto
+            crate::style::types::TextAlignLast::Right
         ));
     }
 
@@ -4217,7 +4217,7 @@ mod tests {
     }
 
     #[test]
-    fn text_align_justify_all_sets_last_line_justify() {
+    fn text_align_justify_all_respects_explicit_last_line_alignment() {
         let dom = element_with_style("text-align-last: right; text-align: justify-all;");
         let styled = apply_styles(&dom, &StyleSheet::new());
         assert!(matches!(
@@ -4226,7 +4226,7 @@ mod tests {
         ));
         assert!(matches!(
             styled.styles.text_align_last,
-            crate::style::types::TextAlignLast::Justify
+            crate::style::types::TextAlignLast::Right
         ));
     }
 

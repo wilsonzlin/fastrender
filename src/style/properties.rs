@@ -5220,12 +5220,6 @@ pub fn apply_declaration_with_base(
                 };
                 if let Some(value) = parsed {
                     styles.text_align = value;
-                    styles.text_align_last = match value {
-                        TextAlign::Justify => TextAlignLast::Auto,
-                        TextAlign::JustifyAll => TextAlignLast::Justify,
-                        TextAlign::MatchParent => TextAlignLast::MatchParent,
-                        _ => TextAlignLast::Auto,
-                    };
                 }
             }
         }
