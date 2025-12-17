@@ -831,9 +831,6 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
     };
 
     match tag.as_str() {
-        "a" if node.get_attribute("href").is_some() => {
-            add_rule("color: rgb(0, 0, 238); text-decoration: underline; cursor: pointer;", 0);
-        }
         "bdi" if node.get_attribute("dir").is_none() => {
             let resolved = resolve_first_strong_direction(node).map(|d| match d {
                 TextDirection::Ltr => crate::style::types::Direction::Ltr,
@@ -851,64 +848,6 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
         "bdo" if node.get_attribute("dir").is_none() => {
             add_rule("unicode-bidi: bidi-override; direction: ltr;", 0);
         }
-        "h1" => add_rule("font-size: 2em; font-weight: bolder; margin-top: 0.67em; margin-bottom: 0.67em;", 0),
-        "h2" => add_rule("font-size: 1.5em; font-weight: bolder; margin-top: 0.83em; margin-bottom: 0.83em;", 0),
-        "h3" => add_rule("font-size: 1.17em; font-weight: bolder; margin-top: 1em; margin-bottom: 1em;", 0),
-        "h4" => add_rule("font-size: 1em; font-weight: bolder; margin-top: 1.33em; margin-bottom: 1.33em;", 0),
-        "h5" => add_rule("font-size: 0.83em; font-weight: bolder; margin-top: 1.67em; margin-bottom: 1.67em;", 0),
-        "h6" => add_rule("font-size: 0.67em; font-weight: bolder; margin-top: 2.33em; margin-bottom: 2.33em;", 0),
-        "p" => add_rule("margin-top: 1em; margin-bottom: 1em;", 0),
-        "pre" => add_rule(
-            "font-family: monospace; white-space: pre; margin-top: 1em; margin-bottom: 1em;",
-            0,
-        ),
-        "code" | "kbd" | "samp" | "tt" => add_rule("font-family: monospace;", 0),
-        "blockquote" => add_rule(
-            "margin-top: 1em; margin-bottom: 1em; margin-left: 40px; margin-right: 40px;",
-            0,
-        ),
-        "ul" => add_rule(
-            "margin-top: 1em; margin-bottom: 1em; padding-left: 40px; list-style-type: disc;",
-            0,
-        ),
-        "menu" | "dir" => add_rule(
-            "display: block; margin-top: 1em; margin-bottom: 1em; padding-left: 40px; list-style-type: disc;",
-            0,
-        ),
-        "ol" => add_rule(
-            "margin-top: 1em; margin-bottom: 1em; padding-left: 40px; list-style-type: decimal;",
-            0,
-        ),
-        "dd" => add_rule("margin-left: 40px;", 0),
-        "hr" => add_rule(
-            "box-sizing: content-box; height: 1px; margin: 0.5em auto; border: 1px inset; border-color: currentColor; color: gray;",
-            0,
-        ),
-        "small" => add_rule("font-size: smaller;", 0),
-        "big" => add_rule("font-size: larger;", 0),
-        "sub" => add_rule("font-size: smaller; vertical-align: sub;", 0),
-        "sup" => add_rule("font-size: smaller; vertical-align: super;", 0),
-        "mark" => add_rule("background-color: yellow; color: black;", 0),
-        "address" | "cite" | "dfn" | "var" | "em" | "i" => add_rule("font-style: italic;", 0),
-        "ins" => add_rule("text-decoration: underline;", 0),
-        "del" => add_rule("text-decoration: line-through;", 0),
-        "q" => add_rule("quotes: '“' '”' '‘' '’';", 0),
-        "details" => add_rule("display: block;", 0),
-        "summary" => add_rule(
-            "display: list-item; cursor: pointer; list-style-type: disclosure-closed; list-style-position: outside;",
-            0,
-        ),
-        "u" => add_rule("text-decoration: underline;", 0),
-        "s" | "strike" => add_rule("text-decoration: line-through;", 0),
-        "center" => add_rule("text-align: center;", 0),
-        "th" => add_rule("font-weight: bolder; text-align: center;", 0),
-        "option" => add_rule("display: block; white-space: pre;", 0),
-        "optgroup" => add_rule("display: block; white-space: pre; font-weight: bolder;", 0),
-        "fieldset" => add_rule(
-            "display: block; margin: 0.35em 2px 0.625em; padding: 0.35em 0.75em 0.625em; border: 2px groove rgb(192, 192, 192);",
-            0,
-        ),
-        "legend" => add_rule("display: block; padding-left: 2px; padding-right: 2px;", 0),
         "textarea" => {
             add_rule(
                 "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block; cursor: text;",
@@ -947,15 +886,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
             "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
             0,
         ),
-        "nobr" => add_rule("white-space: nowrap;", 0),
         _ => {}
-    }
-
-    if (tag == "abbr" || tag == "acronym") && node.get_attribute("title").is_some() {
-        add_rule(
-            "border-bottom-width: 1px; border-bottom-style: dotted; border-bottom-color: currentColor; cursor: help;",
-            1,
-        );
     }
 
     rules

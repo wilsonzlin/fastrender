@@ -42,7 +42,7 @@ main, article, section, header, footer, nav, aside, figure, figcaption {
 h1 {
     display: block;
     font-size: 2em;
-    font-weight: bold;
+    font-weight: bolder;
     margin-top: 0.67em;
     margin-bottom: 0.67em;
 }
@@ -50,7 +50,7 @@ h1 {
 h2 {
     display: block;
     font-size: 1.5em;
-    font-weight: bold;
+    font-weight: bolder;
     margin-top: 0.83em;
     margin-bottom: 0.83em;
 }
@@ -58,7 +58,7 @@ h2 {
 h3 {
     display: block;
     font-size: 1.17em;
-    font-weight: bold;
+    font-weight: bolder;
     margin-top: 1em;
     margin-bottom: 1em;
 }
@@ -66,7 +66,7 @@ h3 {
 h4 {
     display: block;
     font-size: 1em;
-    font-weight: bold;
+    font-weight: bolder;
     margin-top: 1.33em;
     margin-bottom: 1.33em;
 }
@@ -74,7 +74,7 @@ h4 {
 h5 {
     display: block;
     font-size: 0.83em;
-    font-weight: bold;
+    font-weight: bolder;
     margin-top: 1.67em;
     margin-bottom: 1.67em;
 }
@@ -82,7 +82,7 @@ h5 {
 h6 {
     display: block;
     font-size: 0.67em;
-    font-weight: bold;
+    font-weight: bolder;
     margin-top: 2.33em;
     margin-bottom: 2.33em;
 }
@@ -100,6 +100,15 @@ ul, ol {
     margin-top: 1em;
     margin-bottom: 1em;
     padding-left: 40px;
+}
+
+ul {
+    list-style-type: disc;
+    counter-reset: list-item;
+}
+
+ol {
+    list-style-type: decimal;
     counter-reset: list-item;
 }
 
@@ -114,6 +123,10 @@ menu, dir {
     margin-bottom: 1em;
     padding-left: 40px;
     list-style-type: disc;
+}
+
+dd {
+    margin-left: 40px;
 }
 
 /* Obsolete center element */
@@ -190,12 +203,12 @@ td, th {
 }
 
 th {
-    font-weight: bold;
+    font-weight: bolder;
     text-align: center;
 }
 
 /* Inline elements */
-span, a, strong, em, b, i, u, small, mark, code {
+span, a, strong, em, b, i, u, small, mark, code, big, sub, sup {
     display: inline;
 }
 
@@ -211,7 +224,7 @@ bdo {
     unicode-bidi: bidi-override;
 }
 
-em, i {
+em, i, address, cite, dfn, var {
     font-style: italic;
 }
 
@@ -220,10 +233,58 @@ u {
 }
 
 small {
-    font-size: 0.83em;
+    font-size: smaller;
 }
 
-code {
+big {
+    font-size: larger;
+}
+
+sub {
+    font-size: smaller;
+    vertical-align: sub;
+}
+
+sup {
+    font-size: smaller;
+    vertical-align: super;
+}
+
+mark {
+    background-color: yellow;
+    color: black;
+}
+
+ins {
+    text-decoration: underline;
+}
+
+del, s, strike {
+    text-decoration: line-through;
+}
+
+q {
+    quotes: "“" "”" "‘" "’";
+}
+
+abbr[title], acronym[title] {
+    border-bottom-width: 1px;
+    border-bottom-style: dotted;
+    border-bottom-color: currentColor;
+    cursor: help;
+}
+
+a[href] {
+    color: rgb(0, 0, 238);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+nobr {
+    white-space: nowrap;
+}
+
+code, kbd, samp, tt {
     font-family: monospace;
 }
 
@@ -304,7 +365,9 @@ head, style, script, meta, link, title, noscript, template {
 /* Horizontal rule */
 hr {
     display: block;
-    margin-top: 0.5em;
-    margin-bottom: 0.5em;
-    border: 1px inset;
+    box-sizing: content-box;
+    height: 1px;
+    margin: 0.5em auto;
+    color: gray;
+    border: 1px inset currentColor;
 }
