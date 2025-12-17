@@ -811,6 +811,33 @@ fn filters_apply_to_stacking_context_layer() {
 }
 
 #[test]
+fn opacity_filter_modulates_alpha() {
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::TRANSPARENT, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+        is_isolated: true,
+        transform: None,
+        filters: vec![ResolvedFilter::Opacity(0.5)],
+        backdrop_filters: Vec::new(),
+        radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let (r, g, b, a) = pixel(&pixmap, 0, 0);
+    assert_eq!((r, g, b), (128, 0, 0));
+    assert!((a as i16 - 128).abs() <= 1, "expected ~50% alpha, got {}", a);
+}
+
+#[test]
 fn backdrop_filters_modify_backdrop_region() {
     let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
     let mut list = DisplayList::new();
