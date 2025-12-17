@@ -4545,6 +4545,30 @@ mod tests {
     }
 
     #[test]
+    fn ua_focus_outline_applies_to_form_controls() {
+        let input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("type".to_string(), "text".to_string()),
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&input, &StyleSheet::new());
+        assert_eq!(styled.styles.outline_style, OutlineStyle::Dotted);
+        assert_eq!(styled.styles.outline_width, Length::px(1.0));
+        assert_eq!(styled.styles.outline_offset, Length::px(2.0));
+        assert_eq!(
+            styled.styles.outline_color,
+            crate::style::OutlineColor::Color(Rgba::BLACK)
+        );
+    }
+
+    #[test]
     fn ua_hover_focus_do_not_apply_without_flags() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -4820,7 +4844,7 @@ mod tests {
         let decls = parse_declarations("color: red;");
         assert_eq!(decls.len(), 1);
         if let crate::css::types::PropertyValue::Color(c) = &decls[0].value {
-            assert_eq!(*c, crate::style::color::Color::Rgba(Rgba::RED));
+            assert_eq!(c, &crate::style::color::Color::Rgba(Rgba::RED));
         } else {
             panic!("color did not parse");
         }

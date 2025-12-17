@@ -315,6 +315,14 @@ input[type="hidden"] {
     display: none;
 }
 
+input:focus,
+textarea:focus,
+select:focus,
+button:focus {
+    outline: 1px dotted rgb(0, 0, 0);
+    outline-offset: 2px;
+}
+
 input:disabled,
 textarea:disabled,
 select:disabled,
