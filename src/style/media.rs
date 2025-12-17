@@ -2973,6 +2973,16 @@ mod tests {
 
         assert!(Resolution::parse("-1dpi").is_err());
         assert!(Resolution::parse("infdppx").is_err());
+
+        // Case-insensitive units are accepted
+        let upper = Resolution::parse("1DPI").unwrap();
+        assert_eq!(upper.value, 1.0);
+        assert_eq!(upper.unit, ResolutionUnit::Dpi);
+
+        // Zero is valid
+        let zero = Resolution::parse("0dppx").unwrap();
+        assert_eq!(zero.value, 0.0);
+        assert_eq!(zero.unit, ResolutionUnit::Dppx);
     }
 
     #[test]
