@@ -200,6 +200,32 @@ fn builder_clip_path_polygon_masks_rendered_output() {
 }
 
 #[test]
+fn builder_clip_path_inset_masks_rendered_output() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::RED;
+    style.clip_path = ClipPath::BasicShape(
+        BasicShape::Inset {
+            top: Length::px(2.0),
+            right: Length::px(2.0),
+            bottom: Length::px(2.0),
+            left: Length::px(2.0),
+            border_radius: None,
+        },
+        None,
+    );
+
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Center pixels should be clipped in; corners remain white per the background.
+    assert_eq!(pixel(&pixmap, 5, 5), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 1, 1), (255, 255, 255, 255));
+}
+
+#[test]
 fn color_mix_srgb_renders_expected_color() {
     let mut style = fastrender::ComputedStyle::default();
     style.background_color = Color::parse("color-mix(in srgb, red 25%, blue 75%)")
