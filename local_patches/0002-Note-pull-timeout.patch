@@ -1,7 +1,7 @@
 From d47eb9a9ef50fc91067324d3b2a8258ce07fd1d9 Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 14:48:16 -0500
-Subject: [PATCH 2/9] Note pull timeout
+Subject: [PATCH 02/11] Note pull timeout
 
 ---
  scratchpad.md | 1 +
