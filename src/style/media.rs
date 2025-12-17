@@ -1550,6 +1550,10 @@ pub struct MediaContext {
     pub pointer: PointerCapability,
     /// Any pointer accuracy (finest available)
     pub any_pointer: PointerCapability,
+    /// Whether any available pointer is coarse
+    pub any_pointer_coarse: bool,
+    /// Whether any available pointer is fine
+    pub any_pointer_fine: bool,
     /// User's color scheme preference
     pub prefers_color_scheme: Option<ColorScheme>,
     /// User's reduced motion preference
@@ -1601,6 +1605,8 @@ impl MediaContext {
             any_can_hover: true,
             pointer: PointerCapability::Fine,
             any_pointer: PointerCapability::Fine,
+            any_pointer_coarse: false,
+            any_pointer_fine: true,
             prefers_color_scheme: Some(ColorScheme::NoPreference),
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
@@ -1762,6 +1768,8 @@ impl MediaContext {
             any_can_hover: false,
             pointer: PointerCapability::None,
             any_pointer: PointerCapability::None,
+            any_pointer_coarse: false,
+            any_pointer_fine: false,
             prefers_color_scheme: Some(ColorScheme::NoPreference),
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
@@ -1804,6 +1812,8 @@ impl MediaContext {
             any_can_hover: false,
             pointer: PointerCapability::Coarse,
             any_pointer: PointerCapability::Coarse,
+            any_pointer_coarse: true,
+            any_pointer_fine: false,
             prefers_color_scheme: Some(ColorScheme::NoPreference),
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
@@ -2137,8 +2147,9 @@ impl MediaContext {
             // Pointer capability
             MediaFeature::Pointer(capability) => self.pointer == *capability,
             MediaFeature::AnyPointer(capability) => match capability {
-                PointerCapability::None => self.any_pointer == PointerCapability::None,
-                _ => self.any_pointer == *capability,
+                PointerCapability::None => !self.any_pointer_coarse && !self.any_pointer_fine,
+                PointerCapability::Coarse => self.any_pointer_coarse,
+                PointerCapability::Fine => self.any_pointer_fine,
             },
 
             // User preferences
@@ -3295,6 +3306,23 @@ mod tests {
         assert!(!printer.evaluate(&fine_query));
         assert!(!printer.evaluate(&coarse_query));
         assert!(printer.evaluate(&none_query));
+    }
+
+    #[test]
+    fn test_evaluate_any_pointer_hybrid() {
+        let hybrid = MediaContext {
+            any_pointer_coarse: true,
+            any_pointer_fine: true,
+            ..MediaContext::screen(1200.0, 800.0)
+        };
+
+        let fine_query = MediaQuery::parse("(any-pointer: fine)").unwrap();
+        let coarse_query = MediaQuery::parse("(any-pointer: coarse)").unwrap();
+        let none_query = MediaQuery::parse("(any-pointer: none)").unwrap();
+
+        assert!(hybrid.evaluate(&fine_query));
+        assert!(hybrid.evaluate(&coarse_query));
+        assert!(!hybrid.evaluate(&none_query));
     }
 
     #[test]
