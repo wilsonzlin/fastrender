@@ -217,6 +217,16 @@ fn test_counter_style_markers() {
 }
 
 #[test]
+fn additive_counter_styles_fall_back_out_of_range() {
+    // Armenian/Georgian additive styles should fall back to decimal when outside their range
+    assert_eq!(CounterStyle::Armenian.format(-3), "-3");
+    assert_eq!(CounterStyle::LowerArmenian.format(10_000), "10000");
+    assert_eq!(CounterStyle::LowerArmenian.format(-1), "-1");
+    assert_eq!(CounterStyle::Georgian.format(20_000), "20000");
+    assert_eq!(CounterStyle::Georgian.format(-5), "-5");
+}
+
+#[test]
 fn test_counter_style_parse() {
     assert_eq!(CounterStyle::parse("decimal"), Some(CounterStyle::Decimal));
     assert_eq!(
