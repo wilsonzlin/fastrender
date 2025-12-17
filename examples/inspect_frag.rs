@@ -24,6 +24,12 @@ use std::env;
 use std::fs;
 use url::Url;
 
+fn usage() {
+    eprintln!("Usage: inspect_frag [--viewport WxH] [--dpr RATIO] <file.html | file://url>");
+    eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
+    eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Avoid panicking on SIGPIPE/BrokenPipe when piped through tools like `head`.
     let default_hook = std::panic::take_hook();
@@ -41,7 +47,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_hook(info);
     }));
 
-    let raw_path = env::args().nth(1).expect("path arg");
+    let mut args = env::args().skip(1);
+    let mut viewport_size = (1200u32, 800u32);
+    let mut device_pixel_ratio = 1.0f32;
+    let mut raw_path: Option<String> = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                usage();
+                return Ok(());
+            }
+            "--viewport" => {
+                if let Some(val) = args.next() {
+                    let mut parts = val.split('x');
+                    if let (Some(w), Some(h)) = (parts.next(), parts.next()) {
+                        if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
+                            viewport_size = (w, h);
+                        }
+                    }
+                }
+            }
+            "--dpr" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<f32>() {
+                        if parsed.is_finite() && parsed > 0.0 {
+                            device_pixel_ratio = parsed;
+                        }
+                    }
+                }
+            }
+            _ => {
+                if raw_path.is_none() {
+                    raw_path = Some(arg);
+                } else {
+                    eprintln!("Unexpected extra argument: {arg}");
+                    usage();
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    let raw_path = match raw_path {
+        Some(path) => path,
+        None => {
+            usage();
+            std::process::exit(1);
+        }
+    };
+
     let (path, input_url) = if let Ok(url) = Url::parse(&raw_path) {
         if url.scheme() == "file" {
             let path_buf = url
@@ -67,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut html = fs::read_to_string(&path)?;
     let resource_base = infer_base_url(&html, &input_url).into_owned();
 
-    let mut renderer = FastRender::new()?;
+    let mut renderer = FastRender::builder().device_pixel_ratio(device_pixel_ratio).build()?;
     renderer.set_base_url(resource_base.clone());
 
     if let Ok(val) = env::var("FASTR_TRACE_BOXES") {
@@ -120,7 +174,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dom = dom::parse_html(&html)?;
 
-    let media_ctx = MediaContext::screen(1200.0, 800.0).with_env_overrides();
+    let media_ctx = MediaContext::screen(viewport_size.0 as f32, viewport_size.1 as f32)
+        .with_device_pixel_ratio(device_pixel_ratio)
+        .with_env_overrides();
     let stylesheet = extract_css(&dom)?;
     let styled = apply_styles_with_media_and_target(&dom, &stylesheet, &media_ctx, None);
 
@@ -245,7 +301,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("text boxes: {}", text_boxes);
 
     let engine = LayoutEngine::with_font_context(
-        LayoutConfig::for_viewport(Size::new(1200.0, 800.0)),
+        LayoutConfig::for_viewport(Size::new(viewport_size.0 as f32, viewport_size.1 as f32)),
         renderer.font_context().clone(),
     );
     let fragment_tree = engine.layout_tree(&mut box_tree)?;
@@ -376,7 +432,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
         .unwrap_or(false);
     if log_viewport {
-        let viewport_rect = Rect::from_xywh(0.0, 0.0, 1200.0, 800.0);
+        let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_size.0 as f32, viewport_size.1 as f32);
         let mut in_view = 0usize;
         let mut text_in_view = 0usize;
         let mut samples: Vec<(f32, String)> = Vec::new();
@@ -469,7 +525,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (id, debug) = match &f.content {
                 FragmentContent::Block { box_id } | FragmentContent::Inline { box_id, .. } => {
                     if let Some(id) = box_id {
-                        let dbg = box_debug.get(&id).cloned().unwrap_or_else(|| format!("{:?}", f.content));
+                        let dbg = box_debug
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("{:?}", f.content));
                         (Some(*id), dbg)
                     } else {
                         (None, format!("{:?}", f.content))
@@ -556,7 +615,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     // Also list contexts intersecting the viewport to locate visible layers.
     println!("viewport-intersecting stacking contexts:");
-    let viewport = Rect::from_xywh(0.0, 0.0, 1200.0, 800.0);
+    let viewport = Rect::from_xywh(0.0, 0.0, viewport_size.0 as f32, viewport_size.1 as f32);
     for ctx in stacks.iter().filter(|c| c.rect.intersects(viewport)) {
         let bg = ctx.style.background_color;
         println!(
@@ -579,7 +638,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(style) = frag.style.as_deref() {
             let bg = style.background_color;
             if bg.a > 0.0 {
-                backgrounds.push((abs.y(), abs.x(), bg, format!("{:?}", frag.content), abs.width(), abs.height()));
+                backgrounds.push((
+                    abs.y(),
+                    abs.x(),
+                    bg,
+                    format!("{:?}", frag.content),
+                    abs.width(),
+                    abs.height(),
+                ));
             }
         }
     }
@@ -591,16 +657,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bg.r, bg.g, bg.b, bg.a, content
         );
     }
-    // Backgrounds that intersect the viewport (1200x800)
-    let viewport = Rect::from_xywh(0.0, 0.0, 1200.0, 800.0);
+    // Backgrounds that intersect the viewport
+    let viewport = Rect::from_xywh(0.0, 0.0, viewport_size.0 as f32, viewport_size.1 as f32);
     let mut view_bgs: Vec<_> = fragments_abs
         .iter()
         .filter_map(|(abs, frag)| frag.style.as_deref().map(|style| (style.background_color, *abs, frag)))
         .filter(|(bg, rect, _)| bg.a > 0.0 && rect.intersects(viewport))
         .collect();
-    view_bgs.sort_by(|a, b| {
-        a.1.y().partial_cmp(&b.1.y()).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    view_bgs.sort_by(|a, b| a.1.y().partial_cmp(&b.1.y()).unwrap_or(std::cmp::Ordering::Equal));
     println!("viewport-intersecting backgrounds (alpha>0): {}", view_bgs.len());
     for (idx, (bg, rect, frag)) in view_bgs
         .iter()
@@ -1449,19 +1513,21 @@ fn find_first_skinny(
     None
 }
 
-fn find_fragment_with_text(
-    fragment: &FragmentNode,
-    offset: Point,
-    needle: &str,
-    path: &mut Vec<String>,
-) -> bool {
+fn find_fragment_with_text(fragment: &FragmentNode, offset: Point, needle: &str, path: &mut Vec<String>) -> bool {
     let abs = Rect::from_xywh(
         fragment.bounds.x() + offset.x,
         fragment.bounds.y() + offset.y,
         fragment.bounds.width(),
         fragment.bounds.height(),
     );
-    let mut label = format!("{:?} @ ({:.1},{:.1},{:.1},{:.1})", fragment.content, abs.x(), abs.y(), abs.width(), abs.height());
+    let mut label = format!(
+        "{:?} @ ({:.1},{:.1},{:.1},{:.1})",
+        fragment.content,
+        abs.x(),
+        abs.y(),
+        abs.width(),
+        abs.height()
+    );
     if let Some(style) = fragment.style.as_deref() {
         label.push_str(&format!(" display={:?} pos={:?}", style.display, style.position));
     }
