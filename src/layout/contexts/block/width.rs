@@ -28,7 +28,8 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/visudet.html#Computing_widths_and_margins>
 
-use crate::layout::utils::content_size_from_box_sizing;
+use crate::layout::utils::{content_size_from_box_sizing, resolve_scrollbar_width};
+use crate::style::types::{Direction, Overflow};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
 
@@ -125,20 +126,32 @@ pub fn compute_block_width(
     viewport: crate::geometry::Size,
 ) -> ComputedBlockWidth {
     // Resolve padding (percentages relative to containing width)
-    let padding_left = resolve_length(
+    let mut padding_left = resolve_length(
         style.padding_left,
         containing_width,
         style.font_size,
         style.root_font_size,
         viewport,
     );
-    let padding_right = resolve_length(
+    let mut padding_right = resolve_length(
         style.padding_right,
         containing_width,
         style.font_size,
         style.root_font_size,
         viewport,
     );
+
+    // Reserve space for a vertical scrollbar when overflow-y is scroll
+    if style.overflow_y == Overflow::Scroll {
+        let gutter = resolve_scrollbar_width(style);
+        if gutter > 0.0 {
+            if style.direction == Direction::Rtl {
+                padding_left += gutter;
+            } else {
+                padding_right += gutter;
+            }
+        }
+    }
 
     // Border widths
     let border_left = resolve_length(
@@ -419,8 +432,7 @@ fn resolve_length(
 mod tests {
     use super::*;
     use crate::geometry::Size;
-    use crate::style::types::BoxSizing;
-    use crate::style::types::Direction;
+    use crate::style::types::{BoxSizing, Direction, Overflow, ScrollbarWidth};
 
     fn default_style() -> ComputedStyle {
         ComputedStyle::default()
@@ -509,6 +521,22 @@ mod tests {
             margin_right: 10.0,
         };
         assert_eq!(w.content_offset_x(), 17.0);
+    }
+
+    #[test]
+    fn scrollbar_width_reserves_inline_gutter() {
+        let mut style = default_style();
+        style.overflow_y = Overflow::Scroll;
+        style.scrollbar_width = ScrollbarWidth::Thin;
+
+        let result = compute_block_width(&style, 200.0, viewport());
+        // Thin scrollbar (8px) should be reserved on the inline end (LTR → right).
+        assert!((result.padding_right - 8.0).abs() < f32::EPSILON);
+        assert!((result.content_width - 192.0).abs() < f32::EPSILON);
+
+        style.direction = Direction::Rtl;
+        let rtl = compute_block_width(&style, 200.0, viewport());
+        assert!((rtl.padding_left - 8.0).abs() < f32::EPSILON);
     }
 
     // Width computation tests

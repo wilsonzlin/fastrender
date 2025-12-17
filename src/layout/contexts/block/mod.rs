@@ -40,12 +40,13 @@ use crate::layout::formatting_context::{
 use crate::layout::profile::{layout_timer, LayoutKind};
 use crate::layout::utils::{
     border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_font_relative_length,
-    resolve_length_with_percentage,
+    resolve_length_with_percentage, resolve_scrollbar_width,
 };
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::float::Float;
 use crate::style::position::Position;
+use crate::style::types::Overflow;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -468,13 +469,16 @@ impl BlockFormattingContext {
             &self.font_context,
             self.viewport_size,
         );
-        let padding_bottom = resolve_length_for_width(
+        let mut padding_bottom = resolve_length_for_width(
             style.padding_bottom,
             containing_width,
             style,
             &self.font_context,
             self.viewport_size,
         );
+        if style.overflow_x == Overflow::Scroll {
+            padding_bottom += resolve_scrollbar_width(style);
+        }
 
         // Height computation (CSS 2.1 Section 10.6.3) with aspect-ratio adjustment (CSS Sizing L4)
         let mut height = specified_height.unwrap_or(content_height);
@@ -1826,13 +1830,17 @@ impl FormattingContext for BlockFormattingContext {
             &self.font_context,
             self.viewport_size,
         );
-        let padding_bottom = resolve_length_for_width(
+        let mut padding_bottom = resolve_length_for_width(
             style.padding_bottom,
             containing_width,
             style,
             &self.font_context,
             self.viewport_size,
         );
+        // Reserve space for a horizontal scrollbar when overflow-x is scroll.
+        if style.overflow_x == Overflow::Scroll {
+            padding_bottom += resolve_scrollbar_width(style);
+        }
         let vertical_edges = border_top + padding_top + padding_bottom + border_bottom;
 
         let resolved_height = style
@@ -2337,9 +2345,10 @@ mod tests {
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
     use crate::style::position::Position;
-    use crate::style::types::{ListStylePosition, ListStyleType};
+    use crate::style::types::{ListStylePosition, ListStyleType, Overflow, ScrollbarWidth};
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
+    use crate::text::font_loader::FontContext;
     use crate::tree::box_generation::{BoxGenerator, DOMNode};
     use crate::tree::fragment_tree::FragmentContent;
     use std::sync::Arc;
@@ -2355,6 +2364,25 @@ mod tests {
         style.display = Display::Block;
         style.height = Some(Length::px(height));
         Arc::new(style)
+    }
+
+    #[test]
+    fn horizontal_scrollbar_reserves_gutter_height() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::Block;
+        style.overflow_x = Overflow::Scroll;
+        style.scrollbar_width = ScrollbarWidth::Thin;
+
+        let node = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
+        let fc = BlockFormattingContext::with_font_context_viewport_and_cb(
+            FontContext::new(),
+            Size::new(200.0, 200.0),
+            ContainingBlock::viewport(Size::new(200.0, 200.0)),
+        );
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite);
+        let fragment = fc.layout(&node, &constraints).unwrap();
+
+        assert!((fragment.bounds.height() - 8.0).abs() < 0.01);
     }
 
     fn block_style_with_margin(margin: f32) -> Arc<ComputedStyle> {
