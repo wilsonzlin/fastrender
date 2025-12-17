@@ -59,7 +59,7 @@ use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
 use crate::dom::{self, DomNode};
 use crate::error::{Error, RenderError, Result};
-use crate::geometry::{Point, Size};
+use crate::geometry::{Point, Rect, Size};
 use crate::image_loader::ImageCache;
 use crate::image_output::{encode_image, OutputFormat};
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
@@ -76,7 +76,9 @@ use crate::style::cascade::{
 };
 use crate::style::color::Rgba;
 use crate::style::media::MediaContext;
-use crate::style::types::ContainerType;
+use crate::style::types::{
+    ContainerType, ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, WritingMode,
+};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle as DbFontStyle, ScaledMetrics};
@@ -728,6 +730,9 @@ impl FastRender {
         let expand_full_page = std::env::var("FASTR_FULL_PAGE")
             .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
             .unwrap_or(false);
+        let viewport_size = Size::new(width as f32, height as f32);
+        let scroll = apply_scroll_snap(&fragment_tree, viewport_size, Point::new(scroll_x, scroll_y));
+
         let (target_width, target_height) = if expand_full_page {
             let content_bounds = fragment_tree.content_size();
             let w = width.max(content_bounds.max_x().ceil().max(1.0) as u32);
@@ -738,7 +743,7 @@ impl FastRender {
         };
 
         // Paint to pixmap
-        let offset = Point::new(-scroll_x, -scroll_y);
+        let offset = Point::new(-scroll.x, -scroll.y);
         let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
 
         if let Some(start) = stage_start {
@@ -2810,6 +2815,233 @@ fn build_styled_lookup<'a>(styled: &'a StyledNode, out: &mut HashMap<usize, *con
     }
 }
 
+#[derive(Default)]
+struct SnapBounds {
+    max_x: f32,
+    max_y: f32,
+}
+
+impl SnapBounds {
+    fn update(&mut self, rect: Rect) {
+        self.max_x = self.max_x.max(rect.max_x());
+        self.max_y = self.max_y.max(rect.max_y());
+    }
+}
+
+fn is_vertical_writing_mode(mode: WritingMode) -> bool {
+    matches!(
+        mode,
+        WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+    )
+}
+
+fn snap_axis_flags(axis: ScrollSnapAxis, inline_vertical: bool) -> (bool, bool) {
+    match axis {
+        ScrollSnapAxis::None => (false, false),
+        ScrollSnapAxis::Both => (true, true),
+        ScrollSnapAxis::X => (true, false),
+        ScrollSnapAxis::Y => (false, true),
+        ScrollSnapAxis::Inline => {
+            if inline_vertical {
+                (false, true)
+            } else {
+                (true, false)
+            }
+        }
+        ScrollSnapAxis::Block => {
+            if inline_vertical {
+                (true, false)
+            } else {
+                (false, true)
+            }
+        }
+    }
+}
+
+fn snap_position(alignment: ScrollSnapAlign, start: f32, extent: f32, viewport_extent: f32) -> Option<f32> {
+    match alignment {
+        ScrollSnapAlign::None => None,
+        ScrollSnapAlign::Start => Some(start),
+        ScrollSnapAlign::End => Some(start + extent - viewport_extent),
+        ScrollSnapAlign::Center => Some(start + extent * 0.5 - viewport_extent * 0.5),
+    }
+}
+
+fn pick_snap_target(
+    current: f32,
+    max_scroll: f32,
+    strictness: ScrollSnapStrictness,
+    threshold: f32,
+    candidates: &[(f32, ScrollSnapStop)],
+) -> f32 {
+    if candidates.is_empty() {
+        return current.min(max_scroll).max(0.0);
+    }
+
+    let mut best = current;
+    let mut best_dist = f32::INFINITY;
+    let mut best_stop_always = false;
+
+    for &(candidate, stop) in candidates {
+        let clamped = candidate.min(max_scroll).max(0.0);
+        let dist = (clamped - current).abs();
+        let prefer = dist + 1e-3 < best_dist
+            || ((dist - best_dist).abs() <= 1e-3 && stop == ScrollSnapStop::Always && !best_stop_always);
+        if prefer {
+            best = clamped;
+            best_dist = dist;
+            best_stop_always = stop == ScrollSnapStop::Always;
+        }
+    }
+
+    match strictness {
+        ScrollSnapStrictness::Mandatory => best,
+        ScrollSnapStrictness::Proximity => {
+            if best_dist <= threshold {
+                best
+            } else {
+                current
+            }
+        }
+    }
+}
+
+fn collect_snap_targets(
+    node: &FragmentNode,
+    offset: Point,
+    inline_vertical: bool,
+    snap_x: bool,
+    snap_y: bool,
+    viewport: Size,
+    bounds: &mut SnapBounds,
+    targets_x: &mut Vec<(f32, ScrollSnapStop)>,
+    targets_y: &mut Vec<(f32, ScrollSnapStop)>,
+) {
+    let abs_bounds = Rect::from_xywh(
+        node.bounds.x() + offset.x,
+        node.bounds.y() + offset.y,
+        node.bounds.width(),
+        node.bounds.height(),
+    );
+    bounds.update(abs_bounds);
+
+    if let Some(style) = node.style.as_ref() {
+        if snap_x {
+            let align_x = if inline_vertical {
+                style.scroll_snap_align.block
+            } else {
+                style.scroll_snap_align.inline
+            };
+            if let Some(pos) = snap_position(align_x, abs_bounds.x(), abs_bounds.width(), viewport.width) {
+                targets_x.push((pos, style.scroll_snap_stop));
+            }
+        }
+        if snap_y {
+            let align_y = if inline_vertical {
+                style.scroll_snap_align.inline
+            } else {
+                style.scroll_snap_align.block
+            };
+            if let Some(pos) = snap_position(align_y, abs_bounds.y(), abs_bounds.height(), viewport.height) {
+                targets_y.push((pos, style.scroll_snap_stop));
+            }
+        }
+    }
+
+    let child_offset = Point::new(abs_bounds.x(), abs_bounds.y());
+    for child in &node.children {
+        collect_snap_targets(
+            child,
+            child_offset,
+            inline_vertical,
+            snap_x,
+            snap_y,
+            viewport,
+            bounds,
+            targets_x,
+            targets_y,
+        );
+    }
+}
+
+fn find_snap_container<'a>(
+    node: &'a FragmentNode,
+    origin: Point,
+) -> Option<(&'a FragmentNode, &'a ComputedStyle, Point)> {
+    if let Some(style) = node.style.as_ref() {
+        if style.scroll_snap_type.axis != ScrollSnapAxis::None {
+            return Some((node, style, origin));
+        }
+    }
+
+    for child in &node.children {
+        let child_origin = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
+        if let Some(found) = find_snap_container(child, child_origin) {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point) -> Point {
+    let Some((container, style, container_origin)) = find_snap_container(&fragment_tree.root, Point::ZERO) else {
+        return scroll;
+    };
+
+    if style.scroll_snap_type.axis == ScrollSnapAxis::None {
+        return scroll;
+    }
+
+    let inline_vertical = is_vertical_writing_mode(style.writing_mode);
+    let (snap_x, snap_y) = snap_axis_flags(style.scroll_snap_type.axis, inline_vertical);
+    if !snap_x && !snap_y {
+        return scroll;
+    }
+
+    let mut targets_x = Vec::new();
+    let mut targets_y = Vec::new();
+    let mut bounds = SnapBounds::default();
+    // Normalize coordinates so the snap container origin is at (0,0)
+    let container_offset = Point::new(-container_origin.x, -container_origin.y);
+    collect_snap_targets(
+        container,
+        container_offset,
+        inline_vertical,
+        snap_x,
+        snap_y,
+        viewport,
+        &mut bounds,
+        &mut targets_x,
+        &mut targets_y,
+    );
+
+    // Ensure the container itself contributes to the scrollable area
+    let container_rect = Rect::from_xywh(
+        container.bounds.x() + container_offset.x,
+        container.bounds.y() + container_offset.y,
+        container.bounds.width(),
+        container.bounds.height(),
+    );
+    bounds.update(container_rect);
+
+    let max_scroll_x = (bounds.max_x - viewport.width).max(0.0);
+    let max_scroll_y = (bounds.max_y - viewport.height).max(0.0);
+    let strictness = style.scroll_snap_type.strictness;
+    let snapped_x = if snap_x {
+        pick_snap_target(scroll.x, max_scroll_x, strictness, viewport.width * 0.5, &targets_x)
+    } else {
+        scroll.x
+    };
+    let snapped_y = if snap_y {
+        pick_snap_target(scroll.y, max_scroll_y, strictness, viewport.height * 0.5, &targets_y)
+    } else {
+        scroll.y
+    };
+
+    Point::new(snapped_x, snapped_y)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3804,6 +4036,54 @@ mod tests {
         let hash_a = style_layout_fingerprint(&a);
         let hash_b = style_layout_fingerprint(&b);
 
-        assert_ne!(hash_a, hash_b, "scroll snap settings must influence layout fingerprints");
+        assert_ne!(
+            hash_a, hash_b,
+            "scroll snap settings must influence layout fingerprints"
+        );
+    }
+
+    #[test]
+    fn scroll_snap_mandatory_adjusts_offsets() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body { margin: 0; height: 100%; scroll-snap-type: y mandatory; }
+                section { height: 200px; scroll-snap-align: start; }
+            </style>
+            <section></section>
+            <section></section>
+        "#;
+
+        let dom = renderer.parse_html(html).unwrap();
+        let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
+
+        let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 120.0));
+        assert!((snapped.y - 200.0).abs() < 0.1, "expected snap to the second section");
+        assert!(snapped.x.abs() < 0.1);
+    }
+
+    #[test]
+    fn scroll_snap_proximity_only_when_close() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body { margin: 0; height: 100%; scroll-snap-type: y proximity; }
+                section { height: 200px; scroll-snap-align: start; }
+            </style>
+            <section></section>
+            <section></section>
+        "#;
+
+        let dom = renderer.parse_html(html).unwrap();
+        let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
+
+        let near = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 30.0));
+        assert!(near.y.abs() < 0.1, "nearby offset should snap to the first section");
+
+        let far = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 260.0));
+        assert!(
+            (far.y - 260.0).abs() < 0.1,
+            "far offset should remain unchanged for proximity snapping"
+        );
     }
 }
