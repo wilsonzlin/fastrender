@@ -667,6 +667,15 @@ fn test_pointer_and_hover() {
     assert!(mobile.evaluate(&no_hover));
 }
 
+/// Invalid pointer/hover values should fail to parse
+#[test]
+fn pointer_and_hover_reject_invalid_values() {
+    assert!(MediaQuery::parse("(pointer: maybe)").is_err());
+    assert!(MediaQuery::parse("(pointer: 2)").is_err());
+    assert!(MediaQuery::parse("(hover: sometimes)").is_err());
+    assert!(MediaQuery::parse("(hover: 1)").is_err());
+}
+
 // ============================================================================
 // Complex Query Tests
 // ============================================================================
