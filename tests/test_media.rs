@@ -38,6 +38,12 @@ fn rejects_media_query_with_invalid_length_unit() {
     assert!(MediaQuery::parse("(max-width: 10foo)").is_err());
 }
 
+#[test]
+fn rejects_media_query_calc_percentage_without_base() {
+    // Percentages inside calc() should fail when no percentage base is available.
+    assert!(MediaQuery::parse("(max-width: calc(50% + 10px))").is_err());
+}
+
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         if let Some(v) = &self.prev {
