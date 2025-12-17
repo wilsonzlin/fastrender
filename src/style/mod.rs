@@ -37,15 +37,15 @@ use types::{
     FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride,
     FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
     FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, FontVariationSetting, FontWeight, GridTrack, HyphensMode, ImageOrientation, ImageRendering,
-    ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
-    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowAnchor,
-    OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarColor, ScrollbarWidth, TabSize,
-    TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
-    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextRendering,
-    TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox,
-    TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak,
-    WritingMode,
+    FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, GridTrack, HyphensMode,
+    ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight,
+    ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
+    OutlineStyle, Overflow, OverflowAnchor, OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior,
+    ScrollbarColor, ScrollbarWidth, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration,
+    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation,
+    TextOverflow, TextRendering, TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition,
+    TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace,
+    WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -421,6 +421,7 @@ pub struct ComputedStyle {
     pub counters: CounterProperties,
 
     // Color and background
+    pub forced_color_adjust: ForcedColorAdjust,
     pub color_scheme: ColorSchemePreference,
     pub caret_color: CaretColor,
     pub accent_color: AccentColor,
@@ -654,6 +655,7 @@ impl Default for ComputedStyle {
             list_style_image: ListStyleImage::None,
             counters: CounterProperties::default(),
 
+            forced_color_adjust: ForcedColorAdjust::Auto,
             color_scheme: ColorSchemePreference::Normal,
             caret_color: CaretColor::Auto,
             accent_color: AccentColor::Auto,

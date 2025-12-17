@@ -1158,6 +1158,7 @@ fn is_inherited_property(name: &str) -> bool {
             | "tab-size"
             | "hyphens"
             | "word-break"
+            | "forced-color-adjust"
             | "overflow-anchor"
             | "overflow-wrap"
             | "text-emphasis"
@@ -2300,6 +2301,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.cursor = source.cursor;
             styles.cursor_images = source.cursor_images.clone();
         }
+        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "accent-color" => styles.accent_color = source.accent_color,
         "caret-color" => styles.caret_color = source.caret_color,
         "color-scheme" => styles.color_scheme = source.color_scheme.clone(),
@@ -5532,6 +5534,16 @@ pub fn apply_declaration_with_base(
                     "auto" => OverflowAnchor::Auto,
                     "none" => OverflowAnchor::None,
                     _ => styles.overflow_anchor,
+                };
+            }
+        }
+        "forced-color-adjust" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => ForcedColorAdjust::Auto,
+                    "none" => ForcedColorAdjust::None,
+                    "preserve-parent-color" => ForcedColorAdjust::PreserveParentColor,
+                    _ => styles.forced_color_adjust,
                 };
             }
         }
@@ -11156,6 +11168,77 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.overflow_anchor, OverflowAnchor::Auto));
+    }
+
+    #[test]
+    fn forced_color_adjust_parses_and_defaults() {
+        let mut style = ComputedStyle::default();
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("preserve-parent-color".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::PreserveParentColor));
+    }
+
+    #[test]
+    fn forced_color_adjust_inherit_and_initial() {
+        let parent = ComputedStyle {
+            forced_color_adjust: ForcedColorAdjust::None,
+            ..ComputedStyle::default()
+        };
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.forced_color_adjust, parent.forced_color_adjust);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
     }
 
     #[test]

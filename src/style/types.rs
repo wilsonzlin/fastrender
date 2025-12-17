@@ -579,6 +579,7 @@ impl Default for ColorSchemePreference {
 pub enum ForcedColorAdjust {
     Auto,
     None,
+    PreserveParentColor,
 }
 
 impl Default for ForcedColorAdjust {
