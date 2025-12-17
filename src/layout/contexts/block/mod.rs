@@ -2009,7 +2009,10 @@ impl FormattingContext for BlockFormattingContext {
                     &self.font_context,
                 );
 
-                let static_pos = static_position.unwrap_or(padding_origin);
+                // Static position starts at the containing block origin; AbsoluteLayout will add
+                // padding/border offsets, so use the content origin when no flow position was
+                // recorded.
+                let static_pos = static_position.unwrap_or(Point::ZERO);
                 let preferred_min_inline = fc
                     .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
                     .ok();

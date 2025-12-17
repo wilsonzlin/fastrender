@@ -1637,7 +1637,10 @@ impl FormattingContext for FlexFormattingContext {
 
                 let positioned_style =
                     resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
-                let static_pos = padding_origin;
+                // Static position should start at the padding box origin; AbsoluteLayout will
+                // add padding/border offsets, so use the content origin here to avoid double
+                // counting padding.
+                let static_pos = Point::ZERO;
                 let preferred_min_inline = fc
                     .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
                     .ok();

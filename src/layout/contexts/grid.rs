@@ -1075,7 +1075,9 @@ impl FormattingContext for GridFormattingContext {
                     self.viewport_size,
                     &self.font_context,
                 );
-                let static_pos = padding_origin;
+                // Static position resolves to where the element would be in flow; use the
+                // content origin here since AbsoluteLayout adds padding/border.
+                let static_pos = crate::geometry::Point::ZERO;
                 let preferred_min_inline = fc
                     .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
                     .ok();

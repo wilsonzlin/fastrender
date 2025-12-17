@@ -5417,7 +5417,9 @@ impl InlineFormattingContext {
                 self.nearest_positioned_cb
             };
             let static_position = if lines_empty && style.position.is_positioned() {
-                padding_origin
+                // Static position starts at the containing block origin; AbsoluteLayout adds
+                // padding/border offsets, so use the content origin when no lines were laid out.
+                Point::ZERO
             } else {
                 static_position
             };

@@ -14,6 +14,12 @@ use fastrender::text::font_loader::FontContext;
 use fastrender::FragmentNode;
 use fastrender::{ContainingBlock, PositionedLayout, StickyConstraints};
 use fastrender::{Length, LengthOrAuto, LengthUnit, Position, PositionedStyle};
+use fastrender::{BoxNode, ComputedStyle, LayoutConstraints};
+use fastrender::layout::contexts::flex::FlexFormattingContext;
+use fastrender::layout::contexts::inline::InlineFormattingContext;
+use fastrender::style::display::FormattingContextType;
+use fastrender::{Display, FormattingContext};
+use std::sync::Arc;
 
 // ============================================================================
 // Test Fixtures
@@ -139,6 +145,84 @@ fn sticky_constraints_use_font_metrics_for_relative_units() {
     let constraints = StickyConstraints::from_style(&style, &cb, &font_context);
 
     assert!((constraints.top.unwrap_or(0.0) - x_height).abs() < 1e-3);
+}
+
+#[test]
+fn absolute_static_position_in_flex_respects_padding_once() {
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.position = Position::Relative;
+    container_style.padding_left = Length::px(12.0);
+    container_style.padding_top = Length::px(6.0);
+    container_style.padding_right = Length::px(0.0);
+    container_style.padding_bottom = Length::px(0.0);
+    container_style.border_left_width = Length::px(0.0);
+    container_style.border_top_width = Length::px(0.0);
+    container_style.border_right_width = Length::px(0.0);
+    container_style.border_bottom_width = Length::px(0.0);
+
+    let mut abs_style = ComputedStyle::default();
+    abs_style.position = Position::Absolute;
+    abs_style.width = Some(Length::px(10.0));
+    abs_style.height = Some(Length::px(8.0));
+    let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+
+    let container = BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![abs_child]);
+    let constraints = LayoutConstraints::definite(200.0, 100.0);
+    let fc = FlexFormattingContext::new();
+    let fragment = fc.layout(&container, &constraints).expect("flex layout");
+
+    assert_eq!(fragment.children.len(), 1, "absolute child should produce one fragment");
+    let abs_fragment = &fragment.children[0];
+    assert!(
+        (abs_fragment.bounds.x() - 12.0).abs() < 0.1,
+        "static position should start at padding-left; got {}",
+        abs_fragment.bounds.x()
+    );
+    assert!(
+        (abs_fragment.bounds.y() - 6.0).abs() < 0.1,
+        "static position should start at padding-top; got {}",
+        abs_fragment.bounds.y()
+    );
+}
+
+#[test]
+fn absolute_static_position_in_empty_inline_respects_padding_once() {
+    let mut inline_style = ComputedStyle::default();
+    inline_style.display = Display::Inline;
+    inline_style.position = Position::Relative;
+    inline_style.padding_left = Length::px(10.0);
+    inline_style.padding_top = Length::px(4.0);
+    inline_style.padding_right = Length::px(0.0);
+    inline_style.padding_bottom = Length::px(0.0);
+    inline_style.border_left_width = Length::px(0.0);
+    inline_style.border_top_width = Length::px(0.0);
+    inline_style.border_right_width = Length::px(0.0);
+    inline_style.border_bottom_width = Length::px(0.0);
+
+    let mut abs_style = ComputedStyle::default();
+    abs_style.position = Position::Absolute;
+    abs_style.width = Some(Length::px(5.0));
+    abs_style.height = Some(Length::px(5.0));
+    let abs_child = BoxNode::new_inline(Arc::new(abs_style), vec![]);
+
+    let inline = BoxNode::new_inline(Arc::new(inline_style), vec![abs_child]);
+    let constraints = LayoutConstraints::definite_width(100.0);
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&inline, &constraints).expect("inline layout");
+
+    assert_eq!(fragment.children.len(), 1, "absolute child should be laid out");
+    let abs_fragment = &fragment.children[0];
+    assert!(
+        (abs_fragment.bounds.x() - 10.0).abs() < 0.1,
+        "static position should start at padding-left; got {}",
+        abs_fragment.bounds.x()
+    );
+    assert!(
+        (abs_fragment.bounds.y() - 4.0).abs() < 0.1,
+        "static position should start at padding-top; got {}",
+        abs_fragment.bounds.y()
+    );
 }
 
 // ============================================================================

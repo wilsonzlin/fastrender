@@ -3633,7 +3633,10 @@ impl FormattingContext for TableFormattingContext {
                 let preferred_block = fc
                     .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
                     .ok();
-                let mut input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, cb.rect.origin);
+                // Static position should start at the containing block origin; AbsoluteLayout
+                // adds padding/border offsets, so use the content origin here to avoid double
+                // counting padding.
+                let mut input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, Point::ZERO);
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
                 input.preferred_min_block_size = preferred_min_block;

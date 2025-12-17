@@ -32,6 +32,7 @@ Idle; no current tasks. Available for new tasks.
 - Flex rows now also recentre pathological horizontal drift: when every child sits multiple container widths to the right, we translate the row back so the leftmost child starts at the origin while preserving relative spacing.
 - Action: still need to inspect cnn.com cached HTML via inspect_frag with FASTR_LOG_FLEX_CHILD_IDS targeting ribbon items to see if x drift persists after the new clamp.
 - Added regression `flex_row_clamps_pathological_inline_drift`: a flex row whose items carry massive left margins is translated back toward the origin, keeping child x positions near 0.
+- Static positions no longer double-count padding: out-of-flow children laid out via flex, grid, table, or empty inline containers now use a content-origin static position so AbsoluteLayout adds padding/border once. Added regressions for flex/empty inline padding anchoring. Fixed cascade test fallout (Rgba alpha args, borrow match).
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
