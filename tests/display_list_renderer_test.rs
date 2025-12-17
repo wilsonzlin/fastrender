@@ -376,7 +376,6 @@ fn text_decoration_segments_offset_by_line_start() {
 #[test]
 fn text_decoration_currentcolor_resolves_in_display_list() {
     // Ensure currentColor on text decorations resolves against the text color when emitting display list items.
-    let mut list = DisplayList::new();
     let mut style = fastrender::ComputedStyle::default();
     style.color = Rgba::rgb(10, 20, 30);
     style.text_decoration.lines = fastrender::style::types::TextDecorationLine::UNDERLINE;
@@ -401,6 +400,10 @@ fn text_decoration_currentcolor_resolves_in_display_list() {
         .first()
         .and_then(|d| d.underline.as_ref())
         .expect("underline present");
+
+    // currentColor should resolve to the text color with the specified thickness
+    assert_eq!(deco.decorations.first().unwrap().color, Rgba::rgb(10, 20, 30));
+    assert_eq!(underline.thickness, 2.0);
 
     let pixmap = DisplayListRenderer::new(30, 20, Rgba::WHITE, FontContext::new())
         .unwrap()
