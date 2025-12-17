@@ -58,7 +58,7 @@ Idle; no current tasks. Available for new tasks.
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
 - Implemented `forced-color-adjust`: parsed/inherited (auto/none/preserve-parent-color), added to computed styles/property lists/hashes with regression tests; fixed an ambiguous float tolerance in flex layout.
 - Hashes now include `color-scheme` in the layout fingerprint, and `forced-color-adjust` parsing handles global keywords correctly (non-inherited) with case-insensitive text-decoration parsing fixed.
-- Deduped `forced-color-adjust` property handling/cascade fallout (removed duplicate parse/copy branches, restored field), fixed duplicate hashing, and cleaned up merge conflicts (word-break:anywhere tests, scroll-snap hashing). Cascade unwraps prefers-color-scheme safely.
+- Deduped `forced-color-adjust` property handling/cascade fallout (removed duplicate parse/copy branches, restored field), fixed duplicate hashing, and cleaned up merge conflicts (word-break:anywhere tests, scroll-snap hashing). Cascade unwraps prefers-color-scheme safely. Scroll-snap fingerprinting keeps only the decomposed axis/strictness/align/stop hashes.
 
 - DOM now tracks element namespaces: parse_html captures the element namespace, selector matching respects the actual namespace (HTML vs foreign), and local-name/type comparisons are case-insensitive only for HTML elements. Tests cover namespace matching, HTML vs. SVG casing, and namespace-aware type equality. HTML-only form states (disabled/required/etc.) are gated to HTML elements.
 
