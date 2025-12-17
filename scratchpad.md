@@ -1,5 +1,6 @@
 # Scratchpad – rendering engine session notes
 Idle; no current tasks.
+- 2027-XX-XX: Fixed style rebase fallout (restored `text_rendering`/`overflow_anchor` fields in `ComputedStyle`, removed duplicate `text-size-adjust` definitions, added missing namespaces in scrollbar-color cascade test). Block layout now reserves scrollbar gutters: overflow-y scroll adds a directional inline gutter via resolved scrollbar width, overflow-x scroll adds a bottom gutter; added unit tests.
 ## Current Status (Dec 2025)
 - **39 pages tested**: 39 pass, 0 crash, 0 error (latest sweep Dec 15)
 - **Testing**: `cargo run --release --bin render_pages` → see `fetches/renders/_summary.log` (latest run: 207.1s; amazon/walmart/cnn still slow)
