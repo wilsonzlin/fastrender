@@ -155,9 +155,10 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
 impl DomNode {
     pub fn get_attribute(&self, name: &str) -> Option<String> {
         match &self.node_type {
-            DomNodeType::Element { attributes, .. } => {
-                attributes.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
-            }
+            DomNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.clone()),
             _ => None,
         }
     }
@@ -707,6 +708,20 @@ mod tests {
         for child in &node.children {
             collect_wbr_texts(child, out);
         }
+    }
+
+    #[test]
+    fn attribute_lookup_is_case_insensitive() {
+        let node = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                attributes: vec![("HREF".to_string(), "foo".to_string())],
+            },
+            children: vec![],
+        };
+
+        assert_eq!(node.get_attribute("href"), Some("foo".to_string()));
+        assert_eq!(node.get_attribute("HRef"), Some("foo".to_string()));
     }
 
     #[test]
