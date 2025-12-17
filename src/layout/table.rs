@@ -7477,6 +7477,51 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_corners_keep_winning_style_and_color() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_collapse = BorderCollapse::Collapse;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.border_top_style = BorderStyle::Dotted;
+        cell_style.border_right_style = BorderStyle::Dotted;
+        cell_style.border_bottom_style = BorderStyle::Dotted;
+        cell_style.border_left_style = BorderStyle::Dotted;
+        cell_style.border_top_width = Length::px(2.0);
+        cell_style.border_right_width = Length::px(2.0);
+        cell_style.border_bottom_width = Length::px(2.0);
+        cell_style.border_left_width = Length::px(2.0);
+        cell_style.border_top_color = Rgba::from_rgba8(200, 0, 0, 255);
+        cell_style.border_right_color = Rgba::from_rgba8(200, 0, 0, 255);
+        cell_style.border_bottom_color = Rgba::from_rgba8(200, 0, 0, 255);
+        cell_style.border_left_color = Rgba::from_rgba8(200, 0, 0, 255);
+
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+        let row = BoxNode::new_block(
+            Arc::new(ComputedStyle {
+                display: Display::TableRow,
+                ..ComputedStyle::default()
+            }),
+            FormattingContextType::Block,
+            vec![cell],
+        );
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let borders = compute_collapsed_borders(&table, &structure);
+
+        for r in 0..=structure.row_count {
+            for c in 0..=structure.column_count {
+                let corner = &borders.corners[r][c];
+                assert!(corner.width >= 2.0);
+                assert!(matches!(corner.style, BorderStyle::Dotted));
+                assert_eq!(corner.color, Rgba::from_rgba8(200, 0, 0, 255));
+            }
+        }
+    }
+
+    #[test]
     fn test_zero_column_spacing() {
         let structure = TableStructure::new();
         assert_eq!(structure.total_horizontal_spacing(), 0.0);
