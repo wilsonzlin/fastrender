@@ -3103,4 +3103,25 @@ mod tests {
         assert!(element_ref.match_pseudo_element(&PseudoElement::After, &mut context));
         assert!(element_ref.match_pseudo_element(&PseudoElement::Marker, &mut context));
     }
+
+    #[test]
+    fn parse_html_flips_no_js_class() {
+        let dom = parse_html("<html class='no-js foo'><body></body></html>").expect("parse");
+        let html = dom
+            .children
+            .iter()
+            .find(|c| matches!(c.node_type, DomNodeType::Element { .. }))
+            .expect("html child");
+        let classes = match &html.node_type {
+            DomNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+                .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>())
+                .unwrap_or_default(),
+            _ => panic!("expected html element"),
+        };
+        assert!(!classes.iter().any(|c| *c == "no-js"));
+        assert!(classes.iter().any(|c| *c == "js-enabled"));
+        assert!(classes.iter().any(|c| *c == "foo"));
+    }
 }
