@@ -1,5 +1,6 @@
 # Scratchpad – rendering engine session notes
 Idle; no current tasks. Available for new tasks.
+- Added a display-list regression for `background-attachment: local`: display-list builder/renderer keep backgrounds clipped to the padding box for scrollable elements (border stays transparent, padding paints red). `cargo test background_attachment_local_clips_to_padding_box_in_display_list -- --nocapture` passes.
 - Added a display-list regression for `background-attachment: fixed` that renders two adjacent fragments through the display list renderer; fixed backgrounds stay anchored to the viewport (colors differ across x). `cargo test background_attachment_fixed_anchors_to_viewport_in_display_list -- --nocapture` passes.
 - text-align-last now allows `justify-all` to justify the final line even when `text-align-last:auto`; last-line justification is blocked only for `justify`+auto. Static-position alignment uses the same gating, and a regression covers justify-all single-line justification.
 - Added a regression to ensure `text-align: justify` with `text-align-last:auto` keeps single-line paragraphs start-aligned (no justification); `cargo test text_align_justify_single_line_respects_auto_last_line --quiet` passes after the change.
