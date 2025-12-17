@@ -1535,3 +1535,7 @@ Actionable borrowings:
 - Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text. Re-rendered and PNG remains all-white; cached HTML contains multiple inline styles (overlays) with display:none/visibility hidden.
 - Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text. Re-rendered and PNG remains all-white; cached HTML contains multiple inline styles (overlays) with display:none/visibility hidden, but no display:none on html/body/main detected yet.
 - Root rem base now honors the HTML root font-size: the cascade treats the `<html>` element as the root for root_font_size resolution (instead of the document node), so `rem`/percent font sizes resolve after author root sizing. Added regression `root_font_size_percentage_uses_initial_value` covering 62.5% root font-size → 10px rem, and wikipedia.org now renders at full scale (content spans the viewport instead of a 238×64 block).
+<<<<<<< HEAD
+=======
+- Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
+>>>>>>> cf190e1 (Clean scratchpad merge markers)
