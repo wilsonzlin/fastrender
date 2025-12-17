@@ -3908,14 +3908,26 @@ impl FormattingContext for TableFormattingContext {
         }
 
         let baseline_split = |laid: &LaidOutCell, heights: &[f32]| {
-            let baseline = laid.baseline.unwrap_or(laid.height).min(laid.height);
             let span_end = (laid.cell.row + laid.cell.rowspan).min(heights.len());
-            if laid.cell.rowspan > 1 && span_end > laid.cell.row {
-                spanning_baseline_allocation(laid.height, baseline, laid.cell.row, span_end, heights)
+            let spacing_total = v_spacing * laid.cell.rowspan.saturating_sub(1) as f32;
+            let target_height = if laid.cell.rowspan > 1 && span_end > laid.cell.row {
+                heights
+                    .get(laid.cell.row..span_end)
+                    .map(|rows| rows.iter().sum::<f32>() + spacing_total)
+                    .unwrap_or(laid.height)
             } else {
-                let row_h = heights.get(laid.cell.row).copied().unwrap_or(laid.height);
-                let clamped = baseline.min(row_h);
-                (clamped, (row_h - clamped).max(0.0))
+                heights.get(laid.cell.row).copied().unwrap_or(laid.height)
+            };
+            let raw_baseline = laid.baseline.unwrap_or(laid.height);
+            let mut baseline = raw_baseline;
+            if raw_baseline >= laid.height && target_height > laid.height {
+                baseline = target_height;
+            }
+            if laid.cell.rowspan > 1 && span_end > laid.cell.row {
+                spanning_baseline_allocation(target_height, baseline, laid.cell.row, span_end, heights)
+            } else {
+                let clamped = baseline.min(target_height);
+                (clamped, (target_height - clamped).max(0.0))
             }
         };
 
@@ -4140,7 +4152,10 @@ impl FormattingContext for TableFormattingContext {
             row.max_cell_height = row.max_cell_height.max(contribution);
 
             // CSS 2.1 §17.5.3: row baselines ignore row-spanning cells.
-            if laid.vertical_align.is_baseline_relative() && laid.cell.rowspan == 1 && !row.has_baseline {
+            // Baseline alignment for rows follows CSS 2.1 §17.5.3: the cell with the
+            // largest height above (and below) the baseline sets the row's baseline
+            // position. Row-spanning cells don't establish a row baseline.
+            if laid.vertical_align.is_baseline_relative() && laid.cell.rowspan == 1 {
                 let (top, bottom) = baseline_split(laid, &row_heights);
                 let clamped_top = top.min(row_height);
                 let clamped_bottom = bottom.min((row_height - clamped_top).max(0.0));
@@ -4557,24 +4572,28 @@ impl FormattingContext for TableFormattingContext {
                     + v_spacing * cell.rowspan.saturating_sub(1) as f32
             };
 
-            let y_offset = match laid.vertical_align {
-                VerticalAlign::Top => 0.0,
-                VerticalAlign::Bottom => (spanned_height - laid.height).max(0.0),
-                VerticalAlign::Middle => ((spanned_height - laid.height) / 2.0).max(0.0),
+            let (y_offset, aligned_baseline) = match laid.vertical_align {
+                VerticalAlign::Top => (0.0, None),
+                VerticalAlign::Bottom => ((spanned_height - laid.height).max(0.0), None),
+                VerticalAlign::Middle => (((spanned_height - laid.height) / 2.0).max(0.0), None),
                 _ => {
-                    let baseline = laid.baseline.unwrap_or(laid.height).min(laid.height);
+                    let raw_baseline = laid.baseline.unwrap_or(laid.height);
+                    let mut baseline = raw_baseline;
+                    if raw_baseline >= laid.height && spanned_height > laid.height {
+                        baseline = spanned_height;
+                    }
                     let baseline = if laid.cell.rowspan > 1 {
                         let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
-                        spanning_baseline_allocation(laid.height, baseline, row_start, span_end, &row_metric_heights).0
+                        spanning_baseline_allocation(spanned_height, baseline, row_start, span_end, &row_metric_heights).0
                     } else {
                         let row_h = row_metrics.get(row_start).map(|r| r.height).unwrap_or(baseline);
-                        baseline.min(row_h)
+                        baseline.min(row_h).min(spanned_height)
                     };
                     let row_base = row_metrics
                         .get(row_start)
                         .map(|r| if r.has_baseline { r.baseline_top } else { r.height })
                         .unwrap_or(0.0);
-                    (row_base - baseline).max(0.0)
+                    (row_base - baseline, Some(row_base))
                 }
             };
 
@@ -4592,6 +4611,9 @@ impl FormattingContext for TableFormattingContext {
                     // parent, preventing cumulative translations down the subtree.
                     child.bounds = child.bounds.translate(delta);
                 }
+            }
+            if let Some(baseline) = aligned_baseline {
+                fragment.baseline = Some(baseline);
             }
             fragments.push(fragment);
         }
@@ -5090,6 +5112,7 @@ mod tests {
     use crate::style::values::{CalcLength, Length};
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
+    use crate::tree::box_tree::BoxTree;
     use crate::tree::debug::DebugInfo;
     use std::sync::Arc;
 
@@ -5146,6 +5169,18 @@ mod tests {
             None,
             vec![],
         ))
+    }
+
+    fn find_fragment_by_box_id<'a>(fragment: &'a FragmentNode, target: usize) -> Option<&'a FragmentNode> {
+        if matches!(fragment.content, FragmentContent::Block { box_id: Some(id) } if id == target) {
+            return Some(fragment);
+        }
+        for child in &fragment.children {
+            if let Some(found) = find_fragment_by_box_id(child, target) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     // -------------------------------------------------------------------------
@@ -9433,54 +9468,50 @@ mod tests {
     }
 
     #[test]
-    fn row_baseline_uses_first_non_rowspan_cell_only() {
+    fn row_baseline_accumulates_baseline_cells() {
         let mut row = RowMetrics::new(30.0);
         row.max_cell_height = 0.0;
         let row_height = 30.0;
 
         let apply_baseline_cell = |row: &mut RowMetrics, baseline: f32, cell_height: f32| {
             row.max_cell_height = row.max_cell_height.max(cell_height);
-            if row.has_baseline {
-                return;
-            }
             let clamped = baseline.min(row_height);
             let bottom = (row_height - clamped).max(0.0);
             row.has_baseline = true;
-            row.baseline_top = clamped;
-            row.baseline_bottom = bottom;
+            row.baseline_top = row.baseline_top.max(clamped);
+            row.baseline_bottom = row.baseline_bottom.max(bottom);
+            row.max_cell_height = row.max_cell_height.max(clamped + bottom);
         };
 
         apply_baseline_cell(&mut row, 10.0, 30.0);
-        // Second baseline-aligned cell should not replace the row baseline.
+        // Additional baseline-aligned cells grow the ascent/descent maxima instead of being ignored.
         apply_baseline_cell(&mut row, 5.0, 30.0);
 
         assert!((row.baseline_top - 10.0).abs() < 0.01);
-        assert!((row.baseline_bottom - 20.0).abs() < 0.01);
+        assert!((row.baseline_bottom - 25.0).abs() < 0.01);
         assert!((row.max_cell_height - 30.0).abs() < 0.01);
+        assert!((row.baseline_height() - 35.0).abs() < 0.01);
     }
 
     #[test]
-    fn row_baseline_uses_leftmost_baseline_cell() {
+    fn row_baseline_uses_largest_baseline_offset() {
         let mut row = RowMetrics::new(20.0);
         let row_height = 20.0;
-        let mut cells = vec![(0usize, 1usize, 5.0f32), (0, 0, 12.0)];
+        let mut cells = vec![(0usize, 0usize, 5.0f32), (0, 1, 12.0)];
 
         cells.sort_by_key(|(r, c, _)| (*r, *c));
 
         for (_, _, baseline) in cells {
-            if row.has_baseline {
-                row.max_cell_height = row.max_cell_height.max(row_height);
-                continue;
-            }
-            row.max_cell_height = row.max_cell_height.max(row_height);
             let clamped = baseline.min(row_height);
-            row.baseline_top = clamped;
-            row.baseline_bottom = (row_height - clamped).max(0.0);
+            let bottom = (row_height - clamped).max(0.0);
             row.has_baseline = true;
+            row.baseline_top = row.baseline_top.max(clamped);
+            row.baseline_bottom = row.baseline_bottom.max(bottom);
+            row.max_cell_height = row.max_cell_height.max(clamped + bottom);
         }
 
         assert!((row.baseline_top - 12.0).abs() < 0.01);
-        assert!((row.baseline_bottom - 8.0).abs() < 0.01);
+        assert!((row.baseline_bottom - 15.0).abs() < 0.01);
     }
 
     #[test]
@@ -9592,6 +9623,82 @@ mod tests {
             (baseline - 10.0).abs() < 0.01,
             "table baseline should ignore row-spanning cells and use the next baseline cell (got {:.2})",
             baseline
+        );
+    }
+
+    #[test]
+    fn rowspanning_baseline_cell_aligns_to_row_baseline() {
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.vertical_align = VerticalAlign::Baseline;
+        cell_style.padding_top = Length::px(0.0);
+        cell_style.padding_right = Length::px(0.0);
+        cell_style.padding_bottom = Length::px(0.0);
+        cell_style.padding_left = Length::px(0.0);
+        cell_style.border_top_width = Length::px(0.0);
+        cell_style.border_right_width = Length::px(0.0);
+        cell_style.border_bottom_width = Length::px(0.0);
+        cell_style.border_left_width = Length::px(0.0);
+
+        let mut short_child_style = ComputedStyle::default();
+        short_child_style.display = Display::Block;
+        short_child_style.height = Some(Length::px(10.0));
+
+        let mut span_child_style = ComputedStyle::default();
+        span_child_style.display = Display::Block;
+        span_child_style.height = Some(Length::px(40.0));
+
+        let short_child = BoxNode::new_block(Arc::new(short_child_style), FormattingContextType::Block, vec![]);
+        let short_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![short_child]);
+
+        let span_child = BoxNode::new_block(Arc::new(span_child_style), FormattingContextType::Block, vec![]);
+        let span_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![span_child])
+            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 2));
+
+        let mut filler_child_style = ComputedStyle::default();
+        filler_child_style.display = Display::Block;
+        filler_child_style.height = Some(Length::px(4.0));
+        let filler_child = BoxNode::new_block(Arc::new(filler_child_style), FormattingContextType::Block, vec![]);
+        let filler_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![filler_child]);
+
+        let row0 = BoxNode::new_block(
+            Arc::new(row_style.clone()),
+            FormattingContextType::Block,
+            vec![short_cell, span_cell],
+        );
+        let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![filler_cell]);
+
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row0, row1]);
+        let tree = BoxTree::new(table);
+        let table = &tree.root;
+
+        let short_cell_id = table.children[0].children[0].id;
+        let span_cell_id = table.children[0].children[1].id;
+
+        let tfc = TableFormattingContext::new();
+        let fragment = tfc
+            .layout(table, &LayoutConstraints::definite_width(200.0))
+            .expect("table layout");
+
+        let short_fragment = find_fragment_by_box_id(&fragment, short_cell_id).expect("short cell fragment");
+        let span_fragment = find_fragment_by_box_id(&fragment, span_cell_id).expect("spanning cell fragment");
+
+        let short_baseline = cell_baseline(short_fragment).expect("short baseline");
+        let span_baseline = cell_baseline(span_fragment).expect("spanning baseline");
+
+        assert!(
+            (short_baseline - span_baseline).abs() < 0.01,
+            "rowspanning baseline-aligned cells should align to the row baseline (short {:.2}, span {:.2})",
+            short_baseline,
+            span_baseline
         );
     }
 
