@@ -8068,6 +8068,36 @@ mod tests {
     }
 
     #[test]
+    fn mix_blend_mode_multiply_combines_colors() {
+        // Background: red, child: semi-opaque blue with multiply blend → purple-ish with reduced alpha.
+        let mut child_style = ComputedStyle::default();
+        child_style.background_color = Rgba::from_rgba8(0, 0, 255, 128);
+        child_style.mix_blend_mode = MixBlendMode::Multiply;
+
+        let child = FragmentNode::new_with_style(
+            Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+            FragmentContent::Block { box_id: None },
+            vec![],
+            child_style.into(),
+        );
+
+        let mut root_style = ComputedStyle::default();
+        root_style.background_color = Rgba::RED;
+        let mut root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child]);
+        root.style = Some(Arc::new(root_style));
+
+        let pixmap = paint_tree(&FragmentTree::new(root), 30, 30, Rgba::WHITE).expect("paint");
+        let pixel = pixmap.pixel(10, 10).expect("sample");
+
+        // Multiply red (1,0,0) by blue (0,0,1) → (0,0,0); with 50% alpha over red bg we expect
+        // the result to stay dark and keep a nonzero blue component but low green.
+        assert!(pixel.red() < 200, "red should darken under multiply (got {})", pixel.red());
+        assert!(pixel.blue() < 130, "blue should darken under multiply (got {})", pixel.blue());
+        // Green should remain near zero for red*blue.
+        assert!(pixel.green() < 30, "green should stay low (got {})", pixel.green());
+    }
+
+    #[test]
     fn underline_offset_moves_line() {
         let mut style = ComputedStyle::default();
         style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
