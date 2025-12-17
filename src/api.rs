@@ -1897,6 +1897,18 @@ fn hash_text_indent(indent: &crate::style::types::TextIndent, hasher: &mut Defau
     indent.each_line.hash(hasher);
 }
 
+fn hash_text_size_adjust(value: &crate::style::types::TextSizeAdjust, hasher: &mut DefaultHasher) {
+    use crate::style::types::TextSizeAdjust::*;
+    match value {
+        Auto => 0u8.hash(hasher),
+        None => 1u8.hash(hasher),
+        Percentage(p) => {
+            2u8.hash(hasher);
+            hash_f32(*p, hasher);
+        }
+    }
+}
+
 fn hash_list_style_type(value: &crate::style::types::ListStyleType, hasher: &mut DefaultHasher) {
     use crate::style::types::ListStyleType::*;
     match value {
@@ -2294,6 +2306,8 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
     hash_enum_discriminant(&style.text_align_last, &mut h);
     hash_enum_discriminant(&style.text_justify, &mut h);
     hash_text_indent(&style.text_indent, &mut h);
+    hash_text_size_adjust(&style.text_size_adjust, &mut h);
+    hash_enum_discriminant(&style.text_rendering, &mut h);
     hash_text_transform(&style.text_transform, &mut h);
     hash_enum_discriminant(&style.text_orientation, &mut h);
     hash_enum_discriminant(&style.text_combine_upright, &mut h);
