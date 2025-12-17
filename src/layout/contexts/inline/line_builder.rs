@@ -171,7 +171,7 @@ impl InlineItem {
 }
 
 fn allows_soft_wrap(style: &ComputedStyle) -> bool {
-    !matches!(style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre) && !matches!(style.text_wrap, TextWrap::Nowrap)
+    !matches!(style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre) && !matches!(style.text_wrap, TextWrap::NoWrap)
 }
 
 /// A shaped text item

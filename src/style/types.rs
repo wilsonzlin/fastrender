@@ -1626,23 +1626,6 @@ impl Default for TextOrientation {
     }
 }
 
-/// CSS `text-wrap`
-///
-/// Reference: CSS Text Module Level 4
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextWrap {
-    Wrap,
-    NoWrap,
-    Balance,
-    Pretty,
-}
-
-impl Default for TextWrap {
-    fn default() -> Self {
-        TextWrap::Wrap
-    }
-}
-
 /// CSS `text-combine-upright`
 ///
 /// Reference: CSS Writing Modes Level 4
@@ -2039,7 +2022,7 @@ pub enum WhiteSpace {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextWrap {
     Auto,
-    Nowrap,
+    NoWrap,
     Balance,
     Pretty,
     Stable,

@@ -5224,7 +5224,7 @@ pub fn apply_declaration_with_base(
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.text_wrap = match kw.as_str() {
                     "wrap" | "auto" | "normal" => TextWrap::Auto,
-                    "nowrap" => TextWrap::Nowrap,
+                    "nowrap" => TextWrap::NoWrap,
                     "balance" => TextWrap::Balance,
                     "pretty" => TextWrap::Pretty,
                     "stable" => TextWrap::Stable,
@@ -5234,11 +5234,12 @@ pub fn apply_declaration_with_base(
         }
         "text-wrap" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.text_wrap = match kw.to_ascii_lowercase().as_str() {
-                    "wrap" => TextWrap::Wrap,
+                styles.text_wrap = match kw.as_str() {
+                    "wrap" | "auto" | "normal" => TextWrap::Auto,
                     "nowrap" => TextWrap::NoWrap,
                     "balance" => TextWrap::Balance,
                     "pretty" => TextWrap::Pretty,
+                    "stable" => TextWrap::Stable,
                     _ => styles.text_wrap,
                 };
             }
@@ -13075,58 +13076,6 @@ mod tests {
     }
 
     #[test]
-    fn text_wrap_parses_and_inherits() {
-        let mut style = ComputedStyle::default();
-
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "text-wrap".to_string(),
-                value: PropertyValue::Keyword("nowrap".to_string()),
-                raw_value: String::new(),
-                important: false,
-            },
-            &ComputedStyle::default(),
-            16.0,
-            16.0,
-        );
-        assert!(matches!(style.text_wrap, TextWrap::NoWrap));
-
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "text-wrap".to_string(),
-                value: PropertyValue::Keyword("balance".to_string()),
-                raw_value: String::new(),
-                important: false,
-            },
-            &ComputedStyle::default(),
-            16.0,
-            16.0,
-        );
-        assert!(matches!(style.text_wrap, TextWrap::Balance));
-
-        let parent = ComputedStyle {
-            text_wrap: TextWrap::Pretty,
-            ..ComputedStyle::default()
-        };
-
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "text-wrap".to_string(),
-                value: PropertyValue::Keyword("inherit".to_string()),
-                raw_value: String::new(),
-                important: false,
-            },
-            &parent,
-            16.0,
-            16.0,
-        );
-        assert_eq!(style.text_wrap, parent.text_wrap);
-    }
-
-    #[test]
     fn forced_color_adjust_parses_and_handles_globals() {
         let mut style = ComputedStyle::default();
         assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
@@ -13714,7 +13663,7 @@ mod tests {
             16.0,
             16.0,
         );
-        assert!(matches!(style.text_wrap, TextWrap::Nowrap));
+        assert!(matches!(style.text_wrap, TextWrap::NoWrap));
 
         let parent = ComputedStyle {
             text_wrap: TextWrap::Balance,

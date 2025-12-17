@@ -8218,7 +8218,7 @@ mod tests {
     #[test]
     fn text_wrap_nowrap_suppresses_soft_wraps() {
         let mut text_style = ComputedStyle::default();
-        text_style.text_wrap = TextWrap::Nowrap;
+        text_style.text_wrap = TextWrap::NoWrap;
         text_style.white_space = WhiteSpace::Normal;
         let root = BoxNode::new_block(
             default_style(),
@@ -8237,7 +8237,7 @@ mod tests {
     #[test]
     fn text_wrap_nowrap_keeps_mandatory_breaks() {
         let mut text_style = ComputedStyle::default();
-        text_style.text_wrap = TextWrap::Nowrap;
+        text_style.text_wrap = TextWrap::NoWrap;
         text_style.white_space = WhiteSpace::PreWrap; // preserves newline as mandatory
         let root = BoxNode::new_block(
             default_style(),
