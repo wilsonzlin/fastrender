@@ -272,6 +272,22 @@ fn test_full_analysis_logical_runs() {
     assert!(!visual.is_empty());
 }
 
+#[test]
+fn bidi_visual_order_preserves_positions() {
+    let analyzer = BidiAnalyzer::new();
+    // Base LTR with embedded RTL word.
+    let analysis = analyzer.analyze_full("ABC שלום GHI", Direction::Ltr);
+
+    // Visual runs should reorder the RTL word between the surrounding LTR runs.
+    let runs = analysis.visual_runs();
+    assert_eq!(runs.len(), 3);
+
+    // Visual order should be: "ABC ", "שלום", " GHI".
+    assert!(runs[0].text.starts_with("ABC"));
+    assert!(runs[1].text.contains('ש'));
+    assert!(runs[2].text.contains("GHI"));
+}
+
 // =============================================================================
 // Edge Cases
 // =============================================================================
