@@ -4819,8 +4819,8 @@ mod tests {
         assert_eq!(lone_li.get_attribute("style"), Some("color: red;".to_string()));
         let decls = parse_declarations("color: red;");
         assert_eq!(decls.len(), 1);
-        if let crate::css::types::PropertyValue::Color(c) = decls[0].value {
-            assert_eq!(c, crate::style::color::Color::Rgba(Rgba::RED));
+        if let crate::css::types::PropertyValue::Color(c) = &decls[0].value {
+            assert_eq!(*c, crate::style::color::Color::Rgba(Rgba::RED));
         } else {
             panic!("color did not parse");
         }
@@ -5481,10 +5481,10 @@ mod tests {
 
         let styled = apply_styles(&dom, &StyleSheet::new());
         let first = styled.children.first().expect("first child");
-        assert_eq!(first.styles.background_color, Rgba::from_rgba8(128, 0, 128));
+        assert_eq!(first.styles.background_color, Rgba::from_rgba8(128, 0, 128, 255));
 
         let second = styled.children.get(1).expect("second child");
-        assert_eq!(second.styles.color, Rgba::from_rgba8(255, 191, 191));
+        assert_eq!(second.styles.color, Rgba::from_rgba8(255, 191, 191, 255));
     }
 }
 

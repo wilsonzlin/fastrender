@@ -8051,6 +8051,23 @@ mod tests {
     }
 
     #[test]
+    fn grayscale_filter_converts_pixel_values() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::BLUE;
+        style.filter = vec![FilterFunction::Grayscale(1.0)];
+
+        let mut root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), Vec::new());
+        root.style = Some(Arc::new(style));
+
+        let pixmap = paint_tree(&FragmentTree::new(root), 30, 30, Rgba::WHITE).expect("paint");
+        let pixel = pixmap.pixel(10, 10).expect("sample");
+        // Blue (0,0,1) converted to grayscale yields ~0.0722 in each channel.
+        assert!(pixel.red().abs_diff(18) <= 1, "expected ~18, got {}", pixel.red());
+        assert!(pixel.green().abs_diff(18) <= 1, "expected ~18, got {}", pixel.green());
+        assert!(pixel.blue().abs_diff(18) <= 1, "expected ~18, got {}", pixel.blue());
+    }
+
+    #[test]
     fn underline_offset_moves_line() {
         let mut style = ComputedStyle::default();
         style.text_decoration.lines = crate::style::types::TextDecorationLine::UNDERLINE;
