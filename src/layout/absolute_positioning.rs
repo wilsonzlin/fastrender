@@ -335,14 +335,14 @@ impl AbsoluteLayout {
             log_abs_clamp("width", min_width, max_width, style.min_width, style.max_width);
             max_width = min_width;
         }
-        width = width.clamp(min_width, max_width);
+        width = crate::layout::utils::clamp_with_order(width, min_width, max_width);
         let min_height = content_size_from_box_sizing(style.min_height.to_px(), vertical_spacing, style.box_sizing);
         let mut max_height = content_size_from_box_sizing(style.max_height.to_px(), vertical_spacing, style.box_sizing);
         if max_height.is_finite() && max_height < min_height {
             log_abs_clamp("height", min_height, max_height, style.min_height, style.max_height);
             max_height = min_height;
         }
-        height = height.clamp(min_height, max_height);
+        height = crate::layout::utils::clamp_with_order(height, min_height, max_height);
 
         // Position relative to containing block origin
         let position = Point::new(containing_block.origin().x + x, containing_block.origin().y + y);
@@ -485,7 +485,7 @@ impl AbsoluteLayout {
             }
         };
 
-        width = width.clamp(min_width, max_width);
+        width = crate::layout::utils::clamp_with_order(width, min_width, max_width);
 
         // If the leading edge was auto-resolved from the opposite inset, keep the specified inset
         // satisfied after clamping width (CSS 2.1 constraint equation).
@@ -628,7 +628,7 @@ impl AbsoluteLayout {
             }
         };
 
-        height = height.clamp(min_height, max_height);
+        height = crate::layout::utils::clamp_with_order(height, min_height, max_height);
 
         // If the top edge was auto-resolved from the bottom inset, keep the authored bottom inset
         // satisfied after clamping height (CSS 2.1 constraint equation).

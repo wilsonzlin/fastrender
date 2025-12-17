@@ -524,7 +524,7 @@ impl BlockFormattingContext {
         } else {
             max_height
         };
-        let height = height.clamp(min_height, max_height);
+        let height = crate::layout::utils::clamp_with_order(height, min_height, max_height);
 
         // Create the fragment
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
@@ -1187,10 +1187,10 @@ impl BlockFormattingContext {
 
                 let available = (containing_width - margin_left - margin_right).max(0.0);
                 let used_border_box = if let Some(specified) = specified_width {
-                    specified.clamp(min_width, max_width)
+                    crate::layout::utils::clamp_with_order(specified, min_width, max_width)
                 } else {
                     let shrink = preferred.min(available.max(preferred_min));
-                    shrink.clamp(min_width, max_width)
+                    crate::layout::utils::clamp_with_order(shrink, min_width, max_width)
                 };
 
                 let content_width = (used_border_box - horizontal_edges).max(0.0);
@@ -1740,7 +1740,11 @@ impl FormattingContext for BlockFormattingContext {
             max_width
         };
 
-        let mut clamped_content_width = computed_width.content_width.clamp(min_width, max_width);
+        let mut clamped_content_width = crate::layout::utils::clamp_with_order(
+            computed_width.content_width,
+            min_width,
+            max_width,
+        );
         if clamped_content_width > self.viewport_size.width {
             clamped_content_width = self.viewport_size.width;
         }
@@ -1908,7 +1912,11 @@ impl FormattingContext for BlockFormattingContext {
         } else {
             max_height
         };
-        let height = resolved_height.unwrap_or(content_height).clamp(min_height, max_height);
+        let height = crate::layout::utils::clamp_with_order(
+            resolved_height.unwrap_or(content_height),
+            min_height,
+            max_height,
+        );
 
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
         // For root/layout entry points, keep fragment bounds scoped to the border box so margins
@@ -2209,7 +2217,7 @@ impl FormattingContext for BlockFormattingContext {
         } else {
             (min_width, max_width)
         };
-        width = width.clamp(min_width, max_width);
+        width = crate::layout::utils::clamp_with_order(width, min_width, max_width);
 
         let clamped = width.max(0.0);
         // Optional tracing for over-large intrinsic widths.

@@ -1075,7 +1075,11 @@ impl FormattingContext for FlexFormattingContext {
                     if max_w_bound < min_w_bound {
                         max_w_bound = min_w_bound;
                     }
-                    content_size.width = content_size.width.clamp(min_w_bound, max_w_bound);
+                    content_size.width = crate::layout::utils::clamp_with_order(
+                        content_size.width,
+                        min_w_bound,
+                        max_w_bound,
+                    );
 
                     let mut max_h_bound = resolved_max_h.unwrap_or_else(|| match avail.height {
                         AvailableSpace::Definite(h) => h,
@@ -1085,7 +1089,11 @@ impl FormattingContext for FlexFormattingContext {
                     if max_h_bound < min_h_bound {
                         max_h_bound = min_h_bound;
                     }
-                    content_size.height = content_size.height.clamp(min_h_bound, max_h_bound);
+                    content_size.height = crate::layout::utils::clamp_with_order(
+                        content_size.height,
+                        min_h_bound,
+                        max_h_bound,
+                    );
 
                     if log_skinny
                         && (content_size.width <= 1.0

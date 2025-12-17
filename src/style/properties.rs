@@ -2226,7 +2226,6 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "user-select" => styles.user_select = source.user_select,
         "scrollbar-width" => styles.scrollbar_width = source.scrollbar_width,
         "scrollbar-color" => styles.scrollbar_color = source.scrollbar_color,
-        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
             styles.vertical_align_specified = source.vertical_align_specified;
@@ -9194,7 +9193,7 @@ fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLin
 
     for comp in components {
         if let PropertyValue::Keyword(kw) = comp {
-            match kw.as_str() {
+            match kw.to_ascii_lowercase().as_str() {
                 "none" => {
                     saw_none = true;
                     lines = TextDecorationLine::NONE;
@@ -9219,7 +9218,7 @@ fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLin
 
 fn parse_text_decoration_style(value: &PropertyValue) -> Option<TextDecorationStyle> {
     match value {
-        PropertyValue::Keyword(kw) => match kw.as_str() {
+        PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
             "solid" => Some(TextDecorationStyle::Solid),
             "double" => Some(TextDecorationStyle::Double),
             "dotted" => Some(TextDecorationStyle::Dotted),
@@ -9234,7 +9233,7 @@ fn parse_text_decoration_style(value: &PropertyValue) -> Option<TextDecorationSt
 fn parse_text_decoration_color(value: &PropertyValue) -> Option<Option<Rgba>> {
     match value {
         PropertyValue::Color(c) => Some(Some(*c)),
-        PropertyValue::Keyword(kw) if kw == "currentcolor" => Some(None),
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(None),
         _ => None,
     }
 }
@@ -9518,7 +9517,7 @@ fn parse_text_decoration_thickness(
     _root_font_size: f32,
 ) -> Option<TextDecorationThickness> {
     match value {
-        PropertyValue::Keyword(kw) => match kw.as_str() {
+        PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
             "auto" => Some(TextDecorationThickness::Auto),
             "from-font" => Some(TextDecorationThickness::FromFont),
             _ => None,
@@ -9531,7 +9530,7 @@ fn parse_text_decoration_thickness(
 
 fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecorationSkipInk> {
     if let PropertyValue::Keyword(kw) = value {
-        return match kw.as_str() {
+        return match kw.to_ascii_lowercase().as_str() {
             "auto" => Some(TextDecorationSkipInk::Auto),
             "none" => Some(TextDecorationSkipInk::None),
             "all" => Some(TextDecorationSkipInk::All),

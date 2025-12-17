@@ -216,6 +216,31 @@ pub fn resolve_font_relative_length_for_positioned(
     )
 }
 
+/// Clamps a value, tolerating inverted bounds and non-finite endpoints.
+///
+/// f32::clamp panics when `min > max` or either bound is NaN. This helper swaps
+/// inverted bounds and treats non-finite bounds as unbounded on that side.
+pub fn clamp_with_order(value: f32, min: f32, max: f32) -> f32 {
+    let mut lo = min;
+    let mut hi = max;
+
+    // Treat NaN bounds as unbounded.
+    let lo_finite = lo.is_finite();
+    let hi_finite = hi.is_finite();
+    if !lo_finite && !hi_finite {
+        return value;
+    } else if !lo_finite {
+        return value.min(hi);
+    } else if !hi_finite {
+        return value.max(lo);
+    }
+
+    if lo > hi {
+        std::mem::swap(&mut lo, &mut hi);
+    }
+    value.max(lo).min(hi)
+}
+
 fn resolve_font_relative_length_with_params(
     length: Length,
     font_size: f32,

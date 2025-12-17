@@ -1510,7 +1510,7 @@ impl InlineFormattingContext {
 
         let constraint_width = if let Some(content_width) = specified_width {
             // Honor specified width; use containing block width for layout to avoid over-constraining margins.
-            let used = content_width.clamp(min_width, max_width);
+            let used = crate::layout::utils::clamp_with_order(content_width, min_width, max_width);
             if available_for_box.is_finite() {
                 used.min(available_for_box.max(preferred_min))
             } else {
@@ -1523,16 +1523,15 @@ impl InlineFormattingContext {
                 if ratio > 0.0 {
                     let target_border = h * ratio;
                     let target_content = (target_border - horizontal_edges).max(0.0);
-                    let used = target_content.clamp(min_width, max_width);
+                    let used = crate::layout::utils::clamp_with_order(target_content, min_width, max_width);
                     if available_for_box.is_finite() {
                         used.min(available_for_box.max(preferred_min))
                     } else {
                         used
                     }
                 } else {
-                    preferred
-                        .min(available_for_box.max(preferred_min))
-                        .clamp(min_width, max_width)
+                    let shrink = preferred.min(available_for_box.max(preferred_min));
+                    crate::layout::utils::clamp_with_order(shrink, min_width, max_width)
                 }
             } else {
                 let available = if available_for_box.is_finite() {
@@ -1541,7 +1540,7 @@ impl InlineFormattingContext {
                     preferred
                 };
                 let shrink = preferred.min(available.max(preferred_min));
-                let used = shrink.clamp(min_width, max_width);
+                let used = crate::layout::utils::clamp_with_order(shrink, min_width, max_width);
                 used
             }
         };
