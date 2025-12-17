@@ -49,3 +49,13 @@ fn background_position_offsets_follow_keywords() {
     // right 10% -> 90% x, top 20% -> 20% y
     assert_eq!(bg_pos(node), (90.0, 20.0));
 }
+
+#[test]
+fn background_position_defaults_to_zero_zero() {
+    let dom = dom::parse_html(r#"<div style="background-position: initial"></div>"#).unwrap();
+    let stylesheet = parse_stylesheet("bg-pos", r#""#, None).unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = &styled.children[0];
+    assert_eq!(bg_pos(node), (0.0, 0.0));
+}
