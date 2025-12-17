@@ -3375,6 +3375,24 @@ impl FlexFormattingContext {
             }
         }
 
+        // Guard against pathological horizontal drift: if every child in a row sits far beyond
+        // the container (multiple widths away), translate them back so the leftmost child starts
+        // at the origin while preserving relative spacing.
+        if main_axis_is_row && !children.is_empty() {
+            let min_x = children.iter().map(|c| c.bounds.x()).fold(f32::INFINITY, f32::min);
+            let max_x = children.iter().map(|c| c.bounds.max_x()).fold(f32::NEG_INFINITY, f32::max);
+            let drift_limit = rect.width().max(1.0) * 4.0;
+            if min_x.is_finite() && min_x > drift_limit && max_x.is_finite() {
+                let dx = min_x;
+                for child in &mut children {
+                    child.bounds = Rect::new(
+                        Point::new(child.bounds.x() - dx, child.bounds.y()),
+                        child.bounds.size,
+                    );
+                }
+            }
+        }
+
         // Final clamp: only adjust children that overflow the container bounds. Keep normal in-bounds
         // items unchanged to avoid shrinking legitimate content (e.g., images taller than the parent).
         if rect.width() > 0.0 && rect.height() > 0.0 {
