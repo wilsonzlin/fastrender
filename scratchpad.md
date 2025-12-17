@@ -40,6 +40,7 @@
 ## Session notes (latest)
 
 - Added presentational hint for the HTML `hidden` attribute: `[hidden]` now maps to `display: none` via cascade with low specificity, and tests cover default hiding plus author override. Targeted test run hit existing duplicate `:indeterminate` definitions in `dom.rs` (unrelated to this change), so suite not fully executed here.
+- Cleaned up duplicate :indeterminate implementations/tests: removed duplicate selector parse arm, consolidated DOM `is_indeterminate`, and deduped tests so targeted runs no longer fail. Hidden hint remains intact.
 
 - Added `:autofill` pseudo-class: parsed/serialized via selectors, DOM matching always false (no autofill state available). Added basic parse/match tests.
 - Implemented legacy `clip` property: parsed `rect()`/`auto` into computed styles, painter applies rectangular clipping (intersecting overflow clips) with a regression test.

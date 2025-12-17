@@ -707,34 +707,6 @@ impl<'a> ElementRef<'a> {
         self.numeric_in_range(num)
     }
 
-    fn is_indeterminate(&self) -> bool {
-        let Some(tag) = self.node.tag_name() else {
-            return false;
-        };
-        if tag.eq_ignore_ascii_case("input") {
-            let input_type = self
-                .node
-                .get_attribute("type")
-                .map(|s| s.to_ascii_lowercase())
-                .unwrap_or_else(|| "text".to_string());
-
-            if matches!(input_type.as_str(), "checkbox" | "radio") {
-                return self.node.get_attribute("indeterminate").is_some();
-            }
-            return false;
-        }
-
-        if tag.eq_ignore_ascii_case("progress") {
-            // Missing or invalid value makes progress indeterminate.
-            let Some(value) = self.node.get_attribute("value") else {
-                return true;
-            };
-            return Self::parse_number(&value).is_none();
-        }
-
-        false
-    }
-
     /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
     fn direction(&self) -> TextDirection {
         if let Some(dir) = self.dir_attribute(self.node, self.node) {
