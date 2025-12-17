@@ -1449,6 +1449,12 @@ impl MediaContext {
         self
     }
 
+    /// Sets the reduced transparency preference
+    pub fn with_reduced_transparency(mut self, reduce: bool) -> Self {
+        self.prefers_reduced_transparency = reduce;
+        self
+    }
+
     /// Sets the reduced data preference
     pub fn with_reduced_data(mut self, reduce: bool) -> Self {
         self.prefers_reduced_data = reduce;
@@ -2735,6 +2741,17 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_prefers_reduced_transparency() {
+        let ctx = MediaContext::screen(1024.0, 768.0).with_reduced_transparency(true);
+
+        let query = MediaQuery::parse("(prefers-reduced-transparency: reduce)").unwrap();
+        assert!(ctx.evaluate(&query));
+
+        let query = MediaQuery::parse("(prefers-reduced-transparency: no-preference)").unwrap();
+        assert!(!ctx.evaluate(&query));
+    }
+
+    #[test]
     fn test_evaluate_forced_colors() {
         let ctx = MediaContext::screen(800.0, 600.0);
         let query_none = MediaQuery::parse("(forced-colors: none)").unwrap();
@@ -2888,6 +2905,7 @@ mod tests {
         let guard_inverted = EnvGuard::new("FASTR_INVERTED_COLORS", Some("maybe"));
         let guard_color_depth = EnvGuard::new("FASTR_COLOR_DEPTH", Some("abc"));
         let guard_forced = EnvGuard::new("FASTR_FORCED_COLORS", Some("maybe"));
+        let guard_transparency = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("maybe"));
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_scheme(ColorScheme::Light)
             .with_env_overrides();
@@ -2895,10 +2913,12 @@ mod tests {
         assert!(matches!(ctx.inverted_colors, InvertedColors::None));
         assert_eq!(ctx.color_depth, 8);
         assert!(!ctx.forced_colors);
+        assert!(!ctx.prefers_reduced_transparency);
         drop(guard_scheme);
         drop(guard_inverted);
         drop(guard_color_depth);
         drop(guard_forced);
+        drop(guard_transparency);
     }
 
     #[test]
