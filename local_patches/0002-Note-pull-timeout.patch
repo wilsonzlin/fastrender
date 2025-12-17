@@ -1,0 +1,24 @@
+From d47eb9a9ef50fc91067324d3b2a8258ce07fd1d9 Mon Sep 17 00:00:00 2001
+From: Wilson Lin <code@wilsonl.in>
+Date: Wed, 17 Dec 2025 14:48:16 -0500
+Subject: [PATCH 2/3] Note pull timeout
+
+---
+ scratchpad.md | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/scratchpad.md b/scratchpad.md
+index 0d22083..40e8ccc 100644
+--- a/scratchpad.md
++++ b/scratchpad.md
+@@ -1,6 +1,7 @@
+ # Scratchpad – rendering engine session notes
+ Idle; no current tasks. Available for new tasks.
+ - PositionedLayout absolute helper now delegates to AbsoluteLayout for spec-accurate shrink-to-fit/auto-margin handling; positioned layout tests updated (shrink-to-fit expectation) and an auto-margin centering regression added. `cargo test --quiet test_absolute_position_left_right_shrink_to_fit` and `cargo test --quiet absolute_position_auto_margins_center_between_insets` pass (existing display_list_renderer warnings still present during test compile).
++- Pull from origin currently times out (ssh fetch). Commit `f888136` is local; push pending once network permits.
+ - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
+ - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
+ - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
+-- 
+2.43.0
+
