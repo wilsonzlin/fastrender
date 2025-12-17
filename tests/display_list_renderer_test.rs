@@ -2,12 +2,15 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use fastrender::css::types::ColorStop;
 use fastrender::geometry::Rect;
-use fastrender::paint::display_list::{DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem};
+use fastrender::paint::display_list::{
+    DecorationPaint, DecorationStroke, DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem,
+    TextDecorationItem,
+};
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage, BorderImageSlice,
-    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius,
+    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius, TextDecorationStyle,
 };
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
@@ -156,11 +159,7 @@ fn builder_clip_path_masks_rendered_output() {
         None,
     );
 
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
 
     let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
     let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
@@ -200,6 +199,36 @@ fn builder_clip_path_polygon_masks_rendered_output() {
     // Pixel inside triangle should be filled; bottom-right should stay white.
     assert_eq!(pixel(&pixmap, 2, 2), (255, 0, 0, 255));
     assert_eq!(pixel(&pixmap, 9, 9), (255, 255, 255, 255));
+}
+
+#[test]
+fn display_list_renderer_paints_text_decoration_color() {
+    let mut list = DisplayList::new();
+    let decoration = DecorationPaint {
+        style: TextDecorationStyle::Solid,
+        color: Rgba::RED,
+        underline: Some(DecorationStroke {
+            center: 5.0,
+            thickness: 2.0,
+            segments: None,
+        }),
+        overline: None,
+        line_through: None,
+    };
+
+    list.push(DisplayItem::TextDecoration(TextDecorationItem {
+        bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+        line_start: 0.0,
+        line_width: 20.0,
+        inline_vertical: false,
+        decorations: vec![decoration],
+    }));
+
+    let renderer = DisplayListRenderer::new(20, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    assert_eq!(pixel(&pixmap, 10, 5), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 10, 0), (255, 255, 255, 255));
 }
 
 #[test]
@@ -244,11 +273,7 @@ fn display_list_border_image_nine_slice() {
         ..BorderImage::default()
     };
 
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 16.0, 16.0), vec![], Arc::new(style));
 
     let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
     let renderer = DisplayListRenderer::new(16, 16, Rgba::WHITE, FontContext::new()).unwrap();

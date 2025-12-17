@@ -3355,15 +3355,14 @@ impl Default for DisplayListBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{engine::general_purpose, Engine as _};
     use crate::css::types::{Declaration, PropertyValue, Transform};
     use crate::image_loader::ImageCache;
     use crate::paint::stacking::{StackingContext, StackingContextReason};
-    use crate::style::content::{parse_content, ContentItem, ContentValue};
     use crate::style::color::{Color, Rgba};
+    use crate::style::content::{parse_content, ContentItem, ContentValue};
     use crate::style::display::Display;
-    use crate::style::properties::{apply_declaration, with_image_set_dpr};
     use crate::style::position::Position;
+    use crate::style::properties::{apply_declaration, with_image_set_dpr};
     use crate::style::types::{
         BackgroundImage, BackgroundLayer, BackgroundRepeat, ImageRendering, MixBlendMode, TextDecorationLine,
         TransformBox,
@@ -3371,6 +3370,7 @@ mod tests {
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
+    use base64::{engine::general_purpose, Engine as _};
     use image::codecs::png::PngEncoder;
     use image::ColorType;
     use image::ImageEncoder;
@@ -3389,10 +3389,7 @@ mod tests {
         PngEncoder::new(&mut buf)
             .write_image(&color, 1, 1, ColorType::Rgba8.into())
             .expect("encode png");
-        format!(
-            "data:image/png;base64,{}",
-            general_purpose::STANDARD.encode(buf)
-        )
+        format!("data:image/png;base64,{}", general_purpose::STANDARD.encode(buf))
     }
 
     fn create_image_fragment(x: f32, y: f32, width: f32, height: f32, src: &str) -> FragmentNode {
@@ -3494,6 +3491,33 @@ mod tests {
             .expect("text decoration emitted");
 
         assert_eq!(deco_color, Rgba::GREEN);
+    }
+
+    #[test]
+    fn builder_prefers_explicit_text_decoration_color() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::GREEN;
+        style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+        style.text_decoration.color = Some(Rgba::BLUE);
+
+        let fragment = FragmentNode::new_text_styled(
+            Rect::from_xywh(0.0, 0.0, 50.0, 16.0),
+            "Hi".to_string(),
+            12.0,
+            Arc::new(style),
+        );
+
+        let list = DisplayListBuilder::new().build(&fragment);
+        let deco_color = list
+            .items()
+            .iter()
+            .find_map(|item| match item {
+                DisplayItem::TextDecoration(dec) => dec.decorations.first().map(|d| d.color),
+                _ => None,
+            })
+            .expect("decoration color present");
+
+        assert_eq!(deco_color, Rgba::BLUE);
     }
 
     #[test]
@@ -3865,10 +3889,7 @@ mod tests {
                 &mut style,
                 &Declaration {
                     property: "background-image".to_string(),
-                    value: PropertyValue::Keyword(format!(
-                        "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
-                        low, high
-                    )),
+                    value: PropertyValue::Keyword(format!("image-set(url(\"{}\") 1x, url(\"{}\") 2x)", low, high)),
                     raw_value: String::new(),
                     important: false,
                 },
@@ -3879,11 +3900,7 @@ mod tests {
         });
         style.background_color = Rgba::TRANSPARENT;
 
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            vec![],
-            Arc::new(style),
-        );
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
 
         let list = DisplayListBuilder::new().build(&fragment);
         let image = list
@@ -3904,11 +3921,7 @@ mod tests {
         let high = data_url_for_color([0, 0, 255, 255]);
 
         let content = with_image_set_dpr(2.0, || {
-            parse_content(&format!(
-                "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
-                low, high
-            ))
-            .expect("parse content")
+            parse_content(&format!("image-set(url(\"{}\") 1x, url(\"{}\") 2x)", low, high)).expect("parse content")
         });
 
         let chosen = match content {
@@ -3953,10 +3966,7 @@ mod tests {
                 &mut style,
                 &Declaration {
                     property: "list-style-image".to_string(),
-                    value: PropertyValue::Keyword(format!(
-                        "image-set(url(\"{}\") 1x, url(\"{}\") 2x)",
-                        low, high
-                    )),
+                    value: PropertyValue::Keyword(format!("image-set(url(\"{}\") 1x, url(\"{}\") 2x)", low, high)),
                     raw_value: String::new(),
                     important: false,
                 },
