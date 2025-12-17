@@ -128,7 +128,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
                 // Italic text - using Oblique since we may not have true italics
                 styles.font_style = crate::style::FontStyle::Oblique(None);
             }
-            "img" | "video" | "audio" | "canvas" | "svg" => {
+            "img" | "video" | "audio" | "canvas" | "svg" | "iframe" => {
                 // Responsive default: limit replaced elements to their containing block
                 styles.max_width = Some(Length::percent(100.0));
             }

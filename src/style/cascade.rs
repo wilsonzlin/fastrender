@@ -3517,6 +3517,15 @@ mod tests {
         assert_eq!(styled_optgroup.styles.white_space, crate::style::types::WhiteSpace::Pre);
         assert!(styled_optgroup.styles.font_weight.to_u16() >= 700);
 
+        let iframe = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "iframe".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
         let styled_fieldset = apply_styles(&fieldset, &StyleSheet::new());
         assert_eq!(styled_fieldset.styles.display, Display::Block);
         assert!(styled_fieldset.styles.border_top_width.to_px() >= 1.5);
@@ -3551,6 +3560,16 @@ mod tests {
                 .resolve_with_font_size(styled_legend.styles.font_size)
                 .unwrap_or(0.0)
                 > 0.0
+        );
+
+        let styled_iframe = apply_styles(&iframe, &StyleSheet::new());
+        assert_eq!(
+            styled_iframe
+                .styles
+                .max_width
+                .as_ref()
+                .and_then(|l| l.resolve_with_font_size(styled_iframe.styles.font_size)),
+            Some(100.0)
         );
 
         let styled_details = apply_styles(&details, &StyleSheet::new());
