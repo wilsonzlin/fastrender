@@ -49,6 +49,7 @@ Idle; no current tasks.
 - DOM now tracks element namespaces: parse_html captures the element namespace, selector matching respects the actual namespace (HTML vs foreign), and local-name/type comparisons are case-insensitive only for HTML elements. Tests cover namespace matching, HTML vs. SVG casing, and namespace-aware type equality. HTML-only form states (disabled/required/etc.) are gated to HTML elements.
 
 - Added `inverted-colors` media feature: parses/evaluates against a new MediaContext field, supports `FASTR_INVERTED_COLORS` env override, and includes regression coverage for parsing/evaluation/env handling.
+- Media env overrides now accept `FASTR_COLOR_DEPTH`, `FASTR_COLOR_INDEX`, and `FASTR_MONOCHROME_DEPTH` to drive color/monochrome media features; added helper setters and tests for overrides/invalid values.
 
 - Fixed stacking context bounds computation to recurse into children and avoid the implicit zero origin (paint containment clip test now passes).
 - Added regression test to ensure stacking context bounds include child contexts without precomputed bounds.

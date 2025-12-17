@@ -1216,6 +1216,9 @@ impl MediaContext {
     /// - `FASTR_PREFERS_REDUCED_TRANSPARENCY` = `reduce` | `no-preference` | truthy/falsy
     /// - `FASTR_PREFERS_REDUCED_DATA` = `reduce` | `no-preference` | truthy/falsy
     /// - `FASTR_INVERTED_COLORS` = `inverted` | `none` | truthy/falsy
+    /// - `FASTR_COLOR_DEPTH` = integer bits per color channel (e.g., 8)
+    /// - `FASTR_COLOR_INDEX` = integer palette size (e.g., 256)
+    /// - `FASTR_MONOCHROME_DEPTH` = integer bits for monochrome devices (e.g., 1)
     pub fn with_env_overrides(mut self) -> Self {
         if let Ok(value) = env::var("FASTR_PREFERS_COLOR_SCHEME") {
             let v = value.trim().to_ascii_lowercase();
@@ -1270,6 +1273,24 @@ impl MediaContext {
                 }
                 _ => self.inverted_colors,
             };
+        }
+
+        if let Ok(value) = env::var("FASTR_COLOR_DEPTH") {
+            if let Ok(bits) = value.trim().parse::<u32>() {
+                self.color_depth = bits;
+            }
+        }
+
+        if let Ok(value) = env::var("FASTR_COLOR_INDEX") {
+            if let Ok(count) = value.trim().parse::<u32>() {
+                self.color_index = count;
+            }
+        }
+
+        if let Ok(value) = env::var("FASTR_MONOCHROME_DEPTH") {
+            if let Ok(bits) = value.trim().parse::<u32>() {
+                self.monochrome_depth = bits;
+            }
         }
 
         self
@@ -1377,6 +1398,24 @@ impl MediaContext {
     /// Sets the reduced data preference
     pub fn with_reduced_data(mut self, reduce: bool) -> Self {
         self.prefers_reduced_data = reduce;
+        self
+    }
+
+    /// Sets the color depth (bits per color component)
+    pub fn with_color_depth(mut self, bits: u32) -> Self {
+        self.color_depth = bits;
+        self
+    }
+
+    /// Sets the color index size
+    pub fn with_color_index(mut self, count: u32) -> Self {
+        self.color_index = count;
+        self
+    }
+
+    /// Sets the monochrome depth (bits)
+    pub fn with_monochrome_depth(mut self, bits: u32) -> Self {
+        self.monochrome_depth = bits;
         self
     }
 
@@ -2627,6 +2666,25 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_color_depth_overrides() {
+        let ctx = MediaContext::screen(800.0, 600.0)
+            .with_color_depth(10)
+            .with_color_index(512)
+            .with_monochrome_depth(0);
+
+        let color_query = MediaQuery::parse("(min-color: 8)").unwrap();
+        assert!(ctx.evaluate(&color_query));
+        let color_index_query = MediaQuery::parse("(min-color-index: 256)").unwrap();
+        assert!(ctx.evaluate(&color_index_query));
+
+        let mono_query = MediaQuery::parse("(monochrome)").unwrap();
+        assert!(!ctx.evaluate(&mono_query));
+
+        let mono_depth = MediaContext::screen(800.0, 600.0).with_monochrome_depth(2);
+        assert!(mono_depth.evaluate(&mono_query));
+    }
+
+    #[test]
     fn test_evaluate_inverted_colors() {
         let ctx = MediaContext::screen(1024.0, 768.0);
 
@@ -2713,6 +2771,9 @@ mod tests {
         let guard_transparency = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("1"));
         let guard_data = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("yes"));
         let guard_inverted = EnvGuard::new("FASTR_INVERTED_COLORS", Some("inverted"));
+        let guard_color_depth = EnvGuard::new("FASTR_COLOR_DEPTH", Some("10"));
+        let guard_color_index = EnvGuard::new("FASTR_COLOR_INDEX", Some("512"));
+        let guard_mono = EnvGuard::new("FASTR_MONOCHROME_DEPTH", Some("0"));
 
         let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
         assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Dark));
@@ -2721,6 +2782,9 @@ mod tests {
         assert!(ctx.prefers_reduced_transparency);
         assert!(ctx.prefers_reduced_data);
         assert!(matches!(ctx.inverted_colors, InvertedColors::Inverted));
+        assert_eq!(ctx.color_depth, 10);
+        assert_eq!(ctx.color_index, 512);
+        assert_eq!(ctx.monochrome_depth, 0);
 
         drop(guard_scheme);
         drop(guard_motion);
@@ -2728,19 +2792,25 @@ mod tests {
         drop(guard_transparency);
         drop(guard_data);
         drop(guard_inverted);
+        drop(guard_color_depth);
+        drop(guard_color_index);
+        drop(guard_mono);
     }
 
     #[test]
     fn env_overrides_ignore_invalid_values() {
         let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("invalid"));
         let guard_inverted = EnvGuard::new("FASTR_INVERTED_COLORS", Some("maybe"));
+        let guard_color_depth = EnvGuard::new("FASTR_COLOR_DEPTH", Some("abc"));
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_scheme(ColorScheme::Light)
             .with_env_overrides();
         assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Light));
         assert!(matches!(ctx.inverted_colors, InvertedColors::None));
+        assert_eq!(ctx.color_depth, 8);
         drop(guard_scheme);
         drop(guard_inverted);
+        drop(guard_color_depth);
     }
 
     #[test]
