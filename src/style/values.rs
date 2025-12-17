@@ -1003,6 +1003,9 @@ impl LengthOrAuto {
     /// assert_eq!(LengthOrAuto::Auto.resolve_against(200.0), None);
     /// ```
     pub fn resolve_against(self, percentage_base: f32) -> Option<f32> {
+        if !percentage_base.is_finite() {
+            return None;
+        }
         self.length()
             .and_then(|length| length.resolve_against(percentage_base))
             .or_else(|| self.length().map(|length| length.to_px()))
