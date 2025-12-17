@@ -3326,6 +3326,43 @@ mod tests {
     }
 
     #[test]
+    fn border_spacing_percentages_are_ignored() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("table { border-spacing: 10% 5%; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+
+        // Percentages are invalid for border-spacing; UA defaults remain in place.
+        assert_eq!(styled.styles.border_spacing_horizontal, Length::px(2.0));
+        assert_eq!(styled.styles.border_spacing_vertical, Length::px(2.0));
+    }
+
+    #[test]
+    fn border_spacing_negative_lengths_clamp_to_zero() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let stylesheet = parse_stylesheet("table { border-spacing: -3px -4px; }").unwrap();
+        let styled = apply_styles(&dom, &stylesheet);
+
+        assert_eq!(styled.styles.border_spacing_horizontal, Length::px(0.0));
+        assert_eq!(styled.styles.border_spacing_vertical, Length::px(0.0));
+    }
+
+    #[test]
     fn cellpadding_presentational_hint_applies_to_cells() {
         let dom = DomNode {
             node_type: DomNodeType::Element {

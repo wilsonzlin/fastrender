@@ -1609,16 +1609,11 @@ impl Default for TableStructure {
 }
 
 fn resolve_border_spacing_length(length: &crate::style::values::Length, font_size: f32) -> f32 {
-    if length.unit == LengthUnit::Calc {
-        return length
-            .resolve_with_context(None, 0.0, 0.0, font_size, font_size)
-            .unwrap_or(0.0);
-    }
-    match length.unit {
-        LengthUnit::Em | LengthUnit::Rem => length.value * font_size,
-        _ if length.unit.is_absolute() => length.to_px(),
-        _ => 0.0,
-    }
+    let resolved = length
+        .resolve_with_context(None, 0.0, 0.0, font_size, font_size)
+        .unwrap_or(0.0);
+
+    resolved.max(0.0)
 }
 
 fn resolve_border_spacing(style: &crate::style::ComputedStyle) -> (f32, f32) {
@@ -5088,7 +5083,7 @@ mod tests {
     use crate::style::display::FormattingContextType;
     use crate::style::position::Position;
     use crate::style::types::{BorderCollapse, BorderStyle, CaptionSide, Direction, TableLayout, VerticalAlign};
-    use crate::style::values::Length;
+    use crate::style::values::{CalcLength, Length};
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
     use crate::tree::debug::DebugInfo;
@@ -7434,6 +7429,13 @@ mod tests {
 
         // Total spacing = row_count * spacing (includes both edges)
         assert_eq!(structure.total_vertical_spacing(), 20.0);
+    }
+
+    #[test]
+    fn border_spacing_calc_is_clamped_to_zero() {
+        let len = CalcLength::single(LengthUnit::Px, -5.0);
+        let spacing = resolve_border_spacing_length(&Length::calc(len), 16.0);
+        assert_eq!(spacing, 0.0);
     }
 
     #[test]

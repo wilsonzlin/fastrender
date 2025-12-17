@@ -1,5 +1,6 @@
 # Scratchpad – rendering engine session notes
-- Added gitlab.com/weebly.com/weibo.cn to fetch_pages PAGES; `cargo check --bin fetch_pages` passes.
+Added gitlab.com/weebly.com/weibo.cn to fetch_pages PAGES; `cargo check --bin fetch_pages` passes. Currently idle/available for new tasks.
+Idle; no current tasks. Available for new tasks.
 - Added nhk.or.jp to fetch_pages targets to extend vertical/intl coverage.
 - Added image-orientation inheritance, tokenized multi-keyword parsing for image-orientation/image-resolution (fixes "90deg flip" parsing), cascade/css parser tests, and a cascade inheritance test. `cargo test image_orientation -- --nocapture` and `cargo test tokenizes_image_resolution_multi_keyword -- --nocapture` pass.
 - Added display-list coverage for image-set backgrounds/content to ensure high-DPR candidates are selected in the display list path (data-URL PNGs in DisplayListBuilder tests).
@@ -15,6 +16,7 @@
 - Float shrink-to-fit clamps to min-width: added a layout regression where a floating block with only `min-width` in a 100px container still uses its 150px min width (shrink-to-fit + min/max clamp). `cargo test --quiet float_auto_width_honors_min_width` passes.
 - Added viewport scroll snapping: render_html_with_scroll now adjusts scroll offsets based on scroll-snap-type/align/stop (container detected from fragment tree) with proximity/mandatory handling; new API tests cover snapping/threshold behavior.
 - 2028-XX-XX (Agent12): Fixed painting/display-list handling for sideways writing modes. Sideways writing now counts as vertical in painter/display list builder so vertical layout glyph offsets/ decorations render correctly. Added regression ensuring sideways-LR text produces vertical glyph offsets/decorations.
+- Border-spacing validation: border-spacing now rejects percentage values, clamps negative lengths to zero (including calc resolution), and resolves spacing with non-negative clamp. Added cascade + table tests. Git push currently timing out (SSH to github).
 - Added `--scroll-y` and `--scroll-x` to `examples/inspect_frag` (reports fragments/contexts relative to a scroll offset) and deduped `forced-color-adjust` merge fallout (single enum/field/default); text-decoration parsing is ASCII case-insensitive and `MediaContext` defaults `prefers-color-scheme` to no-preference so media tests pass. Added `--scroll-x`/`--scroll-y` parsing to fetch_and_render/render_pages CLIs and horizontal scroll offsets now apply through the renderer.
 - Added horizontal scroll support end-to-end: FastRender `render_html_with_scroll` / `render_to_png_with_scroll` now accept x/y offsets and apply both; CLI tools parse `--scroll-x`/`--scroll-y` and feed both offsets. deduped forced-color-adjust field defaults and cleaned text-wrap test expectation.
 - Added horizontal scroll support end-to-end: FastRender `render_html_with_scroll` / `render_to_png_with_scroll` now accept x/y offsets and apply both; CLI tools parse `--scroll-x`/`--scroll-y` and feed both offsets. Deduped forced-color-adjust field defaults and cleaned text-wrap test expectation. Push to origin may be pending (git push hanging/timeouts).

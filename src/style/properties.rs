@@ -6211,7 +6211,15 @@ pub fn apply_declaration_with_base(
             }
         }
         "border-spacing" => {
-            if let Some((h, v)) = extract_length_pair(&resolved_value) {
+            if let Some((mut h, mut v)) = extract_length_pair(&resolved_value) {
+                // border-spacing only accepts non-negative lengths; percentages are invalid.
+                if h.has_percentage() || v.has_percentage() {
+                    return;
+                }
+
+                h = sanitize_non_negative_length(h);
+                v = sanitize_non_negative_length(v);
+
                 styles.border_spacing_horizontal = h;
                 styles.border_spacing_vertical = v;
             }
