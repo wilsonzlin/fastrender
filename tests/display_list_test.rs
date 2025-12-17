@@ -6,11 +6,12 @@
 use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
 use fastrender::paint::display_list::ClipShape;
+use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::css::types::{Declaration, PropertyValue};
 use fastrender::style::properties::{apply_declaration, with_image_set_dpr};
 use fastrender::style::types::{
-    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment, TextDecorationLine,
-    WritingMode,
+    BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
+    TextDecorationLine, WritingMode,
 };
 use fastrender::style::values::Length;
 use fastrender::text::pipeline::{Direction, GlyphPosition, RunRotation, ShapedRun};
@@ -185,6 +186,52 @@ fn background_image_set_chooses_best_density_for_display_list() {
 
     assert_eq!(image_item.image.width, 4);
     assert_eq!(image_item.image.height, 4);
+}
+
+#[test]
+fn background_attachment_fixed_anchors_to_viewport_in_display_list() {
+    let mut style = ComputedStyle::default();
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 90.0,
+            stops: vec![
+                ColorStop {
+                    color: Color::Rgba(Rgba::RED),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::BLUE),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        attachment: BackgroundAttachment::Fixed,
+        ..BackgroundLayer::default()
+    }]);
+    let style = Arc::new(style);
+
+    let first = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![], style.clone());
+    let second = FragmentNode::new_block_styled(Rect::from_xywh(1.0, 0.0, 1.0, 1.0), vec![], style.clone());
+    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 2.0, 1.0), vec![first, second]);
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
+        .with_viewport_size(2.0, 1.0)
+        .build(&root);
+
+    let pixmap = DisplayListRenderer::new(2, 1, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(&list)
+        .unwrap();
+    let pixel = |x: u32, y: u32| {
+        let px = pixmap.pixel(x, y).expect("pixel inside viewport");
+        (px.red(), px.green(), px.blue(), px.alpha())
+    };
+
+    assert_ne!(
+        pixel(0, 0),
+        pixel(1, 0),
+        "fixed backgrounds should stay anchored to the viewport, changing colors across global x positions"
+    );
 }
 
 #[test]
