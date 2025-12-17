@@ -45,6 +45,7 @@ Idle; no current tasks.
 
 - Added regression for `scrollbar-width` global keywords (inherit/revert/revert-layer/unset) to lock cascade behavior; no functional change needed.
 - Flex pass-cache now keys on the measurement-adjusted style and seeds from the shared measure cache so intrinsic probes reuse cached sizes/fragments even when we clone styles (aimed at the CNN carousel flex hotspots).
+- Flex pass-cache now tolerance-matches stored layouts within a size epsilon to reuse cached fragments across near-identical probes; deduped `text-size-adjust` type definition and restored missing `text-rendering`/`overflow-anchor` computed fields after merge.
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
 - Implemented `text-size-adjust`: parses auto/none/percentage, cascades/inherits with regression coverage.
 

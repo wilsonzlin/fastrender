@@ -2240,7 +2240,6 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "text-justify" => styles.text_justify = source.text_justify,
         "text-rendering" => styles.text_rendering = source.text_rendering,
         "text-size-adjust" => styles.text_size_adjust = source.text_size_adjust,
-        "text-size-adjust" => styles.text_size_adjust = source.text_size_adjust,
         "text-orientation" => {
             styles.text_orientation = match source.text_orientation {
                 crate::style::types::TextOrientation::SidewaysRight => crate::style::types::TextOrientation::Sideways,

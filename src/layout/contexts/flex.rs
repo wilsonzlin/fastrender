@@ -790,6 +790,27 @@ impl FormattingContext for FlexFormattingContext {
                         *pass_hits.entry(cache_key).or_insert(0) += 1;
                         return taffy::geometry::Size { width: size.width, height: size.height };
                     }
+                    if let Some(entry) = pass_cache.get(&cache_key) {
+                        let target_w = fallback_size(known_dimensions.width, avail.width);
+                        let target_h = fallback_size(known_dimensions.height, avail.height);
+                        if let Some((stored_size, frag)) =
+                            find_layout_cache_fragment(entry, Size::new(target_w, target_h))
+                        {
+                            record_node_measure_hit(measure_box.id);
+                            flex_profile::record_measure_hit();
+                            flex_profile::record_measure_bucket_hit(w_state, h_state);
+                            flex_profile::record_measure_time(measure_timer);
+                            pass_cache
+                                .entry(cache_key)
+                                .or_default()
+                                .entry(key)
+                                .or_insert_with(|| (stored_size, std::sync::Arc::clone(&frag)));
+                            return taffy::geometry::Size {
+                                width: stored_size.width,
+                                height: stored_size.height,
+                            };
+                        }
+                    }
                     if let Ok(mut cache) = measured_fragments.lock() {
                         if let Some((size, frag)) = cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
                             pass_cache
