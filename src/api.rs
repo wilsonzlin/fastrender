@@ -3743,4 +3743,20 @@ mod tests {
             "object should set aspect ratio from SVG"
         );
     }
+
+    #[test]
+    fn scroll_snap_changes_fingerprint() {
+        let a = ComputedStyle::default();
+        let mut b = a.clone();
+
+        b.scroll_snap_type.axis = crate::style::types::ScrollSnapAxis::X;
+        b.scroll_snap_type.strictness = crate::style::types::ScrollSnapStrictness::Mandatory;
+        b.scroll_snap_align.inline = crate::style::types::ScrollSnapAlign::Center;
+        b.scroll_snap_stop = crate::style::types::ScrollSnapStop::Always;
+
+        let hash_a = style_layout_fingerprint(&a);
+        let hash_b = style_layout_fingerprint(&b);
+
+        assert_ne!(hash_a, hash_b, "scroll snap settings must influence layout fingerprints");
+    }
 }

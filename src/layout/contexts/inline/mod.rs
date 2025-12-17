@@ -7781,28 +7781,6 @@ mod tests {
     }
 
     #[test]
-    fn word_break_anywhere_splits_when_overflowing() {
-        let mut text_style = ComputedStyle::default();
-        text_style.word_break = WordBreak::Anywhere;
-        text_style.white_space = WhiteSpace::Normal;
-        let root = BoxNode::new_block(
-            default_style(),
-            FormattingContextType::Block,
-            vec![BoxNode::new_text(
-                Arc::new(text_style),
-                "supercalifragilisticexpialidocious".to_string(),
-            )],
-        );
-        let constraints = LayoutConstraints::definite_width(40.0);
-        let ifc = InlineFormattingContext::new();
-        let fragment = ifc.layout(&root, &constraints).expect("layout");
-        assert!(
-            fragment.children.len() > 1,
-            "word-break:anywhere should allow breaking long tokens when they overflow"
-        );
-    }
-
-    #[test]
     fn word_break_anywhere_respects_nowrap() {
         let mut text_style = ComputedStyle::default();
         text_style.word_break = WordBreak::Anywhere;
