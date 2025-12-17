@@ -1107,6 +1107,35 @@ mod tests {
     }
 
     #[test]
+    fn compute_replaced_height_percentage_derives_width_from_ratio() {
+        let mut style = ComputedStyle::default();
+        style.height = Some(Length::percent(60.0));
+        style.aspect_ratio = crate::style::types::AspectRatio::Ratio(1.25);
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            intrinsic_size: None,
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(
+            &style,
+            &replaced,
+            Some(Size::new(200.0, 300.0)),
+            Size::new(800.0, 600.0),
+        );
+
+        // Height 60% of 300px resolves to 180px; aspect ratio derives width to 225px.
+        assert!((size.height - 180.0).abs() < 0.01);
+        assert!((size.width - 225.0).abs() < 0.01);
+    }
+
+    #[test]
     fn resolves_scrollbar_width_keywords() {
         let mut style = ComputedStyle::default();
         style.scrollbar_width = ScrollbarWidth::Auto;
