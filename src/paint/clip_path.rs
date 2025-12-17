@@ -1,9 +1,8 @@
 use crate::geometry::{Point, Rect};
-use crate::layout::utils::resolve_font_relative_length;
 use crate::paint::display_list::BorderRadii;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::style::types::{BackgroundPosition, BasicShape, ClipPath, ClipRadii, FillRule, ReferenceBox, ShapeRadius};
-use crate::style::values::{Length, LengthUnit};
+use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use tiny_skia::{FillRule as SkFillRule, IntSize, Mask, MaskType, PathBuilder, Pixmap, Rect as SkRect};
@@ -391,15 +390,16 @@ fn resolve_clip_length(
     style: &ComputedStyle,
     percentage_base: f32,
     viewport: (f32, f32),
-    font_ctx: &FontContext,
+    _font_ctx: &FontContext,
 ) -> f32 {
-    match len.unit {
-        LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
-        u if u.is_font_relative() => resolve_font_relative_length(len, style, font_ctx),
-        u if u.is_viewport_relative() => len.resolve_with_viewport(viewport.0, viewport.1).unwrap_or(len.value),
-        _ if len.unit.is_absolute() => len.to_px(),
-        _ => len.value,
-    }
+    len.resolve_with_context(
+        Some(percentage_base),
+        viewport.0,
+        viewport.1,
+        style.font_size,
+        style.root_font_size,
+    )
+    .unwrap_or(len.value)
 }
 
 fn resolve_clip_radii(

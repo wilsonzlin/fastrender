@@ -5550,22 +5550,22 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
     for component in &style.transform {
         let next = match component {
             crate::css::types::Transform::Translate(x, y) => {
-                let tx = resolve_transform_length(x, style.font_size, percentage_width);
-                let ty = resolve_transform_length(y, style.font_size, percentage_height);
+                let tx = resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+                let ty = resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                 Transform::from_translate(tx, ty)
             }
             crate::css::types::Transform::TranslateX(x) => {
-                let tx = resolve_transform_length(x, style.font_size, percentage_width);
+                let tx = resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
                 Transform::from_translate(tx, 0.0)
             }
             crate::css::types::Transform::TranslateY(y) => {
-                let ty = resolve_transform_length(y, style.font_size, percentage_height);
+                let ty = resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                 Transform::from_translate(0.0, ty)
             }
             crate::css::types::Transform::TranslateZ(_) => Transform::identity(),
             crate::css::types::Transform::Translate3d(x, y, _) => {
-                let tx = resolve_transform_length(x, style.font_size, percentage_width);
-                let ty = resolve_transform_length(y, style.font_size, percentage_height);
+                let tx = resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+                let ty = resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                 Transform::from_translate(tx, ty)
             }
             crate::css::types::Transform::Scale(sx, sy) => Transform::from_scale(*sx, *sy),
@@ -5631,8 +5631,8 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
         ts = ts.pre_concat(next);
     }
 
-    let origin_x = resolve_transform_length(&style.transform_origin.x, style.font_size, percentage_width);
-    let origin_y = resolve_transform_length(&style.transform_origin.y, style.font_size, percentage_height);
+    let origin_x = resolve_transform_length(&style.transform_origin.x, style.font_size, style.root_font_size, percentage_width);
+    let origin_y = resolve_transform_length(&style.transform_origin.y, style.font_size, style.root_font_size, percentage_height);
     let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
     // Apply transform around the resolved origin.
@@ -5643,13 +5643,17 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
     Some(ts)
 }
 
-fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
-    match len.unit {
-        LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
-        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size),
-        _ if len.unit.is_absolute() => len.to_px(),
-        _ => len.value,
-    }
+fn resolve_transform_length(len: &Length, font_size: f32, root_font_size: f32, percentage_base: f32) -> f32 {
+    let needs_viewport = len.unit.is_viewport_relative()
+        || len
+            .calc
+            .as_ref()
+            .map(|c| c.has_viewport_relative())
+            .unwrap_or(false);
+    let (vw, vh) = if needs_viewport { (f32::NAN, f32::NAN) } else { (0.0, 0.0) };
+
+    len.resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
+        .unwrap_or(len.value)
 }
 
 fn transform_rect(rect: Rect, ts: &Transform) -> Rect {

@@ -21,22 +21,19 @@ pub fn resolve_object_position(
         PositionComponent::Keyword(PositionKeyword::Center) => free * 0.5,
         PositionComponent::Keyword(PositionKeyword::End) => free,
         PositionComponent::Length(len) => {
-            match () {
-                _ if len.unit.is_percentage() => len.resolve_against(free).unwrap_or(0.0),
-                _ if len.unit.is_absolute() => len.to_px(),
-                _ if len.unit.is_font_relative() => {
-                    len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size)
-                }
-                _ if len.unit.is_viewport_relative() => {
-                    if let Some((vw, vh)) = viewport {
-                        len.resolve_with_viewport(vw, vh).unwrap_or(len.value)
-                    } else {
-                        // Fallback: treat unresolved viewport units as raw numbers to avoid panics.
-                        len.value
-                    }
-                }
-                _ => len.value,
-            }
+            let needs_viewport = len.unit.is_viewport_relative()
+                || len
+                    .calc
+                    .as_ref()
+                    .map(|c| c.has_viewport_relative())
+                    .unwrap_or(false);
+            let (vw, vh) = match viewport {
+                Some((vw, vh)) => (vw, vh),
+                None if needs_viewport => (f32::NAN, f32::NAN),
+                None => (0.0, 0.0),
+            };
+            len.resolve_with_context(Some(free), vw, vh, font_size, font_size)
+                .unwrap_or(len.value)
         }
         PositionComponent::Percentage(pct) => free * pct,
     }
@@ -97,6 +94,7 @@ pub fn compute_object_fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::values::{CalcLength, Length, LengthUnit};
 
     #[test]
     fn contain_centers_image() {
@@ -148,7 +146,7 @@ mod tests {
     #[test]
     fn font_relative_lengths_use_font_size() {
         let position = ObjectPosition {
-            x: PositionComponent::Length(crate::style::values::Length::em(2.0)),
+            x: PositionComponent::Length(Length::em(2.0)),
             y: PositionComponent::Keyword(PositionKeyword::Start),
         };
 
@@ -161,7 +159,6 @@ mod tests {
 
     #[test]
     fn viewport_units_resolve_when_available() {
-        use crate::style::values::{Length, LengthUnit};
         let position = ObjectPosition {
             x: PositionComponent::Length(Length::new(10.0, LengthUnit::Vw)),
             y: PositionComponent::Keyword(PositionKeyword::Start),
@@ -181,5 +178,42 @@ mod tests {
         .expect("fit computed");
         assert!((offset_x - 20.0).abs() < 0.01);
         assert!((offset_y - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calc_positions_resolve_with_available_context() {
+        // Percentage + absolute calc resolves against the free space.
+        let calc = CalcLength::single(LengthUnit::Percent, 50.0)
+            .add_scaled(&CalcLength::single(LengthUnit::Px, 10.0), 1.0)
+            .expect("calc terms");
+        let position = ObjectPosition {
+            x: PositionComponent::Length(Length::calc(calc)),
+            y: PositionComponent::Keyword(PositionKeyword::Start),
+        };
+
+        let (offset_x, _, _, _) =
+            compute_object_fit(ObjectFit::None, position, 120.0, 50.0, 20.0, 20.0, 16.0, None)
+                .expect("fit computed");
+        // free_x = 100 (box 120 - dest_w 20). 50% + 10px => 60px.
+        assert!((offset_x - 60.0).abs() < 0.01);
+
+        // Viewport-relative calc resolves when a viewport is provided.
+        let viewport_calc = CalcLength::single(LengthUnit::Vw, 10.0);
+        let position = ObjectPosition {
+            x: PositionComponent::Length(Length::calc(viewport_calc)),
+            y: PositionComponent::Keyword(PositionKeyword::Start),
+        };
+        let (offset_x, _, _, _) = compute_object_fit(
+            ObjectFit::None,
+            position,
+            100.0,
+            50.0,
+            50.0,
+            50.0,
+            16.0,
+            Some((200.0, 100.0)),
+        )
+        .expect("fit computed");
+        assert!((offset_x - 20.0).abs() < 0.01);
     }
 }

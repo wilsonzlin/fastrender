@@ -1403,22 +1403,22 @@ impl DisplayListBuilder {
         for component in &style.transform {
             let next = match component {
                 crate::css::types::Transform::Translate(x, y) => {
-                    let tx = Self::resolve_transform_length(x, style.font_size, percentage_width);
-                    let ty = Self::resolve_transform_length(y, style.font_size, percentage_height);
+                    let tx = Self::resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+                    let ty = Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                     Transform2D::translate(tx, ty)
                 }
                 crate::css::types::Transform::TranslateX(x) => {
-                    let tx = Self::resolve_transform_length(x, style.font_size, percentage_width);
+                    let tx = Self::resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
                     Transform2D::translate(tx, 0.0)
                 }
                 crate::css::types::Transform::TranslateY(y) => {
-                    let ty = Self::resolve_transform_length(y, style.font_size, percentage_height);
+                    let ty = Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                     Transform2D::translate(0.0, ty)
                 }
                 crate::css::types::Transform::TranslateZ(_) => Transform2D::identity(),
                 crate::css::types::Transform::Translate3d(x, y, _) => {
-                    let tx = Self::resolve_transform_length(x, style.font_size, percentage_width);
-                    let ty = Self::resolve_transform_length(y, style.font_size, percentage_height);
+                    let tx = Self::resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+                    let ty = Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                     Transform2D::translate(tx, ty)
                 }
                 crate::css::types::Transform::Scale(sx, sy) => Transform2D::scale(*sx, *sy),
@@ -1498,8 +1498,8 @@ impl DisplayListBuilder {
             ts = ts.multiply(&next);
         }
 
-        let origin_x = Self::resolve_transform_length(&style.transform_origin.x, style.font_size, percentage_width);
-        let origin_y = Self::resolve_transform_length(&style.transform_origin.y, style.font_size, percentage_height);
+        let origin_x = Self::resolve_transform_length(&style.transform_origin.x, style.font_size, style.root_font_size, percentage_width);
+        let origin_y = Self::resolve_transform_length(&style.transform_origin.y, style.font_size, style.root_font_size, percentage_height);
         let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
         let translate_to_origin = Transform2D::translate(origin.x, origin.y);
@@ -1507,13 +1507,17 @@ impl DisplayListBuilder {
         Some(translate_to_origin.multiply(&ts).multiply(&translate_back))
     }
 
-    fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
-        match len.unit {
-            LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
-            LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size),
-            _ if len.unit.is_absolute() => len.to_px(),
-            _ => len.value,
-        }
+    fn resolve_transform_length(len: &Length, font_size: f32, root_font_size: f32, percentage_base: f32) -> f32 {
+        let needs_viewport = len.unit.is_viewport_relative()
+            || len
+                .calc
+                .as_ref()
+                .map(|c| c.has_viewport_relative())
+                .unwrap_or(false);
+        let (vw, vh) = if needs_viewport { (f32::NAN, f32::NAN) } else { (0.0, 0.0) };
+
+        len.resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
+            .unwrap_or(len.value)
     }
 
     fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point) {
@@ -3583,7 +3587,7 @@ mod tests {
         BackgroundImage, BackgroundLayer, BackgroundRepeat, ImageRendering, MixBlendMode, TextDecorationLine,
         TransformBox,
     };
-    use crate::style::values::Length;
+    use crate::style::values::{CalcLength, Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedType;
     use base64::{engine::general_purpose, Engine as _};
@@ -4816,6 +4820,24 @@ mod tests {
         let transform = DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
 
         assert!((transform.e + 15.0).abs() < 1e-3);
+        assert!((transform.f).abs() < 1e-3);
+    }
+
+    #[test]
+    fn transform_translate_resolves_calc_components() {
+        let mut style = ComputedStyle::default();
+        style.font_size = 10.0;
+        style.root_font_size = 12.0;
+        let calc = CalcLength::single(LengthUnit::Percent, 50.0)
+            .add_scaled(&CalcLength::single(LengthUnit::Em, 2.0), 1.0)
+            .expect("calc terms");
+        style.transform.push(Transform::Translate(Length::calc(calc), Length::percent(0.0)));
+
+        let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
+        let transform = DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+
+        // 50% of 200 = 100; 2em at 10px = 20 -> total 120.
+        assert!((transform.e - 120.0).abs() < 1e-3);
         assert!((transform.f).abs() < 1e-3);
     }
 
