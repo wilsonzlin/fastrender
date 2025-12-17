@@ -622,6 +622,18 @@ mod tests {
             ":has() is unsupported and should fail selector() queries"
         );
     }
+
+    #[test]
+    fn supports_selector_handles_invalid_selector_list() {
+        let cond = SupportsCondition::Selector("div:unknown-pseudo, span".into());
+        assert!(
+            !cond.matches(),
+            "selector() should fail when any selector in the list is unsupported"
+        );
+
+        let cond = SupportsCondition::Selector("div + span".into());
+        assert!(cond.matches(), "supported selector list should be accepted");
+    }
 }
 
 impl Default for StyleSheet {
