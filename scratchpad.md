@@ -431,6 +431,7 @@ Inline coordinate fix (Mar 2026):
 - Latest run: `FASTR_RENDER_TIMINGS=1 FASTR_INTRINSIC_STATS=1 target/release/fetch_and_render file:///root/r/fastrender/fetches/html/cnn.com.html` → parse ~30–36ms, cascade ~4.4–5.8s, box_tree ~0.9–1.1s, box_count 8715, layout ~1.4–1.7s, paint ~22–29s, total ~30–55s. Intrinsic stats stable: lookups ~58k, hits ~38k (65%), stores ~15k, block_calls ~52k, flex_calls ~460, inline_calls ~5k. Paint remains dominant bottleneck.
 
 ## Recent changes (this branch)
+- Pseudo-element selector matching now reports support for ::before/::after/::marker instead of rejecting all pseudo-elements; added a dom test to cover match_pseudo_element for these pseudos.
 - HTML `nowrap` presentational hint now maps `td`/`th` `nowrap` attributes to `white-space: nowrap`, and UA defaults set `<nobr>` to `white-space: nowrap`; cascade tests cover the hint, override, and nobr default.
 - `<wbr>` elements now synthesize a zero-width break text child during DOM conversion so optional break opportunities participate in line breaking without losing selector styling; regression added in dom tests.
 - Flex-to-fragment conversion was dropping flex item contents: `taffy_to_fragment` rebuilt child fragments without using real layout results, so flex items lost their text/images (CNN rendered almost blank). Fixed by re-laying out each flex child with the definite size Taffy resolved and positioning the resulting fragment at the Taffy coordinates, preserving the measured content. `FASTR_DUMP_COMMANDS` debug flag now prints display list command types/rects.

@@ -565,10 +565,14 @@ impl<'a> Element for ElementRef<'a> {
 
     fn match_pseudo_element(
         &self,
-        _pseudo: &PseudoElement,
+        pseudo: &PseudoElement,
         _context: &mut selectors::matching::MatchingContext<Self::Impl>,
     ) -> bool {
-        false // We don't render pseudo-elements yet
+        match pseudo {
+            // These pseudo-elements are supported for all elements; filtering
+            // based on box generation happens later in the pipeline.
+            PseudoElement::Before | PseudoElement::After | PseudoElement::Marker => true,
+        }
     }
 
     fn is_link(&self) -> bool {
@@ -1033,5 +1037,25 @@ mod tests {
         let ancestors: Vec<&DomNode> = vec![&root];
         assert!(matches(&root, &[], &PseudoClass::Scope));
         assert!(!matches(&child, &ancestors, &PseudoClass::Scope));
+    }
+
+    #[test]
+    fn pseudo_element_matching_reports_supported_pseudos() {
+        let node = element("div", vec![]);
+        let ancestors: Vec<&DomNode> = vec![];
+        let mut caches = SelectorCaches::default();
+        let mut context = MatchingContext::new(
+            MatchingMode::ForStatelessPseudoElement,
+            None,
+            &mut caches,
+            QuirksMode::NoQuirks,
+            NeedsSelectorFlags::No,
+            MatchingForInvalidation::No,
+        );
+        let element_ref = ElementRef::with_ancestors(&node, &ancestors);
+
+        assert!(element_ref.match_pseudo_element(&PseudoElement::Before, &mut context));
+        assert!(element_ref.match_pseudo_element(&PseudoElement::After, &mut context));
+        assert!(element_ref.match_pseudo_element(&PseudoElement::Marker, &mut context));
     }
 }
