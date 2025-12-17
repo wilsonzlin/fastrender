@@ -1152,7 +1152,6 @@ fn is_inherited_property(name: &str) -> bool {
             | "text-emphasis-position"
             | "text-transform"
             | "text-combine-upright"
-            | "text-wrap"
             | "letter-spacing"
             | "word-spacing"
             | "white-space"
@@ -5222,18 +5221,6 @@ pub fn apply_declaration_with_base(
                 PropertyValue::Percentage(p) if *p >= 0.0 => TextSizeAdjust::Percentage(*p),
                 _ => styles.text_size_adjust,
             };
-        }
-        "text-wrap" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.text_wrap = match kw.as_str() {
-                    "wrap" | "auto" | "normal" => TextWrap::Auto,
-                    "nowrap" => TextWrap::NoWrap,
-                    "balance" => TextWrap::Balance,
-                    "pretty" => TextWrap::Pretty,
-                    "stable" => TextWrap::Stable,
-                    _ => styles.text_wrap,
-                };
-            }
         }
         "text-wrap" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
