@@ -434,6 +434,15 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
             let link_tag_lower = link_tag.to_lowercase();
 
             if link_tag_lower.contains("stylesheet") {
+                if let Some(media) = extract_attr_value(link_tag, "media") {
+                    let media_lower = media.to_ascii_lowercase();
+                    let has_screen = media_lower.contains("screen") || media_lower.contains("all");
+                    let has_print = media_lower.contains("print");
+                    if has_print && !has_screen {
+                        pos = abs_start + link_end + 1;
+                        continue;
+                    }
+                }
                 if let Some(href_start) = link_tag_lower.find("href") {
                     let href_section = &link_tag[href_start..];
                     if let Some(quote_start) = href_section.find('"').or_else(|| href_section.find('\'')) {
@@ -737,7 +746,10 @@ mod tests {
             <link rel="stylesheet" href="https://cdn.example.com/app.css?foo=bar\u0026baz=qux">
         "#;
         let urls = extract_css_links(html, "https://example.com/");
-        assert_eq!(urls, vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]);
+        assert_eq!(
+            urls,
+            vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]
+        );
     }
 
     #[test]
@@ -782,7 +794,10 @@ mod tests {
             </script>
         "#;
         let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert_eq!(urls, vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]);
+        assert_eq!(
+            urls,
+            vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]
+        );
     }
 
     #[test]
@@ -798,6 +813,23 @@ mod tests {
             vec![
                 "https://example.com/a.css".to_string(),
                 "https://example.com/b.css".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_print_only_stylesheets() {
+        let html = r#"
+            <link rel="stylesheet" media="print" href="/print.css">
+            <link rel="stylesheet" media="screen,print" href="/screen.css">
+            <link rel="stylesheet" href="/default.css">
+        "#;
+        let urls = extract_css_links(html, "https://example.com/");
+        assert_eq!(
+            urls,
+            vec![
+                "https://example.com/screen.css".to_string(),
+                "https://example.com/default.css".to_string(),
             ]
         );
     }
