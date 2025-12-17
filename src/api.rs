@@ -1519,9 +1519,13 @@ impl FastRender {
                                     replaced_box.intrinsic_size = Some(Size::new(w, h));
                                 }
                                 if needs_ratio && !explicit_no_ratio {
-                                    replaced_box.aspect_ratio = image
-                                        .intrinsic_ratio(orientation)
-                                        .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+                                    replaced_box.aspect_ratio = image.intrinsic_ratio(orientation).or_else(|| {
+                                        if h > 0.0 {
+                                            Some(w / h)
+                                        } else {
+                                            None
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -1555,9 +1559,13 @@ impl FastRender {
                                 replaced_box.intrinsic_size = Some(Size::new(w, h));
                             }
                             if needs_ratio && !explicit_no_ratio {
-                                replaced_box.aspect_ratio = image
-                                    .intrinsic_ratio(orientation)
-                                    .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+                                replaced_box.aspect_ratio = image.intrinsic_ratio(orientation).or_else(|| {
+                                    if h > 0.0 {
+                                        Some(w / h)
+                                    } else {
+                                        None
+                                    }
+                                });
                             }
                         }
                     }
@@ -1582,9 +1590,13 @@ impl FastRender {
                                 replaced_box.intrinsic_size = Some(Size::new(w, h));
                             }
                             if needs_ratio && !explicit_no_ratio {
-                                replaced_box.aspect_ratio = image
-                                    .intrinsic_ratio(orientation)
-                                    .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+                                replaced_box.aspect_ratio = image.intrinsic_ratio(orientation).or_else(|| {
+                                    if h > 0.0 {
+                                        Some(w / h)
+                                    } else {
+                                        None
+                                    }
+                                });
                             }
                         }
                     }
@@ -2408,6 +2420,14 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
     hash_enum_discriminant(&style.scroll_snap_align.inline, &mut h);
     hash_enum_discriminant(&style.scroll_snap_align.block, &mut h);
     hash_enum_discriminant(&style.scroll_snap_stop, &mut h);
+    hash_length(&style.scroll_padding_top, &mut h);
+    hash_length(&style.scroll_padding_right, &mut h);
+    hash_length(&style.scroll_padding_bottom, &mut h);
+    hash_length(&style.scroll_padding_left, &mut h);
+    hash_length(&style.scroll_margin_top, &mut h);
+    hash_length(&style.scroll_margin_right, &mut h);
+    hash_length(&style.scroll_margin_bottom, &mut h);
+    hash_length(&style.scroll_margin_left, &mut h);
     hash_enum_discriminant(&style.scrollbar_width, &mut h);
     hash_scrollbar_color(&style.scrollbar_color, &mut h);
     hash_list_style_type(&style.list_style_type, &mut h);
@@ -2672,6 +2692,17 @@ fn diff_layout_fields(old: &ComputedStyle, new: &ComputedStyle) -> Vec<String> {
     cmp!(unicode_bidi);
     cmp!(text_align);
     cmp!(text_align_last);
+    cmp!(scroll_snap_type);
+    cmp!(scroll_snap_align);
+    cmp!(scroll_snap_stop);
+    cmp!(scroll_padding_top);
+    cmp!(scroll_padding_right);
+    cmp!(scroll_padding_bottom);
+    cmp!(scroll_padding_left);
+    cmp!(scroll_margin_top);
+    cmp!(scroll_margin_right);
+    cmp!(scroll_margin_bottom);
+    cmp!(scroll_margin_left);
     cmp!(vertical_align);
     cmp!(line_height);
     cmp!(font_size);
@@ -2891,12 +2922,29 @@ fn snap_axis_flags(axis: ScrollSnapAxis, inline_vertical: bool) -> (bool, bool) 
     }
 }
 
-fn snap_position(alignment: ScrollSnapAlign, start: f32, extent: f32, viewport_extent: f32) -> Option<f32> {
+fn resolve_snap_length(len: Length, percentage_base: f32) -> f32 {
+    len.resolve_against(percentage_base).unwrap_or_else(|| len.to_px())
+}
+
+fn snap_position(
+    alignment: ScrollSnapAlign,
+    start: f32,
+    extent: f32,
+    viewport_extent: f32,
+    padding_start: f32,
+    padding_end: f32,
+    margin_start: f32,
+    margin_end: f32,
+) -> Option<f32> {
+    let target_start = start - margin_start;
+    let target_end = start + extent + margin_end;
     match alignment {
         ScrollSnapAlign::None => None,
-        ScrollSnapAlign::Start => Some(start),
-        ScrollSnapAlign::End => Some(start + extent - viewport_extent),
-        ScrollSnapAlign::Center => Some(start + extent * 0.5 - viewport_extent * 0.5),
+        ScrollSnapAlign::Start => Some(target_start - padding_start),
+        ScrollSnapAlign::End => Some(target_end - (viewport_extent - padding_end)),
+        ScrollSnapAlign::Center => {
+            Some((target_start + target_end) * 0.5 - (padding_start + (viewport_extent - padding_end)) * 0.5)
+        }
     }
 }
 
@@ -2946,6 +2994,8 @@ fn collect_snap_targets(
     snap_x: bool,
     snap_y: bool,
     viewport: Size,
+    padding_x: (f32, f32),
+    padding_y: (f32, f32),
     bounds: &mut SnapBounds,
     targets_x: &mut Vec<(f32, ScrollSnapStop)>,
     targets_y: &mut Vec<(f32, ScrollSnapStop)>,
@@ -2960,22 +3010,46 @@ fn collect_snap_targets(
 
     if let Some(style) = node.style.as_ref() {
         if snap_x {
+            let margin_start = resolve_snap_length(style.scroll_margin_left, viewport.width);
+            let margin_end = resolve_snap_length(style.scroll_margin_right, viewport.width);
+            let (padding_start, padding_end) = padding_x;
             let align_x = if inline_vertical {
                 style.scroll_snap_align.block
             } else {
                 style.scroll_snap_align.inline
             };
-            if let Some(pos) = snap_position(align_x, abs_bounds.x(), abs_bounds.width(), viewport.width) {
+            if let Some(pos) = snap_position(
+                align_x,
+                abs_bounds.x(),
+                abs_bounds.width(),
+                viewport.width,
+                padding_start,
+                padding_end,
+                margin_start,
+                margin_end,
+            ) {
                 targets_x.push((pos, style.scroll_snap_stop));
             }
         }
         if snap_y {
+            let margin_start = resolve_snap_length(style.scroll_margin_top, viewport.height);
+            let margin_end = resolve_snap_length(style.scroll_margin_bottom, viewport.height);
+            let (padding_start, padding_end) = padding_y;
             let align_y = if inline_vertical {
                 style.scroll_snap_align.inline
             } else {
                 style.scroll_snap_align.block
             };
-            if let Some(pos) = snap_position(align_y, abs_bounds.y(), abs_bounds.height(), viewport.height) {
+            if let Some(pos) = snap_position(
+                align_y,
+                abs_bounds.y(),
+                abs_bounds.height(),
+                viewport.height,
+                padding_start,
+                padding_end,
+                margin_start,
+                margin_end,
+            ) {
                 targets_y.push((pos, style.scroll_snap_stop));
             }
         }
@@ -2990,6 +3064,8 @@ fn collect_snap_targets(
             snap_x,
             snap_y,
             viewport,
+            padding_x,
+            padding_y,
             bounds,
             targets_x,
             targets_y,
@@ -3032,6 +3108,14 @@ fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point
         return scroll;
     }
 
+    let padding_x = (
+        resolve_snap_length(style.scroll_padding_left, viewport.width).max(0.0),
+        resolve_snap_length(style.scroll_padding_right, viewport.width).max(0.0),
+    );
+    let padding_y = (
+        resolve_snap_length(style.scroll_padding_top, viewport.height).max(0.0),
+        resolve_snap_length(style.scroll_padding_bottom, viewport.height).max(0.0),
+    );
     let mut targets_x = Vec::new();
     let mut targets_y = Vec::new();
     let mut bounds = SnapBounds::default();
@@ -3044,6 +3128,8 @@ fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point
         snap_x,
         snap_y,
         viewport,
+        padding_x,
+        padding_y,
         &mut bounds,
         &mut targets_x,
         &mut targets_y,
@@ -4273,6 +4359,64 @@ mod tests {
     }
 
     #[test]
+    fn scroll_padding_insets_snapport_alignment() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body {
+                    margin: 0;
+                    height: 100%;
+                    scroll-snap-type: y mandatory;
+                    scroll-padding-top: 40px;
+                }
+                section { height: 100px; scroll-snap-align: start; }
+            </style>
+            <section></section>
+            <section></section>
+        "#;
+
+        let dom = renderer.parse_html(html).unwrap();
+        let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
+
+        let (_, style, _) = super::find_snap_container(&fragments.root, Point::ZERO).expect("snap container");
+        assert!(
+            (style.scroll_padding_top.to_px() - 40.0).abs() < 0.1,
+            "scroll-padding should parse"
+        );
+
+        let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 120.0));
+        assert!(
+            (snapped.y - 60.0).abs() < 0.1,
+            "scroll-padding should inset snap positions (snapped={:?})",
+            snapped
+        );
+    }
+
+    #[test]
+    fn scroll_margin_shifts_snap_targets() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body { margin: 0; height: 100%; scroll-snap-type: y mandatory; }
+                section { height: 120px; scroll-snap-align: start; }
+                section + section { scroll-margin-top: 30px; }
+            </style>
+            <section></section>
+            <section></section>
+        "#;
+
+        let dom = renderer.parse_html(html).unwrap();
+        let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
+
+        let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 130.0));
+        assert!(
+            (snapped.y - 90.0).abs() < 0.1,
+            "scroll-margin should shift snap targets (snapped={:?})",
+            snapped
+        );
+    }
+
+    #[test]
     fn scroll_snap_horizontal_mandatory_adjusts_offsets() {
         let mut renderer = FastRender::new().unwrap();
         let html = r#"
@@ -4302,12 +4446,7 @@ mod tests {
             (snapped.x - 200.0).abs() < 0.1,
             "expected snap to the second section on the inline axis (snapped={:?}, xs={:?}, content={:?})",
             snapped,
-            fragments
-                .root
-                .children
-                .iter()
-                .map(|c| c.bounds.x())
-                .collect::<Vec<_>>(),
+            fragments.root.children.iter().map(|c| c.bounds.x()).collect::<Vec<_>>(),
             fragments.content_size()
         );
         assert!(snapped.y.abs() < 0.1);
@@ -4352,6 +4491,8 @@ mod tests {
             snap_x,
             snap_y,
             Size::new(100.0, 100.0),
+            (0.0, 0.0),
+            (0.0, 0.0),
             &mut bounds,
             &mut targets_x,
             &mut targets_y,
@@ -4385,11 +4526,8 @@ mod tests {
             vec![],
             Arc::new(child_style.clone()),
         );
-        let child_b = FragmentNode::new_block_styled(
-            Rect::from_xywh(200.0, 0.0, 100.0, 100.0),
-            vec![],
-            Arc::new(child_style),
-        );
+        let child_b =
+            FragmentNode::new_block_styled(Rect::from_xywh(200.0, 0.0, 100.0, 100.0), vec![], Arc::new(child_style));
 
         let container = FragmentNode::new_block_styled(
             Rect::from_xywh(0.0, 0.0, 400.0, 200.0),
@@ -4423,11 +4561,8 @@ mod tests {
             vec![],
             Arc::new(child_style.clone()),
         );
-        let child_b = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 200.0, 100.0, 100.0),
-            vec![],
-            Arc::new(child_style),
-        );
+        let child_b =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 200.0, 100.0, 100.0), vec![], Arc::new(child_style));
 
         let container = FragmentNode::new_block_styled(
             Rect::from_xywh(0.0, 0.0, 200.0, 400.0),
@@ -4447,18 +4582,9 @@ mod tests {
 
     #[test]
     fn scroll_snap_stop_always_breaks_ties() {
-        let candidates = vec![
-            (100.0, ScrollSnapStop::Normal),
-            (200.0, ScrollSnapStop::Always),
-        ];
+        let candidates = vec![(100.0, ScrollSnapStop::Normal), (200.0, ScrollSnapStop::Always)];
 
-        let snapped = super::pick_snap_target(
-            150.0,
-            400.0,
-            ScrollSnapStrictness::Mandatory,
-            50.0,
-            &candidates,
-        );
+        let snapped = super::pick_snap_target(150.0, 400.0, ScrollSnapStrictness::Mandatory, 50.0, &candidates);
 
         assert!(
             (snapped - 200.0).abs() < 0.1,

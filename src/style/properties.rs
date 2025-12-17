@@ -64,15 +64,16 @@ fn synthesize_area_line_names(styles: &mut ComputedStyle) {
     }
 
     if let Some(bounds) = crate::style::grid::validate_area_rectangles(&styles.grid_template_areas) {
-        let ensure_line = |lines: &mut Vec<Vec<String>>, names: &mut HashMap<String, Vec<usize>>, idx: usize, name: String| {
-            if lines.len() <= idx {
-                lines.resize(idx + 1, Vec::new());
-            }
-            if !lines[idx].contains(&name) {
-                lines[idx].push(name.clone());
-                names.entry(name).or_default().push(idx);
-            }
-        };
+        let ensure_line =
+            |lines: &mut Vec<Vec<String>>, names: &mut HashMap<String, Vec<usize>>, idx: usize, name: String| {
+                if lines.len() <= idx {
+                    lines.resize(idx + 1, Vec::new());
+                }
+                if !lines[idx].contains(&name) {
+                    lines[idx].push(name.clone());
+                    names.entry(name).or_default().push(idx);
+                }
+            };
 
         // Ensure line vectors are large enough for the current track counts.
         if styles.grid_column_line_names.len() < col_count + 1 {
@@ -2363,6 +2364,26 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "scroll-snap-type" => styles.scroll_snap_type = source.scroll_snap_type,
         "scroll-snap-align" => styles.scroll_snap_align = source.scroll_snap_align,
         "scroll-snap-stop" => styles.scroll_snap_stop = source.scroll_snap_stop,
+        "scroll-padding" => {
+            styles.scroll_padding_top = source.scroll_padding_top;
+            styles.scroll_padding_right = source.scroll_padding_right;
+            styles.scroll_padding_bottom = source.scroll_padding_bottom;
+            styles.scroll_padding_left = source.scroll_padding_left;
+        }
+        "scroll-padding-top" => styles.scroll_padding_top = source.scroll_padding_top,
+        "scroll-padding-right" => styles.scroll_padding_right = source.scroll_padding_right,
+        "scroll-padding-bottom" => styles.scroll_padding_bottom = source.scroll_padding_bottom,
+        "scroll-padding-left" => styles.scroll_padding_left = source.scroll_padding_left,
+        "scroll-margin" => {
+            styles.scroll_margin_top = source.scroll_margin_top;
+            styles.scroll_margin_right = source.scroll_margin_right;
+            styles.scroll_margin_bottom = source.scroll_margin_bottom;
+            styles.scroll_margin_left = source.scroll_margin_left;
+        }
+        "scroll-margin-top" => styles.scroll_margin_top = source.scroll_margin_top,
+        "scroll-margin-right" => styles.scroll_margin_right = source.scroll_margin_right,
+        "scroll-margin-bottom" => styles.scroll_margin_bottom = source.scroll_margin_bottom,
+        "scroll-margin-left" => styles.scroll_margin_left = source.scroll_margin_left,
         "overflow-anchor" => styles.overflow_anchor = source.overflow_anchor,
         "pointer-events" => styles.pointer_events = source.pointer_events,
         "touch-action" => styles.touch_action = source.touch_action,
@@ -5826,6 +5847,72 @@ pub fn apply_declaration_with_base(
                 if let Some(val) = parse_overscroll_keyword(kw) {
                     styles.overscroll_behavior_y = val;
                 }
+            }
+        }
+        "scroll-padding" => {
+            if let Some(values) = extract_scroll_padding_values(&resolved_value) {
+                let mut top = styles.scroll_padding_top;
+                let mut right = styles.scroll_padding_right;
+                let mut bottom = styles.scroll_padding_bottom;
+                let mut left = styles.scroll_padding_left;
+                apply_box_values(&mut top, &mut right, &mut bottom, &mut left, values);
+                styles.scroll_padding_top = top;
+                styles.scroll_padding_right = right;
+                styles.scroll_padding_bottom = bottom;
+                styles.scroll_padding_left = left;
+            }
+        }
+        "scroll-padding-top" => {
+            if let Some(len) = extract_scroll_padding_length(&resolved_value) {
+                styles.scroll_padding_top = len;
+            }
+        }
+        "scroll-padding-right" => {
+            if let Some(len) = extract_scroll_padding_length(&resolved_value) {
+                styles.scroll_padding_right = len;
+            }
+        }
+        "scroll-padding-bottom" => {
+            if let Some(len) = extract_scroll_padding_length(&resolved_value) {
+                styles.scroll_padding_bottom = len;
+            }
+        }
+        "scroll-padding-left" => {
+            if let Some(len) = extract_scroll_padding_length(&resolved_value) {
+                styles.scroll_padding_left = len;
+            }
+        }
+        "scroll-margin" => {
+            if let Some(values) = extract_box_values(&resolved_value) {
+                let mut top = styles.scroll_margin_top;
+                let mut right = styles.scroll_margin_right;
+                let mut bottom = styles.scroll_margin_bottom;
+                let mut left = styles.scroll_margin_left;
+                apply_box_values(&mut top, &mut right, &mut bottom, &mut left, values);
+                styles.scroll_margin_top = top;
+                styles.scroll_margin_right = right;
+                styles.scroll_margin_bottom = bottom;
+                styles.scroll_margin_left = left;
+            }
+        }
+        "scroll-margin-top" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                styles.scroll_margin_top = len;
+            }
+        }
+        "scroll-margin-right" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                styles.scroll_margin_right = len;
+            }
+        }
+        "scroll-margin-bottom" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                styles.scroll_margin_bottom = len;
+            }
+        }
+        "scroll-margin-left" => {
+            if let Some(len) = extract_length(&resolved_value) {
+                styles.scroll_margin_left = len;
             }
         }
         "scroll-snap-type" => {
@@ -9959,6 +10046,29 @@ pub fn extract_margin_values(value: &PropertyValue) -> Option<Vec<Option<Length>
     }
 }
 
+pub fn extract_scroll_padding_length(value: &PropertyValue) -> Option<Length> {
+    match value {
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => Some(Length::px(0.0)),
+        _ => extract_length(value),
+    }
+}
+
+pub fn extract_scroll_padding_values(value: &PropertyValue) -> Option<Vec<Length>> {
+    match value {
+        PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => Some(vec![Length::px(0.0)]),
+        PropertyValue::Length(_) | PropertyValue::Number(_) => extract_scroll_padding_length(value).map(|v| vec![v]),
+        PropertyValue::Multiple(values) => {
+            let lengths: Vec<Length> = values.iter().filter_map(extract_scroll_padding_length).collect();
+            if lengths.is_empty() {
+                None
+            } else {
+                Some(lengths)
+            }
+        }
+        _ => None,
+    }
+}
+
 pub fn extract_box_values(value: &PropertyValue) -> Option<Vec<Length>> {
     match value {
         PropertyValue::Length(len) => Some(vec![*len]),
@@ -13965,9 +14075,7 @@ mod tests {
                 &Declaration {
                     property: "cursor".to_string(),
                     value: PropertyValue::Multiple(vec![
-                        PropertyValue::Keyword(
-                            "image-set(url(\"low.cur\") 1x, url(\"hi.cur\") 2x)".to_string(),
-                        ),
+                        PropertyValue::Keyword("image-set(url(\"low.cur\") 1x, url(\"hi.cur\") 2x)".to_string()),
                         PropertyValue::Keyword(",".to_string()),
                         PropertyValue::Keyword("crosshair".to_string()),
                     ]),

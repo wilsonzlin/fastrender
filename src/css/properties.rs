@@ -218,6 +218,16 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "scroll-snap-type",
     "scroll-snap-align",
     "scroll-snap-stop",
+    "scroll-padding",
+    "scroll-padding-top",
+    "scroll-padding-right",
+    "scroll-padding-bottom",
+    "scroll-padding-left",
+    "scroll-margin",
+    "scroll-margin-top",
+    "scroll-margin-right",
+    "scroll-margin-bottom",
+    "scroll-margin-left",
     "overflow",
     "overflow-x",
     "overflow-y",
@@ -884,23 +894,23 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "background-image"
                 | "background-repeat"
                 | "background-size"
-            | "background-attachment"
-            | "background-origin"
-            | "background-clip"
-            | "border"
-            | "border-top"
-            | "border-right"
-            | "border-bottom"
-            | "border-left"
-            | "image-orientation"
-            | "image-resolution"
-            | "scrollbar-color"
-            | "margin"
-            | "padding"
-            | "border-inline"
-            | "border-inline-start"
-            | "border-inline-end"
-            | "border-block"
+                | "background-attachment"
+                | "background-origin"
+                | "background-clip"
+                | "border"
+                | "border-top"
+                | "border-right"
+                | "border-bottom"
+                | "border-left"
+                | "image-orientation"
+                | "image-resolution"
+                | "scrollbar-color"
+                | "margin"
+                | "padding"
+                | "border-inline"
+                | "border-inline-start"
+                | "border-inline-end"
+                | "border-block"
                 | "border-block-start"
                 | "border-block-end"
                 | "outline"
