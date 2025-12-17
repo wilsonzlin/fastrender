@@ -1309,7 +1309,7 @@ impl FormattingContext for FlexFormattingContext {
                 fragment.bounds.height()
             };
 
-            for (child_node, child_fragment) in box_node.children.iter().zip(fragment.children.iter_mut()) {
+            for (child_node, child_fragment) in in_flow_children.iter().zip(fragment.children.iter_mut()) {
                 let align = child_node.style.align_self.unwrap_or(box_node.style.align_items);
                 let child_cross = if cross_is_horizontal {
                     child_fragment.bounds.width()
