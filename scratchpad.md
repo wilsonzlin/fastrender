@@ -7,6 +7,7 @@ Idle; no current tasks. Available for new tasks.
 - Pull from origin currently times out (ssh fetch). Commit `f888136` is local; push pending once network permits.
 - Push over SSH still timing out; HTTPS requires creds. Origin reset to SSH. Commits `f888136` and `d47eb9a` remain local.
 - Archived local commits as patches in `local_patches/` (full series covering all local commits) so others can apply while pushes are blocked. Push over SSH still timing out; HTTPS requires creds.
+- Fixed display list underline currentColor test to assert resolved color/thickness (removed unused vars); warnings gone. Patch archive in `local_patches/` continues to carry all local commits while push remains blocked (SSH timeouts/HTTPS creds).
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
