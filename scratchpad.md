@@ -20,6 +20,7 @@
 # Rendered https://www.foxnews.com at 1200×800 (fox.png); page loads and renders with content visible (header/sections). No obvious issues spotted in quick scan.
 # Sticky positioning: fixed a bug where sticky elements with all-auto offsets were still clamped to the viewport/container (unwrap_or(0)), causing unintended movement. Now we only clamp axes with specified offsets. Added regression ensuring a sticky box with no offsets stays put.
 # Added background image-rendering coverage: display-list builder regression ensures pixelated backgrounds use nearest-neighbor sampling; roadmap marks image-rendering implemented. `cargo test background_image_rendering_pixelated_sets_nearest_filter_quality --quiet` passes.
+# Added background image-rendering coverage: crisp-edges backgrounds now assert nearest-neighbor sampling in both display-list builder and painter (`cargo test background_image_rendering_crisp_edges_sets_nearest_filter_quality --quiet`, `cargo test background_image_rendering_crisp_edges_uses_nearest_sampling --quiet`).
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.
