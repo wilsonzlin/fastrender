@@ -7757,7 +7757,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn word_break_break_word_respects_nowrap() {
         let mut text_style = ComputedStyle::default();
         text_style.word_break = WordBreak::BreakWord;

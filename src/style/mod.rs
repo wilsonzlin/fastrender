@@ -426,6 +426,7 @@ pub struct ComputedStyle {
     pub counters: CounterProperties,
 
     // Color and background
+    pub forced_color_adjust: ForcedColorAdjust,
     pub color_scheme: ColorSchemePreference,
     pub caret_color: CaretColor,
     pub accent_color: AccentColor,
@@ -661,6 +662,7 @@ impl Default for ComputedStyle {
             list_style_position: ListStylePosition::Outside,
             list_style_image: ListStyleImage::None,
             counters: CounterProperties::default(),
+            forced_color_adjust: ForcedColorAdjust::Auto,
             color_scheme: ColorSchemePreference::Normal,
             caret_color: CaretColor::Auto,
             accent_color: AccentColor::Auto,

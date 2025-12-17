@@ -2377,6 +2377,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.cursor = source.cursor;
             styles.cursor_images = source.cursor_images.clone();
         }
+        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "accent-color" => styles.accent_color = source.accent_color,
         "caret-color" => styles.caret_color = source.caret_color,
         "color-scheme" => styles.color_scheme = source.color_scheme.clone(),
@@ -10218,6 +10219,7 @@ mod tests {
         );
         assert!(matches!(style.word_break, WordBreak::Anywhere));
     }
+    #[test]
     fn parses_flex_flow_shorthand() {
         let mut style = ComputedStyle::default();
         apply_declaration(
