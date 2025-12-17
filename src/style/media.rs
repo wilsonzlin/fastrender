@@ -506,7 +506,39 @@ enum RangeValueKey {
     Resolution(ResolutionKey),
 }
 
-pub type MediaQueryCache = HashMap<MediaQueryKey, bool>;
+#[derive(Debug, Default)]
+pub struct MediaQueryCache {
+    results: HashMap<MediaQueryKey, bool>,
+    key_cache: HashMap<usize, MediaQueryKey>,
+}
+
+impl MediaQueryCache {
+    fn key_for(&mut self, query: &MediaQuery) -> MediaQueryKey {
+        let ptr = query as *const MediaQuery as usize;
+        if let Some(existing) = self.key_cache.get(&ptr) {
+            return existing.clone();
+        }
+        let key = MediaQueryKey::from(query);
+        self.key_cache.insert(ptr, key.clone());
+        key
+    }
+
+    fn get(&self, key: &MediaQueryKey) -> Option<bool> {
+        self.results.get(key).copied()
+    }
+
+    fn insert(&mut self, key: MediaQueryKey, value: bool) {
+        self.results.insert(key, value);
+    }
+
+    pub fn len(&self) -> usize {
+        self.results.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.results.is_empty()
+    }
+}
 
 impl From<&MediaQuery> for MediaQueryKey {
     fn from(query: &MediaQuery) -> Self {
@@ -1799,9 +1831,9 @@ impl MediaContext {
     /// Evaluates a single media query with optional caching.
     pub fn evaluate_with_cache(&self, query: &MediaQuery, cache: Option<&mut MediaQueryCache>) -> bool {
         if let Some(cache) = cache {
-            let key = MediaQueryKey::from(query);
+            let key = cache.key_for(query);
             if let Some(hit) = cache.get(&key) {
-                return *hit;
+                return hit;
             }
 
             let result = self.evaluate(query);
