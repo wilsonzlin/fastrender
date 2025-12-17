@@ -292,30 +292,53 @@ impl<'a> ElementRef<'a> {
             .unwrap_or(false)
     }
 
-    fn focus_flag(&self) -> bool {
-        let wants_focus = self
-            .node
-            .get_attribute_ref("data-fastr-focus")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-
-        if !wants_focus {
+    fn node_focus_flag(node: &DomNode) -> bool {
+        if let DomNodeType::Element { namespace, .. } = &node.node_type {
+            if namespace == SVG_NAMESPACE {
+                let focusable = node
+                    .get_attribute_ref("focusable")
+                    .map(|v| v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                if !focusable {
+                    return false;
+                }
+            }
+        } else {
             return false;
         }
 
-        // Only allow focus when the element is focusable. For SVG, the default is unfocusable unless
-        // the `focusable` attribute is explicitly set to true.
-        if let DomNodeType::Element { namespace, attributes, .. } = &self.node.node_type {
-            if namespace == SVG_NAMESPACE {
-                return attributes
-                    .iter()
-                    .find(|(k, _)| k.eq_ignore_ascii_case("focusable"))
-                    .map(|(_, v)| v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false);
-            }
+        node.get_attribute_ref("data-fastr-focus")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    fn focus_flag(&self) -> bool {
+        Self::node_focus_flag(self.node)
+    }
+
+    fn focus_visible_flag(&self) -> bool {
+        if !Self::node_focus_flag(self.node) {
+            return false;
         }
 
-        true
+        self.node
+            .get_attribute_ref("data-fastr-focus-visible")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    fn subtree_contains_focus(&self) -> bool {
+        Self::node_or_descendant_has_focus(self.node)
+    }
+
+    fn node_or_descendant_has_focus(node: &DomNode) -> bool {
+        if Self::node_focus_flag(node) {
+            return true;
+        }
+
+        node.children
+            .iter()
+            .any(Self::node_or_descendant_has_focus)
     }
 
     /// Find index of this element among sibling elements and the total number of element siblings.
@@ -1384,7 +1407,8 @@ impl<'a> Element for ElementRef<'a> {
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover => self.hover_flag(),
             PseudoClass::Focus => self.focus_flag(),
-            PseudoClass::FocusWithin | PseudoClass::FocusVisible => false,
+            PseudoClass::FocusWithin => self.subtree_contains_focus(),
+            PseudoClass::FocusVisible => self.focus_visible_flag(),
             PseudoClass::Active => self.active_flag(),
             PseudoClass::Checked => self.is_checked(),
             PseudoClass::Link => self.is_link() && !self.visited_flag(),
@@ -2165,6 +2189,143 @@ mod tests {
             children: vec![],
         };
         assert!(matches(&svg, &[], &PseudoClass::Focus));
+    }
+
+    #[test]
+    fn svg_focusable_false_blocks_focus_even_when_flagged() {
+        let svg = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("focusable".to_string(), "false".to_string()),
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        assert!(!matches(&svg, &[], &PseudoClass::Focus));
+    }
+
+    #[test]
+    fn focus_within_matches_focused_element() {
+        let focused = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("data-fastr-focus".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+
+        assert!(matches(&focused, &[], &PseudoClass::FocusWithin));
+    }
+
+    #[test]
+    fn focus_within_matches_descendant_focus() {
+        let mut parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "button".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("data-fastr-focus".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+
+        parent.children.push(child);
+
+        assert!(matches(&parent, &[], &PseudoClass::FocusWithin));
+    }
+
+    #[test]
+    fn focus_within_respects_svg_focusable() {
+        let mut parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let svg_unfocusable = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![("data-fastr-focus".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+
+        parent.children.push(svg_unfocusable);
+
+        assert!(!matches(&parent, &[], &PseudoClass::FocusWithin));
+
+        let mut parent_focusable = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let svg_focusable = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("focusable".to_string(), "true".to_string()),
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        parent_focusable.children.push(svg_focusable);
+
+        assert!(matches(&parent_focusable, &[], &PseudoClass::FocusWithin));
+    }
+
+    #[test]
+    fn focus_visible_matches_when_flagged() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "button".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                    ("data-fastr-focus-visible".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        assert!(matches(&dom, &[], &PseudoClass::FocusVisible));
+    }
+
+    #[test]
+    fn focus_visible_requires_visible_flag() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "button".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("data-fastr-focus".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+
+        assert!(!matches(&dom, &[], &PseudoClass::FocusVisible));
     }
 
     #[test]
