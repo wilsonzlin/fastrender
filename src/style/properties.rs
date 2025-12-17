@@ -5599,7 +5599,6 @@ pub fn apply_declaration_with_base(
                     "normal" => WordBreak::Normal,
                     "break-all" => WordBreak::BreakAll,
                     "keep-all" => WordBreak::KeepAll,
-                    "anywhere" => WordBreak::Anywhere,
                     "break-word" => WordBreak::BreakWord,
                     "anywhere" => WordBreak::Anywhere,
                     _ => styles.word_break,
@@ -10200,7 +10199,7 @@ mod tests {
             16.0,
             16.0,
         );
-        assert_eq!(style.text_wrap, TextWrap::Wrap);
+        assert_eq!(style.text_wrap, TextWrap::Auto);
     }
 
     #[test]

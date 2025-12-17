@@ -511,6 +511,22 @@ fn env_override_prefers_reduced_data() {
     drop(guard_invalid);
 }
 
+/// Tests prefers-reduced-data media feature evaluation
+#[test]
+fn test_prefers_reduced_data() {
+    let normal_ctx = MediaContext::screen(1024.0, 768.0);
+    let reduced_ctx = MediaContext::screen(1024.0, 768.0).with_reduced_data(true);
+
+    let reduce_query = MediaQuery::parse("(prefers-reduced-data: reduce)").unwrap();
+    let no_pref_query = MediaQuery::parse("(prefers-reduced-data: no-preference)").unwrap();
+
+    assert!(!normal_ctx.evaluate(&reduce_query));
+    assert!(normal_ctx.evaluate(&no_pref_query));
+
+    assert!(reduced_ctx.evaluate(&reduce_query));
+    assert!(!reduced_ctx.evaluate(&no_pref_query));
+}
+
 // ============================================================================
 // Pointer and Hover Tests
 // ============================================================================
