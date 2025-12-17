@@ -10185,6 +10185,33 @@ mod tests {
     }
 
     #[test]
+    fn text_indent_hanging_indents_soft_wrapped_lines() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(10.0);
+        root_style.text_indent.hanging = true;
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "longword longword longword".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(80.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() >= 2, "soft wrap should create multiple lines");
+        let first_x = fragment.children[0].children[0].bounds.x();
+        let second_x = fragment.children[1].children[0].bounds.x();
+        assert!(first_x < 1.0, "first line should remain unindented under hanging");
+        assert!(second_x >= 9.0, "soft-wrapped lines should receive hanging indent");
+    }
+
+    #[test]
     fn text_indent_hanging_each_line_skips_first_line() {
         let mut root_style = ComputedStyle::default();
         root_style.text_indent.length = Length::px(12.0);
