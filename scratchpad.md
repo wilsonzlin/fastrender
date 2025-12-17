@@ -34,11 +34,19 @@ Idle; no current tasks. Available for new tasks.
 - Fixed grid repeat(auto-fit/auto-fill) parsing to retain named lines: named line mappings now survive auto-repeat blocks, and new tests cover auto-fit/auto-fill named line preservation. `cargo test --quiet auto_fill_repeat_keeps_named_lines` passes.
 - Counter style fallbacks: lower-greek now has regression coverage for out-of-range values falling back to decimal; Armenian tests now also assert lower-armenian out-of-range fallback. `cargo test --quiet counter_style_armenian_variants` passes.
 - Float shrink-to-fit clamps to min-width: added a layout regression where a floating block with only `min-width` in a 100px container still uses its 150px min width (shrink-to-fit + min/max clamp). `cargo test --quiet float_auto_width_honors_min_width` passes.
+- Media: added coverage for `FASTR_PREFERS_REDUCED_TRANSPARENCY=no-preference` so env overrides handle both CLI flag values (`reduce`/`no-preference`).
+- Display list: added a builder regression to ensure text decorations inherit currentColor when `text-decoration-color` is unset (underline uses the text color).
 - Added viewport scroll snapping: render_html_with_scroll now adjusts scroll offsets based on scroll-snap-type/align/stop (container detected from fragment tree) with proximity/mandatory handling; new API tests cover snapping/threshold behavior.
 - 2028-XX-XX (Agent12): Fixed painting/display-list handling for sideways writing modes. Sideways writing now counts as vertical in painter/display list builder so vertical layout glyph offsets/ decorations render correctly. Added regression ensuring sideways-LR text produces vertical glyph offsets/decorations.
 - Border-spacing validation: border-spacing now rejects percentage values, clamps negative lengths to zero (including calc resolution), and resolves spacing with non-negative clamp. Added cascade + table tests. Git push currently timing out (SSH to github).
 - Rebased/pushed the border-spacing validation work; `cargo test border_spacing_percentages_are_ignored` passes locally.
 - CLI: fetch_and_render/render_pages/inspect_frag accept `--prefers-reduced-transparency reduce|no-preference` to set `FASTR_PREFERS_REDUCED_TRANSPARENCY` for media overrides (help text updated).
+<<<<<<< HEAD
+=======
+- Added media-query caching plumbing: MediaQueryCache/MediaQueryKey, cached evaluation helpers, and optional cache-aware collection/resolve/import pathways (StyleSheet + cascade). FastRender layout/iframe paths now reuse one cache across imports, font-face collection, and cascade. New regression `media_query_cache_reused_between_collections` verifies cached reuse; cargo check passes.
+- Media: added coverage for `FASTR_PREFERS_REDUCED_TRANSPARENCY=no-preference` so env overrides handle both CLI flag values (`reduce`/`no-preference`).
+- Display list: added a builder regression to ensure text decorations inherit currentColor when `text-decoration-color` is unset (underline uses the text color).
+>>>>>>> 852cfc3 (Note decoration/currentColor display-list regression)
 - Added shaping regression for sideways writing: pipeline shapes sideways-LR text with CW90 rotation to keep glyph orientation correct. Test skips when fonts unavailable.
 - Added scroll snap coverage for inline/horizontal axes and stop:always tie-breaking so snapping works for x/inline snap types and stop preferences.
 - Added scroll snap coverage for vertical writing modes: manual fragment-tree tests ensure block snapping targets the horizontal axis under vertical-rl and inline snapping targets the vertical axis, and stop:always tie-breaking is covered.

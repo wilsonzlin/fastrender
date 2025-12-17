@@ -3465,6 +3465,38 @@ mod tests {
     }
 
     #[test]
+    fn builder_text_decoration_uses_current_color_when_none() {
+        let mut style = ComputedStyle::default();
+        style.color = Rgba::GREEN;
+        style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+        // Leave text_decoration.color as None so it should resolve to currentColor.
+
+        let fragment = FragmentNode::new_text_styled(
+            Rect::from_xywh(0.0, 0.0, 50.0, 16.0),
+            "Hi".to_string(),
+            12.0,
+            Arc::new(style),
+        );
+
+        let builder = DisplayListBuilder::new();
+        let list = builder.build(&fragment);
+
+        let deco_color = list
+            .items()
+            .iter()
+            .find_map(|item| {
+                if let DisplayItem::TextDecoration(dec) = item {
+                    dec.decorations.first().map(|d| d.color)
+                } else {
+                    None
+                }
+            })
+            .expect("text decoration emitted");
+
+        assert_eq!(deco_color, Rgba::GREEN);
+    }
+
+    #[test]
     fn builder_resolves_font_relative_underline_offset() {
         let mut style = ComputedStyle::default();
         style.text_decoration.lines = TextDecorationLine::UNDERLINE;
