@@ -219,11 +219,18 @@ fn resolve_simple_var(
     // Variable not found - try fallback
     if let Some(fallback_str) = fallback {
         // The fallback may itself contain var() references
-        if let Some(mut parsed) = parse_resolved_value(fallback_str, property_name) {
+        let resolved_fallback = resolve_embedded_vars(fallback_str, custom_properties, depth + 1);
+
+        // If the fallback still contains unresolved var() calls, the declaration is invalid.
+        if resolved_fallback.contains("var(") {
+            return VarResolutionResult::NotFound(resolved_fallback);
+        }
+
+        if let Some(mut parsed) = parse_resolved_value(&resolved_fallback, property_name) {
             parsed = resolve_var_recursive(&parsed, custom_properties, depth + 1, property_name).unwrap_or(parsed);
             return VarResolutionResult::Resolved(parsed);
         }
-        let as_keyword = PropertyValue::Keyword(fallback_str.to_string());
+        let as_keyword = PropertyValue::Keyword(resolved_fallback);
         return resolve_var_recursive(&as_keyword, custom_properties, depth + 1, property_name);
     }
 
@@ -595,6 +602,14 @@ mod tests {
     fn unresolved_var_marks_declaration_invalid() {
         let props = HashMap::new();
         let value = PropertyValue::Keyword("var(--missing)".to_string());
+        let resolved = resolve_var_for_property(&value, &props, "color");
+        assert!(matches!(resolved, VarResolutionResult::NotFound(_)));
+    }
+
+    #[test]
+    fn unresolved_fallback_var_marks_declaration_invalid() {
+        let props = make_props(&[("--fallback", "var(--still-missing)")]);
+        let value = PropertyValue::Keyword("var(--missing, var(--fallback))".to_string());
         let resolved = resolve_var_for_property(&value, &props, "color");
         assert!(matches!(resolved, VarResolutionResult::NotFound(_)));
     }

@@ -1500,3 +1500,5 @@ Actionable borrowings:
 - Media queries: resolution parsing retains fractional precision; regression in `test_resolution_parse` asserts 1.3333dppx is preserved.
 - Media queries: `prefers-color-scheme` parsing is case-insensitive; regression updated to accept uppercase inputs.
 - Table rowspans: spanning height distribution now shares evenly when uncapped; regression `baseline_height_computation_skips_rowspanning_cells` ensures a tall rowspan cell doesn’t overinflate the preceding row.
+- CSS custom properties: fallback resolution now marks declarations invalid when the fallback still contains unresolved var() references; regression `unresolved_fallback_var_marks_declaration_invalid` added.
+- Bug hunt: rendered https://httpbin.org/html (looks OK) and https://wikipedia.org at 1200×800. Wikipedia render came out as a tiny compressed block (~238×64px of content in the center) instead of the full portal layout, suggesting a font-size/layout scaling issue (likely rem/percent font-size base). Pending investigation/fix.
