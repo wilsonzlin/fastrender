@@ -62,8 +62,10 @@ use crate::error::{Error, RenderError, Result};
 use crate::geometry::{Point, Rect, Size};
 use crate::image_loader::ImageCache;
 use crate::image_output::{encode_image, OutputFormat};
+use crate::layout::absolute_positioning::resolve_positioned_style;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem;
+use crate::layout::contexts::positioned::ContainingBlock;
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::layout::flex_profile::{flex_profile_enabled, log_flex_profile, reset_flex_profile};
 use crate::layout::formatting_context::{intrinsic_cache_clear, intrinsic_cache_reset_counters, intrinsic_cache_stats};
@@ -580,7 +582,7 @@ impl FastRender {
         }
 
         // Layout the document
-        let fragment_tree = self.layout_document(&dom, width, height)?;
+        let mut fragment_tree = self.layout_document(&dom, width, height)?;
 
         if std::env::var("FASTR_LOG_FRAG_BOUNDS")
             .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
@@ -734,6 +736,8 @@ impl FastRender {
             .unwrap_or(false);
         let viewport_size = Size::new(width as f32, height as f32);
         let scroll = apply_scroll_snap(&fragment_tree, viewport_size, Point::new(scroll_x, scroll_y));
+
+        self.apply_sticky_offsets(&mut fragment_tree.root, Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height), scroll, viewport_size);
 
         let (target_width, target_height) = if expand_full_page {
             let content_bounds = fragment_tree.content_size();
@@ -1640,6 +1644,70 @@ impl FastRender {
             Some(Size::new(width, height))
         } else {
             None
+        }
+    }
+
+    fn apply_sticky_offsets(&self, fragment: &mut FragmentNode, parent_rect: Rect, scroll: Point, viewport: Size) {
+        let abs_origin = Point::new(parent_rect.x() + fragment.bounds.x(), parent_rect.y() + fragment.bounds.y());
+        let abs_rect = Rect::from_xywh(abs_origin.x, abs_origin.y, fragment.bounds.width(), fragment.bounds.height());
+
+        for child in fragment.children.iter_mut() {
+            self.apply_sticky_offsets(child, abs_rect, scroll, viewport);
+        }
+
+        let Some(style) = fragment.style.as_ref() else {
+            return;
+        };
+        if !style.position.is_sticky() {
+            return;
+        }
+
+        let inline_base = Some(parent_rect.width());
+        let block_base = if parent_rect.height() > 0.0 {
+            Some(parent_rect.height())
+        } else {
+            None
+        };
+        let containing_block = ContainingBlock::with_viewport_and_bases(parent_rect, viewport, inline_base, block_base);
+        let positioned = resolve_positioned_style(style, &containing_block, viewport, &self.font_context);
+        let constraints = crate::layout::contexts::positioned::StickyConstraints::from_style(
+            &positioned,
+            &containing_block,
+            &self.font_context,
+        );
+        if !constraints.has_constraints() {
+            return;
+        }
+
+        let mut screen_x = abs_rect.x() - scroll.x;
+        let mut screen_y = abs_rect.y() - scroll.y;
+
+        if let Some(left) = constraints.left {
+            screen_x = screen_x.max(left);
+        }
+        if let Some(right) = constraints.right {
+            screen_x = screen_x.min(viewport.width - right - abs_rect.width());
+        }
+        if let Some(top) = constraints.top {
+            screen_y = screen_y.max(top);
+        }
+        if let Some(bottom) = constraints.bottom {
+            screen_y = screen_y.min(viewport.height - bottom - abs_rect.height());
+        }
+
+        let mut new_abs_x = screen_x + scroll.x;
+        let mut new_abs_y = screen_y + scroll.y;
+
+        let cb_min_x = parent_rect.x();
+        let cb_min_y = parent_rect.y();
+        let cb_max_x = parent_rect.max_x();
+        let cb_max_y = parent_rect.max_y();
+        new_abs_x = new_abs_x.min(cb_max_x - abs_rect.width()).max(cb_min_x);
+        new_abs_y = new_abs_y.min(cb_max_y - abs_rect.height()).max(cb_min_y);
+
+        let delta = Point::new(new_abs_x - abs_rect.x(), new_abs_y - abs_rect.y());
+        if delta.x.abs() > f32::EPSILON || delta.y.abs() > f32::EPSILON {
+            *fragment = fragment.translate(delta);
         }
     }
 
@@ -3299,6 +3367,38 @@ mod tests {
 
         assert_eq!(pixel(&top), (255, 0, 0, 255));
         assert_eq!(pixel(&scrolled), (0, 255, 0, 255));
+    }
+
+    #[test]
+    fn sticky_element_stays_pinned_when_scrolled() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body { margin: 0; padding: 0; }
+                .sticky { position: sticky; top: 0; height: 10px; background: rgb(255, 0, 0); }
+                .content { height: 100px; background: rgb(0, 255, 0); }
+            </style>
+            <div class="sticky"></div>
+            <div class="content"></div>
+        "#;
+
+        let top = renderer
+            .render_html_with_scroll(html, 20, 20, 0.0, 0.0)
+            .expect("render at scroll 0");
+        let scrolled = renderer
+            .render_html_with_scroll(html, 20, 20, 0.0, 20.0)
+            .expect("render with scroll offset");
+
+        let sample = |pixmap: &Pixmap, x: u32, y: u32| {
+            let width = pixmap.width();
+            let data = pixmap.data();
+            let idx = ((y * width + x) * 4) as usize;
+            (data[idx], data[idx + 1], data[idx + 2], data[idx + 3])
+        };
+
+        assert_eq!(sample(&top, 0, 0), (255, 0, 0, 255));
+        assert_eq!(sample(&scrolled, 0, 0), (255, 0, 0, 255));
+        assert_eq!(sample(&scrolled, 10, 15), (0, 255, 0, 255));
     }
 
     #[test]
