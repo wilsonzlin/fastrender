@@ -4796,7 +4796,7 @@ mod tests {
         let decls = parse_declarations("color: red;");
         assert_eq!(decls.len(), 1);
         if let crate::css::types::PropertyValue::Color(c) = &decls[0].value {
-            assert_eq!(*c, crate::style::color::Color::Rgba(Rgba::RED));
+            assert_eq!(c, &crate::style::color::Color::Rgba(Rgba::RED));
         } else {
             panic!("color did not parse");
         }

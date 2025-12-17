@@ -655,8 +655,7 @@ impl TextItem {
             return best_break;
         }
 
-        let can_overflow_break_word =
-            matches!(self.style.word_break, WordBreak::BreakWord | WordBreak::Anywhere);
+        let can_overflow_break_word = matches!(self.style.word_break, WordBreak::BreakWord | WordBreak::Anywhere);
         let can_overflow_break_by_wrap = self.style.overflow_wrap == OverflowWrap::BreakWord;
 
         if can_overflow_break_word || can_overflow_break_by_wrap {
@@ -1407,7 +1406,6 @@ impl<'a> LineBuilder<'a> {
         let para_start = self.next_line_is_para_start;
         self.next_line_is_para_start = false;
         let indent_for_line = self.compute_indent_for_line(para_start, is_first_line);
-        let indent_cut = indent_for_line.max(0.0);
         let base_width = if is_first_line {
             self.first_line_width
         } else {
@@ -1420,16 +1418,14 @@ impl<'a> LineBuilder<'a> {
                 LineSpaceOptions::default().line_height(self.strut_metrics.line_height),
             );
             self.current_line_space = Some(space);
-            let width = (space.width - indent_cut).max(0.0);
-            self.current_line.available_width = width;
-            self.current_line.box_width = space.width - indent_cut;
+            self.current_line.available_width = space.width;
+            self.current_line.box_width = space.width;
             self.current_line.left_offset = space.left_edge;
             self.current_y = self.current_y.max((space.y - self.float_base_y).max(0.0));
         } else {
-            let w = (base_width - indent_cut).max(0.0);
             self.current_line_space = None;
-            self.current_line.available_width = w;
-            self.current_line.box_width = w;
+            self.current_line.available_width = base_width;
+            self.current_line.box_width = base_width;
             self.current_line.left_offset = 0.0;
         }
         self.current_line.indent = indent_for_line;
@@ -3442,11 +3438,7 @@ mod tests {
         let lines = builder.finish();
         assert_eq!(lines.len(), 1);
 
-        let actual: String = lines[0]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let actual: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
 
         let logical = format!(
             "L {}{}A{}BD{}C{}{} R",
@@ -3604,11 +3596,7 @@ mod tests {
         let lines = builder.finish();
         assert_eq!(lines.len(), 1);
 
-        let actual: String = lines[0]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let actual: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
 
         let logical = format!(
             "L {}X {}abc{} Y{} R",
@@ -3657,19 +3645,11 @@ mod tests {
         let lines = builder.finish();
         assert_eq!(lines.len(), 2);
 
-        let actual_para1: String = lines[0]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let actual_para1: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
         let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{202e}', '\u{202c}'), Some(Level::ltr()));
         assert_eq!(actual_para1, expected_para1);
 
-        let actual_para2: String = lines[1]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let actual_para2: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
         let expected_para2 = reorder_with_controls(&format!("{}XYZ{}", '\u{202a}', '\u{202c}'), Some(Level::ltr()));
         assert_eq!(actual_para2, expected_para2);
     }
@@ -3700,19 +3680,11 @@ mod tests {
         let lines = builder.finish();
         assert_eq!(lines.len(), 2);
 
-        let para1_text: String = lines[0]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let para1_text: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
         let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{202e}', '\u{202c}'), Some(Level::ltr()));
         assert_eq!(para1_text, expected_para1);
 
-        let para2_text: String = lines[1]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let para2_text: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
         assert_eq!(para2_text, "DEF".to_string());
     }
 
@@ -3751,19 +3723,11 @@ mod tests {
         let lines = builder.finish();
         assert_eq!(lines.len(), 2);
 
-        let para1_text: String = lines[0]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let para1_text: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
         let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{202e}', '\u{202c}'), Some(Level::ltr()));
         assert_eq!(para1_text, expected_para1);
 
-        let para2_text: String = lines[1]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let para2_text: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
         let expected_para2 = reorder_with_controls(&format!("{}XYZ{}", '\u{202b}', '\u{202c}'), Some(Level::ltr()));
         assert_eq!(para2_text, expected_para2);
     }
@@ -3785,7 +3749,11 @@ mod tests {
             UnicodeBidi::BidiOverride,
         );
         para1.add_child(InlineItem::Text(make_text_item("AB", 20.0)));
-        para1.add_child(InlineItem::Text(make_text_item_with_bidi("cd", 20.0, UnicodeBidi::Embed)));
+        para1.add_child(InlineItem::Text(make_text_item_with_bidi(
+            "cd",
+            20.0,
+            UnicodeBidi::Embed,
+        )));
         builder.add_item(InlineItem::InlineBox(para1));
         builder.force_break();
 
@@ -3806,22 +3774,14 @@ mod tests {
         let lines = builder.finish();
         assert_eq!(lines.len(), 2);
 
-        let para1_text: String = lines[0]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let para1_text: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
         let expected_para1 = reorder_with_controls(
             &format!("{}AB{}{}cd{}", '\u{202e}', '\u{202c}', '\u{202b}', '\u{202c}'),
             Some(Level::ltr()),
         );
         assert_eq!(para1_text, expected_para1);
 
-        let para2_text: String = lines[1]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let para2_text: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
         let expected_para2 = reorder_with_controls(&format!("{}EF{}", '\u{202a}', '\u{202c}'), Some(Level::ltr()));
         assert_eq!(para2_text, expected_para2);
     }
@@ -3850,19 +3810,11 @@ mod tests {
         let lines = builder.finish();
         assert_eq!(lines.len(), 2);
 
-        let para1_text: String = lines[0]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let para1_text: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
         let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{2067}', '\u{2069}'), Some(Level::ltr()));
         assert_eq!(para1_text, expected_para1);
 
-        let para2_text: String = lines[1]
-            .items
-            .iter()
-            .map(|p| flatten_text(&p.item))
-            .collect();
+        let para2_text: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
         assert_eq!(para2_text, "DEF".to_string());
     }
 

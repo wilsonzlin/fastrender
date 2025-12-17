@@ -9654,6 +9654,30 @@ mod tests {
     }
 
     #[test]
+    fn text_indent_does_not_reduce_available_width() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_indent.length = Length::px(40.0);
+        root_style.font_size = 16.0;
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "word word".to_string())],
+        );
+        // Text should still fit on one line; indent shifts start without shortening available width.
+        let constraints = LayoutConstraints::definite_width(80.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert_eq!(
+            fragment.children.len(),
+            1,
+            "indent should not force wrapping by shrinking width"
+        );
+    }
+
+    #[test]
     fn text_indent_each_line_applies_to_following_lines() {
         let mut root_style = ComputedStyle::default();
         root_style.text_indent.length = Length::px(8.0);
