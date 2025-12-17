@@ -41,6 +41,8 @@ Idle; no current tasks.
 - Added CSS `text-size-adjust`: new computed type/default (auto), inherited, parsed keywords/percentages, property list updates, and cascade tests. `cargo test text_size_adjust --quiet` passes.
 - Added CSS `text-rendering`: new computed type/default (auto), inherited, property parsing (optimizeSpeed/optimizeLegibility/geometricPrecision), property lists, and regression tests. `cargo test text_rendering --quiet` passes.
 
+- Added media query coverage for `prefers-reduced-transparency` (evaluation and env override) plus a MediaContext setter; restored `text_size_adjust` field in ComputedStyle to fix build break from earlier merge.
+
 - Added `:target-within` pseudo-class: selector parsing/serialization, DOM subtree target detection, and parsing/matching regression covering ancestors and target elements.
 
 - Added regression for `scrollbar-width` global keywords (inherit/revert/revert-layer/unset) to lock cascade behavior; no functional change needed.
