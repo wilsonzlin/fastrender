@@ -63,6 +63,7 @@ pub enum PseudoClass {
     Hover,
     Active,
     Focus,
+    PlaceholderShown,
     Link,
     Visited,
 }
@@ -117,6 +118,7 @@ impl ToCss for PseudoClass {
             PseudoClass::Hover => dest.write_str(":hover"),
             PseudoClass::Active => dest.write_str(":active"),
             PseudoClass::Focus => dest.write_str(":focus"),
+            PseudoClass::PlaceholderShown => dest.write_str(":placeholder-shown"),
             PseudoClass::Link => dest.write_str(":link"),
             PseudoClass::Visited => dest.write_str(":visited"),
         }
@@ -181,6 +183,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "hover" => Ok(PseudoClass::Hover),
             "active" => Ok(PseudoClass::Active),
             "focus" => Ok(PseudoClass::Focus),
+            "placeholder-shown" => Ok(PseudoClass::PlaceholderShown),
             "link" => Ok(PseudoClass::Link),
             "visited" => Ok(PseudoClass::Visited),
             "any-link" => Ok(PseudoClass::AnyLink),
@@ -382,5 +385,6 @@ mod tests {
         assert_eq!(PseudoClass::AnyLink.to_css_string(), ":any-link");
         assert_eq!(PseudoClass::Target.to_css_string(), ":target");
         assert_eq!(PseudoClass::Scope.to_css_string(), ":scope");
+        assert_eq!(PseudoClass::PlaceholderShown.to_css_string(), ":placeholder-shown");
     }
 }

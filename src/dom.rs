@@ -338,6 +338,43 @@ impl<'a> ElementRef<'a> {
             })
     }
 
+    fn is_placeholder_shown(&self) -> bool {
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+
+        if tag.eq_ignore_ascii_case("input") {
+            if self.node.get_attribute("placeholder").is_none() {
+                return false;
+            }
+
+            let input_type = self.node.get_attribute("type").map(|t| t.to_ascii_lowercase());
+
+            if !supports_placeholder(&input_type) {
+                return false;
+            }
+
+            let value = self.node.get_attribute("value").unwrap_or_default();
+            return value.is_empty();
+        }
+
+        if tag.eq_ignore_ascii_case("textarea") {
+            if self.node.get_attribute("placeholder").is_none() {
+                return false;
+            }
+
+            let mut combined = String::new();
+            for child in &self.node.children {
+                if let DomNodeType::Text { content } = &child.node_type {
+                    combined.push_str(content);
+                }
+            }
+            return combined.is_empty();
+        }
+
+        false
+    }
+
     fn is_target(&self) -> bool {
         let Some(target) = current_target_fragment() else {
             return false;
@@ -374,6 +411,20 @@ fn lang_matches(range: &str, lang: &str) -> bool {
     }
     // Prefix match with boundary
     lang.starts_with(range) && lang.as_bytes().get(range.len()) == Some(&b'-')
+}
+
+fn supports_placeholder(input_type: &Option<String>) -> bool {
+    let Some(t) = input_type.as_ref() else {
+        return true;
+    };
+
+    match t.as_str() {
+        // Per HTML spec, placeholder is supported for text-like controls; unknown types default to text.
+        "text" | "search" | "url" | "tel" | "email" | "password" | "number" => true,
+        "hidden" | "submit" | "reset" | "button" | "image" | "file" | "checkbox" | "radio" | "range" | "color"
+        | "date" | "datetime-local" | "month" | "week" | "time" => false,
+        _ => true,
+    }
 }
 
 impl<'a> Element for ElementRef<'a> {
@@ -556,6 +607,7 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Target => self.is_target(),
             PseudoClass::Scope => self.all_ancestors.is_empty(),
             PseudoClass::Empty => self.is_empty(),
+            PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => false,
             PseudoClass::Link => self.is_link(),
@@ -983,6 +1035,65 @@ mod tests {
 
         assert!(matches(&area, &[], &PseudoClass::AnyLink));
         assert!(matches(&stylesheet_link, &[], &PseudoClass::AnyLink));
+    }
+
+    #[test]
+    fn placeholder_shown_matches_empty_controls() {
+        let input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("placeholder".to_string(), "Search".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&input, &[], &PseudoClass::PlaceholderShown));
+
+        let with_value = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("placeholder".to_string(), "Search".to_string()),
+                    ("value".to_string(), "query".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&with_value, &[], &PseudoClass::PlaceholderShown));
+
+        let checkbox = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "checkbox".to_string()),
+                    ("placeholder".to_string(), "X".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&checkbox, &[], &PseudoClass::PlaceholderShown));
+
+        let empty_textarea = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "textarea".to_string(),
+                attributes: vec![("placeholder".to_string(), "Describe".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&empty_textarea, &[], &PseudoClass::PlaceholderShown));
+
+        let prefilled_textarea = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "textarea".to_string(),
+                attributes: vec![("placeholder".to_string(), "Describe".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Text {
+                    content: "Hello".to_string(),
+                },
+                children: vec![],
+            }],
+        };
+        assert!(!matches(&prefilled_textarea, &[], &PseudoClass::PlaceholderShown));
     }
 
     #[test]
