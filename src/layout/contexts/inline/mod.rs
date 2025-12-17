@@ -9004,6 +9004,32 @@ mod tests {
     }
 
     #[test]
+    fn text_align_justify_single_line_respects_auto_last_line() {
+        let mut root_style = ComputedStyle::default();
+        root_style.font_size = 16.0;
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Auto;
+        root_style.white_space = WhiteSpace::PreWrap;
+        let root = BoxNode::new_block(
+            Arc::new(root_style),
+            FormattingContextType::Block,
+            vec![make_text_box("word word")],
+        );
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        let line = fragment.children.first().expect("line fragment");
+        assert_eq!(fragment.children.len(), 1, "single line expected");
+        let last = line.children.last().expect("text fragment");
+        let trailing_gap = line.bounds.x() + line.bounds.width() - (last.bounds.x() + last.bounds.width());
+        assert!(
+            trailing_gap > 40.0,
+            "single-line justify with auto last line should not stretch gaps; trailing_gap={trailing_gap}"
+        );
+    }
+
+    #[test]
     fn text_align_last_applies_to_paragraphs_split_by_hard_break() {
         let mut root_style = ComputedStyle::default();
         root_style.font_size = 16.0;
