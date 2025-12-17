@@ -425,12 +425,12 @@ impl<'a> ElementRef<'a> {
         }
 
         // Find the nearest select ancestor.
-        let select = self
-            .all_ancestors
-            .iter()
-            .rev()
-            .copied()
-            .find(|ancestor| ancestor.tag_name().map(|t| t.eq_ignore_ascii_case("select")).unwrap_or(false));
+        let select = self.all_ancestors.iter().rev().copied().find(|ancestor| {
+            ancestor
+                .tag_name()
+                .map(|t| t.eq_ignore_ascii_case("select"))
+                .unwrap_or(false)
+        });
 
         let Some(select_node) = select else {
             return false;
@@ -707,6 +707,34 @@ impl<'a> ElementRef<'a> {
         self.numeric_in_range(num)
     }
 
+    fn is_indeterminate(&self) -> bool {
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+        if tag.eq_ignore_ascii_case("input") {
+            let input_type = self
+                .node
+                .get_attribute("type")
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+
+            if matches!(input_type.as_str(), "checkbox" | "radio") {
+                return self.node.get_attribute("indeterminate").is_some();
+            }
+            return false;
+        }
+
+        if tag.eq_ignore_ascii_case("progress") {
+            // Missing or invalid value makes progress indeterminate.
+            let Some(value) = self.node.get_attribute("value") else {
+                return true;
+            };
+            return Self::parse_number(&value).is_none();
+        }
+
+        false
+    }
+
     /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
     fn direction(&self) -> TextDirection {
         if let Some(dir) = self.dir_attribute(self.node, self.node) {
@@ -840,8 +868,7 @@ fn first_enabled_option<'a>(node: &'a DomNode, optgroup_disabled: bool) -> Optio
     let is_option = tag.as_deref() == Some("option");
 
     let option_disabled = node.get_attribute("disabled").is_some();
-    let next_optgroup_disabled = optgroup_disabled
-        || (tag.as_deref() == Some("optgroup") && option_disabled);
+    let next_optgroup_disabled = optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
 
     if is_option && !(option_disabled || optgroup_disabled) {
         return Some(node);
@@ -1046,6 +1073,7 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Invalid => self.supports_validation() && !self.is_disabled() && !self.is_valid_control(),
             PseudoClass::InRange => !self.is_disabled() && self.range_state() == Some(true),
             PseudoClass::OutOfRange => !self.is_disabled() && self.range_state() == Some(false),
+            PseudoClass::Indeterminate => self.is_indeterminate(),
             PseudoClass::ReadOnly => !self.is_read_write(),
             PseudoClass::ReadWrite => self.is_read_write(),
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
@@ -1901,6 +1929,48 @@ mod tests {
         };
         assert!(matches(&disabled_input, &[], &PseudoClass::Valid));
         assert!(!matches(&disabled_input, &[], &PseudoClass::Invalid));
+    }
+
+    #[test]
+    fn indeterminate_matches_checkbox_and_progress() {
+        let checkbox_indeterminate = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "checkbox".to_string()),
+                    ("indeterminate".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&checkbox_indeterminate, &[], &PseudoClass::Indeterminate));
+
+        let checkbox_determinate = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "checkbox".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&checkbox_determinate, &[], &PseudoClass::Indeterminate));
+
+        let progress_indeterminate = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "progress".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        assert!(matches(&progress_indeterminate, &[], &PseudoClass::Indeterminate));
+
+        let progress_determinate = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "progress".to_string(),
+                attributes: vec![("value".to_string(), "0.5".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&progress_determinate, &[], &PseudoClass::Indeterminate));
     }
 
     #[test]

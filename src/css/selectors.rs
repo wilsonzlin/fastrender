@@ -71,6 +71,7 @@ pub enum PseudoClass {
     Invalid,
     InRange,
     OutOfRange,
+    Indeterminate,
     ReadOnly,
     ReadWrite,
     PlaceholderShown,
@@ -138,11 +139,11 @@ impl ToCss for PseudoClass {
             PseudoClass::Invalid => dest.write_str(":invalid"),
             PseudoClass::InRange => dest.write_str(":in-range"),
             PseudoClass::OutOfRange => dest.write_str(":out-of-range"),
+            PseudoClass::Indeterminate => dest.write_str(":indeterminate"),
             PseudoClass::ReadOnly => dest.write_str(":read-only"),
             PseudoClass::ReadWrite => dest.write_str(":read-write"),
             PseudoClass::PlaceholderShown => dest.write_str(":placeholder-shown"),
             PseudoClass::Autofill => dest.write_str(":autofill"),
-            PseudoClass::Checked => dest.write_str(":checked"),
             PseudoClass::Checked => dest.write_str(":checked"),
             PseudoClass::Link => dest.write_str(":link"),
             PseudoClass::Visited => dest.write_str(":visited"),
@@ -216,6 +217,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "invalid" => Ok(PseudoClass::Invalid),
             "in-range" => Ok(PseudoClass::InRange),
             "out-of-range" => Ok(PseudoClass::OutOfRange),
+            "indeterminate" => Ok(PseudoClass::Indeterminate),
             "read-only" => Ok(PseudoClass::ReadOnly),
             "read-write" => Ok(PseudoClass::ReadWrite),
             "placeholder-shown" => Ok(PseudoClass::PlaceholderShown),
@@ -430,6 +432,7 @@ mod tests {
         assert_eq!(PseudoClass::Invalid.to_css_string(), ":invalid");
         assert_eq!(PseudoClass::InRange.to_css_string(), ":in-range");
         assert_eq!(PseudoClass::OutOfRange.to_css_string(), ":out-of-range");
+        assert_eq!(PseudoClass::Indeterminate.to_css_string(), ":indeterminate");
         assert_eq!(PseudoClass::ReadOnly.to_css_string(), ":read-only");
         assert_eq!(PseudoClass::ReadWrite.to_css_string(), ":read-write");
         assert_eq!(PseudoClass::PlaceholderShown.to_css_string(), ":placeholder-shown");
