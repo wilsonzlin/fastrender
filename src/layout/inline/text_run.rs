@@ -1098,6 +1098,18 @@ mod tests {
     }
 
     #[test]
+    fn test_text_run_negative_half_leading() {
+        // Allow line-height smaller than the text height so we preserve negative leading.
+        let run = TextRun {
+            height: 12.0,
+            line_height: 8.0,
+            ..TextRun::new()
+        };
+
+        assert!((run.half_leading() + 2.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn test_text_run_bounds_at() {
         let run = TextRun {
             width: 50.0,
