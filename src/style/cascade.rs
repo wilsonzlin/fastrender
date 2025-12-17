@@ -6916,6 +6916,12 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.caption_side = defaults.caption_side;
     styles.empty_cells = defaults.empty_cells;
 
+    // Outlines do not apply to markers; clear any inherited or authored values.
+    styles.outline_style = defaults.outline_style;
+    styles.outline_width = defaults.outline_width;
+    styles.outline_color = defaults.outline_color;
+    styles.outline_offset = defaults.outline_offset;
+
     // Text alignment/indentation properties do not apply to ::marker (CSS Pseudo/Lists).
     styles.text_align = defaults.text_align;
     styles.text_align_last = defaults.text_align_last;

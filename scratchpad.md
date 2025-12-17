@@ -16,6 +16,7 @@
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.
 # Marker display-list regression: display-list renderer test now checks ::marker text fragments honor authored text-shadow as well.
+# Marker outline ignored: marker cascade now resets outline properties; regression ensures authored/inherited outlines are cleared on ::marker.
 # Added hanging text-indent soft-wrap regression: soft-wrapped lines now explicitly covered when text-indent:hanging is set (first line unindented, subsequent soft wraps indented). `cargo test text_indent_hanging_indents_soft_wrapped_lines --quiet` passes.
 # Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # Notes: recent render attempts (aljazeera/natgeo/wsj) logged separately; color-scheme palette/inheritance work completed upstream.

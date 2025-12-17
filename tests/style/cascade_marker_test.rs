@@ -73,3 +73,24 @@ fn marker_allows_text_affecting_properties() {
     assert_eq!(marker_style.font_size, 24.0);
     assert_eq!(marker_style.text_transform, fastrender::style::types::TextTransform::Uppercase);
 }
+
+#[test]
+fn marker_ignores_outline_properties() {
+    let mut ctx = CascadeContext::default();
+    let mut li_style = ComputedStyle::default();
+    li_style.display = Display::ListItem;
+
+    let rules = "li { outline: 2px solid rgb(1,2,3); } li::marker { outline: 4px dotted rgb(4,5,6); outline-offset: 8px; }";
+    ctx.add_author_stylesheet(rules).unwrap();
+
+    let li = build_list_item();
+    let viewport = Size::new(800.0, 600.0);
+    let (_style, marker) = ctx.compute_styles_for_node(&li, viewport);
+    let marker_style = marker.expect("marker styles");
+
+    // Outline on markers should be cleared to defaults and not inherit from the list item.
+    assert!(matches!(marker_style.outline_style, fastrender::style::types::OutlineStyle::None));
+    assert_eq!(marker_style.outline_width, ComputedStyle::default().outline_width);
+    assert!(matches!(marker_style.outline_color, fastrender::style::types::OutlineColor::Invert));
+    assert_eq!(marker_style.outline_offset, ComputedStyle::default().outline_offset);
+}
