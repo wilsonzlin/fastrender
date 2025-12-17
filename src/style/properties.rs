@@ -14976,6 +14976,10 @@ mod tests {
             parse_filter_list(&PropertyValue::Keyword("drop-shadow(1px 2px -5px)".to_string())).is_none(),
             "negative drop-shadow blur should be invalid"
         );
+        assert!(
+            parse_filter_list(&PropertyValue::Keyword("blur(-0.5px)".to_string())).is_none(),
+            "sub-pixel negative blur should still be rejected"
+        );
     }
 
     #[test]
