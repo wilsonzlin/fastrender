@@ -25,11 +25,14 @@ use std::fs;
 use url::Url;
 
 fn usage() {
-    eprintln!("Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] <file.html | file://url>");
+    eprintln!(
+        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency reduce|no-preference] <file.html | file://url>"
+    );
     eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
     eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
     eprintln!("  --scroll-x PX    Horizontal scroll offset in CSS px (default 0)");
     eprintln!("  --scroll-y PX    Vertical scroll offset in CSS px (default 0)");
+    eprintln!("  --prefers-reduced-transparency reduce|no-preference   Media preference override");
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -54,6 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut device_pixel_ratio = 1.0f32;
     let mut scroll_x = 0.0f32;
     let mut scroll_y = 0.0f32;
+    let mut prefers_reduced_transparency: Option<String> = None;
     let mut raw_path: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -98,6 +102,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            "--prefers-reduced-transparency" => {
+                if let Some(val) = args.next() {
+                    let v = val.to_ascii_lowercase();
+                    if matches!(v.as_str(), "reduce" | "no-preference") {
+                        prefers_reduced_transparency = Some(v);
+                    }
+                }
+            }
             _ => {
                 if raw_path.is_none() {
                     raw_path = Some(arg);
@@ -117,6 +129,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
+
+    if let Some(val) = prefers_reduced_transparency {
+        env::set_var("FASTR_PREFERS_REDUCED_TRANSPARENCY", val);
+    }
 
     let (path, input_url) = if let Ok(url) = Url::parse(&raw_path) {
         if url.scheme() == "file" {

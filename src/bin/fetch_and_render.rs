@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency reduce|no-preference] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -8,6 +8,7 @@
 //! Options:
 //!   --timeout SECONDS   Per-page timeout (default: 0 = no timeout)
 //!   --dpr FLOAT         Device pixel ratio for media queries/srcset (default: 1.0)
+//!   --prefers-reduced-transparency reduce|no-preference   Media preference override
 
 #![allow(clippy::io_other_error)]
 #![allow(clippy::redundant_closure)]
@@ -331,8 +332,12 @@ mod tests {
 }
 
 fn usage(program: &str) {
-    eprintln!("Usage: {program} [--timeout SECONDS] [--dpr FLOAT] <url> [output.png] [width] [height] [scroll_x] [scroll_y]");
-    eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
+    eprintln!(
+        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency reduce|no-preference] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
+    );
+    eprintln!(
+        "Example: {program} --timeout 120 --dpr 2.0 --prefers-reduced-transparency reduce https://www.example.com output.png 1200 800 0 0"
+    );
     eprintln!("  width: viewport width (default: 1200)");
     eprintln!("  height: viewport height (default: 800)");
     eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
@@ -428,6 +433,7 @@ fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let mut timeout_secs: Option<u64> = None;
     let mut dpr: f32 = 1.0;
+    let mut prefers_reduced_transparency: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -446,6 +452,14 @@ fn main() -> Result<()> {
                         if parsed.is_finite() && parsed > 0.0 {
                             dpr = parsed;
                         }
+                    }
+                }
+            }
+            "--prefers-reduced-transparency" => {
+                if let Some(val) = args.next() {
+                    let v = val.to_ascii_lowercase();
+                    if matches!(v.as_str(), "reduce" | "no-preference") {
+                        prefers_reduced_transparency = Some(v);
                     }
                 }
             }
@@ -471,6 +485,9 @@ fn main() -> Result<()> {
     let (tx, rx) = channel();
     let url_clone = url.clone();
     let output_clone = output.clone();
+    if let Some(val) = prefers_reduced_transparency {
+        env::set_var("FASTR_PREFERS_REDUCED_TRANSPARENCY", val);
+    }
     thread::Builder::new()
         .name("fetch_and_render-worker".to_string())
         .stack_size(STACK_SIZE)
