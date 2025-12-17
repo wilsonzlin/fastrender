@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency reduce|no-preference] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -8,7 +8,8 @@
 //! Options:
 //!   --timeout SECONDS   Per-page timeout (default: 0 = no timeout)
 //!   --dpr FLOAT         Device pixel ratio for media queries/srcset (default: 1.0)
-//!   --prefers-reduced-transparency reduce|no-preference   Media preference override
+//!   --prefers-reduced-transparency reduce|no-preference|true|false
+//!                        User media preference for reduced transparency (overrides env)
 
 #![allow(clippy::io_other_error)]
 #![allow(clippy::redundant_closure)]
@@ -329,31 +330,43 @@ mod tests {
         let decoded = decode_html_bytes(&bytes, None);
         assert_eq!(decoded, "£");
     }
+
+    #[test]
+    fn parse_prefers_reduced_transparency_values() {
+        assert_eq!(parse_prefers_reduced_transparency("reduce"), Some(true));
+        assert_eq!(parse_prefers_reduced_transparency("no-preference"), Some(false));
+        assert_eq!(parse_prefers_reduced_transparency("yes"), Some(true));
+        assert_eq!(parse_prefers_reduced_transparency("off"), Some(false));
+        assert_eq!(parse_prefers_reduced_transparency("maybe"), None);
+    }
 }
 
 fn usage(program: &str) {
-    eprintln!(
-        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency reduce|no-preference] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
-    );
-    eprintln!(
-        "Example: {program} --timeout 120 --dpr 2.0 --prefers-reduced-transparency reduce https://www.example.com output.png 1200 800 0 0"
-    );
+    eprintln!("Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] <url> [output.png] [width] [height] [scroll_x] [scroll_y]");
+    eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
     eprintln!("  height: viewport height (default: 800)");
     eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
+    eprintln!("  prefers-reduced-transparency: reduce|no-preference|true|false (overrides env)");
     eprintln!("  scroll_x: horizontal scroll offset (default: 0)");
     eprintln!("  scroll_y: vertical scroll offset (default: 0)");
 }
 
-fn render_once(
-    url: &str,
-    output: &str,
-    width: u32,
-    height: u32,
-    scroll_x: u32,
-    scroll_y: u32,
-    dpr: f32,
-) -> Result<()> {
+fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
+    let v = val.trim().to_ascii_lowercase();
+    if matches!(
+        v.as_str(),
+        "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+    ) {
+        return Some(true);
+    }
+    if matches!(v.as_str(), "0" | "false" | "no" | "off" | "none" | "no-preference") {
+        return Some(false);
+    }
+    None
+}
+
+fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_x: u32, scroll_y: u32, dpr: f32) -> Result<()> {
     println!("Fetching HTML from: {}", url);
     let (html_bytes, html_content_type) = fetch_bytes(url)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
@@ -412,13 +425,8 @@ fn render_once(
     );
     let mut renderer = FastRender::builder().device_pixel_ratio(dpr).build()?;
     renderer.set_base_url(resource_base.clone());
-    let png_data = renderer.render_to_png_with_scroll(
-        &html_with_css,
-        width,
-        height,
-        scroll_x as f32,
-        scroll_y as f32,
-    )?;
+    let png_data =
+        renderer.render_to_png_with_scroll(&html_with_css, width, height, scroll_x as f32, scroll_y as f32)?;
 
     println!("Saving to {}...", output);
     std::fs::write(&output, png_data)?;
@@ -433,7 +441,7 @@ fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let mut timeout_secs: Option<u64> = None;
     let mut dpr: f32 = 1.0;
-    let mut prefers_reduced_transparency: Option<String> = None;
+    let mut prefers_reduced_transparency: Option<bool> = None;
     let mut positional: Vec<String> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -457,10 +465,7 @@ fn main() -> Result<()> {
             }
             "--prefers-reduced-transparency" => {
                 if let Some(val) = args.next() {
-                    let v = val.to_ascii_lowercase();
-                    if matches!(v.as_str(), "reduce" | "no-preference") {
-                        prefers_reduced_transparency = Some(v);
-                    }
+                    prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
                 }
             }
             _ => positional.push(arg),
@@ -482,12 +487,16 @@ fn main() -> Result<()> {
     let scroll_x = positional.get(4).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
     let scroll_y = positional.get(5).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
 
+    if let Some(reduce) = prefers_reduced_transparency {
+        std::env::set_var(
+            "FASTR_PREFERS_REDUCED_TRANSPARENCY",
+            if reduce { "reduce" } else { "no-preference" },
+        );
+    }
+
     let (tx, rx) = channel();
     let url_clone = url.clone();
     let output_clone = output.clone();
-    if let Some(val) = prefers_reduced_transparency {
-        env::set_var("FASTR_PREFERS_REDUCED_TRANSPARENCY", val);
-    }
     thread::Builder::new()
         .name("fetch_and_render-worker".to_string())
         .stack_size(STACK_SIZE)

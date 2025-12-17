@@ -1,6 +1,6 @@
 //! Render all cached pages in parallel
 //!
-//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency reduce|no-preference]
+//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>]
 //!
 //! Renders all HTML files in fetches/html/ to fetches/renders/
 //! Logs per-page to fetches/renders/{name}.log
@@ -32,17 +32,29 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!(
-        "Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency reduce|no-preference]"
-    );
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
     println!("  --pages a,b,c     Render only the listed cached pages (use cache stems like cnn.com)");
     println!("  --dpr FLOAT       Device pixel ratio for media queries/srcset (default: 1.0)");
+    println!("  --prefers-reduced-transparency reduce|no-preference|true|false (overrides env)");
     println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
-    println!("  --prefers-reduced-transparency reduce|no-preference   Media preference override");
+}
+
+fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
+    let v = val.trim().to_ascii_lowercase();
+    if matches!(
+        v.as_str(),
+        "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+    ) {
+        return Some(true);
+    }
+    if matches!(v.as_str(), "0" | "false" | "no" | "off" | "none" | "no-preference") {
+        return Some(false);
+    }
+    None
 }
 
 struct PageResult {
@@ -65,7 +77,7 @@ fn main() {
     let mut timeout_secs: Option<u64> = None;
     let mut viewport: Option<(u32, u32)> = None;
     let mut device_pixel_ratio: f32 = 1.0;
-    let mut prefers_reduced_transparency: Option<String> = None;
+    let mut prefers_reduced_transparency: Option<bool> = None;
     let mut scroll_x: f32 = 0.0;
     let mut scroll_y: f32 = 0.0;
     while let Some(arg) = args.next() {
@@ -107,6 +119,11 @@ fn main() {
                     }
                 }
             }
+            "--prefers-reduced-transparency" => {
+                if let Some(val) = args.next() {
+                    prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
+                }
+            }
             "--pages" => {
                 if let Some(val) = args.next() {
                     let mut filter = page_filter.take().unwrap_or_default();
@@ -137,20 +154,15 @@ fn main() {
                     }
                 }
             }
-            "--prefers-reduced-transparency" => {
-                if let Some(val) = args.next() {
-                    let v = val.to_ascii_lowercase();
-                    if matches!(v.as_str(), "reduce" | "no-preference") {
-                        prefers_reduced_transparency = Some(v);
-                    }
-                }
-            }
             _ => {}
         }
     }
 
-    if let Some(val) = prefers_reduced_transparency {
-        std::env::set_var("FASTR_PREFERS_REDUCED_TRANSPARENCY", val);
+    if let Some(reduce) = prefers_reduced_transparency {
+        std::env::set_var(
+            "FASTR_PREFERS_REDUCED_TRANSPARENCY",
+            if reduce { "reduce" } else { "no-preference" },
+        );
     }
 
     // Create directories
@@ -310,13 +322,7 @@ fn main() {
                             .device_pixel_ratio(device_pixel_ratio)
                             .build()
                             .expect("create renderer");
-                        renderer.render_to_png_with_scroll(
-                            &html_for_render,
-                            viewport_w,
-                            viewport_h,
-                            scroll_x,
-                            scroll_y,
-                        )
+                        renderer.render_to_png_with_scroll(&html_for_render, viewport_w, viewport_h, scroll_x, scroll_y)
                     };
 
                     let (tx, rx) = channel();
