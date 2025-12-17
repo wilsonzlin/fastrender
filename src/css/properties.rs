@@ -884,21 +884,23 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "background-image"
                 | "background-repeat"
                 | "background-size"
-                | "background-attachment"
-                | "background-origin"
-                | "background-clip"
-                | "border"
-                | "border-top"
-                | "border-right"
-                | "border-bottom"
-                | "border-left"
-                | "scrollbar-color"
-                | "margin"
-                | "padding"
-                | "border-inline"
-                | "border-inline-start"
-                | "border-inline-end"
-                | "border-block"
+            | "background-attachment"
+            | "background-origin"
+            | "background-clip"
+            | "border"
+            | "border-top"
+            | "border-right"
+            | "border-bottom"
+            | "border-left"
+            | "image-orientation"
+            | "image-resolution"
+            | "scrollbar-color"
+            | "margin"
+            | "padding"
+            | "border-inline"
+            | "border-inline-start"
+            | "border-inline-end"
+            | "border-block"
                 | "border-block-start"
                 | "border-block-end"
                 | "outline"
@@ -1667,6 +1669,28 @@ mod tests {
             matches!(list[1], PropertyValue::Length(len) if (len.value - 25.0).abs() < 0.01 && len.unit.is_percentage())
                 || matches!(list[1], PropertyValue::Percentage(p) if (p - 25.0).abs() < 0.01)
         );
+    }
+
+    #[test]
+    fn tokenizes_image_orientation_angle_and_flip() {
+        let parsed = parse_property_value("image-orientation", "90deg flip");
+        let PropertyValue::Multiple(list) = parsed.expect("parsed") else {
+            panic!("expected Multiple");
+        };
+        assert_eq!(list.len(), 2);
+        assert!(matches!(list[0], PropertyValue::Keyword(ref k) if k == "90deg"));
+        assert!(matches!(list[1], PropertyValue::Keyword(ref k) if k == "flip"));
+    }
+
+    #[test]
+    fn tokenizes_image_resolution_multi_keyword() {
+        let parsed = parse_property_value("image-resolution", "from-image snap");
+        let PropertyValue::Multiple(list) = parsed.expect("parsed") else {
+            panic!("expected Multiple");
+        };
+        assert_eq!(list.len(), 2);
+        assert!(matches!(list[0], PropertyValue::Keyword(ref k) if k == "from-image"));
+        assert!(matches!(list[1], PropertyValue::Keyword(ref k) if k == "snap"));
     }
 
     #[test]

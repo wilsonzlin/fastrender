@@ -1492,6 +1492,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.list_style_type = parent.list_style_type.clone();
     styles.list_style_position = parent.list_style_position;
     styles.list_style_image = parent.list_style_image.clone();
+    styles.image_orientation = parent.image_orientation;
     styles.quotes = parent.quotes.clone();
     styles.cursor = parent.cursor;
     styles.cursor_images = parent.cursor_images.clone();
@@ -1616,9 +1617,9 @@ mod tests {
     use crate::style::float::Float;
     use crate::style::properties::apply_declaration;
     use crate::style::types::{
-        BorderCollapse, BorderStyle, Direction, LineBreak, ListStylePosition, ListStyleType, ScrollbarColor,
-        TextCombineUpright, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition, UnicodeBidi, WhiteSpace,
-        WillChange, WillChangeHint,
+        BorderCollapse, BorderStyle, Direction, ImageOrientation, LineBreak, ListStylePosition, ListStyleType,
+        ScrollbarColor, TextCombineUpright, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition,
+        UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -4222,6 +4223,34 @@ mod tests {
             styled.children[0].styles.image_rendering,
             crate::style::types::ImageRendering::Auto
         ));
+    }
+
+    #[test]
+    fn image_orientation_inherits() {
+        let child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("style".to_string(), "image-orientation: 90deg flip;".to_string())],
+            },
+            children: vec![child],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let expected = ImageOrientation::Angle {
+            quarter_turns: 1,
+            flip: true,
+        };
+        assert_eq!(styled.styles.image_orientation, expected);
+        assert_eq!(styled.children[0].styles.image_orientation, expected);
     }
 
     #[test]
