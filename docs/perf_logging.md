@@ -13,3 +13,13 @@ Helpful environment variables for profiling layout/cascade on large pages:
   - `FASTR_LOG_CONTAINER_FIELDS=1` lists which layout-affecting fields changed for the sampled diff entries.
 
 These env vars are read in the rendering binaries (`render_pages`, `fetch_and_render`) and cascade internals; leave them unset for normal runs.
+
+Other useful profiling flags
+----------------------------
+
+- `FASTR_RENDER_TIMINGS=1` — prints high-level timing for parse/cascade/box/layout/paint per page in the render binaries.
+- `FASTR_LAYOUT_PROFILE=1` — enables layout-context profiling (block/inline/flex/grid/table/absolute) with call counts and inclusive times.
+- `FASTR_FLEX_PROFILE=1` — flex-specific profiling (measure/compute/convert stats, cache hits) with optional node/key histograms (`FASTR_FLEX_PROFILE_NODES=1`, `FASTR_FLEX_PROFILE_HIST=1`).
+- `FASTR_INTRINSIC_STATS=1` — reports intrinsic sizing cache hits/misses/lookups after layout.
+
+All profiling logs are best run in release builds to reflect real performance.
