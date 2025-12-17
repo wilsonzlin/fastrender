@@ -31,6 +31,13 @@ fn rejects_media_query_with_percentage_width() {
     assert!(MediaQuery::parse("(min-width: 120%)").is_err());
 }
 
+#[test]
+fn rejects_media_query_with_invalid_length_unit() {
+    // Media feature lengths must use absolute/angle/time/resolution units per the feature grammar; bare numbers are invalid.
+    assert!(MediaQuery::parse("(max-width: 10)").is_err());
+    assert!(MediaQuery::parse("(max-width: 10foo)").is_err());
+}
+
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         if let Some(v) = &self.prev {
