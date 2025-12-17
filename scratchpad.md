@@ -74,12 +74,7 @@ Idle; no current tasks. Available for new tasks. Marker geometry/paint review st
 - FUTURE: run `examples/inspect_frag --page cnn.com --log FLEX_CHILD_IDS=... --timeout 60` once build succeeds to confirm row positions after clamps.
 - List markers: image markers now use `marker_inline_gap` and keep inline-end spacing even in vertical RTL flows. RTL line positioning shifts marker content by its gap so the space stays between marker and text. Added regressions `marker_image_inside_uses_inline_end_margin_in_vertical_ltr`/`_rtl` under inline context tests. Branch `agent13/marker-gap` carries the change (push to main pending).
 - Idle; no current tasks. Available for new tasks.
- - Static positions no longer double-count padding: out-of-flow children laid out via flex, grid, table, or empty inline containers now use a content-origin static position so AbsoluteLayout adds padding/border once. Added regressions for flex/empty inline padding anchoring. Fixed cascade test fallout (Rgba alpha args, borrow match).
- - Flex drift clamp now logs when triggered if `FASTR_LOG_FLEX_DRIFT` is set, printing parent id/selector and clamp amounts.
- - Pending: build times out when running fetch_and_render; need to reattempt inspect_frag/fetch once compilation completes or reuse cached CNN HTML.
- - FUTURE: run `examples/inspect_frag --page cnn.com --log FLEX_CHILD_IDS=... --timeout 60` once build succeeds to confirm row positions after clamps.
- - List markers: image markers now use `marker_inline_gap` and keep inline-end spacing even in vertical RTL flows. RTL line positioning shifts marker content by its gap so the space stays between marker and text. Added regressions `marker_image_inside_uses_inline_end_margin_in_vertical_ltr`/`_rtl` under inline context tests. Branch `agent13/marker-gap` carries the change (push to main pending).
- - Idle; no current tasks. Available for new tasks.
+- SVG focusability gated: :focus matches SVG only when `focusable="true"`; `focusable="false"` or absent blocks focus even if flagged. Added DOM regressions for focusable true/false/default. Branch `agent13/svg-focus` carries the change (main push pending).
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
