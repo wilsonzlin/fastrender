@@ -223,7 +223,6 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "placeholder-shown" => Ok(PseudoClass::PlaceholderShown),
             "autofill" => Ok(PseudoClass::Autofill),
             "checked" => Ok(PseudoClass::Checked),
-            "indeterminate" => Ok(PseudoClass::Indeterminate),
             "link" => Ok(PseudoClass::Link),
             "visited" => Ok(PseudoClass::Visited),
             "any-link" => Ok(PseudoClass::AnyLink),

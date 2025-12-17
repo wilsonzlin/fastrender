@@ -382,12 +382,78 @@ impl DisplayListBuilder {
             .viewport
             .unwrap_or((context_bounds.width(), context_bounds.height()));
         let clip_path = root_style.and_then(|style| resolve_clip_path(style, context_bounds, viewport, &self.font_ctx));
+        let clip_rect = root_style.and_then(|style| {
+            let clip = style.clip.as_ref()?;
+            let width = context_bounds.width();
+            let height = context_bounds.height();
+            let resolve = |component: &crate::style::types::ClipComponent, base: f32| -> f32 {
+                match component {
+                    crate::style::types::ClipComponent::Auto => base,
+                    crate::style::types::ClipComponent::Length(len) => {
+                        len.resolve_with_context(
+                            Some(base),
+                            viewport.0,
+                            viewport.1,
+                            style.font_size,
+                            style.root_font_size,
+                        )
+                        .unwrap_or_else(|| len.to_px())
+                    }
+                }
+            };
+
+            let left = match &clip.left {
+                crate::style::types::ClipComponent::Auto => context_bounds.x(),
+                crate::style::types::ClipComponent::Length(len) => {
+                    context_bounds.x()
+                        + len
+                            .resolve_with_context(
+                                Some(width),
+                                viewport.0,
+                                viewport.1,
+                                style.font_size,
+                                style.root_font_size,
+                            )
+                            .unwrap_or_else(|| len.to_px())
+                }
+            };
+            let top = match &clip.top {
+                crate::style::types::ClipComponent::Auto => context_bounds.y(),
+                crate::style::types::ClipComponent::Length(len) => {
+                    context_bounds.y()
+                        + len
+                            .resolve_with_context(
+                                Some(height),
+                                viewport.0,
+                                viewport.1,
+                                style.font_size,
+                                style.root_font_size,
+                            )
+                            .unwrap_or_else(|| len.to_px())
+                }
+            };
+            let right = resolve(&clip.right, context_bounds.x() + width);
+            let bottom = resolve(&clip.bottom, context_bounds.y() + height);
+
+            let rect = Rect::from_xywh(left, top, right - left, bottom - top);
+            if rect.width() <= 0.0 || rect.height() <= 0.0 {
+                None
+            } else {
+                Some(ClipItem {
+                    shape: ClipShape::Rect { rect, radii: None },
+                })
+            }
+        });
 
         let mut pushed_clips = 0;
         if let Some(path) = clip_path {
             self.list.push(DisplayItem::PushClip(ClipItem {
                 shape: ClipShape::Path { path },
             }));
+            pushed_clips += 1;
+        }
+        if let Some(clip) = clip_rect {
+            self.list.push(DisplayItem::PushClip(clip));
             pushed_clips += 1;
         }
         if paint_contained {
@@ -3435,6 +3501,24 @@ mod tests {
 
         assert_eq!(list.len(), 1);
         assert!(matches!(list.items()[0], DisplayItem::Text(_)));
+    }
+
+    #[test]
+    fn clip_property_emits_clip_item() {
+        let mut style = ComputedStyle::default();
+        style.clip = Some(crate::style::types::ClipRect {
+            top: crate::style::types::ClipComponent::Length(Length::px(5.0)),
+            right: crate::style::types::ClipComponent::Length(Length::px(15.0)),
+            bottom: crate::style::types::ClipComponent::Length(Length::px(15.0)),
+            left: crate::style::types::ClipComponent::Length(Length::px(5.0)),
+        });
+        style.background_color = Rgba::RED;
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+
+        let builder = DisplayListBuilder::new();
+        let list = builder.build_with_stacking_tree(&fragment);
+
+        assert!(list.items().iter().any(|item| matches!(item, DisplayItem::PushClip(_))));
     }
 
     #[test]
