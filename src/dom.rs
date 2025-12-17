@@ -293,6 +293,17 @@ impl<'a> ElementRef<'a> {
     }
 
     fn focus_flag(&self) -> bool {
+        if self.is_svg_element() {
+            let focusable = self
+                .node
+                .get_attribute_ref("focusable")
+                .map(|v| v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if !focusable {
+                return false;
+            }
+        }
+
         self.node
             .get_attribute_ref("data-fastr-focus")
             .map(|v| v.eq_ignore_ascii_case("true"))
@@ -326,6 +337,13 @@ impl<'a> ElementRef<'a> {
             self.node.node_type,
             DomNodeType::Element { ref namespace, .. }
                 if namespace.is_empty() || namespace == HTML_NAMESPACE
+        )
+    }
+
+    fn is_svg_element(&self) -> bool {
+        matches!(
+            self.node.node_type,
+            DomNodeType::Element { ref namespace, .. } if namespace == SVG_NAMESPACE
         )
     }
 
@@ -2116,6 +2134,54 @@ mod tests {
 
         assert!(!matches(&link, &[], &PseudoClass::Hover));
         assert!(!matches(&link, &[], &PseudoClass::Focus));
+    }
+
+    #[test]
+    fn svg_focusable_true_matches_focus_when_flagged() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("focusable".to_string(), "true".to_string()),
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        assert!(matches(&dom, &[], &PseudoClass::Focus));
+    }
+
+    #[test]
+    fn svg_focusable_false_blocks_focus_even_when_flagged() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("focusable".to_string(), "false".to_string()),
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        assert!(!matches(&dom, &[], &PseudoClass::Focus));
+    }
+
+    #[test]
+    fn svg_focusable_absent_defaults_to_not_focusable() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![("data-fastr-focus".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+
+        assert!(!matches(&dom, &[], &PseudoClass::Focus));
     }
 
     #[test]
