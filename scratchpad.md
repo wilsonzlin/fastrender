@@ -490,6 +490,8 @@ Inline coordinate fix (Mar 2026):
 - Latest run: `FASTR_RENDER_TIMINGS=1 FASTR_INTRINSIC_STATS=1 target/release/fetch_and_render file:///root/r/fastrender/fetches/html/cnn.com.html` → parse ~30–36ms, cascade ~4.4–5.8s, box_tree ~0.9–1.1s, box_count 8715, layout ~1.4–1.7s, paint ~22–29s, total ~30–55s. Intrinsic stats stable: lookups ~58k, hits ~38k (65%), stores ~15k, block_calls ~52k, flex_calls ~460, inline_calls ~5k. Paint remains dominant bottleneck.
 
 ## Recent changes (this branch)
+- Media queries: inverted-colors support now has explicit parsing/evaluation tests and a MediaContext env override; color-scheme evaluation treats `no-preference` when the context has no scheme set. Cascade now unpacks absent schemes as `no-preference` when applying styles.
+- Fixed computed style struct drift: restored a single `forced_color_adjust` field/default (removing duplicates), kept scrollbar types deduped, and reconciled upstream additions (text-wrap/scroll-snap imports). Forced-color-adjust tests remain.
 - Hardened clamping: added `clamp_with_order` helper and applied across block/inline/flex/abs positioning/table width resolution to avoid min>max panics; further cleaned merge markers and ensured `forced-color-adjust` globals/inheritance work after merges.
 - Added clamp_with_order unit tests (inverted/NaN/inf bounds) and deduped forced-color-adjust hashing/property copies after merge warnings.
 - Fixed length resolution crash paths: percentage/viewport/font-relative calc terms now fall back to 0/raw values when context is missing, and missing overflow_anchor duplication cleaned up after merges.
