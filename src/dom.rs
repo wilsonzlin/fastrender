@@ -283,6 +283,22 @@ impl<'a> ElementRef<'a> {
             .unwrap_or(false)
     }
 
+    fn hover_flag(&self) -> bool {
+        self
+            .node
+            .get_attribute("data-fastr-hover")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    fn focus_flag(&self) -> bool {
+        self
+            .node
+            .get_attribute("data-fastr-focus")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
     /// Get parent node
     fn parent_node(&self) -> Option<&'a DomNode> {
         self.parent
@@ -1300,7 +1316,9 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
             PseudoClass::Autofill => false,
             // Interactive pseudo-classes (not supported in static rendering)
-            PseudoClass::Hover | PseudoClass::Focus | PseudoClass::FocusWithin | PseudoClass::FocusVisible => false,
+            PseudoClass::Hover => self.hover_flag(),
+            PseudoClass::Focus => self.focus_flag(),
+            PseudoClass::FocusWithin | PseudoClass::FocusVisible => false,
             PseudoClass::Active => self.active_flag(),
             PseudoClass::Checked => self.is_checked(),
             PseudoClass::Link => self.is_link() && !self.visited_flag(),
@@ -2005,6 +2023,37 @@ mod tests {
             children: vec![],
         };
         assert!(matches(&active, &[], &PseudoClass::Active));
+    }
+
+    #[test]
+    fn hover_and_focus_match_when_flagged() {
+        let hover = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("href".to_string(), "https://example.com".to_string()),
+                    ("data-fastr-hover".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&hover, &[], &PseudoClass::Hover));
+        assert!(!matches(&hover, &[], &PseudoClass::Focus));
+
+        let focus = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("href".to_string(), "https://example.com".to_string()),
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&focus, &[], &PseudoClass::Hover));
+        assert!(matches(&focus, &[], &PseudoClass::Focus));
     }
 
     #[test]

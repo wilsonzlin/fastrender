@@ -1658,8 +1658,7 @@ mod tests {
         UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
     };
     use crate::style::values::Length;
-    use crate::style::ComputedStyle;
-    use crate::style::CursorKeyword;
+    use crate::style::{ComputedStyle, CursorKeyword, OutlineStyle};
 
     fn element_with_style(style: &str) -> DomNode {
         DomNode {
@@ -4448,6 +4447,40 @@ mod tests {
 
         let styled_active = apply_styles(&active, &StyleSheet::new());
         assert_eq!(styled_active.styles.color, Rgba::new(255, 0, 0, 1.0));
+    }
+
+    #[test]
+    fn ua_link_styles_apply_to_hover_and_focus() {
+        let hover = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("href".to_string(), "https://example.com".to_string()),
+                    ("data-fastr-hover".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled_hover = apply_styles(&hover, &StyleSheet::new());
+        assert_eq!(styled_hover.styles.color, Rgba::new(255, 0, 0, 1.0));
+
+        let focus = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("href".to_string(), "https://example.com".to_string()),
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled_focus = apply_styles(&focus, &StyleSheet::new());
+        assert_eq!(styled_focus.styles.outline_style, OutlineStyle::Dotted);
+        assert_eq!(styled_focus.styles.outline_width, Length::px(1.0));
     }
 
     #[test]
