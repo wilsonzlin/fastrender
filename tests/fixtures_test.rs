@@ -178,6 +178,7 @@ fn test_all_fixture_files_exist() {
         "text_complex_scripts",
         "text_bidi",
         "text_line_break",
+        "text_overflow_vertical",
     ];
 
     for name in &expected_fixtures {
@@ -211,6 +212,11 @@ fn test_fixture_files_are_valid_html() {
             );
         }
     }
+}
+
+#[test]
+fn fixture_text_overflow_vertical() {
+    test_fixture("text_overflow_vertical").unwrap();
 }
 
 // =============================================================================
