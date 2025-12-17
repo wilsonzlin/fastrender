@@ -40,6 +40,7 @@ Idle; no current tasks. Available for new tasks.
 - Action: still need to inspect cnn.com cached HTML via inspect_frag with FASTR_LOG_FLEX_CHILD_IDS targeting ribbon items to see if x drift persists after the new clamp.
 - Added regression `flex_row_clamps_pathological_inline_drift`: a flex row whose items carry massive left margins is translated back toward the origin, keeping child x positions near 0.
 - Flex drift clamp now logs when triggered if `FASTR_LOG_FLEX_DRIFT` is set, printing parent id/selector and clamp amounts.
+- Pending: build times out when running fetch_and_render; need to reattempt inspect_frag/fetch once compilation completes or reuse cached CNN HTML.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
