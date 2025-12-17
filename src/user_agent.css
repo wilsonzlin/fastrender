@@ -9,6 +9,21 @@ body {
     margin: 8px;
 }
 
+/* Links */
+a:link {
+    color: rgb(0, 0, 238);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+a:visited {
+    color: rgb(85, 26, 139);
+}
+
+a:active {
+    color: rgb(255, 0, 0);
+}
+
 /* HTML5 semantic elements */
 main, article, section, header, footer, nav, aside, figure, figcaption {
     display: block;

@@ -4361,6 +4361,60 @@ mod tests {
     }
 
     #[test]
+    fn ua_link_styles_apply_to_unvisited_links() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("href".to_string(), "https://example.com".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.color, Rgba::new(0, 0, 238, 1.0));
+        assert_eq!(styled.styles.cursor, CursorKeyword::Pointer);
+        assert!(styled
+            .styles
+            .applied_text_decorations
+            .iter()
+            .any(|d| d.decoration.lines.contains(TextDecorationLine::UNDERLINE)));
+    }
+
+    #[test]
+    fn ua_link_styles_apply_to_visited_and_active() {
+        let visited = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("href".to_string(), "https://example.com".to_string()),
+                    ("data-fastr-visited".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled_visited = apply_styles(&visited, &StyleSheet::new());
+        assert_eq!(styled_visited.styles.color, Rgba::new(85, 26, 139, 1.0));
+
+        let active = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("href".to_string(), "https://example.com".to_string()),
+                    ("data-fastr-active".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled_active = apply_styles(&active, &StyleSheet::new());
+        assert_eq!(styled_active.styles.color, Rgba::new(255, 0, 0, 1.0));
+    }
+
+    #[test]
     fn text_align_match_parent_maps_start_end_using_parent_direction() {
         let parent = DomNode {
             node_type: DomNodeType::Element {

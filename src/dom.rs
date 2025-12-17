@@ -267,6 +267,22 @@ impl<'a> ElementRef<'a> {
         }
     }
 
+    fn visited_flag(&self) -> bool {
+        self
+            .node
+            .get_attribute("data-fastr-visited")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    fn active_flag(&self) -> bool {
+        self
+            .node
+            .get_attribute("data-fastr-active")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
     /// Get parent node
     fn parent_node(&self) -> Option<&'a DomNode> {
         self.parent
@@ -1284,14 +1300,11 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
             PseudoClass::Autofill => false,
             // Interactive pseudo-classes (not supported in static rendering)
-            PseudoClass::Hover
-            | PseudoClass::Active
-            | PseudoClass::Focus
-            | PseudoClass::FocusWithin
-            | PseudoClass::FocusVisible => false,
+            PseudoClass::Hover | PseudoClass::Focus | PseudoClass::FocusWithin | PseudoClass::FocusVisible => false,
+            PseudoClass::Active => self.active_flag(),
             PseudoClass::Checked => self.is_checked(),
-            PseudoClass::Link => self.is_link(),
-            PseudoClass::Visited => false, // Can't determine visited state
+            PseudoClass::Link => self.is_link() && !self.visited_flag(),
+            PseudoClass::Visited => self.is_link() && self.visited_flag(),
         }
     }
 
@@ -1938,6 +1951,60 @@ mod tests {
         let child = &fieldset.children[0];
         assert!(!matches(child, &ancestors, &PseudoClass::Required));
         assert!(!matches(child, &ancestors, &PseudoClass::Optional));
+    }
+
+    #[test]
+    fn link_and_visited_match_state_flags() {
+        let unvisited = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("href".to_string(), "https://example.com".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&unvisited, &[], &PseudoClass::Link));
+        assert!(!matches(&unvisited, &[], &PseudoClass::Visited));
+
+        let visited = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("href".to_string(), "https://example.com".to_string()),
+                    ("data-fastr-visited".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&visited, &[], &PseudoClass::Link));
+        assert!(matches(&visited, &[], &PseudoClass::Visited));
+    }
+
+    #[test]
+    fn active_matches_when_flagged() {
+        let inactive = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("href".to_string(), "https://example.com".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&inactive, &[], &PseudoClass::Active));
+
+        let active = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("href".to_string(), "https://example.com".to_string()),
+                    ("data-fastr-active".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&active, &[], &PseudoClass::Active));
     }
 
     #[test]
