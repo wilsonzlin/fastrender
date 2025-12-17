@@ -503,6 +503,18 @@ fn env_override_prefers_reduced_transparency() {
     drop(guard_invalid);
 }
 
+#[test]
+fn media_query_cache_reuses_existing_entry() {
+    let query = MediaQuery::parse("(min-width: 10px)").unwrap();
+    let ctx = MediaContext::screen(100.0, 100.0);
+    let mut cache = MediaQueryCache::default();
+
+    assert!(ctx.evaluate_with_cache(&query, Some(&mut cache)));
+    let first_len = cache.len();
+    assert!(ctx.evaluate_with_cache(&query, Some(&mut cache)));
+    assert_eq!(cache.len(), first_len, "cache should not grow on repeat evaluation");
+}
+
 /// Tests env override for prefers-reduced-data
 #[test]
 fn env_override_prefers_reduced_data() {
