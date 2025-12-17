@@ -11,7 +11,6 @@ Idle; no current tasks. Available for new tasks.
 - Added display-list coverage for list-style-image image-set selection: a DisplayListBuilder test uses data-URL PNGs and `with_image_set_dpr` to assert the 2x candidate is chosen for list-style images at DPR=2.
 - Inline line-height negative leading is now honored: half-leading is no longer clamped in inline baseline logic, strut initialization, painter, and display list builder, so line-height values smaller than ascent+descent shrink the line box instead of inflating to content height. Added regressions for BaselineMetrics and BaselineAligner to cover negative leading behavior.
 - Row-spanning baseline cells now reserve height in the first row (baseline splitting feeds row sizing), but row baselines still ignore spanning cells per CSS 2.1. Added a regression to ensure rowspans don't set the table baseline and renamed the old rowspan baseline test.
-- Collapsed border corners now have regression coverage to ensure the winning style/width/color carry through (dotted 2px case), guarding corner styling preservation.
 - Decoupled `text-align` from `text-align-last` so setting `text-align` no longer clobbers inherited/explicit last-line alignment; layout now justifies the final line for `text-align: justify-all` even when `text-align-last` stays `auto`. Added cascade regressions (`text_align_does_not_reset_text_align_last`, `text_align_justify_all_respects_explicit_last_line_alignment`) and IFC tests for explicit last-line overrides and justify-all default justification.
 - UA link states: added user-agent CSS for `a:link`/`:visited`/`:active` colors, exposed test flags via `data-fastr-visited`/`data-fastr-active` pseudo matching, and added cascade/DOM regressions to ensure unvisited links get blue/underline/pointer and visited/active flags pick purple/red.
 - Added display-list coverage for `background-repeat: space` when only one tile fits: a 30px tile in a 40px box is centered (x=y=5), ensuring display list tiling matches the painter's space centering behavior.
@@ -20,18 +19,19 @@ Idle; no current tasks. Available for new tasks.
 - Fixed grid repeat(auto-fit/auto-fill) parsing to retain named lines: named line mappings now survive auto-repeat blocks, and new tests cover auto-fit/auto-fill named line preservation. `cargo test --quiet auto_fill_repeat_keeps_named_lines` passes.
 - Counter style fallbacks: lower-greek now has regression coverage for out-of-range values falling back to decimal; Armenian tests now also assert lower-armenian out-of-range fallback. `cargo test --quiet counter_style_armenian_variants` passes.
 - Float shrink-to-fit clamps to min-width: added a layout regression where a floating block with only `min-width` in a 100px container still uses its 150px min width (shrink-to-fit + min/max clamp). `cargo test --quiet float_auto_width_honors_min_width` passes.
-- Added float max-width regression: floating block with intrinsic text and `max-width:50px` clamps the shrink-to-fit width to 50px. `cargo test --quiet float_auto_width_clamps_to_max_width` passes.
 - Added viewport scroll snapping: render_html_with_scroll now adjusts scroll offsets based on scroll-snap-type/align/stop (container detected from fragment tree) with proximity/mandatory handling; new API tests cover snapping/threshold behavior.
 - 2028-XX-XX (Agent12): Fixed painting/display-list handling for sideways writing modes. Sideways writing now counts as vertical in painter/display list builder so vertical layout glyph offsets/ decorations render correctly. Added regression ensuring sideways-LR text produces vertical glyph offsets/decorations.
-- Border-spacing validation: border-spacing now rejects percentage values, clamps negative lengths to zero (including calc resolution), and resolves spacing with non-negative clamp. Added cascade + table tests; `cargo test border_spacing_percentages_are_ignored` passes.
+<<<<<<< HEAD
+- Border-spacing validation: border-spacing now rejects percentage values, clamps negative lengths to zero (including calc resolution), and resolves spacing with non-negative clamp. Added cascade + table tests. Git push currently timing out (SSH to github).
+- Rebased/pushed the border-spacing validation work; `cargo test border_spacing_percentages_are_ignored` passes locally.
 - Added vertical text-overflow regressions: vertical-rl with clip/ellipsis and inline-start ellipsis now tested to ensure markers appear and inline-axis extents clamp to the available height.
 - Added vertical_writing_ellipsis fixture covering end/start ellipsis in vertical-rl for manual render inspection.
 - CLI: fetch_and_render/render_pages/inspect_frag accept `--prefers-reduced-transparency reduce|no-preference` to set `FASTR_PREFERS_REDUCED_TRANSPARENCY` for media overrides (help text updated).
-- Added media-query caching plumbing: MediaQueryCache/MediaQueryKey, cached evaluation helpers, and optional cache-aware collection/resolve/import pathways (StyleSheet + cascade). FastRender layout/iframe paths now reuse one cache across imports, font-face collection, and cascade. New regression `media_query_cache_reused_between_collections` verifies cached reuse; cargo check passes.
+=======
 - Added shaping regression for sideways writing: pipeline shapes sideways-LR text with CW90 rotation to keep glyph orientation correct. Test skips when fonts unavailable.
 - Added scroll snap coverage for inline/horizontal axes and stop:always tie-breaking so snapping works for x/inline snap types and stop preferences.
 - Added scroll snap coverage for vertical writing modes: manual fragment-tree tests ensure block snapping targets the horizontal axis under vertical-rl and inline snapping targets the vertical axis, and stop:always tie-breaking is covered.
-- Added scroll snap regression for `scroll-snap-type: none` to ensure snapping is disabled when authors opt out; `apply_scroll_snap` returns the original offsets. Test `scroll_snap_none_leaves_offsets_unchanged` passes.
+>>>>>>> 7ba42b7 (Add vertical writing scroll snap tests)
 - Added `--scroll-y` and `--scroll-x` to `examples/inspect_frag` (reports fragments/contexts relative to a scroll offset) and deduped `forced-color-adjust` merge fallout (single enum/field/default); text-decoration parsing is ASCII case-insensitive and `MediaContext` defaults `prefers-color-scheme` to no-preference so media tests pass. Added `--scroll-x`/`--scroll-y` parsing to fetch_and_render/render_pages CLIs and horizontal scroll offsets now apply through the renderer.
 - Added horizontal scroll support end-to-end: FastRender `render_html_with_scroll` / `render_to_png_with_scroll` now accept x/y offsets and apply both; CLI tools parse `--scroll-x`/`--scroll-y` and feed both offsets. deduped forced-color-adjust field defaults and cleaned text-wrap test expectation.
 - Added horizontal scroll support end-to-end: FastRender `render_html_with_scroll` / `render_to_png_with_scroll` now accept x/y offsets and apply both; CLI tools parse `--scroll-x`/`--scroll-y` and feed both offsets. Deduped forced-color-adjust field defaults and cleaned text-wrap test expectation. Push to origin may be pending (git push hanging/timeouts).
@@ -47,6 +47,8 @@ Idle; no current tasks. Available for new tasks.
 ## Current Status (Dec 2025)
 - **39 pages tested**: 39 pass, 0 crash, 0 error (latest sweep Dec 15)
 - **Testing**: `cargo run --release --bin render_pages` → see `fetches/renders/_summary.log` (latest run: 207.1s; amazon/walmart/cnn still slow)
+- Latest: Added a TextRun regression for negative leading and kept inline half-leading signed; no active tasks (idle).
+Currently idle; recent work was negative-leading regressions/tests. No active task claimed.
 
 ## Context
 - Project: Rust HTML/CSS renderer (`fastrender`); current harness: danger-full-access FS, network enabled, approval policy `never`.
@@ -1385,4 +1387,6 @@ Actionable borrowings:
 - Painter now supports a scroll/translation offset and FastRender exposes `render_html_with_scroll`/`render_to_png_with_scroll`; the fetch_and_render CLI scroll_y argument now applies that offset instead of warning. Added regression `render_html_with_scroll_offsets_viewport` covering the shifted viewport.
 - render_pages CLI gained `--scroll-y` support and passes the offset through `render_to_png_with_scroll`; per-page logs include the scroll value.
 - Added prefers-contrast media coverage: MediaContext setter, evaluation regression, and env override invalid-value guard.
- - Added a TextRun regression ensuring half-leading can be negative when line-height is smaller than text height (test_text_run_negative_half_leading).
+- Idle/free; repo clean and synced. Waiting for next task.
+- Block intrinsic sizing now ignores out-of-flow floats: floating children are skipped when computing block min/max-content inline sizes, so shrink-to-fit blocks/columns don’t expand because of floats. Added regression `block_intrinsic_width_ignores_floats`; `cargo test block_intrinsic_width_ignores_floats -- --nocapture` passes.
+- Grid `grid-template-areas` now synthesize line names (`<area>-start`/`<area>-end`) on row/column boundaries so placements can target those names. Added regression `grid_template_areas_create_line_names` to ensure line names/maps populate when only areas are authored.
