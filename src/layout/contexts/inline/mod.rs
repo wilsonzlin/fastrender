@@ -8189,6 +8189,67 @@ mod tests {
         );
     }
 
+    fn collect_text_with_x<'a>(node: &'a FragmentNode, out: &mut Vec<(String, f32)>) {
+        let mut stack = vec![node];
+        while let Some(fragment) = stack.pop() {
+            if let FragmentContent::Text { ref text, .. } = fragment.content {
+                out.push((text.clone(), fragment.bounds.x()));
+            }
+            for child in &fragment.children {
+                stack.push(child);
+            }
+        }
+    }
+
+    #[test]
+    fn bidi_isolate_positions_between_surrounding_runs() {
+        // An isolate should act as an atomic inline: its contents stay together and the isolated
+        // run sits between surrounding LTR runs in visual order.
+        let mut rtl_style = ComputedStyle::default();
+        rtl_style.direction = crate::style::types::Direction::Rtl;
+        rtl_style.unicode_bidi = crate::style::types::UnicodeBidi::Isolate;
+        let rtl_style = Arc::new(rtl_style);
+
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![
+                BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
+                BoxNode::new_inline(
+                    rtl_style.clone(),
+                    vec![BoxNode::new_text(rtl_style.clone(), "DEF".to_string())],
+                ),
+                BoxNode::new_text(default_style(), "\u{00A0}GHI".to_string()),
+            ],
+        );
+
+        let ifc = InlineFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(400.0);
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_with_x(&fragment, &mut texts);
+        texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        let labels: Vec<_> = texts.iter().map(|(t, _)| t.clone()).collect();
+        let joined = labels.join("");
+        assert_eq!(joined, "ABC\u{00A0}DEF\u{00A0}GHI");
+
+        // All isolate characters (D/E/F) should form a contiguous block in visual order.
+        let isolate_positions: Vec<usize> = labels
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t.as_str(), "D" | "E" | "F"))
+            .map(|(idx, _)| idx)
+            .collect();
+        if let (Some(first), Some(last)) = (isolate_positions.first(), isolate_positions.last()) {
+            assert_eq!(isolate_positions.len(), last - first + 1);
+        } else {
+            panic!("isolate characters missing from line");
+        }
+    }
+
     #[test]
     fn mandatory_breaks_survive_added_anywhere_breaks() {
         // Combine a mandatory break with word-break:anywhere additions at the same offset.
