@@ -39,6 +39,9 @@
 
 ## Session notes (latest)
 
+- Implemented CSS `user-select`: added `UserSelect` enum/defaults, parsing of auto/text/none/all/contain, property wiring, and regression coverage; also marked `user-select` as inherited per spec. Pushed `c412f85` and `fa5a130`.
+- Implemented CSS `touch-action`: added `TouchAction` flags, default auto, parsing of single/multi-keyword lists (pan-*, pinch-zoom, manipulation), property copy wiring, and regression test. No layout behavior yet; pushed `ae9c051`.
+
 - Added `:autofill` pseudo-class: parsed/serialized via selectors, DOM matching always false (no autofill state available). Added basic parse/match tests.
 - Added `:checked` selector support: parsed/serialized and DOM matching for checkable inputs (checkbox/radio with the checked attribute) and option elements (selected attribute or default first option when no selection on a single select). Tests cover inputs, default-selected options, and multiple selects.
 - Added `:indeterminate` pseudo-class: parsed/serialized; DOM matches checkboxes with an indeterminate attribute and progress elements without a valid value (missing or non-numeric). Radios don’t match. Tests cover checkbox/radio/progress cases.
