@@ -126,7 +126,21 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
         }
     };
 
-    let children = node.children.borrow().iter().map(convert_handle_to_node).collect();
+    let mut children = node.children.borrow().iter().map(convert_handle_to_node).collect::<Vec<_>>();
+
+    // HTML <wbr> elements represent optional break opportunities. Synthesize a zero-width break
+    // text node so line breaking can consider the opportunity while still allowing the element to
+    // be styled/selected.
+    if let DomNodeType::Element { tag_name, .. } = &node_type {
+        if tag_name.eq_ignore_ascii_case("wbr") {
+            children.push(DomNode {
+                node_type: DomNodeType::Text {
+                    content: "\u{200B}".to_string(),
+                },
+                children: Vec::new(),
+            });
+        }
+    }
 
     DomNode { node_type, children }
 }
@@ -645,6 +659,21 @@ mod tests {
         element_ref.match_non_ts_pseudo_class(pseudo, &mut context)
     }
 
+    fn collect_wbr_texts(node: &DomNode, out: &mut Vec<String>) {
+        if let DomNodeType::Element { tag_name, .. } = &node.node_type {
+            if tag_name.eq_ignore_ascii_case("wbr") {
+                for child in &node.children {
+                    if let DomNodeType::Text { content } = &child.node_type {
+                        out.push(content.clone());
+                    }
+                }
+            }
+        }
+        for child in &node.children {
+            collect_wbr_texts(child, out);
+        }
+    }
+
     #[test]
     fn empty_pseudo_requires_no_element_or_text_children() {
         let empty = element("div", vec![]);
@@ -654,6 +683,14 @@ mod tests {
         assert!(matches(&empty, &[], &PseudoClass::Empty));
         assert!(!matches(&whitespace, &[], &PseudoClass::Empty));
         assert!(!matches(&child, &[], &PseudoClass::Empty));
+    }
+
+    #[test]
+    fn wbr_inserts_zero_width_break_text_node() {
+        let dom = parse_html("<p>Hello<wbr>World</p>").expect("parse html");
+        let mut texts = Vec::new();
+        collect_wbr_texts(&dom, &mut texts);
+        assert!(texts.iter().any(|t| t == "\u{200B}"));
     }
 
     #[test]

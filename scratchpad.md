@@ -429,6 +429,7 @@ Inline coordinate fix (Mar 2026):
 
 ## Recent changes (this branch)
 - HTML `nowrap` presentational hint now maps `td`/`th` `nowrap` attributes to `white-space: nowrap`, and UA defaults set `<nobr>` to `white-space: nowrap`; cascade tests cover the hint, override, and nobr default.
+- `<wbr>` elements now synthesize a zero-width break text child during DOM conversion so optional break opportunities participate in line breaking without losing selector styling; regression added in dom tests.
 - Flex-to-fragment conversion was dropping flex item contents: `taffy_to_fragment` rebuilt child fragments without using real layout results, so flex items lost their text/images (CNN rendered almost blank). Fixed by re-laying out each flex child with the definite size Taffy resolved and positioning the resulting fragment at the Taffy coordinates, preserving the measured content. `FASTR_DUMP_COMMANDS` debug flag now prints display list command types/rects.
 - Font-size resolution now receives the real viewport during cascade: viewport/font-relative font sizes resolve via media viewport instead of panicking, and a regression test locks 10vw/5vh handling. `apply_cascaded_declarations` threads viewport through; tests use `apply_declaration` with a default viewport and `apply_declaration_with_viewport` when an explicit viewport is needed.
 - Line-height lengths now resolve to px during cascade (handles em/rem/ex/ch/vw/vh) and the line-height computation path tolerates remaining relative units, avoiding panics when inline layout measures lines.
