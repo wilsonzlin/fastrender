@@ -13815,6 +13815,35 @@ mod tests {
     }
 
     #[test]
+    fn cursor_image_set_respects_device_pixel_ratio() {
+        let mut style = ComputedStyle::default();
+        with_image_set_dpr(2.0, || {
+            apply_declaration(
+                &mut style,
+                &Declaration {
+                    property: "cursor".to_string(),
+                    value: PropertyValue::Multiple(vec![
+                        PropertyValue::Keyword(
+                            "image-set(url(\"low.cur\") 1x, url(\"hi.cur\") 2x)".to_string(),
+                        ),
+                        PropertyValue::Keyword(",".to_string()),
+                        PropertyValue::Keyword("crosshair".to_string()),
+                    ]),
+                    raw_value: String::new(),
+                    important: false,
+                },
+                &ComputedStyle::default(),
+                16.0,
+                16.0,
+            );
+        });
+
+        assert_eq!(style.cursor, CursorKeyword::Crosshair);
+        assert_eq!(style.cursor_images.len(), 1);
+        assert_eq!(style.cursor_images[0].url, "hi.cur");
+    }
+
+    #[test]
     fn list_style_image_accepts_image_set() {
         let mut style = ComputedStyle::default();
         apply_declaration(
