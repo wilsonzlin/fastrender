@@ -513,14 +513,12 @@ pub struct MediaQueryCache {
 }
 
 impl MediaQueryCache {
-    fn key_for(&mut self, query: &MediaQuery) -> MediaQueryKey {
+    fn key_for(&mut self, query: &MediaQuery) -> &MediaQueryKey {
         let ptr = query as *const MediaQuery as usize;
-        if let Some(existing) = self.key_cache.get(&ptr) {
-            return existing.clone();
+        if !self.key_cache.contains_key(&ptr) {
+            self.key_cache.insert(ptr, MediaQueryKey::from(query));
         }
-        let key = MediaQueryKey::from(query);
-        self.key_cache.insert(ptr, key.clone());
-        key
+        self.key_cache.get(&ptr).expect("key just inserted")
     }
 
     fn get(&self, key: &MediaQueryKey) -> Option<bool> {
@@ -1831,7 +1829,7 @@ impl MediaContext {
     /// Evaluates a single media query with optional caching.
     pub fn evaluate_with_cache(&self, query: &MediaQuery, cache: Option<&mut MediaQueryCache>) -> bool {
         if let Some(cache) = cache {
-            let key = cache.key_for(query);
+            let key = cache.key_for(query).clone();
             if let Some(hit) = cache.get(&key) {
                 return hit;
             }
