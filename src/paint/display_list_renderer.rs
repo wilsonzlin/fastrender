@@ -1099,7 +1099,8 @@ impl DisplayListRenderer {
             self.canvas.blend_mode()
         };
         let opacity = self.canvas.opacity().clamp(0.0, 1.0);
-        let clip = self.canvas.clip_mask().cloned();
+        // CSS outlines should not be clipped by overflow/clip regions.
+        let clip = None;
         let transform = self.canvas.transform();
         let color = item.color;
 
@@ -3636,6 +3637,32 @@ mod tests {
         assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 0, 255));
         // Inside the original rect stays untouched.
         assert_eq!(pixel(&pixmap, 3, 3), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn outline_ignores_clip_region() {
+        let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+        // Simulate overflow:hidden via a clip.
+        list.push(DisplayItem::PushClip(ClipItem {
+            shape: ClipShape::Rect {
+                rect: Rect::from_xywh(10.0, 10.0, 10.0, 10.0),
+                radii: Some(BorderRadii::ZERO),
+            },
+        }));
+        list.push(DisplayItem::Outline(OutlineItem {
+            rect: Rect::from_xywh(10.0, 10.0, 10.0, 10.0),
+            width: 4.0,
+            style: CssBorderStyle::Solid,
+            color: Rgba::RED,
+            offset: 0.0,
+            invert: false,
+        }));
+        list.push(DisplayItem::PopClip);
+
+        let pixmap = renderer.render(&list).unwrap();
+        // Outline should extend beyond the clipped rect.
+        assert_eq!(pixel(&pixmap, 8, 15), (255, 0, 0, 255));
     }
 
     #[test]
