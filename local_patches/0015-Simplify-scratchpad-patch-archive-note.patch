@@ -1,21 +1,22 @@
-From e495d80364cfb1d1b6ac4557a653f3bea31fb3ff Mon Sep 17 00:00:00 2001
+From 66fb0b5c3a42e6b4da73ea857a5ca69b613bf85f Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
-Date: Wed, 17 Dec 2025 14:52:39 -0500
-Subject: [PATCH 03/15] Note push blockage
+Date: Wed, 17 Dec 2025 15:00:42 -0500
+Subject: [PATCH 15/15] Simplify scratchpad patch archive note
 
 ---
- scratchpad.md | 1 +
- 1 file changed, 1 insertion(+)
+ scratchpad.md | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/scratchpad.md b/scratchpad.md
-index 40e8ccc..1bf417d 100644
+index 3f16043..d000d3d 100644
 --- a/scratchpad.md
 +++ b/scratchpad.md
-@@ -2,6 +2,7 @@
- Idle; no current tasks. Available for new tasks.
+@@ -3,7 +3,7 @@ Idle; no current tasks. Available for new tasks.
  - PositionedLayout absolute helper now delegates to AbsoluteLayout for spec-accurate shrink-to-fit/auto-margin handling; positioned layout tests updated (shrink-to-fit expectation) and an auto-margin centering regression added. `cargo test --quiet test_absolute_position_left_right_shrink_to_fit` and `cargo test --quiet absolute_position_auto_margins_center_between_insets` pass (existing display_list_renderer warnings still present during test compile).
  - Pull from origin currently times out (ssh fetch). Commit `f888136` is local; push pending once network permits.
-+- Push over SSH still timing out; HTTPS requires creds. Origin reset to SSH. Commits `f888136` and `d47eb9a` remain local.
+ - Push over SSH still timing out; HTTPS requires creds. Origin reset to SSH. Commits `f888136` and `d47eb9a` remain local.
+-- Archived local commits as patches in `local_patches/` (0001- delegate PositionedLayout absolute helper, 0002- note pull timeout, 0003- note push blockage, 0004- archive patch set, 0005- patch archive note, 0006- refresh archive, 0007- scratchpad update, 0008- regenerate patch archive with latest commits, 0009- scratchpad update after regeneration, 0010- resync archive with all local commits, 0011- scratchpad update for latest archive) so others can apply while pushes are blocked. Push over SSH still timing out; HTTPS requires creds.
++- Archived local commits as patches in `local_patches/` (full series covering all local commits) so others can apply while pushes are blocked. Push over SSH still timing out; HTTPS requires creds.
  - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
  - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
  - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
