@@ -7159,6 +7159,95 @@ mod tests {
     }
 
     #[test]
+    fn marker_image_outside_positions_inline_start_in_vertical_rl() {
+        let ifc = InlineFormattingContext::new();
+        let mut root_style = ComputedStyle::default();
+        root_style.writing_mode = WritingMode::VerticalRl;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(
+            marker_style,
+            MarkerContent::Image(ReplacedBox {
+                replaced_type: ReplacedType::Image {
+                    src: String::new(),
+                    alt: None,
+                    sizes: None,
+                    srcset: Vec::new(),
+                },
+                intrinsic_size: Some(Size::new(10.0, 10.0)),
+                aspect_ratio: Some(1.0),
+            }),
+        );
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_y, text_y) = marker_and_text_positions_vertical(line);
+
+        let marker_y = marker_y.expect("marker y");
+        let text_y = text_y.expect("text y");
+        assert!(
+            marker_y < text_y,
+            "image marker should sit at inline-start (top) in vertical-rl; marker_y={}, text_y={}",
+            marker_y,
+            text_y
+        );
+    }
+
+    #[test]
+    fn marker_image_outside_positions_inline_start_in_vertical_rl_rtl_direction() {
+        let ifc = InlineFormattingContext::new();
+        let mut root_style = ComputedStyle::default();
+        root_style.writing_mode = WritingMode::VerticalRl;
+        root_style.direction = crate::style::types::Direction::Rtl;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(
+            marker_style,
+            MarkerContent::Image(ReplacedBox {
+                replaced_type: ReplacedType::Image {
+                    src: String::new(),
+                    alt: None,
+                    sizes: None,
+                    srcset: Vec::new(),
+                },
+                intrinsic_size: Some(Size::new(10.0, 10.0)),
+                aspect_ratio: Some(1.0),
+            }),
+        );
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_y, text_y) = marker_and_text_positions_vertical(line);
+
+        let marker_y = marker_y.expect("marker y");
+        let text_y = text_y.expect("text y");
+        assert!(
+            marker_y > text_y,
+            "rtl inline-start should map to inline-end (bottom) for image markers in vertical-rl; marker_y={}, text_y={}",
+            marker_y,
+            text_y
+        );
+    }
+
+    #[test]
     fn marker_outside_positions_inline_start_in_sideways_rl() {
         let ifc = InlineFormattingContext::new();
         let mut root_style = ComputedStyle::default();
