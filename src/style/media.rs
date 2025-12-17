@@ -3745,6 +3745,13 @@ mod tests {
         assert!(MediaQuery::parse("(max-aspect-ratio: 0/0)").is_err());
     }
 
+    #[test]
+    fn device_dimensions_reject_negative_values() {
+        assert!(MediaQuery::parse("(device-width: -1px)").is_err());
+        assert!(MediaQuery::parse("(max-device-width: -100px)").is_err());
+        assert!(MediaQuery::parse("(min-device-height: -10px)").is_err());
+    }
+
     // ============================================================================
     // Error Message Tests
     // ============================================================================
