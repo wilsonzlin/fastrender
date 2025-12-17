@@ -352,6 +352,48 @@ fn display_list_background_layers_use_per_layer_clip() {
     assert_eq!(gradients[0].rect, Rect::from_xywh(0.0, 0.0, 20.0, 20.0));
     assert_eq!(gradients[1].rect, Rect::from_xywh(4.0, 4.0, 12.0, 12.0));
 }
+
+#[test]
+fn background_repeat_space_centers_single_tile_in_display_list() {
+    // 1x1 SVG so decoding succeeds without file I/O.
+    let data_url = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" fill=\"#f00\"/></svg>".to_string();
+
+    let mut style = ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::Url(data_url)),
+        repeat: BackgroundRepeat {
+            x: fastrender::style::types::BackgroundRepeatKeyword::Space,
+            y: fastrender::style::types::BackgroundRepeatKeyword::Space,
+        },
+        size: fastrender::style::types::BackgroundSize::Explicit(
+            fastrender::style::types::BackgroundSizeComponent::Length(Length::px(30.0)),
+            fastrender::style::types::BackgroundSizeComponent::Length(Length::px(30.0)),
+        ),
+        ..Default::default()
+    }]);
+
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 40.0, 40.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let image = list.items().iter().find_map(|item| {
+        if let DisplayItem::Image(img) = item {
+            Some(img)
+        } else {
+            None
+        }
+    });
+
+    let image = image.expect("background image should emit an image item");
+    assert_eq!(image.dest_rect.width(), 30.0);
+    assert_eq!(image.dest_rect.height(), 30.0);
+    assert!((image.dest_rect.x() - 5.0).abs() < 1e-3, "tile should be centered in 40px area");
+    assert!((image.dest_rect.y() - 5.0).abs() < 1e-3, "tile should be centered vertically");
+}
 #[test]
 fn fragment_box_shadow_emits_items() {
     let mut style = fastrender::ComputedStyle::default();
