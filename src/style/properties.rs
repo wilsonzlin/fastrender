@@ -2303,7 +2303,6 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "user-select" => styles.user_select = source.user_select,
         "scrollbar-width" => styles.scrollbar_width = source.scrollbar_width,
         "scrollbar-color" => styles.scrollbar_color = source.scrollbar_color,
-        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
             styles.vertical_align_specified = source.vertical_align_specified;
@@ -2349,7 +2348,6 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.text_emphasis_color = source.text_emphasis_color;
             styles.text_emphasis_position = source.text_emphasis_position;
         }
-        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "text-decoration" => {
             styles.text_decoration = source.text_decoration.clone();
             styles.text_decoration_line_specified = source.text_decoration_line_specified;
@@ -5905,16 +5903,6 @@ pub fn apply_declaration_with_base(
         "color-scheme" => {
             if let Some(pref) = parse_color_scheme(&resolved_value) {
                 styles.color_scheme = pref;
-            }
-        }
-        "forced-color-adjust" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
-                    "auto" => ForcedColorAdjust::Auto,
-                    "none" => ForcedColorAdjust::None,
-                    "preserve-parent-color" => ForcedColorAdjust::PreserveParentColor,
-                    _ => styles.forced_color_adjust,
-                };
             }
         }
         "color" => {
