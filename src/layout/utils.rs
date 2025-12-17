@@ -46,8 +46,14 @@ pub fn resolve_length_with_percentage_metrics(
     if length.unit.is_percentage() {
         percentage_base.and_then(|b| length.resolve_against(b))
     } else if length.unit.is_viewport_relative() {
+        if !viewport.width.is_finite() || !viewport.height.is_finite() {
+            return None;
+        }
         length.resolve_with_viewport(viewport.width, viewport.height)
     } else if length.unit.is_font_relative() {
+        if !font_size.is_finite() || !root_font_size.is_finite() {
+            return None;
+        }
         match (style, font_context) {
             (Some(style), Some(ctx)) => Some(resolve_font_relative_length(length, style, ctx)),
             _ => Some(resolve_font_relative(length, font_size, root_font_size)),
@@ -576,6 +582,26 @@ mod tests {
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedBox;
+
+    #[test]
+    fn resolve_length_with_percentage_rejects_non_finite_contexts() {
+        let viewport = Size::new(f32::NAN, 800.0);
+
+        assert_eq!(
+            resolve_length_with_percentage(Length::percent(50.0), Some(f32::NAN), viewport, 16.0, 16.0),
+            None
+        );
+
+        assert_eq!(
+            resolve_length_with_percentage(Length::new(10.0, LengthUnit::Vw), Some(0.0), viewport, 16.0, 16.0),
+            None
+        );
+
+        assert_eq!(
+            resolve_length_with_percentage(Length::em(2.0), Some(0.0), Size::new(800.0, 600.0), f32::NAN, 16.0),
+            None
+        );
+    }
 
     #[test]
     fn test_resolve_offset_auto() {
