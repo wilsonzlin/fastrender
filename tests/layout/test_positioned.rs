@@ -370,23 +370,23 @@ fn test_absolute_position_right_bottom() {
 }
 
 #[test]
-fn test_absolute_position_left_right_stretch() {
+fn test_absolute_position_left_right_shrink_to_fit() {
     let layout = PositionedLayout::new();
 
     let mut style = default_style();
     style.position = Position::Absolute;
     style.left = LengthOrAuto::px(100.0);
     style.right = LengthOrAuto::px(100.0);
-    // width is auto - should stretch
+    // width is auto - should shrink-to-fit the intrinsic size between insets
 
     let cb = create_containing_block(500.0, 300.0);
     let intrinsic = Size::new(50.0, 50.0);
 
     let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
-    // Width = 500 - 100 - 100 = 300
+    // Width shrink-to-fits to the intrinsic 50px
     assert_eq!(pos.x, 100.0);
-    assert_eq!(size.width, 300.0);
+    assert_eq!(size.width, 50.0);
 }
 
 #[test]
@@ -494,6 +494,27 @@ fn test_absolute_position_overconstrained_ignores_right() {
 
     // Uses left and width, ignores right
     assert_eq!(pos.x, 10.0);
+    assert_eq!(size.width, 100.0);
+}
+
+#[test]
+fn absolute_position_auto_margins_center_between_insets() {
+    let layout = PositionedLayout::new();
+
+    let mut style = default_style();
+    style.position = Position::Absolute;
+    style.left = LengthOrAuto::px(0.0);
+    style.right = LengthOrAuto::px(0.0);
+    style.width = LengthOrAuto::px(100.0);
+    style.margin_left_auto = true;
+    style.margin_right_auto = true;
+
+    let cb = create_containing_block(300.0, 200.0);
+    let intrinsic = Size::new(10.0, 10.0);
+
+    let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
+
+    assert!((pos.x - 100.0).abs() < 1e-3, "x was {}", pos.x);
     assert_eq!(size.width, 100.0);
 }
 
