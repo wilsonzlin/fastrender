@@ -462,7 +462,7 @@ impl BlockFormattingContext {
             &self.font_context,
             self.viewport_size,
         );
-        let padding_top = resolve_length_for_width(
+        let mut padding_top = resolve_length_for_width(
             style.padding_top,
             containing_width,
             style,
@@ -476,8 +476,14 @@ impl BlockFormattingContext {
             &self.font_context,
             self.viewport_size,
         );
-        if style.overflow_x == Overflow::Scroll {
-            padding_bottom += resolve_scrollbar_width(style);
+        let reserve_horizontal_gutter = matches!(style.overflow_x, Overflow::Scroll)
+            || (style.scrollbar_gutter.stable && matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll));
+        if reserve_horizontal_gutter {
+            let gutter = resolve_scrollbar_width(style);
+            if style.scrollbar_gutter.both_edges {
+                padding_top += gutter;
+            }
+            padding_bottom += gutter;
         }
 
         // Height computation (CSS 2.1 Section 10.6.3) with aspect-ratio adjustment (CSS Sizing L4)
@@ -626,20 +632,29 @@ impl BlockFormattingContext {
         let box_y = current_y + collapsed_margin;
 
         // Resolve padding and borders
-        let padding_top = resolve_length_for_width(
+        let mut padding_top = resolve_length_for_width(
             style.padding_top,
             containing_width,
             style,
             &self.font_context,
             self.viewport_size,
         );
-        let padding_bottom = resolve_length_for_width(
+        let mut padding_bottom = resolve_length_for_width(
             style.padding_bottom,
             containing_width,
             style,
             &self.font_context,
             self.viewport_size,
         );
+        let reserve_horizontal_gutter = matches!(style.overflow_x, Overflow::Scroll)
+            || (style.scrollbar_gutter.stable && matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll));
+        if reserve_horizontal_gutter {
+            let gutter = resolve_scrollbar_width(style);
+            if style.scrollbar_gutter.both_edges {
+                padding_top += gutter;
+            }
+            padding_bottom += gutter;
+        }
 
         let border_top = resolve_length_for_width(
             style.border_top_width,
@@ -1740,11 +1755,8 @@ impl FormattingContext for BlockFormattingContext {
             max_width
         };
 
-        let mut clamped_content_width = crate::layout::utils::clamp_with_order(
-            computed_width.content_width,
-            min_width,
-            max_width,
-        );
+        let mut clamped_content_width =
+            crate::layout::utils::clamp_with_order(computed_width.content_width, min_width, max_width);
         if clamped_content_width > self.viewport_size.width {
             clamped_content_width = self.viewport_size.width;
         }
@@ -1827,7 +1839,7 @@ impl FormattingContext for BlockFormattingContext {
             &self.font_context,
             self.viewport_size,
         );
-        let padding_top = resolve_length_for_width(
+        let mut padding_top = resolve_length_for_width(
             style.padding_top,
             containing_width,
             style,
@@ -1841,9 +1853,15 @@ impl FormattingContext for BlockFormattingContext {
             &self.font_context,
             self.viewport_size,
         );
-        // Reserve space for a horizontal scrollbar when overflow-x is scroll.
-        if style.overflow_x == Overflow::Scroll {
-            padding_bottom += resolve_scrollbar_width(style);
+        // Reserve space for a horizontal scrollbar when requested by overflow or scrollbar-gutter stability.
+        let reserve_horizontal_gutter = matches!(style.overflow_x, Overflow::Scroll)
+            || (style.scrollbar_gutter.stable && matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll));
+        if reserve_horizontal_gutter {
+            let gutter = resolve_scrollbar_width(style);
+            if style.scrollbar_gutter.both_edges {
+                padding_top += gutter;
+            }
+            padding_bottom += gutter;
         }
         let vertical_edges = border_top + padding_top + padding_bottom + border_bottom;
 
@@ -1912,11 +1930,8 @@ impl FormattingContext for BlockFormattingContext {
         } else {
             max_height
         };
-        let height = crate::layout::utils::clamp_with_order(
-            resolved_height.unwrap_or(content_height),
-            min_height,
-            max_height,
-        );
+        let height =
+            crate::layout::utils::clamp_with_order(resolved_height.unwrap_or(content_height), min_height, max_height);
 
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
         // For root/layout entry points, keep fragment bounds scoped to the border box so margins

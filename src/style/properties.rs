@@ -2384,6 +2384,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "scroll-margin-right" => styles.scroll_margin_right = source.scroll_margin_right,
         "scroll-margin-bottom" => styles.scroll_margin_bottom = source.scroll_margin_bottom,
         "scroll-margin-left" => styles.scroll_margin_left = source.scroll_margin_left,
+        "scrollbar-gutter" => styles.scrollbar_gutter = source.scrollbar_gutter,
         "overflow-anchor" => styles.overflow_anchor = source.overflow_anchor,
         "pointer-events" => styles.pointer_events = source.pointer_events,
         "touch-action" => styles.touch_action = source.touch_action,
@@ -5962,6 +5963,37 @@ pub fn apply_declaration_with_base(
                     "always" => ScrollSnapStop::Always,
                     _ => styles.scroll_snap_stop,
                 };
+            }
+        }
+        "scrollbar-gutter" => {
+            let mut stable = false;
+            let mut both_edges = false;
+            let mut seen = false;
+            let tokens: Vec<String> = match &resolved_value {
+                PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_ascii_lowercase()).collect(),
+                PropertyValue::Multiple(values) => values
+                    .iter()
+                    .filter_map(|v| match v {
+                        PropertyValue::Keyword(k) if k != "," => Some(k.to_ascii_lowercase()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for token in tokens {
+                seen = true;
+                match token.as_str() {
+                    "auto" => {}
+                    "stable" => stable = true,
+                    "both-edges" => both_edges = true,
+                    _ => {
+                        seen = false;
+                        break;
+                    }
+                }
+            }
+            if seen {
+                styles.scrollbar_gutter = ScrollbarGutter { stable, both_edges };
             }
         }
         "pointer-events" => {
@@ -12242,6 +12274,43 @@ mod tests {
     }
 
     #[test]
+    fn scrollbar_gutter_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-gutter".into(),
+                value: PropertyValue::Keyword("stable".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(style.scrollbar_gutter.stable);
+        assert!(!style.scrollbar_gutter.both_edges);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-gutter".into(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("both-edges".into()),
+                    PropertyValue::Keyword("stable".into()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(style.scrollbar_gutter.stable);
+        assert!(style.scrollbar_gutter.both_edges);
+    }
+
+    #[test]
     fn scrollbar_width_honors_global_keywords() {
         let parent = ComputedStyle {
             scrollbar_width: ScrollbarWidth::Thin,
@@ -12325,6 +12394,93 @@ mod tests {
             16.0,
         );
         assert_eq!(style.scrollbar_width, ScrollbarWidth::Auto);
+    }
+
+    #[test]
+    fn scrollbar_gutter_honors_global_keywords() {
+        let parent = ComputedStyle {
+            scrollbar_gutter: ScrollbarGutter {
+                stable: true,
+                both_edges: true,
+            },
+            ..ComputedStyle::default()
+        };
+        let revert_base = ComputedStyle {
+            scrollbar_gutter: ScrollbarGutter {
+                stable: false,
+                both_edges: true,
+            },
+            ..ComputedStyle::default()
+        };
+        let revert_layer_base = ComputedStyle::default();
+
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-gutter".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scrollbar_gutter, parent.scrollbar_gutter);
+
+        style.scrollbar_gutter = ScrollbarGutter {
+            stable: true,
+            both_edges: false,
+        };
+        apply_declaration_with_base(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-gutter".into(),
+                value: PropertyValue::Keyword("revert".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            &revert_base,
+            None,
+            16.0,
+            16.0,
+            DEFAULT_VIEWPORT,
+        );
+        assert_eq!(style.scrollbar_gutter, revert_base.scrollbar_gutter);
+
+        apply_declaration_with_base(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-gutter".into(),
+                value: PropertyValue::Keyword("revert-layer".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            &revert_base,
+            Some(&revert_layer_base),
+            16.0,
+            16.0,
+            DEFAULT_VIEWPORT,
+        );
+        assert_eq!(style.scrollbar_gutter, revert_layer_base.scrollbar_gutter);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-gutter".into(),
+                value: PropertyValue::Keyword("unset".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scrollbar_gutter, ScrollbarGutter::default());
     }
 
     #[test]

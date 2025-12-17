@@ -228,6 +228,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "scroll-margin-right",
     "scroll-margin-bottom",
     "scroll-margin-left",
+    "scrollbar-gutter",
     "overflow",
     "overflow-x",
     "overflow-y",

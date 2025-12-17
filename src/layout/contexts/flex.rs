@@ -2104,9 +2104,19 @@ impl FlexFormattingContext {
             inline_positive_item
         };
 
-        let map_overflow = |value: CssOverflow| match value {
-            // Taffy lacks an Auto variant; treat it like Visible (no reserved scrollbar space).
-            CssOverflow::Visible | CssOverflow::Auto => TaffyOverflow::Visible,
+        let reserve_scroll_x =
+            style.scrollbar_gutter.stable && matches!(style.overflow_x, CssOverflow::Auto | CssOverflow::Scroll);
+        let reserve_scroll_y =
+            style.scrollbar_gutter.stable && matches!(style.overflow_y, CssOverflow::Auto | CssOverflow::Scroll);
+        let map_overflow = |value: CssOverflow, reserve: bool| match value {
+            // Taffy lacks an Auto variant; treat it like Visible unless scrollbar-gutter requests stability.
+            CssOverflow::Visible | CssOverflow::Auto => {
+                if reserve {
+                    TaffyOverflow::Scroll
+                } else {
+                    TaffyOverflow::Visible
+                }
+            }
             CssOverflow::Hidden => TaffyOverflow::Hidden,
             CssOverflow::Scroll => TaffyOverflow::Scroll,
             CssOverflow::Clip => TaffyOverflow::Clip,
@@ -2215,8 +2225,8 @@ impl FlexFormattingContext {
             aspect_ratio: self.aspect_ratio_to_taffy(style.aspect_ratio),
 
             overflow: taffy::geometry::Point {
-                x: map_overflow(style.overflow_x),
-                y: map_overflow(style.overflow_y),
+                x: map_overflow(style.overflow_x, reserve_scroll_x),
+                y: map_overflow(style.overflow_y, reserve_scroll_y),
             },
             scrollbar_width: resolve_scrollbar_width(style),
 

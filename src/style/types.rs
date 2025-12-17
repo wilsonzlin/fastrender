@@ -814,6 +814,27 @@ impl Default for ScrollSnapStop {
     }
 }
 
+/// CSS `scrollbar-gutter`
+///
+/// Controls whether scroll containers reserve space for scrollbars, and whether
+/// gutters appear on both edges or only the inline end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollbarGutter {
+    /// Reserve scrollbar space even when scrollbars are not currently showing
+    pub stable: bool,
+    /// Place gutters on both inline edges instead of only the inline end
+    pub both_edges: bool,
+}
+
+impl Default for ScrollbarGutter {
+    fn default() -> Self {
+        ScrollbarGutter {
+            stable: false,
+            both_edges: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserSelect {
     Auto,

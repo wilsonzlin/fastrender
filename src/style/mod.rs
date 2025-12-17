@@ -41,11 +41,11 @@ use types::{
     ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage,
     ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow,
     OverflowAnchor, OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollSnapAlignments,
-    ScrollSnapStop, ScrollSnapType, ScrollbarColor, ScrollbarWidth, TabSize, TableLayout, TextAlign, TextAlignLast,
-    TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
-    TextJustify, TextOrientation, TextOverflow, TextRendering, TextSizeAdjust, TextTransform, TextUnderlineOffset,
-    TextUnderlinePosition, TextWrap, TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi,
-    UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    ScrollSnapStop, ScrollSnapType, ScrollbarColor, ScrollbarGutter, ScrollbarWidth, TabSize, TableLayout, TextAlign,
+    TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle,
+    TextIndent, TextJustify, TextOrientation, TextOverflow, TextRendering, TextSizeAdjust, TextTransform,
+    TextUnderlineOffset, TextUnderlinePosition, TextWrap, TouchAction, TransformBox, TransformOrigin, TransformStyle,
+    UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -252,6 +252,7 @@ pub struct ComputedStyle {
     pub scroll_margin_right: Length,
     pub scroll_margin_bottom: Length,
     pub scroll_margin_left: Length,
+    pub scrollbar_gutter: ScrollbarGutter,
     pub overflow_anchor: OverflowAnchor,
     pub pointer_events: PointerEvents,
     pub user_select: UserSelect,
@@ -523,6 +524,7 @@ impl Default for ComputedStyle {
             scroll_margin_right: Length::px(0.0),
             scroll_margin_bottom: Length::px(0.0),
             scroll_margin_left: Length::px(0.0),
+            scrollbar_gutter: ScrollbarGutter::default(),
             overflow_anchor: OverflowAnchor::Auto,
             pointer_events: PointerEvents::Auto,
             user_select: UserSelect::Auto,

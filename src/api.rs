@@ -2496,6 +2496,8 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
     hash_length(&style.scroll_margin_right, &mut h);
     hash_length(&style.scroll_margin_bottom, &mut h);
     hash_length(&style.scroll_margin_left, &mut h);
+    style.scrollbar_gutter.stable.hash(&mut h);
+    style.scrollbar_gutter.both_edges.hash(&mut h);
     hash_enum_discriminant(&style.scrollbar_width, &mut h);
     hash_scrollbar_color(&style.scrollbar_color, &mut h);
     hash_list_style_type(&style.list_style_type, &mut h);

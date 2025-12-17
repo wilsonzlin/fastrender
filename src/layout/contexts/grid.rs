@@ -238,9 +238,19 @@ impl GridFormattingContext {
         let block_positive_container = self.block_axis_positive(style);
         let inline_is_horizontal_container = self.inline_axis_is_horizontal(style);
 
-        let map_overflow = |value: CssOverflow| match value {
-            // Taffy lacks an Auto variant; treat it like Visible (no reserved scrollbar space).
-            CssOverflow::Visible | CssOverflow::Auto => TaffyOverflow::Visible,
+        let reserve_scroll_x =
+            style.scrollbar_gutter.stable && matches!(style.overflow_x, CssOverflow::Auto | CssOverflow::Scroll);
+        let reserve_scroll_y =
+            style.scrollbar_gutter.stable && matches!(style.overflow_y, CssOverflow::Auto | CssOverflow::Scroll);
+        let map_overflow = |value: CssOverflow, reserve: bool| match value {
+            // Taffy lacks an Auto variant; treat it like Visible unless scrollbar-gutter requests stability.
+            CssOverflow::Visible | CssOverflow::Auto => {
+                if reserve {
+                    TaffyOverflow::Scroll
+                } else {
+                    TaffyOverflow::Visible
+                }
+            }
             CssOverflow::Hidden => TaffyOverflow::Hidden,
             CssOverflow::Scroll => TaffyOverflow::Scroll,
             CssOverflow::Clip => TaffyOverflow::Clip,
@@ -302,8 +312,8 @@ impl GridFormattingContext {
         taffy_style.aspect_ratio = self.convert_aspect_ratio(style.aspect_ratio);
 
         taffy_style.overflow = taffy::geometry::Point {
-            x: map_overflow(style.overflow_x),
-            y: map_overflow(style.overflow_y),
+            x: map_overflow(style.overflow_x, reserve_scroll_x),
+            y: map_overflow(style.overflow_y, reserve_scroll_y),
         };
         taffy_style.scrollbar_width = resolve_scrollbar_width(style);
 

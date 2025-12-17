@@ -30,8 +30,8 @@ use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
     BoxSizing, Containment, FilterFunction, FontSizeAdjust, FontStretch, ForcedColorAdjust, Isolation, MixBlendMode,
-    Overflow, OverflowAnchor, ScrollSnapAlignments, ScrollSnapStop, ScrollSnapType, ScrollbarColor, ScrollbarWidth,
-    TextAlignLast, TextIndent, TextJustify, TextRendering, TouchAction, UserSelect, WillChange,
+    Overflow, OverflowAnchor, ScrollSnapAlignments, ScrollSnapStop, ScrollSnapType, ScrollbarColor, ScrollbarGutter,
+    ScrollbarWidth, TextAlignLast, TextIndent, TextJustify, TextRendering, TouchAction, UserSelect, WillChange,
 };
 use crate::style::values::{Length, LengthOrAuto};
 
@@ -270,6 +270,7 @@ pub struct PositionedStyle {
     pub scroll_snap_type: ScrollSnapType,
     pub scroll_snap_align: ScrollSnapAlignments,
     pub scroll_snap_stop: ScrollSnapStop,
+    pub scrollbar_gutter: ScrollbarGutter,
 
     // ===== COLORS =====
     /// Text color
@@ -557,6 +558,7 @@ impl Default for PositionedStyle {
             touch_action: TouchAction::auto(),
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: ScrollbarColor::Auto,
+            scrollbar_gutter: ScrollbarGutter::default(),
             forced_color_adjust: ForcedColorAdjust::Auto,
             scroll_snap_type: ScrollSnapType::default(),
             scroll_snap_align: ScrollSnapAlignments::default(),

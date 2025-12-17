@@ -21,3 +21,6 @@ mod test_baseline;
 
 #[path = "layout/test_inline_float.rs"]
 mod test_inline_float;
+
+#[path = "layout/scrollbar_gutter.rs"]
+mod scrollbar_gutter;

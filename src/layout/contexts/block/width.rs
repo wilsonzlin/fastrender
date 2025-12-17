@@ -141,11 +141,16 @@ pub fn compute_block_width(
         viewport,
     );
 
-    // Reserve space for a vertical scrollbar when overflow-y is scroll
-    if style.overflow_y == Overflow::Scroll {
+    // Reserve space for a vertical scrollbar when requested by overflow or scrollbar-gutter stability
+    let reserve_vertical_gutter = matches!(style.overflow_y, Overflow::Scroll)
+        || (style.scrollbar_gutter.stable && matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll));
+    if reserve_vertical_gutter {
         let gutter = resolve_scrollbar_width(style);
         if gutter > 0.0 {
-            if style.direction == Direction::Rtl {
+            if style.scrollbar_gutter.both_edges {
+                padding_left += gutter;
+                padding_right += gutter;
+            } else if style.direction == Direction::Rtl {
                 padding_left += gutter;
             } else {
                 padding_right += gutter;
