@@ -63,6 +63,8 @@ pub enum PseudoClass {
     Hover,
     Active,
     Focus,
+    Disabled,
+    Enabled,
     Required,
     Optional,
     ReadOnly,
@@ -122,6 +124,8 @@ impl ToCss for PseudoClass {
             PseudoClass::Hover => dest.write_str(":hover"),
             PseudoClass::Active => dest.write_str(":active"),
             PseudoClass::Focus => dest.write_str(":focus"),
+            PseudoClass::Disabled => dest.write_str(":disabled"),
+            PseudoClass::Enabled => dest.write_str(":enabled"),
             PseudoClass::Required => dest.write_str(":required"),
             PseudoClass::Optional => dest.write_str(":optional"),
             PseudoClass::ReadOnly => dest.write_str(":read-only"),
@@ -191,6 +195,8 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "hover" => Ok(PseudoClass::Hover),
             "active" => Ok(PseudoClass::Active),
             "focus" => Ok(PseudoClass::Focus),
+            "disabled" => Ok(PseudoClass::Disabled),
+            "enabled" => Ok(PseudoClass::Enabled),
             "required" => Ok(PseudoClass::Required),
             "optional" => Ok(PseudoClass::Optional),
             "read-only" => Ok(PseudoClass::ReadOnly),
@@ -397,6 +403,8 @@ mod tests {
         assert_eq!(PseudoClass::AnyLink.to_css_string(), ":any-link");
         assert_eq!(PseudoClass::Target.to_css_string(), ":target");
         assert_eq!(PseudoClass::Scope.to_css_string(), ":scope");
+        assert_eq!(PseudoClass::Disabled.to_css_string(), ":disabled");
+        assert_eq!(PseudoClass::Enabled.to_css_string(), ":enabled");
         assert_eq!(PseudoClass::Required.to_css_string(), ":required");
         assert_eq!(PseudoClass::Optional.to_css_string(), ":optional");
         assert_eq!(PseudoClass::ReadOnly.to_css_string(), ":read-only");

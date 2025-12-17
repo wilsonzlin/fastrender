@@ -314,17 +314,21 @@ impl<'a> ElementRef<'a> {
             .map(|l| l.to_ascii_lowercase())
     }
 
+    fn supports_disabled(&self) -> bool {
+        self.node
+            .tag_name()
+            .map(|tag| match tag.to_ascii_lowercase().as_str() {
+                "button" | "input" | "select" | "textarea" | "option" | "optgroup" | "fieldset" => true,
+                _ => false,
+            })
+            .unwrap_or(false)
+    }
+
     fn is_disabled(&self) -> bool {
         if let Some(tag) = self.node.tag_name() {
             let lower = tag.to_ascii_lowercase();
 
-            // Elements that honor the disabled attribute themselves.
-            let self_supports_disabled = matches!(
-                lower.as_str(),
-                "button" | "input" | "select" | "textarea" | "option" | "optgroup" | "fieldset"
-            );
-
-            if self_supports_disabled && self.node.get_attribute("disabled").is_some() {
+            if self.supports_disabled() && self.node.get_attribute("disabled").is_some() {
                 return true;
             }
 
@@ -754,6 +758,8 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Target => self.is_target(),
             PseudoClass::Scope => self.all_ancestors.is_empty(),
             PseudoClass::Empty => self.is_empty(),
+            PseudoClass::Disabled => self.supports_disabled() && self.is_disabled(),
+            PseudoClass::Enabled => self.supports_disabled() && !self.is_disabled(),
             PseudoClass::Required => self.is_required(),
             PseudoClass::Optional => self.supports_required() && !self.is_disabled() && !self.is_required(),
             PseudoClass::ReadOnly => !self.is_read_write(),
@@ -1327,6 +1333,68 @@ mod tests {
         let child = &fieldset.children[0];
         assert!(!matches(child, &ancestors, &PseudoClass::Required));
         assert!(!matches(child, &ancestors, &PseudoClass::Optional));
+    }
+
+    #[test]
+    fn disabled_and_enabled_match_controls() {
+        let input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        assert!(matches(&input, &[], &PseudoClass::Enabled));
+        assert!(!matches(&input, &[], &PseudoClass::Disabled));
+
+        let disabled_button = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "button".to_string(),
+                attributes: vec![("disabled".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&disabled_button, &[], &PseudoClass::Disabled));
+        assert!(!matches(&disabled_button, &[], &PseudoClass::Enabled));
+
+        // Fieldset disables descendants except inside first legend
+        let legend_child = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let legend = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "legend".to_string(),
+                attributes: vec![],
+            },
+            children: vec![legend_child.clone()],
+        };
+        let outer_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let fieldset = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "fieldset".to_string(),
+                attributes: vec![("disabled".to_string(), "true".to_string())],
+            },
+            children: vec![legend.clone(), outer_input.clone()],
+        };
+
+        let anc_outer: Vec<&DomNode> = vec![&fieldset];
+        assert!(matches(&outer_input, &anc_outer, &PseudoClass::Disabled));
+        assert!(!matches(&outer_input, &anc_outer, &PseudoClass::Enabled));
+
+        let anc_legend: Vec<&DomNode> = vec![&fieldset, &fieldset.children[0]];
+        let legend_child_ref = &fieldset.children[0].children[0];
+        assert!(!matches(legend_child_ref, &anc_legend, &PseudoClass::Disabled));
+        assert!(matches(legend_child_ref, &anc_legend, &PseudoClass::Enabled));
     }
 
     #[test]
