@@ -35,7 +35,7 @@ use taffy::prelude::{TaffyFitContent, TaffyMaxContent, TaffyMinContent};
 use taffy::style::{
     AlignContent as TaffyAlignContent, Dimension, Display, GridPlacement as TaffyGridPlacement, GridTemplateArea,
     GridTemplateComponent, GridTemplateRepetition, LengthPercentage, LengthPercentageAuto, MaxTrackSizingFunction,
-    MinTrackSizingFunction, RepetitionCount, Style as TaffyStyle, TrackSizingFunction,
+    MinTrackSizingFunction, Overflow as TaffyOverflow, RepetitionCount, Style as TaffyStyle, TrackSizingFunction,
 };
 use taffy::style_helpers::TaffyAuto;
 use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
@@ -44,11 +44,12 @@ use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::profile::{layout_timer, LayoutKind};
-use crate::layout::utils::resolve_font_relative_length;
+use crate::layout::utils::{resolve_font_relative_length, resolve_scrollbar_width};
 use crate::style::display::Display as CssDisplay;
 use crate::style::grid::validate_area_rectangles;
 use crate::style::types::{
-    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, GridAutoFlow, GridTrack, JustifyContent, WritingMode,
+    AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, GridAutoFlow, GridTrack, JustifyContent,
+    Overflow as CssOverflow, WritingMode,
 };
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -237,6 +238,14 @@ impl GridFormattingContext {
         let block_positive_container = self.block_axis_positive(style);
         let inline_is_horizontal_container = self.inline_axis_is_horizontal(style);
 
+        let map_overflow = |value: CssOverflow| match value {
+            // Taffy lacks an Auto variant; treat it like Visible (no reserved scrollbar space).
+            CssOverflow::Visible | CssOverflow::Auto => TaffyOverflow::Visible,
+            CssOverflow::Hidden => TaffyOverflow::Hidden,
+            CssOverflow::Scroll => TaffyOverflow::Scroll,
+            CssOverflow::Clip => TaffyOverflow::Clip,
+        };
+
         // Grid item axes follow the containing grid's writing mode, not the item's own.
         let item_axis_style = containing_grid.unwrap_or(style);
         let inline_positive_item = self.inline_axis_positive(item_axis_style);
@@ -291,6 +300,12 @@ impl GridFormattingContext {
             bottom: self.convert_length_to_lp(&style.border_bottom_width, style),
         };
         taffy_style.aspect_ratio = self.convert_aspect_ratio(style.aspect_ratio);
+
+        taffy_style.overflow = taffy::geometry::Point {
+            x: map_overflow(style.overflow_x),
+            y: map_overflow(style.overflow_y),
+        };
+        taffy_style.scrollbar_width = resolve_scrollbar_width(style);
 
         // Grid container properties
         if is_grid {
@@ -1087,7 +1102,7 @@ impl FormattingContext for GridFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::types::{AlignItems, AspectRatio, GridAutoFlow, GridTrack, WritingMode};
+    use crate::style::types::{AlignItems, AspectRatio, GridAutoFlow, GridTrack, Overflow, ScrollbarWidth, WritingMode};
     use std::sync::Arc;
 
     fn make_grid_style() -> Arc<ComputedStyle> {
@@ -1106,6 +1121,23 @@ mod tests {
         style.grid_template_columns = cols;
         style.grid_template_rows = rows;
         Arc::new(style)
+    }
+
+    #[test]
+    fn convert_style_sets_overflow_and_scrollbar_width() {
+        let mut style = ComputedStyle::default();
+        style.display = CssDisplay::Grid;
+        style.overflow_x = Overflow::Scroll;
+        style.overflow_y = Overflow::Clip;
+        style.scrollbar_width = ScrollbarWidth::Thin;
+
+        let node = BoxNode::new_block(Arc::new(style), FormattingContextType::Grid, vec![]);
+        let gc = GridFormattingContext::new();
+        let taffy_style = gc.convert_style(&node.style, None);
+
+        assert_eq!(taffy_style.overflow.x, TaffyOverflow::Scroll);
+        assert_eq!(taffy_style.overflow.y, TaffyOverflow::Clip);
+        assert_eq!(taffy_style.scrollbar_width, resolve_scrollbar_width(&node.style));
     }
 
     // Test 1: Basic grid container creation

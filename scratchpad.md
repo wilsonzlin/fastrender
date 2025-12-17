@@ -54,6 +54,7 @@ Idle; no current tasks.
 - Implemented CSS `user-select`: added `UserSelect` enum/defaults, parsing of auto/text/none/all/contain, property wiring, and regression coverage; also marked `user-select` as inherited per spec. Pushed `c412f85` and `fa5a130`.
 - Implemented CSS `touch-action`: added `TouchAction` flags, default auto, parsing of single/multi-keyword lists (pan-*, pinch-zoom, manipulation), property copy wiring, and regression test. No layout behavior yet; pushed `ae9c051`.
 - Added CSS `scrollbar-width` support: new enum/defaults, cascade parsing/copying, and regression test; pushed `b28f20f`. Fixed fetch_and_render CLI docs placement.
+- Scrollbar width now influences layout: resolve CSS keywords to 16px (auto), 8px (thin), or 0 (none) and feed Taffy flex/grid styles (overflow mapped to Taffy with auto treated as visible). Added helper + flex/grid unit tests.
 
 - Added `:autofill` pseudo-class: parsed/serialized via selectors, DOM matching always false (no autofill state available). Added basic parse/match tests.
 - Added `:checked` selector support: parsed/serialized and DOM matching for checkable inputs (checkbox/radio with the checked attribute) and option elements (selected attribute or default first option when no selection on a single select). Tests cover inputs, default-selected options, and multiple selects.

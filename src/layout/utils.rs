@@ -4,7 +4,7 @@
 
 use crate::geometry::Size;
 use crate::style::computed::PositionedStyle;
-use crate::style::types::{BoxSizing, FontStyle as CssFontStyle};
+use crate::style::types::{BoxSizing, FontStyle as CssFontStyle, ScrollbarWidth};
 use crate::style::values::{Length, LengthOrAuto, LengthUnit};
 use crate::style::ComputedStyle;
 use crate::text::font_db::{FontStretch, FontStyle as FontFaceStyle};
@@ -57,6 +57,21 @@ pub fn resolve_length_with_percentage_metrics(
     } else {
         // Viewport/unknown units should already have been handled earlier; fall back to raw value.
         Some(length.value)
+    }
+}
+
+/// Resolves the CSS `scrollbar-width` keyword to an approximate physical width in CSS pixels.
+///
+/// CSS leaves the exact thickness up to the user agent. We choose representative values to
+/// reserve space for scrollbars during layout:
+/// - `auto`: typical platform scrollbar thickness (16px)
+/// - `thin`: a slimmer scrollbar (8px)
+/// - `none`: no space reserved
+pub fn resolve_scrollbar_width(style: &ComputedStyle) -> f32 {
+    match style.scrollbar_width {
+        ScrollbarWidth::Auto => 16.0,
+        ScrollbarWidth::Thin => 8.0,
+        ScrollbarWidth::None => 0.0,
     }
 }
 
@@ -534,7 +549,7 @@ fn resolve_font_relative(len: Length, font_size: f32, root_font_size: f32) -> f3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::types::BoxSizing;
+    use crate::style::types::{BoxSizing, ScrollbarWidth};
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::tree::box_tree::ReplacedBox;
@@ -866,5 +881,18 @@ mod tests {
 
         let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
         assert!((size.width - 90.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn resolves_scrollbar_width_keywords() {
+        let mut style = ComputedStyle::default();
+        style.scrollbar_width = ScrollbarWidth::Auto;
+        assert_eq!(resolve_scrollbar_width(&style), 16.0);
+
+        style.scrollbar_width = ScrollbarWidth::Thin;
+        assert_eq!(resolve_scrollbar_width(&style), 8.0);
+
+        style.scrollbar_width = ScrollbarWidth::None;
+        assert_eq!(resolve_scrollbar_width(&style), 0.0);
     }
 }

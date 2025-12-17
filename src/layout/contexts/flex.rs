@@ -34,6 +34,7 @@ use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutCo
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::positioned::ContainingBlock;
+use crate::layout::utils::resolve_scrollbar_width;
 use crate::layout::flex_profile::{self, record_node_measure_hit, record_node_measure_store, DimState};
 use crate::layout::formatting_context::{
     count_flex_intrinsic_call, intrinsic_cache_lookup, intrinsic_cache_store, FormattingContext, IntrinsicSizingMode,
@@ -44,7 +45,7 @@ use crate::style::display::{Display, FormattingContextType};
 use crate::style::position::Position;
 use crate::style::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, FlexBasis, FlexDirection, FlexWrap, JustifyContent,
-    WritingMode,
+    Overflow as CssOverflow, WritingMode,
 };
 use crate::style::values::{Length, LengthUnit};
 use crate::style::ComputedStyle;
@@ -55,6 +56,7 @@ use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 static LOG_CHILD_IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
 
 use taffy::prelude::*;
+use taffy::style::Overflow as TaffyOverflow;
 use taffy::TaffyTree;
 
 fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
@@ -2024,6 +2026,14 @@ impl FlexFormattingContext {
             inline_positive_item
         };
 
+        let map_overflow = |value: CssOverflow| match value {
+            // Taffy lacks an Auto variant; treat it like Visible (no reserved scrollbar space).
+            CssOverflow::Visible | CssOverflow::Auto => TaffyOverflow::Visible,
+            CssOverflow::Hidden => TaffyOverflow::Hidden,
+            CssOverflow::Scroll => TaffyOverflow::Scroll,
+            CssOverflow::Clip => TaffyOverflow::Clip,
+        };
+
         let mut min_width_dimension =
             self.length_option_to_dimension_box_sizing(style.min_width.as_ref(), style, Axis::Horizontal);
         let mut min_height_dimension =
@@ -2125,6 +2135,12 @@ impl FlexFormattingContext {
                 bottom: self.length_to_taffy_lp(&style.border_bottom_width, style),
             },
             aspect_ratio: self.aspect_ratio_to_taffy(style.aspect_ratio),
+
+            overflow: taffy::geometry::Point {
+                x: map_overflow(style.overflow_x),
+                y: map_overflow(style.overflow_y),
+            },
+            scrollbar_width: resolve_scrollbar_width(style),
 
             ..Default::default()
         }
@@ -3845,7 +3861,7 @@ mod tests {
     use crate::style::display::Display;
     use crate::style::display::FormattingContextType;
     use crate::style::position::Position;
-    use crate::style::types::{AlignItems, AspectRatio};
+    use crate::style::types::{AlignItems, AspectRatio, Overflow, ScrollbarWidth};
     use crate::style::values::Length;
     use std::sync::Arc;
 
@@ -3869,6 +3885,23 @@ mod tests {
         style.height = Some(Length::px(height));
         style.flex_grow = grow;
         Arc::new(style)
+    }
+
+    #[test]
+    fn taffy_style_maps_overflow_and_scrollbar_width() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::Flex;
+        style.overflow_x = Overflow::Scroll;
+        style.overflow_y = Overflow::Hidden;
+        style.scrollbar_width = ScrollbarWidth::Thin;
+
+        let node = BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![]);
+        let fc = FlexFormattingContext::new();
+        let taffy_style = fc.computed_style_to_taffy(&node, true, None);
+
+        assert_eq!(taffy_style.scrollbar_width, resolve_scrollbar_width(&node.style));
+        assert_eq!(taffy_style.overflow.x, TaffyOverflow::Scroll);
+        assert_eq!(taffy_style.overflow.y, TaffyOverflow::Hidden);
     }
 
     #[test]
