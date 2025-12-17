@@ -394,6 +394,47 @@ fn background_repeat_space_centers_single_tile_in_display_list() {
     assert!((image.dest_rect.x() - 5.0).abs() < 1e-3, "tile should be centered in 40px area");
     assert!((image.dest_rect.y() - 5.0).abs() < 1e-3, "tile should be centered vertically");
 }
+
+#[test]
+fn background_attachment_fixed_anchors_to_viewport() {
+    // Inline SVG (1x1) so decoding succeeds without filesystem IO.
+    let data_url = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\" fill=\"#0f0\"/></svg>".to_string();
+
+    let mut style = ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::Url(data_url)),
+        attachment: fastrender::style::types::BackgroundAttachment::Fixed,
+        repeat: BackgroundRepeat::no_repeat(),
+        size: fastrender::style::types::BackgroundSize::Explicit(
+            fastrender::style::types::BackgroundSizeComponent::Length(Length::px(10.0)),
+            fastrender::style::types::BackgroundSizeComponent::Length(Length::px(10.0)),
+        ),
+        ..Default::default()
+    }]);
+
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
+        .with_viewport_size(100.0, 100.0)
+        .build(&fragment);
+
+    let image = list.items().iter().find_map(|item| match item {
+        DisplayItem::Image(img) => Some(img),
+        _ => None,
+    });
+
+    let image = image.expect("background image should emit an image item");
+    // Attachment fixed should position relative to the viewport origin (0,0), not the fragment offset.
+    assert!((image.dest_rect.x() - 0.0).abs() < 1e-3);
+    assert!((image.dest_rect.y() - 0.0).abs() < 1e-3);
+    assert_eq!(image.dest_rect.width(), 10.0);
+    assert_eq!(image.dest_rect.height(), 10.0);
+}
 #[test]
 fn fragment_box_shadow_emits_items() {
     let mut style = fastrender::ComputedStyle::default();
