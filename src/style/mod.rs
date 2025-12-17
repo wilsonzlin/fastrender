@@ -40,11 +40,11 @@ use types::{
     FontVariantPosition, FontVariationSetting, FontWeight, GridTrack, HyphensMode, ImageOrientation, ImageRendering,
     ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
     ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
-    OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarWidth, TabSize, TableLayout, TextAlign,
-    TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle,
-    TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition,
-    TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace,
-    WillChange, WordBreak, WritingMode,
+    OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarColor, ScrollbarWidth, TabSize, TableLayout,
+    TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition,
+    TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset,
+    TextUnderlinePosition, TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect,
+    VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -244,6 +244,7 @@ pub struct ComputedStyle {
     pub user_select: UserSelect,
     pub touch_action: TouchAction,
     pub scrollbar_width: ScrollbarWidth,
+    pub scrollbar_color: ScrollbarColor,
     pub top: Option<Length>,
     pub right: Option<Length>,
     pub bottom: Option<Length>,
@@ -498,6 +499,7 @@ impl Default for ComputedStyle {
             user_select: UserSelect::Auto,
             touch_action: TouchAction::auto(),
             scrollbar_width: ScrollbarWidth::Auto,
+            scrollbar_color: ScrollbarColor::Auto,
             top: None,
             right: None,
             bottom: None,

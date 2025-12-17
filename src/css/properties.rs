@@ -263,6 +263,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "text-underline-position",
     "top",
     "touch-action",
+    "scrollbar-color",
     "scrollbar-width",
     "transform",
     "transform-box",
@@ -758,7 +759,11 @@ fn parse_font_family_list(value_str: &str) -> Option<Vec<String>> {
         }
     }
 
-    if families.is_empty() { None } else { Some(families) }
+    if families.is_empty() {
+        None
+    } else {
+        Some(families)
+    }
 }
 
 fn parse_single_font_family(parser: &mut Parser) -> Option<String> {
@@ -766,10 +771,7 @@ fn parse_single_font_family(parser: &mut Parser) -> Option<String> {
         return Some(s);
     }
 
-    let first = parser
-        .expect_ident()
-        .map(|ident| ident.as_ref().to_string())
-        .ok()?;
+    let first = parser.expect_ident().map(|ident| ident.as_ref().to_string()).ok()?;
     let mut name = first;
     loop {
         match parser.try_parse(|p| p.expect_ident().map(|i| i.as_ref().to_string())) {
@@ -882,6 +884,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "border-right"
                 | "border-bottom"
                 | "border-left"
+                | "scrollbar-color"
                 | "margin"
                 | "padding"
                 | "border-inline"

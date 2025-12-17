@@ -641,6 +641,15 @@ pub enum ScrollbarWidth {
     None,
 }
 
+/// Scrollbar color preference (UI hint; currently unused in layout)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScrollbarColor {
+    Auto,
+    Dark,
+    Light,
+    Colors { thumb: Rgba, track: Rgba },
+}
+
 impl TouchAction {
     pub fn auto() -> Self {
         Self {
@@ -706,6 +715,12 @@ impl Default for UserSelect {
 impl Default for ScrollBehavior {
     fn default() -> Self {
         ScrollBehavior::Auto
+    }
+}
+
+impl Default for ScrollbarColor {
+    fn default() -> Self {
+        ScrollbarColor::Auto
     }
 }
 

@@ -684,14 +684,38 @@ fn parse_touch_action_keywords(tokens: &[String]) -> Option<TouchAction> {
         return match kw {
             "auto" => Some(TouchAction::auto()),
             "none" => Some(TouchAction::none()),
-            "pan-x" => Some(TouchAction { pan_x: true, ..TouchAction::empty() }),
-            "pan-y" => Some(TouchAction { pan_y: true, ..TouchAction::empty() }),
-            "pan-left" => Some(TouchAction { pan_left: true, ..TouchAction::empty() }),
-            "pan-right" => Some(TouchAction { pan_right: true, ..TouchAction::empty() }),
-            "pan-up" => Some(TouchAction { pan_up: true, ..TouchAction::empty() }),
-            "pan-down" => Some(TouchAction { pan_down: true, ..TouchAction::empty() }),
-            "pinch-zoom" => Some(TouchAction { pinch_zoom: true, ..TouchAction::empty() }),
-            "manipulation" => Some(TouchAction { manipulation: true, ..TouchAction::empty() }),
+            "pan-x" => Some(TouchAction {
+                pan_x: true,
+                ..TouchAction::empty()
+            }),
+            "pan-y" => Some(TouchAction {
+                pan_y: true,
+                ..TouchAction::empty()
+            }),
+            "pan-left" => Some(TouchAction {
+                pan_left: true,
+                ..TouchAction::empty()
+            }),
+            "pan-right" => Some(TouchAction {
+                pan_right: true,
+                ..TouchAction::empty()
+            }),
+            "pan-up" => Some(TouchAction {
+                pan_up: true,
+                ..TouchAction::empty()
+            }),
+            "pan-down" => Some(TouchAction {
+                pan_down: true,
+                ..TouchAction::empty()
+            }),
+            "pinch-zoom" => Some(TouchAction {
+                pinch_zoom: true,
+                ..TouchAction::empty()
+            }),
+            "manipulation" => Some(TouchAction {
+                manipulation: true,
+                ..TouchAction::empty()
+            }),
             _ => None,
         };
     }
@@ -2222,6 +2246,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "touch-action" => styles.touch_action = source.touch_action,
         "user-select" => styles.user_select = source.user_select,
         "scrollbar-width" => styles.scrollbar_width = source.scrollbar_width,
+        "scrollbar-color" => styles.scrollbar_color = source.scrollbar_color,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
             styles.vertical_align_specified = source.vertical_align_specified;
@@ -5652,30 +5677,28 @@ pub fn apply_declaration_with_base(
                 };
             }
         }
-        "touch-action" => {
-            match &resolved_value {
-                PropertyValue::Keyword(kw) => {
-                    if let Some(val) = parse_touch_action_keywords(&[kw.to_ascii_lowercase()]) {
-                        styles.touch_action = val;
-                    }
+        "touch-action" => match &resolved_value {
+            PropertyValue::Keyword(kw) => {
+                if let Some(val) = parse_touch_action_keywords(&[kw.to_ascii_lowercase()]) {
+                    styles.touch_action = val;
                 }
-                PropertyValue::Multiple(tokens) => {
-                    let mut parts = Vec::new();
-                    for token in tokens {
-                        if let PropertyValue::Keyword(k) = token {
-                            if k == "," {
-                                continue;
-                            }
-                            parts.push(k.to_ascii_lowercase());
-                        }
-                    }
-                    if let Some(val) = parse_touch_action_keywords(&parts) {
-                        styles.touch_action = val;
-                    }
-                }
-                _ => {}
             }
-        }
+            PropertyValue::Multiple(tokens) => {
+                let mut parts = Vec::new();
+                for token in tokens {
+                    if let PropertyValue::Keyword(k) = token {
+                        if k == "," {
+                            continue;
+                        }
+                        parts.push(k.to_ascii_lowercase());
+                    }
+                }
+                if let Some(val) = parse_touch_action_keywords(&parts) {
+                    styles.touch_action = val;
+                }
+            }
+            _ => {}
+        },
         "scrollbar-width" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.scrollbar_width = match kw.to_ascii_lowercase().as_str() {
@@ -5684,6 +5707,18 @@ pub fn apply_declaration_with_base(
                     "none" => ScrollbarWidth::None,
                     _ => styles.scrollbar_width,
                 }
+            }
+        }
+        "scrollbar-color" => {
+            if let Some((thumb, track)) = extract_color_pair_with(&resolved_value, &resolve_color_value) {
+                styles.scrollbar_color = ScrollbarColor::Colors { thumb, track };
+            } else if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.scrollbar_color = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => ScrollbarColor::Auto,
+                    "dark" => ScrollbarColor::Dark,
+                    "light" => ScrollbarColor::Light,
+                    _ => styles.scrollbar_color,
+                };
             }
         }
         "resize" => {
@@ -11462,6 +11497,75 @@ mod tests {
     }
 
     #[test]
+    fn scrollbar_color_parses_keywords_and_colors() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-color".into(),
+                value: PropertyValue::Keyword("dark".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.scrollbar_color, ScrollbarColor::Dark));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-color".into(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Color(Rgba::from_rgba8(255, 0, 0, 255)),
+                    PropertyValue::Keyword("currentColor".into()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        match style.scrollbar_color {
+            ScrollbarColor::Colors { thumb, track } => {
+                assert_eq!(thumb, Rgba::from_rgba8(255, 0, 0, 255));
+                assert_eq!(track, style.color);
+            }
+            other => panic!("Unexpected scrollbar color: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn scrollbar_color_inherits() {
+        let parent = ComputedStyle {
+            scrollbar_color: ScrollbarColor::Colors {
+                thumb: Rgba::from_rgba8(1, 2, 3, 255),
+                track: Rgba::from_rgba8(4, 5, 6, 255),
+            },
+            ..ComputedStyle::default()
+        };
+
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-color".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.scrollbar_color, parent.scrollbar_color);
+    }
+
+    #[test]
     fn color_scheme_inherit_and_initial() {
         let parent = ComputedStyle {
             color_scheme: ColorSchemePreference::Supported {
@@ -13891,11 +13995,8 @@ mod tests {
     #[test]
     fn font_family_parses_quoted_names_with_commas() {
         let mut style = ComputedStyle::default();
-        let value = parse_property_value(
-            "font-family",
-            "\"Font, With, Commas\", Open Sans, serif",
-        )
-        .expect("font-family parse");
+        let value =
+            parse_property_value("font-family", "\"Font, With, Commas\", Open Sans, serif").expect("font-family parse");
         let decl = Declaration {
             property: "font-family".to_string(),
             value,
