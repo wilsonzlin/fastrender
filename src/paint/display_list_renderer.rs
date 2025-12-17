@@ -4183,6 +4183,42 @@ mod tests {
     }
 
     #[test]
+    fn backdrop_filter_applies_to_background() {
+        let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+
+        // Background layer: solid red.
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            color: Rgba::rgb(255, 0, 0),
+        }));
+
+        // Foreground stacking context with backdrop-filter:invert on a transparent box.
+        list.push(DisplayItem::PushStackingContext(
+            crate::paint::display_list::StackingContextItem {
+                z_index: 0,
+                creates_stacking_context: true,
+                bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+                mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
+                is_isolated: false,
+                transform: None,
+                filters: Vec::new(),
+                backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
+                radii: BorderRadii::ZERO,
+            },
+        ));
+        list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+            color: Rgba::from_rgba8(0, 0, 0, 0),
+        }));
+        list.push(DisplayItem::PopStackingContext);
+
+        let pixmap = renderer.render(&list).unwrap();
+        // Red background inverted through backdrop-filter yields cyan.
+        assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 255, 255));
+    }
+
+    #[test]
     fn renders_text_shadows() {
         let font_ctx = FontContext::new();
         let Some(font) = font_ctx.get_sans_serif() else {
