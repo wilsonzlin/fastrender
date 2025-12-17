@@ -20,6 +20,7 @@
 - Idle; no current tasks. Available for new tasks. Push blocked for local list-counter fixes (start/reversed/value under UA defaults); rebase churn with upstream persists.
 - Ordered lists now honor `start`/`reversed` even with UA counter defaults: ol UA `counter-reset`/li UA `counter-increment` defaults are treated as defaults so HTML attrs can override them. Reversed lists flip the default increment and start from the list length (or `start`) under UA styles. Added cascade-backed regressions using `apply_styles` to lock start=5 and reversed 3→1 numbering with UA CSS present.
 - Ordered list `value` attribute respected under UA defaults: added cascade-backed regressions for forward and reversed lists to ensure list-item `value` overrides UA counter resets/increments even when `start`/`reversed` are present (10/11 for start=5+value=10, and 5/4/3 for reversed with value=5).
+- Filter parsing: `filter: none` now parses to an empty filter list (regression added).
 =======
 - Added mozilla.org, theguardian.com, washingtonpost.com, fandom.com, ikea.com, and bing.com to the fetch_pages target list; `cargo check --bin fetch_pages` passes. Push attempts are timing out; branch remains ahead by local commits.
 - Positioned descendants now keep positioned containing blocks during intrinsic layout: out-of-flow candidates are laid out as relative with cleared offsets so nested positioned children resolve against their parent padding, flex absolute layout threads the containing block through, and nested absolute regressions for block/flex percent offsets were added.
