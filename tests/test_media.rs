@@ -339,10 +339,11 @@ fn test_retina_image_patterns() {
 fn test_prefers_color_scheme() {
     let light_ctx = MediaContext::screen(1024.0, 768.0).with_color_scheme(ColorScheme::Light);
     let dark_ctx = MediaContext::screen(1024.0, 768.0).with_color_scheme(ColorScheme::Dark);
-    let no_pref_ctx = MediaContext::screen(1024.0, 768.0); // No preference set
+    let no_pref_ctx = MediaContext::screen(1024.0, 768.0); // Defaults to no-preference
 
     let dark_query = MediaQuery::parse("(prefers-color-scheme: dark)").unwrap();
     let light_query = MediaQuery::parse("(prefers-color-scheme: light)").unwrap();
+    let no_pref_query = MediaQuery::parse("(prefers-color-scheme: no-preference)").unwrap();
 
     // Dark mode
     assert!(dark_ctx.evaluate(&dark_query));
@@ -351,10 +352,12 @@ fn test_prefers_color_scheme() {
     // Light mode
     assert!(!light_ctx.evaluate(&dark_query));
     assert!(light_ctx.evaluate(&light_query));
+    assert!(!light_ctx.evaluate(&no_pref_query));
 
-    // No preference - neither matches
+    // No preference - matches only no-preference queries
     assert!(!no_pref_ctx.evaluate(&dark_query));
     assert!(!no_pref_ctx.evaluate(&light_query));
+    assert!(no_pref_ctx.evaluate(&no_pref_query));
 }
 
 /// Tests prefers-reduced-motion media feature

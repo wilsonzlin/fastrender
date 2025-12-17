@@ -927,6 +927,8 @@ impl fmt::Display for PointerCapability {
 /// Color scheme preference
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorScheme {
+    /// No preference
+    NoPreference,
     /// Light color scheme preferred
     Light,
     /// Dark color scheme preferred
@@ -938,6 +940,7 @@ impl ColorScheme {
     pub fn parse(s: &str) -> Result<Self, MediaParseError> {
         let s = s.trim().to_lowercase();
         match s.as_str() {
+            "no-preference" => Ok(ColorScheme::NoPreference),
             "light" => Ok(ColorScheme::Light),
             "dark" => Ok(ColorScheme::Dark),
             _ => Err(MediaParseError::InvalidColorScheme(s)),
@@ -948,6 +951,7 @@ impl ColorScheme {
 impl fmt::Display for ColorScheme {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            ColorScheme::NoPreference => write!(f, "no-preference"),
             ColorScheme::Light => write!(f, "light"),
             ColorScheme::Dark => write!(f, "dark"),
         }
@@ -2950,6 +2954,7 @@ mod tests {
         assert_eq!(format!("{}", MediaType::Screen), "screen");
         assert_eq!(format!("{}", Orientation::Portrait), "portrait");
         assert_eq!(format!("{}", ColorScheme::Dark), "dark");
+        assert_eq!(format!("{}", ColorScheme::NoPreference), "no-preference");
         assert_eq!(format!("{}", PointerCapability::Fine), "fine");
     }
 
