@@ -2378,6 +2378,84 @@ mod tests {
     }
 
     #[test]
+    fn color_scheme_dark_recolors_focus_outline() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "body".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "input".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
+                        attributes: vec![
+                            ("type".to_string(), "text".to_string()),
+                            ("data-fastr-focus".to_string(), "true".to_string()),
+                        ],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet("html { color-scheme: light dark; } body { margin: 0; }").unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Dark);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+        let body = styled.children.first().expect("body");
+        let input = body.children.first().expect("input");
+
+        assert_eq!(input.styles.outline_color, OutlineColor::Color(Rgba::rgb(232, 232, 232)));
+    }
+
+    #[test]
+    fn color_scheme_dark_respects_authored_outline() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "body".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "input".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
+                        attributes: vec![
+                            ("type".to_string(), "text".to_string()),
+                            ("data-fastr-focus".to_string(), "true".to_string()),
+                            (
+                                "style".to_string(),
+                                "outline: 1px solid rgb(10, 20, 30);".to_string(),
+                            ),
+                        ],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet("html { color-scheme: light dark; } body { margin: 0; }").unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Dark);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+        let body = styled.children.first().expect("body");
+        let input = body.children.first().expect("input");
+
+        assert_eq!(input.styles.outline_color, OutlineColor::Color(Rgba::rgb(10, 20, 30)));
+    }
+
+    #[test]
     fn dir_attribute_sets_direction_and_isolate() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
