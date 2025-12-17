@@ -348,6 +348,8 @@ pub enum MediaFeature {
     MinColorIndex(u32),
     /// Maximum color-index: `(max-color-index: 256)`
     MaxColorIndex(u32),
+    /// Color gamut capability: `(color-gamut: p3)`
+    ColorGamut(ColorGamut),
 
     // Monochrome features
     /// Device is monochrome: `(monochrome)`
@@ -586,6 +588,13 @@ impl MediaFeature {
             "max-color-index" => {
                 let count = Self::parse_integer_value(&name, value)?;
                 Ok(MediaFeature::MaxColorIndex(count))
+            }
+
+            // Color gamut
+            "color-gamut" => {
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+                let gamut = ColorGamut::parse(value)?;
+                Ok(MediaFeature::ColorGamut(gamut))
             }
 
             // Monochrome features
@@ -944,6 +953,40 @@ impl fmt::Display for ColorScheme {
     }
 }
 
+/// Color gamut capability
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ColorGamut {
+    /// sRGB gamut support
+    Srgb,
+    /// Display P3 gamut support
+    P3,
+    /// Rec.2020 gamut support
+    Rec2020,
+}
+
+impl ColorGamut {
+    /// Parses a color-gamut value
+    pub fn parse(s: &str) -> Result<Self, MediaParseError> {
+        let s = s.trim().to_ascii_lowercase();
+        match s.as_str() {
+            "srgb" => Ok(ColorGamut::Srgb),
+            "p3" | "display-p3" => Ok(ColorGamut::P3),
+            "rec2020" | "rec-2020" => Ok(ColorGamut::Rec2020),
+            _ => Err(MediaParseError::InvalidColorGamut(s)),
+        }
+    }
+}
+
+impl fmt::Display for ColorGamut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ColorGamut::Srgb => write!(f, "srgb"),
+            ColorGamut::P3 => write!(f, "p3"),
+            ColorGamut::Rec2020 => write!(f, "rec2020"),
+        }
+    }
+}
+
 /// Reduced motion preference
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReducedMotion {
@@ -1109,6 +1152,8 @@ pub struct MediaContext {
     pub color_depth: u32,
     /// Color palette size (0 if not indexed color)
     pub color_index: u32,
+    /// Color gamut capability
+    pub color_gamut: ColorGamut,
     /// Monochrome depth in bits (0 if color device)
     pub monochrome_depth: u32,
     /// Whether primary input can hover
@@ -1158,6 +1203,7 @@ impl MediaContext {
             media_type: MediaType::Screen,
             color_depth: 8,
             color_index: 0,
+            color_gamut: ColorGamut::Srgb,
             monochrome_depth: 0,
             can_hover: true,
             any_can_hover: true,
@@ -1179,6 +1225,7 @@ impl MediaContext {
     /// - `FASTR_PREFERS_CONTRAST` = `more`/`high` | `less`/`low` | `custom`/`forced` | `no-preference`
     /// - `FASTR_PREFERS_REDUCED_TRANSPARENCY` = `reduce` | `no-preference` | truthy/falsy
     /// - `FASTR_PREFERS_REDUCED_DATA` = `reduce` | `no-preference` | truthy/falsy
+    /// - `FASTR_COLOR_GAMUT` = `srgb` | `p3`/`display-p3` | `rec2020`
     pub fn with_env_overrides(mut self) -> Self {
         if let Ok(value) = env::var("FASTR_PREFERS_COLOR_SCHEME") {
             let v = value.trim().to_ascii_lowercase();
@@ -1221,6 +1268,12 @@ impl MediaContext {
             ) || matches!(ReducedData::parse(&v), Ok(ReducedData::Reduce));
         }
 
+        if let Ok(value) = env::var("FASTR_COLOR_GAMUT") {
+            if let Ok(gamut) = ColorGamut::parse(&value) {
+                self.color_gamut = gamut;
+            }
+        }
+
         self
     }
 
@@ -1254,6 +1307,7 @@ impl MediaContext {
             media_type: MediaType::Print,
             color_depth: 8, // Most printers can do color
             color_index: 0,
+            color_gamut: ColorGamut::Srgb,
             monochrome_depth: 0,
             can_hover: false,
             any_can_hover: false,
@@ -1291,6 +1345,7 @@ impl MediaContext {
             media_type: MediaType::Screen,
             color_depth: 8,
             color_index: 0,
+            color_gamut: ColorGamut::Srgb,
             monochrome_depth: 0,
             can_hover: false,
             any_can_hover: false,
@@ -1312,6 +1367,12 @@ impl MediaContext {
     /// Sets the color scheme preference
     pub fn with_color_scheme(mut self, scheme: ColorScheme) -> Self {
         self.prefers_color_scheme = scheme;
+        self
+    }
+
+    /// Sets the color gamut capability
+    pub fn with_color_gamut(mut self, gamut: ColorGamut) -> Self {
+        self.color_gamut = gamut;
         self
     }
 
@@ -1490,6 +1551,11 @@ impl MediaContext {
             MediaFeature::ColorIndex => self.color_index > 0,
             MediaFeature::MinColorIndex(count) => self.color_index >= *count,
             MediaFeature::MaxColorIndex(count) => self.color_index <= *count,
+            MediaFeature::ColorGamut(gamut) => match gamut {
+                ColorGamut::Srgb => true,
+                ColorGamut::P3 => matches!(self.color_gamut, ColorGamut::P3 | ColorGamut::Rec2020),
+                ColorGamut::Rec2020 => self.color_gamut == ColorGamut::Rec2020,
+            },
 
             // Monochrome features
             MediaFeature::Monochrome => self.monochrome_depth > 0,
@@ -2022,6 +2088,8 @@ pub enum MediaParseError {
     InvalidPointerCapability(String),
     /// Invalid color scheme
     InvalidColorScheme(String),
+    /// Invalid color gamut
+    InvalidColorGamut(String),
     /// Invalid reduced motion value
     InvalidReducedMotion(String),
     /// Invalid contrast preference
@@ -2073,6 +2141,13 @@ impl fmt::Display for MediaParseError {
             }
             MediaParseError::InvalidColorScheme(s) => {
                 write!(f, "Invalid color scheme: '{}' (expected 'light' or 'dark')", s)
+            }
+            MediaParseError::InvalidColorGamut(s) => {
+                write!(
+                    f,
+                    "Invalid color gamut: '{}' (expected 'srgb', 'p3', or 'rec2020')",
+                    s
+                )
             }
             MediaParseError::InvalidReducedMotion(s) => {
                 write!(
@@ -2635,6 +2710,7 @@ mod tests {
         let guard_contrast = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("high"));
         let guard_transparency = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("1"));
         let guard_data = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("yes"));
+        let guard_gamut = EnvGuard::new("FASTR_COLOR_GAMUT", Some("p3"));
 
         let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
         assert_eq!(ctx.prefers_color_scheme, ColorScheme::Dark);
@@ -2642,22 +2718,27 @@ mod tests {
         assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
         assert!(ctx.prefers_reduced_transparency);
         assert!(ctx.prefers_reduced_data);
+        assert_eq!(ctx.color_gamut, ColorGamut::P3);
 
         drop(guard_scheme);
         drop(guard_motion);
         drop(guard_contrast);
         drop(guard_transparency);
         drop(guard_data);
+        drop(guard_gamut);
     }
 
     #[test]
     fn env_overrides_ignore_invalid_values() {
         let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("invalid"));
+        let guard_gamut = EnvGuard::new("FASTR_COLOR_GAMUT", Some("wide"));
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_scheme(ColorScheme::Light)
             .with_env_overrides();
         assert_eq!(ctx.prefers_color_scheme, ColorScheme::Light);
+        assert_eq!(ctx.color_gamut, ColorGamut::Srgb);
         drop(guard_scheme);
+        drop(guard_gamut);
     }
 
     #[test]
@@ -2682,6 +2763,28 @@ mod tests {
 
         let query = MediaQuery::parse("(min-color: 16)").unwrap();
         assert!(!ctx.evaluate(&query));
+    }
+
+    #[test]
+    fn test_evaluate_color_gamut() {
+        let srgb_ctx = MediaContext::screen(1024.0, 768.0);
+        let srgb_query = MediaQuery::parse("(color-gamut: srgb)").unwrap();
+        let p3_query = MediaQuery::parse("(color-gamut: p3)").unwrap();
+        let rec_query = MediaQuery::parse("(color-gamut: rec2020)").unwrap();
+
+        assert!(srgb_ctx.evaluate(&srgb_query));
+        assert!(!srgb_ctx.evaluate(&p3_query));
+        assert!(!srgb_ctx.evaluate(&rec_query));
+
+        let p3_ctx = srgb_ctx.clone().with_color_gamut(ColorGamut::P3);
+        assert!(p3_ctx.evaluate(&srgb_query));
+        assert!(p3_ctx.evaluate(&p3_query));
+        assert!(!p3_ctx.evaluate(&rec_query));
+
+        let rec_ctx = srgb_ctx.with_color_gamut(ColorGamut::Rec2020);
+        assert!(rec_ctx.evaluate(&srgb_query));
+        assert!(rec_ctx.evaluate(&p3_query));
+        assert!(rec_ctx.evaluate(&rec_query));
     }
 
     #[test]
@@ -2712,6 +2815,9 @@ mod tests {
 
         let err = MediaQuery::parse("(orientation: invalid)").unwrap_err();
         assert!(err.to_string().contains("Invalid orientation"));
+
+        let err = MediaQuery::parse("(color-gamut: foo)").unwrap_err();
+        assert!(err.to_string().contains("Invalid color gamut"));
     }
 
     // ============================================================================

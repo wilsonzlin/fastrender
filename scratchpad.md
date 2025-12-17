@@ -469,6 +469,7 @@ Inline coordinate fix (Mar 2026):
 - Latest run: `FASTR_RENDER_TIMINGS=1 FASTR_INTRINSIC_STATS=1 target/release/fetch_and_render file:///root/r/fastrender/fetches/html/cnn.com.html` → parse ~30–36ms, cascade ~4.4–5.8s, box_tree ~0.9–1.1s, box_count 8715, layout ~1.4–1.7s, paint ~22–29s, total ~30–55s. Intrinsic stats stable: lookups ~58k, hits ~38k (65%), stores ~15k, block_calls ~52k, flex_calls ~460, inline_calls ~5k. Paint remains dominant bottleneck.
 
 ## Recent changes (this branch)
+- Added `color-gamut` media feature support: parse/evaluate against MediaContext (srgb/p3/rec2020), env override via `FASTR_COLOR_GAMUT`, and regression tests.
 - Text decoration keyword parsing is now ASCII case-insensitive (line/style/thickness/skip-ink/underline-position), with regression coverage for uppercase inputs.
 - text-decoration-color now treats currentColor case-insensitively; parsing accepts any casing of the keyword and the regression for decoration longhands covers CurrentColor.
 - Added `word-break: anywhere`: parsing/computed value plus inline breaking/min-content handling; anywhere adds char-boundary breaks (suppressed by nowrap) and reduces min-content width. Regression covers wrapping/nowrap/min-content behavior.
