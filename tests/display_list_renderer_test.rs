@@ -7,7 +7,7 @@ use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage, BorderImageSlice,
-    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, ShapeRadius,
+    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius,
 };
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
@@ -169,6 +169,37 @@ fn builder_clip_path_masks_rendered_output() {
     // Center pixel should be clipped in, corner should remain the clear background.
     assert_eq!(pixel(&pixmap, 5, 5), (255, 0, 0, 255));
     assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+}
+
+#[test]
+fn builder_clip_path_polygon_masks_rendered_output() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::RED;
+    style.clip_path = ClipPath::BasicShape(
+        BasicShape::Polygon {
+            fill: FillRule::NonZero,
+            points: vec![
+                (Length::px(0.0), Length::px(0.0)),
+                (Length::px(0.0), Length::px(10.0)),
+                (Length::px(10.0), Length::px(0.0)),
+            ],
+        },
+        None,
+    );
+
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Pixel inside triangle should be filled; bottom-right should stay white.
+    assert_eq!(pixel(&pixmap, 2, 2), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 9, 9), (255, 255, 255, 255));
 }
 
 #[test]
