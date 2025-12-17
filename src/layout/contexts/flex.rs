@@ -1752,25 +1752,6 @@ fn hash_length(len: &Length, hasher: &mut DefaultHasher) {
     }
 }
 
-fn hash_edge_offsets(offsets: &crate::geometry::EdgeOffsets, hasher: &mut DefaultHasher) {
-    offsets.top.to_bits().hash(hasher);
-    offsets.right.to_bits().hash(hasher);
-    offsets.bottom.to_bits().hash(hasher);
-    offsets.left.to_bits().hash(hasher);
-}
-
-fn hash_length_or_auto(len: &crate::style::values::LengthOrAuto, hasher: &mut DefaultHasher) {
-    match len {
-        crate::style::values::LengthOrAuto::Auto => {
-            0u8.hash(hasher);
-        }
-        crate::style::values::LengthOrAuto::Length(l) => {
-            1u8.hash(hasher);
-            hash_length(l, hasher);
-        }
-    }
-}
-
 fn hash_option_length(len: &Option<Length>, hasher: &mut DefaultHasher) {
     match len {
         Some(l) => {
@@ -1918,6 +1899,7 @@ impl FlexFormattingContext {
     /// Builds a Taffy tree from a BoxNode tree
     ///
     /// Returns the root NodeId and populates the node_map for later lookups.
+    #[allow(dead_code)]
     fn build_taffy_tree(
         &self,
         taffy_tree: &mut TaffyTree<*const BoxNode>,
@@ -3747,7 +3729,9 @@ impl FlexFormattingContext {
         match len.unit {
             LengthUnit::Percent => None,
             _ if len.unit.is_absolute() => Some(len.to_px()),
-            u if u.is_viewport_relative() => len.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height),
+            u if u.is_viewport_relative() => {
+                len.resolve_with_viewport(self.viewport_size.width, self.viewport_size.height)
+            }
             LengthUnit::Rem => Some(len.value * style.root_font_size),
             LengthUnit::Em => Some(len.value * style.font_size),
             LengthUnit::Ex => Some(len.value * style.font_size * 0.5),

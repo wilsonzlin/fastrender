@@ -6,8 +6,8 @@
 use fastrender::resource::{FetchedResource, ResourceFetcher};
 use fastrender::Result;
 use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 /// A caching wrapper around any ResourceFetcher
@@ -145,10 +145,7 @@ mod tests {
     impl ResourceFetcher for DummyFetcher {
         fn fetch(&self, _url: &str) -> fastrender::Result<FetchedResource> {
             self.count.fetch_add(1, Ordering::SeqCst);
-            Ok(FetchedResource::new(
-                self.bytes.clone(),
-                self.content_type.clone(),
-            ))
+            Ok(FetchedResource::new(self.bytes.clone(), self.content_type.clone()))
         }
     }
 
@@ -198,6 +195,8 @@ mod tests {
     }
 }
 
+#[cfg(not(test))]
+#[allow(dead_code)]
 fn main() {
     eprintln!("caching_fetcher is a library-only helper; use it by wrapping a ResourceFetcher in code.");
 }

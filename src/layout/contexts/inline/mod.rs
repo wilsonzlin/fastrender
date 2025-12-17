@@ -5401,6 +5401,7 @@ impl Default for InlineFormattingContext {
 }
 
 impl InlineFormattingContext {
+    #[cfg(test)]
     fn rotate_fragment_ccw(fragment: &mut FragmentNode, max_x: f32) {
         fragment.bounds = Rect::from_xywh(
             fragment.bounds.y(),
@@ -5413,6 +5414,7 @@ impl InlineFormattingContext {
         }
     }
 
+    #[cfg(test)]
     fn rotate_fragment_cw(fragment: &mut FragmentNode, max_x: f32) {
         fragment.bounds = Rect::from_xywh(
             max_x - fragment.bounds.y() - fragment.bounds.height(),

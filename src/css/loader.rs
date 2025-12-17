@@ -562,6 +562,7 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile;
 
     #[test]
     fn resolves_relative_http_links() {
@@ -639,14 +640,25 @@ mod tests {
     #[test]
     fn canonicalizes_relative_file_url_before_inference() {
         let html = "<html><head></head></html>";
-        let cwd = std::env::current_dir().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let prev_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
         let rel = "fetches/html/news.ycombinator.com.html";
-        let abs = cwd.join(rel).canonicalize().unwrap();
+        let rel_path = std::path::Path::new(rel);
+        if let Some(parent) = rel_path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(rel_path, html).unwrap();
+
+        let abs = rel_path.canonicalize().unwrap();
         let rel_url = format!("file://{}", rel);
         let inferred = infer_base_url(html, &rel_url);
         // When the file exists locally, we still expect the HTTPS origin guess.
         assert_eq!(inferred, "https://news.ycombinator.com/");
         // And the canonicalized file URL was at least parseable (implicit by no panic).
         assert!(abs.exists());
+
+        std::env::set_current_dir(prev_cwd).unwrap();
     }
 }

@@ -274,13 +274,6 @@ fn is_positioned(style: &ComputedStyle) -> bool {
     !matches!(style.position, Position::Static)
 }
 
-fn is_float_for_stacking(style: &ComputedStyle) -> bool {
-    if is_positioned(style) {
-        return false;
-    }
-    style.float.is_floating()
-}
-
 fn is_inline_level(style: &ComputedStyle, fragment: &FragmentNode) -> bool {
     let is_inline_display = matches!(
         style.display,
@@ -5440,9 +5433,7 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
 fn resolve_transform_length(len: &Length, font_size: f32, percentage_base: f32) -> f32 {
     match len.unit {
         LengthUnit::Percent => len.resolve_against(percentage_base).unwrap_or(0.0),
-        LengthUnit::Em | LengthUnit::Rem => len
-            .resolve_with_font_size(font_size)
-            .unwrap_or(len.value * font_size),
+        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size),
         _ if len.unit.is_absolute() => len.to_px(),
         _ => len.value,
     }

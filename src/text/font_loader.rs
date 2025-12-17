@@ -592,6 +592,7 @@ impl FontContext {
             .unwrap_or(false)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn has_web_faces(&self, family: &str) -> bool {
         let folded = case_fold(family);
         self.web_fonts
