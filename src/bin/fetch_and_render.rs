@@ -320,14 +320,15 @@ mod tests {
 }
 
 fn usage(program: &str) {
-    eprintln!("Usage: {program} [--timeout SECONDS] <url> [output.png] [width] [height] [scroll_y]");
-    eprintln!("Example: {program} --timeout 120 https://www.example.com output.png 1200 800 0");
+    eprintln!("Usage: {program} [--timeout SECONDS] [--dpr FLOAT] <url> [output.png] [width] [height] [scroll_y]");
+    eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0");
     eprintln!("  width: viewport width (default: 1200)");
     eprintln!("  height: viewport height (default: 800)");
+    eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
     eprintln!("  scroll_y: vertical scroll offset (default: 0; not yet supported)");
 }
 
-fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32) -> Result<()> {
+fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32, dpr: f32) -> Result<()> {
     println!("Fetching HTML from: {}", url);
     let (html_bytes, html_content_type) = fetch_bytes(url)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
@@ -381,7 +382,7 @@ fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32) 
     };
 
     println!("Rendering to image ({}x{} viewport)...", width, height);
-    let mut renderer = FastRender::new()?;
+    let mut renderer = FastRender::builder().device_pixel_ratio(dpr).build()?;
     renderer.set_base_url(resource_base.clone());
     // Note: scroll_y is currently not supported, will render from top
     if scroll_y != 0 {
@@ -401,12 +402,22 @@ fn main() -> Result<()> {
     let program = env::args().next().unwrap_or_else(|| "fetch_and_render".to_string());
     let mut args = env::args().skip(1);
     let mut timeout_secs: Option<u64> = None;
+    let mut dpr: f32 = 1.0;
     let mut positional: Vec<String> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--timeout" => {
                 if let Some(val) = args.next() {
                     timeout_secs = val.parse().ok();
+                }
+            }
+            "--dpr" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<f32>() {
+                        if parsed.is_finite() && parsed > 0.0 {
+                            dpr = parsed;
+                        }
+                    }
                 }
             }
             _ => positional.push(arg),
@@ -434,7 +445,7 @@ fn main() -> Result<()> {
         .name("fetch_and_render-worker".to_string())
         .stack_size(STACK_SIZE)
         .spawn(move || {
-            let _ = tx.send(render_once(&url_clone, &output_clone, width, height, scroll_y));
+            let _ = tx.send(render_once(&url_clone, &output_clone, width, height, scroll_y, dpr));
         })
         .expect("spawn render worker");
 

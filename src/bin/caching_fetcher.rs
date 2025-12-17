@@ -7,6 +7,7 @@ use fastrender::resource::{FetchedResource, ResourceFetcher};
 use fastrender::Result;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 /// A caching wrapper around any ResourceFetcher
@@ -80,6 +81,17 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
         };
         Some(mime.to_string())
     }
+
+    fn meta_path(cache_path: &Path) -> PathBuf {
+        let mut meta = cache_path.to_owned();
+        let meta_ext = cache_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|ext| format!("{ext}.meta"))
+            .unwrap_or_else(|| "meta".to_string());
+        meta.set_extension(meta_ext);
+        meta
+    }
 }
 
 impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
@@ -93,8 +105,12 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
 
         // Try to load from cache
         if cache_path.exists() {
-            if let Ok(bytes) = std::fs::read(&cache_path) {
-                let content_type = Self::content_type_from_ext(&cache_path);
+            if let Ok(bytes) = fs::read(&cache_path) {
+                let content_type = fs::read_to_string(Self::meta_path(&cache_path))
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| Self::content_type_from_ext(&cache_path));
                 return Ok(FetchedResource::new(bytes, content_type));
             }
         }
@@ -103,9 +119,82 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
         let resource = self.inner.fetch(url)?;
 
         // Save to cache (best effort - don't fail if write fails)
-        let _ = std::fs::write(&cache_path, &resource.bytes);
+        let _ = fs::write(&cache_path, &resource.bytes);
+        if let Some(ct) = &resource.content_type {
+            let _ = fs::write(Self::meta_path(&cache_path), ct);
+        }
 
         Ok(resource)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fastrender::resource::FetchedResource;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct DummyFetcher {
+        count: Arc<AtomicUsize>,
+        bytes: Vec<u8>,
+        content_type: Option<String>,
+    }
+
+    impl ResourceFetcher for DummyFetcher {
+        fn fetch(&self, _url: &str) -> fastrender::Result<FetchedResource> {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            Ok(FetchedResource::new(
+                self.bytes.clone(),
+                self.content_type.clone(),
+            ))
+        }
+    }
+
+    #[test]
+    fn caches_and_restores_content_type_without_extension() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let counter = Arc::new(AtomicUsize::new(0));
+        let fetcher = DummyFetcher {
+            count: counter.clone(),
+            bytes: b"hi".to_vec(),
+            content_type: Some("text/plain".to_string()),
+        };
+
+        let caching = CachingFetcher::new(fetcher, tmp.path());
+        let url = "https://example.com/resource"; // no extension -> would map to .bin
+
+        let first = caching.fetch(url).expect("first fetch");
+        assert_eq!(first.content_type.as_deref(), Some("text/plain"));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+        let second = caching.fetch(url).expect("cached fetch");
+        assert_eq!(second.content_type.as_deref(), Some("text/plain"));
+        assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit cache");
+    }
+
+    #[test]
+    fn falls_back_to_extension_when_no_content_type() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let counter = Arc::new(AtomicUsize::new(0));
+        let fetcher = DummyFetcher {
+            count: counter.clone(),
+            bytes: b"pngdata".to_vec(),
+            content_type: None,
+        };
+
+        let caching = CachingFetcher::new(fetcher, tmp.path());
+        let url = "https://example.com/image.png";
+
+        let first = caching.fetch(url).expect("first fetch");
+        assert_eq!(first.content_type.as_deref(), None);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+        let second = caching.fetch(url).expect("cached fetch");
+        // Meta is absent, but extension should still provide a MIME guess.
+        assert_eq!(second.content_type.as_deref(), Some("image/png"));
+        assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit cache");
     }
 }
 

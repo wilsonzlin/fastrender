@@ -39,6 +39,9 @@
 
 ## Session notes (latest)
 
+- CachingFetcher now persists content-type alongside cached assets (sidecar .meta) and restores it on cache hits so extensionless URLs keep their MIME; added unit tests in `src/bin/caching_fetcher.rs` (includes extension-based fallback without refetching).
+- fetch_and_render now accepts `--dpr` to set device pixel ratio; it threads through to FastRender builder so media queries/srcset honor the requested DPR.
+- render_pages accepts `--dpr` to override device pixel ratio for all pages; forwarded into FastRender builder so responsive assets match the requested DPR.
 - `examples/inspect_frag` now ignores SIGPIPE/BrokenPipe panics (exits cleanly when piped through `head`/`tail`) via a panic hook, so dev traces won’t crash when output is truncated.
 - `fetch_and_render --timeout 60 file:///.../cnn.com.html` (1200×800, Dec 16 build) completes in ~51.8s (parse 40ms, cascade 7.45s, box 5.03s, layout 16.45s, layout_document_total 49.85s, paint 0.45s). Output PNG 106KB.
 - RowMetrics baseline fallback test now lives at the module level (no longer an unnameable inner test), so the row baseline→row-bottom behavior is actually executed in the suite and the warning disappears.

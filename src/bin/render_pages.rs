@@ -50,6 +50,7 @@ fn main() {
     let mut page_filter: Option<HashSet<String>> = None;
     let mut timeout_secs: Option<u64> = None;
     let mut viewport: Option<(u32, u32)> = None;
+    let mut device_pixel_ratio: f32 = 1.0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--jobs" => {
@@ -72,6 +73,15 @@ fn main() {
                     if let (Some(w), Some(h)) = (parts.next(), parts.next()) {
                         if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
                             viewport = Some((w, h));
+                        }
+                    }
+                }
+            }
+            "--dpr" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<f32>() {
+                        if parsed.is_finite() && parsed > 0.0 {
+                            device_pixel_ratio = parsed;
                         }
                     }
                 }
@@ -164,11 +174,11 @@ fn main() {
                 let html = match fs::read_to_string(&path) {
                     Ok(h) => h,
                     Err(e) => {
-                        log.push_str(&format!("Read error: {}\n", e));
-                        let _ = fs::write(&log_path, &log);
-                        results.lock().unwrap().push(PageResult {
-                            name,
-                            status: Status::Error(format!("read: {}", e)),
+                log.push_str(&format!("Read error: {}\n", e));
+                let _ = fs::write(&log_path, &log);
+                results.lock().unwrap().push(PageResult {
+                    name,
+                    status: Status::Error(format!("read: {}", e)),
                             time_ms: 0,
                             size: None,
                         });
@@ -244,6 +254,7 @@ fn main() {
                         let mut renderer = FastRender::builder()
                             .fetcher(fetcher as Arc<dyn ResourceFetcher>)
                             .base_url(resource_base.clone())
+                            .device_pixel_ratio(device_pixel_ratio)
                             .build()
                             .expect("create renderer");
                         renderer.render_to_png(&html_for_render, viewport_w, viewport_h)
