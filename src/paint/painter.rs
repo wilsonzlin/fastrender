@@ -4160,7 +4160,7 @@ impl Painter {
             Some(Size::new(self.css_width, self.css_height)),
         );
         let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
-        let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
+        let half_leading = (metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0;
         let baseline_y = rect.y() + half_leading + metrics.baseline_offset;
 
         self.paint_shaped_runs(&runs, rect.x(), baseline_y, style.color, Some(style));

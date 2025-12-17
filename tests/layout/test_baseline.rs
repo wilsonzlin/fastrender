@@ -765,3 +765,29 @@ fn test_line_height_with_leading() {
     let half_leading = (24.0 - 16.0) / 2.0;
     assert_eq!(boxes[0].metrics.half_leading(), half_leading);
 }
+
+#[test]
+fn test_negative_leading_is_preserved() {
+    // Line-height smaller than the font's ascent+descent should shrink the line box and
+    // propagate negative leading instead of clamping to zero.
+    let strut = mock_scaled_metrics_with_line_height(16.0, 12.0, 4.0, 12.0);
+    let mut aligner = BaselineAligner::with_strut(strut.clone());
+
+    let tight_box = InlineBoxMetrics {
+        ascent: 12.0,
+        descent: 4.0,
+        line_height: 12.0,
+        baseline_offset: 12.0,
+        x_height: Some(6.0),
+        vertical_align: VerticalAlign::Baseline,
+    };
+
+    aligner.add_box(tight_box);
+
+    let (line_metrics, boxes) = aligner.align();
+
+    let expected_half_leading = (12.0 - 16.0) / 2.0;
+    assert!((boxes[0].metrics.half_leading() - expected_half_leading).abs() < 0.01);
+    assert!((line_metrics.height - 12.0).abs() < 0.01);
+    assert!((line_metrics.baseline - (tight_box.ascent + expected_half_leading)).abs() < 0.01);
+}

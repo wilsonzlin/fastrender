@@ -175,7 +175,7 @@ impl BaselineMetrics {
     /// Leading is the difference between line-height and the actual content height.
     /// It's split equally above and below.
     pub fn half_leading(&self) -> f32 {
-        ((self.line_height - (self.ascent + self.descent)) / 2.0).max(0.0)
+        (self.line_height - (self.ascent + self.descent)) / 2.0
     }
 }
 
@@ -225,7 +225,7 @@ impl LineBaselineAccumulator {
         // Approximate standard font metrics
         let ascent = font_size * 0.8;
         let descent = font_size * 0.2;
-        let half_leading = ((line_height - font_size) / 2.0).max(0.0);
+        let half_leading = (line_height - font_size) / 2.0;
 
         Self {
             max_ascent: ascent + half_leading,
@@ -481,6 +481,22 @@ mod tests {
         };
         // line_height=24, ascent+descent=16, leading=8, half=4
         assert_eq!(metrics.half_leading(), 4.0);
+    }
+
+    #[test]
+    fn baseline_metrics_allow_negative_half_leading() {
+        // line-height smaller than the font's ascent+descent should produce negative leading
+        let metrics = BaselineMetrics {
+            baseline_offset: 10.0,
+            height: 8.0,
+            ascent: 10.0,
+            descent: 2.0,
+            line_gap: 0.0,
+            line_height: 8.0,
+            x_height: None,
+        };
+
+        assert!((metrics.half_leading() + 2.0).abs() < 1e-3);
     }
 
     #[test]

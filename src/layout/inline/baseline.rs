@@ -239,7 +239,7 @@ impl InlineBoxMetrics {
     /// split equally above and below the content area.
     #[inline]
     pub fn half_leading(&self) -> f32 {
-        (self.line_height - self.content_height()).max(0.0) / 2.0
+        (self.line_height - self.content_height()) / 2.0
     }
 }
 
@@ -293,11 +293,12 @@ impl LineMetrics {
     /// is composed of inline-level elements, 'line-height' specifies the
     /// minimal height of line boxes within the element."
     pub fn from_strut(strut_metrics: &ScaledMetrics) -> Self {
+        let half_leading = (strut_metrics.line_height - (strut_metrics.ascent + strut_metrics.descent)) / 2.0;
         Self {
             height: strut_metrics.line_height,
-            baseline: strut_metrics.ascent,
-            max_ascent: strut_metrics.ascent,
-            max_descent: strut_metrics.descent,
+            baseline: strut_metrics.ascent + half_leading,
+            max_ascent: strut_metrics.ascent + half_leading,
+            max_descent: strut_metrics.descent + half_leading,
             text_top: strut_metrics.ascent,
             text_bottom: strut_metrics.descent,
         }
@@ -432,7 +433,13 @@ impl BaselineAligner {
 
         // Step 1: Initialize from strut or find initial baseline position
         let (initial_above, initial_below, text_top, text_bottom) = if let Some(ref strut) = self.strut {
-            (strut.ascent, strut.descent, strut.ascent, strut.descent)
+            let strut_half_leading = (strut.line_height - (strut.ascent + strut.descent)) / 2.0;
+            (
+                strut.ascent + strut_half_leading,
+                strut.descent + strut_half_leading,
+                strut.ascent,
+                strut.descent,
+            )
         } else {
             (0.0, 0.0, 0.0, 0.0)
         };

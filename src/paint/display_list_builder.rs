@@ -3054,7 +3054,7 @@ impl DisplayListBuilder {
         let viewport = self.viewport.map(|(w, h)| Size::new(w, h));
         let line_height = compute_line_height_with_metrics_viewport(style, metrics_scaled.as_ref(), viewport);
         let metrics = InlineTextItem::metrics_from_runs(&runs, line_height, style.font_size);
-        let half_leading = ((metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0).max(0.0);
+        let half_leading = (metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0;
         let baseline = rect.y() + half_leading + metrics.baseline_offset;
 
         let shadows = Self::text_shadows_from_style(Some(style));
