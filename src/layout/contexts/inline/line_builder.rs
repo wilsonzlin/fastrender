@@ -3621,6 +3621,59 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    #[test]
+    fn bidi_override_does_not_cross_paragraph_boundary() {
+        // An override in the first paragraph should not affect the following paragraph; embeds
+        // in later paragraphs should resolve independently.
+        let mut builder = make_builder(200.0);
+
+        let mut para1 = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::BidiOverride,
+        );
+        para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+        builder.add_item(InlineItem::InlineBox(para1));
+        builder.force_break();
+
+        let mut para2 = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Ltr,
+            UnicodeBidi::Embed,
+        );
+        para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
+        builder.add_item(InlineItem::InlineBox(para2));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 2);
+
+        let actual_para1: String = lines[0]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+        let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{202e}', '\u{202c}'), Some(Level::ltr()));
+        assert_eq!(actual_para1, expected_para1);
+
+        let actual_para2: String = lines[1]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+        let expected_para2 = reorder_with_controls(&format!("{}XYZ{}", '\u{202a}', '\u{202c}'), Some(Level::ltr()));
+        assert_eq!(actual_para2, expected_para2);
+    }
+
     fn nested_inline_box_with_depth(
         depth: usize,
         ub: UnicodeBidi,
