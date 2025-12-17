@@ -14,7 +14,7 @@ use fastrender::text::pipeline::{
 };
 use fastrender::ComputedStyle;
 use fastrender::FontContext;
-use fastrender::style::types::WritingMode;
+use fastrender::style::types::{TextOrientation, WritingMode};
 
 /// Helper macro to skip test if font shaping fails due to missing fonts
 macro_rules! require_fonts {
@@ -71,6 +71,48 @@ fn sideways_writing_mode_shapes_with_rotation() {
     style.writing_mode = WritingMode::SidewaysLr;
 
     let runs = require_fonts!(pipeline.shape_with_direction("abc", &style, &font_ctx, Direction::LeftToRight));
+    assert!(!runs.is_empty());
+    for run in runs {
+        assert_eq!(run.rotation, RunRotation::Cw90);
+    }
+}
+
+#[test]
+fn vertical_mixed_orientation_splits_runs() {
+    let pipeline = ShapingPipeline::new();
+    let font_ctx = FontContext::new();
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::VerticalRl;
+    style.text_orientation = TextOrientation::Mixed;
+
+    let runs = require_fonts!(pipeline.shape_with_direction("漢A", &style, &font_ctx, Direction::LeftToRight));
+    assert!(runs.len() >= 2, "expected separate runs for upright CJK and rotated Latin");
+
+    let mut saw_upright = false;
+    let mut saw_rotated = false;
+    for run in runs {
+        if run.text.contains('漢') {
+            assert_eq!(run.rotation, RunRotation::None);
+            saw_upright = true;
+        }
+        if run.text.contains('A') {
+            assert_eq!(run.rotation, RunRotation::Cw90);
+            saw_rotated = true;
+        }
+    }
+
+    assert!(saw_upright && saw_rotated, "mixed orientation should produce upright and rotated runs");
+}
+
+#[test]
+fn vertical_sideways_orientation_rotates_all() {
+    let pipeline = ShapingPipeline::new();
+    let font_ctx = FontContext::new();
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::VerticalRl;
+    style.text_orientation = TextOrientation::Sideways;
+
+    let runs = require_fonts!(pipeline.shape_with_direction("AB", &style, &font_ctx, Direction::LeftToRight));
     assert!(!runs.is_empty());
     for run in runs {
         assert_eq!(run.rotation, RunRotation::Cw90);
