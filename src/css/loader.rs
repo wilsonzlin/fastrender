@@ -414,7 +414,7 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
         }
     }
 
-    css_urls
+    dedupe_links_preserving_order(css_urls)
 }
 
 /// Heuristic extraction of CSS URLs that appear inside inline scripts or attributes.
@@ -502,6 +502,13 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
     }
 
     urls
+}
+
+/// Deduplicate a list while preserving the order of first occurrence.
+pub fn dedupe_links_preserving_order(mut links: Vec<String>) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::with_capacity(links.len());
+    links.retain(|link| seen.insert(link.clone()));
+    links
 }
 
 /// Inject a `<style>` block containing `css` into the HTML document.
@@ -690,6 +697,23 @@ mod tests {
         "#;
         let urls = extract_embedded_css_urls(html, "https://example.com/");
         assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
+    }
+
+    #[test]
+    fn dedupes_stylesheet_links_preserving_order() {
+        let html = r#"
+            <link rel="stylesheet" href="/a.css">
+            <link rel="stylesheet" href="/b.css">
+            <link rel="stylesheet" href="/a.css">
+        "#;
+        let urls = extract_css_links(html, "https://example.com/app/index.html");
+        assert_eq!(
+            urls,
+            vec![
+                "https://example.com/a.css".to_string(),
+                "https://example.com/b.css".to_string(),
+            ]
+        );
     }
 
     #[test]
