@@ -1,0 +1,26 @@
+<!doctype html>
+<style>
+body {
+  writing-mode: vertical-rl;
+  width: 200px;
+}
+.ellipsis-end {
+  white-space: nowrap;
+  overflow-y: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid #000;
+}
+.ellipsis-start {
+  white-space: nowrap;
+  overflow-y: hidden;
+  text-overflow: ellipsis clip;
+  direction: ltr;
+  border: 1px solid #f00;
+}
+</style>
+<div class="ellipsis-end">
+  Vertical text that should end-clip with an ellipsis when it overflows the inline axis.
+</div>
+<div class="ellipsis-start">
+  Start elide in vertical text should show ellipsis at the start.
+</div>
