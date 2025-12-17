@@ -12929,6 +12929,32 @@ mod tests {
     }
 
     #[test]
+    fn background_position_two_keywords_vertical_first_with_percentage() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-position".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("top".to_string()),
+                    PropertyValue::Percentage(30.0),
+                    PropertyValue::Keyword("left".to_string()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        let BackgroundPosition::Position { x, y } = style.background_layers[0].position;
+        assert!((y.alignment - 0.0).abs() < 0.01);
+        assert_eq!(y.offset, Length::percent(30.0));
+        assert!((x.alignment - 0.0).abs() < 0.01);
+        assert!(x.offset.is_zero());
+    }
+
+    #[test]
     fn background_position_center_left_swaps_axes() {
         let mut style = ComputedStyle::default();
         apply_declaration(
