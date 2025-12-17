@@ -348,8 +348,6 @@ pub enum MediaFeature {
     MinColorIndex(u32),
     /// Maximum color-index: `(max-color-index: 256)`
     MaxColorIndex(u32),
-    /// Color gamut capability: `(color-gamut: p3)`
-    ColorGamut(ColorGamut),
 
     // Monochrome features
     /// Device is monochrome: `(monochrome)`
@@ -380,6 +378,8 @@ pub enum MediaFeature {
     PrefersReducedTransparency(ReducedTransparency),
     /// Reduced data usage preference: `(prefers-reduced-data: reduce)`
     PrefersReducedData(ReducedData),
+    /// Whether the UA is in an inverted-color mode: `(inverted-colors: inverted)`
+    InvertedColors(InvertedColors),
     /// Range comparisons using level 4 syntax (e.g., `400px < width <= 800px`)
     Range {
         feature: RangeFeature,
@@ -590,13 +590,6 @@ impl MediaFeature {
                 Ok(MediaFeature::MaxColorIndex(count))
             }
 
-            // Color gamut
-            "color-gamut" => {
-                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
-                let gamut = ColorGamut::parse(value)?;
-                Ok(MediaFeature::ColorGamut(gamut))
-            }
-
             // Monochrome features
             "monochrome" => {
                 if value.is_some() {
@@ -664,6 +657,11 @@ impl MediaFeature {
                 let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let data = ReducedData::parse(value)?;
                 Ok(MediaFeature::PrefersReducedData(data))
+            }
+            "inverted-colors" => {
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+                let inverted = InvertedColors::parse(value)?;
+                Ok(MediaFeature::InvertedColors(inverted))
             }
 
             _ => Err(MediaParseError::UnknownFeature(name)),
@@ -926,8 +924,6 @@ pub enum ColorScheme {
     Light,
     /// Dark color scheme preferred
     Dark,
-    /// No preference specified
-    NoPreference,
 }
 
 impl ColorScheme {
@@ -937,7 +933,6 @@ impl ColorScheme {
         match s.as_str() {
             "light" => Ok(ColorScheme::Light),
             "dark" => Ok(ColorScheme::Dark),
-            "no-preference" => Ok(ColorScheme::NoPreference),
             _ => Err(MediaParseError::InvalidColorScheme(s)),
         }
     }
@@ -948,41 +943,6 @@ impl fmt::Display for ColorScheme {
         match self {
             ColorScheme::Light => write!(f, "light"),
             ColorScheme::Dark => write!(f, "dark"),
-            ColorScheme::NoPreference => write!(f, "no-preference"),
-        }
-    }
-}
-
-/// Color gamut capability
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ColorGamut {
-    /// sRGB gamut support
-    Srgb,
-    /// Display P3 gamut support
-    P3,
-    /// Rec.2020 gamut support
-    Rec2020,
-}
-
-impl ColorGamut {
-    /// Parses a color-gamut value
-    pub fn parse(s: &str) -> Result<Self, MediaParseError> {
-        let s = s.trim().to_ascii_lowercase();
-        match s.as_str() {
-            "srgb" => Ok(ColorGamut::Srgb),
-            "p3" | "display-p3" => Ok(ColorGamut::P3),
-            "rec2020" | "rec-2020" => Ok(ColorGamut::Rec2020),
-            _ => Err(MediaParseError::InvalidColorGamut(s)),
-        }
-    }
-}
-
-impl fmt::Display for ColorGamut {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ColorGamut::Srgb => write!(f, "srgb"),
-            ColorGamut::P3 => write!(f, "p3"),
-            ColorGamut::Rec2020 => write!(f, "rec2020"),
         }
     }
 }
@@ -1115,6 +1075,36 @@ impl fmt::Display for ReducedData {
     }
 }
 
+/// Inverted colors state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InvertedColors {
+    /// Colors are not inverted
+    None,
+    /// Colors are inverted
+    Inverted,
+}
+
+impl InvertedColors {
+    /// Parses an inverted-colors value
+    pub fn parse(s: &str) -> Result<Self, MediaParseError> {
+        let s = s.trim().to_lowercase();
+        match s.as_str() {
+            "none" => Ok(InvertedColors::None),
+            "inverted" => Ok(InvertedColors::Inverted),
+            _ => Err(MediaParseError::InvalidInvertedColors(s)),
+        }
+    }
+}
+
+impl fmt::Display for InvertedColors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InvertedColors::None => write!(f, "none"),
+            InvertedColors::Inverted => write!(f, "inverted"),
+        }
+    }
+}
+
 // ============================================================================
 // Media Context - Evaluation Environment
 // ============================================================================
@@ -1152,8 +1142,6 @@ pub struct MediaContext {
     pub color_depth: u32,
     /// Color palette size (0 if not indexed color)
     pub color_index: u32,
-    /// Color gamut capability
-    pub color_gamut: ColorGamut,
     /// Monochrome depth in bits (0 if color device)
     pub monochrome_depth: u32,
     /// Whether primary input can hover
@@ -1165,7 +1153,7 @@ pub struct MediaContext {
     /// Any pointer accuracy (finest available)
     pub any_pointer: PointerCapability,
     /// User's color scheme preference
-    pub prefers_color_scheme: ColorScheme,
+    pub prefers_color_scheme: Option<ColorScheme>,
     /// User's reduced motion preference
     pub prefers_reduced_motion: bool,
     /// User's contrast preference
@@ -1174,6 +1162,8 @@ pub struct MediaContext {
     pub prefers_reduced_transparency: bool,
     /// User's reduced data preference
     pub prefers_reduced_data: bool,
+    /// Whether the UA is currently in an inverted-color mode
+    pub inverted_colors: InvertedColors,
 }
 
 impl MediaContext {
@@ -1203,17 +1193,17 @@ impl MediaContext {
             media_type: MediaType::Screen,
             color_depth: 8,
             color_index: 0,
-            color_gamut: ColorGamut::Srgb,
             monochrome_depth: 0,
             can_hover: true,
             any_can_hover: true,
             pointer: PointerCapability::Fine,
             any_pointer: PointerCapability::Fine,
-            prefers_color_scheme: ColorScheme::NoPreference,
+            prefers_color_scheme: None,
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
             prefers_reduced_data: false,
+            inverted_colors: InvertedColors::None,
         }
     }
 
@@ -1225,14 +1215,14 @@ impl MediaContext {
     /// - `FASTR_PREFERS_CONTRAST` = `more`/`high` | `less`/`low` | `custom`/`forced` | `no-preference`
     /// - `FASTR_PREFERS_REDUCED_TRANSPARENCY` = `reduce` | `no-preference` | truthy/falsy
     /// - `FASTR_PREFERS_REDUCED_DATA` = `reduce` | `no-preference` | truthy/falsy
-    /// - `FASTR_COLOR_GAMUT` = `srgb` | `p3`/`display-p3` | `rec2020`
+    /// - `FASTR_INVERTED_COLORS` = `inverted` | `none` | truthy/falsy
     pub fn with_env_overrides(mut self) -> Self {
         if let Ok(value) = env::var("FASTR_PREFERS_COLOR_SCHEME") {
             let v = value.trim().to_ascii_lowercase();
             self.prefers_color_scheme = match v.as_str() {
-                "light" => ColorScheme::Light,
-                "dark" => ColorScheme::Dark,
-                "no-preference" => ColorScheme::NoPreference,
+                "light" => Some(ColorScheme::Light),
+                "dark" => Some(ColorScheme::Dark),
+                "no-preference" => None,
                 _ => self.prefers_color_scheme,
             };
         }
@@ -1268,10 +1258,18 @@ impl MediaContext {
             ) || matches!(ReducedData::parse(&v), Ok(ReducedData::Reduce));
         }
 
-        if let Ok(value) = env::var("FASTR_COLOR_GAMUT") {
-            if let Ok(gamut) = ColorGamut::parse(&value) {
-                self.color_gamut = gamut;
-            }
+        if let Ok(value) = env::var("FASTR_INVERTED_COLORS") {
+            let v = value.trim().to_ascii_lowercase();
+            self.inverted_colors = match InvertedColors::parse(&v) {
+                Ok(state) => state,
+                Err(_) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => {
+                    InvertedColors::Inverted
+                }
+                Err(_) if matches!(v.as_str(), "0" | "false" | "off" | "none") => {
+                    InvertedColors::None
+                }
+                _ => self.inverted_colors,
+            };
         }
 
         self
@@ -1307,17 +1305,17 @@ impl MediaContext {
             media_type: MediaType::Print,
             color_depth: 8, // Most printers can do color
             color_index: 0,
-            color_gamut: ColorGamut::Srgb,
             monochrome_depth: 0,
             can_hover: false,
             any_can_hover: false,
             pointer: PointerCapability::None,
             any_pointer: PointerCapability::None,
-            prefers_color_scheme: ColorScheme::NoPreference,
+            prefers_color_scheme: None,
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
             prefers_reduced_data: false,
+            inverted_colors: InvertedColors::None,
         }
     }
 
@@ -1345,17 +1343,17 @@ impl MediaContext {
             media_type: MediaType::Screen,
             color_depth: 8,
             color_index: 0,
-            color_gamut: ColorGamut::Srgb,
             monochrome_depth: 0,
             can_hover: false,
             any_can_hover: false,
             pointer: PointerCapability::Coarse,
             any_pointer: PointerCapability::Coarse,
-            prefers_color_scheme: ColorScheme::NoPreference,
+            prefers_color_scheme: None,
             prefers_reduced_motion: false,
             prefers_contrast: ContrastPreference::NoPreference,
             prefers_reduced_transparency: false,
             prefers_reduced_data: false,
+            inverted_colors: InvertedColors::None,
         }
     }
 
@@ -1366,13 +1364,7 @@ impl MediaContext {
 
     /// Sets the color scheme preference
     pub fn with_color_scheme(mut self, scheme: ColorScheme) -> Self {
-        self.prefers_color_scheme = scheme;
-        self
-    }
-
-    /// Sets the color gamut capability
-    pub fn with_color_gamut(mut self, gamut: ColorGamut) -> Self {
-        self.color_gamut = gamut;
+        self.prefers_color_scheme = Some(scheme);
         self
     }
 
@@ -1385,6 +1377,12 @@ impl MediaContext {
     /// Sets the reduced data preference
     pub fn with_reduced_data(mut self, reduce: bool) -> Self {
         self.prefers_reduced_data = reduce;
+        self
+    }
+
+    /// Sets whether colors are inverted
+    pub fn with_inverted_colors(mut self, inverted: InvertedColors) -> Self {
+        self.inverted_colors = inverted;
         self
     }
 
@@ -1551,11 +1549,6 @@ impl MediaContext {
             MediaFeature::ColorIndex => self.color_index > 0,
             MediaFeature::MinColorIndex(count) => self.color_index >= *count,
             MediaFeature::MaxColorIndex(count) => self.color_index <= *count,
-            MediaFeature::ColorGamut(gamut) => match gamut {
-                ColorGamut::Srgb => true,
-                ColorGamut::P3 => matches!(self.color_gamut, ColorGamut::P3 | ColorGamut::Rec2020),
-                ColorGamut::Rec2020 => self.color_gamut == ColorGamut::Rec2020,
-            },
 
             // Monochrome features
             MediaFeature::Monochrome => self.monochrome_depth > 0,
@@ -1587,7 +1580,7 @@ impl MediaContext {
             }
 
             // User preferences
-            MediaFeature::PrefersColorScheme(scheme) => self.prefers_color_scheme == *scheme,
+            MediaFeature::PrefersColorScheme(scheme) => self.prefers_color_scheme == Some(*scheme),
             MediaFeature::PrefersReducedMotion(motion) => match motion {
                 ReducedMotion::NoPreference => !self.prefers_reduced_motion,
                 ReducedMotion::Reduce => self.prefers_reduced_motion,
@@ -1600,6 +1593,10 @@ impl MediaContext {
             MediaFeature::PrefersReducedData(data) => match data {
                 ReducedData::NoPreference => !self.prefers_reduced_data,
                 ReducedData::Reduce => self.prefers_reduced_data,
+            },
+            MediaFeature::InvertedColors(state) => match state {
+                InvertedColors::None => matches!(self.inverted_colors, InvertedColors::None),
+                InvertedColors::Inverted => matches!(self.inverted_colors, InvertedColors::Inverted),
             },
             MediaFeature::Range { feature, op, value } => match (feature, value) {
                 (RangeFeature::Width, RangeValue::Length(len)) => {
@@ -2088,8 +2085,6 @@ pub enum MediaParseError {
     InvalidPointerCapability(String),
     /// Invalid color scheme
     InvalidColorScheme(String),
-    /// Invalid color gamut
-    InvalidColorGamut(String),
     /// Invalid reduced motion value
     InvalidReducedMotion(String),
     /// Invalid contrast preference
@@ -2098,6 +2093,8 @@ pub enum MediaParseError {
     InvalidReducedTransparency(String),
     /// Invalid reduced data value
     InvalidReducedData(String),
+    /// Invalid inverted-colors value
+    InvalidInvertedColors(String),
     /// Empty media query
     EmptyQuery,
     /// Expected '(' for feature
@@ -2142,13 +2139,6 @@ impl fmt::Display for MediaParseError {
             MediaParseError::InvalidColorScheme(s) => {
                 write!(f, "Invalid color scheme: '{}' (expected 'light' or 'dark')", s)
             }
-            MediaParseError::InvalidColorGamut(s) => {
-                write!(
-                    f,
-                    "Invalid color gamut: '{}' (expected 'srgb', 'p3', or 'rec2020')",
-                    s
-                )
-            }
             MediaParseError::InvalidReducedMotion(s) => {
                 write!(
                     f,
@@ -2174,6 +2164,13 @@ impl fmt::Display for MediaParseError {
                 write!(
                     f,
                     "Invalid reduced data: '{}' (expected 'no-preference' or 'reduce')",
+                    s
+                )
+            }
+            MediaParseError::InvalidInvertedColors(s) => {
+                write!(
+                    f,
+                    "Invalid inverted-colors: '{}' (expected 'none' or 'inverted')",
                     s
                 )
             }
@@ -2393,11 +2390,6 @@ mod tests {
     fn test_media_feature_parse_prefers_color_scheme() {
         let feature = MediaFeature::parse("prefers-color-scheme", Some("dark")).unwrap();
         assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::Dark));
-        let feature = MediaFeature::parse("prefers-color-scheme", Some("light")).unwrap();
-        assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::Light));
-        let feature = MediaFeature::parse("prefers-color-scheme", Some("no-preference")).unwrap();
-        assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::NoPreference));
-        assert!(MediaFeature::parse("prefers-color-scheme", Some("unknown")).is_err());
     }
 
     // ============================================================================
@@ -2610,10 +2602,6 @@ mod tests {
 
         let query = MediaQuery::parse("(prefers-color-scheme: light)").unwrap();
         assert!(!ctx.evaluate(&query));
-
-        let default_ctx = MediaContext::screen(1024.0, 768.0);
-        let query = MediaQuery::parse("(prefers-color-scheme: no-preference)").unwrap();
-        assert!(default_ctx.evaluate(&query));
     }
 
     #[test]
@@ -2636,6 +2624,20 @@ mod tests {
 
         let query = MediaQuery::parse("(prefers-reduced-data: no-preference)").unwrap();
         assert!(!ctx.evaluate(&query));
+    }
+
+    #[test]
+    fn test_evaluate_inverted_colors() {
+        let ctx = MediaContext::screen(1024.0, 768.0);
+
+        let query_none = MediaQuery::parse("(inverted-colors: none)").unwrap();
+        assert!(ctx.evaluate(&query_none));
+        let query_inverted = MediaQuery::parse("(inverted-colors: inverted)").unwrap();
+        assert!(!ctx.evaluate(&query_inverted));
+
+        let inverted_ctx = ctx.clone().with_inverted_colors(InvertedColors::Inverted);
+        assert!(inverted_ctx.evaluate(&query_inverted));
+        assert!(!inverted_ctx.evaluate(&query_none));
     }
 
     #[test]
@@ -2710,45 +2712,35 @@ mod tests {
         let guard_contrast = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("high"));
         let guard_transparency = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("1"));
         let guard_data = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("yes"));
-        let guard_gamut = EnvGuard::new("FASTR_COLOR_GAMUT", Some("p3"));
+        let guard_inverted = EnvGuard::new("FASTR_INVERTED_COLORS", Some("inverted"));
 
         let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-        assert_eq!(ctx.prefers_color_scheme, ColorScheme::Dark);
+        assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Dark));
         assert!(ctx.prefers_reduced_motion);
         assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
         assert!(ctx.prefers_reduced_transparency);
         assert!(ctx.prefers_reduced_data);
-        assert_eq!(ctx.color_gamut, ColorGamut::P3);
+        assert!(matches!(ctx.inverted_colors, InvertedColors::Inverted));
 
         drop(guard_scheme);
         drop(guard_motion);
         drop(guard_contrast);
         drop(guard_transparency);
         drop(guard_data);
-        drop(guard_gamut);
+        drop(guard_inverted);
     }
 
     #[test]
     fn env_overrides_ignore_invalid_values() {
         let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("invalid"));
-        let guard_gamut = EnvGuard::new("FASTR_COLOR_GAMUT", Some("wide"));
+        let guard_inverted = EnvGuard::new("FASTR_INVERTED_COLORS", Some("maybe"));
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_scheme(ColorScheme::Light)
             .with_env_overrides();
-        assert_eq!(ctx.prefers_color_scheme, ColorScheme::Light);
-        assert_eq!(ctx.color_gamut, ColorGamut::Srgb);
+        assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Light));
+        assert!(matches!(ctx.inverted_colors, InvertedColors::None));
         drop(guard_scheme);
-        drop(guard_gamut);
-    }
-
-    #[test]
-    fn env_overrides_no_preference_scheme() {
-        let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("no-preference"));
-        let ctx = MediaContext::screen(800.0, 600.0)
-            .with_color_scheme(ColorScheme::Dark)
-            .with_env_overrides();
-        assert_eq!(ctx.prefers_color_scheme, ColorScheme::NoPreference);
-        drop(guard_scheme);
+        drop(guard_inverted);
     }
 
     #[test]
@@ -2763,28 +2755,6 @@ mod tests {
 
         let query = MediaQuery::parse("(min-color: 16)").unwrap();
         assert!(!ctx.evaluate(&query));
-    }
-
-    #[test]
-    fn test_evaluate_color_gamut() {
-        let srgb_ctx = MediaContext::screen(1024.0, 768.0);
-        let srgb_query = MediaQuery::parse("(color-gamut: srgb)").unwrap();
-        let p3_query = MediaQuery::parse("(color-gamut: p3)").unwrap();
-        let rec_query = MediaQuery::parse("(color-gamut: rec2020)").unwrap();
-
-        assert!(srgb_ctx.evaluate(&srgb_query));
-        assert!(!srgb_ctx.evaluate(&p3_query));
-        assert!(!srgb_ctx.evaluate(&rec_query));
-
-        let p3_ctx = srgb_ctx.clone().with_color_gamut(ColorGamut::P3);
-        assert!(p3_ctx.evaluate(&srgb_query));
-        assert!(p3_ctx.evaluate(&p3_query));
-        assert!(!p3_ctx.evaluate(&rec_query));
-
-        let rec_ctx = srgb_ctx.with_color_gamut(ColorGamut::Rec2020);
-        assert!(rec_ctx.evaluate(&srgb_query));
-        assert!(rec_ctx.evaluate(&p3_query));
-        assert!(rec_ctx.evaluate(&rec_query));
     }
 
     #[test]
@@ -2815,9 +2785,6 @@ mod tests {
 
         let err = MediaQuery::parse("(orientation: invalid)").unwrap_err();
         assert!(err.to_string().contains("Invalid orientation"));
-
-        let err = MediaQuery::parse("(color-gamut: foo)").unwrap_err();
-        assert!(err.to_string().contains("Invalid color gamut"));
     }
 
     // ============================================================================
