@@ -703,6 +703,13 @@ fn parse_matrix_3d(parser: &mut Parser) -> Result<Transform, ()> {
 
 fn parse_perspective(parser: &mut Parser) -> Result<Transform, ()> {
     let len = parse_length_component(parser)?;
+    // perspective() only accepts positive lengths (no percentages)
+    if len.unit.is_percentage() {
+        return Err(());
+    }
+    if len.calc.is_none() && len.value <= 0.0 {
+        return Err(());
+    }
     Ok(Transform::Perspective(len))
 }
 
@@ -1962,6 +1969,16 @@ mod tests {
             Transform::Rotate(deg) => assert!((*deg - 15.0).abs() < 0.01),
             other => panic!("unexpected transform {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_invalid_perspective_lengths() {
+        assert!(parse_transform_list("perspective(0px)").is_none());
+        assert!(parse_transform_list("perspective(-10px)").is_none());
+        assert!(parse_transform_list("perspective(50%)").is_none());
+
+        // calc is accepted even if sign can’t be determined at parse time
+        assert!(parse_transform_list("perspective(calc(10px + 5px))").is_some());
     }
 
     #[test]
