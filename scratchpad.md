@@ -1,6 +1,9 @@
 # Scratchpad – rendering engine session notes
 Idle; no current tasks. Available for new tasks.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
+- Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
+- Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
+- Added display-list regression for polar color-mix backgrounds (`color-mix(in oklch, ...)`) to ensure resolved colors paint correctly (`paint_color_mix_polar_display_list_test.rs`).
 - Added a painter regression for `clip-path: polygon(...)`: triangular clip masks paint output (inside red, outside white). `cargo test clip_path_polygon_masks_paint_output -- --nocapture` passes.
 - Added bidi regression `bidi_override_does_not_cross_paragraph_boundary` to ensure an override in one paragraph doesn’t reorder later paragraphs; embeds in following paragraphs resolve independently.
 - Added a regression for nested isolate-override containing an inner isolate: inline bidi reordering now has test `bidi_isolate_override_keeps_inner_isolate_atomic` comparing the render with unicode-bidi controls. `cargo test bidi_isolate_override_keeps_inner_isolate_atomic -- --nocapture` passes. Stashed unrelated WIP (`pre-bidi-wip`) that tweaks rowspan weight defaults/match-parent text-align_last propagation.
