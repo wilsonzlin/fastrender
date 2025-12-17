@@ -1457,6 +1457,17 @@ mod tests {
     }
 
     #[test]
+    fn supports_selector_list_fails_when_any_selector_unsupported() {
+        // A selector list that contains an unsupported selector should cause the whole selector()
+        // feature query to evaluate to false per the spec.
+        let css = r#"@supports selector(div, span:has(a)) { .skip { color: red; } }"#;
+        let stylesheet = parse_stylesheet(css).unwrap();
+        let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+        let rules = stylesheet.collect_style_rules(&media);
+        assert_eq!(rules.len(), 0, "any unsupported selector in list should disable nested rules");
+    }
+
+    #[test]
     fn supports_not_selector_inverts_result() {
         let css = r#"@supports not selector(div:has(span)) { .ok { color: red; } }"#;
         let stylesheet = parse_stylesheet(css).unwrap();
