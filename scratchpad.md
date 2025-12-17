@@ -1,4 +1,28 @@
-# Notes and recent work are tracked upstream. Idle; no current tasks. Marker geometry/paint review still pending after gap/property regressions.
+# Cascade performance: cached UA default form declarations, bypassed full rule matching for non-element nodes, added zero-declaration fast path in apply_cascaded_declarations, and added a text-node inheritance regression.
+# Border-collapse conflict resolution now follows CSS 2.1: final ties pick the later source-order border instead of the top/left neighbor; regressions updated.
+# Border-collapse tie-breaking now follows CSS 2.1 physical edge preference: equal-style/width borders pick the start edge (top/left or top/right in RTL) before source order. Updated collapsed border conflict resolution and regressions for LTR/RTL vertical ties and horizontal ties.
+# Cascade perf: UA stylesheet is now parsed once via a cached OnceLock instead of per-cascade parsing.
+# Calc helpers now require proper context: calc lengths with percentage/viewport/font terms return None in viewport/font resolvers when bases are missing, and a regression `calc_resolution_helpers_require_context` covers the helpers. Transform/object-fit/clip-path now resolve calc lengths via context-aware helpers (avoiding raw-value fallbacks); added builder/painter/object-fit regressions for calc translate/object-position. Display-list renderer border-image resolution now guards viewport-relative calcs when no viewport is provided (regression added). Display-list background offsets now guard viewport-relative calcs when no viewport is available (regression added).
+# Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
+# Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
+# Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
+# Color-scheme inheritance still validated; further palette audits ongoing.
+# Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
+# Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
+# Rendered https://www.aljazeera.com at 1200×800 (aljazeera.png); page loads but renders mostly blank white with sparse text (likely heavy client-side content). Potential issue: critical content missing without JS; leaving as observation for now (no code change).
+# Attempted https://www.nationalgeographic.com at 1200×800 (natgeo.png) with 60s timeout; render timed out after loading many CSS assets. Needs further investigation (possible heavy/JS-driven layout or performance issue).
+# Inline boxes now break their children: overflowing inline boxes flatten and wrap their child items instead of acting atomically, so long paragraphs wrap within the viewport. Added a render regression to ensure a long paragraph wraps in a 400px viewport.
+# Attempted https://www.wsj.com at 1200×800; fetch failed with 401 (likely paywall/auth). Skipped for now.
+# Attempted https://www.theverge.com at 1200×800; render timed out after fetching CSS (likely heavy client-side). No output produced.
+# Rendered https://www.wikipedia.org at 1200×800 (wiki.png); page renders correctly (simple static HTML, white background). No issues noted.
+# Rendered https://www.foxnews.com at 1200×800 (fox.png); page loads and renders with content visible (header/sections). No obvious issues spotted in quick scan.
+# Sticky positioning: fixed a bug where sticky elements with all-auto offsets were still clamped to the viewport/container (unwrap_or(0)), causing unintended movement. Now we only clamp axes with specified offsets. Added regression ensuring a sticky box with no offsets stays put.
+# Added background image-rendering coverage: display-list builder regression ensures pixelated backgrounds use nearest-neighbor sampling; roadmap marks image-rendering implemented. `cargo test background_image_rendering_pixelated_sets_nearest_filter_quality --quiet` passes.
+# Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
+# ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
+# Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.
+# Marker display-list regression: display-list renderer test now checks ::marker text fragments honor authored text-shadow as well.
+>>>>>>> 017f394 (Follow CSS2.1 border-collapse physical tie-breaking)
 # Marker outline ignored: marker cascade now resets outline properties; regression ensures authored/inherited outlines are cleared on ::marker.
 # Added hanging text-indent soft-wrap regression: soft-wrapped lines now explicitly covered when text-indent:hanging is set (first line unindented, subsequent soft wraps indented). `cargo test text_indent_hanging_indents_soft_wrapped_lines --quiet` passes.
 # Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.

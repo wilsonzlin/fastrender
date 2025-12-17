@@ -1831,7 +1831,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         }
     }
 
-    fn resolve_candidates(candidates: &[BorderCandidate], _direction: Direction) -> BorderCandidate {
+    fn resolve_candidates(candidates: &[BorderCandidate], direction: Direction, orientation: Option<bool>) -> BorderCandidate {
         if candidates.is_empty() {
             return BorderCandidate::none();
         }
@@ -1863,6 +1863,23 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
 
         let best_origin = non_none.iter().map(|c| origin_priority(c.origin)).max().unwrap_or(0);
         non_none.retain(|c| origin_priority(c.origin) == best_origin);
+
+        // Position tiebreak: for vertical borders prefer the nearer start edge (left in LTR, right in RTL);
+        // for horizontal borders prefer the top edge. Corner resolution passes None and skips this step.
+        if let Some(is_vertical) = orientation {
+            if non_none.len() > 1 {
+                if is_vertical {
+                    let target = match direction {
+                        Direction::Rtl => non_none.iter().map(|c| c.col).max().unwrap_or(0),
+                        _ => non_none.iter().map(|c| c.col).min().unwrap_or(0),
+                    };
+                    non_none.retain(|c| c.col == target);
+                } else {
+                    let target_row = non_none.iter().map(|c| c.row).min().unwrap_or(0);
+                    non_none.retain(|c| c.row == target_row);
+                }
+            }
+        }
 
         // Final tiebreaker: later source order wins (CSS 2.1 §17.6.2.1 step f).
         non_none
@@ -2317,7 +2334,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         .iter()
         .map(|line| {
             line.iter()
-                .map(|candidates| candidate_to_resolved(resolve_candidates(candidates, direction)))
+                .map(|candidates| candidate_to_resolved(resolve_candidates(candidates, direction, Some(true))))
                 .collect()
         })
         .collect();
@@ -2326,7 +2343,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         .iter()
         .map(|line| {
             line.iter()
-                .map(|candidates| candidate_to_resolved(resolve_candidates(candidates, direction)))
+                .map(|candidates| candidate_to_resolved(resolve_candidates(candidates, direction, Some(false))))
                 .collect()
         })
         .collect();
@@ -2348,7 +2365,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             if r < horizontal.len() && c < horizontal[r].len() {
                 candidates.extend_from_slice(&horizontal[r][c]);
             }
-            let resolved = resolve_candidates(&candidates, direction);
+            let resolved = resolve_candidates(&candidates, direction, None);
             row_vec.push(candidate_to_resolved(resolved));
         }
         resolved_corners.push(row_vec);
@@ -6073,7 +6090,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_borders_tie_prefers_later_cell_in_ltr() {
+    fn collapsed_borders_tie_prefers_start_cell_in_ltr() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -6101,11 +6118,11 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         let middle_border = &borders.vertical[1][0];
-        assert_eq!(middle_border.color, Rgba::from_rgba8(0, 255, 0, 255));
+        assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
     }
 
     #[test]
-    fn collapsed_borders_tie_prefers_later_cell_in_rtl() {
+    fn collapsed_borders_tie_prefers_start_cell_in_rtl() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -6134,6 +6151,7 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         let middle_border = &borders.vertical[1][0];
+        // Start edge in RTL is right cell (green).
         assert_eq!(middle_border.color, Rgba::from_rgba8(0, 255, 0, 255));
     }
 
@@ -6546,7 +6564,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_borders_tie_on_horizontal_border_uses_later_cell() {
+    fn collapsed_borders_tie_on_horizontal_border_prefers_top() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -6601,7 +6619,8 @@ mod tests {
         let horizontal_border = &borders.horizontal[1][0];
         assert_eq!(horizontal_border.style, BorderStyle::Solid);
         assert!((horizontal_border.width - 4.0).abs() < f32::EPSILON);
-        assert_eq!(horizontal_border.color, Rgba::from_rgba8(0, 0, 255, 255));
+        // Top cell should win when all else ties.
+        assert_eq!(horizontal_border.color, Rgba::from_rgba8(255, 0, 0, 255));
     }
 
     #[test]
