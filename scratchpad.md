@@ -6,6 +6,7 @@
 - Calc-length percentages now require a finite base: CalcLength::resolve returns None when percentage base is missing/non-finite, and a regression covers calc percent resolution along with absolute-only calcs. Ran `fetch_and_render --release --timeout 60` for cnet.com (success) and google.com (success); cnn.com timed out at 60s.
 - UA disabled form controls now have dimmed UA styling (gray text/background, default cursor); cascade test `disabled_form_controls_use_ua_styles` covers the defaults.
 - UA focus outlines now apply to form controls: UA CSS adds focus outlines for inputs/selects/textareas/buttons, and a cascade regression `ua_focus_outline_applies_to_form_controls` locks the outline style/offset.
+- Textarea wrap="off" disables wrapping: presentational hint maps wrap=off to `white-space: pre`, and regression `textarea_wrap_off_disables_wrapping` ensures author CSS can override back to pre-wrap.
 - Added UA disabled form-control styling: user_agent.css dims disabled inputs/selects/textareas/buttons/options/optgroups and switches cursors to default; cascade regression `disabled_form_controls_use_ua_styles` verifies the UA defaults.
 Idle; no current tasks. Available for new tasks.
 - Pull/push to origin have been failing (SSH timeouts/HTTPS creds). A full patch series for all local commits lives in `local_patches/` (0001–0018) so others can apply while pushes are blocked.

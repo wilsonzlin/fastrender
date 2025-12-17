@@ -808,7 +808,10 @@ fn append_presentational_hints<'a>(
     if let Some(presentational_rule) = nowrap_presentational_hint(node, 10) {
         matching_rules.push(presentational_rule);
     }
-    if let Some(presentational_rule) = hidden_presentational_hint(node, 11) {
+    if let Some(presentational_rule) = textarea_wrap_presentational_hint(node, 11) {
+        matching_rules.push(presentational_rule);
+    }
+    if let Some(presentational_rule) = hidden_presentational_hint(node, 12) {
         matching_rules.push(presentational_rule);
     }
 }
@@ -4029,6 +4032,29 @@ mod tests {
     }
 
     #[test]
+    fn textarea_wrap_off_disables_wrapping() {
+        let textarea = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "textarea".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("wrap".to_string(), "off".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&textarea, &StyleSheet::new());
+        assert!(matches!(styled.styles.white_space, crate::style::types::WhiteSpace::Pre));
+
+        // Author CSS should override the presentational hint.
+        let stylesheet = parse_stylesheet("textarea { white-space: pre-wrap; }").unwrap();
+        let styled = apply_styles(&textarea, &stylesheet);
+        assert!(matches!(
+            styled.styles.white_space,
+            crate::style::types::WhiteSpace::PreWrap
+        ));
+    }
+
+    #[test]
     fn nobr_element_defaults_to_nowrap() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -6112,6 +6138,26 @@ fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRul
         order,
         layer_order: vec![u32::MAX],
         declarations: Cow::Owned(parse_declarations("white-space: nowrap;")),
+    })
+}
+
+fn textarea_wrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+    let tag = node.tag_name()?.to_ascii_lowercase();
+    if tag != "textarea" {
+        return None;
+    }
+
+    let wrap = node.get_attribute("wrap")?;
+    if !wrap.eq_ignore_ascii_case("off") {
+        return None;
+    }
+
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations("white-space: pre;")),
     })
 }
 
