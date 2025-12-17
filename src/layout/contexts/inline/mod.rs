@@ -8075,6 +8075,62 @@ mod tests {
     }
 
     #[test]
+    fn text_overflow_custom_string_appends_when_overflowing() {
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.overflow_x = Overflow::Hidden;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Clip,
+            inline_end: TextOverflowSide::String("!!".into()),
+        };
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = container_style.white_space;
+        let root = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "clipped text".repeat(4))],
+        );
+        let constraints = LayoutConstraints::definite_width(80.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_fragments(&fragment, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains("!!")),
+            "custom overflow string should appear when clipping occurs"
+        );
+    }
+
+    #[test]
+    fn text_overflow_does_not_apply_when_overflow_is_visible() {
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.overflow_x = Overflow::Visible;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Clip,
+            inline_end: TextOverflowSide::Ellipsis,
+        };
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = container_style.white_space;
+        let root = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "this will overflow visibly".repeat(3))],
+        );
+        let constraints = LayoutConstraints::definite_width(60.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_fragments(&fragment, &mut texts);
+        assert!(
+            !texts.iter().any(|t| t.contains('…')),
+            "no ellipsis should appear when inline overflow is visible"
+        );
+    }
+
+    #[test]
     fn text_overflow_start_value_elides_from_inline_start() {
         let mut container_style = ComputedStyle::default();
         container_style.white_space = WhiteSpace::Nowrap;
