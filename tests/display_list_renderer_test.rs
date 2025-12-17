@@ -10,9 +10,9 @@ use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Color;
 use fastrender::style::types::{
-    BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundPositionComponent, BackgroundRepeat, BasicShape,
-    BorderImage, BorderImageSlice, BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule,
-    ShapeRadius, TextDecorationStyle,
+    BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundPositionComponent, BackgroundRepeat,
+    BackgroundRepeatKeyword, BackgroundSize, BackgroundSizeComponent, BasicShape, BorderImage, BorderImageSlice,
+    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius, TextDecorationStyle,
 };
 use fastrender::ComputedStyle;
 use fastrender::style::values::Length;
@@ -274,34 +274,30 @@ fn color_mix_srgb_linear_matches_resolved_color() {
     );
 }
 
-    #[test]
-    fn color_mix_current_color_resolves_in_renderer() {
-        let mut style = fastrender::ComputedStyle::default();
-        style.color = Rgba::GREEN;
-        style.background_color = Color::parse("color-mix(in srgb, currentColor 50%, blue 50%)")
-            .unwrap()
-            .to_rgba(style.color);
+#[test]
+fn color_mix_current_color_resolves_in_renderer() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.color = Rgba::GREEN;
+    style.background_color = Color::parse("color-mix(in srgb, currentColor 50%, blue 50%)")
+        .unwrap()
+        .to_rgba(style.color);
 
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
-            vec![],
-            Arc::new(style),
-        );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![], Arc::new(style));
 
-        let list = DisplayListBuilder::new().build(&fragment);
-        let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
-            .unwrap()
-            .render(&list)
-            .unwrap();
+    let list = DisplayListBuilder::new().build(&fragment);
+    let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(&list)
+        .unwrap();
 
-        let expected = Color::parse("color-mix(in srgb, currentColor 50%, blue 50%)")
-            .unwrap()
-            .to_rgba(Rgba::GREEN);
-        assert_eq!(
-            pixel(&pixmap, 0, 0),
-            (expected.r, expected.g, expected.b, expected.alpha_u8())
-        );
-    }
+    let expected = Color::parse("color-mix(in srgb, currentColor 50%, blue 50%)")
+        .unwrap()
+        .to_rgba(Rgba::GREEN);
+    assert_eq!(
+        pixel(&pixmap, 0, 0),
+        (expected.r, expected.g, expected.b, expected.alpha_u8())
+    );
+}
 
 #[test]
 fn display_list_renderer_paints_text_decoration_color() {
@@ -599,6 +595,45 @@ fn display_list_border_image_generated_uniform_color() {
 }
 
 #[test]
+fn display_list_linear_gradient_respects_background_size() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_layers = vec![BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: fastrender::Color::Rgba(Rgba::RED),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: fastrender::Color::Rgba(Rgba::RED),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        size: BackgroundSize::Explicit(
+            BackgroundSizeComponent::Length(Length::px(2.0)),
+            BackgroundSizeComponent::Length(Length::px(2.0)),
+        ),
+        repeat: BackgroundRepeat {
+            x: BackgroundRepeatKeyword::NoRepeat,
+            y: BackgroundRepeatKeyword::NoRepeat,
+        },
+        ..Default::default()
+    }];
+
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), vec![], Arc::new(style));
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Gradient tile should be confined to the 2x2 background-size at the top-left.
+    assert_eq!(pixel(&pixmap, 1, 1), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 3, 3), (255, 255, 255, 255));
+}
+
+#[test]
 fn filters_apply_to_stacking_context_layer() {
     let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
     let mut list = DisplayList::new();
@@ -749,8 +784,11 @@ fn grayscale_filter_converts_to_luma() {
     let pixmap = renderer.render(&list).unwrap();
     let (r, g, b, a) = pixel(&pixmap, 0, 0);
     assert_eq!(a, 255);
-    assert!(r.abs_diff(18) <= 1 && g.abs_diff(18) <= 1 && b.abs_diff(18) <= 1,
-        "expected grayscale ~18, got {:?}", (r, g, b, a));
+    assert!(
+        r.abs_diff(18) <= 1 && g.abs_diff(18) <= 1 && b.abs_diff(18) <= 1,
+        "expected grayscale ~18, got {:?}",
+        (r, g, b, a)
+    );
 }
 
 #[test]

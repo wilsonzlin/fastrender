@@ -47,9 +47,9 @@ use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::{
-    BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
-    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderImageSource, ImageOrientation,
-    BackfaceVisibility, ImageRendering, Isolation, MixBlendMode, ObjectFit, ResolvedTextDecoration, TextDecorationLine,
+    BackfaceVisibility, BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition,
+    BackgroundRepeatKeyword, BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderImageSource,
+    ImageOrientation, ImageRendering, Isolation, MixBlendMode, ObjectFit, ResolvedTextDecoration, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness, TextEmphasisPosition, TextEmphasisStyle,
     TextUnderlineOffset, TextUnderlinePosition, TransformBox,
 };
@@ -1019,7 +1019,6 @@ impl DisplayListBuilder {
         position: &BackgroundPosition,
         font_size: f32,
         root_font_size: f32,
-        clip_rect: Rect,
         viewport: Option<(f32, f32)>,
     ) -> Point {
         let (align_x, off_x, align_y, off_y) = match position {
@@ -1029,8 +1028,8 @@ impl DisplayListBuilder {
                 (x.alignment, ox, y.alignment, oy)
             }
         };
-        let cx = rect.x() + align_x * rect.width() + off_x - clip_rect.x();
-        let cy = rect.y() + align_y * rect.height() + off_y - clip_rect.y();
+        let cx = rect.x() + align_x * rect.width() + off_x;
+        let cy = rect.y() + align_y * rect.height() + off_y;
         Point::new(cx, cy)
     }
 
@@ -1900,45 +1899,168 @@ impl DisplayListBuilder {
                 .push(DisplayItem::PushBlendMode(BlendModeItem { mode: blend_mode }));
         }
 
+        let compute_tiles = |img_w: f32, img_h: f32| -> Option<(f32, f32, Vec<f32>, Vec<f32>)> {
+            let (mut tile_w, mut tile_h) = Self::compute_background_size(
+                layer,
+                style.font_size,
+                style.root_font_size,
+                self.viewport,
+                origin_rect.width(),
+                origin_rect.height(),
+                img_w,
+                img_h,
+            );
+
+            if tile_w <= 0.0 || tile_h <= 0.0 {
+                return None;
+            }
+
+            let mut rounded_x = false;
+            let mut rounded_y = false;
+            if layer.repeat.x == BackgroundRepeatKeyword::Round {
+                tile_w = Self::round_tile_length(origin_rect.width(), tile_w);
+                rounded_x = true;
+            }
+            if layer.repeat.y == BackgroundRepeatKeyword::Round {
+                tile_h = Self::round_tile_length(origin_rect.height(), tile_h);
+                rounded_y = true;
+            }
+            if rounded_x ^ rounded_y
+                && matches!(
+                    layer.size,
+                    BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+                )
+            {
+                let aspect = if img_h != 0.0 { img_w / img_h } else { 1.0 };
+                if rounded_x {
+                    tile_h = tile_w / aspect;
+                } else {
+                    tile_w = tile_h * aspect;
+                }
+            }
+
+            let (offset_x, offset_y) = Self::resolve_background_offset(
+                layer.position,
+                origin_rect.width(),
+                origin_rect.height(),
+                tile_w,
+                tile_h,
+                style.font_size,
+                style.root_font_size,
+                self.viewport,
+            );
+
+            let positions_x = Self::tile_positions(
+                layer.repeat.x,
+                origin_rect.x(),
+                origin_rect.width(),
+                tile_w,
+                offset_x,
+                clip_rect.min_x(),
+                clip_rect.max_x(),
+            );
+            let positions_y = Self::tile_positions(
+                layer.repeat.y,
+                origin_rect.y(),
+                origin_rect.height(),
+                tile_h,
+                offset_y,
+                clip_rect.min_y(),
+                clip_rect.max_y(),
+            );
+
+            Some((tile_w, tile_h, positions_x, positions_y))
+        };
+
         match bg {
             BackgroundImage::LinearGradient { angle, stops } => {
                 let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
-                    let rad = angle.to_radians();
-                    let dx = rad.sin();
-                    let dy = -rad.cos();
-                    let len = 0.5 * (origin_rect.width() * dx.abs() + origin_rect.height() * dy.abs());
-                    let cx = origin_rect.x() + origin_rect.width() / 2.0;
-                    let cy = origin_rect.y() + origin_rect.height() / 2.0;
-                    let start = Point::new(cx - dx * len - clip_rect.x(), cy - dy * len - clip_rect.y());
-                    let end = Point::new(cx + dx * len - clip_rect.x(), cy + dy * len - clip_rect.y());
-                    self.list.push(DisplayItem::LinearGradient(LinearGradientItem {
-                        rect: clip_rect,
-                        start,
-                        end,
-                        stops: Self::gradient_stops(&resolved),
-                        spread: GradientSpread::Pad,
-                    }));
+                    if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+                        let max_x = clip_rect.max_x();
+                        let max_y = clip_rect.max_y();
+                        let stops = Self::gradient_stops(&resolved);
+                        let rad = angle.to_radians();
+                        let dx = rad.sin();
+                        let dy = -rad.cos();
+                        let len = 0.5 * (tile_w * dx.abs() + tile_h * dy.abs());
+
+                        for ty in positions_y.iter().copied() {
+                            for tx in positions_x.iter().copied() {
+                                if tx >= max_x || ty >= max_y {
+                                    continue;
+                                }
+
+                                let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                                    continue;
+                                };
+                                if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                                    continue;
+                                }
+
+                                let cx = tile_rect.x() + tile_w / 2.0;
+                                let cy = tile_rect.y() + tile_h / 2.0;
+                                let start =
+                                    Point::new(cx - dx * len - intersection.x(), cy - dy * len - intersection.y());
+                                let end =
+                                    Point::new(cx + dx * len - intersection.x(), cy + dy * len - intersection.y());
+
+                                self.list.push(DisplayItem::LinearGradient(LinearGradientItem {
+                                    rect: intersection,
+                                    start,
+                                    end,
+                                    stops: stops.clone(),
+                                    spread: GradientSpread::Pad,
+                                }));
+                            }
+                        }
+                    }
                 }
             }
             BackgroundImage::RepeatingLinearGradient { angle, stops } => {
                 let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
-                    let rad = angle.to_radians();
-                    let dx = rad.sin();
-                    let dy = -rad.cos();
-                    let len = 0.5 * (origin_rect.width() * dx.abs() + origin_rect.height() * dy.abs());
-                    let cx = origin_rect.x() + origin_rect.width() / 2.0;
-                    let cy = origin_rect.y() + origin_rect.height() / 2.0;
-                    let start = Point::new(cx - dx * len - clip_rect.x(), cy - dy * len - clip_rect.y());
-                    let end = Point::new(cx + dx * len - clip_rect.x(), cy + dy * len - clip_rect.y());
-                    self.list.push(DisplayItem::LinearGradient(LinearGradientItem {
-                        rect: clip_rect,
-                        start,
-                        end,
-                        stops: Self::gradient_stops(&resolved),
-                        spread: GradientSpread::Repeat,
-                    }));
+                    if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+                        let max_x = clip_rect.max_x();
+                        let max_y = clip_rect.max_y();
+                        let stops = Self::gradient_stops(&resolved);
+                        let rad = angle.to_radians();
+                        let dx = rad.sin();
+                        let dy = -rad.cos();
+                        let len = 0.5 * (tile_w * dx.abs() + tile_h * dy.abs());
+
+                        for ty in positions_y.iter().copied() {
+                            for tx in positions_x.iter().copied() {
+                                if tx >= max_x || ty >= max_y {
+                                    continue;
+                                }
+
+                                let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                                    continue;
+                                };
+                                if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                                    continue;
+                                }
+
+                                let cx = tile_rect.x() + tile_w / 2.0;
+                                let cy = tile_rect.y() + tile_h / 2.0;
+                                let start =
+                                    Point::new(cx - dx * len - intersection.x(), cy - dy * len - intersection.y());
+                                let end =
+                                    Point::new(cx + dx * len - intersection.x(), cy + dy * len - intersection.y());
+
+                                self.list.push(DisplayItem::LinearGradient(LinearGradientItem {
+                                    rect: intersection,
+                                    start,
+                                    end,
+                                    stops: stops.clone(),
+                                    spread: GradientSpread::Repeat,
+                                }));
+                            }
+                        }
+                    }
                 }
             }
             BackgroundImage::ConicGradient {
@@ -1948,21 +2070,45 @@ impl DisplayListBuilder {
             } => {
                 let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
                 if !resolved.is_empty() {
-                    let center = Self::resolve_gradient_center(
-                        origin_rect,
-                        position,
-                        style.font_size,
-                        style.root_font_size,
-                        clip_rect,
-                        self.viewport,
-                    );
-                    self.list.push(DisplayItem::ConicGradient(ConicGradientItem {
-                        rect: clip_rect,
-                        center,
-                        from_angle: *from_angle,
-                        stops: Self::gradient_stops_unclamped(&resolved),
-                        repeating: false,
-                    }));
+                    if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+                        let max_x = clip_rect.max_x();
+                        let max_y = clip_rect.max_y();
+                        let stops = Self::gradient_stops_unclamped(&resolved);
+
+                        for ty in positions_y.iter().copied() {
+                            for tx in positions_x.iter().copied() {
+                                if tx >= max_x || ty >= max_y {
+                                    continue;
+                                }
+
+                                let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                                    continue;
+                                };
+                                if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                                    continue;
+                                }
+
+                                let center_abs = Self::resolve_gradient_center(
+                                    Rect::from_xywh(tile_rect.x(), tile_rect.y(), tile_w, tile_h),
+                                    position,
+                                    style.font_size,
+                                    style.root_font_size,
+                                    self.viewport,
+                                );
+                                let center =
+                                    Point::new(center_abs.x - intersection.x(), center_abs.y - intersection.y());
+
+                                self.list.push(DisplayItem::ConicGradient(ConicGradientItem {
+                                    rect: intersection,
+                                    center,
+                                    from_angle: *from_angle,
+                                    stops: stops.clone(),
+                                    repeating: false,
+                                }));
+                            }
+                        }
+                    }
                 }
             }
             BackgroundImage::RepeatingConicGradient {
@@ -1972,21 +2118,45 @@ impl DisplayListBuilder {
             } => {
                 let resolved = Self::normalize_color_stops_unclamped(stops, style.color);
                 if !resolved.is_empty() {
-                    let center = Self::resolve_gradient_center(
-                        origin_rect,
-                        position,
-                        style.font_size,
-                        style.root_font_size,
-                        clip_rect,
-                        self.viewport,
-                    );
-                    self.list.push(DisplayItem::ConicGradient(ConicGradientItem {
-                        rect: clip_rect,
-                        center,
-                        from_angle: *from_angle,
-                        stops: Self::gradient_stops_unclamped(&resolved),
-                        repeating: true,
-                    }));
+                    if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+                        let max_x = clip_rect.max_x();
+                        let max_y = clip_rect.max_y();
+                        let stops = Self::gradient_stops_unclamped(&resolved);
+
+                        for ty in positions_y.iter().copied() {
+                            for tx in positions_x.iter().copied() {
+                                if tx >= max_x || ty >= max_y {
+                                    continue;
+                                }
+
+                                let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                                    continue;
+                                };
+                                if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                                    continue;
+                                }
+
+                                let center_abs = Self::resolve_gradient_center(
+                                    Rect::from_xywh(tile_rect.x(), tile_rect.y(), tile_w, tile_h),
+                                    position,
+                                    style.font_size,
+                                    style.root_font_size,
+                                    self.viewport,
+                                );
+                                let center =
+                                    Point::new(center_abs.x - intersection.x(), center_abs.y - intersection.y());
+
+                                self.list.push(DisplayItem::ConicGradient(ConicGradientItem {
+                                    rect: intersection,
+                                    center,
+                                    from_angle: *from_angle,
+                                    stops: stops.clone(),
+                                    repeating: true,
+                                }));
+                            }
+                        }
+                    }
                 }
             }
             BackgroundImage::RadialGradient {
@@ -1997,23 +2167,46 @@ impl DisplayListBuilder {
             } => {
                 let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
-                    let (cx, cy, radius_x, radius_y) = Self::radial_geometry(
-                        origin_rect,
-                        position,
-                        size,
-                        *shape,
-                        style.font_size,
-                        style.root_font_size,
-                        self.viewport,
-                    );
-                    let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
-                    self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
-                        rect: clip_rect,
-                        center,
-                        radii: Point::new(radius_x, radius_y),
-                        stops: Self::gradient_stops(&resolved),
-                        spread: GradientSpread::Pad,
-                    }));
+                    if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+                        let max_x = clip_rect.max_x();
+                        let max_y = clip_rect.max_y();
+                        let stops = Self::gradient_stops(&resolved);
+
+                        for ty in positions_y.iter().copied() {
+                            for tx in positions_x.iter().copied() {
+                                if tx >= max_x || ty >= max_y {
+                                    continue;
+                                }
+
+                                let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                                    continue;
+                                };
+                                if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                                    continue;
+                                }
+
+                                let (cx, cy, radius_x, radius_y) = Self::radial_geometry(
+                                    Rect::from_xywh(tile_rect.x(), tile_rect.y(), tile_w, tile_h),
+                                    position,
+                                    size,
+                                    *shape,
+                                    style.font_size,
+                                    style.root_font_size,
+                                    self.viewport,
+                                );
+                                let center = Point::new(cx - intersection.x(), cy - intersection.y());
+
+                                self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
+                                    rect: intersection,
+                                    center,
+                                    radii: Point::new(radius_x, radius_y),
+                                    stops: stops.clone(),
+                                    spread: GradientSpread::Pad,
+                                }));
+                            }
+                        }
+                    }
                 }
             }
             BackgroundImage::RepeatingRadialGradient {
@@ -2024,23 +2217,46 @@ impl DisplayListBuilder {
             } => {
                 let resolved = Self::normalize_color_stops(stops, style.color);
                 if !resolved.is_empty() {
-                    let (cx, cy, radius_x, radius_y) = Self::radial_geometry(
-                        origin_rect,
-                        position,
-                        size,
-                        *shape,
-                        style.font_size,
-                        style.root_font_size,
-                        self.viewport,
-                    );
-                    let center = Point::new(cx - clip_rect.x(), cy - clip_rect.y());
-                    self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
-                        rect: clip_rect,
-                        center,
-                        radii: Point::new(radius_x, radius_y),
-                        stops: Self::gradient_stops(&resolved),
-                        spread: GradientSpread::Repeat,
-                    }));
+                    if let Some((tile_w, tile_h, positions_x, positions_y)) = compute_tiles(0.0, 0.0) {
+                        let max_x = clip_rect.max_x();
+                        let max_y = clip_rect.max_y();
+                        let stops = Self::gradient_stops(&resolved);
+
+                        for ty in positions_y.iter().copied() {
+                            for tx in positions_x.iter().copied() {
+                                if tx >= max_x || ty >= max_y {
+                                    continue;
+                                }
+
+                                let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+                                let Some(intersection) = tile_rect.intersection(clip_rect) else {
+                                    continue;
+                                };
+                                if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+                                    continue;
+                                }
+
+                                let (cx, cy, radius_x, radius_y) = Self::radial_geometry(
+                                    Rect::from_xywh(tile_rect.x(), tile_rect.y(), tile_w, tile_h),
+                                    position,
+                                    size,
+                                    *shape,
+                                    style.font_size,
+                                    style.root_font_size,
+                                    self.viewport,
+                                );
+                                let center = Point::new(cx - intersection.x(), cy - intersection.y());
+
+                                self.list.push(DisplayItem::RadialGradient(RadialGradientItem {
+                                    rect: intersection,
+                                    center,
+                                    radii: Point::new(radius_x, radius_y),
+                                    stops: stops.clone(),
+                                    spread: GradientSpread::Repeat,
+                                }));
+                            }
+                        }
+                    }
                 }
             }
             BackgroundImage::Url(src) => {
@@ -4555,11 +4771,7 @@ mod tests {
         style.transform.push(Transform::RotateY(180.0));
         style.background_color = Rgba::BLACK;
 
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
-            vec![],
-            Arc::new(style),
-        );
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
 
         let builder = DisplayListBuilder::new();
         let list = builder.build(&fragment);

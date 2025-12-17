@@ -3,6 +3,7 @@
 - Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse.
 - SVG percent width/height are ignored for intrinsic sizing: percent-specified dimensions fall back to default 300×150 while preserving viewBox aspect ratios; added regression.
 # Scratchpad – rendering engine session notes
+- Working on display-list gradient backgrounds: builder now tiles gradients using background-size/position/repeat (matching painter), with a regression to ensure a linear-gradient with 2x2 background-size and no-repeat only paints the top-left tile.
 - Stylesheet extraction: `extract_css_links` now deduplicates `<link rel="stylesheet">` entries while preserving order, cutting redundant fetches (regression `dedupes_stylesheet_links_preserving_order`).
 - Embedded CSS scan hardened: `.css-*{...}` class tokens and percent-encoded variants are ignored when hunting CSS URLs, preventing bogus fetches (e.g., aljazeera encoded class names). Added regressions `ignores_embedded_css_class_tokens` and `ignores_percent_encoded_css_class_tokens`; cascade color tests updated for `from_rgba8` alpha arg.
 - Scroll snapping now honors scroll-padding and scroll-margin: CSS parsing/cascade accept physical scroll-padding/scroll-margin properties, layout fingerprints include them, and snap target computation accounts for container padding insets and target margins. Added scroll snap regressions for padding/margin alignment.
