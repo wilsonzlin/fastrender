@@ -2,12 +2,12 @@
 # Border-collapse conflict resolution now follows CSS 2.1: final ties pick the later source-order border instead of the top/left neighbor; regressions updated.
 # Cascade perf: UA stylesheet is now parsed once via a cached OnceLock instead of per-cascade parsing.
 # Calc helpers now require proper context: calc lengths with percentage/viewport/font terms return None in viewport/font resolvers when bases are missing, and a regression `calc_resolution_helpers_require_context` covers the helpers. Transform/object-fit/clip-path now resolve calc lengths via context-aware helpers (avoiding raw-value fallbacks); added builder/painter/object-fit regressions for calc translate/object-position. Display-list renderer border-image resolution now guards viewport-relative calcs when no viewport is provided (regression added). Display-list background offsets now guard viewport-relative calcs when no viewport is available (regression added).
+# Render bug hunt: arstechnica.com fetched/rendered at 1200×800 (/tmp/ars.png); page largely white (likely JS-driven) with no actionable defect identified yet. Stackoverflow.com rendered at 1200×800 (/tmp/so.png); output appears normal from ASCII scan. Economist.com fetch blocked with 403.
+# Wikipedia portal render: root `no-js` class now auto-flips to `js-enabled` during HTML parse to mimic JS bootstrap; default fetcher UA now uses a Chrome-like string. Rendering still shows a tiny centered block (likely CSS-driven); further layout investigation pending.
+# Render bug hunt: stackoverflow.com (1200×800) looked normal; no regression added. Economist.com fetch blocked with 403.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
-# fetch_and_render now follows HTTP redirects (up to 10 hops) when fetching HTML/CSS so sites like rust-lang.org resolve to their canonical targets instead of rendering 301 bodies.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
-# Table intrinsic: added regression ensuring percent padding on table cells is ignored when the table width is indefinite (percent padding treated as auto without a base).
-# Table intrinsic: percent padding on cells counts toward intrinsic widths when the table width is definite; regression uses 200px table with 10% padding per side to add 40px.
 # Color-scheme inheritance still validated; further palette audits ongoing.
 # Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
 # Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
@@ -37,17 +37,11 @@
 # List markers: image markers now use `marker_inline_gap` and keep inline-end spacing even in vertical RTL flows. RTL line positioning shifts marker content by its gap so the space stays between marker and text. Added regressions `marker_image_inside_uses_inline_end_margin_in_vertical_ltr`/`_rtl` under inline context tests. Branch `agent13/marker-gap` carries the change (push to main pending). Pushing `agent13/marker-gap` has been timing out; remote branch may lag the latest note/commit.
 # Scratchpad – rendering engine session notes
 - Grid auto margins now align items: grid items with auto inline/block margins map to self-alignment (center/end/start), and a regression ensures auto inline margins center a 50px item in a 200px track.
-- Bidi visual ordering now covered: added regression ensuring mixed LTR + RTL runs produce expected visual sequence (LTR text, RTL word, trailing LTR) to guard against logical-order painting overlap.
-- :root matching is now case-insensitive in HTML namespace; `<HTML>` matches :root while foreign/SVG roots do not. Added regression in dom.rs.
-- Removed unused mut in sticky presentational test (warning noise cleanup).
 - :focus-within now walks descendants for data-fastr-focus (respecting SVG focusable=true), and :focus-visible matches data-fastr-focus-visible on focused elements. Added DOM regressions for self/descendant focus-within, SVG gating, and focus-visible flagging.
 - Float shrink-to-fit now uses float-context availability: auto floats shrink against the space left by existing floats instead of the full containing width. Regression `float_auto_width_shrinks_to_available_space_next_to_float` added (`cargo test float_auto_width_shrinks_to_available_space_next_to_float --quiet`); pushed as c7b21f4.
 - Outlines now bypass clip-path clipping in the painter: stacking-context bounds include outline extents and outlines are painted after clip-path masking, keeping focus rings visible outside clipped shapes. Regression `outline_not_clipped_by_clip_path` added.
 - Table cell percentage min-width coverage: column constraints now have regressions ensuring 50% min-width resolves when the table width is definite and is ignored when no percentage base is known (`cell_percentage_min_width_uses_definite_table_width`, `cell_percentage_min_width_ignored_without_definite_base`).
-- Added inline bidi regression: a plain RTL run positions between surrounding LTR runs in visual order (`bidi_rtl_run_positions_between_ltr_runs`).
 - Inline boxes now break their children: overflowing inline boxes flatten and wrap their child items instead of acting atomically, so long paragraphs wrap within the viewport. Added a render regression to ensure a long paragraph wraps in a 400px viewport.
-- Image rendering: added display-list regressions to distinguish pixelated vs smooth sampling on upscaled backgrounds so image-rendering maps to nearest/linear correctly.
-- fetch_and_render now follows HTTP redirects (up to 10 hops) when fetching HTML/CSS so sites like rust-lang.org resolve to their canonical targets instead of rendering 301 bodies.
 - Working on display-list gradient backgrounds: builder now tiles gradients using background-size/position/repeat (matching painter), with a regression to ensure a linear-gradient with 2x2 background-size and no-repeat only paints the top-left tile.
 - Stylesheet extraction: `extract_css_links` now deduplicates `<link rel="stylesheet">` entries while preserving order, cutting redundant fetches (regression `dedupes_stylesheet_links_preserving_order`).
 - Embedded CSS scan hardened: `.css-*{...}` class tokens and percent-encoded variants are ignored when hunting CSS URLs, preventing bogus fetches (e.g., aljazeera encoded class names). Added regressions `ignores_embedded_css_class_tokens` and `ignores_percent_encoded_css_class_tokens`; cascade color tests updated for `from_rgba8` alpha arg.
@@ -1513,6 +1507,7 @@ Actionable borrowings:
 - Row flex conversion now reflows children whenever any item extends beyond the container width (instead of 1.5×), keeping row items anchored at the start edge when Taffy produces shifted positions. Tests still pass; CNN bbox unchanged (~1200×9361) but far-right fragments remain absent—media still appear slightly offscreen, so need to trace flex constraints/styles for those wrappers.
 - Painter now supports a scroll/translation offset and FastRender exposes `render_html_with_scroll`/`render_to_png_with_scroll`; the fetch_and_render CLI scroll_y argument now applies that offset instead of warning. Added regression `render_html_with_scroll_offsets_viewport` covering the shifted viewport.
 - render_pages CLI gained `--scroll-y` support and passes the offset through `render_to_png_with_scroll`; per-page logs include the scroll value.
+- Rendered example.org (render timed out locally at 120s build/run); no output generated. Pending retry if needed.
 - Added prefers-contrast media coverage: MediaContext setter, evaluation regression, and env override invalid-value guard.
 - Added a TextRun regression ensuring half-leading can be negative when line-height is smaller than text height (test_text_run_negative_half_leading).
 - Inline bidi: added layout regression `bidi_isolate_positions_between_surrounding_runs` to ensure a unicode-bidi:isolate RTL run stays contiguous and is positioned between surrounding LTR text in visual order.
@@ -1529,4 +1524,13 @@ Actionable borrowings:
 - Media queries: range equality now rejects percentage operands; regression `range_equality_rejects_percentages` added.
 - Media queries: resolution parsing retains fractional precision; regression in `test_resolution_parse` asserts 1.3333dppx is preserved.
 - Media queries: `prefers-color-scheme` parsing is case-insensitive; regression updated to accept uppercase inputs.
-- Bug hunt: rendered https://httpbin.org/html (looks OK) and https://wikipedia.org at 1200×800. Wikipedia render came out as a tiny compressed block (~238×64px of content in the center) instead of the full portal layout, suggesting a font-size/layout scaling issue (likely rem/percent font-size base). Pending investigation/fix.
+- Rendered wikipedia.org at 1200×800: output PNG is entirely white despite successful fetch; likely styles/overlays hiding content or JS dependency. Needs investigation.
+- Table rowspans: spanning height distribution now shares evenly when uncapped; regression `baseline_height_computation_skips_rowspanning_cells` ensures a tall rowspan cell doesn’t overinflate the preceding row.
+- CSS custom properties: fallback resolution now marks declarations invalid when the fallback still contains unresolved var() references; regression `unresolved_fallback_var_marks_declaration_invalid` added.
+- Bug hunt: rendered https://httpbin.org/html (looks OK) and https://wikipedia.org at 1200×800. Wikipedia render came out as a tiny compressed block (~238×64px of content in the center) due to rem sizing ignoring the html 62.5% root font size (fixed below).
+    - Inspect frag on cached portal shows huge negative text indent ("Wikip" at x≈-9483) and main content pushed down (nav ~y=1175). Portal CSS uses `html { font-size:62.5%; }` and fixed rem sizing for central featured; likely offset compounded by banners/positioning.
+- Marker gap default: regression asserts inline-end marker gap falls back to 0.5em when inline margins are zero.
+- Marker gap default: regression asserts inline-end marker gap falls back to 0.5em when inline margins are zero.
+- Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning.
+- Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning.
+- Root rem base now honors the HTML root font-size: the cascade treats the `<html>` element as the root for root_font_size resolution (instead of the document node), so `rem`/percent font sizes resolve after author root sizing. Added regression `root_font_size_percentage_uses_initial_value` covering 62.5% root font-size → 10px rem, and wikipedia.org now renders at full scale (content spans the viewport instead of a 238×64 block).
