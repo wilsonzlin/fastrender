@@ -1534,6 +1534,7 @@ Actionable borrowings:
 - Media queries: range equality now rejects percentage operands; regression `range_equality_rejects_percentages` added.
 - Media queries: resolution parsing retains fractional precision; regression in `test_resolution_parse` asserts 1.3333dppx is preserved.
 - Media queries: `prefers-color-scheme` parsing is case-insensitive; regression updated to accept uppercase inputs.
+- Render bug hunt: wired.com rendered at 1200×800 yields almost entirely blank output (only a 1px black line). Page is JS-heavy and no CSS links were discovered; likely needs JS/CSS fetch fallback if pursued.
 - Rendered wikipedia.org at 1200×800: output PNG is entirely white despite successful fetch; likely styles/overlays hiding content or JS dependency. Needs investigation.
 - Table rowspans: spanning height distribution now shares evenly when uncapped; regression `baseline_height_computation_skips_rowspanning_cells` ensures a tall rowspan cell doesn’t overinflate the preceding row.
 - CSS custom properties: fallback resolution now marks declarations invalid when the fallback still contains unresolved var() references; regression `unresolved_fallback_var_marks_declaration_invalid` added.
@@ -1547,6 +1548,4 @@ Actionable borrowings:
 - Rendered example.org at 1200×800 (fresh fetch); output is normal (non-white).
 - Root rem base now honors the HTML root font-size: the cascade treats the `<html>` element as the root for root_font_size resolution (instead of the document node), so `rem`/percent font sizes resolve after author root sizing. Added regression `root_font_size_percentage_uses_initial_value` covering 62.5% root font-size → 10px rem, and wikipedia.org now renders at full scale (content spans the viewport instead of a 238×64 block).
 <<<<<<< HEAD
-=======
-- Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
->>>>>>> cf190e1 (Clean scratchpad merge markers)
+ - Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
