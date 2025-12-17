@@ -492,6 +492,36 @@ impl<'a> ElementRef<'a> {
         self.is_contenteditable()
     }
 
+    fn is_indeterminate(&self) -> bool {
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+        let lower = tag.to_ascii_lowercase();
+
+        if lower == "input" {
+            let input_type = self
+                .node
+                .get_attribute("type")
+                .map(|t| t.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+
+            if input_type == "checkbox" {
+                return self.node.get_attribute("indeterminate").is_some();
+            }
+
+            return false;
+        }
+
+        if lower == "progress" {
+            if let Some(value) = self.node.get_attribute("value") {
+                return Self::parse_number(&value).is_none();
+            }
+            return true;
+        }
+
+        false
+    }
+
     fn supports_required(&self) -> bool {
         let Some(tag) = self.node.tag_name() else {
             return false;
@@ -1078,6 +1108,7 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::ReadWrite => self.is_read_write(),
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
             PseudoClass::Autofill => false,
+            PseudoClass::Indeterminate => self.is_indeterminate(),
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => false,
             PseudoClass::Checked => self.is_checked(),
@@ -1786,6 +1817,69 @@ mod tests {
         let ancestors: Vec<&DomNode> = vec![&select_multiple_selected];
         let selected_option = &select_multiple_selected.children[0];
         assert!(matches(selected_option, &ancestors, &PseudoClass::Checked));
+    }
+
+    #[test]
+    fn indeterminate_matches_checkbox_and_progress() {
+        let checkbox = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "checkbox".to_string()),
+                    ("indeterminate".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&checkbox, &[], &PseudoClass::Indeterminate));
+
+        let normal_checkbox = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "checkbox".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&normal_checkbox, &[], &PseudoClass::Indeterminate));
+
+        let radio = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "radio".to_string()),
+                    ("indeterminate".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&radio, &[], &PseudoClass::Indeterminate));
+
+        let progress_indeterminate = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "progress".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        assert!(matches(&progress_indeterminate, &[], &PseudoClass::Indeterminate));
+
+        let progress_value = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "progress".to_string(),
+                attributes: vec![("value".to_string(), "0.5".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&progress_value, &[], &PseudoClass::Indeterminate));
+
+        let progress_invalid_value = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "progress".to_string(),
+                attributes: vec![("value".to_string(), "not-a-number".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&progress_invalid_value, &[], &PseudoClass::Indeterminate));
     }
 
     #[test]
