@@ -45,6 +45,34 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
         .map(|u| u.to_string())
 }
 
+fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
+    let mut cleaned = candidate
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')'))
+        .trim()
+        .to_string();
+
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    if cleaned.contains('\\') {
+        cleaned = cleaned.replace("\\/", "/").replace('\\', "");
+    }
+
+    if let Some(pos) = cleaned.to_ascii_lowercase().rfind(".css") {
+        let trailing = &cleaned[pos + 4..];
+        if trailing.chars().all(|c| c == '/') {
+            cleaned.truncate(pos + 4);
+        }
+    }
+
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned)
+    }
+}
+
 /// Rewrite `url(...)` references in a CSS string to be absolute using the stylesheet's base URL.
 pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
     #[derive(PartialEq)]
@@ -398,6 +426,7 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
 /// resolve and fetch it as a stylesheet.
 pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
     let mut urls = Vec::new();
+    let mut seen = HashSet::new();
     let bytes = html.as_bytes();
     let mut idx = 0;
 
@@ -425,11 +454,14 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
         if end > start {
             let candidate = &html[start..end];
             if candidate.len() < 512 {
-                let cleaned = candidate.trim_matches(|c: char| c == '"' || c == '\'' || c == '(' || c == ')');
-                let cleaned_lower = cleaned.to_ascii_lowercase();
-                if !cleaned_lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
-                    if let Some(resolved) = resolve_href(base_url, cleaned) {
-                        urls.push(resolved);
+                if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
+                    let cleaned_lower = cleaned.to_ascii_lowercase();
+                    if !cleaned_lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
+                        if let Some(resolved) = resolve_href(base_url, &cleaned) {
+                            if seen.insert(resolved.clone()) {
+                                urls.push(resolved);
+                            }
+                        }
                     }
                 }
             }
@@ -452,8 +484,15 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
                     let candidate = &after_quote[..q_end_rel];
                     if !candidate.to_ascii_lowercase().contains("style.csstext") && !candidate.trim_end().ends_with(':')
                     {
-                        if let Some(resolved) = resolve_href(base_url, candidate) {
-                            urls.push(resolved);
+                        if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
+                            let lower = cleaned.to_ascii_lowercase();
+                            if !lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
+                                if let Some(resolved) = resolve_href(base_url, &cleaned) {
+                                    if seen.insert(resolved.clone()) {
+                                        urls.push(resolved);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -628,6 +667,29 @@ mod tests {
         let urls = extract_embedded_css_urls(html, "https://example.com/app/");
         assert!(urls.contains(&"https://example.com/app/assets/site.css?v=1".to_string()));
         assert!(urls.contains(&"https://example.com/shared/base.css".to_string()));
+    }
+
+    #[test]
+    fn normalizes_escaped_embedded_css_urls() {
+        let html = r#"
+            <link rel="stylesheet" href="https://cdn.example.com/styles/main.css">
+            <script>
+                var url = "https://cdn.example.com/styles/main.css\\\"/\u003c";
+            </script>
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert_eq!(urls, vec!["https://cdn.example.com/styles/main.css".to_string()]);
+    }
+
+    #[test]
+    fn unescapes_json_style_embedded_urls() {
+        let html = r#"
+            <script>
+                window.css = "https:\\/\\/cdn.example.com\\/app.css\\"";
+            </script>
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
     }
 
     #[test]
