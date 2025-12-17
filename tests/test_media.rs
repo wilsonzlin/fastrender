@@ -492,6 +492,11 @@ fn env_override_prefers_reduced_transparency() {
     assert!(ctx.prefers_reduced_transparency);
     drop(guard);
 
+    let guard_no_pref = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("no-preference"));
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(!ctx.prefers_reduced_transparency);
+    drop(guard_no_pref);
+
     let guard_invalid = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("invalid"));
     let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
     assert!(!ctx.prefers_reduced_transparency);

@@ -23,6 +23,7 @@ Idle; no current tasks. Available for new tasks.
 - Inline line-height negative leading is now honored: half-leading is no longer clamped in inline baseline logic, strut initialization, painter, and display list builder, so line-height values smaller than ascent+descent shrink the line box instead of inflating to content height. Added regressions for BaselineMetrics and BaselineAligner to cover negative leading behavior.
 - Ran `cargo test baseline --quiet` to cover baseline suite; all passing. Git push still timing out.
 - Row-spanning baseline cells now reserve height in the first row (baseline splitting feeds row sizing), but row baselines still ignore spanning cells per CSS 2.1. Added a regression to ensure rowspans don't set the table baseline and renamed the old rowspan baseline test.
+- Media: added coverage for `FASTR_PREFERS_REDUCED_TRANSPARENCY=no-preference` so env overrides handle both CLI flag values (`reduce`/`no-preference`).
 - Decoupled `text-align` from `text-align-last` so setting `text-align` no longer clobbers inherited/explicit last-line alignment; layout now justifies the final line for `text-align: justify-all` even when `text-align-last` stays `auto`. Added cascade regressions (`text_align_does_not_reset_text_align_last`, `text_align_justify_all_respects_explicit_last_line_alignment`) and IFC tests for explicit last-line overrides and justify-all default justification.
 - Added cascade regression for `text-align: match-parent` with RTL + `text-align: end`: children inherit the resolved left alignment from the parent's direction when using match-parent.
 - UA link states: added user-agent CSS for `a:link`/`:visited`/`:active` colors, exposed test flags via `data-fastr-visited`/`data-fastr-active` pseudo matching, and added cascade/DOM regressions to ensure unvisited links get blue/underline/pointer and visited/active flags pick purple/red.
@@ -32,6 +33,13 @@ Idle; no current tasks. Available for new tasks.
 - Cascade selector matching performance: replaced per-node HashMap deduplication with a reusable MatchIndex/candidate scratch (shared across cascade traversal) to cut allocations; compute_pseudo/marker callers take the scratch. Added regression `highest_specificity_selector_in_rule_wins` to ensure selectors within a rule pick the highest specificity.
 - Fixed grid repeat(auto-fit/auto-fill) parsing to retain named lines: named line mappings now survive auto-repeat blocks, and new tests cover auto-fit/auto-fill named line preservation. `cargo test --quiet auto_fill_repeat_keeps_named_lines` passes.
 - Counter style fallbacks: lower-greek now has regression coverage for out-of-range values falling back to decimal; Armenian tests now also assert lower-armenian out-of-range fallback. `cargo test --quiet counter_style_armenian_variants` passes.
+<<<<<<< HEAD
+=======
+- Documented the new prefers-reduced-transparency CLI flag in README and media feature docs (roadmap/reference) so users can find the override.
+- Media: added coverage for `FASTR_PREFERS_REDUCED_TRANSPARENCY=no-preference` so env overrides handle both CLI flag values (`reduce`/`no-preference`).
+- Documented the new prefers-reduced-transparency CLI flag in README and media feature docs (roadmap/reference) so users can find the override.
+- Documented the new prefers-reduced-transparency CLI flag in README and media feature docs (roadmap/reference) so users can find the override.
+>>>>>>> 2bfb0e7 (Add no-preference coverage for reduced-transparency env)
 - Float shrink-to-fit clamps to min-width: added a layout regression where a floating block with only `min-width` in a 100px container still uses its 150px min width (shrink-to-fit + min/max clamp). `cargo test --quiet float_auto_width_honors_min_width` passes.
 - Added viewport scroll snapping: render_html_with_scroll now adjusts scroll offsets based on scroll-snap-type/align/stop (container detected from fragment tree) with proximity/mandatory handling; new API tests cover snapping/threshold behavior.
 - 2028-XX-XX (Agent12): Fixed painting/display-list handling for sideways writing modes. Sideways writing now counts as vertical in painter/display list builder so vertical layout glyph offsets/ decorations render correctly. Added regression ensuring sideways-LR text produces vertical glyph offsets/decorations.
