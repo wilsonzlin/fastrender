@@ -316,6 +316,20 @@ pub enum MediaFeature {
     /// Maximum block size: `(max-block-size: 900px)`
     MaxBlockSize(Length),
 
+    // Device viewport features
+    /// Exact device width: `(device-width: 768px)`
+    DeviceWidth(Length),
+    /// Minimum device width: `(min-device-width: 768px)`
+    MinDeviceWidth(Length),
+    /// Maximum device width: `(max-device-width: 1024px)`
+    MaxDeviceWidth(Length),
+    /// Exact device height: `(device-height: 600px)`
+    DeviceHeight(Length),
+    /// Minimum device height: `(min-device-height: 400px)`
+    MinDeviceHeight(Length),
+    /// Maximum device height: `(max-device-height: 900px)`
+    MaxDeviceHeight(Length),
+
     // Orientation
     /// Device orientation: `(orientation: portrait)`
     Orientation(Orientation),
@@ -327,6 +341,12 @@ pub enum MediaFeature {
     MinAspectRatio { width: u32, height: u32 },
     /// Maximum aspect ratio: `(max-aspect-ratio: 16/9)`
     MaxAspectRatio { width: u32, height: u32 },
+    /// Exact device aspect ratio: `(device-aspect-ratio: 16/9)`
+    DeviceAspectRatio { width: u32, height: u32 },
+    /// Minimum device aspect ratio: `(min-device-aspect-ratio: 16/9)`
+    MinDeviceAspectRatio { width: u32, height: u32 },
+    /// Maximum device aspect ratio: `(max-device-aspect-ratio: 16/9)`
+    MaxDeviceAspectRatio { width: u32, height: u32 },
 
     // Resolution features
     /// Exact resolution: `(resolution: 2dppx)`
@@ -411,6 +431,9 @@ pub enum RangeFeature {
     BlockSize,
     Height,
     AspectRatio,
+    DeviceWidth,
+    DeviceHeight,
+    DeviceAspectRatio,
     Resolution,
 }
 
@@ -443,6 +466,12 @@ enum MediaFeatureKey {
     BlockSize(LengthKey),
     MinBlockSize(LengthKey),
     MaxBlockSize(LengthKey),
+    DeviceWidth(LengthKey),
+    MinDeviceWidth(LengthKey),
+    MaxDeviceWidth(LengthKey),
+    DeviceHeight(LengthKey),
+    MinDeviceHeight(LengthKey),
+    MaxDeviceHeight(LengthKey),
     Orientation(Orientation),
     AspectRatio {
         width: u32,
@@ -453,6 +482,18 @@ enum MediaFeatureKey {
         height: u32,
     },
     MaxAspectRatio {
+        width: u32,
+        height: u32,
+    },
+    DeviceAspectRatio {
+        width: u32,
+        height: u32,
+    },
+    MinDeviceAspectRatio {
+        width: u32,
+        height: u32,
+    },
+    MaxDeviceAspectRatio {
         width: u32,
         height: u32,
     },
@@ -563,6 +604,12 @@ impl From<&MediaFeature> for MediaFeatureKey {
             MediaFeature::BlockSize(len) => MediaFeatureKey::BlockSize(length_key(len)),
             MediaFeature::MinBlockSize(len) => MediaFeatureKey::MinBlockSize(length_key(len)),
             MediaFeature::MaxBlockSize(len) => MediaFeatureKey::MaxBlockSize(length_key(len)),
+            MediaFeature::DeviceWidth(len) => MediaFeatureKey::DeviceWidth(length_key(len)),
+            MediaFeature::MinDeviceWidth(len) => MediaFeatureKey::MinDeviceWidth(length_key(len)),
+            MediaFeature::MaxDeviceWidth(len) => MediaFeatureKey::MaxDeviceWidth(length_key(len)),
+            MediaFeature::DeviceHeight(len) => MediaFeatureKey::DeviceHeight(length_key(len)),
+            MediaFeature::MinDeviceHeight(len) => MediaFeatureKey::MinDeviceHeight(length_key(len)),
+            MediaFeature::MaxDeviceHeight(len) => MediaFeatureKey::MaxDeviceHeight(length_key(len)),
             MediaFeature::Orientation(o) => MediaFeatureKey::Orientation(*o),
             MediaFeature::AspectRatio { width, height } => MediaFeatureKey::AspectRatio {
                 width: *width,
@@ -573,6 +620,18 @@ impl From<&MediaFeature> for MediaFeatureKey {
                 height: *height,
             },
             MediaFeature::MaxAspectRatio { width, height } => MediaFeatureKey::MaxAspectRatio {
+                width: *width,
+                height: *height,
+            },
+            MediaFeature::DeviceAspectRatio { width, height } => MediaFeatureKey::DeviceAspectRatio {
+                width: *width,
+                height: *height,
+            },
+            MediaFeature::MinDeviceAspectRatio { width, height } => MediaFeatureKey::MinDeviceAspectRatio {
+                width: *width,
+                height: *height,
+            },
+            MediaFeature::MaxDeviceAspectRatio { width, height } => MediaFeatureKey::MaxDeviceAspectRatio {
                 width: *width,
                 height: *height,
             },
@@ -735,6 +794,32 @@ impl MediaFeature {
                 Ok(MediaFeature::MaxBlockSize(length))
             }
 
+            // Device dimensions
+            "device-width" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::DeviceWidth(length))
+            }
+            "min-device-width" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::MinDeviceWidth(length))
+            }
+            "max-device-width" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::MaxDeviceWidth(length))
+            }
+            "device-height" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::DeviceHeight(length))
+            }
+            "min-device-height" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::MinDeviceHeight(length))
+            }
+            "max-device-height" => {
+                let length = Self::parse_length_value(&name, value)?;
+                Ok(MediaFeature::MaxDeviceHeight(length))
+            }
+
             // Orientation
             "orientation" => {
                 let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
@@ -754,6 +839,18 @@ impl MediaFeature {
             "max-aspect-ratio" => {
                 let (width, height) = Self::parse_ratio_value(&name, value)?;
                 Ok(MediaFeature::MaxAspectRatio { width, height })
+            }
+            "device-aspect-ratio" => {
+                let (width, height) = Self::parse_ratio_value(&name, value)?;
+                Ok(MediaFeature::DeviceAspectRatio { width, height })
+            }
+            "min-device-aspect-ratio" => {
+                let (width, height) = Self::parse_ratio_value(&name, value)?;
+                Ok(MediaFeature::MinDeviceAspectRatio { width, height })
+            }
+            "max-device-aspect-ratio" => {
+                let (width, height) = Self::parse_ratio_value(&name, value)?;
+                Ok(MediaFeature::MaxDeviceAspectRatio { width, height })
             }
 
             // Resolution
@@ -1420,6 +1517,10 @@ pub struct MediaContext {
     pub viewport_width: f32,
     /// Viewport height in CSS pixels
     pub viewport_height: f32,
+    /// Device width in CSS pixels
+    pub device_width: f32,
+    /// Device height in CSS pixels
+    pub device_height: f32,
     /// Base font size (px) for resolving font-relative lengths in queries
     pub base_font_size: f32,
     /// Device pixel ratio (DPR)
@@ -1480,6 +1581,8 @@ impl MediaContext {
         Self {
             viewport_width: width,
             viewport_height: height,
+            device_width: width,
+            device_height: height,
             base_font_size: 16.0,
             device_pixel_ratio: 1.0,
             media_type: MediaType::Screen,
@@ -1609,6 +1712,17 @@ impl MediaContext {
         self
     }
 
+    /// Returns a new context with the given device dimensions in CSS pixels.
+    pub fn with_device_size(mut self, width: f32, height: f32) -> Self {
+        if width.is_finite() && width > 0.0 {
+            self.device_width = width;
+        }
+        if height.is_finite() && height > 0.0 {
+            self.device_height = height;
+        }
+        self
+    }
+
     /// Creates a print context with given dimensions
     ///
     /// Sets defaults for printing:
@@ -1628,6 +1742,8 @@ impl MediaContext {
         Self {
             viewport_width: width,
             viewport_height: height,
+            device_width: width,
+            device_height: height,
             base_font_size: 16.0,
             device_pixel_ratio: 1.0,
             media_type: MediaType::Print,
@@ -1668,6 +1784,8 @@ impl MediaContext {
         Self {
             viewport_width: width,
             viewport_height: height,
+            device_width: width,
+            device_height: height,
             base_font_size: 16.0,
             device_pixel_ratio: 2.0, // Common for mobile
             media_type: MediaType::Screen,
@@ -1904,6 +2022,32 @@ impl MediaContext {
                 self.viewport_height <= target
             }
 
+            // Device dimensions
+            MediaFeature::DeviceWidth(length) => {
+                let target = self.resolve_length(length);
+                (self.device_width - target).abs() < 0.5
+            }
+            MediaFeature::MinDeviceWidth(length) => {
+                let target = self.resolve_length(length);
+                self.device_width >= target
+            }
+            MediaFeature::MaxDeviceWidth(length) => {
+                let target = self.resolve_length(length);
+                self.device_width <= target
+            }
+            MediaFeature::DeviceHeight(length) => {
+                let target = self.resolve_length(length);
+                (self.device_height - target).abs() < 0.5
+            }
+            MediaFeature::MinDeviceHeight(length) => {
+                let target = self.resolve_length(length);
+                self.device_height >= target
+            }
+            MediaFeature::MaxDeviceHeight(length) => {
+                let target = self.resolve_length(length);
+                self.device_height <= target
+            }
+
             // Orientation
             MediaFeature::Orientation(orientation) => {
                 let is_portrait = self.viewport_height >= self.viewport_width;
@@ -1927,6 +2071,21 @@ impl MediaContext {
             MediaFeature::MaxAspectRatio { width, height } => {
                 let target_ratio = *width as f32 / *height as f32;
                 let actual_ratio = self.viewport_width / self.viewport_height;
+                actual_ratio <= target_ratio
+            }
+            MediaFeature::DeviceAspectRatio { width, height } => {
+                let target_ratio = *width as f32 / *height as f32;
+                let actual_ratio = self.device_width / self.device_height;
+                (target_ratio - actual_ratio).abs() < 0.01
+            }
+            MediaFeature::MinDeviceAspectRatio { width, height } => {
+                let target_ratio = *width as f32 / *height as f32;
+                let actual_ratio = self.device_width / self.device_height;
+                actual_ratio >= target_ratio
+            }
+            MediaFeature::MaxDeviceAspectRatio { width, height } => {
+                let target_ratio = *width as f32 / *height as f32;
+                let actual_ratio = self.device_width / self.device_height;
                 actual_ratio <= target_ratio
             }
 
@@ -2025,9 +2184,22 @@ impl MediaContext {
                     let target = self.resolve_length(len);
                     compare_with_op(*op, self.viewport_height, target)
                 }
+                (RangeFeature::DeviceWidth, RangeValue::Length(len)) => {
+                    let target = self.resolve_length(len);
+                    compare_with_op(*op, self.device_width, target)
+                }
+                (RangeFeature::DeviceHeight, RangeValue::Length(len)) => {
+                    let target = self.resolve_length(len);
+                    compare_with_op(*op, self.device_height, target)
+                }
                 (RangeFeature::AspectRatio, RangeValue::AspectRatio(w, h)) => {
                     let target_ratio = *w as f32 / *h as f32;
                     let actual_ratio = self.viewport_width / self.viewport_height;
+                    compare_with_op(*op, actual_ratio, target_ratio)
+                }
+                (RangeFeature::DeviceAspectRatio, RangeValue::AspectRatio(w, h)) => {
+                    let target_ratio = *w as f32 / *h as f32;
+                    let actual_ratio = self.device_width / self.device_height;
                     compare_with_op(*op, actual_ratio, target_ratio)
                 }
                 (RangeFeature::Resolution, RangeValue::Resolution(res)) => {
@@ -2328,7 +2500,10 @@ impl<'a> MediaQueryParser<'a> {
                 "inline-size" => Some(RangeFeature::InlineSize),
                 "block-size" => Some(RangeFeature::BlockSize),
                 "height" => Some(RangeFeature::Height),
+                "device-width" => Some(RangeFeature::DeviceWidth),
+                "device-height" => Some(RangeFeature::DeviceHeight),
                 "aspect-ratio" => Some(RangeFeature::AspectRatio),
+                "device-aspect-ratio" => Some(RangeFeature::DeviceAspectRatio),
                 "resolution" => Some(RangeFeature::Resolution),
                 _ => None,
             }
@@ -2336,21 +2511,33 @@ impl<'a> MediaQueryParser<'a> {
 
         let parse_value = |feature: RangeFeature, raw: &str| -> Result<RangeValue, MediaParseError> {
             match feature {
-                RangeFeature::Width | RangeFeature::InlineSize | RangeFeature::BlockSize | RangeFeature::Height => {
+                RangeFeature::Width
+                | RangeFeature::InlineSize
+                | RangeFeature::BlockSize
+                | RangeFeature::Height
+                | RangeFeature::DeviceWidth
+                | RangeFeature::DeviceHeight => {
                     let len = MediaFeature::parse_length_value(
                         match feature {
                             RangeFeature::Width => "width",
                             RangeFeature::InlineSize => "inline-size",
                             RangeFeature::BlockSize => "block-size",
                             RangeFeature::Height => "height",
+                            RangeFeature::DeviceWidth => "device-width",
+                            RangeFeature::DeviceHeight => "device-height",
                             _ => unreachable!(),
                         },
                         Some(raw),
                     )?;
                     Ok(RangeValue::Length(len))
                 }
-                RangeFeature::AspectRatio => {
-                    let (w, h) = MediaFeature::parse_ratio_value("aspect-ratio", Some(raw))?;
+                RangeFeature::AspectRatio | RangeFeature::DeviceAspectRatio => {
+                    let feature_name = match feature {
+                        RangeFeature::AspectRatio => "aspect-ratio",
+                        RangeFeature::DeviceAspectRatio => "device-aspect-ratio",
+                        _ => unreachable!(),
+                    };
+                    let (w, h) = MediaFeature::parse_ratio_value(feature_name, Some(raw))?;
                     Ok(RangeValue::AspectRatio(w, h))
                 }
                 RangeFeature::Resolution => {

@@ -255,6 +255,46 @@ fn test_orientation_detection() {
     }
 }
 
+/// Tests legacy device-width/-height media features
+#[test]
+fn test_device_dimension_queries_use_device_metrics() {
+    // Viewport is narrow, device is wide (common on mobile where device-width stays large)
+    let ctx = MediaContext::screen(375.0, 667.0).with_device_size(1080.0, 1920.0);
+
+    let min_device = MediaQuery::parse("(min-device-width: 800px)").unwrap();
+    let max_device = MediaQuery::parse("(max-device-width: 800px)").unwrap();
+    let exact_device = MediaQuery::parse("(device-width: 1080px)").unwrap();
+    let max_device_height = MediaQuery::parse("(max-device-height: 2000px)").unwrap();
+
+    // Device metrics drive these queries, not the viewport
+    assert!(ctx.evaluate(&min_device));
+    assert!(!ctx.evaluate(&max_device));
+    assert!(ctx.evaluate(&exact_device));
+    assert!(ctx.evaluate(&max_device_height));
+
+    // Viewport-sized queries still reflect the smaller viewport
+    let wide_viewport = MediaQuery::parse("(min-width: 800px)").unwrap();
+    assert!(!ctx.evaluate(&wide_viewport));
+}
+
+/// Tests device-aspect-ratio media features and range syntax
+#[test]
+fn test_device_aspect_ratio_queries() {
+    let ctx = MediaContext::screen(375.0, 667.0).with_device_size(1080.0, 1920.0);
+
+    let exact_ratio = MediaQuery::parse("(device-aspect-ratio: 9/16)").unwrap();
+    let min_ratio = MediaQuery::parse("(min-device-aspect-ratio: 9/16)").unwrap();
+    let max_ratio = MediaQuery::parse("(max-device-aspect-ratio: 9/16)").unwrap();
+    let mismatch = MediaQuery::parse("(device-aspect-ratio: 16/9)").unwrap();
+    let range = MediaQuery::parse("(600px < device-width <= 1200px)").unwrap();
+
+    assert!(ctx.evaluate(&exact_ratio));
+    assert!(ctx.evaluate(&min_ratio));
+    assert!(ctx.evaluate(&max_ratio));
+    assert!(ctx.evaluate(&range));
+    assert!(!ctx.evaluate(&mismatch));
+}
+
 // ============================================================================
 // Print Media Tests
 // ============================================================================
