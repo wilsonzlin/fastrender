@@ -162,14 +162,18 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
 }
 
 impl DomNode {
-    pub fn get_attribute(&self, name: &str) -> Option<String> {
+    pub fn get_attribute_ref(&self, name: &str) -> Option<&str> {
         match &self.node_type {
             DomNodeType::Element { attributes, .. } => attributes
                 .iter()
                 .find(|(k, _)| k.eq_ignore_ascii_case(name))
-                .map(|(_, v)| v.clone()),
+                .map(|(_, v)| v.as_str()),
             _ => None,
         }
+    }
+
+    pub fn get_attribute(&self, name: &str) -> Option<String> {
+        self.get_attribute_ref(name).map(|v| v.to_string())
     }
 
     pub fn tag_name(&self) -> Option<&str> {
@@ -227,7 +231,7 @@ impl DomNode {
 
     /// Check if this element has a specific class
     pub fn has_class(&self, class: &str) -> bool {
-        if let Some(class_attr) = self.get_attribute("class") {
+        if let Some(class_attr) = self.get_attribute_ref("class") {
             class_attr.split_whitespace().any(|c| c == class)
         } else {
             false
@@ -236,7 +240,7 @@ impl DomNode {
 
     /// Check if this element has a specific ID
     pub fn has_id(&self, id: &str) -> bool {
-        self.get_attribute("id").as_deref() == Some(id)
+        self.get_attribute_ref("id") == Some(id)
     }
 }
 
@@ -268,55 +272,53 @@ impl<'a> ElementRef<'a> {
     }
 
     fn visited_flag(&self) -> bool {
-        self
-            .node
-            .get_attribute("data-fastr-visited")
+        self.node
+            .get_attribute_ref("data-fastr-visited")
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     }
 
     fn active_flag(&self) -> bool {
-        self
-            .node
-            .get_attribute("data-fastr-active")
+        self.node
+            .get_attribute_ref("data-fastr-active")
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     }
 
     fn hover_flag(&self) -> bool {
-        self
-            .node
-            .get_attribute("data-fastr-hover")
+        self.node
+            .get_attribute_ref("data-fastr-hover")
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     }
 
     fn focus_flag(&self) -> bool {
-        self
-            .node
-            .get_attribute("data-fastr-focus")
+        self.node
+            .get_attribute_ref("data-fastr-focus")
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     }
 
-    /// Get parent node
-    fn parent_node(&self) -> Option<&'a DomNode> {
-        self.parent
-    }
-
-    /// Get sibling elements from parent
-    fn sibling_elements(&self) -> Vec<&'a DomNode> {
-        if let Some(parent) = self.parent_node() {
-            parent.element_children()
-        } else {
-            vec![]
+    /// Find index of this element among sibling elements and the total number of element siblings.
+    fn element_index_and_len(&self) -> Option<(usize, usize)> {
+        let parent = self.parent?;
+        let mut index = None;
+        let mut len = 0usize;
+        for child in parent.children.iter() {
+            if !child.is_element() {
+                continue;
+            }
+            if ptr::eq(child, self.node) {
+                index = Some(len);
+            }
+            len += 1;
         }
+        index.map(|idx| (idx, len))
     }
 
     /// Find index of this element among siblings
     fn element_index(&self) -> Option<usize> {
-        let siblings = self.sibling_elements();
-        siblings.iter().position(|&sibling| ptr::eq(sibling, self.node))
+        self.element_index_and_len().map(|(idx, _)| idx)
     }
 
     fn is_html_element(&self) -> bool {
@@ -332,9 +334,19 @@ impl<'a> ElementRef<'a> {
     where
         F: Fn(&DomNode) -> bool,
     {
-        let siblings: Vec<_> = self.sibling_elements().into_iter().filter(|s| predicate(s)).collect();
-        let index = siblings.iter().position(|&sibling| ptr::eq(sibling, self.node))?;
-        Some((index, siblings.len()))
+        let parent = self.parent?;
+        let mut index = None;
+        let mut len = 0usize;
+        for child in parent.children.iter() {
+            if !child.is_element() || !predicate(child) {
+                continue;
+            }
+            if ptr::eq(child, self.node) {
+                index = Some(len);
+            }
+            len += 1;
+        }
+        index.map(|idx| (idx, len))
     }
 
     /// Position among siblings of the same element type (case-insensitive).
@@ -375,8 +387,8 @@ impl<'a> ElementRef<'a> {
     }
 
     fn lang_attribute(&self, node: &DomNode) -> Option<String> {
-        node.get_attribute("lang")
-            .or_else(|| node.get_attribute("xml:lang"))
+        node.get_attribute_ref("lang")
+            .or_else(|| node.get_attribute_ref("xml:lang"))
             .map(|l| l.to_ascii_lowercase())
     }
 
@@ -397,14 +409,14 @@ impl<'a> ElementRef<'a> {
         if let Some(tag) = self.node.tag_name() {
             let lower = tag.to_ascii_lowercase();
 
-            if self.supports_disabled() && self.node.get_attribute("disabled").is_some() {
+            if self.supports_disabled() && self.node.get_attribute_ref("disabled").is_some() {
                 return true;
             }
 
             // Fieldset disabled state propagates to descendants except those inside the first legend.
             for (i, ancestor) in self.all_ancestors.iter().enumerate().rev() {
                 if let Some(a_tag) = ancestor.tag_name() {
-                    if a_tag.eq_ignore_ascii_case("fieldset") && ancestor.get_attribute("disabled").is_some() {
+                    if a_tag.eq_ignore_ascii_case("fieldset") && ancestor.get_attribute_ref("disabled").is_some() {
                         // Find first legend child of this fieldset.
                         let first_legend = ancestor.element_children().into_iter().find(|child| {
                             child
@@ -436,7 +448,7 @@ impl<'a> ElementRef<'a> {
                     if let Some(a_tag) = ancestor.tag_name() {
                         let a_lower = a_tag.to_ascii_lowercase();
                         if matches!(a_lower.as_str(), "select" | "optgroup" | "fieldset") {
-                            if ancestor.get_attribute("disabled").is_some() {
+                            if ancestor.get_attribute_ref("disabled").is_some() {
                                 return true;
                             }
                         }
@@ -452,7 +464,7 @@ impl<'a> ElementRef<'a> {
         if !self.is_html_element() {
             return false;
         }
-        if let Some(value) = self.node.get_attribute("contenteditable") {
+        if let Some(value) = self.node.get_attribute_ref("contenteditable") {
             let v = value.to_ascii_lowercase();
             return v.is_empty() || v == "true";
         }
@@ -470,7 +482,7 @@ impl<'a> ElementRef<'a> {
             return false;
         }
 
-        let input_type = self.node.get_attribute("type").map(|t| t.to_ascii_lowercase());
+        let input_type = self.node.get_attribute_ref("type").map(|t| t.to_ascii_lowercase());
 
         input_type
             .as_deref()
@@ -495,7 +507,7 @@ impl<'a> ElementRef<'a> {
     }
 
     fn is_option_selected(&self) -> bool {
-        let explicitly_selected = self.node.get_attribute("selected").is_some();
+        let explicitly_selected = self.node.get_attribute_ref("selected").is_some();
         if explicitly_selected {
             return true;
         }
@@ -512,7 +524,7 @@ impl<'a> ElementRef<'a> {
             return false;
         };
 
-        let is_multiple = select_node.get_attribute("multiple").is_some();
+        let is_multiple = select_node.get_attribute_ref("multiple").is_some();
         if is_multiple {
             // Multiple selects require explicit selection.
             return explicitly_selected;
@@ -534,9 +546,9 @@ impl<'a> ElementRef<'a> {
         };
 
         if tag.eq_ignore_ascii_case("input") {
-            let input_type = self.node.get_attribute("type").map(|t| t.to_ascii_lowercase());
+            let input_type = self.node.get_attribute_ref("type").map(|t| t.to_ascii_lowercase());
             if matches!(input_type.as_deref(), Some("checkbox") | Some("radio")) {
-                return self.node.get_attribute("checked").is_some();
+                return self.node.get_attribute_ref("checked").is_some();
             }
             return false;
         }
@@ -558,12 +570,12 @@ impl<'a> ElementRef<'a> {
         }
 
         if self.is_text_editable_input() {
-            return self.node.get_attribute("readonly").is_none();
+            return self.node.get_attribute_ref("readonly").is_none();
         }
 
         if let Some(tag) = self.node.tag_name() {
             if tag.eq_ignore_ascii_case("textarea") {
-                return self.node.get_attribute("readonly").is_none();
+                return self.node.get_attribute_ref("readonly").is_none();
             }
             if tag.eq_ignore_ascii_case("select") {
                 return true;
@@ -587,7 +599,7 @@ impl<'a> ElementRef<'a> {
             "input" => {
                 let t = self
                     .node
-                    .get_attribute("type")
+                    .get_attribute_ref("type")
                     .map(|s| s.to_ascii_lowercase())
                     .unwrap_or_else(|| "text".to_string());
 
@@ -598,7 +610,7 @@ impl<'a> ElementRef<'a> {
     }
 
     fn is_required(&self) -> bool {
-        self.supports_required() && !self.is_disabled() && self.node.get_attribute("required").is_some()
+        self.supports_required() && !self.is_disabled() && self.node.get_attribute_ref("required").is_some()
     }
 
     fn supports_validation(&self) -> bool {
@@ -614,7 +626,7 @@ impl<'a> ElementRef<'a> {
             "input" => {
                 let t = self
                     .node
-                    .get_attribute("type")
+                    .get_attribute_ref("type")
                     .map(|s| s.to_ascii_lowercase())
                     .unwrap_or_else(|| "text".to_string());
                 !matches!(t.as_str(), "button" | "reset" | "submit" | "image" | "hidden")
@@ -638,13 +650,18 @@ impl<'a> ElementRef<'a> {
             return self.select_value();
         }
         if tag == "input" {
-            return Some(self.node.get_attribute("value").unwrap_or_default());
+            return Some(
+                self.node
+                    .get_attribute_ref("value")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+            );
         }
         None
     }
 
     fn select_value(&self) -> Option<String> {
-        let multiple = self.node.get_attribute("multiple").is_some();
+        let multiple = self.node.get_attribute_ref("multiple").is_some();
         let explicit = find_selected_option_value(self.node, false);
         if explicit.is_some() {
             return explicit;
@@ -662,8 +679,14 @@ impl<'a> ElementRef<'a> {
     }
 
     fn numeric_in_range(&self, value: f64) -> Option<bool> {
-        let min = self.node.get_attribute("min").and_then(|m| Self::parse_number(&m));
-        let max = self.node.get_attribute("max").and_then(|m| Self::parse_number(&m));
+        let min = self
+            .node
+            .get_attribute_ref("min")
+            .and_then(|m| Self::parse_number(m));
+        let max = self
+            .node
+            .get_attribute_ref("max")
+            .and_then(|m| Self::parse_number(m));
 
         if min.is_none() && max.is_none() {
             return None;
@@ -712,7 +735,7 @@ impl<'a> ElementRef<'a> {
         if lower == "input" {
             let input_type = self
                 .node
-                .get_attribute("type")
+                .get_attribute_ref("type")
                 .map(|s| s.to_ascii_lowercase())
                 .unwrap_or_else(|| "text".to_string());
 
@@ -735,7 +758,7 @@ impl<'a> ElementRef<'a> {
 
             if matches!(input_type.as_str(), "checkbox" | "radio") {
                 if self.is_required() {
-                    return self.node.get_attribute("checked").is_some();
+                    return self.node.get_attribute_ref("checked").is_some();
                 }
                 return true;
             }
@@ -755,14 +778,18 @@ impl<'a> ElementRef<'a> {
         }
         let input_type = self
             .node
-            .get_attribute("type")
+            .get_attribute_ref("type")
             .map(|s| s.to_ascii_lowercase())
             .unwrap_or_else(|| "text".to_string());
         if !matches!(input_type.as_str(), "number" | "range") {
             return None;
         }
 
-        let value = self.node.get_attribute("value").unwrap_or_default();
+        let value = self
+            .node
+            .get_attribute_ref("value")
+            .map(|v| v.to_string())
+            .unwrap_or_default();
         let Some(num) = Self::parse_number(&value) else {
             return None;
         };
@@ -776,19 +803,19 @@ impl<'a> ElementRef<'a> {
         if tag.eq_ignore_ascii_case("input") {
             let input_type = self
                 .node
-                .get_attribute("type")
+                .get_attribute_ref("type")
                 .map(|t| t.to_ascii_lowercase())
                 .unwrap_or_else(|| "text".to_string());
 
             if input_type == "checkbox" {
-                return self.node.get_attribute("indeterminate").is_some();
+                return self.node.get_attribute_ref("indeterminate").is_some();
             }
             return false;
         }
 
         if tag.eq_ignore_ascii_case("progress") {
             // Missing or invalid value makes progress indeterminate.
-            let Some(value) = self.node.get_attribute("value") else {
+            let Some(value) = self.node.get_attribute_ref("value") else {
                 return true;
             };
             return Self::parse_number(&value).is_none();
@@ -813,13 +840,13 @@ impl<'a> ElementRef<'a> {
 
         let is_submit_input = lower == "input"
             && node
-                .get_attribute("type")
+                .get_attribute_ref("type")
                 .map(|t| t.eq_ignore_ascii_case("submit") || t.eq_ignore_ascii_case("image"))
                 .unwrap_or(false);
 
         let is_button_submit = lower == "button"
             && node
-                .get_attribute("type")
+                .get_attribute_ref("type")
                 .map(|t| t.eq_ignore_ascii_case("submit"))
                 .unwrap_or(true);
 
@@ -871,8 +898,8 @@ impl<'a> ElementRef<'a> {
     }
 
     fn dir_attribute(&self, node: &DomNode, resolve_root: &DomNode) -> Option<TextDirection> {
-        node.get_attribute("dir")
-            .or_else(|| node.get_attribute("xml:dir"))
+        node.get_attribute_ref("dir")
+            .or_else(|| node.get_attribute_ref("xml:dir"))
             .and_then(|d| match d.to_ascii_lowercase().as_str() {
                 "ltr" => Some(TextDirection::Ltr),
                 "rtl" => Some(TextDirection::Rtl),
@@ -887,22 +914,29 @@ impl<'a> ElementRef<'a> {
         };
 
         if tag.eq_ignore_ascii_case("input") {
-            if self.node.get_attribute("placeholder").is_none() {
+            if self.node.get_attribute_ref("placeholder").is_none() {
                 return false;
             }
 
-            let input_type = self.node.get_attribute("type").map(|t| t.to_ascii_lowercase());
+            let input_type = self
+                .node
+                .get_attribute_ref("type")
+                .map(|t| t.to_ascii_lowercase());
 
             if !supports_placeholder(&input_type) {
                 return false;
             }
 
-            let value = self.node.get_attribute("value").unwrap_or_default();
+            let value = self
+                .node
+                .get_attribute_ref("value")
+                .map(|v| v.to_string())
+                .unwrap_or_default();
             return value.is_empty();
         }
 
         if tag.eq_ignore_ascii_case("textarea") {
-            if self.node.get_attribute("placeholder").is_none() {
+            if self.node.get_attribute_ref("placeholder").is_none() {
                 return false;
             }
 
@@ -942,7 +976,7 @@ impl<'a> ElementRef<'a> {
     }
 
     fn node_matches_target(node: &DomNode, target: &str) -> bool {
-        if let Some(id) = node.get_attribute("id") {
+        if let Some(id) = node.get_attribute_ref("id") {
             if id == target {
                 return true;
             }
@@ -951,7 +985,7 @@ impl<'a> ElementRef<'a> {
         if let Some(tag) = node.tag_name() {
             let lower = tag.to_ascii_lowercase();
             if matches!(lower.as_str(), "a" | "area") {
-                if let Some(name) = node.get_attribute("name") {
+                if let Some(name) = node.get_attribute_ref("name") {
                     if name == target {
                         return true;
                     }
@@ -1004,7 +1038,7 @@ fn select_has_explicit_selection(select: &DomNode) -> bool {
             return;
         }
         if let Some(tag) = node.tag_name() {
-            if tag.eq_ignore_ascii_case("option") && node.get_attribute("selected").is_some() {
+            if tag.eq_ignore_ascii_case("option") && node.get_attribute_ref("selected").is_some() {
                 found = true;
             }
         }
@@ -1032,10 +1066,10 @@ fn find_selected_option_value(node: &DomNode, optgroup_disabled: bool) -> Option
     let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
     let is_option = tag.as_deref() == Some("option");
 
-    let option_disabled = node.get_attribute("disabled").is_some();
+    let option_disabled = node.get_attribute_ref("disabled").is_some();
     let next_optgroup_disabled = optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
 
-    if is_option && node.get_attribute("selected").is_some() && !(option_disabled || optgroup_disabled) {
+    if is_option && node.get_attribute_ref("selected").is_some() && !(option_disabled || optgroup_disabled) {
         return Some(option_value_from_node(node));
     }
 
@@ -1051,7 +1085,7 @@ fn first_enabled_option<'a>(node: &'a DomNode, optgroup_disabled: bool) -> Optio
     let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
     let is_option = tag.as_deref() == Some("option");
 
-    let option_disabled = node.get_attribute("disabled").is_some();
+    let option_disabled = node.get_attribute_ref("disabled").is_some();
     let next_optgroup_disabled = optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
 
     if is_option && !(option_disabled || optgroup_disabled) {
@@ -1099,33 +1133,43 @@ impl<'a> Element for ElementRef<'a> {
     }
 
     fn prev_sibling_element(&self) -> Option<Self> {
-        let siblings = self.sibling_elements();
-        let index = self.element_index()?;
-        if index > 0 {
-            let prev_node = siblings[index - 1];
-            Some(ElementRef {
-                node: prev_node,
-                parent: self.parent,
-                all_ancestors: self.all_ancestors,
-            })
-        } else {
-            None
+        let parent = self.parent?;
+        let mut prev: Option<&DomNode> = None;
+        for child in parent.children.iter() {
+            if !child.is_element() {
+                continue;
+            }
+            if ptr::eq(child, self.node) {
+                return prev.map(|node| ElementRef {
+                    node,
+                    parent: self.parent,
+                    all_ancestors: self.all_ancestors,
+                });
+            }
+            prev = Some(child);
         }
+        None
     }
 
     fn next_sibling_element(&self) -> Option<Self> {
-        let siblings = self.sibling_elements();
-        let index = self.element_index()?;
-        if index + 1 < siblings.len() {
-            let next_node = siblings[index + 1];
-            Some(ElementRef {
-                node: next_node,
-                parent: self.parent,
-                all_ancestors: self.all_ancestors,
-            })
-        } else {
-            None
+        let parent = self.parent?;
+        let mut seen_self = false;
+        for child in parent.children.iter() {
+            if !child.is_element() {
+                continue;
+            }
+            if seen_self {
+                return Some(ElementRef {
+                    node: child,
+                    parent: self.parent,
+                    all_ancestors: self.all_ancestors,
+                });
+            }
+            if ptr::eq(child, self.node) {
+                seen_self = true;
+            }
         }
+        None
     }
 
     fn is_html_element_in_html_document(&self) -> bool {
@@ -1201,7 +1245,7 @@ impl<'a> Element for ElementRef<'a> {
             }
         }
 
-        let attr_value = match self.node.get_attribute(local_name.as_str()) {
+        let attr_value = match self.node.get_attribute_ref(local_name.as_str()) {
             Some(v) => v,
             None => return false,
         };
@@ -1214,7 +1258,7 @@ impl<'a> Element for ElementRef<'a> {
                 value,
             } => {
                 let value_str: &str = std::borrow::Borrow::borrow(&**value);
-                operator.eval_str(&attr_value, value_str, *case_sensitivity)
+                operator.eval_str(attr_value, value_str, *case_sensitivity)
             }
         }
     }
@@ -1230,19 +1274,22 @@ impl<'a> Element for ElementRef<'a> {
             }
             PseudoClass::FirstChild => self.element_index() == Some(0),
             PseudoClass::LastChild => {
-                let siblings = self.sibling_elements();
-                self.element_index() == Some(siblings.len().saturating_sub(1))
+                self.element_index_and_len()
+                    .map(|(idx, len)| idx == len.saturating_sub(1))
+                    .unwrap_or(false)
             }
-            PseudoClass::OnlyChild => self.sibling_elements().len() == 1,
+            PseudoClass::OnlyChild => self
+                .element_index_and_len()
+                .map(|(_, len)| len == 1)
+                .unwrap_or(false),
             PseudoClass::NthChild(a, b) => self
                 .element_index()
                 .map(|index| matches_an_plus_b(*a, *b, (index + 1) as i32))
                 .unwrap_or(false),
             PseudoClass::NthLastChild(a, b) => {
-                let siblings = self.sibling_elements();
-                self.element_index()
-                    .map(|index| {
-                        let n = (siblings.len() - index) as i32;
+                self.element_index_and_len()
+                    .map(|(index, len)| {
+                        let n = (len - index) as i32;
                         matches_an_plus_b(*a, *b, n)
                     })
                     .unwrap_or(false)
@@ -1298,11 +1345,11 @@ impl<'a> Element for ElementRef<'a> {
                     if lower == "input" {
                         let t = self
                             .node
-                            .get_attribute("type")
+                            .get_attribute_ref("type")
                             .map(|s| s.to_ascii_lowercase())
                             .unwrap_or_else(|| "text".to_string());
                         if t == "checkbox" || t == "radio" {
-                            return self.node.get_attribute("checked").is_some();
+                            return self.node.get_attribute_ref("checked").is_some();
                         }
                     }
                     if matches!(lower.as_str(), "input" | "button") {
@@ -1342,7 +1389,7 @@ impl<'a> Element for ElementRef<'a> {
         let Some(tag) = self.node.tag_name() else {
             return false;
         };
-        let has_href = self.node.get_attribute("href").is_some();
+        let has_href = self.node.get_attribute_ref("href").is_some();
         has_href && matches!(tag.to_ascii_lowercase().as_str(), "a" | "area" | "link")
     }
 
@@ -1355,7 +1402,7 @@ impl<'a> Element for ElementRef<'a> {
             CaseSensitivity::CaseSensitive => self.node.has_id(id.as_str()),
             CaseSensitivity::AsciiCaseInsensitive => self
                 .node
-                .get_attribute("id")
+                .get_attribute_ref("id")
                 .map(|attr| attr.eq_ignore_ascii_case(id.as_str()))
                 .unwrap_or(false),
         }
@@ -1366,7 +1413,7 @@ impl<'a> Element for ElementRef<'a> {
             CaseSensitivity::CaseSensitive => self.node.has_class(class.as_str()),
             CaseSensitivity::AsciiCaseInsensitive => self
                 .node
-                .get_attribute("class")
+                .get_attribute_ref("class")
                 .map(|classes| {
                     classes
                         .split_whitespace()
