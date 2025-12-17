@@ -8,6 +8,7 @@ use selectors::{
     attr::{AttrSelectorOperation, CaseSensitivity},
     Element, OpaqueElement,
 };
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::ptr;
 use std::thread_local;
@@ -465,10 +466,21 @@ impl<'a> Element for ElementRef<'a> {
 
     fn attr_matches(
         &self,
-        _ns: &selectors::attr::NamespaceConstraint<&CssString>,
+        ns: &selectors::attr::NamespaceConstraint<&CssString>,
         local_name: &CssString,
         operation: &AttrSelectorOperation<&CssString>,
     ) -> bool {
+        // Namespace check: we only support HTML namespace/none.
+        match ns {
+            selectors::attr::NamespaceConstraint::Any => {}
+            selectors::attr::NamespaceConstraint::Specific(url) => {
+                let url: &str = (*url).borrow();
+                if !(url.is_empty() || url == HTML_NAMESPACE) {
+                    return false;
+                }
+            }
+        }
+
         let attr_value = match self.node.get_attribute(local_name.as_str()) {
             Some(v) => v,
             None => return false,
@@ -758,6 +770,10 @@ mod tests {
             value: &value_sensitive,
         };
         assert!(!element_ref.attr_matches(&NamespaceConstraint::Any, &local, &op_sensitive));
+
+        // Namespaced selector should fail when requesting a non-HTML namespace.
+        let svg_ns = CssString("http://www.w3.org/2000/svg".into());
+        assert!(!element_ref.attr_matches(&NamespaceConstraint::Specific(&svg_ns), &local, &op_insensitive,));
     }
 
     #[test]
