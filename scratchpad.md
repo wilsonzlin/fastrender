@@ -40,8 +40,8 @@ Idle; no current tasks.
 ## Session notes (latest)
 
 - Implemented CSS `user-select`: added `UserSelect` enum/defaults, parsing of auto/text/none/all/contain, property wiring, and regression coverage; also marked `user-select` as inherited per spec. Pushed `c412f85` and `fa5a130`.
-- Implemented CSS `touch-action`: added `TouchAction` flags, default auto, parsing of single/multi-keyword lists (pan-*, pinch-zoom, manipulation), property copy wiring, and regression test. No layout behavior yet; CSS parser now treats `touch-action` as a known property and parses keyword lists; `is_known_property` now uses linear contains so out-of-order entries (e.g., overflow/overscroll) aren’t dropped. Added a parsing regression for touch-action lists. Pushed `ae9c051` plus follow-up parser fix.
-- Restored `transform-style`/`backface-visibility` fields on `ComputedStyle` (defaults: flat/visible) so the existing property parsing/tests compile; removed the duplicate `is_indeterminate` helper and moved the fetch_and_render CLI doc block to the top of the file to fix build errors.
+- Implemented CSS `touch-action`: added `TouchAction` flags, default auto, parsing of single/multi-keyword lists (pan-*, pinch-zoom, manipulation), property copy wiring, and regression test. No layout behavior yet; pushed `ae9c051`.
+- Added CSS `scrollbar-width` support: new enum/defaults, cascade parsing/copying, and regression test; pushed `b28f20f`. Fixed fetch_and_render CLI docs placement.
 
 - Added `:autofill` pseudo-class: parsed/serialized via selectors, DOM matching always false (no autofill state available). Added basic parse/match tests.
 - Added `:checked` selector support: parsed/serialized and DOM matching for checkable inputs (checkbox/radio with the checked attribute) and option elements (selected attribute or default first option when no selection on a single select). Tests cover inputs, default-selected options, and multiple selects.
