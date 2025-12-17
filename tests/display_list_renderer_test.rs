@@ -12,10 +12,11 @@ use fastrender::style::color::Color;
 use fastrender::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage, BorderImageSlice,
     BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius, TextDecorationStyle,
-    BackgroundLayer,
+    BackgroundLayer, TextDecorationLine, TextDecorationSkipInk,
 };
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
+use fastrender::text::pipeline::ShapingPipeline;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::Rgba;
 use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder, RgbaImage};
@@ -464,6 +465,47 @@ fn display_list_border_image_generated_uniform_color() {
     assert_eq!(tr, (255, 0, 0, 255));
     assert_eq!(bl, (255, 0, 0, 255));
     assert_eq!(br, (255, 0, 0, 255));
+}
+
+#[test]
+fn text_decoration_skip_ink_none_renders_continuous_line() {
+    let mut style = fastrender::style::ComputedStyle::default();
+    style.font_size = 20.0;
+    style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+    style.text_decoration_skip_ink = TextDecorationSkipInk::None;
+
+    let font_ctx = FontContext::new();
+    let shaper = ShapingPipeline::new();
+    let runs = match shaper.shape("g", &style, &font_ctx) {
+        Ok(r) if !r.is_empty() => r,
+        _ => return,
+    };
+
+    let fragment = FragmentNode::new_text_shaped(
+        Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
+        "g".to_string(),
+        14.0,
+        runs,
+        Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build(&fragment);
+    let deco = list
+        .items()
+        .iter()
+        .find_map(|i| match i {
+            DisplayItem::TextDecoration(d) => Some(d),
+            _ => None,
+        })
+        .expect("decoration");
+
+    let underline = deco
+        .decorations
+        .first()
+        .and_then(|d| d.underline.as_ref())
+        .expect("underline");
+
+    assert!(underline.segments.is_none(), "skip-ink:none should emit a continuous underline");
 }
 
 #[test]
