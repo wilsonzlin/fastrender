@@ -1692,21 +1692,25 @@ impl FastRender {
         let top = constraints.top.unwrap_or(0.0);
         let bottom = constraints.bottom.unwrap_or(0.0);
 
-        let min_x = container_screen_min_x + left;
-        let max_x = container_screen_max_x - right - abs_rect.width();
-        let viewport_min_x = left;
-        let viewport_max_x = viewport.width - right - abs_rect.width();
-        let clamp_min_x = min_x.max(viewport_min_x);
-        let clamp_max_x = max_x.min(viewport_max_x);
-        screen_x = screen_x.max(clamp_min_x).min(clamp_max_x);
+        if constraints.left.is_some() || constraints.right.is_some() {
+            let min_x = container_screen_min_x + left;
+            let max_x = container_screen_max_x - right - abs_rect.width();
+            let viewport_min_x = left;
+            let viewport_max_x = viewport.width - right - abs_rect.width();
+            let clamp_min_x = min_x.max(viewport_min_x);
+            let clamp_max_x = max_x.min(viewport_max_x);
+            screen_x = screen_x.max(clamp_min_x).min(clamp_max_x);
+        }
 
-        let min_y = container_screen_min_y + top;
-        let max_y = container_screen_max_y - bottom - abs_rect.height();
-        let viewport_min_y = top;
-        let viewport_max_y = viewport.height - bottom - abs_rect.height();
-        let clamp_min_y = min_y.max(viewport_min_y);
-        let clamp_max_y = max_y.min(viewport_max_y);
-        screen_y = screen_y.max(clamp_min_y).min(clamp_max_y);
+        if constraints.top.is_some() || constraints.bottom.is_some() {
+            let min_y = container_screen_min_y + top;
+            let max_y = container_screen_max_y - bottom - abs_rect.height();
+            let viewport_min_y = top;
+            let viewport_max_y = viewport.height - bottom - abs_rect.height();
+            let clamp_min_y = min_y.max(viewport_min_y);
+            let clamp_max_y = max_y.min(viewport_max_y);
+            screen_y = screen_y.max(clamp_min_y).min(clamp_max_y);
+        }
 
         let mut new_abs_x = screen_x + scroll.x;
         let mut new_abs_y = screen_y + scroll.y;
@@ -3256,6 +3260,7 @@ mod tests {
     use crate::text::pipeline::ShapingPipeline;
     use crate::tree::fragment_tree::{FragmentContent, FragmentTree};
     use crate::ComputedStyle;
+    use crate::Rect;
     use base64::Engine;
     use image::codecs::png::PngEncoder;
     use image::ImageEncoder;
@@ -3301,6 +3306,32 @@ mod tests {
         let mut out = Vec::new();
         helper(styled, id, &mut out);
         out
+    }
+
+    #[test]
+    fn sticky_without_offsets_does_not_move() {
+        let mut renderer = FastRender::new().unwrap();
+
+        let mut root = FragmentNode::new(
+            Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
+            FragmentContent::Block { box_id: None },
+            vec![],
+        );
+        let mut sticky_style = ComputedStyle::default();
+        sticky_style.position = crate::style::position::Position::Sticky;
+        let sticky = FragmentNode::new_with_style(
+            Rect::from_xywh(20.0, 30.0, 50.0, 40.0),
+            FragmentContent::Block { box_id: None },
+            vec![],
+            Arc::new(sticky_style),
+        );
+        root.children.push(sticky);
+
+        renderer.apply_sticky_offsets(&mut root, Rect::from_xywh(0.0, 0.0, 200.0, 200.0), Point::ZERO, Size::new(200.0, 200.0));
+
+        let child = &root.children[0];
+        assert!((child.bounds.x() - 20.0).abs() < 0.01);
+        assert!((child.bounds.y() - 30.0).abs() < 0.01);
     }
 
     // =========================================================================

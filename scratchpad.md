@@ -1,3 +1,12 @@
+# Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
+# Color-scheme inheritance still validated; further palette audits ongoing.
+# Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
+# Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
+# Rendered https://www.aljazeera.com at 1200×800 (aljazeera.png); page loads but renders mostly blank white with sparse text (likely heavy client-side content). Potential issue: critical content missing without JS; leaving as observation for now (no code change).
+# Attempted https://www.nationalgeographic.com at 1200×800 (natgeo.png) with 60s timeout; render timed out after loading many CSS assets. Needs further investigation (possible heavy/JS-driven layout or performance issue).
+# Attempted https://www.wsj.com at 1200×800; fetch failed with 401 (likely paywall/auth). Skipped for now.
+# Attempted https://www.theverge.com at 1200×800; render timed out after fetching CSS (likely heavy client-side). No output produced.
+# Sticky positioning: fixed a bug where sticky elements with all-auto offsets were still clamped to the viewport/container (unwrap_or(0)), causing unintended movement. Now we only clamp axes with specified offsets. Added regression ensuring a sticky box with no offsets stays put.
 # Added background image-rendering coverage: display-list builder regression ensures pixelated backgrounds use nearest-neighbor sampling; roadmap marks image-rendering implemented. `cargo test background_image_rendering_pixelated_sets_nearest_filter_quality --quiet` passes.
 # Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
