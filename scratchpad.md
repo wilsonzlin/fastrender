@@ -2,7 +2,8 @@
 # Border-collapse conflict resolution now follows CSS 2.1: final ties pick the later source-order border instead of the top/left neighbor; regressions updated.
 # Cascade perf: UA stylesheet is now parsed once via a cached OnceLock instead of per-cascade parsing.
 # Calc helpers now require proper context: calc lengths with percentage/viewport/font terms return None in viewport/font resolvers when bases are missing, and a regression `calc_resolution_helpers_require_context` covers the helpers. Transform/object-fit/clip-path now resolve calc lengths via context-aware helpers (avoiding raw-value fallbacks); added builder/painter/object-fit regressions for calc translate/object-position. Display-list renderer border-image resolution now guards viewport-relative calcs when no viewport is provided (regression added). Display-list background offsets now guard viewport-relative calcs when no viewport is available (regression added).
-# Notes and recent work are tracked upstream. Marker geometry/paint review still pending after gap/property regressions.
+# Render bug hunt: arstechnica.com fetched/rendered at 1200×800 (/tmp/ars.png); page largely white (likely JS-driven) with no actionable defect identified yet. Stackoverflow.com rendered at 1200×800 (/tmp/so.png); output appears normal from ASCII scan. Economist.com fetch blocked with 403.
+# Wikipedia portal render: root `no-js` class now auto-flips to `js-enabled` during HTML parse to mimic JS bootstrap; default fetcher UA now uses a Chrome-like string. Rendering still shows a tiny centered block (likely CSS-driven); further layout investigation pending.
 # Render bug hunt: stackoverflow.com (1200×800) looked normal; no regression added. Economist.com fetch blocked with 403.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
@@ -1523,15 +1524,14 @@ Actionable borrowings:
 - Media queries: range equality now rejects percentage operands; regression `range_equality_rejects_percentages` added.
 - Media queries: resolution parsing retains fractional precision; regression in `test_resolution_parse` asserts 1.3333dppx is preserved.
 - Media queries: `prefers-color-scheme` parsing is case-insensitive; regression updated to accept uppercase inputs.
-<<<<<<< HEAD
-- Rendered wikipedia.org at 1200×800: previously all-white/tiny; rem-base fix below now yields full-size portal (monitor for any remaining visibility issues).
+- Rendered wikipedia.org at 1200×800: output PNG is entirely white despite successful fetch; likely styles/overlays hiding content or JS dependency. Needs investigation.
 - Table rowspans: spanning height distribution now shares evenly when uncapped; regression `baseline_height_computation_skips_rowspanning_cells` ensures a tall rowspan cell doesn’t overinflate the preceding row.
 - CSS custom properties: fallback resolution now marks declarations invalid when the fallback still contains unresolved var() references; regression `unresolved_fallback_var_marks_declaration_invalid` added.
 - Bug hunt: rendered https://httpbin.org/html (looks OK) and https://wikipedia.org at 1200×800. Wikipedia render came out as a tiny compressed block (~238×64px of content in the center) due to rem sizing ignoring the html 62.5% root font size (fixed below).
     - Inspect frag on cached portal shows huge negative text indent ("Wikip" at x≈-9483) and main content pushed down (nav ~y=1175). Portal CSS uses `html { font-size:62.5%; }` and fixed rem sizing for central featured; likely offset compounded by banners/positioning.
 - Marker gap default: regression asserts inline-end marker gap falls back to 0.5em when inline margins are zero.
+- Marker gap default: regression asserts inline-end marker gap falls back to 0.5em when inline margins are zero.
+- Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text. Re-rendered and PNG remains all-white.
+- Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text.
+- Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning.
 - Root rem base now honors the HTML root font-size: the cascade treats the `<html>` element as the root for root_font_size resolution (instead of the document node), so `rem`/percent font sizes resolve after author root sizing. Added regression `root_font_size_percentage_uses_initial_value` covering 62.5% root font-size → 10px rem, and wikipedia.org now renders at full scale (content spans the viewport instead of a 238×64 block).
-- Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
-=======
-- Media query cache: key interning now uses entry API (no redundant contains/get), trimming per-query hash/alloc overhead in evaluate_with_cache.
->>>>>>> 5427e2b (Tighten media query cache key interning)
