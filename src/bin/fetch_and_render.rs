@@ -408,7 +408,13 @@ fn render_once(
     );
     let mut renderer = FastRender::builder().device_pixel_ratio(dpr).build()?;
     renderer.set_base_url(resource_base.clone());
-    let png_data = renderer.render_to_png_with_scroll(&html_with_css, width, height, scroll_y as f32)?;
+    let png_data = renderer.render_to_png_with_scroll(
+        &html_with_css,
+        width,
+        height,
+        scroll_x as f32,
+        scroll_y as f32,
+    )?;
 
     println!("Saving to {}...", output);
     std::fs::write(&output, png_data)?;

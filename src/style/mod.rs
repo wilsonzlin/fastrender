@@ -427,7 +427,6 @@ pub struct ComputedStyle {
 
     // Color and background
     pub color_scheme: ColorSchemePreference,
-    pub forced_color_adjust: ForcedColorAdjust,
     pub caret_color: CaretColor,
     pub accent_color: AccentColor,
     pub color: Rgba,
@@ -663,7 +662,6 @@ impl Default for ComputedStyle {
             list_style_image: ListStyleImage::None,
             counters: CounterProperties::default(),
             color_scheme: ColorSchemePreference::Normal,
-            forced_color_adjust: ForcedColorAdjust::Auto,
             caret_color: CaretColor::Auto,
             accent_color: AccentColor::Auto,
             color: Rgba::BLACK,

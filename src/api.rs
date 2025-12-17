@@ -532,15 +532,29 @@ impl FastRender {
     /// - Painting fails
     /// - Invalid dimensions (width or height is 0)
     pub fn render_html(&mut self, html: &str, width: u32, height: u32) -> Result<Pixmap> {
-        self.render_html_internal(html, width, height, 0.0)
+        self.render_html_internal(html, width, height, 0.0, 0.0)
     }
 
-    /// Renders HTML with a vertical scroll offset applied to the viewport
-    pub fn render_html_with_scroll(&mut self, html: &str, width: u32, height: u32, scroll_y: f32) -> Result<Pixmap> {
-        self.render_html_internal(html, width, height, scroll_y)
+    /// Renders HTML with scroll offsets applied to the viewport
+    pub fn render_html_with_scroll(
+        &mut self,
+        html: &str,
+        width: u32,
+        height: u32,
+        scroll_x: f32,
+        scroll_y: f32,
+    ) -> Result<Pixmap> {
+        self.render_html_internal(html, width, height, scroll_x, scroll_y)
     }
 
-    fn render_html_internal(&mut self, html: &str, width: u32, height: u32, scroll_y: f32) -> Result<Pixmap> {
+    fn render_html_internal(
+        &mut self,
+        html: &str,
+        width: u32,
+        height: u32,
+        scroll_x: f32,
+        scroll_y: f32,
+    ) -> Result<Pixmap> {
         // Validate dimensions
         if width == 0 || height == 0 {
             return Err(Error::Render(RenderError::InvalidParameters {
@@ -724,7 +738,7 @@ impl FastRender {
         };
 
         // Paint to pixmap
-        let offset = Point::new(0.0, -scroll_y);
+        let offset = Point::new(-scroll_x, -scroll_y);
         let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
 
         if let Some(start) = stage_start {
@@ -1602,9 +1616,16 @@ impl FastRender {
         encode_image(&pixmap, OutputFormat::Png)
     }
 
-    /// Renders HTML to PNG bytes with a vertical scroll offset
-    pub fn render_to_png_with_scroll(&mut self, html: &str, width: u32, height: u32, scroll_y: f32) -> Result<Vec<u8>> {
-        let pixmap = self.render_html_with_scroll(html, width, height, scroll_y)?;
+    /// Renders HTML to PNG bytes with scroll offsets
+    pub fn render_to_png_with_scroll(
+        &mut self,
+        html: &str,
+        width: u32,
+        height: u32,
+        scroll_x: f32,
+        scroll_y: f32,
+    ) -> Result<Vec<u8>> {
+        let pixmap = self.render_html_with_scroll(html, width, height, scroll_x, scroll_y)?;
         encode_image(&pixmap, OutputFormat::Png)
     }
 
@@ -2910,10 +2931,10 @@ mod tests {
         "#;
 
         let top = renderer
-            .render_html_with_scroll(html, 10, 50, 0.0)
+            .render_html_with_scroll(html, 10, 50, 0.0, 0.0)
             .expect("render at scroll 0");
         let scrolled = renderer
-            .render_html_with_scroll(html, 10, 50, 50.0)
+            .render_html_with_scroll(html, 10, 50, 0.0, 50.0)
             .expect("render with scroll offset");
 
         let pixel = |pixmap: &Pixmap| {

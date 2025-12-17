@@ -3073,7 +3073,7 @@ mod tests {
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_scheme(ColorScheme::Dark)
             .with_env_overrides();
-        assert_eq!(ctx.prefers_color_scheme, None);
+        assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::NoPreference));
         drop(guard_scheme);
     }
 

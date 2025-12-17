@@ -288,14 +288,19 @@ fn main() {
                 };
                 let run_render = move || -> Result<Vec<u8>, Status> {
                     let render_work = move || -> Result<Vec<u8>, fastrender::Error> {
-                        let _ = scroll_x; // horizontal scroll not yet supported by renderer API
                         let mut renderer = FastRender::builder()
                             .fetcher(fetcher as Arc<dyn ResourceFetcher>)
                             .base_url(resource_base.clone())
                             .device_pixel_ratio(device_pixel_ratio)
                             .build()
                             .expect("create renderer");
-                        renderer.render_to_png_with_scroll(&html_for_render, viewport_w, viewport_h, scroll_y)
+                        renderer.render_to_png_with_scroll(
+                            &html_for_render,
+                            viewport_w,
+                            viewport_h,
+                            scroll_x,
+                            scroll_y,
+                        )
                     };
 
                     let (tx, rx) = channel();
