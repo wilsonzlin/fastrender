@@ -7,16 +7,18 @@ use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
 use fastrender::paint::display_list::ClipShape;
 use fastrender::style::types::{
-    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment, TextDecorationLine,
+    WritingMode,
 };
 use fastrender::style::values::Length;
+use fastrender::text::pipeline::{Direction, GlyphPosition, RunRotation, ShapedRun};
 use fastrender::tree::box_tree::ReplacedType;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use fastrender::{
     BlendMode, BorderRadii, BoxShadowItem, ClipItem, DisplayItem, DisplayList, FillRectItem, FillRoundedRectItem,
-    GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem, LinearGradientItem,
-    OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem, StrokeRoundedRectItem, Transform2D,
-    TransformItem,
+    FontContext, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality, ImageItem,
+    LinearGradientItem, OpacityItem, PaintTextItem as TextItem, RadialGradientItem, StrokeRectItem,
+    StrokeRoundedRectItem, Transform2D, TransformItem,
 };
 use fastrender::{Color, ComputedStyle, Rgba};
 use std::sync::Arc;
@@ -509,6 +511,82 @@ fn test_text_item() {
     } else {
         panic!("Expected Text item");
     }
+}
+
+#[test]
+fn sideways_writing_mode_emits_vertical_text_and_decorations() {
+    let font = match FontContext::new().get_sans_serif() {
+        Some(f) => Arc::new(f),
+        None => return, // Skip if no fonts available
+    };
+
+    let glyph = GlyphPosition {
+        glyph_id: 1,
+        cluster: 0,
+        x_offset: 5.0,
+        y_offset: 0.0,
+        x_advance: 0.0,
+        y_advance: 0.0,
+    };
+
+    let run = ShapedRun {
+        text: "A".to_string(),
+        start: 0,
+        end: 1,
+        glyphs: vec![glyph],
+        direction: Direction::LeftToRight,
+        level: 0,
+        advance: 0.0,
+        font,
+        font_size: 16.0,
+        baseline_shift: 0.0,
+        language: None,
+        synthetic_bold: 0.0,
+        synthetic_oblique: 0.0,
+        rotation: RunRotation::None,
+        scale: 1.0,
+    };
+
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::SidewaysLr;
+    style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+
+    let fragment = FragmentNode::new_text_shaped(
+        Rect::from_xywh(0.0, 0.0, 20.0, 40.0),
+        "A".to_string(),
+        0.0,
+        vec![run],
+        Arc::new(style),
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+
+    let text_item = list
+        .items()
+        .iter()
+        .find_map(|i| match i {
+            DisplayItem::Text(t) => Some(t),
+            _ => None,
+        })
+        .expect("expected text item");
+
+    assert_eq!(text_item.glyphs.len(), 1);
+    let glyph = &text_item.glyphs[0];
+    assert_eq!(glyph.offset.x, 0.0);
+    assert_eq!(glyph.offset.y, 5.0);
+
+    let decoration = list
+        .items()
+        .iter()
+        .find_map(|i| match i {
+            DisplayItem::TextDecoration(d) => Some(d),
+            _ => None,
+        })
+        .expect("expected text decoration item");
+
+    assert!(decoration.inline_vertical);
+    assert_eq!(decoration.line_start, 0.0);
+    assert_eq!(decoration.line_width, 40.0);
 }
 
 // ============================================================================

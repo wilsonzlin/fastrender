@@ -1490,7 +1490,10 @@ impl Painter {
                     .or_else(|| self.shaper.shape(&text, &style, &self.font_ctx).ok());
                 let inline_vertical = matches!(
                     style.writing_mode,
-                    crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+                    crate::style::types::WritingMode::VerticalRl
+                        | crate::style::types::WritingMode::VerticalLr
+                        | crate::style::types::WritingMode::SidewaysRl
+                        | crate::style::types::WritingMode::SidewaysLr
                 );
                 let (block_baseline, inline_start, inline_len) = if inline_vertical {
                     (rect.x() + baseline_offset, rect.y(), rect.height())

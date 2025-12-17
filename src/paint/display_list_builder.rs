@@ -1486,7 +1486,10 @@ impl DisplayListBuilder {
                 let inline_vertical = style_opt.map_or(false, |s| {
                     matches!(
                         s.writing_mode,
-                        crate::style::types::WritingMode::VerticalRl | crate::style::types::WritingMode::VerticalLr
+                        crate::style::types::WritingMode::VerticalRl
+                            | crate::style::types::WritingMode::VerticalLr
+                            | crate::style::types::WritingMode::SidewaysRl
+                            | crate::style::types::WritingMode::SidewaysLr
                     )
                 });
                 let (baseline_block, baseline_inline) = if inline_vertical {
