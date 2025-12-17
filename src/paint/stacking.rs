@@ -328,36 +328,39 @@ impl StackingContext {
 
     /// Computes bounds from all fragments in this context
     pub fn compute_bounds(&mut self) {
-        let mut bounds: Option<Rect> = None;
+        // Compute child bounds first so they contribute accurately.
+        for child in &mut self.children {
+            child.compute_bounds();
+        }
 
-        let add = |rect: Rect, bounds: &mut Option<Rect>| {
-            *bounds = Some(match *bounds {
-                Some(existing) => existing.union(rect),
-                None => rect,
-            });
+        let mut bounds: Option<Rect> = None;
+        let accumulate = |rect: Rect, current: &mut Option<Rect>| {
+            match current {
+                Some(existing) => *existing = existing.union(rect),
+                None => *current = Some(rect),
+            }
         };
 
         // Union all fragment bounds from all layers
         for frag in &self.fragments {
-            add(frag.bounds, &mut bounds);
+            accumulate(frag.bounds, &mut bounds);
         }
         for frag in &self.layer3_blocks {
-            add(frag.bounds, &mut bounds);
+            accumulate(frag.bounds, &mut bounds);
         }
         for frag in &self.layer4_floats {
-            add(frag.bounds, &mut bounds);
+            accumulate(frag.bounds, &mut bounds);
         }
         for frag in &self.layer5_inlines {
-            add(frag.bounds, &mut bounds);
+            accumulate(frag.bounds, &mut bounds);
         }
         for frag in &self.layer6_positioned {
-            add(frag.bounds, &mut bounds);
+            accumulate(frag.bounds, &mut bounds);
         }
 
-        // Union child stacking context bounds (compute them first)
-        for child in &mut self.children {
-            child.compute_bounds();
-            add(child.bounds, &mut bounds);
+        // Union child stacking context bounds
+        for child in &self.children {
+            accumulate(child.bounds, &mut bounds);
         }
 
         self.bounds = bounds.unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 0.0, 0.0));
