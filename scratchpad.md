@@ -10,7 +10,7 @@
 - UA disabled form controls now have dimmed UA styling (gray text/background, default cursor); cascade test `disabled_form_controls_use_ua_styles` covers the defaults.
 - UA focus outlines now apply to form controls: UA CSS adds focus outlines for inputs/selects/textareas/buttons, and a cascade regression `ua_focus_outline_applies_to_form_controls` locks the outline style/offset.
 - Added UA disabled form-control styling: user_agent.css dims disabled inputs/selects/textareas/buttons/options/optgroups and switches cursors to default; cascade regression `disabled_form_controls_use_ua_styles` verifies the UA defaults.
-Idle; no current tasks. Available for new tasks. Marker geometry/paint review still pending after gap/property regressions.
+Idle; no current tasks. Available for new tasks. Marker geometry/paint review still pending after gap/property regressions; pushes are succeeding now.
 - Fixed display-list underline currentColor test to assert resolved color/thickness and remove unused vars; warnings cleared.
 - PositionedLayout absolute helper delegates to AbsoluteLayout for spec-accurate shrink-to-fit/auto-margin handling; positioned layout tests updated (shrink-to-fit expectation) and an auto-margin centering regression added. `cargo test --quiet test_absolute_position_left_right_shrink_to_fit` and `cargo test --quiet absolute_position_auto_margins_center_between_insets` pass.
 - Pull from origin currently times out (ssh fetch). Commit `f888136` is local; push pending once network permits.
