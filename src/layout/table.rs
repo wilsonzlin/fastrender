@@ -5950,6 +5950,36 @@ mod tests {
     }
 
     #[test]
+    fn cell_percent_padding_is_ignored_when_table_width_indefinite() {
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.padding_left = Length::percent(10.0);
+        cell_style.padding_right = Length::percent(10.0);
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        let col = constraints.first().expect("column constraints");
+        assert!(col.min_width < 0.5, "percent padding should be treated as auto with no width base (min={:.2})", col.min_width);
+        assert!(col.max_width < 0.5, "percent padding should be treated as auto with no width base (max={:.2})", col.max_width);
+    }
+
+    #[test]
     fn collapsed_border_hidden_suppresses_other_styles() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
