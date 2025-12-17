@@ -95,10 +95,6 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
         return None;
     }
 
-    if cleaned.contains('\\') {
-        cleaned = cleaned.replace("\\/", "/").replace('\\', "");
-    }
-
     if let Some(pos) = cleaned.to_ascii_lowercase().rfind(".css") {
         let trailing = &cleaned[pos + 4..];
         if trailing.chars().all(|c| c == '/') {
@@ -107,6 +103,9 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
     }
 
     cleaned = unescape_js_escapes(&cleaned).into_owned();
+    if cleaned.contains('\\') {
+        cleaned = cleaned.replace('\\', "");
+    }
 
     if cleaned.is_empty() {
         None
@@ -773,6 +772,17 @@ mod tests {
         "#;
         let urls = extract_embedded_css_urls(html, "https://example.com/");
         assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
+    }
+
+    #[test]
+    fn unescapes_js_escaped_embedded_css_urls() {
+        let html = r#"
+            <script>
+                const css = "https://cdn.example.com/app.css?foo=bar\\u0026baz=qux";
+            </script>
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert_eq!(urls, vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]);
     }
 
     #[test]
