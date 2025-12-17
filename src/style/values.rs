@@ -281,10 +281,19 @@ impl CalcLength {
         font_size_px: f32,
         root_font_size_px: f32,
     ) -> Option<f32> {
+        if !viewport_width.is_finite()
+            || !viewport_height.is_finite()
+            || !font_size_px.is_finite()
+            || !root_font_size_px.is_finite()
+        {
+            return None;
+        }
+
+        let percentage_base = percentage_base.filter(|b| b.is_finite());
         let mut total = 0.0;
         for term in self.terms() {
             let resolved = match term.unit {
-                LengthUnit::Percent => Some((term.value / 100.0) * percentage_base.unwrap_or(0.0)),
+                LengthUnit::Percent => percentage_base.map(|base| (term.value / 100.0) * base),
                 u if u.is_absolute() => Some(Length::new(term.value, u).to_px()),
                 u if u.is_viewport_relative() => {
                     Length::new(term.value, u).resolve_with_viewport(viewport_width, viewport_height)
@@ -516,6 +525,32 @@ mod tests {
         assert_eq!(
             Length::percent(10.0).resolve_with_context(Some(NAN), NAN, NAN, NAN, NAN),
             None
+        );
+    }
+
+    #[test]
+    fn calc_length_requires_percentage_base() {
+        use std::f32::NAN;
+
+        let mut calc = CalcLength::empty();
+        calc.push(LengthUnit::Percent, 50.0).unwrap();
+        calc.push(LengthUnit::Px, 10.0).unwrap();
+
+        let length = Length::calc(calc);
+        assert_eq!(length.resolve_with_context(None, 800.0, 600.0, 16.0, 16.0), None);
+        assert_eq!(length.resolve_with_context(Some(NAN), 800.0, 600.0, 16.0, 16.0), None);
+        assert_eq!(
+            length.resolve_with_context(Some(200.0), 800.0, 600.0, 16.0, 16.0),
+            Some(110.0)
+        );
+
+        let mut absolute_calc = CalcLength::empty();
+        absolute_calc.push(LengthUnit::Px, 5.0).unwrap();
+        absolute_calc.push(LengthUnit::Em, 1.0).unwrap();
+
+        assert_eq!(
+            Length::calc(absolute_calc).resolve_with_context(None, 800.0, 600.0, 10.0, 10.0),
+            Some(15.0)
         );
     }
 
