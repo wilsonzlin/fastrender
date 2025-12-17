@@ -22,6 +22,7 @@
 - Flex row fallback now clamps runaway cross-axis positions: when Taffy returns row items with y-offsets far beyond the container height, placement snaps them back to the row origin instead of rendering thousands of pixels offscreen. Remaining CNN drift likely comes from offscreen x positions; need further tracing of row wrapping and constraint bases.
 - Flex rows now also recentre pathological horizontal drift: when every child sits multiple container widths to the right, we translate the row back so the leftmost child starts at the origin while preserving relative spacing.
 - Action: still need to inspect cnn.com cached HTML via inspect_frag with FASTR_LOG_FLEX_CHILD_IDS targeting ribbon items to see if x drift persists after the new clamp.
+- Added regression `flex_row_clamps_pathological_inline_drift`: a flex row whose items carry massive left margins is translated back toward the origin, keeping child x positions near 0.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
