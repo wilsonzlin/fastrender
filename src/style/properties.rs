@@ -4798,6 +4798,7 @@ pub fn apply_declaration_with_base(
                     styles.font_variant_numeric = FontVariantNumeric::default();
                     styles.font_variant_east_asian = FontVariantEastAsian::default();
                     styles.font_variant_position = FontVariantPosition::Normal;
+                    styles.font_variant_emoji = FontVariantEmoji::Normal;
                     styles.font_size_adjust = FontSizeAdjust::None;
                     styles.font_synthesis = FontSynthesis::default();
                     styles.font_kerning = FontKerning::Auto;
@@ -15561,6 +15562,7 @@ mod tests {
             tag: *b"TEST",
             value: 1,
         });
+        style.font_variant_emoji = FontVariantEmoji::Emoji;
 
         let decl = Declaration {
             property: "font".to_string(),
@@ -15577,6 +15579,7 @@ mod tests {
         assert_eq!(style.font_variant_numeric, FontVariantNumeric::default());
         assert_eq!(style.font_variant_east_asian, FontVariantEastAsian::default());
         assert!(matches!(style.font_variant_position, FontVariantPosition::Normal));
+        assert!(matches!(style.font_variant_emoji, FontVariantEmoji::Normal));
         // font-feature-settings should remain untouched by the shorthand
         assert_eq!(style.font_feature_settings.len(), 1);
     }
