@@ -3344,10 +3344,12 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![(
-                    "style".to_string(),
-                    "scrollbar-color: rgb(10, 20, 30) rgb(40, 50, 60);".to_string(),
-                )],
+                attributes: vec![
+                    (
+                        "style".to_string(),
+                        "scrollbar-color: rgb(10, 20, 30) rgb(40, 50, 60);".to_string(),
+                    ),
+                ],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
