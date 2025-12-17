@@ -8344,6 +8344,54 @@ mod tests {
     }
 
     #[test]
+    fn bidi_isolate_override_reorders_only_inside_isolate() {
+        // An isolate-override should reverse its own contents while remaining atomic between
+        // surrounding LTR runs.
+        let mut rtl_override = ComputedStyle::default();
+        rtl_override.direction = crate::style::types::Direction::Rtl;
+        rtl_override.unicode_bidi = crate::style::types::UnicodeBidi::IsolateOverride;
+        let rtl_override = Arc::new(rtl_override);
+
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![
+                BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
+                BoxNode::new_inline(
+                    rtl_override.clone(),
+                    vec![BoxNode::new_text(rtl_override.clone(), "DEF".to_string())],
+                ),
+                BoxNode::new_text(default_style(), "\u{00A0}GHI".to_string()),
+            ],
+        );
+
+        let ifc = InlineFormattingContext::new();
+        let constraints = LayoutConstraints::definite_width(400.0);
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_with_x(&fragment, &mut texts);
+        texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let labels: Vec<_> = texts.iter().map(|(t, _)| t.clone()).collect();
+        let joined = labels.join("");
+        assert_eq!(joined, "ABC\u{00A0}FED\u{00A0}GHI");
+
+        // Ensure the reversed isolate characters remain contiguous.
+        let isolate_positions: Vec<usize> = labels
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t.as_str(), "F" | "E" | "D"))
+            .map(|(idx, _)| idx)
+            .collect();
+        if let (Some(first), Some(last)) = (isolate_positions.first(), isolate_positions.last()) {
+            assert_eq!(isolate_positions.len(), last - first + 1);
+        } else {
+            panic!("isolate-override characters missing from line");
+        }
+    }
+
+    #[test]
     fn mandatory_breaks_survive_added_anywhere_breaks() {
         // Combine a mandatory break with word-break:anywhere additions at the same offset.
         let text = "a\nb";
