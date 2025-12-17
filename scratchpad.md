@@ -6,6 +6,7 @@ Idle; no current tasks. Available for new tasks.
 - Added bidi regression `bidi_override_stops_at_forced_break` to ensure an override without a terminator does not leak past a paragraph break; the second paragraph stays LTR.
 - Added bidi regression `bidi_override_and_embed_across_paragraphs` to ensure an override in one paragraph and an embed in the next reorder independently per paragraph.
 - Added bidi regression `bidi_override_mixed_controls_across_paragraphs` to cover RLO/RLE sequences split by a forced break; paragraphs reorder independently per UAX#9. `cargo test bidi_override_mixed_controls_across_paragraphs -- --nocapture` passes.
+- Added bidi regression `bidi_isolate_does_not_affect_following_paragraph` to ensure an isolate in one paragraph doesn’t influence subsequent paragraph reordering.
 - font-variant-emoji now has picker regressions: text preference avoids emoji fonts, emoji preference selects emoji fonts, unicode uses text for non-emoji, and FE0E/FE0F variation selectors force text/emoji choices accordingly.
 - Media query caching optimized: `MediaQueryCache` memoizes per-query keys and tracks results internally instead of exposing a raw HashMap, reducing rebuilds while keeping the existing API. `cargo test media_query_cache_reused_between_collections -- --nocapture` passes.
 - Added a display-list renderer regression for clip-path from the builder: `builder_clip_path_masks_rendered_output` builds a stacking tree with a circular clip-path and ensures the rendered output is clipped (center red, corners white).
