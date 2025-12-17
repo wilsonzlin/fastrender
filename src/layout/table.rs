@@ -372,7 +372,7 @@ fn distribute_rowspan_targets(
         let weight = match headroom {
             Some(h) if h > 0.0 => h,
             Some(_) => 0.0,
-            None => base.max(1.0), // Uncapped rows fall back to current/base height weighting.
+            None => current.max(1.0), // Uncapped rows fall back to their current height weighting.
         };
         weights.push(weight);
         caps.push(max_opt);
@@ -2840,20 +2840,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
             let spacing = structure.border_spacing.1 * (cell.rowspan - 1) as f32;
             let span_height = (cell.min_height - spacing).max(0.0);
 
-            let auto_rows: Vec<usize> = (span_start..span_end)
-                .filter(|idx| {
-                    matches!(
-                        structure.rows[*idx].specified_height,
-                        Some(SpecifiedHeight::Auto) | None
-                    )
-                })
-                .collect();
-            let has_auto = !auto_rows.is_empty();
-            let targets: Vec<usize> = if has_auto {
-                auto_rows.clone()
-            } else {
-                (span_start..span_end).collect()
-            };
+            let targets: Vec<usize> = (span_start..span_end).collect();
             if !targets.is_empty() {
                 let percent_base = content_available;
                 let mut mins: Vec<f32> = structure.rows.iter().map(|r| r.min_height).collect();
@@ -3994,20 +3981,7 @@ impl FormattingContext for TableFormattingContext {
                 let span_end = (laid.cell.row + laid.cell.rowspan).min(structure.row_count);
                 let spacing_total = v_spacing * (laid.cell.rowspan.saturating_sub(1) as f32);
                 let span_height = (laid.height - spacing_total).max(0.0);
-                let auto_rows: Vec<usize> = (span_start..span_end)
-                    .filter(|idx| {
-                        matches!(
-                            structure.rows[*idx].specified_height,
-                            Some(SpecifiedHeight::Auto) | None
-                        )
-                    })
-                    .collect();
-                let has_auto = !auto_rows.is_empty();
-                let targets: Vec<usize> = if has_auto {
-                    auto_rows.clone()
-                } else {
-                    (span_start..span_end).collect()
-                };
+                let targets: Vec<usize> = (span_start..span_end).collect();
                 let current_total: f32 = row_heights
                     .get(span_start..span_end)
                     .map(|slice| slice.iter().sum())
@@ -8807,6 +8781,42 @@ mod tests {
         // Row 0 caps at its max; the remaining height flows into row 1.
         assert!((structure.rows[0].computed_height - 60.0).abs() < 0.5);
         assert!(structure.rows[1].computed_height > 120.0);
+    }
+
+    #[test]
+    fn calculate_row_heights_spreads_rowspan_across_specified_and_auto_rows() {
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.rows[0].specified_height = Some(SpecifiedHeight::Fixed(50.0));
+        structure.cells = vec![CellInfo {
+            index: 0,
+            source_row: 0,
+            source_col: 0,
+            row: 0,
+            col: 0,
+            rowspan: 2,
+            colspan: 1,
+            box_index: 0,
+            min_width: 0.0,
+            max_width: 0.0,
+            min_height: 150.0,
+            bounds: Rect::ZERO,
+        }];
+        structure.border_spacing = (0.0, 0.0);
+
+        calculate_row_heights(&mut structure, None);
+
+        assert!(
+            structure.rows[0].computed_height > 70.0 && structure.rows[0].computed_height < 80.0,
+            "row 0 should share the spanning height despite its fixed size (got {:.2})",
+            structure.rows[0].computed_height
+        );
+        assert!(
+            structure.rows[1].computed_height > 70.0 && structure.rows[1].computed_height < 80.0,
+            "row 1 should share the spanning height (got {:.2})",
+            structure.rows[1].computed_height
+        );
     }
 
     #[test]
