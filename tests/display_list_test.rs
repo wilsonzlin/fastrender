@@ -291,7 +291,7 @@ fn background_attachment_local_clips_to_padding_box_in_display_list() {
 }
 
 #[test]
-fn background_attachment_local_uses_padding_box_origin_in_display_list() {
+fn background_attachment_local_anchors_to_padding_box() {
     fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
         let px = pixmap.pixel(x, y).expect("pixel inside viewport");
         (px.red(), px.green(), px.blue(), px.alpha())
@@ -299,58 +299,48 @@ fn background_attachment_local_uses_padding_box_origin_in_display_list() {
 
     let mut style = ComputedStyle::default();
     style.set_background_layers(vec![BackgroundLayer {
-        image: Some(BackgroundImage::RepeatingLinearGradient {
-            angle: 90.0,
-            stops: vec![
-                ColorStop {
-                    color: Color::Rgba(Rgba::RED),
-                    position: Some(0.0),
-                },
-                ColorStop {
-                    color: Color::Rgba(Rgba::RED),
-                    position: Some(0.5),
-                },
-                ColorStop {
-                    color: Color::Rgba(Rgba::BLUE),
-                    position: Some(0.5),
-                },
-                ColorStop {
-                    color: Color::Rgba(Rgba::BLUE),
-                    position: Some(1.0),
-                },
-            ],
-        }),
+        image: Some(BackgroundImage::Url(
+            "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='2'%3E%3Crect width='1' height='1' fill='red'/%3E%3Crect y='1' width='1' height='1' fill='blue'/%3E%3C/svg%3E"
+                .into(),
+        )),
         attachment: BackgroundAttachment::Local,
+        repeat: BackgroundRepeat::repeat_y(),
         ..BackgroundLayer::default()
     }]);
+    style.padding_left = Length::px(0.0);
+    style.padding_right = Length::px(0.0);
+    style.padding_top = Length::px(0.0);
+    style.padding_bottom = Length::px(0.0);
+    style.border_left_width = Length::px(1.0);
+    style.border_right_width = Length::px(1.0);
+    style.border_top_width = Length::px(1.0);
+    style.border_bottom_width = Length::px(1.0);
+    style.border_left_style = BorderStyle::Solid;
+    style.border_right_style = BorderStyle::Solid;
+    style.border_top_style = BorderStyle::Solid;
+    style.border_bottom_style = BorderStyle::Solid;
+    style.border_left_color = Rgba::TRANSPARENT;
+    style.border_right_color = Rgba::TRANSPARENT;
+    style.border_top_color = Rgba::TRANSPARENT;
+    style.border_bottom_color = Rgba::TRANSPARENT;
     style.overflow_x = fastrender::style::types::Overflow::Scroll;
     style.overflow_y = fastrender::style::types::Overflow::Scroll;
-    style.border_top_width = Length::px(2.0);
-    style.border_right_width = Length::px(2.0);
-    style.border_bottom_width = Length::px(2.0);
-    style.border_left_width = Length::px(2.0);
-    style.border_top_style = BorderStyle::Solid;
-    style.border_right_style = BorderStyle::Solid;
-    style.border_bottom_style = BorderStyle::Solid;
-    style.border_left_style = BorderStyle::Solid;
-    style.border_top_color = Rgba::TRANSPARENT;
-    style.border_right_color = Rgba::TRANSPARENT;
-    style.border_bottom_color = Rgba::TRANSPARENT;
-    style.border_left_color = Rgba::TRANSPARENT;
 
-    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), vec![], Arc::new(style));
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 6.0, 6.0), vec![], Arc::new(style));
     let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
-        .with_viewport_size(12.0, 12.0)
+        .with_viewport_size(6.0, 6.0)
         .build(&fragment);
 
-    let pixmap = DisplayListRenderer::new(12, 12, Rgba::WHITE, FontContext::new())
+    let pixmap = DisplayListRenderer::new(6, 6, Rgba::WHITE, FontContext::new())
         .unwrap()
         .render(&list)
         .unwrap();
 
-    // Padding box spans x∈[2,10). Gradient should start at padding start (red) and end near padding end (blue).
-    assert_eq!(pixel(&pixmap, 2, 6), (255, 0, 0, 255));
-    assert_eq!(pixel(&pixmap, 9, 6), (0, 0, 255, 255));
+    // Padding box begins at y=1; attachment local should anchor the background to that edge, starting with red.
+    let first = pixel(&pixmap, 1, 1);
+    let second = pixel(&pixmap, 1, 2);
+    assert_eq!(first, (255, 0, 0, 255));
+    assert_eq!(second, (0, 0, 255, 255));
 }
 
 #[test]
