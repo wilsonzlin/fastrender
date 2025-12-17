@@ -3555,6 +3555,18 @@ mod tests {
     }
 
     #[test]
+    fn range_resolution_accepts_x_alias() {
+        let mut ctx = MediaContext::screen(1024.0, 768.0);
+        ctx.device_pixel_ratio = 2.0;
+
+        let res_query = MediaQuery::parse("(resolution >= 2x)").unwrap();
+        assert!(ctx.evaluate(&res_query));
+
+        let miss = MediaQuery::parse("(resolution > 3x)").unwrap();
+        assert!(!ctx.evaluate(&miss));
+    }
+
+    #[test]
     fn test_evaluate_range_equality() {
         let ctx = MediaContext::screen(700.0, 800.0);
         let width_eq = MediaQuery::parse("(width = 700px)").unwrap();
