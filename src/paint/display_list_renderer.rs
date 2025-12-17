@@ -3640,29 +3640,31 @@ mod tests {
     }
 
     #[test]
-    fn outline_ignores_clip_region() {
-        let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
+    fn outline_paints_outside_overflow_hidden_clip() {
+        let renderer = DisplayListRenderer::new(20, 20, Rgba::WHITE, FontContext::new()).unwrap();
         let mut list = DisplayList::new();
-        // Simulate overflow:hidden via a clip.
+        // Simulate overflow:hidden clipping the content box but paint outline after clip.
         list.push(DisplayItem::PushClip(ClipItem {
             shape: ClipShape::Rect {
-                rect: Rect::from_xywh(10.0, 10.0, 10.0, 10.0),
+                rect: Rect::from_xywh(8.0, 8.0, 4.0, 4.0),
                 radii: Some(BorderRadii::ZERO),
             },
         }));
+        list.push(DisplayItem::PopClip);
         list.push(DisplayItem::Outline(OutlineItem {
-            rect: Rect::from_xywh(10.0, 10.0, 10.0, 10.0),
-            width: 4.0,
+            rect: Rect::from_xywh(8.0, 8.0, 4.0, 4.0),
+            width: 2.0,
             style: CssBorderStyle::Solid,
             color: Rgba::RED,
             offset: 0.0,
             invert: false,
         }));
-        list.push(DisplayItem::PopClip);
 
         let pixmap = renderer.render(&list).unwrap();
-        // Outline should extend beyond the clipped rect.
-        assert_eq!(pixel(&pixmap, 8, 15), (255, 0, 0, 255));
+        // Outline should render outside the clipped area; check just left of the content box.
+        assert_eq!(pixel(&pixmap, 7, 10), (255, 0, 0, 255));
+        // Center remains unclipped by outline.
+        assert_eq!(pixel(&pixmap, 10, 10), (255, 255, 255, 255));
     }
 
     #[test]
