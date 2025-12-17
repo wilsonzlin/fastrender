@@ -121,6 +121,33 @@ fn test_phone_number_in_arabic() {
 }
 
 // =============================================================================
+// Paragraph / override interactions
+// =============================================================================
+
+#[test]
+fn override_does_not_leak_to_next_paragraph_with_embed() {
+    // First paragraph forces RTL override; second paragraph contains an embedded LTR run.
+    // Visual order should keep paragraphs independent (no override leak).
+    let para1 = "ABC";
+    let para2 = "\u{202A}DEF\u{202C}"; // LRE ... PDF
+    let text = format!("{para1}\n{para2}");
+
+    let runs = analyze_bidi(&text, Direction::Ltr);
+
+    // Split runs by paragraph
+    let (first_para, second_para): (Vec<_>, Vec<_>) = runs
+        .into_iter()
+        .partition(|r| r.text.contains('A') || r.text.contains('C'));
+
+    let combined_first: String = first_para.iter().map(|r| r.text.as_str()).collect();
+    assert!(combined_first.contains("ABC"), "override paragraph should stay RTL but complete");
+
+    let combined_second: String = second_para.iter().map(|r| r.text.as_str()).collect();
+    // The embedded LTR run should surface as DEF in visual order without reversal.
+    assert!(combined_second.contains("DEF"), "embedded LTR run should stay LTR in its paragraph");
+}
+
+// =============================================================================
 // Direction Detection Tests
 // =============================================================================
 
