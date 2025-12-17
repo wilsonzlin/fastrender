@@ -1,9 +1,9 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] <url> [output.png] [width] [height] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
-//!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0
+//!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
 //!
 //! Options:
 //!   --timeout SECONDS   Per-page timeout (default: 0 = no timeout)
@@ -331,15 +331,25 @@ mod tests {
 }
 
 fn usage(program: &str) {
-    eprintln!("Usage: {program} [--timeout SECONDS] [--dpr FLOAT] <url> [output.png] [width] [height] [scroll_y]");
-    eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0");
+    eprintln!("Usage: {program} [--timeout SECONDS] [--dpr FLOAT] <url> [output.png] [width] [height] [scroll_x] [scroll_y]");
+    eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
     eprintln!("  height: viewport height (default: 800)");
     eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
+    eprintln!("  scroll_x: horizontal scroll offset (default: 0)");
     eprintln!("  scroll_y: vertical scroll offset (default: 0)");
 }
 
-fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32, dpr: f32) -> Result<()> {
+fn render_once(
+    url: &str,
+    output: &str,
+    width: u32,
+    height: u32,
+    scroll_x: u32,
+    scroll_y: u32,
+    dpr: f32,
+) -> Result<()> {
+    let _ = scroll_x; // horizontal scroll not yet supported by the renderer API
     println!("Fetching HTML from: {}", url);
     let (html_bytes, html_content_type) = fetch_bytes(url)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
@@ -393,8 +403,8 @@ fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_y: u32, 
     };
 
     println!(
-        "Rendering to image ({}x{} viewport, scroll_y={})...",
-        width, height, scroll_y
+        "Rendering to image ({}x{} viewport, scroll_x={}, scroll_y={})...",
+        width, height, scroll_x, scroll_y
     );
     let mut renderer = FastRender::builder().device_pixel_ratio(dpr).build()?;
     renderer.set_base_url(resource_base.clone());
@@ -450,7 +460,8 @@ fn main() -> Result<()> {
         .unwrap_or_else(|| "fetched_output.png".to_string());
     let width = positional.get(2).and_then(|v| v.parse::<u32>().ok()).unwrap_or(1200);
     let height = positional.get(3).and_then(|v| v.parse::<u32>().ok()).unwrap_or(800);
-    let scroll_y = positional.get(4).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    let scroll_x = positional.get(4).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    let scroll_y = positional.get(5).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
 
     let (tx, rx) = channel();
     let url_clone = url.clone();
@@ -459,7 +470,15 @@ fn main() -> Result<()> {
         .name("fetch_and_render-worker".to_string())
         .stack_size(STACK_SIZE)
         .spawn(move || {
-            let _ = tx.send(render_once(&url_clone, &output_clone, width, height, scroll_y, dpr));
+            let _ = tx.send(render_once(
+                &url_clone,
+                &output_clone,
+                width,
+                height,
+                scroll_x,
+                scroll_y,
+                dpr,
+            ));
         })
         .expect("spawn render worker");
 

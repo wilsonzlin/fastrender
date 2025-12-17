@@ -1,6 +1,6 @@
 //! Render all cached pages in parallel
 //!
-//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-y PX]
+//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX]
 //!
 //! Renders all HTML files in fetches/html/ to fetches/renders/
 //! Logs per-page to fetches/renders/{name}.log
@@ -32,12 +32,13 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-y PX]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
     println!("  --pages a,b,c     Render only the listed cached pages (use cache stems like cnn.com)");
     println!("  --dpr FLOAT       Device pixel ratio for media queries/srcset (default: 1.0)");
+    println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
 }
 
@@ -61,6 +62,7 @@ fn main() {
     let mut timeout_secs: Option<u64> = None;
     let mut viewport: Option<(u32, u32)> = None;
     let mut device_pixel_ratio: f32 = 1.0;
+    let mut scroll_x: f32 = 0.0;
     let mut scroll_y: f32 = 0.0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -118,6 +120,15 @@ fn main() {
                     if let Ok(parsed) = val.parse::<f32>() {
                         if parsed.is_finite() {
                             scroll_y = parsed;
+                        }
+                    }
+                }
+            }
+            "--scroll-x" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<f32>() {
+                        if parsed.is_finite() {
+                            scroll_x = parsed;
                         }
                     }
                 }
@@ -211,6 +222,7 @@ fn main() {
                 };
                 log.push_str(&format!("HTML size: {} bytes\n", html.len()));
                 log.push_str(&format!("Viewport: {}x{}\n", viewport_w, viewport_h));
+                log.push_str(&format!("Scroll-X: {}px\n", scroll_x));
                 log.push_str(&format!("Scroll-Y: {}px\n", scroll_y));
 
                 let input_url = format!("file://{}", path.display());
@@ -276,6 +288,7 @@ fn main() {
                 };
                 let run_render = move || -> Result<Vec<u8>, Status> {
                     let render_work = move || -> Result<Vec<u8>, fastrender::Error> {
+                        let _ = scroll_x; // horizontal scroll not yet supported by renderer API
                         let mut renderer = FastRender::builder()
                             .fetcher(fetcher as Arc<dyn ResourceFetcher>)
                             .base_url(resource_base.clone())
