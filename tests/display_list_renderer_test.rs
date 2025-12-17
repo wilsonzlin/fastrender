@@ -724,6 +724,35 @@ fn blur_filters_arent_clipped_by_border_radii() {
 }
 
 #[test]
+fn grayscale_filter_converts_to_luma() {
+    let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+        is_isolated: true,
+        transform: None,
+        filters: vec![ResolvedFilter::Grayscale(1.0)],
+        backdrop_filters: Vec::new(),
+        radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    }));
+    // Pure blue content becomes luma gray (~18/255 per channel).
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+        color: Rgba::from_rgba8(0, 0, 255, 255),
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let (r, g, b, a) = pixel(&pixmap, 0, 0);
+    assert_eq!(a, 255);
+    assert!(r.abs_diff(18) <= 1 && g.abs_diff(18) <= 1 && b.abs_diff(18) <= 1,
+        "expected grayscale ~18, got {:?}", (r, g, b, a));
+}
+
+#[test]
 fn color_blend_mode_uses_destination_luminance() {
     use fastrender::paint::display_list::{BlendMode, BlendModeItem};
 
