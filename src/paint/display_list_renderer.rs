@@ -2220,7 +2220,7 @@ impl DisplayListRenderer {
                             pixmap,
                             &paint,
                             deco.style,
-                            *start,
+                            item.line_start + *start,
                             len,
                             underline.center,
                             underline.thickness,

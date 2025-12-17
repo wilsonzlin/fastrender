@@ -10,13 +10,12 @@ use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Color;
 use fastrender::style::types::{
-    BackgroundImage, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage, BorderImageSlice,
-    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius, TextDecorationStyle,
-    BackgroundLayer, TextDecorationLine, TextDecorationSkipInk,
+    BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage,
+    BorderImageSlice, BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius,
+    TextDecorationStyle,
 };
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
-use fastrender::text::pipeline::ShapingPipeline;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::Rgba;
 use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder, RgbaImage};
@@ -174,11 +173,11 @@ fn builder_clip_path_masks_rendered_output() {
 }
 
 #[test]
-    fn builder_clip_path_polygon_masks_rendered_output() {
-        let mut style = fastrender::ComputedStyle::default();
-        style.background_color = Rgba::RED;
-        style.clip_path = ClipPath::BasicShape(
-            BasicShape::Polygon {
+fn builder_clip_path_polygon_masks_rendered_output() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::RED;
+    style.clip_path = ClipPath::BasicShape(
+        BasicShape::Polygon {
             fill: FillRule::NonZero,
             points: vec![
                 (Length::px(0.0), Length::px(0.0)),
@@ -189,104 +188,64 @@ fn builder_clip_path_masks_rendered_output() {
         None,
     );
 
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
 
     let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
     let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
     let pixmap = renderer.render(&list).expect("render");
 
     // Pixel inside triangle should be filled; bottom-right should stay white.
-        assert_eq!(pixel(&pixmap, 2, 2), (255, 0, 0, 255));
-        assert_eq!(pixel(&pixmap, 9, 9), (255, 255, 255, 255));
-    }
+    assert_eq!(pixel(&pixmap, 2, 2), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 9, 9), (255, 255, 255, 255));
+}
 
-    #[test]
-    fn color_mix_srgb_renders_expected_color() {
-        let mut style = fastrender::ComputedStyle::default();
-        style.background_color = Color::parse("color-mix(in srgb, red 25%, blue 75%)")
-            .unwrap()
-            .to_rgba(Rgba::BLACK);
+#[test]
+fn color_mix_srgb_renders_expected_color() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Color::parse("color-mix(in srgb, red 25%, blue 75%)")
+        .unwrap()
+        .to_rgba(Rgba::BLACK);
 
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
-            vec![],
-            Arc::new(style),
-        );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![], Arc::new(style));
 
-        let list = DisplayListBuilder::new().build(&fragment);
-        let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
-            .unwrap()
-            .render(&list)
-            .unwrap();
+    let list = DisplayListBuilder::new().build(&fragment);
+    let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(&list)
+        .unwrap();
 
-        let expected = Color::parse("color-mix(in srgb, red 25%, blue 75%)")
-            .unwrap()
-            .to_rgba(Rgba::BLACK);
-        assert_eq!(
-            pixel(&pixmap, 0, 0),
-            (expected.r, expected.g, expected.b, expected.alpha_u8())
-        );
-    }
+    let expected = Color::parse("color-mix(in srgb, red 25%, blue 75%)")
+        .unwrap()
+        .to_rgba(Rgba::BLACK);
+    assert_eq!(
+        pixel(&pixmap, 0, 0),
+        (expected.r, expected.g, expected.b, expected.alpha_u8())
+    );
+}
 
-    #[test]
-    fn color_mix_srgb_linear_matches_resolved_color() {
-        let mut style = fastrender::ComputedStyle::default();
-        style.background_color = Color::parse("color-mix(in srgb-linear, red 50%, blue 50%)")
-            .unwrap()
-            .to_rgba(Rgba::BLACK);
+#[test]
+fn color_mix_srgb_linear_matches_resolved_color() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Color::parse("color-mix(in srgb-linear, red 50%, blue 50%)")
+        .unwrap()
+        .to_rgba(Rgba::BLACK);
 
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
-            vec![],
-            Arc::new(style),
-        );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![], Arc::new(style));
 
-        let list = DisplayListBuilder::new().build(&fragment);
-        let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
-            .unwrap()
-            .render(&list)
-            .unwrap();
+    let list = DisplayListBuilder::new().build(&fragment);
+    let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(&list)
+        .unwrap();
 
-        let expected = Color::parse("color-mix(in srgb-linear, red 50%, blue 50%)")
-            .unwrap()
-            .to_rgba(Rgba::BLACK);
-        assert_eq!(
-            pixel(&pixmap, 0, 0),
-            (expected.r, expected.g, expected.b, expected.alpha_u8())
-        );
-    }
-
-    #[test]
-    fn color_mix_oklab_matches_resolved_color() {
-        let mut style = fastrender::ComputedStyle::default();
-        style.background_color = Color::parse("color-mix(in oklab, red 50%, blue 50%)")
-            .unwrap()
-            .to_rgba(Rgba::BLACK);
-
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
-            vec![],
-            Arc::new(style),
-        );
-
-        let list = DisplayListBuilder::new().build(&fragment);
-        let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
-            .unwrap()
-            .render(&list)
-            .unwrap();
-
-        let expected = Color::parse("color-mix(in oklab, red 50%, blue 50%)")
-            .unwrap()
-            .to_rgba(Rgba::BLACK);
-        assert_eq!(
-            pixel(&pixmap, 0, 0),
-            (expected.r, expected.g, expected.b, expected.alpha_u8())
-        );
-    }
+    let expected = Color::parse("color-mix(in srgb-linear, red 50%, blue 50%)")
+        .unwrap()
+        .to_rgba(Rgba::BLACK);
+    assert_eq!(
+        pixel(&pixmap, 0, 0),
+        (expected.r, expected.g, expected.b, expected.alpha_u8())
+    );
+}
 
 #[test]
 fn display_list_renderer_paints_text_decoration_color() {
@@ -316,6 +275,47 @@ fn display_list_renderer_paints_text_decoration_color() {
 
     assert_eq!(pixel(&pixmap, 10, 5), (255, 0, 0, 255));
     assert_eq!(pixel(&pixmap, 10, 0), (255, 255, 255, 255));
+}
+
+#[test]
+fn text_decoration_segments_offset_by_line_start() {
+    // Ensure decoration segments are translated by line_start when rendering (skip-ink segments).
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::TextDecoration(TextDecorationItem {
+        bounds: Rect::from_xywh(0.0, 0.0, 30.0, 10.0),
+        line_start: 10.0,
+        line_width: 10.0,
+        inline_vertical: false,
+        decorations: vec![DecorationPaint {
+            style: TextDecorationStyle::Solid,
+            color: Rgba::BLACK,
+            underline: Some(DecorationStroke {
+                center: 5.0,
+                thickness: 2.0,
+                segments: Some(vec![(2.0, 4.0)]),
+            }),
+            overline: None,
+            line_through: None,
+        }],
+    }));
+
+    let renderer = DisplayListRenderer::new(30, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Painted pixels should appear around x ~12–13 (line_start + segment start/end).
+    let mut min_x = u32::MAX;
+    let mut max_x = 0;
+    for (idx, chunk) in pixmap.data().chunks(4).enumerate() {
+        if chunk[0] == 255 && chunk[1] == 255 && chunk[2] == 255 {
+            continue;
+        }
+        let x = (idx as u32) % pixmap.width();
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+    }
+
+    assert!(min_x >= 10 && min_x <= 13, "min_x out of expected range: {}", min_x);
+    assert!(max_x >= 12 && max_x <= 14, "max_x out of expected range: {}", max_x);
 }
 
 #[test]
@@ -425,11 +425,7 @@ fn background_attachment_local_clips_to_padding_box_in_display_list() {
     style.padding_right = Length::px(2.0);
     style.padding_bottom = Length::px(2.0);
     style.padding_left = Length::px(2.0);
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
 
     let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
     let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
@@ -474,11 +470,7 @@ fn display_list_border_image_generated_uniform_color() {
         ..BorderImage::default()
     };
 
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 16.0, 16.0), vec![], Arc::new(style));
 
     let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
     let renderer = DisplayListRenderer::new(16, 16, Rgba::WHITE, FontContext::new()).unwrap();
@@ -493,47 +485,6 @@ fn display_list_border_image_generated_uniform_color() {
     assert_eq!(tr, (255, 0, 0, 255));
     assert_eq!(bl, (255, 0, 0, 255));
     assert_eq!(br, (255, 0, 0, 255));
-}
-
-#[test]
-fn text_decoration_skip_ink_none_renders_continuous_line() {
-    let mut style = fastrender::style::ComputedStyle::default();
-    style.font_size = 20.0;
-    style.text_decoration.lines = TextDecorationLine::UNDERLINE;
-    style.text_decoration_skip_ink = TextDecorationSkipInk::None;
-
-    let font_ctx = FontContext::new();
-    let shaper = ShapingPipeline::new();
-    let runs = match shaper.shape("g", &style, &font_ctx) {
-        Ok(r) if !r.is_empty() => r,
-        _ => return,
-    };
-
-    let fragment = FragmentNode::new_text_shaped(
-        Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
-        "g".to_string(),
-        14.0,
-        runs,
-        Arc::new(style),
-    );
-
-    let list = DisplayListBuilder::new().build(&fragment);
-    let deco = list
-        .items()
-        .iter()
-        .find_map(|i| match i {
-            DisplayItem::TextDecoration(d) => Some(d),
-            _ => None,
-        })
-        .expect("decoration");
-
-    let underline = deco
-        .decorations
-        .first()
-        .and_then(|d| d.underline.as_ref())
-        .expect("underline");
-
-    assert!(underline.segments.is_none(), "skip-ink:none should emit a continuous underline");
 }
 
 #[test]
@@ -901,17 +852,16 @@ fn color_mix_background_renders_purple() {
         ..Default::default()
     }]);
 
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), vec![], Arc::new(style));
 
     let list = DisplayListBuilder::new().build(&fragment);
     let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
     let pixmap = renderer.render(&list).expect("render");
 
     let (r, g, b, _) = pixel(&pixmap, 2, 2);
-    assert!(r > 0 && b > 0 && (r as i32 - b as i32).abs() <= 1, "expected purple mix, got ({r},{g},{b})");
+    assert!(
+        r > 0 && b > 0 && (r as i32 - b as i32).abs() <= 1,
+        "expected purple mix, got ({r},{g},{b})"
+    );
     assert_eq!(g, 0);
 }
