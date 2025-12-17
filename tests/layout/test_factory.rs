@@ -10,6 +10,9 @@ use fastrender::FormattingContextFactory;
 #[allow(unused_imports)]
 use fastrender::{BoxNode, FormattingContextType, FragmentNode};
 use fastrender::{FormattingContext, IntrinsicSizingMode, LayoutConstraints};
+use fastrender::style::display::Display;
+use fastrender::style::float::Float;
+use fastrender::style::values::Length;
 use std::sync::Arc;
 
 // =============================================================================
@@ -623,6 +626,39 @@ fn block_intrinsic_width_respects_max_width() {
         width <= 5.01,
         "max-width should clamp intrinsic width to 5px, got {}",
         width
+    );
+}
+
+#[test]
+fn block_intrinsic_width_ignores_floats() {
+    let factory = FormattingContextFactory::new();
+
+    let mut float_style = ComputedStyle::default();
+    float_style.display = Display::Block;
+    float_style.float = Float::Left;
+    float_style.width = Some(Length::px(200.0));
+    float_style.height = Some(Length::px(10.0));
+    let float_child = BoxNode::new_block(Arc::new(float_style), FormattingContextType::Block, vec![]);
+
+    let parent = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![float_child]);
+    let block_fc = factory.create(FormattingContextType::Block);
+
+    let min = block_fc
+        .compute_intrinsic_inline_size(&parent, IntrinsicSizingMode::MinContent)
+        .expect("min-content width");
+    let max = block_fc
+        .compute_intrinsic_inline_size(&parent, IntrinsicSizingMode::MaxContent)
+        .expect("max-content width");
+
+    assert!(
+        min <= 0.01,
+        "floats are out-of-flow and should not raise min-content width; got {}",
+        min
+    );
+    assert!(
+        max <= 0.01,
+        "floats are out-of-flow and should not raise max-content width; got {}",
+        max
     );
 }
 

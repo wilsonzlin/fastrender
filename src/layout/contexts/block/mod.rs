@@ -2156,6 +2156,12 @@ impl FormattingContext for BlockFormattingContext {
                 continue;
             }
 
+            // Floats are out-of-flow for intrinsic sizing; they shouldn't contribute to the
+            // parent’s min/max-content inline size.
+            if child.style.float.is_floating() {
+                continue;
+            }
+
             let treated_as_block = match child.box_type {
                 BoxType::Replaced(_) if child.style.display.is_inline_level() => false,
                 _ => child.is_block_level(),
@@ -2178,6 +2184,12 @@ impl FormattingContext for BlockFormattingContext {
             if !child.is_block_level() || is_out_of_flow(child) {
                 continue;
             }
+
+            // Ignore floats when computing intrinsic inline sizes; they are out-of-flow.
+            if child.style.float.is_floating() {
+                continue;
+            }
+
             let fc_type = child.formatting_context().unwrap_or(FormattingContextType::Block);
             let fc = factory.create(fc_type);
             let child_width = fc.compute_intrinsic_inline_size(child, mode)?;
