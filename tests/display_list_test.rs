@@ -291,6 +291,69 @@ fn background_attachment_local_clips_to_padding_box_in_display_list() {
 }
 
 #[test]
+fn background_attachment_local_uses_padding_box_origin_in_display_list() {
+    fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let px = pixmap.pixel(x, y).expect("pixel inside viewport");
+        (px.red(), px.green(), px.blue(), px.alpha())
+    }
+
+    let mut style = ComputedStyle::default();
+    style.set_background_layers(vec![BackgroundLayer {
+        image: Some(BackgroundImage::RepeatingLinearGradient {
+            angle: 90.0,
+            stops: vec![
+                ColorStop {
+                    color: Color::Rgba(Rgba::RED),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::RED),
+                    position: Some(0.5),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::BLUE),
+                    position: Some(0.5),
+                },
+                ColorStop {
+                    color: Color::Rgba(Rgba::BLUE),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        attachment: BackgroundAttachment::Local,
+        ..BackgroundLayer::default()
+    }]);
+    style.overflow_x = fastrender::style::types::Overflow::Scroll;
+    style.overflow_y = fastrender::style::types::Overflow::Scroll;
+    style.border_top_width = Length::px(2.0);
+    style.border_right_width = Length::px(2.0);
+    style.border_bottom_width = Length::px(2.0);
+    style.border_left_width = Length::px(2.0);
+    style.border_top_style = BorderStyle::Solid;
+    style.border_right_style = BorderStyle::Solid;
+    style.border_bottom_style = BorderStyle::Solid;
+    style.border_left_style = BorderStyle::Solid;
+    style.border_top_color = Rgba::TRANSPARENT;
+    style.border_right_color = Rgba::TRANSPARENT;
+    style.border_bottom_color = Rgba::TRANSPARENT;
+    style.border_left_color = Rgba::TRANSPARENT;
+
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 12.0, 12.0), vec![], Arc::new(style));
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
+        .with_viewport_size(12.0, 12.0)
+        .build(&fragment);
+
+    let pixmap = DisplayListRenderer::new(12, 12, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(&list)
+        .unwrap();
+
+    // Padding box spans x∈[2,10). Gradient should start at padding start (red) and end near padding end (blue).
+    assert_eq!(pixel(&pixmap, 2, 6), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 9, 6), (0, 0, 255, 255));
+}
+
+#[test]
 fn fragment_background_gradient_emits_linear_gradient() {
     let mut style = fastrender::ComputedStyle::default();
     style.background_color = Rgba::TRANSPARENT;
