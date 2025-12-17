@@ -559,9 +559,14 @@ impl<'a> ElementRef<'a> {
     }
 
     fn select_value(&self) -> Option<String> {
-        let explicit = find_selected_option_value(self.node);
+        let multiple = self.node.get_attribute("multiple").is_some();
+        let explicit = find_selected_option_value(self.node, false);
         if explicit.is_some() {
             return explicit;
+        }
+
+        if multiple {
+            return None;
         }
 
         first_enabled_option(self.node, false).map(option_value_from_node)
@@ -679,7 +684,6 @@ impl<'a> ElementRef<'a> {
 
         self.numeric_in_range(num)
     }
-
     fn is_indeterminate(&self) -> bool {
         let Some(tag) = self.node.tag_name() else {
             return false;
@@ -772,7 +776,6 @@ impl<'a> ElementRef<'a> {
 
         traverse(form, &mut ancestors, target).unwrap_or(false)
     }
-
     /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
     fn direction(&self) -> TextDirection {
         if let Some(dir) = self.dir_attribute(self.node, self.node) {
@@ -918,16 +921,19 @@ fn option_value_from_node(node: &DomNode) -> String {
         .collect()
 }
 
-fn find_selected_option_value(node: &DomNode) -> Option<String> {
+fn find_selected_option_value(node: &DomNode, optgroup_disabled: bool) -> Option<String> {
     let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
     let is_option = tag.as_deref() == Some("option");
 
-    if is_option && node.get_attribute("selected").is_some() {
+    let option_disabled = node.get_attribute("disabled").is_some();
+    let next_optgroup_disabled = optgroup_disabled || (tag.as_deref() == Some("optgroup") && option_disabled);
+
+    if is_option && node.get_attribute("selected").is_some() && !(option_disabled || optgroup_disabled) {
         return Some(option_value_from_node(node));
     }
 
     for child in &node.children {
-        if let Some(val) = find_selected_option_value(child) {
+        if let Some(val) = find_selected_option_value(child, next_optgroup_disabled) {
             return Some(val);
         }
     }
@@ -2214,6 +2220,46 @@ mod tests {
         };
         assert!(matches(&disabled_input, &[], &PseudoClass::Valid));
         assert!(!matches(&disabled_input, &[], &PseudoClass::Invalid));
+
+        let required_multiple_select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![
+                    ("required".to_string(), "true".to_string()),
+                    ("multiple".to_string(), "multiple".to_string()),
+                ],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "option".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+        assert!(matches(&required_multiple_select, &[], &PseudoClass::Invalid));
+
+        let valid_multiple_select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![
+                    ("required".to_string(), "true".to_string()),
+                    ("multiple".to_string(), "multiple".to_string()),
+                ],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "option".to_string(),
+                    attributes: vec![
+                        ("selected".to_string(), "selected".to_string()),
+                        ("value".to_string(), "a".to_string()),
+                    ],
+                },
+                children: vec![],
+            }],
+        };
+        assert!(matches(&valid_multiple_select, &[], &PseudoClass::Valid));
+        assert!(!matches(&valid_multiple_select, &[], &PseudoClass::Invalid));
     }
 
     #[test]
