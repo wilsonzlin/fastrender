@@ -9075,7 +9075,7 @@ mod tests {
     }
 
     #[test]
-    fn text_indent_hanging_each_line_indents_all_lines() {
+    fn text_indent_hanging_each_line_skips_first_line() {
         let mut root_style = ComputedStyle::default();
         root_style.text_indent.length = Length::px(12.0);
         root_style.text_indent.hanging = true;
@@ -9096,13 +9096,10 @@ mod tests {
         let first_x = fragment.children[0].children[0].bounds.x();
         let second_x = fragment.children[1].children[0].bounds.x();
         assert!(
-            first_x >= 11.0,
-            "first line should be indented when each-line is present alongside hanging"
-        );
-        assert!(
             second_x >= 11.0,
             "subsequent lines should be indented under hanging + each-line"
         );
+        assert!(first_x < 1.0, "first line should remain outdented under hanging");
     }
 
     #[test]

@@ -1387,20 +1387,17 @@ impl<'a> LineBuilder<'a> {
         }
         if is_first_line {
             if self.indent_hanging {
-                if self.indent_each_line {
-                    self.indent
-                } else {
-                    0.0
-                }
+                0.0
             } else {
                 self.indent
             }
-        } else if self.indent_hanging {
-            self.indent
-        } else if is_para_start && self.indent_each_line {
-            self.indent
         } else {
-            0.0
+            let apply_indent = self.indent_hanging || (self.indent_each_line && is_para_start);
+            if apply_indent {
+                self.indent
+            } else {
+                0.0
+            }
         }
     }
 
