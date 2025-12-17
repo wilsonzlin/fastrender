@@ -7520,8 +7520,8 @@ mod tests {
     use crate::style::types::{
         BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundPosition, BackgroundPositionComponent,
         BackgroundRepeat, BackgroundSize, BackgroundSizeComponent, BorderImage, BorderImageRepeat, BorderImageSlice,
-        BorderImageSliceValue, BorderImageSource, ClipPath, FilterShadow, Isolation, MixBlendMode, OutlineColor,
-        OutlineStyle, Overflow, ShapeRadius, TransformBox,
+        BorderImageSliceValue, BorderImageSource, ClipPath, FilterShadow, ImageRendering, Isolation, MixBlendMode,
+        OutlineColor, OutlineStyle, Overflow, ShapeRadius, TransformBox,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -7608,6 +7608,13 @@ mod tests {
         } else {
             Some((min_x, min_y, max_x, max_y))
         }
+    }
+
+    #[test]
+    fn image_rendering_crisp_edges_uses_nearest_filter_quality() {
+        let mut style = ComputedStyle::default();
+        style.image_rendering = ImageRendering::CrispEdges;
+        assert_eq!(Painter::filter_quality_for_image(Some(&style)), FilterQuality::Nearest);
     }
 
     #[test]
