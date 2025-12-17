@@ -7127,6 +7127,22 @@ mod tests {
     }
 
     #[test]
+    fn marker_gap_uses_inline_end_margin_in_vertical_lr() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = WritingMode::VerticalLr;
+        style.margin_bottom = Some(Length::px(11.0));
+        style.margin_top = Some(Length::px(3.0));
+
+        // Vertical inline-end corresponds to the block-end edge (bottom in vertical-lr)
+        let gap = marker_inline_gap(&style, &FontContext::new(), Size::new(800.0, 600.0));
+        assert!(
+            (10.5..11.5).contains(&gap),
+            "expected inline-end gap from margin-bottom in vertical-lr, got {}",
+            gap
+        );
+    }
+
+    #[test]
     fn upright_vertical_forces_ltr_base_direction() {
         let mut style = ComputedStyle::default();
         style.direction = crate::style::types::Direction::Rtl;
