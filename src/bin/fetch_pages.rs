@@ -52,6 +52,7 @@ const PAGES: &[&str] = &[
     "https://apple.com",
     "https://nytimes.com",
     "https://bbc.com",
+    "https://nhk.or.jp",
     "https://cnn.com",
     "https://espn.com",
     "https://imdb.com",

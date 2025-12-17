@@ -1,5 +1,6 @@
 # Scratchpad – rendering engine session notes
 - Added gitlab.com/weebly.com/weibo.cn to fetch_pages PAGES; `cargo check --bin fetch_pages` passes.
+- Added nhk.or.jp to fetch_pages targets to extend vertical/intl coverage.
 - Added image-orientation inheritance, tokenized multi-keyword parsing for image-orientation/image-resolution (fixes "90deg flip" parsing), cascade/css parser tests, and a cascade inheritance test. `cargo test image_orientation -- --nocapture` and `cargo test tokenizes_image_resolution_multi_keyword -- --nocapture` pass.
 - Added display-list coverage for image-set backgrounds/content to ensure high-DPR candidates are selected in the display list path (data-URL PNGs in DisplayListBuilder tests).
 - Added display-list coverage for list-style-image image-set selection: a DisplayListBuilder test uses data-URL PNGs and `with_image_set_dpr` to assert the 2x candidate is chosen for list-style images at DPR=2.
