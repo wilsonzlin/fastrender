@@ -445,7 +445,7 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
         let mut end = abs_pos + 4;
         while end < bytes.len() {
             let c = bytes[end] as char;
-            if c == '"' || c == '\'' || c == ')' || c.is_whitespace() || c == '>' {
+            if c == '"' || c == '\'' || c == ')' || c.is_whitespace() || c == '>' || c == '{' || c == '}' {
                 break;
             }
             end += 1;
@@ -455,7 +455,32 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
             let candidate = &html[start..end];
             if candidate.len() < 512 {
                 if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
+                    if cleaned.contains('{') || cleaned.contains('}') {
+                        idx = end;
+                        continue;
+                    }
+                    if let Some(first) = cleaned.chars().next() {
+                        if !(first.is_ascii_alphanumeric() || matches!(first, '/' | '.' | '#')) {
+                            idx = end;
+                            continue;
+                        }
+                    }
+
                     let cleaned_lower = cleaned.to_ascii_lowercase();
+                    let css_pos = cleaned_lower.find(".css");
+                    if let Some(pos) = css_pos {
+                        let after = cleaned_lower.as_bytes().get(pos + 4).copied();
+                        if let Some(ch) = after {
+                            let ch = ch as char;
+                            if ch != '?' && ch != '#' && ch != '/' && ch != '%' && ch != '"' && ch != '\'' {
+                                idx = end;
+                                continue;
+                            }
+                        }
+                    } else {
+                        idx = end;
+                        continue;
+                    }
                     if !cleaned_lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
                         if let Some(resolved) = resolve_href(base_url, &cleaned) {
                             if seen.insert(resolved.clone()) {
@@ -714,6 +739,31 @@ mod tests {
                 "https://example.com/b.css".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn ignores_embedded_css_class_tokens() {
+        let html = r#"
+            <style>
+                .css-v2kfba{height:100%;width:100%;}
+            </style>
+            <script>
+                const cls = '.css-15ru6p1{font-size:inherit;font-weight:normal;}'
+            </script>
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn ignores_percent_encoded_css_class_tokens() {
+        let html = r#"
+            <script>
+                const bogus = ">%3E.css-v2kfba%7Bheight:100%;width:100%;%7D%3C/style";
+            </script>
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert!(urls.is_empty());
     }
 
     #[test]
