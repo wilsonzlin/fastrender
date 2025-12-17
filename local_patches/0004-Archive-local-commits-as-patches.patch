@@ -1,7 +1,7 @@
 From 837bd652de5af0ac4e955244f64f5bcc69f9eae6 Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 14:55:35 -0500
-Subject: [PATCH 4/5] Archive local commits as patches
+Subject: [PATCH 4/7] Archive local commits as patches
 
 ---
  ...ate-PositionedLayout-absolute-helper.patch | 376 ++++++++++++++++++
