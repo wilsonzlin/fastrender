@@ -113,9 +113,15 @@ fn parse_rule_list<'i, 't>(parser: &mut Parser<'i, 't>) -> Vec<CssRule> {
 /// Recover from a parse error by skipping to the next rule
 fn recover_from_error<'i, 't>(parser: &mut Parser<'i, 't>) {
     while !parser.is_exhausted() {
-        if let Ok(Token::CurlyBracketBlock) = parser.next() {
-            let _: std::result::Result<(), ParseError<()>> = parser.parse_nested_block(|_| Ok(()));
-            break;
+        match parser.next() {
+            Ok(Token::CurlyBracketBlock) => {
+                let _: std::result::Result<(), ParseError<()>> = parser.parse_nested_block(|_| Ok(()));
+                break;
+            }
+            Ok(Token::ParenthesisBlock) | Ok(Token::SquareBracketBlock) => {
+                let _: std::result::Result<(), ParseError<()>> = parser.parse_nested_block(|_| Ok(()));
+            }
+            _ => {}
         }
     }
 }
