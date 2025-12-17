@@ -293,10 +293,29 @@ impl<'a> ElementRef<'a> {
     }
 
     fn focus_flag(&self) -> bool {
-        self.node
+        let wants_focus = self
+            .node
             .get_attribute_ref("data-fastr-focus")
             .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
+            .unwrap_or(false);
+
+        if !wants_focus {
+            return false;
+        }
+
+        // Only allow focus when the element is focusable. For SVG, the default is unfocusable unless
+        // the `focusable` attribute is explicitly set to true.
+        if let DomNodeType::Element { namespace, attributes, .. } = &self.node.node_type {
+            if namespace == SVG_NAMESPACE {
+                return attributes
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case("focusable"))
+                    .map(|(_, v)| v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+            }
+        }
+
+        true
     }
 
     /// Find index of this element among sibling elements and the total number of element siblings.
@@ -2116,6 +2135,36 @@ mod tests {
 
         assert!(!matches(&link, &[], &PseudoClass::Hover));
         assert!(!matches(&link, &[], &PseudoClass::Focus));
+    }
+
+    #[test]
+    fn svg_is_not_focusable_by_default() {
+        let svg = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![("data-fastr-focus".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&svg, &[], &PseudoClass::Hover) == false);
+        assert!(!matches(&svg, &[], &PseudoClass::Focus));
+    }
+
+    #[test]
+    fn svg_focusable_true_allows_focus() {
+        let svg = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("focusable".to_string(), "true".to_string()),
+                    ("data-fastr-focus".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&svg, &[], &PseudoClass::Focus));
     }
 
     #[test]
