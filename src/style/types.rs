@@ -665,7 +665,6 @@ pub enum ScrollbarColor {
     Light,
     Colors { thumb: Rgba, track: Rgba },
 }
-
 impl TouchAction {
     pub fn auto() -> Self {
         Self {
