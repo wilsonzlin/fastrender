@@ -314,6 +314,92 @@ impl<'a> ElementRef<'a> {
             .map(|l| l.to_ascii_lowercase())
     }
 
+    fn is_disabled(&self) -> bool {
+        if self.node.get_attribute("disabled").is_some() {
+            return true;
+        }
+
+        // Options/optgroups inherit disabled from ancestor select/optgroup/fieldset.
+        if let Some(tag) = self.node.tag_name() {
+            let lower = tag.to_ascii_lowercase();
+            if lower == "option" || lower == "optgroup" {
+                for ancestor in self.all_ancestors.iter().rev() {
+                    if let Some(a_tag) = ancestor.tag_name() {
+                        let a_lower = a_tag.to_ascii_lowercase();
+                        if a_lower == "select" || a_lower == "optgroup" || a_lower == "fieldset" {
+                            if ancestor.get_attribute("disabled").is_some() {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    fn is_contenteditable(&self) -> bool {
+        if let Some(value) = self.node.get_attribute("contenteditable") {
+            let v = value.to_ascii_lowercase();
+            return v.is_empty() || v == "true";
+        }
+        false
+    }
+
+    fn is_text_editable_input(&self) -> bool {
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+        if !tag.eq_ignore_ascii_case("input") {
+            return false;
+        }
+
+        let input_type = self.node.get_attribute("type").map(|t| t.to_ascii_lowercase());
+
+        input_type
+            .as_deref()
+            .map(|t| {
+                matches!(
+                    t,
+                    "text"
+                        | "search"
+                        | "url"
+                        | "tel"
+                        | "email"
+                        | "password"
+                        | "number"
+                        | "date"
+                        | "datetime-local"
+                        | "month"
+                        | "week"
+                        | "time"
+                )
+            })
+            .unwrap_or(true)
+    }
+
+    fn is_read_write(&self) -> bool {
+        if self.is_disabled() {
+            return false;
+        }
+
+        if self.is_text_editable_input() {
+            return self.node.get_attribute("readonly").is_none();
+        }
+
+        if let Some(tag) = self.node.tag_name() {
+            if tag.eq_ignore_ascii_case("textarea") {
+                return self.node.get_attribute("readonly").is_none();
+            }
+            if tag.eq_ignore_ascii_case("select") {
+                return true;
+            }
+        }
+
+        self.is_contenteditable()
+    }
+
     /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
     fn direction(&self) -> TextDirection {
         if let Some(dir) = self.dir_attribute(self.node, self.node) {
@@ -607,6 +693,8 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Target => self.is_target(),
             PseudoClass::Scope => self.all_ancestors.is_empty(),
             PseudoClass::Empty => self.is_empty(),
+            PseudoClass::ReadOnly => !self.is_read_write(),
+            PseudoClass::ReadWrite => self.is_read_write(),
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => false,
@@ -1094,6 +1182,72 @@ mod tests {
             }],
         };
         assert!(!matches(&prefilled_textarea, &[], &PseudoClass::PlaceholderShown));
+    }
+
+    #[test]
+    fn read_only_and_read_write_match_form_controls() {
+        let text_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "text".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&text_input, &[], &PseudoClass::ReadWrite));
+        assert!(!matches(&text_input, &[], &PseudoClass::ReadOnly));
+
+        let readonly_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "text".to_string()),
+                    ("readonly".to_string(), "readonly".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&readonly_input, &[], &PseudoClass::ReadOnly));
+        assert!(!matches(&readonly_input, &[], &PseudoClass::ReadWrite));
+
+        let disabled_textarea = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "textarea".to_string(),
+                attributes: vec![("disabled".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&disabled_textarea, &[], &PseudoClass::ReadOnly));
+        assert!(!matches(&disabled_textarea, &[], &PseudoClass::ReadWrite));
+
+        let checkbox = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "checkbox".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&checkbox, &[], &PseudoClass::ReadOnly));
+        assert!(!matches(&checkbox, &[], &PseudoClass::ReadWrite));
+
+        let select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        assert!(matches(&select, &[], &PseudoClass::ReadWrite));
+        assert!(!matches(&select, &[], &PseudoClass::ReadOnly));
+
+        let editable_div = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("contenteditable".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&editable_div, &[], &PseudoClass::ReadWrite));
+        assert!(!matches(&editable_div, &[], &PseudoClass::ReadOnly));
     }
 
     #[test]

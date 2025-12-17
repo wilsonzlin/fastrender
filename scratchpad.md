@@ -40,6 +40,7 @@
 ## Session notes (latest)
 
 - Added `:placeholder-shown` selector support: parsed/serialized, DOM matching approximates HTML behavior (input/textarea with placeholder and empty value/content, supported text-like input types). Tests cover parsing and matching.
+- Added `:read-only` / `:read-write` pseudo-classes: parsing/serialization plus DOM matching for text-like inputs/textarea/select/contenteditable. Disabled or readonly controls match `:read-only`; editable text controls and select/contenteditable match `:read-write`. Tests cover form controls and contenteditable cases.
 
 - CachingFetcher now persists content-type alongside cached assets (sidecar .meta) and restores it on cache hits so extensionless URLs keep their MIME; added unit tests in `src/bin/caching_fetcher.rs` (includes extension-based fallback without refetching).
 - fetch_and_render now accepts `--dpr` to set device pixel ratio; it threads through to FastRender builder so media queries/srcset honor the requested DPR.
