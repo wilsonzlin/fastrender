@@ -9158,7 +9158,7 @@ fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLin
 
     for comp in components {
         if let PropertyValue::Keyword(kw) = comp {
-            match kw.as_str() {
+            match kw.to_ascii_lowercase().as_str() {
                 "none" => {
                     saw_none = true;
                     lines = TextDecorationLine::NONE;
@@ -9183,7 +9183,7 @@ fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLin
 
 fn parse_text_decoration_style(value: &PropertyValue) -> Option<TextDecorationStyle> {
     match value {
-        PropertyValue::Keyword(kw) => match kw.as_str() {
+        PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
             "solid" => Some(TextDecorationStyle::Solid),
             "double" => Some(TextDecorationStyle::Double),
             "dotted" => Some(TextDecorationStyle::Dotted),
@@ -9265,14 +9265,17 @@ fn parse_text_underline_position(value: &PropertyValue) -> Option<TextUnderlineP
             let mut kws = Vec::new();
             for v in values {
                 if let PropertyValue::Keyword(kw) = v {
-                    kws.extend(kw.split_whitespace().map(|s| s.to_string()));
+                    kws.extend(kw.split_whitespace().map(|s| s.to_ascii_lowercase()));
                 } else {
                     return None;
                 }
             }
             kws
         }
-        PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_string()).collect(),
+        PropertyValue::Keyword(kw) => kw
+            .split_whitespace()
+            .map(|s| s.to_ascii_lowercase())
+            .collect(),
         _ => return None,
     };
 
@@ -9482,7 +9485,7 @@ fn parse_text_decoration_thickness(
     _root_font_size: f32,
 ) -> Option<TextDecorationThickness> {
     match value {
-        PropertyValue::Keyword(kw) => match kw.as_str() {
+        PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
             "auto" => Some(TextDecorationThickness::Auto),
             "from-font" => Some(TextDecorationThickness::FromFont),
             _ => None,
@@ -9495,7 +9498,7 @@ fn parse_text_decoration_thickness(
 
 fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecorationSkipInk> {
     if let PropertyValue::Keyword(kw) = value {
-        return match kw.as_str() {
+        return match kw.to_ascii_lowercase().as_str() {
             "auto" => Some(TextDecorationSkipInk::Auto),
             "none" => Some(TextDecorationSkipInk::None),
             "all" => Some(TextDecorationSkipInk::All),
@@ -12760,6 +12763,85 @@ mod tests {
             style.text_decoration.thickness,
             TextDecorationThickness::Length(l) if (l.to_px() - 3.2).abs() < 0.01
         ));
+    }
+
+    #[test]
+    fn text_decoration_keywords_are_case_insensitive() {
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-decoration-line".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("UNDERLINE".to_string()),
+                    PropertyValue::Keyword("OVERLINE".to_string()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(style.text_decoration.lines.contains(TextDecorationLine::UNDERLINE));
+        assert!(style.text_decoration.lines.contains(TextDecorationLine::OVERLINE));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-decoration-style".to_string(),
+                value: PropertyValue::Keyword("DASHED".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.text_decoration.style, TextDecorationStyle::Dashed);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-decoration-thickness".to_string(),
+                value: PropertyValue::Keyword("FROM-FONT".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_decoration.thickness, TextDecorationThickness::FromFont));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-decoration-skip-ink".to_string(),
+                value: PropertyValue::Keyword("ALL".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.text_decoration_skip_ink, TextDecorationSkipInk::All);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-underline-position".to_string(),
+                value: PropertyValue::Keyword("UNDER RIGHT".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_underline_position, TextUnderlinePosition::UnderRight));
     }
 
     #[test]
