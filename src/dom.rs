@@ -478,24 +478,11 @@ impl<'a> Element for ElementRef<'a> {
             AttrSelectorOperation::Exists => true,
             AttrSelectorOperation::WithValue {
                 operator,
-                case_sensitivity: _,
+                case_sensitivity,
                 value,
             } => {
                 let value_str: &str = std::borrow::Borrow::borrow(&**value);
-                let matches = match operator {
-                    selectors::attr::AttrSelectorOperator::Equal => attr_value == value_str,
-                    selectors::attr::AttrSelectorOperator::Includes => {
-                        attr_value.split_whitespace().any(|v| v == value_str)
-                    }
-                    selectors::attr::AttrSelectorOperator::DashMatch => {
-                        attr_value == value_str || attr_value.starts_with(&format!("{}-", value_str))
-                    }
-                    selectors::attr::AttrSelectorOperator::Prefix => attr_value.starts_with(value_str),
-                    selectors::attr::AttrSelectorOperator::Substring => attr_value.contains(value_str),
-                    selectors::attr::AttrSelectorOperator::Suffix => attr_value.ends_with(value_str),
-                };
-
-                matches
+                operator.eval_str(&attr_value, value_str, *case_sensitivity)
             }
         }
     }
@@ -584,12 +571,30 @@ impl<'a> Element for ElementRef<'a> {
         false // No shadow DOM support
     }
 
-    fn has_id(&self, id: &CssString, _case_sensitivity: CaseSensitivity) -> bool {
-        self.node.has_id(id.as_str())
+    fn has_id(&self, id: &CssString, case_sensitivity: CaseSensitivity) -> bool {
+        match case_sensitivity {
+            CaseSensitivity::CaseSensitive => self.node.has_id(id.as_str()),
+            CaseSensitivity::AsciiCaseInsensitive => self
+                .node
+                .get_attribute("id")
+                .map(|attr| attr.eq_ignore_ascii_case(id.as_str()))
+                .unwrap_or(false),
+        }
     }
 
-    fn has_class(&self, class: &CssString, _case_sensitivity: CaseSensitivity) -> bool {
-        self.node.has_class(class.as_str())
+    fn has_class(&self, class: &CssString, case_sensitivity: CaseSensitivity) -> bool {
+        match case_sensitivity {
+            CaseSensitivity::CaseSensitive => self.node.has_class(class.as_str()),
+            CaseSensitivity::AsciiCaseInsensitive => self
+                .node
+                .get_attribute("class")
+                .map(|classes| {
+                    classes
+                        .split_whitespace()
+                        .any(|c| c.eq_ignore_ascii_case(class.as_str()))
+                })
+                .unwrap_or(false),
+        }
     }
 
     fn imported_part(&self, _name: &CssString) -> Option<CssString> {
@@ -722,6 +727,60 @@ mod tests {
 
         assert_eq!(node.get_attribute("href"), Some("foo".to_string()));
         assert_eq!(node.get_attribute("HRef"), Some("foo".to_string()));
+    }
+
+    #[test]
+    fn attr_selector_respects_case_sensitivity() {
+        use selectors::attr::{AttrSelectorOperation, AttrSelectorOperator, NamespaceConstraint};
+
+        let node = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![("foo".to_string(), "Bar".to_string())],
+            },
+            children: vec![],
+        };
+        let element_ref = ElementRef::new(&node);
+        let local = CssString("foo".into());
+
+        let value_insensitive = CssString("bar".into());
+        let op_insensitive = AttrSelectorOperation::WithValue {
+            operator: AttrSelectorOperator::Equal,
+            case_sensitivity: CaseSensitivity::AsciiCaseInsensitive,
+            value: &value_insensitive,
+        };
+        assert!(element_ref.attr_matches(&NamespaceConstraint::Any, &local, &op_insensitive));
+
+        let value_sensitive = CssString("bar".into());
+        let op_sensitive = AttrSelectorOperation::WithValue {
+            operator: AttrSelectorOperator::Equal,
+            case_sensitivity: CaseSensitivity::CaseSensitive,
+            value: &value_sensitive,
+        };
+        assert!(!element_ref.attr_matches(&NamespaceConstraint::Any, &local, &op_sensitive));
+    }
+
+    #[test]
+    fn id_and_class_respect_case_sensitivity() {
+        let node = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![
+                    ("id".to_string(), "Foo".to_string()),
+                    ("class".to_string(), "Bar baz".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        let element_ref = ElementRef::new(&node);
+
+        assert!(element_ref.has_id(&CssString("Foo".into()), CaseSensitivity::CaseSensitive));
+        assert!(!element_ref.has_id(&CssString("foo".into()), CaseSensitivity::CaseSensitive));
+        assert!(element_ref.has_id(&CssString("foo".into()), CaseSensitivity::AsciiCaseInsensitive));
+
+        assert!(element_ref.has_class(&CssString("Bar".into()), CaseSensitivity::CaseSensitive));
+        assert!(!element_ref.has_class(&CssString("bar".into()), CaseSensitivity::CaseSensitive));
+        assert!(element_ref.has_class(&CssString("bar".into()), CaseSensitivity::AsciiCaseInsensitive));
     }
 
     #[test]
