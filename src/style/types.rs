@@ -633,6 +633,14 @@ pub struct TouchAction {
     pub manipulation: bool,
 }
 
+/// Scrollbar width preference (UI hint; currently unused in layout)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarWidth {
+    Auto,
+    Thin,
+    None,
+}
+
 impl TouchAction {
     pub fn auto() -> Self {
         Self {

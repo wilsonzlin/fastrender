@@ -263,6 +263,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "text-underline-position",
     "top",
     "touch-action",
+    "scrollbar-width",
     "transform",
     "transform-box",
     "transform-style",

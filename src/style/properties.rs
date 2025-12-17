@@ -2221,6 +2221,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "pointer-events" => styles.pointer_events = source.pointer_events,
         "touch-action" => styles.touch_action = source.touch_action,
         "user-select" => styles.user_select = source.user_select,
+        "scrollbar-width" => styles.scrollbar_width = source.scrollbar_width,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
             styles.vertical_align_specified = source.vertical_align_specified;
@@ -5673,6 +5674,16 @@ pub fn apply_declaration_with_base(
                     }
                 }
                 _ => {}
+            }
+        }
+        "scrollbar-width" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.scrollbar_width = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => ScrollbarWidth::Auto,
+                    "thin" => ScrollbarWidth::Thin,
+                    "none" => ScrollbarWidth::None,
+                    _ => styles.scrollbar_width,
+                }
             }
         }
         "resize" => {
@@ -11415,6 +11426,38 @@ mod tests {
         assert!(style.touch_action.pinch_zoom);
         assert!(!style.touch_action.none);
         assert!(!style.touch_action.auto);
+    }
+
+    #[test]
+    fn scrollbar_width_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-width".into(),
+                value: PropertyValue::Keyword("thin".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.scrollbar_width, ScrollbarWidth::Thin));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scrollbar-width".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.scrollbar_width, ScrollbarWidth::None));
     }
 
     #[test]

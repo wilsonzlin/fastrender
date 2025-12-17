@@ -30,7 +30,7 @@ use crate::style::display::Display;
 use crate::style::position::Position;
 use crate::style::types::{
     BoxSizing, Containment, FilterFunction, FontSizeAdjust, FontStretch, Isolation, MixBlendMode, Overflow,
-    TextAlignLast, TextIndent, TextJustify, TouchAction, UserSelect, WillChange,
+    ScrollbarWidth, TextAlignLast, TextIndent, TextJustify, TouchAction, UserSelect, WillChange,
 };
 use crate::style::values::{Length, LengthOrAuto};
 
@@ -257,6 +257,7 @@ pub struct PositionedStyle {
     /// Initial: auto
     pub user_select: UserSelect,
     pub touch_action: TouchAction,
+    pub scrollbar_width: ScrollbarWidth,
 
     // ===== COLORS =====
     /// Text color
@@ -536,6 +537,7 @@ impl Default for PositionedStyle {
             overflow_y: Overflow::Visible,
             user_select: UserSelect::Auto,
             touch_action: TouchAction::auto(),
+            scrollbar_width: ScrollbarWidth::Auto,
 
             // Color defaults
             color: Color::Rgba(Rgba::BLACK),

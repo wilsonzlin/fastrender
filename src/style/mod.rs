@@ -40,11 +40,11 @@ use types::{
     FontVariantPosition, FontVariationSetting, FontWeight, GridTrack, HyphensMode, ImageOrientation, ImageRendering,
     ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
     ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
-    OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, TabSize, TableLayout, TextAlign, TextAlignLast,
-    TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
-    TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction,
-    TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange,
-    WordBreak, WritingMode,
+    OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarWidth, TabSize, TableLayout, TextAlign,
+    TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle,
+    TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition,
+    TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace,
+    WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -243,6 +243,7 @@ pub struct ComputedStyle {
     pub pointer_events: PointerEvents,
     pub user_select: UserSelect,
     pub touch_action: TouchAction,
+    pub scrollbar_width: ScrollbarWidth,
     pub top: Option<Length>,
     pub right: Option<Length>,
     pub bottom: Option<Length>,
@@ -452,8 +453,6 @@ pub struct ComputedStyle {
     pub will_change: WillChange,
     /// CSS containment
     pub containment: Containment,
-    /// Whether user selection is enabled
-    pub user_select: UserSelect,
 
     // Visual effects
     pub opacity: f32,
@@ -498,6 +497,7 @@ impl Default for ComputedStyle {
             pointer_events: PointerEvents::Auto,
             user_select: UserSelect::Auto,
             touch_action: TouchAction::auto(),
+            scrollbar_width: ScrollbarWidth::Auto,
             top: None,
             right: None,
             bottom: None,
