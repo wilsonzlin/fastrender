@@ -1,3 +1,4 @@
+- Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
 # Scratchpad – rendering engine session notes
 - Replaced-element box-sizing fix: percentage padding on replaced elements now resolves against the containing block width in both axes when computing content size (compute_replaced_size). Added regression `compute_replaced_border_box_padding_uses_width_base` covering border-box height with 10% top padding and differing width/height bases.
 - Replaced-element min-height coverage: percentage min-height with an indefinite height base is ignored; added regression `compute_replaced_ignores_min_height_percentage_without_base` to lock the behavior.
