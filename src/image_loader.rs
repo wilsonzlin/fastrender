@@ -675,6 +675,18 @@ mod tests {
     }
 
     #[test]
+    fn svg_percent_width_height_ignored_defaults_with_viewbox_ratio() {
+        let cache = ImageCache::new();
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='50%' height='25%' viewBox='0 0 200 100'></svg>";
+        let img = cache.render_svg(svg).expect("rendered");
+
+        // Percent lengths are ignored; fall back to 300x150 but keep the viewBox ratio (2:1).
+        assert_eq!(img.width(), 300);
+        assert_eq!(img.height(), 150);
+        assert_eq!(img.intrinsic_ratio(OrientationTransform::IDENTITY), Some(2.0));
+    }
+
+    #[test]
     fn render_inline_svg_returns_image() {
         let cache = ImageCache::new();
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="5"></svg>"#;
