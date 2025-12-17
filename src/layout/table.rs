@@ -1756,7 +1756,7 @@ impl ResolvedBorder {
 }
 
 #[derive(Debug, Clone)]
-struct CollapsedBorders {
+pub struct CollapsedBorders {
     /// Vertical grid lines: index is column boundary (0..=columns), inner vec is per row segment.
     vertical: Vec<Vec<ResolvedBorder>>,
     /// Horizontal grid lines: index is row boundary (0..=rows), inner vec is per column segment.
@@ -1807,7 +1807,9 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
     }
 
     fn style_rank(style: BorderStyle) -> u8 {
+        // CSS2.1 §17.6.2.1: hidden > double > solid > dashed > dotted > ridge > outset > groove > inset > none
         match style {
+            BorderStyle::Hidden => 9,
             BorderStyle::Double => 8,
             BorderStyle::Solid => 7,
             BorderStyle::Dashed => 6,
@@ -1816,7 +1818,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
             BorderStyle::Outset => 3,
             BorderStyle::Groove => 2,
             BorderStyle::Inset => 1,
-            BorderStyle::Hidden | BorderStyle::None => 0,
+            BorderStyle::None => 0,
         }
     }
 
@@ -2376,6 +2378,11 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         horizontal: resolved_horizontal,
         corners: resolved_corners,
     }
+}
+
+#[cfg(test)]
+pub fn compute_collapsed_borders_for_test(table_box: &BoxNode, structure: &TableStructure) -> CollapsedBorders {
+    compute_collapsed_borders(table_box, structure)
 }
 
 fn find_first_baseline(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
