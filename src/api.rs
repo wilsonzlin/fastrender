@@ -4080,6 +4080,29 @@ mod tests {
     }
 
     #[test]
+    fn scroll_snap_none_leaves_offsets_unchanged() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body { margin: 0; height: 100%; scroll-snap-type: none; }
+                section { height: 200px; scroll-snap-align: start; }
+            </style>
+            <section></section>
+            <section></section>
+        "#;
+
+        let dom = renderer.parse_html(html).unwrap();
+        let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
+
+        let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 120.0));
+        assert!(
+            (snapped.y - 120.0).abs() < 0.1,
+            "scroll-snap-type:none should not adjust scroll offsets"
+        );
+        assert!(snapped.x.abs() < 0.1);
+    }
+
+    #[test]
     fn scroll_snap_proximity_only_when_close() {
         let mut renderer = FastRender::new().unwrap();
         let html = r#"
