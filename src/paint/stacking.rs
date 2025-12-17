@@ -1490,6 +1490,18 @@ mod tests {
         assert_eq!(sc.bounds.max_y(), 100.0);
     }
 
+    #[test]
+    fn test_compute_bounds_includes_children() {
+        let mut parent = StackingContext::new(0);
+        let mut child = StackingContext::new(0);
+        child.fragments.push(create_block_fragment(10.0, 20.0, 5.0, 5.0));
+
+        parent.children.push(child);
+        parent.compute_bounds();
+
+        assert_eq!(parent.bounds, Rect::from_xywh(10.0, 20.0, 5.0, 5.0));
+    }
+
     // Layer classification tests
 
     #[test]
