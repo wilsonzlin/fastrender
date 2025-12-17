@@ -1465,6 +1465,9 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.cursor_images = parent.cursor_images.clone();
     styles.scrollbar_color = parent.scrollbar_color;
 
+    // Color scheme inherits
+    styles.color_scheme = parent.color_scheme.clone();
+
     // Color inherits
     styles.color = parent.color;
 
@@ -2161,6 +2164,44 @@ mod tests {
         assert_eq!(styled.styles.background_color, Rgba::rgb(16, 16, 16));
         assert_eq!(body.styles.color, Rgba::rgb(10, 20, 30));
         assert_eq!(body.styles.background_color, Rgba::rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn color_scheme_inherits_to_descendants() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "body".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "div".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+        let stylesheet = parse_stylesheet("html { color-scheme: light dark; }").unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Dark);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+        let expected = ColorSchemePreference::Supported {
+            schemes: vec![ColorSchemeEntry::Light, ColorSchemeEntry::Dark],
+            only: false,
+        };
+        assert_eq!(styled.styles.color_scheme, expected);
+        let body = styled.children.first().expect("body");
+        assert_eq!(body.styles.color_scheme, expected);
+        let div = body.children.first().expect("div");
+        assert_eq!(div.styles.color_scheme, expected);
     }
 
     #[test]
