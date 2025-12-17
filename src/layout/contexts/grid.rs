@@ -287,6 +287,10 @@ impl GridFormattingContext {
         };
 
         // Margin
+        let margin_left_auto = style.margin_left.is_none();
+        let margin_right_auto = style.margin_right.is_none();
+        let margin_top_auto = style.margin_top.is_none();
+        let margin_bottom_auto = style.margin_bottom.is_none();
         taffy_style.margin = taffy::geometry::Rect {
             left: self.convert_opt_length_to_lpa(&style.margin_left, style),
             right: self.convert_opt_length_to_lpa(&style.margin_right, style),
@@ -448,6 +452,47 @@ impl GridFormattingContext {
         taffy_style.justify_self = style
             .justify_self
             .map(|a| self.convert_align_items(&a, inline_positive_item));
+
+        if containing_grid.is_some() {
+            // Auto margins override alignment per-axis; map them to self-alignment to keep grid items centered or pushed.
+            let inline_start_auto = if inline_is_horizontal_item {
+                if inline_positive_item { margin_left_auto } else { margin_right_auto }
+            } else if block_positive_item {
+                margin_top_auto
+            } else {
+                margin_bottom_auto
+            };
+            let inline_end_auto = if inline_is_horizontal_item {
+                if inline_positive_item { margin_right_auto } else { margin_left_auto }
+            } else if block_positive_item {
+                margin_bottom_auto
+            } else {
+                margin_top_auto
+            };
+
+            let block_start_auto = if block_positive_item { margin_top_auto } else { margin_bottom_auto };
+            let block_end_auto = if block_positive_item { margin_bottom_auto } else { margin_top_auto };
+
+            let justify_override = match (inline_start_auto, inline_end_auto) {
+                (true, true) => Some(AlignItems::Center),
+                (true, false) => Some(if inline_positive_item { AlignItems::FlexEnd } else { AlignItems::FlexStart }),
+                (false, true) => Some(if inline_positive_item { AlignItems::FlexStart } else { AlignItems::FlexEnd }),
+                _ => None,
+            };
+            if let Some(justify) = justify_override {
+                taffy_style.justify_self = Some(self.convert_align_items(&justify, inline_positive_item));
+            }
+
+            let align_override = match (block_start_auto, block_end_auto) {
+                (true, true) => Some(AlignItems::Center),
+                (true, false) => Some(if block_positive_item { AlignItems::FlexEnd } else { AlignItems::FlexStart }),
+                (false, true) => Some(if block_positive_item { AlignItems::FlexStart } else { AlignItems::FlexEnd }),
+                _ => None,
+            };
+            if let Some(align) = align_override {
+                taffy_style.align_self = Some(self.convert_align_items(&align, block_positive_item));
+            }
+        }
 
         // Grid item properties using raw line numbers (swap placements when inline axis is vertical)
         if inline_is_horizontal_item {

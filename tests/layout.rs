@@ -24,3 +24,6 @@ mod test_inline_float;
 
 #[path = "layout/scrollbar_gutter.rs"]
 mod scrollbar_gutter;
+
+#[path = "layout/test_grid_margins.rs"]
+mod test_grid_margins;
