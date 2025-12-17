@@ -475,3 +475,13 @@ fn main() -> Result<()> {
         }
     }
 }
+//! Fetch a single page and render it to an image.
+//!
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] <url> [output.png] [width] [height] [scroll_y]
+//!
+//! Examples:
+//!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0
+//!
+//! Options:
+//!   --timeout SECONDS   Per-page timeout (default: 0 = no timeout)
+//!   --dpr FLOAT         Device pixel ratio for media queries/srcset (default: 1.0)
