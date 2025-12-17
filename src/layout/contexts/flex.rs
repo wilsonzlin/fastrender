@@ -119,6 +119,9 @@ pub struct FlexFormattingContext {
 pub(crate) type FlexMeasureCache =
     HashMap<u64, HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>>;
 
+const MAX_MEASURE_CACHE_PER_NODE: usize = 256;
+const MAX_LAYOUT_CACHE_PER_NODE: usize = 128;
+
 impl FlexFormattingContext {
     /// Creates a new FlexFormattingContext
     pub fn new() -> Self {
@@ -1150,6 +1153,9 @@ impl FormattingContext for FlexFormattingContext {
 
                     if let Ok(mut map) = measured_fragments.lock() {
                         let entry = map.entry(cache_key).or_default();
+                        if entry.len() >= MAX_MEASURE_CACHE_PER_NODE {
+                            entry.clear();
+                        }
                         let new_key = !entry.contains_key(&key);
                         let stored_size = Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
                         entry.insert(key, (stored_size, normalized_fragment.clone()));
@@ -1519,6 +1525,9 @@ impl FormattingContext for FlexFormattingContext {
         if let Some((cache_key, key)) = layout_cache_entry {
             if let Ok(mut cache) = self.layout_fragments.lock() {
                 let entry = cache.entry(cache_key).or_default();
+                if entry.len() >= MAX_LAYOUT_CACHE_PER_NODE {
+                    entry.clear();
+                }
                 let size = fragment.bounds.size;
                 entry
                     .entry(key)
@@ -1915,8 +1924,8 @@ fn cache_tolerances(target_size: Size) -> (f32, f32) {
     };
 
     // Bias tolerance slightly toward the larger axis so extremely wide/tall probes coalesce more.
-    let eps_w = band(target_size.width).max(band(target_size.height) * 0.75f32);
-    let eps_h = band(target_size.height).max(band(target_size.width) * 0.5f32);
+    let eps_w = f32::max(band(target_size.width), band(target_size.height) * 0.75);
+    let eps_h = f32::max(band(target_size.height), band(target_size.width) * 0.5);
 
     (eps_w, eps_h)
 }

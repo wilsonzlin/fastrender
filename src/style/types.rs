@@ -666,12 +666,6 @@ pub enum ScrollbarColor {
     Colors { thumb: Rgba, track: Rgba },
 }
 
-/// forced-color-adjust property
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ForcedColorAdjust {
-    Auto,
-    None,
-}
 
 impl TouchAction {
     pub fn auto() -> Self {
@@ -744,12 +738,6 @@ impl Default for ScrollBehavior {
 impl Default for ScrollbarColor {
     fn default() -> Self {
         ScrollbarColor::Auto
-    }
-}
-
-impl Default for ForcedColorAdjust {
-    fn default() -> Self {
-        ForcedColorAdjust::Auto
     }
 }
 

@@ -31,21 +31,19 @@ use position::Position;
 use std::collections::HashMap;
 use types::{
     AccentColor, AlignContent, AlignItems, Appearance, AspectRatio, BackfaceVisibility, BackgroundAttachment,
-    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeat, BackgroundSize,
-    BorderCollapse, BorderImage, BorderStyle, BoxSizing, CaptionSide, CaretColor, ClipPath, ClipRect,
-    ColorSchemePreference, ContainerType, Containment, CursorImage, CursorKeyword, Direction, EmptyCells,
-    FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride,
-    FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
-    FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, GridTrack, HyphensMode,
-    ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight,
-    ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
+    BorderImage, BorderStyle, BoxSizing, CaptionSide, CaretColor, ClipPath, ClipRect, ColorSchemePreference, ContainerType,
+    Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
+    FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle,
+    FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantEmoji,
+    FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust,
+    GridTrack, HyphensMode, ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak,
+    LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
     OutlineStyle, Overflow, OverflowAnchor, OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior,
     ScrollbarColor, ScrollbarWidth, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration,
-    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation,
-    TextOverflow, TextRendering, TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition,
-    TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace,
-    WillChange, WordBreak, WritingMode,
+    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow,
+    TextRendering, TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox,
+    TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -373,7 +371,6 @@ pub struct ComputedStyle {
     pub font_stretch: FontStretch,
     pub font_kerning: FontKerning,
     pub line_height: LineHeight,
-    pub text_size_adjust: TextSizeAdjust,
     pub direction: Direction,
     pub unicode_bidi: UnicodeBidi,
     /// Computed root element font size for resolving rem units
@@ -383,6 +380,7 @@ pub struct ComputedStyle {
     pub text_justify: TextJustify,
     pub text_indent: TextIndent,
     pub text_rendering: TextRendering,
+    pub text_size_adjust: TextSizeAdjust,
     pub text_overflow: TextOverflow,
     pub text_decoration: TextDecoration,
     /// Whether a text-decoration line declaration was authored (shorthand or longhand).
@@ -423,6 +421,7 @@ pub struct ComputedStyle {
     // Color and background
     pub forced_color_adjust: ForcedColorAdjust,
     pub color_scheme: ColorSchemePreference,
+    pub forced_color_adjust: ForcedColorAdjust,
     pub caret_color: CaretColor,
     pub accent_color: AccentColor,
     pub color: Rgba,
@@ -616,7 +615,6 @@ impl Default for ComputedStyle {
             font_stretch: FontStretch::Normal,
             font_kerning: FontKerning::Auto,
             line_height: LineHeight::Normal,
-            text_size_adjust: TextSizeAdjust::Auto,
             direction: Direction::Ltr,
             unicode_bidi: UnicodeBidi::Normal,
             root_font_size: 16.0,
@@ -625,6 +623,7 @@ impl Default for ComputedStyle {
             text_justify: TextJustify::Auto,
             text_indent: TextIndent::default(),
             text_rendering: TextRendering::Auto,
+            text_size_adjust: TextSizeAdjust::Auto,
             text_overflow: TextOverflow::clip(),
             text_decoration: TextDecoration::default(),
             text_decoration_line_specified: false,
@@ -657,6 +656,7 @@ impl Default for ComputedStyle {
 
             forced_color_adjust: ForcedColorAdjust::Auto,
             color_scheme: ColorSchemePreference::Normal,
+            forced_color_adjust: ForcedColorAdjust::Auto,
             caret_color: CaretColor::Auto,
             accent_color: AccentColor::Auto,
             color: Rgba::BLACK,
