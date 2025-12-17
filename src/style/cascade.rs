@@ -646,7 +646,9 @@ pub fn apply_styles_with_media_target_and_imports(
                 16.0,
                 16.0,
                 Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
-                media_ctx.prefers_color_scheme,
+                media_ctx
+                    .prefers_color_scheme
+                    .unwrap_or(ColorScheme::NoPreference),
                 &mut node_counter,
                 &mut ancestor_ids,
                 container_ctx,
