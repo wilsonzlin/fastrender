@@ -7091,6 +7091,23 @@ mod tests {
     }
 
     #[test]
+    fn marker_gap_ignores_block_margins_in_horizontal_flow() {
+        let mut style = ComputedStyle::default();
+        style.margin_top = Some(Length::px(50.0));
+        style.margin_bottom = Some(Length::px(60.0));
+        style.margin_right = Some(Length::px(8.0));
+        style.margin_left = Some(Length::px(4.0));
+
+        // Horizontal writing mode: inline gap should derive from inline-end margin (right in LTR)
+        let gap = marker_inline_gap(&style, &FontContext::new(), Size::new(800.0, 600.0));
+        assert!(
+            (7.5..8.5).contains(&gap),
+            "expected inline-end gap to come from margin-right in horizontal flow, got {}",
+            gap
+        );
+    }
+
+    #[test]
     fn upright_vertical_forces_ltr_base_direction() {
         let mut style = ComputedStyle::default();
         style.direction = crate::style::types::Direction::Rtl;
