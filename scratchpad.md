@@ -23,6 +23,7 @@
 # Notes: recent render attempts (aljazeera/natgeo/wsj) logged separately; color-scheme palette/inheritance work completed upstream.
 - CSS URL extraction now unescapes JS-escaped URLs (e.g., `\u0026` ampersands) in both link hrefs and embedded/script sources, preventing missing stylesheets (e.g., bing.com). Regressions added for link and embedded CSS URL unescaping.
 - Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
+- Table cell intrinsic widths now resolve percentage padding against a definite table width; added regression `cell_percent_padding_counts_when_table_width_definite`.
 - SVG intrinsic sizing: render_svg now falls back to 300×150 with viewBox-derived aspect ratios when width/height are absent, preserves preserveAspectRatio="none", and tests cover width/height, viewBox-only, and aspect-ratio none cases.
 - Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse.
 - SVG percent width/height are ignored for intrinsic sizing: percent-specified dimensions fall back to default 300×150 while preserving viewBox aspect ratios; added regression.

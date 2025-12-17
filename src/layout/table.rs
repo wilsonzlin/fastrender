@@ -1665,10 +1665,9 @@ fn clamp_to_min_max(value: f32, min: Option<f32>, max: Option<f32>) -> f32 {
     v
 }
 
-fn horizontal_padding_and_borders(style: &crate::style::ComputedStyle) -> f32 {
-    // Percentages would need containing block; treat them as zero for intrinsic measurement fallback.
+fn horizontal_padding_and_borders(style: &crate::style::ComputedStyle, percent_base: Option<f32>) -> f32 {
     let resolve_abs = |l: &crate::style::values::Length| match l.unit {
-        LengthUnit::Percent => 0.0,
+        LengthUnit::Percent => percent_base.map(|base| (l.value / 100.0) * base).unwrap_or(0.0),
         _ if l.unit.is_absolute() => l.to_px(),
         _ => l.value,
     };
@@ -1679,9 +1678,9 @@ fn horizontal_padding_and_borders(style: &crate::style::ComputedStyle) -> f32 {
         + resolve_abs(&style.border_right_width)
 }
 
-fn horizontal_padding(style: &crate::style::ComputedStyle) -> f32 {
+fn horizontal_padding(style: &crate::style::ComputedStyle, percent_base: Option<f32>) -> f32 {
     let resolve_abs = |l: &crate::style::values::Length| match l.unit {
-        LengthUnit::Percent => 0.0,
+        LengthUnit::Percent => percent_base.map(|base| (l.value / 100.0) * base).unwrap_or(0.0),
         _ if l.unit.is_absolute() => l.to_px(),
         _ => l.value,
     };
@@ -3037,7 +3036,12 @@ impl TableFormattingContext {
     }
 
     /// Measures cell intrinsic widths using inline min/max content rules
-    fn measure_cell_intrinsic_widths(&self, cell_box: &BoxNode, border_collapse: BorderCollapse) -> (f32, f32) {
+    fn measure_cell_intrinsic_widths(
+        &self,
+        cell_box: &BoxNode,
+        border_collapse: BorderCollapse,
+        percent_base: Option<f32>,
+    ) -> (f32, f32) {
         let fc_type = cell_box
             .formatting_context()
             .unwrap_or(crate::style::display::FormattingContextType::Block);
@@ -3062,10 +3066,10 @@ impl TableFormattingContext {
         // Add horizontal padding (and borders in separate model) to intrinsic widths
         let style = &cell_box.style;
         let padding_and_borders = match border_collapse {
-            BorderCollapse::Separate => horizontal_padding_and_borders(style),
+            BorderCollapse::Separate => horizontal_padding_and_borders(style, percent_base),
             BorderCollapse::Collapse => {
                 // Collapsed borders don't add to box width; include padding only.
-                horizontal_padding(style)
+                horizontal_padding(style, percent_base)
             }
         };
         min += padding_and_borders;
@@ -3095,7 +3099,7 @@ impl TableFormattingContext {
             let width_is_percent = matches!(width_decl.map(|w| w.unit), Some(LengthUnit::Percent));
             let (mut min_w, mut max_w) = match mode {
                 DistributionMode::Fixed => (0.0, f32::INFINITY), // content is ignored in fixed layout
-                _ => self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse),
+                _ => self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse, percent_base),
             };
             let mut has_max_cap = false;
             // Apply min-width/max-width from the cell itself. Percentages only participate when the
@@ -5562,7 +5566,7 @@ mod tests {
             .collect();
         let tfc = TableFormattingContext::new();
         let span_box = tfc.get_cell_box(&table, &structure.cells[0]).expect("span cell");
-        let (span_min, span_max) = tfc.measure_cell_intrinsic_widths(span_box, structure.border_collapse);
+        let (span_min, span_max) = tfc.measure_cell_intrinsic_widths(span_box, structure.border_collapse, percent_base);
         let resolved_width = span_box.style.width.as_ref().and_then(|width| match width.unit {
             LengthUnit::Percent => percent_base.map(|base| {
                 crate::layout::utils::clamp_with_order((width.value / 100.0) * base, span_min, f32::INFINITY)
@@ -5840,6 +5844,45 @@ mod tests {
             min < 50.0,
             "percent min-width should be treated as auto when table width is indefinite, got {:.2}",
             min
+        );
+    }
+
+    #[test]
+    fn cell_percent_padding_counts_when_table_width_definite() {
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.padding_left = Length::percent(10.0);
+        cell_style.padding_right = Length::percent(10.0);
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.width = Some(Length::px(200.0));
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, Some(200.0));
+
+        let col = constraints.first().expect("column constraints");
+        assert!(
+            (col.min_width - 40.0).abs() < 0.5,
+            "10% padding on each side should add 40px to intrinsic min width (got {:.2})",
+            col.min_width
+        );
+        assert!(
+            (col.max_width - 40.0).abs() < 0.5,
+            "10% padding on each side should add 40px to intrinsic max width (got {:.2})",
+            col.max_width
         );
     }
 
