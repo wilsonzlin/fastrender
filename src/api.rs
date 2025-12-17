@@ -4202,6 +4202,82 @@ mod tests {
     }
 
     #[test]
+    fn scroll_snap_block_axis_vertical_writing_mode_snaps_horizontal() {
+        let mut container_style = ComputedStyle::default();
+        container_style.scroll_snap_type.axis = ScrollSnapAxis::Block;
+        container_style.scroll_snap_type.strictness = ScrollSnapStrictness::Mandatory;
+        container_style.writing_mode = WritingMode::VerticalRl;
+
+        let mut child_style = ComputedStyle::default();
+        child_style.scroll_snap_align.inline = ScrollSnapAlign::Start;
+        child_style.scroll_snap_align.block = ScrollSnapAlign::Start;
+
+        let child_a = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            vec![],
+            Arc::new(child_style.clone()),
+        );
+        let child_b = FragmentNode::new_block_styled(
+            Rect::from_xywh(200.0, 0.0, 100.0, 100.0),
+            vec![],
+            Arc::new(child_style),
+        );
+
+        let container = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 400.0, 200.0),
+            vec![child_a, child_b],
+            Arc::new(container_style),
+        );
+        let fragments = FragmentTree::with_viewport(container, Size::new(100.0, 100.0));
+
+        let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(120.0, 0.0));
+        assert!(
+            (snapped.x - 200.0).abs() < 0.1,
+            "block axis should snap horizontally in vertical writing modes (snapped={:?})",
+            snapped
+        );
+        assert!(snapped.y.abs() < 0.1);
+    }
+
+    #[test]
+    fn scroll_snap_inline_axis_vertical_writing_mode_snaps_vertical() {
+        let mut container_style = ComputedStyle::default();
+        container_style.scroll_snap_type.axis = ScrollSnapAxis::Inline;
+        container_style.scroll_snap_type.strictness = ScrollSnapStrictness::Mandatory;
+        container_style.writing_mode = WritingMode::VerticalRl;
+
+        let mut child_style = ComputedStyle::default();
+        child_style.scroll_snap_align.inline = ScrollSnapAlign::Start;
+        child_style.scroll_snap_align.block = ScrollSnapAlign::Start;
+
+        let child_a = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            vec![],
+            Arc::new(child_style.clone()),
+        );
+        let child_b = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 200.0, 100.0, 100.0),
+            vec![],
+            Arc::new(child_style),
+        );
+
+        let container = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 200.0, 400.0),
+            vec![child_a, child_b],
+            Arc::new(container_style),
+        );
+        let fragments = FragmentTree::with_viewport(container, Size::new(100.0, 100.0));
+
+        let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 120.0));
+        assert!(
+            (snapped.y - 200.0).abs() < 0.1,
+            "inline axis should snap vertically in vertical writing modes (snapped={:?})",
+            snapped
+        );
+        assert!(snapped.x.abs() < 0.1);
+    }
+
+    #[test]
     fn scroll_snap_stop_always_breaks_ties() {
         let candidates = vec![
             (100.0, ScrollSnapStop::Normal),
