@@ -2815,7 +2815,7 @@ fn build_styled_lookup<'a>(styled: &'a StyledNode, out: &mut HashMap<usize, *con
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct SnapBounds {
     max_x: f32,
     max_y: f32,
@@ -4084,6 +4084,124 @@ mod tests {
         assert!(
             (far.y - 260.0).abs() < 0.1,
             "far offset should remain unchanged for proximity snapping"
+        );
+    }
+
+    #[test]
+    fn scroll_snap_horizontal_mandatory_adjusts_offsets() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body {
+                    margin: 0;
+                    height: 100%;
+                    width: 100%;
+                    display: grid;
+                    grid-template-columns: 200px 200px;
+                    grid-auto-flow: column;
+                    scroll-snap-type: x mandatory;
+                }
+                section {
+                    height: 100px;
+                    scroll-snap-align: start;
+                }
+            </style>
+            <section></section><section></section>
+        "#;
+
+        let dom = renderer.parse_html(html).unwrap();
+        let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
+
+        let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(120.0, 0.0));
+        assert!(
+            (snapped.x - 200.0).abs() < 0.1,
+            "expected snap to the second section on the inline axis (snapped={:?}, xs={:?}, content={:?})",
+            snapped,
+            fragments
+                .root
+                .children
+                .iter()
+                .map(|c| c.bounds.x())
+                .collect::<Vec<_>>(),
+            fragments.content_size()
+        );
+        assert!(snapped.y.abs() < 0.1);
+    }
+
+    #[test]
+    fn scroll_snap_inline_axis_matches_horizontal_flow() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body {
+                    margin: 0;
+                    height: 100%;
+                    width: 100%;
+                    display: grid;
+                    grid-template-columns: 200px 200px;
+                    grid-auto-flow: column;
+                    scroll-snap-type: inline mandatory;
+                }
+                section {
+                    height: 100px;
+                    scroll-snap-align: start;
+                }
+            </style>
+            <section></section><section></section>
+        "#;
+
+        let dom = renderer.parse_html(html).unwrap();
+        let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
+
+        let (container, style, origin) =
+            super::find_snap_container(&fragments.root, Point::ZERO).expect("snap container");
+        let inline_vertical = super::is_vertical_writing_mode(style.writing_mode);
+        let (snap_x, snap_y) = super::snap_axis_flags(style.scroll_snap_type.axis, inline_vertical);
+        let mut targets_x = Vec::new();
+        let mut targets_y = Vec::new();
+        let mut bounds = SnapBounds::default();
+        super::collect_snap_targets(
+            container,
+            Point::new(-origin.x, -origin.y),
+            inline_vertical,
+            snap_x,
+            snap_y,
+            Size::new(100.0, 100.0),
+            &mut bounds,
+            &mut targets_x,
+            &mut targets_y,
+        );
+
+        let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(120.0, 0.0));
+        assert!(
+            (snapped.x - 200.0).abs() < 0.1,
+            "inline axis snapping should match the horizontal flow (snapped={:?}, targets_x={:?}, bounds={:?}, content={:?})",
+            snapped,
+            targets_x,
+            bounds,
+            fragments.content_size()
+        );
+        assert!(snapped.y.abs() < 0.1);
+    }
+
+    #[test]
+    fn scroll_snap_stop_always_breaks_ties() {
+        let candidates = vec![
+            (100.0, ScrollSnapStop::Normal),
+            (200.0, ScrollSnapStop::Always),
+        ];
+
+        let snapped = super::pick_snap_target(
+            150.0,
+            400.0,
+            ScrollSnapStrictness::Mandatory,
+            50.0,
+            &candidates,
+        );
+
+        assert!(
+            (snapped - 200.0).abs() < 0.1,
+            "stop:always targets should win ties at equal distance"
         );
     }
 }
