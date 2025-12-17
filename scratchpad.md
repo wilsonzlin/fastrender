@@ -1,3 +1,4 @@
+# Cascade performance: cached UA default form declarations, bypassed full rule matching for non-element nodes, added zero-declaration fast path in apply_cascaded_declarations, and added a text-node inheritance regression.
 # Calc helpers now require proper context: calc lengths with percentage/viewport/font terms return None in viewport/font resolvers when bases are missing, and a regression `calc_resolution_helpers_require_context` covers the helpers.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # Color-scheme inheritance still validated; further palette audits ongoing.
@@ -17,11 +18,6 @@
 # Marker display-list regression: display-list renderer test now checks ::marker text fragments honor authored text-shadow as well.
 # Added hanging text-indent soft-wrap regression: soft-wrapped lines now explicitly covered when text-indent:hanging is set (first line unindented, subsequent soft wraps indented). `cargo test text_indent_hanging_indents_soft_wrapped_lines --quiet` passes.
 # Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.
-# Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
-# Color-scheme inheritance still validated; further palette audits ongoing.
-# Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
-# Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
-# Rendered https://www.aljazeera.com at 1200×800 (aljazeera.png); page loads but renders mostly blank white with sparse text (likely heavy client-side content). Potential issue: critical content missing without JS; leaving as observation for now (no code change).
 # Notes: recent render attempts (aljazeera/natgeo/wsj) logged separately; color-scheme palette/inheritance work completed upstream.
 - CSS URL extraction now unescapes JS-escaped URLs (e.g., `\u0026` ampersands) in both link hrefs and embedded/script sources, preventing missing stylesheets (e.g., bing.com). Regressions added for link and embedded CSS URL unescaping.
 - Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.

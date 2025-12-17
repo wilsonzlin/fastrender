@@ -81,6 +81,16 @@ fn log_cascade_profile(elapsed_ms: f64) {
     );
 }
 
+static UA_TEXTAREA_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_INPUT_BASE_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_INPUT_HIDDEN_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_INPUT_TEXT_CURSOR_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_INPUT_POINTER_CURSOR_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+
+fn cached_declarations(cache: &'static OnceLock<Vec<Declaration>>, css: &'static str) -> Cow<'static, [Declaration]> {
+    Cow::Borrowed(cache.get_or_init(|| parse_declarations(css)).as_slice())
+}
+
 fn select_color_scheme(pref: &ColorSchemePreference, user: ColorScheme) -> Option<ColorSchemeEntry> {
     match pref {
         ColorSchemePreference::Normal => None,
@@ -879,13 +889,13 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
         None => return rules,
     };
 
-    let mut add_rule = |css: &str, order: usize| {
+    let mut add_rule = |decls: Cow<'static, [Declaration]>, order: usize| {
         rules.push(MatchedRule {
             origin: StyleOrigin::UserAgent,
             specificity: 1, // tag selector specificity
             order,
             layer_order: vec![u32::MAX],
-            declarations: Cow::Owned(parse_declarations(css)),
+            declarations: decls,
         })
     };
 
@@ -900,16 +910,25 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                 crate::style::types::Direction::Ltr => "ltr",
             };
             add_rule(
-                &format!("unicode-bidi: isolate; direction: {};", dir_value),
+                Cow::Owned(parse_declarations(&format!(
+                    "unicode-bidi: isolate; direction: {};",
+                    dir_value
+                ))),
                 0,
             );
         }
         "bdo" if node.get_attribute("dir").is_none() => {
-            add_rule("unicode-bidi: bidi-override; direction: ltr;", 0);
+            add_rule(
+                Cow::Owned(parse_declarations("unicode-bidi: bidi-override; direction: ltr;")),
+                0,
+            );
         }
         "textarea" => {
             add_rule(
-                "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block; cursor: text;",
+                cached_declarations(
+                    &UA_TEXTAREA_DECLS,
+                    "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block; cursor: text;",
+                ),
                 0,
             );
         }
@@ -924,25 +943,34 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                     specificity: 11, // input[type=\"hidden\"] should outrank generic UA form rules
                     order: 0,
                     layer_order: vec![u32::MAX],
-                    declarations: Cow::Owned(parse_declarations("display: none;")),
+                    declarations: cached_declarations(&UA_INPUT_HIDDEN_DECLS, "display: none;"),
                 });
                 return rules;
             }
             add_rule(
-                "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
+                cached_declarations(
+                    &UA_INPUT_BASE_DECLS,
+                    "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
+                ),
                 0,
             );
             if matches!(
                 input_type.as_str(),
                 "text" | "search" | "email" | "url" | "tel" | "password" | "number"
             ) {
-                add_rule("cursor: text;", 1);
+                add_rule(cached_declarations(&UA_INPUT_TEXT_CURSOR_DECLS, "cursor: text;"), 1);
             } else if matches!(input_type.as_str(), "button" | "submit" | "reset") {
-                add_rule("cursor: pointer;", 1);
+                add_rule(
+                    cached_declarations(&UA_INPUT_POINTER_CURSOR_DECLS, "cursor: pointer;"),
+                    1,
+                );
             }
         }
         "select" | "button" => add_rule(
-            "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
+            cached_declarations(
+                &UA_INPUT_BASE_DECLS,
+                "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
+            ),
             0,
         ),
         _ => {}
@@ -970,13 +998,77 @@ fn apply_styles_internal(
     reuse_counter: Option<&mut usize>,
 ) -> StyledNode {
     record_node_visit(node);
-
-    let mut ua_styles = get_default_styles_for_element(node);
-    inherit_styles(&mut ua_styles, parent_ua_styles);
-
     let mut ancestors: Vec<&DomNode> = Vec::new();
     let node_id = *node_counter;
     *node_counter += 1;
+
+    if !node.is_element() {
+        let mut ua_styles = get_default_styles_for_element(node);
+        inherit_styles(&mut ua_styles, parent_ua_styles);
+        propagate_text_decorations(&mut ua_styles, parent_ua_styles);
+
+        let mut styles = get_default_styles_for_element(node);
+        inherit_styles(&mut styles, parent_styles);
+        propagate_text_decorations(&mut styles, parent_styles);
+
+        let is_root = ancestors.is_empty();
+        let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
+        let current_ua_root_font_size = if is_root {
+            ua_styles.font_size
+        } else {
+            ua_root_font_size
+        };
+        ua_styles.root_font_size = current_ua_root_font_size;
+        styles.root_font_size = current_root_font_size;
+        resolve_line_height_length(&mut ua_styles, viewport);
+        resolve_line_height_length(&mut styles, viewport);
+        resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
+        resolve_absolute_lengths(&mut styles, current_root_font_size, viewport);
+
+        let mut children = Vec::with_capacity(node.children.len());
+        let mut reuse_counter = reuse_counter;
+
+        ancestors.push(node);
+        ancestor_ids.push(node_id);
+        for child in &node.children {
+            let child_reuse = reuse_counter.as_deref_mut();
+            let child_styled = apply_styles_internal_with_ancestors(
+                child,
+                rules,
+                selector_caches,
+                scratch,
+                &styles,
+                &ua_styles,
+                current_root_font_size,
+                current_ua_root_font_size,
+                viewport,
+                color_scheme_pref,
+                &mut ancestors,
+                node_counter,
+                ancestor_ids,
+                container_ctx,
+                container_scope,
+                reuse_map,
+                child_reuse,
+            );
+            children.push(child_styled);
+        }
+        ancestors.pop();
+        ancestor_ids.pop();
+
+        return StyledNode {
+            node_id,
+            node: node.clone(),
+            styles,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children,
+        };
+    }
+
+    let mut ua_styles = get_default_styles_for_element(node);
+    inherit_styles(&mut ua_styles, parent_ua_styles);
     let mut matching_rules = find_matching_rules(
         node,
         rules,
@@ -1229,9 +1321,6 @@ fn apply_styles_internal_with_ancestors<'a>(
 ) -> StyledNode {
     record_node_visit(node);
 
-    let mut ua_styles = get_default_styles_for_element(node);
-    inherit_styles(&mut ua_styles, parent_ua_styles);
-
     let node_id = *node_counter;
     *node_counter += 1;
 
@@ -1260,6 +1349,73 @@ fn apply_styles_internal_with_ancestors<'a>(
             }
         }
     }
+
+    if !node.is_element() {
+        let mut ua_styles = get_default_styles_for_element(node);
+        inherit_styles(&mut ua_styles, parent_ua_styles);
+        propagate_text_decorations(&mut ua_styles, parent_ua_styles);
+
+        let mut styles = get_default_styles_for_element(node);
+        inherit_styles(&mut styles, parent_styles);
+        propagate_text_decorations(&mut styles, parent_styles);
+
+        let is_root = ancestors.is_empty();
+        let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
+        let current_ua_root_font_size = if is_root {
+            ua_styles.font_size
+        } else {
+            ua_root_font_size
+        };
+        ua_styles.root_font_size = current_ua_root_font_size;
+        styles.root_font_size = current_root_font_size;
+        resolve_line_height_length(&mut ua_styles, viewport);
+        resolve_line_height_length(&mut styles, viewport);
+        resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
+        resolve_absolute_lengths(&mut styles, current_root_font_size, viewport);
+
+        let mut children = Vec::with_capacity(node.children.len());
+        let mut reuse_counter = reuse_counter;
+        ancestors.push(node);
+        ancestor_ids.push(node_id);
+        for child in &node.children {
+            let child_reuse = reuse_counter.as_deref_mut();
+            let child_styled = apply_styles_internal_with_ancestors(
+                child,
+                rules,
+                selector_caches,
+                scratch,
+                &styles,
+                &ua_styles,
+                current_root_font_size,
+                current_ua_root_font_size,
+                viewport,
+                color_scheme_pref,
+                ancestors,
+                node_counter,
+                ancestor_ids,
+                container_ctx,
+                container_scope,
+                reuse_map,
+                child_reuse,
+            );
+            children.push(child_styled);
+        }
+        ancestors.pop();
+        ancestor_ids.pop();
+
+        return StyledNode {
+            node_id,
+            node: node.clone(),
+            styles,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: None,
+            children,
+        };
+    }
+
+    let mut ua_styles = get_default_styles_for_element(node);
+    inherit_styles(&mut ua_styles, parent_ua_styles);
 
     let mut matching_rules = find_matching_rules(
         node,
@@ -2003,6 +2159,35 @@ mod tests {
     }
 
     #[test]
+    fn text_nodes_inherit_styles_without_matching() {
+        let dom = DomNode {
+            node_type: DomNodeType::Document,
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "div".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![(
+                        "style".to_string(),
+                        "color: rgb(10, 20, 30); text-decoration: underline;".to_string(),
+                    )],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Text {
+                        content: "hello".to_string(),
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let div = styled.children.first().expect("div");
+        let text = div.children.first().expect("text node");
+        assert_eq!(text.styles.color, Rgba::from_rgba8(10, 20, 30, 255));
+        assert_eq!(text.styles.applied_text_decorations.len(), 1);
+    }
+
+    #[test]
     fn navigation_visibility_respects_author_stylesheet() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -2411,7 +2596,10 @@ mod tests {
         let body = styled.children.first().expect("body");
         let input = body.children.first().expect("input");
 
-        assert_eq!(input.styles.outline_color, OutlineColor::Color(Rgba::rgb(232, 232, 232)));
+        assert_eq!(
+            input.styles.outline_color,
+            OutlineColor::Color(Rgba::rgb(232, 232, 232))
+        );
     }
 
     #[test]
@@ -2435,10 +2623,7 @@ mod tests {
                         attributes: vec![
                             ("type".to_string(), "text".to_string()),
                             ("data-fastr-focus".to_string(), "true".to_string()),
-                            (
-                                "style".to_string(),
-                                "outline: 1px solid rgb(10, 20, 30);".to_string(),
-                            ),
+                            ("style".to_string(), "outline: 1px solid rgb(10, 20, 30);".to_string()),
                         ],
                     },
                     children: vec![],
@@ -5907,6 +6092,11 @@ fn apply_cascaded_declarations<'a, F>(
     }
     if let Some(inline) = inline_declarations.as_ref() {
         total_decls += inline.len();
+    }
+    if total_decls == 0 {
+        resolve_pending_logical_properties(styles);
+        resolve_absolute_lengths(styles, root_font_size, viewport);
+        return;
     }
     flattened.reserve(total_decls);
 
