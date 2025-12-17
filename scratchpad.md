@@ -1529,3 +1529,4 @@ Actionable borrowings:
 - Media queries: resolution parsing retains fractional precision; regression in `test_resolution_parse` asserts 1.3333dppx is preserved.
 - Media queries: `prefers-color-scheme` parsing is case-insensitive; regression updated to accept uppercase inputs.
 - Bug hunt: rendered https://httpbin.org/html (looks OK) and https://wikipedia.org at 1200×800. Wikipedia render came out as a tiny compressed block (~238×64px of content in the center) instead of the full portal layout, suggesting a font-size/layout scaling issue (likely rem/percent font-size base). Pending investigation/fix.
+- Table intrinsic: percent padding contributes to intrinsic widths when the table width is definite; percent padding is ignored when the table width is indefinite (regressions added for both cases).
