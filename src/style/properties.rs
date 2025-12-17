@@ -9883,6 +9883,7 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::css::properties::parse_property_value;
     use crate::geometry::Size;
     use crate::style::types::{
         AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FlexDirection,
@@ -13885,6 +13886,50 @@ mod tests {
         assert!((style.font_size - 16.0).abs() < 0.01);
         assert!(matches!(style.line_height, LineHeight::Normal));
         assert_eq!(style.font_family, vec!["serif".to_string()]);
+    }
+
+    #[test]
+    fn font_family_parses_quoted_names_with_commas() {
+        let mut style = ComputedStyle::default();
+        let value = parse_property_value(
+            "font-family",
+            "\"Font, With, Commas\", Open Sans, serif",
+        )
+        .expect("font-family parse");
+        let decl = Declaration {
+            property: "font-family".to_string(),
+            value,
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+        assert_eq!(
+            style.font_family,
+            vec![
+                "Font, With, Commas".to_string(),
+                "Open Sans".to_string(),
+                "serif".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn font_family_honors_global_keywords() {
+        let mut parent = ComputedStyle::default();
+        parent.font_family = vec!["ParentFace".to_string()];
+        let mut style = ComputedStyle::default();
+        style.font_family = vec!["ChildDefault".to_string()];
+
+        let decl = Declaration {
+            property: "font-family".to_string(),
+            value: parse_property_value("font-family", "inherit").expect("font-family inherit"),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, &parent, 16.0, 16.0);
+        assert_eq!(style.font_family, parent.font_family);
     }
 
     #[test]

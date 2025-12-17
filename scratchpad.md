@@ -39,6 +39,8 @@ Idle; no current tasks.
 
 ## Session notes (latest)
 
+- Font-family parsing now uses cssparser so quoted names/commas are preserved and global keywords (inherit/initial/unset/revert/revert-layer) stay as keywords. Added regression tests for quoted comma names and font-family inheritance.
+
 - Implemented CSS `user-select`: added `UserSelect` enum/defaults, parsing of auto/text/none/all/contain, property wiring, and regression coverage; also marked `user-select` as inherited per spec. Pushed `c412f85` and `fa5a130`.
 - Implemented CSS `touch-action`: added `TouchAction` flags, default auto, parsing of single/multi-keyword lists (pan-*, pinch-zoom, manipulation), property copy wiring, and regression test. No layout behavior yet; pushed `ae9c051`.
 - Added CSS `scrollbar-width` support: new enum/defaults, cascade parsing/copying, and regression test; pushed `b28f20f`. Fixed fetch_and_render CLI docs placement.

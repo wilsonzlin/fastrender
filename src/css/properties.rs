@@ -682,6 +682,67 @@ fn parse_number_component(parser: &mut Parser) -> Result<f32, ()> {
     }
 }
 
+fn is_global_keyword_str(value: &str) -> bool {
+    value.eq_ignore_ascii_case("inherit")
+        || value.eq_ignore_ascii_case("initial")
+        || value.eq_ignore_ascii_case("unset")
+        || value.eq_ignore_ascii_case("revert")
+        || value.eq_ignore_ascii_case("revert-layer")
+}
+
+fn parse_font_family_list(value_str: &str) -> Option<Vec<String>> {
+    let mut input = ParserInput::new(value_str);
+    let mut parser = Parser::new(&mut input);
+    let mut families = Vec::new();
+
+    loop {
+        parser.skip_whitespace();
+        if parser.is_exhausted() {
+            break;
+        }
+
+        let family = parse_single_font_family(&mut parser)?;
+        families.push(family);
+
+        parser.skip_whitespace();
+        if parser.is_exhausted() {
+            break;
+        }
+
+        if parser.expect_comma().is_err() {
+            return None;
+        }
+        // Trailing comma is invalid.
+        if parser.is_exhausted() {
+            return None;
+        }
+    }
+
+    if families.is_empty() { None } else { Some(families) }
+}
+
+fn parse_single_font_family(parser: &mut Parser) -> Option<String> {
+    if let Ok(s) = parser.try_parse(|p| p.expect_string().map(|s| s.as_ref().to_string())) {
+        return Some(s);
+    }
+
+    let first = parser
+        .expect_ident()
+        .map(|ident| ident.as_ref().to_string())
+        .ok()?;
+    let mut name = first;
+    loop {
+        match parser.try_parse(|p| p.expect_ident().map(|i| i.as_ref().to_string())) {
+            Ok(ident) => {
+                name.push(' ');
+                name.push_str(&ident);
+            }
+            Err(_) => break,
+        }
+    }
+    Some(name)
+}
+
 /// Parse a CSS property value
 pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
     // Custom properties store their tokens verbatim (post !important stripping handled by caller).
@@ -839,11 +900,14 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
 
     // Font family special handling
     if property == "font-family" {
-        let families: Vec<String> = value_str
-            .split(',')
-            .map(|f| f.trim().trim_matches('"').trim_matches('\'').to_string())
-            .collect();
-        return Some(PropertyValue::FontFamily(families));
+        if is_global_keyword_str(value_str) {
+            return Some(PropertyValue::Keyword(value_str.to_string()));
+        }
+
+        if let Some(families) = parse_font_family_list(value_str) {
+            return Some(PropertyValue::FontFamily(families));
+        }
+        return None;
     }
 
     // Fallback: treat remaining tokens as keywords/numbers/percentages.
