@@ -9,6 +9,7 @@
 - Textarea wrap="off" disables wrapping: presentational hint maps wrap=off to `white-space: pre`, and regression `textarea_wrap_off_disables_wrapping` ensures author CSS can override back to pre-wrap.
 - Added UA disabled form-control styling: user_agent.css dims disabled inputs/selects/textareas/buttons/options/optgroups and switches cursors to default; cascade regression `disabled_form_controls_use_ua_styles` verifies the UA defaults.
 Idle; no current tasks. Available for new tasks.
+- Sticky follow-up: apply_sticky_offsets now translates only the sticky box (not children) before recursing, preventing nested stickies from being shifted twice. Added regression `nested_sticky_child_remains_visible` to keep inner stickies visible when parent stickies pin.
 - Pull/push to origin have been failing (SSH timeouts/HTTPS creds). A full patch series for all local commits lives in `local_patches/` (0001–0018) so others can apply while pushes are blocked.
 - Fixed display-list underline currentColor test to assert resolved color/thickness and remove unused vars; warnings cleared.
 - PositionedLayout absolute helper delegates to AbsoluteLayout for spec-accurate shrink-to-fit/auto-margin handling; positioned layout tests updated (shrink-to-fit expectation) and an auto-margin centering regression added. `cargo test --quiet test_absolute_position_left_right_shrink_to_fit` and `cargo test --quiet absolute_position_auto_margins_center_between_insets` pass.
