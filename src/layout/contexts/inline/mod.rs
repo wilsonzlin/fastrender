@@ -4472,11 +4472,26 @@ impl InlineFormattingContext {
         let mut out = Vec::with_capacity(lines.len());
         for line in lines.drain(..) {
             let limit = line.available_width;
-            let overflowed = limit.is_finite() && line.width > limit + 0.01;
+            let inline_indent_cut = match line.resolved_direction {
+                crate::style::types::Direction::Rtl => (-line.indent).max(0.0),
+                _ => line.indent.max(0.0),
+            };
+            let usable_limit = if limit.is_finite() {
+                (limit - inline_indent_cut).max(0.0)
+            } else {
+                limit
+            };
+            if std::env::var("FASTR_LOG_OVERFLOW_TEST").is_ok() {
+                eprintln!(
+                    "[text-overflow] width={:.2} limit={:.2} indent={:.2} usable={:.2}",
+                    line.width, limit, line.indent, usable_limit
+                );
+            }
+            let overflowed = usable_limit.is_finite() && line.width > usable_limit + 0.01;
             if !overflowed {
                 let mut clamped = line;
-                if limit.is_finite() {
-                    clamped.width = clamped.width.min(limit.max(0.0));
+                if usable_limit.is_finite() {
+                    clamped.width = clamped.width.min(usable_limit.max(0.0));
                 }
                 out.push(clamped);
                 continue;
@@ -4484,17 +4499,23 @@ impl InlineFormattingContext {
 
             let start_side = style.text_overflow.start_for_direction(line.resolved_direction);
             let end_side = style.text_overflow.end_for_direction(line.resolved_direction);
-            let mut adjusted =
-                match self.apply_text_overflow_to_line(&line, start_side, end_side, style, strut_metrics)? {
-                    Some(line) => line,
-                    None => {
-                        let mut clipped = line.clone();
-                        clipped.width = limit.max(0.0).min(clipped.width);
-                        clipped
-                    }
-                };
+            let mut adjusted = match self.apply_text_overflow_to_line(
+                &line,
+                start_side,
+                end_side,
+                style,
+                strut_metrics,
+                usable_limit,
+            )? {
+                Some(line) => line,
+                None => {
+                    let mut clipped = line.clone();
+                    clipped.width = usable_limit.max(0.0).min(clipped.width);
+                    clipped
+                }
+            };
             if adjusted.available_width.is_finite() {
-                adjusted.width = adjusted.width.min(adjusted.available_width.max(0.0));
+                adjusted.width = adjusted.width.min(usable_limit.max(0.0));
             }
             out.push(adjusted);
         }
@@ -4509,9 +4530,9 @@ impl InlineFormattingContext {
         end_side: &crate::style::types::TextOverflowSide,
         style: &Arc<ComputedStyle>,
         strut_metrics: &BaselineMetrics,
+        usable_limit: f32,
     ) -> Result<Option<Line>, LayoutError> {
-        let limit = line.available_width;
-        if !limit.is_finite() || limit <= 0.0 {
+        if !usable_limit.is_finite() || usable_limit <= 0.0 {
             return Ok(None);
         }
 
@@ -4523,12 +4544,20 @@ impl InlineFormattingContext {
         let mut items: Vec<InlineItem> = line.items.iter().map(|p| p.item.clone()).collect();
         let markers_total = start_width + end_width;
 
-        if markers_total >= limit - 0.01 {
+        if std::env::var("FASTR_LOG_OVERFLOW_TEST").is_ok() {
+            eprintln!(
+                "[text-overflow] markers start={:.2} end={:.2} total={:.2} usable_limit={:.2}",
+                start_width, end_width, markers_total, usable_limit
+            );
+        }
+
+        if markers_total >= usable_limit - 0.01 {
             // Prefer end marker, then start marker if only one can fit.
             let mut single: Option<InlineItem> = None;
-            if end_width > 0.0 && end_width <= limit {
+            let available_for_marker = line.available_width.max(0.0);
+            if end_width > 0.0 && end_width <= available_for_marker + 0.01 {
                 single = end_marker;
-            } else if start_width > 0.0 && start_width <= limit {
+            } else if start_width > 0.0 && start_width <= available_for_marker + 0.01 {
                 single = start_marker;
             }
             if let Some(marker) = single {
@@ -4538,7 +4567,7 @@ impl InlineFormattingContext {
             return Ok(None);
         }
 
-        let mut budget = (limit - markers_total).max(0.0);
+        let mut budget = (usable_limit - markers_total).max(0.0);
         if start_marker.is_some() {
             self.trim_line_start(&mut items, budget);
             let used = self.line_items_width(&items);
@@ -8122,6 +8151,59 @@ mod tests {
         assert!(
             !texts.iter().any(|t| t.contains('…')),
             "ellipsis should not appear when inline overflow is visible"
+        );
+    }
+
+    #[test]
+    fn text_overflow_accounts_for_text_indent_in_overflow_detection() {
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.overflow_x = Overflow::Hidden;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Clip,
+            inline_end: TextOverflowSide::Ellipsis,
+        };
+        container_style.text_indent.length = Length::px(50.0);
+
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = container_style.white_space;
+        let root = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "indent pushes this long content past the edge".to_string(),
+            )],
+        );
+
+        let constraints = LayoutConstraints::definite_width(60.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_fragments(&fragment, &mut texts);
+        if std::env::var("FASTR_LOG_OVERFLOW_TEST").is_ok() {
+            if let Some(line) = fragment
+                .children
+                .iter()
+                .find(|c| matches!(c.content, FragmentContent::Line { .. }))
+            {
+                eprintln!(
+                    "line bounds: x={} width={} children={}",
+                    line.bounds.x(),
+                    line.bounds.width(),
+                    line.children.len()
+                );
+                for (i, child) in line.children.iter().enumerate() {
+                    if let FragmentContent::Text { text, .. } = &child.content {
+                        eprintln!("child#{i} text='{}' x={} w={} ", text, child.bounds.x(), child.bounds.width());
+                    }
+                }
+            }
+        }
+        assert!(
+            texts.iter().any(|t| t.contains('…')),
+            "indent-driven overflow should still emit an ellipsis"
         );
     }
 
