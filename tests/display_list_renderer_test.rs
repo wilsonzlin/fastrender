@@ -395,7 +395,7 @@ fn text_decoration_currentcolor_resolves_in_display_list() {
         })
         .expect("decoration item");
 
-    let underline = deco
+    let _underline = deco
         .decorations
         .first()
         .and_then(|d| d.underline.as_ref())
