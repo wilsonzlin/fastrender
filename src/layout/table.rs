@@ -1610,7 +1610,7 @@ impl Default for TableStructure {
 
 fn resolve_border_spacing_length(length: &crate::style::values::Length, font_size: f32) -> f32 {
     let resolved = length
-        .resolve_with_context(None, 0.0, 0.0, font_size, font_size)
+        .resolve_with_context(None, f32::NAN, f32::NAN, font_size, font_size)
         .unwrap_or(0.0);
 
     resolved.max(0.0)
@@ -1632,8 +1632,8 @@ fn resolve_length_against(
     if length.unit == LengthUnit::Calc {
         return length.resolve_with_context(
             containing_width,
-            containing_width.unwrap_or(0.0),
-            0.0,
+            containing_width.unwrap_or(f32::NAN),
+            f32::NAN,
             font_size,
             font_size,
         );
@@ -7558,6 +7558,20 @@ mod tests {
         let len = CalcLength::single(LengthUnit::Px, -5.0);
         let spacing = resolve_border_spacing_length(&Length::calc(len), 16.0);
         assert_eq!(spacing, 0.0);
+    }
+
+    #[test]
+    fn border_spacing_calc_requires_viewport_for_vw() {
+        let len = CalcLength::single(LengthUnit::Vw, 10.0);
+        // No viewport -> unresolved calc treated as zero.
+        let spacing = resolve_border_spacing_length(&Length::calc(len), 16.0);
+        assert_eq!(spacing, 0.0);
+
+        // With viewport, 10vw of 200px => 20px spacing.
+        let spacing = Length::calc(CalcLength::single(LengthUnit::Vw, 10.0))
+            .resolve_with_context(None, 200.0, 200.0, 16.0, 16.0)
+            .unwrap();
+        assert!((spacing - 20.0).abs() < 0.01);
     }
 
     #[test]
