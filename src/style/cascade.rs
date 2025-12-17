@@ -412,6 +412,10 @@ impl<'a> RuleIndex<'a> {
         }
 
         out.extend(self.universal.iter().copied());
+        if out.len() > 1 {
+            out.sort_unstable();
+            out.dedup();
+        }
     }
 
     fn pseudo_candidates(&self, node: &DomNode, pseudo: &PseudoElement, out: &mut Vec<usize>) {
@@ -460,6 +464,10 @@ impl<'a> RuleIndex<'a> {
         }
 
         out.extend(bucket.universal.iter().copied());
+        if out.len() > 1 {
+            out.sort_unstable();
+            out.dedup();
+        }
     }
 }
 
