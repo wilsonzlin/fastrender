@@ -5600,6 +5600,7 @@ pub fn apply_declaration_with_base(
                     "normal" => WordBreak::Normal,
                     "break-all" => WordBreak::BreakAll,
                     "keep-all" => WordBreak::KeepAll,
+                    "anywhere" => WordBreak::Anywhere,
                     "break-word" => WordBreak::BreakWord,
                     _ => styles.word_break,
                 };
