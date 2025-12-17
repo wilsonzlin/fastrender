@@ -944,3 +944,27 @@ fn color_mix_background_renders_purple() {
     );
     assert_eq!(g, 0);
 }
+
+#[test]
+fn color_mix_oklch_renders_expected_color() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Color::parse("color-mix(in oklch, red 40%, blue 60%)")
+        .unwrap()
+        .to_rgba(Rgba::BLACK);
+
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), vec![], Arc::new(style));
+
+    let list = DisplayListBuilder::new().build(&fragment);
+    let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(&list)
+        .unwrap();
+
+    let expected = Color::parse("color-mix(in oklch, red 40%, blue 60%)")
+        .unwrap()
+        .to_rgba(Rgba::BLACK);
+    assert_eq!(
+        pixel(&pixmap, 0, 0),
+        (expected.r, expected.g, expected.b, expected.alpha_u8())
+    );
+}
