@@ -1352,6 +1352,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.quotes = parent.quotes.clone();
     styles.cursor = parent.cursor;
     styles.cursor_images = parent.cursor_images.clone();
+    styles.scrollbar_color = parent.scrollbar_color;
 
     // Color inherits
     styles.color = parent.color;
@@ -1472,9 +1473,9 @@ mod tests {
     use crate::style::float::Float;
     use crate::style::properties::apply_declaration;
     use crate::style::types::{
-        BorderCollapse, BorderStyle, Direction, LineBreak, ListStylePosition, ListStyleType, TextCombineUpright,
-        TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange,
-        WillChangeHint,
+        BorderCollapse, BorderStyle, Direction, LineBreak, ListStylePosition, ListStyleType, ScrollbarColor,
+        TextCombineUpright, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition, UnicodeBidi, WhiteSpace,
+        WillChange, WillChangeHint,
     };
     use crate::style::values::Length;
     use crate::style::ComputedStyle;
@@ -3221,6 +3222,37 @@ mod tests {
         let styled = apply_styles(&parent, &StyleSheet::new());
         let child = styled.children.first().expect("child");
         assert_eq!(child.styles.cursor, CursorKeyword::Pointer);
+    }
+
+    #[test]
+    fn scrollbar_color_inherits() {
+        let parent = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                attributes: vec![(
+                    "style".to_string(),
+                    "scrollbar-color: rgb(10, 20, 30) rgb(40, 50, 60);".to_string(),
+                )],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&parent, &StyleSheet::new());
+        let child = styled.children.first().expect("child");
+
+        match child.styles.scrollbar_color {
+            ScrollbarColor::Colors { thumb, track } => {
+                assert_eq!(thumb, Rgba::from_rgba8(10, 20, 30, 255));
+                assert_eq!(track, Rgba::from_rgba8(40, 50, 60, 255));
+            }
+            other => panic!("unexpected scrollbar color: {:?}", other),
+        }
     }
 
     #[test]
