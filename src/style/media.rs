@@ -3110,6 +3110,9 @@ mod tests {
         let feature = MediaFeature::parse("prefers-color-scheme", Some("no-preference")).unwrap();
         assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::NoPreference));
         assert!(MediaFeature::parse("prefers-color-scheme", Some("unknown")).is_err());
+        let upper = MediaFeature::parse("prefers-color-scheme", Some("DARK"))
+            .expect("case-insensitive parse");
+        assert_eq!(upper, MediaFeature::PrefersColorScheme(ColorScheme::Dark));
     }
 
     #[test]
