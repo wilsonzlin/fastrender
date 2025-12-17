@@ -319,6 +319,56 @@ fn text_decoration_segments_offset_by_line_start() {
 }
 
 #[test]
+fn text_decoration_currentcolor_resolves_in_display_list() {
+    // Ensure currentColor on text decorations resolves against the text color when emitting display list items.
+    let mut list = DisplayList::new();
+    let mut style = fastrender::ComputedStyle::default();
+    style.color = Rgba::rgb(10, 20, 30);
+    style.text_decoration.lines = fastrender::style::types::TextDecorationLine::UNDERLINE;
+    style.text_decoration.color = None; // currentColor
+    style.text_decoration.thickness = fastrender::style::types::TextDecorationThickness::Length(Length::px(2.0));
+
+    let mut fragment = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), "hi".to_string(), 0.0);
+    fragment.style = Some(Arc::new(style));
+
+    let list = DisplayListBuilder::new().build(&fragment);
+    let deco = list
+        .items()
+        .iter()
+        .find_map(|i| match i {
+            DisplayItem::TextDecoration(d) => Some(d),
+            _ => None,
+        })
+        .expect("decoration item");
+
+    let underline = deco
+        .decorations
+        .first()
+        .and_then(|d| d.underline.as_ref())
+        .expect("underline present");
+
+    let mut renderer = DisplayListRenderer::new(30, 20, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Verify some pixels are non-white (decoration rendered) and dominated by the text color channels.
+    let mut max_r = 0u8;
+    let mut max_g = 0u8;
+    let mut max_b = 0u8;
+    for chunk in pixmap.data().chunks(4) {
+        if chunk[0] == 255 && chunk[1] == 255 && chunk[2] == 255 {
+            continue;
+        }
+        max_r = max_r.max(chunk[0]);
+        max_g = max_g.max(chunk[1]);
+        max_b = max_b.max(chunk[2]);
+    }
+    assert!(
+        max_r >= 10 && max_g >= 20 && max_b >= 30,
+        "decoration should resolve currentColor"
+    );
+}
+
+#[test]
 fn display_list_border_image_nine_slice() {
     // Construct a 3x3 image with distinct corners/edges to verify nine-slice placement.
     let mut img = RgbaImage::new(3, 3);
