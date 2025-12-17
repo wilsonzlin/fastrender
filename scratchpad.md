@@ -26,6 +26,7 @@ Idle; no current tasks. Available for new tasks.
 - Border-spacing validation: border-spacing now rejects percentage values, clamps negative lengths to zero (including calc resolution), and resolves spacing with non-negative clamp. Added cascade + table tests. Git push currently timing out (SSH to github).
 - Rebased/pushed the border-spacing validation work; `cargo test border_spacing_percentages_are_ignored` passes locally.
 - Added vertical text-overflow regressions: vertical-rl with clip/ellipsis and inline-start ellipsis now tested to ensure markers appear and inline-axis extents clamp to the available height.
+- Text-overflow now uses overflow-x as the inline axis even in vertical writing; vertical ellipsis regressions updated to clip via overflow-x (bugfix from overflow-y reliance). Added start/end vertical ellipsis coverage.
 - Added vertical_writing_ellipsis fixture covering end/start ellipsis in vertical-rl for manual render inspection.
 - CLI: fetch_and_render/render_pages/inspect_frag accept `--prefers-reduced-transparency reduce|no-preference` to set `FASTR_PREFERS_REDUCED_TRANSPARENCY` for media overrides (help text updated).
 =======

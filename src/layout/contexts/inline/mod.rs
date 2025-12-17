@@ -4452,13 +4452,9 @@ impl InlineFormattingContext {
         mut lines: Vec<Line>,
         style: &Arc<ComputedStyle>,
         strut_metrics: &BaselineMetrics,
-        inline_vertical: bool,
+        _inline_vertical: bool,
     ) -> Result<Vec<Line>, LayoutError> {
-        let overflow_axis = if inline_vertical {
-            style.overflow_y
-        } else {
-            style.overflow_x
-        };
+        let overflow_axis = style.overflow_x;
         let clipping = matches!(
             overflow_axis,
             crate::style::types::Overflow::Hidden
@@ -7906,7 +7902,7 @@ mod tests {
         let mut container_style = ComputedStyle::default();
         container_style.white_space = WhiteSpace::Nowrap;
         container_style.writing_mode = WritingMode::VerticalRl;
-        container_style.overflow_y = Overflow::Hidden;
+        container_style.overflow_x = Overflow::Hidden;
         container_style.text_overflow = TextOverflow {
             inline_start: TextOverflowSide::Clip,
             inline_end: TextOverflowSide::Ellipsis,
@@ -7953,7 +7949,7 @@ mod tests {
         let mut container_style = ComputedStyle::default();
         container_style.white_space = WhiteSpace::Nowrap;
         container_style.writing_mode = WritingMode::VerticalRl;
-        container_style.overflow_y = Overflow::Hidden;
+        container_style.overflow_x = Overflow::Hidden;
         container_style.text_overflow = TextOverflow {
             inline_start: TextOverflowSide::Ellipsis,
             inline_end: TextOverflowSide::Clip,
