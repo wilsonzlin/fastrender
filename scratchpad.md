@@ -490,6 +490,7 @@ Inline coordinate fix (Mar 2026):
 - Latest run: `FASTR_RENDER_TIMINGS=1 FASTR_INTRINSIC_STATS=1 target/release/fetch_and_render file:///root/r/fastrender/fetches/html/cnn.com.html` → parse ~30–36ms, cascade ~4.4–5.8s, box_tree ~0.9–1.1s, box_count 8715, layout ~1.4–1.7s, paint ~22–29s, total ~30–55s. Intrinsic stats stable: lookups ~58k, hits ~38k (65%), stores ~15k, block_calls ~52k, flex_calls ~460, inline_calls ~5k. Paint remains dominant bottleneck.
 
 ## Recent changes (this branch)
+- Hardened clamping: added `clamp_with_order` helper and applied across block/inline/flex/abs positioning/table width resolution to avoid min>max panics; further cleaned merge markers and ensured `forced-color-adjust` globals/inheritance work after merges.
 - Fixed length resolution crash paths: percentage/viewport/font-relative calc terms now fall back to 0/raw values when context is missing, and missing overflow_anchor duplication cleaned up after merges.
 - Fixed merge fallout: deduped `TextSizeAdjust` definition, added missing `text_rendering`/`overflow_anchor` fields to `ComputedStyle` (defaults, hashing), and updated cascade tests for DOM namespace; tree now builds/tests again.
 - Media `prefers-color-scheme` now defaults to `no-preference`; env overrides accept `no-preference`, evaluation treats missing prefs as no-preference, and tests cover parsing/evaluation/env handling.
