@@ -378,6 +378,8 @@ pub enum MediaFeature {
     PrefersReducedTransparency(ReducedTransparency),
     /// Reduced data usage preference: `(prefers-reduced-data: reduce)`
     PrefersReducedData(ReducedData),
+    /// Forced-colors user agent state: `(forced-colors: active|none)`
+    ForcedColors(ForcedColors),
     /// Whether the UA is in an inverted-color mode: `(inverted-colors: inverted)`
     InvertedColors(InvertedColors),
     /// Range comparisons using level 4 syntax (e.g., `400px < width <= 800px`)
@@ -657,6 +659,11 @@ impl MediaFeature {
                 let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
                 let data = ReducedData::parse(value)?;
                 Ok(MediaFeature::PrefersReducedData(data))
+            }
+            "forced-colors" => {
+                let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+                let forced = ForcedColors::parse(value)?;
+                Ok(MediaFeature::ForcedColors(forced))
             }
             "inverted-colors" => {
                 let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
@@ -1075,6 +1082,34 @@ impl fmt::Display for ReducedData {
     }
 }
 
+/// Forced colors state
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ForcedColors {
+    None,
+    Active,
+}
+
+impl ForcedColors {
+    /// Parses a forced-colors value
+    pub fn parse(s: &str) -> Result<Self, MediaParseError> {
+        let s = s.trim().to_lowercase();
+        match s.as_str() {
+            "none" => Ok(ForcedColors::None),
+            "active" => Ok(ForcedColors::Active),
+            _ => Err(MediaParseError::InvalidForcedColors(s)),
+        }
+    }
+}
+
+impl fmt::Display for ForcedColors {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ForcedColors::None => write!(f, "none"),
+            ForcedColors::Active => write!(f, "active"),
+        }
+    }
+}
+
 /// Inverted colors state
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InvertedColors {
@@ -1164,6 +1199,8 @@ pub struct MediaContext {
     pub prefers_reduced_data: bool,
     /// Whether the UA is currently in an inverted-color mode
     pub inverted_colors: InvertedColors,
+    /// Whether forced-colors mode is active
+    pub forced_colors: bool,
 }
 
 impl MediaContext {
@@ -1204,6 +1241,7 @@ impl MediaContext {
             prefers_reduced_transparency: false,
             prefers_reduced_data: false,
             inverted_colors: InvertedColors::None,
+            forced_colors: false,
         }
     }
 
@@ -1216,6 +1254,7 @@ impl MediaContext {
     /// - `FASTR_PREFERS_REDUCED_TRANSPARENCY` = `reduce` | `no-preference` | truthy/falsy
     /// - `FASTR_PREFERS_REDUCED_DATA` = `reduce` | `no-preference` | truthy/falsy
     /// - `FASTR_INVERTED_COLORS` = `inverted` | `none` | truthy/falsy
+    /// - `FASTR_FORCED_COLORS` = `active` | `none` | truthy/falsy
     /// - `FASTR_COLOR_DEPTH` = integer bits per color channel (e.g., 8)
     /// - `FASTR_COLOR_INDEX` = integer palette size (e.g., 256)
     /// - `FASTR_MONOCHROME_DEPTH` = integer bits for monochrome devices (e.g., 1)
@@ -1272,6 +1311,15 @@ impl MediaContext {
                     InvertedColors::None
                 }
                 _ => self.inverted_colors,
+            };
+        }
+
+        if let Ok(value) = env::var("FASTR_FORCED_COLORS") {
+            let v = value.trim().to_ascii_lowercase();
+            self.forced_colors = match ForcedColors::parse(&v) {
+                Ok(ForcedColors::Active) => true,
+                Ok(ForcedColors::None) => false,
+                Err(_) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
             };
         }
 
@@ -1337,6 +1385,7 @@ impl MediaContext {
             prefers_reduced_transparency: false,
             prefers_reduced_data: false,
             inverted_colors: InvertedColors::None,
+            forced_colors: false,
         }
     }
 
@@ -1375,6 +1424,7 @@ impl MediaContext {
             prefers_reduced_transparency: false,
             prefers_reduced_data: false,
             inverted_colors: InvertedColors::None,
+            forced_colors: false,
         }
     }
 
@@ -1416,6 +1466,12 @@ impl MediaContext {
     /// Sets the monochrome depth (bits)
     pub fn with_monochrome_depth(mut self, bits: u32) -> Self {
         self.monochrome_depth = bits;
+        self
+    }
+
+    /// Sets forced-colors state
+    pub fn with_forced_colors(mut self, forced: bool) -> Self {
+        self.forced_colors = forced;
         self
     }
 
@@ -1632,6 +1688,10 @@ impl MediaContext {
             MediaFeature::PrefersReducedData(data) => match data {
                 ReducedData::NoPreference => !self.prefers_reduced_data,
                 ReducedData::Reduce => self.prefers_reduced_data,
+            },
+            MediaFeature::ForcedColors(state) => match state {
+                ForcedColors::None => !self.forced_colors,
+                ForcedColors::Active => self.forced_colors,
             },
             MediaFeature::InvertedColors(state) => match state {
                 InvertedColors::None => matches!(self.inverted_colors, InvertedColors::None),
@@ -2132,6 +2192,8 @@ pub enum MediaParseError {
     InvalidReducedTransparency(String),
     /// Invalid reduced data value
     InvalidReducedData(String),
+    /// Invalid forced-colors value
+    InvalidForcedColors(String),
     /// Invalid inverted-colors value
     InvalidInvertedColors(String),
     /// Empty media query
@@ -2205,6 +2267,9 @@ impl fmt::Display for MediaParseError {
                     "Invalid reduced data: '{}' (expected 'no-preference' or 'reduce')",
                     s
                 )
+            }
+            MediaParseError::InvalidForcedColors(s) => {
+                write!(f, "Invalid forced-colors: '{}' (expected 'none' or 'active')", s)
             }
             MediaParseError::InvalidInvertedColors(s) => {
                 write!(
@@ -2666,6 +2731,19 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_forced_colors() {
+        let ctx = MediaContext::screen(800.0, 600.0);
+        let query_none = MediaQuery::parse("(forced-colors: none)").unwrap();
+        let query_active = MediaQuery::parse("(forced-colors: active)").unwrap();
+        assert!(ctx.evaluate(&query_none));
+        assert!(!ctx.evaluate(&query_active));
+
+        let forced = ctx.clone().with_forced_colors(true);
+        assert!(forced.evaluate(&query_active));
+        assert!(!forced.evaluate(&query_none));
+    }
+
+    #[test]
     fn test_evaluate_color_depth_overrides() {
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_depth(10)
@@ -2774,6 +2852,7 @@ mod tests {
         let guard_color_depth = EnvGuard::new("FASTR_COLOR_DEPTH", Some("10"));
         let guard_color_index = EnvGuard::new("FASTR_COLOR_INDEX", Some("512"));
         let guard_mono = EnvGuard::new("FASTR_MONOCHROME_DEPTH", Some("0"));
+        let guard_forced = EnvGuard::new("FASTR_FORCED_COLORS", Some("active"));
 
         let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
         assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Dark));
@@ -2785,6 +2864,7 @@ mod tests {
         assert_eq!(ctx.color_depth, 10);
         assert_eq!(ctx.color_index, 512);
         assert_eq!(ctx.monochrome_depth, 0);
+        assert!(ctx.forced_colors);
 
         drop(guard_scheme);
         drop(guard_motion);
@@ -2795,6 +2875,7 @@ mod tests {
         drop(guard_color_depth);
         drop(guard_color_index);
         drop(guard_mono);
+        drop(guard_forced);
     }
 
     #[test]
@@ -2802,15 +2883,18 @@ mod tests {
         let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("invalid"));
         let guard_inverted = EnvGuard::new("FASTR_INVERTED_COLORS", Some("maybe"));
         let guard_color_depth = EnvGuard::new("FASTR_COLOR_DEPTH", Some("abc"));
+        let guard_forced = EnvGuard::new("FASTR_FORCED_COLORS", Some("maybe"));
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_scheme(ColorScheme::Light)
             .with_env_overrides();
         assert_eq!(ctx.prefers_color_scheme, Some(ColorScheme::Light));
         assert!(matches!(ctx.inverted_colors, InvertedColors::None));
         assert_eq!(ctx.color_depth, 8);
+        assert!(!ctx.forced_colors);
         drop(guard_scheme);
         drop(guard_inverted);
         drop(guard_color_depth);
+        drop(guard_forced);
     }
 
     #[test]
