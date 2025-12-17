@@ -19,6 +19,7 @@ use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::Rgba;
+use tiny_skia::Pixmap;
 use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder, RgbaImage};
 use std::sync::Arc;
 
@@ -422,6 +423,84 @@ fn text_decoration_currentcolor_resolves_in_display_list() {
     assert!(
         max_r >= 10 && max_g >= 20 && max_b >= 30,
         "decoration should resolve currentColor"
+    );
+}
+
+fn bbox_for_color(pixmap: &Pixmap, pred: impl Fn((u8, u8, u8, u8)) -> bool) -> Option<(u32, u32, u32, u32)> {
+    let mut min_x = u32::MAX;
+    let mut min_y = u32::MAX;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+
+    let width = pixmap.width();
+    let data = pixmap.data();
+    for y in 0..pixmap.height() {
+        for x in 0..width {
+            let idx = ((y * width + x) * 4) as usize;
+            let p = (data[idx], data[idx + 1], data[idx + 2], data[idx + 3]);
+            if pred(p) {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+
+    if min_x == u32::MAX {
+        None
+    } else {
+        Some((min_x, min_y, max_x, max_y))
+    }
+}
+
+#[test]
+fn marker_text_shadow_is_rendered_in_display_list() {
+    let mut style = ComputedStyle::default();
+    style.display = fastrender::style::display::Display::Inline;
+    style.color = Rgba::BLACK;
+    style.font_size = 16.0;
+    style.text_shadow = vec![fastrender::css::types::TextShadow {
+        offset_x: Length::px(3.0),
+        offset_y: Length::px(0.0),
+        blur_radius: Length::px(0.0),
+        color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
+    }];
+    let style = Arc::new(style);
+
+    let mut marker = FragmentNode::new_text(Rect::from_xywh(10.0, 10.0, 20.0, 20.0), "•".to_string(), 16.0);
+    marker.content = fastrender::tree::fragment_tree::FragmentContent::Text {
+        text: "•".to_string(),
+        box_id: None,
+        baseline_offset: 16.0,
+        shaped: None,
+        is_marker: true,
+    };
+    marker.style = Some(style);
+
+    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 40.0, 30.0), vec![marker]);
+    let list = DisplayListBuilder::new().build(&root);
+
+    let pixmap = DisplayListRenderer::new(60, 40, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(&list)
+        .expect("render");
+
+    let glyph_bbox = bbox_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32)
+        .expect("marker glyph");
+    let shadow_bbox = bbox_for_color(&pixmap, |(r, g, b, _)| {
+        let (r, g, b) = (r as u16, g as u16, b as u16);
+        r > g + 20 && r > b + 20
+    })
+    .expect("marker shadow");
+
+    assert!(
+        shadow_bbox.0 > glyph_bbox.0,
+        "shadow should render to the inline end of the marker glyph"
+    );
+    assert!(
+        shadow_bbox.1.abs_diff(glyph_bbox.1) <= 2,
+        "shadow should stay vertically aligned with the marker glyph"
     );
 }
 
