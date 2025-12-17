@@ -40,6 +40,7 @@ Idle; no current tasks.
 ## Session notes (latest)
 
 - Transform parsing accepts calc/min/max/clamp() in translate/rotate/skew functions; angles resolve math functions and lengths keep calc terms. Added regression covering calc transforms.
+- Transform angle parsing now supports min/max/clamp() inside rotate/skew via calc-angle helpers, with a regression for min/clamp rotate.
 
 - Implemented CSS `user-select`: added `UserSelect` enum/defaults, parsing of auto/text/none/all/contain, property wiring, and regression coverage; also marked `user-select` as inherited per spec. Pushed `c412f85` and `fa5a130`.
 - Implemented CSS `touch-action`: added `TouchAction` flags, default auto, parsing of single/multi-keyword lists (pan-*, pinch-zoom, manipulation), property copy wiring, and regression test. No layout behavior yet; pushed `ae9c051`.
