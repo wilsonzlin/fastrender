@@ -1,3 +1,6 @@
+# Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
+# Color-scheme inheritance still validated; further palette audits ongoing.
+# Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
 - Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
 - SVG intrinsic sizing: render_svg now falls back to 300×150 with viewBox-derived aspect ratios when width/height are absent, preserves preserveAspectRatio="none", and tests cover width/height, viewBox-only, and aspect-ratio none cases.
 - Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse. CSS link extraction now unescapes JS-escaped hrefs (e.g., `\u0026` ampersands) so encoded stylesheet URLs resolve correctly; added a regression for JS-escaped stylesheet hrefs.
