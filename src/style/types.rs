@@ -1434,6 +1434,20 @@ impl Default for FontSizeAdjust {
     }
 }
 
+/// Controls text inflation (`text-size-adjust`)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextSizeAdjust {
+    Auto,
+    None,
+    Percentage(f32),
+}
+
+impl Default for TextSizeAdjust {
+    fn default() -> Self {
+        TextSizeAdjust::Auto
+    }
+}
+
 /// Kerning control (`font-kerning`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontKerning {

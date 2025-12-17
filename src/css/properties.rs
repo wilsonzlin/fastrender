@@ -257,6 +257,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "text-justify",
     "text-orientation",
     "text-overflow",
+    "text-size-adjust",
     "text-shadow",
     "text-transform",
     "text-underline-offset",

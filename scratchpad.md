@@ -38,6 +38,7 @@ Idle; no current tasks.
    - Triggered by: cnn.com
 
 ## Session notes (latest)
+- Added CSS `text-size-adjust`: new computed type/default (auto), inherited, parsed keywords/percentages, property list updates, and cascade tests. `cargo test text_size_adjust --quiet` passes.
 
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
 

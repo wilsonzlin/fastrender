@@ -1172,6 +1172,7 @@ fn is_inherited_property(name: &str) -> bool {
             | "text-emphasis-style"
             | "text-emphasis-color"
             | "text-emphasis-position"
+            | "text-size-adjust"
             | "text-transform"
             | "text-combine-upright"
             | "letter-spacing"
@@ -2232,6 +2233,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "font-synthesis-small-caps" => styles.font_synthesis.small_caps = source.font_synthesis.small_caps,
         "font-synthesis-position" => styles.font_synthesis.position = source.font_synthesis.position,
         "line-height" => styles.line_height = source.line_height.clone(),
+        "text-size-adjust" => styles.text_size_adjust = source.text_size_adjust,
         "table-layout" => styles.table_layout = source.table_layout,
         "empty-cells" => styles.empty_cells = source.empty_cells,
         "caption-side" => styles.caption_side = source.caption_side,
@@ -5090,6 +5092,17 @@ pub fn apply_declaration_with_base(
                 if *pct >= 0.0 {
                     styles.line_height = LineHeight::Percentage(*pct);
                 }
+            }
+            _ => {}
+        },
+        "text-size-adjust" => match &resolved_value {
+            PropertyValue::Keyword(kw) => match kw.as_str() {
+                "auto" => styles.text_size_adjust = TextSizeAdjust::Auto,
+                "none" => styles.text_size_adjust = TextSizeAdjust::None,
+                _ => {}
+            },
+            PropertyValue::Percentage(p) if *p >= 0.0 => {
+                styles.text_size_adjust = TextSizeAdjust::Percentage(*p);
             }
             _ => {}
         },
@@ -11069,6 +11082,89 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.caret_color, CaretColor::Auto));
+    }
+
+    #[test]
+    fn text_size_adjust_parses_keywords_and_percentage() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".into(),
+                value: PropertyValue::Keyword("auto".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_size_adjust, TextSizeAdjust::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".into(),
+                value: PropertyValue::Percentage(125.0),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Percentage(p) if (p - 125.0).abs() < f32::EPSILON));
+    }
+
+    #[test]
+    fn text_size_adjust_inherit_and_initial() {
+        let parent = ComputedStyle {
+            text_size_adjust: TextSizeAdjust::Percentage(80.0),
+            ..ComputedStyle::default()
+        };
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Percentage(p) if (p - 80.0).abs() < f32::EPSILON));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-size-adjust".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Auto));
     }
 
     #[test]
