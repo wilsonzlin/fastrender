@@ -387,18 +387,15 @@ pub fn compute_replaced_size(
     let resolve_for_width = |len: Length| {
         sanitize(resolve_replaced_length(&len, width_base, viewport, font_size, root_font_size).unwrap_or(0.0))
     };
-    let resolve_for_height = |len: Length| {
-        sanitize(resolve_replaced_length(&len, height_base, viewport, font_size, root_font_size).unwrap_or(0.0))
-    };
-
     let horizontal_edges = resolve_for_width(style.padding_left)
         + resolve_for_width(style.padding_right)
         + resolve_for_width(style.border_left_width)
         + resolve_for_width(style.border_right_width);
-    let vertical_edges = resolve_for_height(style.padding_top)
-        + resolve_for_height(style.padding_bottom)
-        + resolve_for_height(style.border_top_width)
-        + resolve_for_height(style.border_bottom_width);
+    // Percentages on padding/borders resolve against the containing block width in both axes.
+    let vertical_edges = resolve_for_width(style.padding_top)
+        + resolve_for_width(style.padding_bottom)
+        + resolve_for_width(style.border_top_width)
+        + resolve_for_width(style.border_bottom_width);
 
     let specified_w = style
         .width
@@ -930,6 +927,36 @@ mod tests {
 
         let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
         assert!((size.width - 90.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn compute_replaced_border_box_padding_uses_width_base() {
+        let mut style = ComputedStyle::default();
+        style.box_sizing = BoxSizing::BorderBox;
+        style.height = Some(Length::px(100.0));
+        style.padding_top = Length::percent(10.0);
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            intrinsic_size: None,
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(
+            &style,
+            &replaced,
+            Some(Size::new(200.0, 400.0)),
+            Size::new(800.0, 600.0),
+        );
+
+        // Padding percentages resolve against the containing block width, so 10% of 200px is
+        // 20px. With box-sizing:border-box and a 100px specified height, the content box is 80px.
+        assert!((size.height - 80.0).abs() < 0.01);
     }
 
     #[test]
