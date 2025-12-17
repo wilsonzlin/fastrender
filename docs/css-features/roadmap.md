@@ -413,6 +413,7 @@ This is a living document that will be updated as features are implemented.
 | `color`, `color-index` | P2 | ❌ | Media Queries | Display caps | |
 | `monochrome` | P3 | ❌ | Media Queries | Display caps | |
 | `prefers-color-scheme` | P2 | ✅ | Media Queries L5 | User prefs | dark, light, no-preference; env override |
+| `prefers-reduced-transparency` | P2 | ✅ | Media Queries L5 | User prefs | reduce, no-preference; env/CLI override |
 | `prefers-reduced-motion` | P2 | ❌ | Media Queries L5 | User prefs | |
 | `hover`, `pointer` | P2 | ❌ | Media Queries L4 | Input caps | |
 | Logic: `and`, `or`, `not`, `only` | P1 | ❌ | Media Queries | Parser | |

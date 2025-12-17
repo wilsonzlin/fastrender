@@ -610,6 +610,7 @@ CSS3+ is split into **modules** that evolve independently.
 - `prefers-color-scheme` (dark mode)
 - `prefers-reduced-motion`
 - `prefers-contrast`
+- `prefers-reduced-transparency`
 
 #### CSS Containment Module Level 1
 

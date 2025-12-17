@@ -75,6 +75,23 @@ Render all cached pages to `fetches/renders/` (PNG + per-page logs):
 
 # Render only specific cached pages with a custom viewport/timeout
 ./target/release/render_pages --pages cnn.com,wikipedia.org --viewport 1366x768 --timeout 60
+
+# Media preferences
+
+You can drive media queries that depend on user preferences via CLI flags or environment variables:
+
+```bash
+# Reduce transparency for a single render
+./target/release/fetch_and_render --prefers-reduced-transparency reduce https://example.com
+
+# Apply the same preference when rendering cached pages
+./target/release/render_pages --prefers-reduced-transparency reduce
+
+# Or set the environment variable for any invocation
+FASTR_PREFERS_REDUCED_TRANSPARENCY=reduce ./target/release/inspect_frag fetches/html/example.com.html
+```
+
+Accepted values are `reduce` and `no-preference` (default). Flags are also available on `inspect_frag`.
 ```
 
 ### API Usage
