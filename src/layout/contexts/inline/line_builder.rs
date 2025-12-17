@@ -3768,6 +3768,64 @@ mod tests {
         assert_eq!(para2_text, expected_para2);
     }
 
+    #[test]
+    fn bidi_override_mixed_controls_across_paragraphs() {
+        // Mixed override/embedding should not leak past a forced break; each paragraph reorders per its controls.
+        let mut builder = make_builder(200.0);
+
+        // First paragraph: RLO forces RTL, then an embedded LTR segment.
+        let mut para1 = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::BidiOverride,
+        );
+        para1.add_child(InlineItem::Text(make_text_item("AB", 20.0)));
+        para1.add_child(InlineItem::Text(make_text_item_with_bidi("cd", 20.0, UnicodeBidi::Embed)));
+        builder.add_item(InlineItem::InlineBox(para1));
+        builder.force_break();
+
+        // Second paragraph: plain LTR embed.
+        let mut para2 = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Ltr,
+            UnicodeBidi::Embed,
+        );
+        para2.add_child(InlineItem::Text(make_text_item("EF", 20.0)));
+        builder.add_item(InlineItem::InlineBox(para2));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 2);
+
+        let para1_text: String = lines[0]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+        let expected_para1 = reorder_with_controls(
+            &format!("{}AB{}{}cd{}", '\u{202e}', '\u{202c}', '\u{202b}', '\u{202c}'),
+            Some(Level::ltr()),
+        );
+        assert_eq!(para1_text, expected_para1);
+
+        let para2_text: String = lines[1]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+        let expected_para2 = reorder_with_controls(&format!("{}EF{}", '\u{202a}', '\u{202c}'), Some(Level::ltr()));
+        assert_eq!(para2_text, expected_para2);
+    }
+
     fn nested_inline_box_with_depth(
         depth: usize,
         ub: UnicodeBidi,
