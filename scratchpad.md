@@ -1523,6 +1523,7 @@ Actionable borrowings:
 - Media queries: range equality now rejects percentage operands; regression `range_equality_rejects_percentages` added.
 - Media queries: resolution parsing retains fractional precision; regression in `test_resolution_parse` asserts 1.3333dppx is preserved.
 - Media queries: `prefers-color-scheme` parsing is case-insensitive; regression updated to accept uppercase inputs.
+<<<<<<< HEAD
 - Rendered wikipedia.org at 1200×800: previously all-white/tiny; rem-base fix below now yields full-size portal (monitor for any remaining visibility issues).
 - Table rowspans: spanning height distribution now shares evenly when uncapped; regression `baseline_height_computation_skips_rowspanning_cells` ensures a tall rowspan cell doesn’t overinflate the preceding row.
 - CSS custom properties: fallback resolution now marks declarations invalid when the fallback still contains unresolved var() references; regression `unresolved_fallback_var_marks_declaration_invalid` added.
@@ -1531,3 +1532,6 @@ Actionable borrowings:
 - Marker gap default: regression asserts inline-end marker gap falls back to 0.5em when inline margins are zero.
 - Root rem base now honors the HTML root font-size: the cascade treats the `<html>` element as the root for root_font_size resolution (instead of the document node), so `rem`/percent font sizes resolve after author root sizing. Added regression `root_font_size_percentage_uses_initial_value` covering 62.5% root font-size → 10px rem, and wikipedia.org now renders at full scale (content spans the viewport instead of a 238×64 block).
 - Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
+=======
+- Media query cache: key interning now uses entry API (no redundant contains/get), trimming per-query hash/alloc overhead in evaluate_with_cache.
+>>>>>>> 5427e2b (Tighten media query cache key interning)

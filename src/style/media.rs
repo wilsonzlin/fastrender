@@ -556,10 +556,7 @@ pub struct MediaQueryCache {
 impl MediaQueryCache {
     fn key_for(&mut self, query: &MediaQuery) -> &MediaQueryKey {
         let ptr = query as *const MediaQuery as usize;
-        if !self.key_cache.contains_key(&ptr) {
-            self.key_cache.insert(ptr, MediaQueryKey::from(query));
-        }
-        self.key_cache.get(&ptr).expect("key just inserted")
+        self.key_cache.entry(ptr).or_insert_with(|| MediaQueryKey::from(query))
     }
 
     fn get(&self, key: &MediaQueryKey) -> Option<bool> {
@@ -1984,122 +1981,86 @@ impl MediaContext {
     fn evaluate_feature(&self, feature: &MediaFeature) -> bool {
         match feature {
             // Width features
-            MediaFeature::Width(length) => {
-                self
-                    .resolve_length(length, self.viewport_width, self.viewport_height)
-                    .map(|target| (self.viewport_width - target).abs() < 0.5)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MinWidth(length) => {
-                self
-                    .resolve_length(length, self.viewport_width, self.viewport_height)
-                    .map(|target| self.viewport_width >= target)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MaxWidth(length) => {
-                self
-                    .resolve_length(length, self.viewport_width, self.viewport_height)
-                    .map(|target| self.viewport_width <= target)
-                    .unwrap_or(false)
-            }
+            MediaFeature::Width(length) => self
+                .resolve_length(length, self.viewport_width, self.viewport_height)
+                .map(|target| (self.viewport_width - target).abs() < 0.5)
+                .unwrap_or(false),
+            MediaFeature::MinWidth(length) => self
+                .resolve_length(length, self.viewport_width, self.viewport_height)
+                .map(|target| self.viewport_width >= target)
+                .unwrap_or(false),
+            MediaFeature::MaxWidth(length) => self
+                .resolve_length(length, self.viewport_width, self.viewport_height)
+                .map(|target| self.viewport_width <= target)
+                .unwrap_or(false),
 
             // Inline-size (alias of width for container queries)
-            MediaFeature::InlineSize(length) => {
-                self
-                    .resolve_length(length, self.viewport_width, self.viewport_height)
-                    .map(|target| (self.viewport_width - target).abs() < 0.5)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MinInlineSize(length) => {
-                self
-                    .resolve_length(length, self.viewport_width, self.viewport_height)
-                    .map(|target| self.viewport_width >= target)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MaxInlineSize(length) => {
-                self
-                    .resolve_length(length, self.viewport_width, self.viewport_height)
-                    .map(|target| self.viewport_width <= target)
-                    .unwrap_or(false)
-            }
+            MediaFeature::InlineSize(length) => self
+                .resolve_length(length, self.viewport_width, self.viewport_height)
+                .map(|target| (self.viewport_width - target).abs() < 0.5)
+                .unwrap_or(false),
+            MediaFeature::MinInlineSize(length) => self
+                .resolve_length(length, self.viewport_width, self.viewport_height)
+                .map(|target| self.viewport_width >= target)
+                .unwrap_or(false),
+            MediaFeature::MaxInlineSize(length) => self
+                .resolve_length(length, self.viewport_width, self.viewport_height)
+                .map(|target| self.viewport_width <= target)
+                .unwrap_or(false),
 
             // Height features
-            MediaFeature::Height(length) => {
-                self
-                    .resolve_length(length, self.viewport_height, self.viewport_width)
-                    .map(|target| (self.viewport_height - target).abs() < 0.5)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MinHeight(length) => {
-                self
-                    .resolve_length(length, self.viewport_height, self.viewport_width)
-                    .map(|target| self.viewport_height >= target)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MaxHeight(length) => {
-                self
-                    .resolve_length(length, self.viewport_height, self.viewport_width)
-                    .map(|target| self.viewport_height <= target)
-                    .unwrap_or(false)
-            }
+            MediaFeature::Height(length) => self
+                .resolve_length(length, self.viewport_height, self.viewport_width)
+                .map(|target| (self.viewport_height - target).abs() < 0.5)
+                .unwrap_or(false),
+            MediaFeature::MinHeight(length) => self
+                .resolve_length(length, self.viewport_height, self.viewport_width)
+                .map(|target| self.viewport_height >= target)
+                .unwrap_or(false),
+            MediaFeature::MaxHeight(length) => self
+                .resolve_length(length, self.viewport_height, self.viewport_width)
+                .map(|target| self.viewport_height <= target)
+                .unwrap_or(false),
 
             // Block-size (alias of height for container queries)
-            MediaFeature::BlockSize(length) => {
-                self
-                    .resolve_length(length, self.viewport_height, self.viewport_width)
-                    .map(|target| (self.viewport_height - target).abs() < 0.5)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MinBlockSize(length) => {
-                self
-                    .resolve_length(length, self.viewport_height, self.viewport_width)
-                    .map(|target| self.viewport_height >= target)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MaxBlockSize(length) => {
-                self
-                    .resolve_length(length, self.viewport_height, self.viewport_width)
-                    .map(|target| self.viewport_height <= target)
-                    .unwrap_or(false)
-            }
+            MediaFeature::BlockSize(length) => self
+                .resolve_length(length, self.viewport_height, self.viewport_width)
+                .map(|target| (self.viewport_height - target).abs() < 0.5)
+                .unwrap_or(false),
+            MediaFeature::MinBlockSize(length) => self
+                .resolve_length(length, self.viewport_height, self.viewport_width)
+                .map(|target| self.viewport_height >= target)
+                .unwrap_or(false),
+            MediaFeature::MaxBlockSize(length) => self
+                .resolve_length(length, self.viewport_height, self.viewport_width)
+                .map(|target| self.viewport_height <= target)
+                .unwrap_or(false),
 
             // Device dimensions
-            MediaFeature::DeviceWidth(length) => {
-                self
-                    .resolve_length(length, self.device_width, self.device_height)
-                    .map(|target| (self.device_width - target).abs() < 0.5)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MinDeviceWidth(length) => {
-                self
-                    .resolve_length(length, self.device_width, self.device_height)
-                    .map(|target| self.device_width >= target)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MaxDeviceWidth(length) => {
-                self
-                    .resolve_length(length, self.device_width, self.device_height)
-                    .map(|target| self.device_width <= target)
-                    .unwrap_or(false)
-            }
-            MediaFeature::DeviceHeight(length) => {
-                self
-                    .resolve_length(length, self.device_height, self.device_width)
-                    .map(|target| (self.device_height - target).abs() < 0.5)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MinDeviceHeight(length) => {
-                self
-                    .resolve_length(length, self.device_height, self.device_width)
-                    .map(|target| self.device_height >= target)
-                    .unwrap_or(false)
-            }
-            MediaFeature::MaxDeviceHeight(length) => {
-                self
-                    .resolve_length(length, self.device_height, self.device_width)
-                    .map(|target| self.device_height <= target)
-                    .unwrap_or(false)
-            }
+            MediaFeature::DeviceWidth(length) => self
+                .resolve_length(length, self.device_width, self.device_height)
+                .map(|target| (self.device_width - target).abs() < 0.5)
+                .unwrap_or(false),
+            MediaFeature::MinDeviceWidth(length) => self
+                .resolve_length(length, self.device_width, self.device_height)
+                .map(|target| self.device_width >= target)
+                .unwrap_or(false),
+            MediaFeature::MaxDeviceWidth(length) => self
+                .resolve_length(length, self.device_width, self.device_height)
+                .map(|target| self.device_width <= target)
+                .unwrap_or(false),
+            MediaFeature::DeviceHeight(length) => self
+                .resolve_length(length, self.device_height, self.device_width)
+                .map(|target| (self.device_height - target).abs() < 0.5)
+                .unwrap_or(false),
+            MediaFeature::MinDeviceHeight(length) => self
+                .resolve_length(length, self.device_height, self.device_width)
+                .map(|target| self.device_height >= target)
+                .unwrap_or(false),
+            MediaFeature::MaxDeviceHeight(length) => self
+                .resolve_length(length, self.device_height, self.device_width)
+                .map(|target| self.device_height <= target)
+                .unwrap_or(false),
 
             // Orientation
             MediaFeature::Orientation(orientation) => {
@@ -2215,42 +2176,30 @@ impl MediaContext {
                 InvertedColors::Inverted => matches!(self.inverted_colors, InvertedColors::Inverted),
             },
             MediaFeature::Range { feature, op, value } => match (feature, value) {
-                (RangeFeature::Width, RangeValue::Length(len)) => {
-                    self
-                        .resolve_length(len, self.viewport_width, self.viewport_height)
-                        .map(|target| compare_with_op(*op, self.viewport_width, target))
-                        .unwrap_or(false)
-                }
-                (RangeFeature::InlineSize, RangeValue::Length(len)) => {
-                    self
-                        .resolve_length(len, self.viewport_width, self.viewport_height)
-                        .map(|target| compare_with_op(*op, self.viewport_width, target))
-                        .unwrap_or(false)
-                }
-                (RangeFeature::BlockSize, RangeValue::Length(len)) => {
-                    self
-                        .resolve_length(len, self.viewport_height, self.viewport_width)
-                        .map(|target| compare_with_op(*op, self.viewport_height, target))
-                        .unwrap_or(false)
-                }
-                (RangeFeature::Height, RangeValue::Length(len)) => {
-                    self
-                        .resolve_length(len, self.viewport_height, self.viewport_width)
-                        .map(|target| compare_with_op(*op, self.viewport_height, target))
-                        .unwrap_or(false)
-                }
-                (RangeFeature::DeviceWidth, RangeValue::Length(len)) => {
-                    self
-                        .resolve_length(len, self.device_width, self.device_height)
-                        .map(|target| compare_with_op(*op, self.device_width, target))
-                        .unwrap_or(false)
-                }
-                (RangeFeature::DeviceHeight, RangeValue::Length(len)) => {
-                    self
-                        .resolve_length(len, self.device_height, self.device_width)
-                        .map(|target| compare_with_op(*op, self.device_height, target))
-                        .unwrap_or(false)
-                }
+                (RangeFeature::Width, RangeValue::Length(len)) => self
+                    .resolve_length(len, self.viewport_width, self.viewport_height)
+                    .map(|target| compare_with_op(*op, self.viewport_width, target))
+                    .unwrap_or(false),
+                (RangeFeature::InlineSize, RangeValue::Length(len)) => self
+                    .resolve_length(len, self.viewport_width, self.viewport_height)
+                    .map(|target| compare_with_op(*op, self.viewport_width, target))
+                    .unwrap_or(false),
+                (RangeFeature::BlockSize, RangeValue::Length(len)) => self
+                    .resolve_length(len, self.viewport_height, self.viewport_width)
+                    .map(|target| compare_with_op(*op, self.viewport_height, target))
+                    .unwrap_or(false),
+                (RangeFeature::Height, RangeValue::Length(len)) => self
+                    .resolve_length(len, self.viewport_height, self.viewport_width)
+                    .map(|target| compare_with_op(*op, self.viewport_height, target))
+                    .unwrap_or(false),
+                (RangeFeature::DeviceWidth, RangeValue::Length(len)) => self
+                    .resolve_length(len, self.device_width, self.device_height)
+                    .map(|target| compare_with_op(*op, self.device_width, target))
+                    .unwrap_or(false),
+                (RangeFeature::DeviceHeight, RangeValue::Length(len)) => self
+                    .resolve_length(len, self.device_height, self.device_width)
+                    .map(|target| compare_with_op(*op, self.device_height, target))
+                    .unwrap_or(false),
                 (RangeFeature::AspectRatio, RangeValue::AspectRatio(w, h)) => {
                     let target_ratio = *w as f32 / *h as f32;
                     let actual_ratio = self.viewport_width / self.viewport_height;
@@ -2288,13 +2237,7 @@ impl MediaContext {
         let _block = block_base.is_finite().then_some(block_base)?;
 
         if length.unit == LengthUnit::Calc {
-            return length.resolve_with_context(
-                Some(inline),
-                vw,
-                vh,
-                base_font,
-                base_font,
-            );
+            return length.resolve_with_context(Some(inline), vw, vh, base_font, base_font);
         }
         match length.unit {
             LengthUnit::Px => Some(length.value),
@@ -3121,8 +3064,7 @@ mod tests {
         let feature = MediaFeature::parse("prefers-color-scheme", Some("no-preference")).unwrap();
         assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::NoPreference));
         assert!(MediaFeature::parse("prefers-color-scheme", Some("unknown")).is_err());
-        let upper = MediaFeature::parse("prefers-color-scheme", Some("DARK"))
-            .expect("case-insensitive parse");
+        let upper = MediaFeature::parse("prefers-color-scheme", Some("DARK")).expect("case-insensitive parse");
         assert_eq!(upper, MediaFeature::PrefersColorScheme(ColorScheme::Dark));
     }
 
