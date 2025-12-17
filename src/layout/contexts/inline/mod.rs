@@ -6219,43 +6219,60 @@ fn has_justify_opportunities(items: &[PositionedItem], mode: TextJustify) -> boo
         return false;
     }
 
-    for pos in items {
-        match &pos.item {
-            InlineItem::Text(t) => match mode {
-                TextJustify::InterCharacter | TextJustify::Distribute => {
-                    if t.cluster_byte_offsets().skip(1).next().is_some() || t.text.chars().count() > 1 {
-                        return true;
-                    }
-                }
-                _ => {
-                    if t.text.chars().any(is_expandable_space) {
-                        return true;
-                    }
-                }
-            },
-            InlineItem::InlineBox(b) => {
-                for child in &b.children {
-                    if let InlineItem::Text(t) = child {
-                        match mode {
-                            TextJustify::InterCharacter | TextJustify::Distribute => {
-                                if t.cluster_byte_offsets().skip(1).next().is_some() || t.text.chars().count() > 1 {
-                                    return true;
-                                }
-                            }
-                            _ => {
-                                if t.text.chars().any(is_expandable_space) {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
+    match mode {
+        TextJustify::InterCharacter | TextJustify::Distribute => {
+            if items.len() > 1 {
+                return true;
             }
-            _ => {}
+            items.iter().any(|pos| item_has_interchar_opportunity(&pos.item))
+        }
+        _ => {
+            if items
+                .windows(2)
+                .any(|pair| is_space_boundary_between(&pair[0].item, &pair[1].item))
+            {
+                return true;
+            }
+
+            items.iter().any(|pos| item_has_space_boundary(&pos.item))
         }
     }
+}
 
+fn item_has_interchar_opportunity(item: &InlineItem) -> bool {
+    match item {
+        InlineItem::Text(t) => t.cluster_byte_offsets().skip(1).next().is_some() || t.text.chars().count() > 1,
+        InlineItem::InlineBox(b) => b.children.iter().any(item_has_interchar_opportunity),
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
+        InlineItem::Tab(_) => false,
+    }
+}
+
+fn item_has_space_boundary(item: &InlineItem) -> bool {
+    match item {
+        InlineItem::Text(t) => text_has_space_boundary(&t.text),
+        InlineItem::InlineBox(b) => b.children.iter().any(item_has_space_boundary),
+        InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
+        InlineItem::Tab(_) => false,
+    }
+}
+
+fn text_has_space_boundary(text: &str) -> bool {
+    let mut prev_space = false;
+    for ch in text.chars() {
+        let is_space = is_expandable_space(ch);
+        if prev_space && !is_space {
+            return true;
+        }
+        prev_space = is_space;
+    }
     false
+}
+
+fn is_space_boundary_between(prev: &InlineItem, next: &InlineItem) -> bool {
+    let prev_last = last_char_of_item(prev);
+    let next_first = first_char_of_item(next);
+    matches!((prev_last, next_first), (Some(p), Some(n)) if is_expandable_space(p) && !is_expandable_space(n))
 }
 
 #[derive(Default)]
@@ -6301,6 +6318,7 @@ mod tests {
     use crate::geometry::Size;
     use crate::layout::formatting_context::IntrinsicSizingMode;
     use crate::style::display::{Display, FormattingContextType};
+    use crate::style::color::Rgba;
     use crate::style::types::FontSizeAdjust;
     use crate::style::types::{
         CaseTransform, HyphensMode, ListStylePosition, Overflow, OverflowWrap, TextCombineUpright, TextOverflow,
@@ -7440,6 +7458,110 @@ mod tests {
         let first = lines.first().expect("first line");
         let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
         assert_eq!(resolved, TextJustify::InterWord);
+    }
+
+    #[test]
+    fn text_justify_inter_character_spans_inline_boundaries() {
+        let mut root_style = ComputedStyle::default();
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_justify = TextJustify::InterCharacter;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
+        root_style.width = Some(Length::px(200.0));
+        let root_style = Arc::new(root_style);
+        let text_style = Arc::new(ComputedStyle::default());
+        let mut text_style_b = ComputedStyle::default();
+        text_style_b.color = Rgba::BLUE;
+        let text_style_b = Arc::new(text_style_b);
+
+        let span1 = BoxNode::new_inline_block(
+            text_style.clone(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(text_style.clone(), "漢".into())],
+        );
+        let span2 = BoxNode::new_inline_block(
+            text_style_b.clone(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(text_style_b.clone(), "字".into())],
+        );
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![span1, span2]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let ifc = InlineFormattingContext::new();
+        let items = ifc
+            .collect_inline_items(&root, constraints.width().unwrap(), constraints.height())
+            .expect("collect items");
+        let strut = ifc.compute_strut_metrics(&root.style);
+        let lines = ifc.build_lines(
+            items,
+            constraints.width().unwrap(),
+            constraints.width().unwrap(),
+            true,
+            root.style.text_wrap,
+            0.0,
+            false,
+            false,
+            &strut,
+            Some(unicode_bidi::Level::ltr()),
+            root.style.direction,
+            root.style.unicode_bidi,
+            None,
+            0.0,
+        );
+        let first_line = lines.first().expect("line");
+        eprintln!("items len={}", first_line.items.len());
+        let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
+        let extra_space = first_line.available_width - total_width;
+        assert!(extra_space > 1.0, "expected extra space to distribute (extra={extra_space})");
+        assert!(
+            has_justify_opportunities(&first_line.items, TextJustify::InterCharacter),
+            "expected justify opportunities across inline boundaries"
+        );
+        let mut base_align = map_text_align(root.style.text_align, first_line.resolved_direction);
+        let resolved_justify = resolve_auto_text_justify(root.style.text_justify, &first_line.items);
+        if is_justify_align(base_align) && matches!(resolved_justify, TextJustify::None) {
+            base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
+        }
+        let align_last_auto = matches!(root.style.text_align_last, crate::style::types::TextAlignLast::Auto);
+        let allow_justify = !true || !align_last_auto || matches!(root.style.text_align, TextAlign::JustifyAll);
+        let has_justify = if !allow_justify || matches!(resolved_justify, TextJustify::None) {
+            false
+        } else {
+            has_justify_opportunities(&first_line.items, resolved_justify)
+        };
+        let mut effective_align = resolve_text_align_for_line(
+            base_align,
+            root.style.text_align_last,
+            first_line.resolved_direction,
+            true,
+            resolved_justify,
+            has_justify,
+        );
+        if is_justify_align(effective_align) && !has_justify {
+            effective_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
+        }
+        eprintln!(
+            "aligns base={:?} effective={:?} resolved={:?} allow={} has={}",
+            base_align, effective_align, resolved_justify, allow_justify, has_justify
+        );
+        let fragments = ifc.create_fragments(
+            lines,
+            0.0,
+            root.style.text_align,
+            root.style.text_align_last,
+            root.style.text_justify,
+            &[(true, true)],
+            false,
+        );
+        let line = fragments.first().expect("line fragment");
+
+        assert!(line.children.len() >= 2, "two inline children expected");
+        let mut bounds: Vec<_> = line.children.iter().map(|c| c.bounds).collect();
+        bounds.sort_by(|a, b| a.x().partial_cmp(&b.x()).unwrap());
+        let a = bounds[0];
+        let b = bounds[1];
+        let gap = b.x() - (a.x() + a.width());
+        eprintln!("bounds: a=({:.2},{:.2},{:.2}), b=({:.2},{:.2},{:.2}), extra={extra_space}", a.x(), a.width(), a.height(), b.x(), b.width(), b.height());
+        assert!(gap > 10.0, "inter-character justify should expand space between styled spans; gap={gap}");
     }
 
     #[test]

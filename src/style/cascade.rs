@@ -376,13 +376,13 @@ impl<'a> RuleIndex<'a> {
             return;
         }
 
-        if let Some(id) = node.get_attribute_ref("id") {
-            if let Some(list) = self.by_id.get(id) {
+        if let Some(id) = node.get_attribute("id") {
+            if let Some(list) = self.by_id.get(&id) {
                 out.extend(list.iter().copied());
             }
         }
 
-        if let Some(class_attr) = node.get_attribute_ref("class") {
+        if let Some(class_attr) = node.get_attribute("class") {
             for cls in class_attr.split_whitespace() {
                 if !cls.is_empty() {
                     if let Some(list) = self.by_class.get(cls) {
@@ -399,12 +399,6 @@ impl<'a> RuleIndex<'a> {
         }
 
         for (name, _) in node.attributes_iter() {
-            if name.as_bytes().iter().all(|b| !b.is_ascii_uppercase()) {
-                if let Some(list) = self.by_attr.get(name) {
-                    out.extend(list.iter().copied());
-                }
-                continue;
-            }
             let key = name.to_ascii_lowercase();
             if let Some(list) = self.by_attr.get(&key) {
                 out.extend(list.iter().copied());
@@ -428,13 +422,13 @@ impl<'a> RuleIndex<'a> {
             return;
         };
 
-        if let Some(id) = node.get_attribute_ref("id") {
-            if let Some(list) = bucket.by_id.get(id) {
+        if let Some(id) = node.get_attribute("id") {
+            if let Some(list) = bucket.by_id.get(&id) {
                 out.extend(list.iter().copied());
             }
         }
 
-        if let Some(class_attr) = node.get_attribute_ref("class") {
+        if let Some(class_attr) = node.get_attribute("class") {
             for cls in class_attr.split_whitespace() {
                 if !cls.is_empty() {
                     if let Some(list) = bucket.by_class.get(cls) {
@@ -451,12 +445,6 @@ impl<'a> RuleIndex<'a> {
         }
 
         for (name, _) in node.attributes_iter() {
-            if name.as_bytes().iter().all(|b| !b.is_ascii_uppercase()) {
-                if let Some(list) = bucket.by_attr.get(name) {
-                    out.extend(list.iter().copied());
-                }
-                continue;
-            }
             let key = name.to_ascii_lowercase();
             if let Some(list) = bucket.by_attr.get(&key) {
                 out.extend(list.iter().copied());
@@ -828,10 +816,7 @@ fn append_presentational_hints<'a>(
     if let Some(presentational_rule) = nowrap_presentational_hint(node, 10) {
         matching_rules.push(presentational_rule);
     }
-    if let Some(presentational_rule) = textarea_wrap_presentational_hint(node, 11) {
-        matching_rules.push(presentational_rule);
-    }
-    if let Some(presentational_rule) = hidden_presentational_hint(node, 12) {
+    if let Some(presentational_rule) = hidden_presentational_hint(node, 11) {
         matching_rules.push(presentational_rule);
     }
 }
@@ -854,7 +839,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
     };
 
     match tag.as_str() {
-        "bdi" if node.get_attribute_ref("dir").is_none() => {
+        "bdi" if node.get_attribute("dir").is_none() => {
             let resolved = resolve_first_strong_direction(node).map(|d| match d {
                 TextDirection::Ltr => crate::style::types::Direction::Ltr,
                 TextDirection::Rtl => crate::style::types::Direction::Rtl,
@@ -868,7 +853,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
                 0,
             );
         }
-        "bdo" if node.get_attribute_ref("dir").is_none() => {
+        "bdo" if node.get_attribute("dir").is_none() => {
             add_rule("unicode-bidi: bidi-override; direction: ltr;", 0);
         }
         "textarea" => {
@@ -879,7 +864,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
         }
         "input" => {
             let input_type = node
-                .get_attribute_ref("type")
+                .get_attribute("type")
                 .map(|t| t.to_ascii_lowercase())
                 .unwrap_or_else(|| "text".to_string());
             if input_type == "hidden" {
@@ -975,11 +960,11 @@ fn apply_styles_internal(
     }
 
     if let Some(lang) = node
-        .get_attribute_ref("lang")
-        .or_else(|| node.get_attribute_ref("xml:lang"))
+        .get_attribute("lang")
+        .or_else(|| node.get_attribute("xml:lang"))
         .filter(|l| !l.is_empty())
     {
-        ua_styles.language = normalize_language_tag(lang);
+        ua_styles.language = normalize_language_tag(&lang);
     }
 
     finalize_grid_placement(&mut ua_styles);
@@ -1007,7 +992,7 @@ fn apply_styles_internal(
 
     // Apply matching CSS rules and inline styles with full cascade ordering
     append_presentational_hints(node, ancestors.as_slice(), parent_styles.direction, &mut matching_rules);
-    let inline_decls = node.get_attribute_ref("style").map(parse_declarations);
+    let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
     let decl_start = prof.then(|| Instant::now());
     apply_cascaded_declarations(
         &mut styles,
@@ -1026,11 +1011,11 @@ fn apply_styles_internal(
 
     // Apply language from attributes (inherits by default)
     if let Some(lang) = node
-        .get_attribute_ref("lang")
-        .or_else(|| node.get_attribute_ref("xml:lang"))
+        .get_attribute("lang")
+        .or_else(|| node.get_attribute("xml:lang"))
         .filter(|l| !l.is_empty())
     {
-        styles.language = normalize_language_tag(lang);
+        styles.language = normalize_language_tag(&lang);
     }
 
     // Finalize grid placement - resolve named grid lines
@@ -1248,11 +1233,11 @@ fn apply_styles_internal_with_ancestors<'a>(
     }
 
     if let Some(lang) = node
-        .get_attribute_ref("lang")
-        .or_else(|| node.get_attribute_ref("xml:lang"))
+        .get_attribute("lang")
+        .or_else(|| node.get_attribute("xml:lang"))
         .filter(|l| !l.is_empty())
     {
-        ua_styles.language = normalize_language_tag(lang);
+        ua_styles.language = normalize_language_tag(&lang);
     }
 
     finalize_grid_placement(&mut ua_styles);
@@ -1280,7 +1265,7 @@ fn apply_styles_internal_with_ancestors<'a>(
 
     // Apply matching CSS rules and inline styles with full cascade ordering
     append_presentational_hints(node, ancestors.as_slice(), parent_styles.direction, &mut matching_rules);
-    let inline_decls = node.get_attribute_ref("style").map(parse_declarations);
+    let inline_decls = node.get_attribute("style").as_deref().map(parse_declarations);
     let decl_start = prof.then(|| Instant::now());
     apply_cascaded_declarations(
         &mut styles,
@@ -3161,6 +3146,56 @@ mod tests {
     }
 
     #[test]
+    fn disabled_form_controls_use_ua_styles() {
+        let disabled_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("type".to_string(), "text".to_string()),
+                    ("disabled".to_string(), "".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let disabled_select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("disabled".to_string(), "".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "option".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled_input = apply_styles(&disabled_input, &StyleSheet::new());
+        assert_eq!(styled_input.styles.color, Rgba::rgb(128, 128, 128));
+        assert_eq!(styled_input.styles.background_color, Rgba::rgb(240, 240, 240));
+        assert!(matches!(
+            styled_input.styles.cursor,
+            crate::style::types::CursorKeyword::Default
+        ));
+
+        let styled_select = apply_styles(&disabled_select, &StyleSheet::new());
+        assert_eq!(styled_select.styles.color, Rgba::rgb(128, 128, 128));
+        assert_eq!(styled_select.styles.background_color, Rgba::rgb(240, 240, 240));
+        assert!(matches!(
+            styled_select.styles.cursor,
+            crate::style::types::CursorKeyword::Default
+        ));
+
+        let styled_option = styled_select.children.first().expect("option");
+        assert_eq!(styled_option.styles.color, Rgba::rgb(128, 128, 128));
+    }
+
+    #[test]
     fn table_header_defaults_apply() {
         let th = DomNode {
             node_type: DomNodeType::Element {
@@ -4052,29 +4087,6 @@ mod tests {
     }
 
     #[test]
-    fn textarea_wrap_off_disables_wrapping() {
-        let textarea = DomNode {
-            node_type: DomNodeType::Element {
-                tag_name: "textarea".to_string(),
-                namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("wrap".to_string(), "off".to_string())],
-            },
-            children: vec![],
-        };
-
-        let styled = apply_styles(&textarea, &StyleSheet::new());
-        assert!(matches!(styled.styles.white_space, crate::style::types::WhiteSpace::Pre));
-
-        // Author CSS should override the presentational hint.
-        let stylesheet = parse_stylesheet("textarea { white-space: pre-wrap; }").unwrap();
-        let styled = apply_styles(&textarea, &stylesheet);
-        assert!(matches!(
-            styled.styles.white_space,
-            crate::style::types::WhiteSpace::PreWrap
-        ));
-    }
-
-    #[test]
     fn nobr_element_defaults_to_nowrap() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
@@ -4815,8 +4827,8 @@ mod tests {
         assert_eq!(lone_li.get_attribute("style"), Some("color: red;".to_string()));
         let decls = parse_declarations("color: red;");
         assert_eq!(decls.len(), 1);
-        if let crate::css::types::PropertyValue::Color(ref c) = decls[0].value {
-            assert_eq!(c, &crate::style::color::Color::Rgba(Rgba::RED));
+        if let crate::css::types::PropertyValue::Color(c) = &decls[0].value {
+            assert_eq!(*c, crate::style::color::Color::Rgba(Rgba::RED));
         } else {
             panic!("color did not parse");
         }
@@ -5771,7 +5783,7 @@ fn dir_presentational_hint(
     let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
     let is_bdo = matches!(tag.as_deref(), Some("bdo"));
     let unicode_bidi_value = if is_bdo { "bidi-override" } else { "isolate" };
-    let dir = node.get_attribute_ref("dir")?;
+    let dir = node.get_attribute("dir")?;
     let dir = dir.trim().to_ascii_lowercase();
     match dir.as_str() {
         "ltr" | "rtl" => {
@@ -5812,7 +5824,7 @@ fn dir_presentational_hint(
 
 fn list_type_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
     let tag = node.tag_name()?.to_ascii_lowercase();
-    let ty = node.get_attribute_ref("type")?;
+    let ty = node.get_attribute("type")?;
     let mapped = match tag.as_str() {
         "ol" | "li" => map_ol_type(&ty),
         "ul" => map_ul_type(&ty),
@@ -5853,8 +5865,7 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
     let mut declarations = String::new();
 
     if let Some(align) = node
-        .get_attribute_ref("align")
-        .map(|a| a.to_string())
+        .get_attribute("align")
         .or_else(|| (tag == "center").then(|| "center".to_string()))
     {
         if let Some(mapped) = map_align(&align) {
@@ -5876,7 +5887,7 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
     }
 
     if matches!(tag.as_str(), "td" | "th" | "tr") {
-        if let Some(valign) = node.get_attribute_ref("valign") {
+        if let Some(valign) = node.get_attribute("valign") {
             if let Some(mapped) = map_valign(&valign) {
                 declarations.push_str(&format!("vertical-align: {};", mapped));
             }
@@ -5898,11 +5909,11 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
 
 fn dimension_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
     let width = node
-        .get_attribute_ref("width")
-        .and_then(|width| parse_dimension_attribute(width));
+        .get_attribute("width")
+        .and_then(|width| parse_dimension_attribute(&width));
     let height = node
-        .get_attribute_ref("height")
-        .and_then(|height| parse_dimension_attribute(height));
+        .get_attribute("height")
+        .and_then(|height| parse_dimension_attribute(&height));
 
     if width.is_none() && height.is_none() {
         return None;
@@ -5927,8 +5938,8 @@ fn dimension_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
 
 fn bgcolor_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
     let color = node
-        .get_attribute_ref("bgcolor")
-        .and_then(|color| parse_color_attribute(color))?;
+        .get_attribute("bgcolor")
+        .and_then(|color| parse_color_attribute(&color))?;
     let css = format!("background-color: {};", color);
     Some(MatchedRule {
         origin: StyleOrigin::Author,
@@ -5941,8 +5952,8 @@ fn bgcolor_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRu
 
 fn bordercolor_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
     let color = node
-        .get_attribute_ref("bordercolor")
-        .and_then(|color| parse_color_attribute(color))?;
+        .get_attribute("bordercolor")
+        .and_then(|color| parse_color_attribute(&color))?;
     let css = format!("border-color: {};", color);
     Some(MatchedRule {
         origin: StyleOrigin::Author,
@@ -5986,8 +5997,8 @@ fn resolve_absolute_lengths(styles: &mut ComputedStyle, root_font_size: f32, vie
 }
 
 fn table_border_value(node: &DomNode) -> Option<Length> {
-    node.get_attribute_ref("border")
-        .and_then(|val| parse_dimension_attribute(val))
+    node.get_attribute("border")
+        .and_then(|val| parse_dimension_attribute(&val))
         .filter(|len| len.unit.is_absolute())
 }
 
@@ -6032,8 +6043,8 @@ fn cellspacing_presentational_hint(node: &DomNode, order: usize) -> Option<Match
     if tag != "table" {
         return None;
     }
-    let spacing = node.get_attribute_ref("cellspacing")?;
-    let length = parse_dimension_attribute(spacing)?;
+    let spacing = node.get_attribute("cellspacing")?;
+    let length = parse_dimension_attribute(&spacing)?;
     let css = format!("border-spacing: {} {};", length, length);
     Some(MatchedRule {
         origin: StyleOrigin::Author,
@@ -6045,8 +6056,8 @@ fn cellspacing_presentational_hint(node: &DomNode, order: usize) -> Option<Match
 }
 
 fn find_cellpadding(ancestors: &[&DomNode], node: &DomNode) -> Option<Length> {
-    if let Some(value) = node.get_attribute_ref("cellpadding") {
-        if let Some(len) = parse_dimension_attribute(value) {
+    if let Some(value) = node.get_attribute("cellpadding") {
+        if let Some(len) = parse_dimension_attribute(&value) {
             return Some(len);
         }
     }
@@ -6054,8 +6065,8 @@ fn find_cellpadding(ancestors: &[&DomNode], node: &DomNode) -> Option<Length> {
     for ancestor in ancestors.iter().rev() {
         if let Some(tag) = ancestor.tag_name() {
             if tag.eq_ignore_ascii_case("table") {
-                if let Some(value) = ancestor.get_attribute_ref("cellpadding") {
-                    if let Some(len) = parse_dimension_attribute(value) {
+                if let Some(value) = ancestor.get_attribute("cellpadding") {
+                    if let Some(len) = parse_dimension_attribute(&value) {
                         return Some(len);
                     }
                 }
@@ -6119,7 +6130,7 @@ fn replaced_alignment_presentational_hint(node: &DomNode, order: usize) -> Optio
         return None;
     }
 
-    let align = node.get_attribute_ref("align")?;
+    let align = node.get_attribute("align")?;
     let align_lower = align.trim().to_ascii_lowercase();
     let mut declarations = String::new();
     match align_lower.as_str() {
@@ -6149,7 +6160,7 @@ fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRul
     if tag != "td" && tag != "th" {
         return None;
     }
-    if node.get_attribute_ref("nowrap").is_none() {
+    if node.get_attribute("nowrap").is_none() {
         return None;
     }
 
@@ -6162,28 +6173,8 @@ fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRul
     })
 }
 
-fn textarea_wrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
-    let tag = node.tag_name()?.to_ascii_lowercase();
-    if tag != "textarea" {
-        return None;
-    }
-
-    let wrap = node.get_attribute("wrap")?;
-    if !wrap.eq_ignore_ascii_case("off") {
-        return None;
-    }
-
-    Some(MatchedRule {
-        origin: StyleOrigin::Author,
-        specificity: 0,
-        order,
-        layer_order: vec![u32::MAX],
-        declarations: Cow::Owned(parse_declarations("white-space: pre;")),
-    })
-}
-
 fn hidden_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
-    if node.get_attribute_ref("hidden").is_none() {
+    if node.get_attribute("hidden").is_none() {
         return None;
     }
 
