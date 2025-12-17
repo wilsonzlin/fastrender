@@ -1159,7 +1159,6 @@ fn is_inherited_property(name: &str) -> bool {
             | "tab-size"
             | "hyphens"
             | "word-break"
-            | "forced-color-adjust"
             | "overflow-anchor"
             | "overflow-wrap"
             | "text-emphasis"
@@ -5547,16 +5546,6 @@ pub fn apply_declaration_with_base(
                 };
             }
         }
-        "forced-color-adjust" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
-                    "auto" => ForcedColorAdjust::Auto,
-                    "none" => ForcedColorAdjust::None,
-                    "preserve-parent-color" => ForcedColorAdjust::PreserveParentColor,
-                    _ => styles.forced_color_adjust,
-                };
-            }
-        }
         "appearance" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 if kw.eq_ignore_ascii_case("auto") {
@@ -5777,6 +5766,16 @@ pub fn apply_declaration_with_base(
         "color-scheme" => {
             if let Some(pref) = parse_color_scheme(&resolved_value) {
                 styles.color_scheme = pref;
+            }
+        }
+        "forced-color-adjust" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => ForcedColorAdjust::Auto,
+                    "none" => ForcedColorAdjust::None,
+                    "preserve-parent-color" => ForcedColorAdjust::PreserveParentColor,
+                    _ => styles.forced_color_adjust,
+                };
             }
         }
         "color" => {
@@ -9196,7 +9195,8 @@ fn parse_text_decoration_line(value: &PropertyValue) -> Option<TextDecorationLin
 
     for comp in components {
         if let PropertyValue::Keyword(kw) = comp {
-            match kw.to_ascii_lowercase().as_str() {
+            let kw = kw.to_ascii_lowercase();
+            match kw.as_str() {
                 "none" => {
                     saw_none = true;
                     lines = TextDecorationLine::NONE;

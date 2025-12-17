@@ -1431,7 +1431,6 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.cursor = parent.cursor;
     styles.cursor_images = parent.cursor_images.clone();
     styles.scrollbar_color = parent.scrollbar_color;
-    styles.forced_color_adjust = parent.forced_color_adjust;
 
     // Color inherits
     styles.color = parent.color;
