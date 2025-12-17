@@ -3739,6 +3739,12 @@ mod tests {
         assert!(!ctx.evaluate(&query));
     }
 
+    #[test]
+    fn aspect_ratio_zero_denominator_rejected() {
+        assert!(MediaQuery::parse("(aspect-ratio: 16/0)").is_err());
+        assert!(MediaQuery::parse("(max-aspect-ratio: 0/0)").is_err());
+    }
+
     // ============================================================================
     // Error Message Tests
     // ============================================================================
