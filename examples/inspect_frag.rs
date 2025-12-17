@@ -25,9 +25,10 @@ use std::fs;
 use url::Url;
 
 fn usage() {
-    eprintln!("Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-y PX] <file.html | file://url>");
+    eprintln!("Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] <file.html | file://url>");
     eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
     eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
+    eprintln!("  --scroll-x PX    Horizontal scroll offset in CSS px (default 0)");
     eprintln!("  --scroll-y PX    Vertical scroll offset in CSS px (default 0)");
 }
 
@@ -51,6 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
     let mut viewport_size = (1200u32, 800u32);
     let mut device_pixel_ratio = 1.0f32;
+    let mut scroll_x = 0.0f32;
     let mut scroll_y = 0.0f32;
     let mut raw_path: Option<String> = None;
     while let Some(arg) = args.next() {
@@ -74,6 +76,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(parsed) = val.parse::<f32>() {
                         if parsed.is_finite() && parsed > 0.0 {
                             device_pixel_ratio = parsed;
+                        }
+                    }
+                }
+            }
+            "--scroll-x" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<f32>() {
+                        if parsed.is_finite() {
+                            scroll_x = parsed;
                         }
                     }
                 }
@@ -132,8 +143,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut html = fs::read_to_string(&path)?;
     let resource_base = infer_base_url(&html, &input_url).into_owned();
 
-    if scroll_y != 0.0 {
-        eprintln!("Applying scroll offset: y={:.1}px", scroll_y);
+    if scroll_x != 0.0 || scroll_y != 0.0 {
+        eprintln!("Applying scroll offset: x={:.1}px y={:.1}px", scroll_x, scroll_y);
     }
 
     let mut renderer = FastRender::builder().device_pixel_ratio(device_pixel_ratio).build()?;
@@ -320,7 +331,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         renderer.font_context().clone(),
     );
     let fragment_tree = engine.layout_tree(&mut box_tree)?;
-    let scroll_offset = Point::new(0.0, -scroll_y);
+    let scroll_offset = Point::new(-scroll_x, -scroll_y);
     let mut box_debug: HashMap<usize, String> = HashMap::new();
     collect_box_debug(&box_tree.root, &mut box_debug);
     let mut box_styles: HashMap<usize, std::sync::Arc<ComputedStyle>> = HashMap::new();
