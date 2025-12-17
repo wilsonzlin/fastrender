@@ -38,14 +38,14 @@ use types::{
     FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
     FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
     FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, GridTrack, HyphensMode, ImageOrientation,
-    ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
-    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowAnchor,
-    OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarColor, ScrollbarWidth, TabSize,
-    TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
-    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextRendering,
-    TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox,
-    TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak,
-    WritingMode,
+    ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage,
+    ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow,
+    OverflowAnchor, OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarColor,
+    ScrollbarWidth, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration,
+    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation,
+    TextOverflow, TextRendering, TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TextWrap,
+    TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace,
+    WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -383,6 +383,7 @@ pub struct ComputedStyle {
     pub text_rendering: TextRendering,
     pub text_indent: TextIndent,
     pub text_size_adjust: TextSizeAdjust,
+    pub text_wrap: TextWrap,
     pub text_overflow: TextOverflow,
     pub text_decoration: TextDecoration,
     /// Whether a text-decoration line declaration was authored (shorthand or longhand).
@@ -622,11 +623,9 @@ impl Default for ComputedStyle {
             text_align_last: TextAlignLast::Auto,
             text_justify: TextJustify::Auto,
             text_rendering: TextRendering::Auto,
-<<<<<<< HEAD
-=======
             text_indent: TextIndent::default(),
->>>>>>> f749693 (Apply color-scheme preference to root defaults)
             text_size_adjust: TextSizeAdjust::Auto,
+            text_wrap: TextWrap::Wrap,
             text_overflow: TextOverflow::clip(),
             text_decoration: TextDecoration::default(),
             text_decoration_line_specified: false,

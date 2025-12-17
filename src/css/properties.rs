@@ -260,6 +260,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "text-overflow",
     "text-rendering",
     "text-size-adjust",
+    "text-wrap",
     "text-shadow",
     "text-transform",
     "text-underline-offset",

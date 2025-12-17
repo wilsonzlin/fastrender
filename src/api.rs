@@ -2305,6 +2305,7 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
     hash_enum_discriminant(&style.text_align, &mut h);
     hash_enum_discriminant(&style.text_align_last, &mut h);
     hash_enum_discriminant(&style.text_justify, &mut h);
+    hash_enum_discriminant(&style.text_wrap, &mut h);
     hash_text_indent(&style.text_indent, &mut h);
     hash_text_size_adjust(&style.text_size_adjust, &mut h);
     hash_enum_discriminant(&style.text_rendering, &mut h);

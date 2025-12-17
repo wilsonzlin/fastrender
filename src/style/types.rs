@@ -666,7 +666,6 @@ pub enum ScrollbarColor {
     Colors { thumb: Rgba, track: Rgba },
 }
 
-
 impl TouchAction {
     pub fn auto() -> Self {
         Self {
@@ -1625,6 +1624,23 @@ pub enum TextOrientation {
 impl Default for TextOrientation {
     fn default() -> Self {
         TextOrientation::Mixed
+    }
+}
+
+/// CSS `text-wrap`
+///
+/// Reference: CSS Text Module Level 4
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextWrap {
+    Wrap,
+    NoWrap,
+    Balance,
+    Pretty,
+}
+
+impl Default for TextWrap {
+    fn default() -> Self {
+        TextWrap::Wrap
     }
 }
 

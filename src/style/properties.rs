@@ -1141,6 +1141,7 @@ fn is_inherited_property(name: &str) -> bool {
             | "text-align-all"
             | "text-align-last"
             | "text-justify"
+            | "text-wrap"
             | "text-rendering"
             | "text-indent"
             | "text-decoration-skip-ink"
@@ -2242,6 +2243,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "text-justify" => styles.text_justify = source.text_justify,
         "text-rendering" => styles.text_rendering = source.text_rendering,
         "text-size-adjust" => styles.text_size_adjust = source.text_size_adjust,
+        "text-wrap" => styles.text_wrap = source.text_wrap,
         "text-orientation" => {
             styles.text_orientation = match source.text_orientation {
                 crate::style::types::TextOrientation::SidewaysRight => crate::style::types::TextOrientation::Sideways,
@@ -5217,6 +5219,17 @@ pub fn apply_declaration_with_base(
                 PropertyValue::Percentage(p) if *p >= 0.0 => TextSizeAdjust::Percentage(*p),
                 _ => styles.text_size_adjust,
             };
+        }
+        "text-wrap" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.text_wrap = match kw.to_ascii_lowercase().as_str() {
+                    "wrap" => TextWrap::Wrap,
+                    "nowrap" => TextWrap::NoWrap,
+                    "balance" => TextWrap::Balance,
+                    "pretty" => TextWrap::Pretty,
+                    _ => styles.text_wrap,
+                };
+            }
         }
         "text-orientation" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -13113,6 +13126,58 @@ mod tests {
         );
 
         assert_eq!(style.text_size_adjust, parent.text_size_adjust);
+    }
+
+    #[test]
+    fn text_wrap_parses_and_inherits() {
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("nowrap".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_wrap, TextWrap::NoWrap));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("balance".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_wrap, TextWrap::Balance));
+
+        let parent = ComputedStyle {
+            text_wrap: TextWrap::Pretty,
+            ..ComputedStyle::default()
+        };
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-wrap".to_string(),
+                value: PropertyValue::Keyword("inherit".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.text_wrap, parent.text_wrap);
     }
 
     #[test]

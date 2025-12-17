@@ -56,7 +56,7 @@ use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, r
 use crate::style::display::FormattingContextType;
 use crate::style::types::{
     Direction, FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign,
-    TextCombineUpright, TextJustify, TextTransform, UnicodeBidi, WhiteSpace, WordBreak, WritingMode,
+    TextCombineUpright, TextJustify, TextTransform, TextWrap, UnicodeBidi, WhiteSpace, WordBreak, WritingMode,
 };
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -377,6 +377,7 @@ impl InlineFormattingContext {
                             &child.style.language,
                         ),
                         child.style.white_space,
+                        child.style.text_wrap,
                     );
                     let mut produced = self.create_inline_items_from_normalized_with_base(
                         child,
@@ -957,6 +958,7 @@ impl InlineFormattingContext {
                             &child.style.language,
                         ),
                         child.style.white_space,
+                        child.style.text_wrap,
                     );
                     if dump_text_enabled() && normalized.text.is_empty() && !text_box.text.is_empty() {
                         eprintln!(
@@ -1653,7 +1655,7 @@ impl InlineFormattingContext {
     ) -> Result<Vec<InlineItem>, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform, style.white_space, &style.language);
-        let normalized = normalize_text_for_white_space(&transformed, style.white_space);
+        let normalized = normalize_text_for_white_space(&transformed, style.white_space, style.text_wrap);
         self.create_inline_items_from_normalized_with_base(
             box_node,
             normalized,
@@ -1785,7 +1787,7 @@ impl InlineFormattingContext {
     ) -> Result<TextItem, LayoutError> {
         let style = &box_node.style;
         let transformed = apply_text_transform(text, style.text_transform, style.white_space, &style.language);
-        let normalized = normalize_text_for_white_space(&transformed, style.white_space);
+        let normalized = normalize_text_for_white_space(&transformed, style.white_space, style.text_wrap);
         self.create_text_item_from_normalized(
             &box_node.style,
             &normalized.text,
@@ -3361,7 +3363,7 @@ impl PendingSpace {
     }
 }
 
-fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> NormalizedText {
+fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace, text_wrap: TextWrap) -> NormalizedText {
     use crate::text::line_break::BreakOpportunity;
 
     let result = match white_space {
@@ -3405,7 +3407,8 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
             NormalizedText {
                 text: out,
                 forced_breaks: Vec::new(),
-                allow_soft_wrap: white_space != WhiteSpace::Nowrap,
+                allow_soft_wrap: white_space != WhiteSpace::Nowrap
+                    && !matches!(text_wrap, TextWrap::NoWrap),
                 leading_collapsible,
                 trailing_collapsible,
             }
@@ -3460,7 +3463,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
             NormalizedText {
                 text: out,
                 forced_breaks: mandatory_breaks,
-                allow_soft_wrap: true,
+                allow_soft_wrap: !matches!(text_wrap, TextWrap::NoWrap),
                 leading_collapsible,
                 trailing_collapsible,
             }
@@ -3489,7 +3492,8 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
             NormalizedText {
                 text: out,
                 forced_breaks: mandatory_breaks,
-                allow_soft_wrap: white_space == WhiteSpace::PreWrap,
+                allow_soft_wrap: white_space == WhiteSpace::PreWrap
+                    && !matches!(text_wrap, TextWrap::NoWrap),
                 leading_collapsible: false,
                 trailing_collapsible: false,
             }
@@ -3519,7 +3523,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace) -> Normal
             NormalizedText {
                 text: out,
                 forced_breaks: mandatory_breaks,
-                allow_soft_wrap: true,
+                allow_soft_wrap: !matches!(text_wrap, TextWrap::NoWrap),
                 leading_collapsible: false,
                 trailing_collapsible: false,
             }
@@ -5707,7 +5711,8 @@ fn edge_combinability(node: &BoxNode, mode: TextCombineUpright, edge: CombineEdg
                 node.style.white_space,
                 &node.style.language,
             );
-            let normalized = normalize_text_for_white_space(&transformed, node.style.white_space);
+            let normalized =
+                normalize_text_for_white_space(&transformed, node.style.white_space, node.style.text_wrap);
             let mut saw_whitespace = match edge {
                 CombineEdge::Leading => normalized.leading_collapsible,
                 CombineEdge::Trailing => normalized.trailing_collapsible,
@@ -5737,7 +5742,7 @@ fn edge_combinability(node: &BoxNode, mode: TextCombineUpright, edge: CombineEdg
         }
         BoxType::Marker(marker_box) => {
             if let MarkerContent::Text(text) = &marker_box.content {
-                let normalized = normalize_text_for_white_space(text, node.style.white_space);
+                let normalized = normalize_text_for_white_space(text, node.style.white_space, node.style.text_wrap);
                 let mut saw_whitespace = match edge {
                     CombineEdge::Leading => normalized.leading_collapsible,
                     CombineEdge::Trailing => normalized.trailing_collapsible,
@@ -6440,7 +6445,7 @@ mod tests {
         style.font_size = 16.0;
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("1234", style.white_space);
+        let normalized = normalize_text_for_white_space("1234", style.white_space, style.text_wrap);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -6474,7 +6479,7 @@ mod tests {
         style.font_size = 16.0;
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("１２", style.white_space);
+        let normalized = normalize_text_for_white_space("１２", style.white_space, style.text_wrap);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -6509,7 +6514,7 @@ mod tests {
         style.font_size = 16.0;
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("123", style.white_space);
+        let normalized = normalize_text_for_white_space("123", style.white_space, style.text_wrap);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -6542,7 +6547,7 @@ mod tests {
         style.font_size = 16.0;
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("1", style.white_space);
+        let normalized = normalize_text_for_white_space("1", style.white_space, style.text_wrap);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -6575,7 +6580,7 @@ mod tests {
         style.text_combine_upright = TextCombineUpright::Digits(2);
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("12", style.white_space);
+        let normalized = normalize_text_for_white_space("12", style.white_space, style.text_wrap);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -6610,7 +6615,7 @@ mod tests {
         style.font_size = 16.0;
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("12", style.white_space);
+        let normalized = normalize_text_for_white_space("12", style.white_space, style.text_wrap);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -6648,7 +6653,7 @@ mod tests {
         style.text_combine_upright = TextCombineUpright::Digits(2);
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("12", style.white_space);
+        let normalized = normalize_text_for_white_space("12", style.white_space, style.text_wrap);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -6678,7 +6683,7 @@ mod tests {
         style.font_size = 16.0;
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
         let style = Arc::new(style);
-        let normalized = normalize_text_for_white_space("1234", style.white_space);
+        let normalized = normalize_text_for_white_space("1234", style.white_space, style.text_wrap);
         let items = ifc
             .create_text_items_with_combine(
                 &style,
@@ -6756,7 +6761,7 @@ mod tests {
         );
 
         let bidi_stack = vec![(style.unicode_bidi, style.direction)];
-        let normalized = normalize_text_for_white_space("12 ", style.white_space);
+        let normalized = normalize_text_for_white_space("12 ", style.white_space, style.text_wrap);
         let combined = ifc
             .create_text_items_with_combine(
                 &style,
@@ -7552,7 +7557,7 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Normal;
 
-        let normalized = normalize_text_for_white_space("  foo \n\tbar  ", style.white_space);
+        let normalized = normalize_text_for_white_space("  foo \n\tbar  ", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "foo bar");
         assert!(normalized.allow_soft_wrap);
         assert!(normalized.forced_breaks.is_empty());
@@ -7562,7 +7567,8 @@ mod tests {
     fn unicode_separators_are_collapsed_in_normal() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Normal;
-        let normalized = normalize_text_for_white_space("a\u{2028}b\u{2029}c\u{0085}d", style.white_space);
+        let normalized =
+            normalize_text_for_white_space("a\u{2028}b\u{2029}c\u{0085}d", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "a b c d");
         assert!(normalized.forced_breaks.is_empty());
         assert!(normalized.allow_soft_wrap);
@@ -7583,7 +7589,7 @@ mod tests {
     fn pre_collapses_crlf_to_single_break() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Pre;
-        let normalized = normalize_text_for_white_space("a\r\nb", style.white_space);
+        let normalized = normalize_text_for_white_space("a\r\nb", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "ab");
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
@@ -7594,7 +7600,8 @@ mod tests {
     fn unicode_line_and_paragraph_separators_break_in_pre() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Pre;
-        let normalized = normalize_text_for_white_space("a\u{2028}b\u{2029}c\u{0085}d", style.white_space);
+        let normalized =
+            normalize_text_for_white_space("a\u{2028}b\u{2029}c\u{0085}d", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "abcd");
         assert_eq!(normalized.forced_breaks.len(), 3);
         assert_eq!(
@@ -7711,7 +7718,7 @@ mod tests {
     fn pre_treats_form_feed_as_break() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Pre;
-        let normalized = normalize_text_for_white_space("a\u{000C}b", style.white_space);
+        let normalized = normalize_text_for_white_space("a\u{000C}b", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "ab");
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
@@ -8218,17 +8225,25 @@ mod tests {
     fn normal_collapses_vertical_tab_to_space() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::Normal;
-        let normalized = normalize_text_for_white_space("a\u{000B} b", style.white_space);
+        let normalized = normalize_text_for_white_space("a\u{000B} b", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "a b");
         assert!(normalized.forced_breaks.is_empty());
         assert!(normalized.allow_soft_wrap);
     }
 
     #[test]
+    fn text_wrap_nowrap_disables_wrapping() {
+        let mut style = ComputedStyle::default();
+        style.text_wrap = TextWrap::NoWrap;
+        let normalized = normalize_text_for_white_space("a b", style.white_space, style.text_wrap);
+        assert!(!normalized.allow_soft_wrap);
+    }
+
+    #[test]
     fn break_spaces_preserves_sequences() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::BreakSpaces;
-        let normalized = normalize_text_for_white_space("  a  \n b ", style.white_space);
+        let normalized = normalize_text_for_white_space("  a  \n b ", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "  a   b ");
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 5);
@@ -8241,7 +8256,7 @@ mod tests {
     fn pre_line_treats_crlf_as_single_break() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::PreLine;
-        let normalized = normalize_text_for_white_space("a\r\n b", style.white_space);
+        let normalized = normalize_text_for_white_space("a\r\n b", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "ab");
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
@@ -8252,7 +8267,7 @@ mod tests {
     fn pre_line_drops_spaces_before_break() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::PreLine;
-        let normalized = normalize_text_for_white_space("a   \n b", style.white_space);
+        let normalized = normalize_text_for_white_space("a   \n b", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "ab");
         assert_eq!(normalized.forced_breaks.len(), 1);
         assert_eq!(normalized.forced_breaks[0].byte_offset, 1);
@@ -8262,7 +8277,8 @@ mod tests {
     fn pre_line_treats_unicode_separators_as_breaks() {
         let mut style = ComputedStyle::default();
         style.white_space = WhiteSpace::PreLine;
-        let normalized = normalize_text_for_white_space("a\u{2028} b\u{2029}c\u{0085}d", style.white_space);
+        let normalized =
+            normalize_text_for_white_space("a\u{2028} b\u{2029}c\u{0085}d", style.white_space, style.text_wrap);
         assert_eq!(normalized.text, "abcd");
         let offsets: Vec<usize> = normalized.forced_breaks.iter().map(|b| b.byte_offset).collect();
         assert_eq!(offsets, vec![1, 2, 3]);
