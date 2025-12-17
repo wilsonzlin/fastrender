@@ -89,3 +89,41 @@ fn bidi_isolate_keeps_neutral_brackets_outside() {
         .collect();
     assert!(middle.contains('א') && middle.contains('ב'));
 }
+
+#[test]
+fn bidi_isolate_override_keeps_neutral_brackets_outside() {
+    // Isolate override should also keep surrounding parentheses out of the RTL run.
+    let mut rtl_iso_override = fastrender::ComputedStyle::default();
+    rtl_iso_override.direction = Direction::Rtl;
+    rtl_iso_override.unicode_bidi = UnicodeBidi::IsolateOverride;
+    let rtl_iso_override = Arc::new(rtl_iso_override);
+
+    let root = BoxNode::new_block(
+        default_style(),
+        FormattingContextType::Block,
+        vec![
+            BoxNode::new_text(default_style(), "(".to_string()),
+            BoxNode::new_inline(
+                rtl_iso_override.clone(),
+                vec![BoxNode::new_text(rtl_iso_override.clone(), "אב".to_string())],
+            ),
+            BoxNode::new_text(default_style(), ")".to_string()),
+        ],
+    );
+
+    let ifc = InlineFormattingContext::new();
+    let constraints = LayoutConstraints::definite_width(400.0);
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+    let mut texts = collect_text_with_x(&fragment);
+    texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    assert!(texts.len() >= 3, "expected at least three text fragments");
+    assert_eq!(texts.first().unwrap().0, "(");
+    assert_eq!(texts.last().unwrap().0, ")");
+    let middle: String = texts[1..texts.len() - 1]
+        .iter()
+        .map(|(t, _)| t.as_str())
+        .collect();
+    assert!(middle.contains('א') && middle.contains('ב'));
+}

@@ -22,6 +22,7 @@
 # Added background image-rendering coverage: display-list builder regression ensures pixelated backgrounds use nearest-neighbor sampling; roadmap marks image-rendering implemented. `cargo test background_image_rendering_pixelated_sets_nearest_filter_quality --quiet` passes.
 # Added background image-rendering coverage: crisp-edges backgrounds now assert nearest-neighbor sampling in both display-list builder and painter (`cargo test background_image_rendering_crisp_edges_sets_nearest_filter_quality --quiet`, `cargo test background_image_rendering_crisp_edges_uses_nearest_sampling --quiet`).
 # Bidi isolate regression: inline visual-order test ensures unicode-bidi:isolate keeps surrounding parentheses outside the RTL run (layout stacks brackets around the isolate rather than flipping them).
+# Bidi isolate-override regression: visual-order test covers unicode-bidi:isolate-override keeping surrounding parentheses outside the RTL run as well.
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.
