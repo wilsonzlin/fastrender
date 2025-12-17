@@ -40,22 +40,12 @@ Idle; no current tasks.
 ## Session notes (latest)
 - Added CSS `text-size-adjust`: new computed type/default (auto), inherited, parsed keywords/percentages, property list updates, and cascade tests. `cargo test text_size_adjust --quiet` passes.
 - Added CSS `text-rendering`: new computed type/default (auto), inherited, property parsing (optimizeSpeed/optimizeLegibility/geometricPrecision), property lists, and regression tests. `cargo test text_rendering --quiet` passes.
-
-<<<<<<< HEAD
 - Added `:target-within` pseudo-class: selector parsing/serialization, DOM subtree target detection, and parsing/matching regression covering ancestors and target elements.
-
 - Added regression for `scrollbar-width` global keywords (inherit/revert/revert-layer/unset) to lock cascade behavior; no functional change needed.
 - Flex pass-cache now keys on the measurement-adjusted style and seeds from the shared measure cache so intrinsic probes reuse cached sizes/fragments even when we clone styles (aimed at the CNN carousel flex hotspots).
 - Flex pass-cache now tolerance-matches stored layouts within a size epsilon to reuse cached fragments across near-identical probes; deduped `text-size-adjust` type definition and restored missing `text-rendering`/`overflow-anchor` computed fields after merge.
-=======
-<<<<<<< HEAD
-=======
-- Added regression for `scrollbar-width` global keywords (inherit/revert/revert-layer/unset) to lock cascade behavior; no functional change needed.
-- Flex pass-cache now keys on the measurement-adjusted style and seeds from the shared measure cache so intrinsic probes reuse cached sizes/fragments even when we clone styles (aimed at the CNN carousel flex hotspots).
->>>>>>> ce14d68 (Handle prefers-color-scheme no-preference and fix duplicate fields)
->>>>>>> d09aa31 (Handle prefers-color-scheme no-preference and fix duplicate fields)
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
-- Implemented `text-size-adjust`: parses auto/none/percentage, cascades/inherits with regression coverage.
+- Implemented `forced-color-adjust`: parsed/inherited (auto/none/preserve-parent-color), added to computed styles/property lists/hashes with regression tests; fixed an ambiguous float tolerance in flex layout.
 
 - DOM now tracks element namespaces: parse_html captures the element namespace, selector matching respects the actual namespace (HTML vs foreign), and local-name/type comparisons are case-insensitive only for HTML elements. Tests cover namespace matching, HTML vs. SVG casing, and namespace-aware type equality. HTML-only form states (disabled/required/etc.) are gated to HTML elements.
 
