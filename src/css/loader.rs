@@ -17,6 +17,7 @@ use url::Url;
 /// as-is), absolute URLs, and filesystem bases (`file://`) that may reference
 /// directory paths.
 pub fn resolve_href(base: &str, href: &str) -> Option<String> {
+    let href = unescape_js_escapes(href);
     if href.is_empty() {
         return None;
     }
@@ -25,7 +26,7 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
         return Some(href.to_string());
     }
 
-    if let Ok(abs) = Url::parse(href) {
+    if let Ok(abs) = Url::parse(href.as_ref()) {
         return Some(abs.to_string());
     }
 
@@ -40,9 +41,48 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     Url::parse(&base_candidate)
         .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
         .ok()?
-        .join(href)
+        .join(href.as_ref())
         .ok()
         .map(|u| u.to_string())
+}
+
+/// Best-effort unescaping for JavaScript-escaped URL strings embedded in HTML/JS.
+///
+/// Handles `\uXXXX` Unicode escapes (common for `\u0026` encoded ampersands) and
+/// simple backslash escaping of quotes/slashes. Returns a borrowed input when no
+/// escapes are present.
+fn unescape_js_escapes(input: &str) -> Cow<'_, str> {
+    if !input.contains('\\') {
+        return Cow::Borrowed(input);
+    }
+
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            if i + 1 < bytes.len() && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\'' || bytes[i + 1] == b'/') {
+                out.push(bytes[i + 1] as char);
+                i += 2;
+                continue;
+            }
+
+            if i + 5 < bytes.len() && (bytes[i + 1] == b'u' || bytes[i + 1] == b'U') {
+                if let Ok(code) = u16::from_str_radix(&input[i + 2..i + 6], 16) {
+                    if let Some(ch) = char::from_u32(code as u32) {
+                        out.push(ch);
+                        i += 6;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+
+    Cow::Owned(out)
 }
 
 fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
@@ -65,6 +105,8 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
             cleaned.truncate(pos + 4);
         }
     }
+
+    cleaned = unescape_js_escapes(&cleaned).into_owned();
 
     if cleaned.is_empty() {
         None
@@ -688,6 +730,15 @@ mod tests {
         assert_eq!(urls.len(), 2);
         assert!(urls.contains(&"https://example.com/styles/a.css".to_string()));
         assert!(urls.contains(&"https://example.com/app/b.css".to_string()));
+    }
+
+    #[test]
+    fn unescapes_js_escaped_stylesheet_hrefs() {
+        let html = r#"
+            <link rel="stylesheet" href="https://cdn.example.com/app.css?foo=bar\u0026baz=qux">
+        "#;
+        let urls = extract_css_links(html, "https://example.com/");
+        assert_eq!(urls, vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]);
     }
 
     #[test]

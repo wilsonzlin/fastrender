@@ -1,25 +1,18 @@
-# Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette, outline recoloring, and author overrides. Pushes completed.
-# Color-scheme inheritance still validated; further palette audits ongoing.
 - Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
 - SVG intrinsic sizing: render_svg now falls back to 300×150 with viewBox-derived aspect ratios when width/height are absent, preserves preserveAspectRatio="none", and tests cover width/height, viewBox-only, and aspect-ratio none cases.
-- Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse.
-- SVG percent width/height are ignored for intrinsic sizing: percent-specified dimensions fall back to default 300×150 while preserving viewBox aspect ratios; added regression.
+- Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse. CSS link extraction now unescapes JS-escaped hrefs (e.g., `\u0026` ampersands) so encoded stylesheet URLs resolve correctly; added a regression for JS-escaped stylesheet hrefs.
 # Scratchpad – rendering engine session notes
 - Stylesheet extraction: `extract_css_links` now deduplicates `<link rel="stylesheet">` entries while preserving order, cutting redundant fetches (regression `dedupes_stylesheet_links_preserving_order`).
 - Embedded CSS scan hardened: `.css-*{...}` class tokens and percent-encoded variants are ignored when hunting CSS URLs, preventing bogus fetches (e.g., aljazeera encoded class names). Added regressions `ignores_embedded_css_class_tokens` and `ignores_percent_encoded_css_class_tokens`; cascade color tests updated for `from_rgba8` alpha arg.
 - Scroll snapping now honors scroll-padding and scroll-margin: CSS parsing/cascade accept physical scroll-padding/scroll-margin properties, layout fingerprints include them, and snap target computation accounts for container padding insets and target margins. Added scroll snap regressions for padding/margin alignment.
-- Color-scheme now inherits through the cascade: `inherit_styles` copies the computed color-scheme to children, and a regression (`color_scheme_inherits_to_descendants`) ensures author-supported schemes propagate. `cargo test color_scheme_inherits_to_descendants --quiet` passes.
-- Inter-character justification now works across styled spans: `has_justify_opportunities` finds inline boundaries/clusters, and regression `text_justify_inter_character_spans_inline_boundaries` justifies two differently styled inline items. Cascade color-mix tests updated for 4-arg `from_rgba8`, and CSS color parsing test borrows the parsed value.
+- Color-scheme now inherits through the cascade: `inherit_styles` copies the computed color-scheme to children, and a regression (`color_scheme_inherits_to_descendants`) ensures author-supported schemes propagate. `cargo test color_scheme_inherits_to_descendants --quiet` passes. Push previously timed out; rebase in progress.
+- Cascade perf: DOM attribute lookups borrow via get_attribute_ref; selector candidate lists dedup to avoid redundant matches; pushed to main.
 - Calc-length percentages now require a finite base: CalcLength::resolve returns None when percentage base is missing/non-finite, and a regression covers calc percent resolution along with absolute-only calcs. Ran `fetch_and_render --release --timeout 60` for cnet.com (success) and google.com (success); cnn.com timed out at 60s.
-- Calc percentages now resolve via the shared resolver in block/flex/grid/inline padding/border helpers, supporting calc() and respecting non-finite percentage bases; positioned offset calc percentages return None when no base is provided (regression added).
 - UA disabled form controls now have dimmed UA styling (gray text/background, default cursor); cascade test `disabled_form_controls_use_ua_styles` covers the defaults.
-- Rowspan distribution now respects row max-height caps: distributing extra height from spanning cells uses headroom caps, and a regression ensures capped rows don’t grow past their max while remaining height flows to uncapped rows.
 - UA focus outlines now apply to form controls: UA CSS adds focus outlines for inputs/selects/textareas/buttons, and a cascade regression `ua_focus_outline_applies_to_form_controls` locks the outline style/offset.
 - Textarea wrap="off" disables wrapping: presentational hint maps wrap=off to `white-space: pre`, and regression `textarea_wrap_off_disables_wrapping` ensures author CSS can override back to pre-wrap.
 - Added UA disabled form-control styling: user_agent.css dims disabled inputs/selects/textareas/buttons/options/optgroups and switches cursors to default; cascade regression `disabled_form_controls_use_ua_styles` verifies the UA defaults.
-- Idle; no current tasks. Available for new tasks.
 - Sticky follow-up: apply_sticky_offsets now translates only the sticky box (not children) before recursing, preventing nested stickies from being shifted twice. Added regression `nested_sticky_child_remains_visible` to keep inner stickies visible when parent stickies pin.
-- Pull/push to origin have been failing (SSH timeouts/HTTPS creds). A full patch series for all local commits lives in `local_patches/` (0001–0018) so others can apply while pushes are blocked.
 - Fixed display-list underline currentColor test to assert resolved color/thickness and remove unused vars; warnings cleared.
 - PositionedLayout absolute helper delegates to AbsoluteLayout for spec-accurate shrink-to-fit/auto-margin handling; positioned layout tests updated (shrink-to-fit expectation) and an auto-margin centering regression added. `cargo test --quiet test_absolute_position_left_right_shrink_to_fit` and `cargo test --quiet absolute_position_auto_margins_center_between_insets` pass.
 - ::marker coverage improved: property-filtering regressions ensure markers ignore box/background sizing/padding overrides and allow text-affecting properties; marker gap asserted for horizontal LTR (inline-end), horizontal RTL (inline-start), and vertical-lr (block-end) margins, ignoring block-axis margins.
@@ -41,7 +34,6 @@
 - Added display-list mix-blend-mode regression: a multiply stacking context over 50% gray yields ~128 red and near-zero green/blue, confirming blend math in the display list renderer.
 - Added display-list backdrop filter regression: a stacking context with `backdrop-filter: invert(1)` over a red backdrop produces cyan pixels, verifying backdrop filters apply to underlying content.
 - Added display-list blur regression: blur outsets scale with device pixel ratio (Blur(2) at scale=2 matches Blur(4) at scale=1).
-- Painter filter outsets now scale with device pixel ratio: blur/drop-shadow outsets use the painting scale, and regression `blur_filter_outset_scales_with_device_pixel_ratio` locks blur radius scaling; filter tests updated accordingly.
 - Replaced height percentage derives width from ratio: with a definite percentage height and aspect-ratio, width derives from the resolved height. Regression `compute_replaced_height_percentage_derives_width_from_ratio` covers height 60% of 300px → 180px and width 225px at 1.25 ratio.
 - Media feature parser rejects calc/invalid lengths: added regressions to ensure length-based media features and range syntax fail on calc() or bogus units, and resolutions with unknown units are invalid.
 - Replaced percentage width ignored without base even with ratio: when width is a percentage and the base is indefinite, we fall back to default size and apply the ratio. Regression `compute_replaced_percentage_width_ignored_without_base_even_with_ratio` expects 300×150 for 50% width, ratio 2.
@@ -57,7 +49,6 @@
 - Pending: build times out when running fetch_and_render; need to reattempt inspect_frag/fetch once compilation completes or reuse cached CNN HTML.
 - FUTURE: run `examples/inspect_frag --page cnn.com --log FLEX_CHILD_IDS=... --timeout 60` once build succeeds to confirm row positions after clamps.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
-- Calc resolution: CalcLength now fails resolution when viewport/font contexts are non-finite, and tests cover calc() percentage lengths rejecting indefinite bases and non-finite contexts.
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
 - Added display-list regression for polar color-mix backgrounds (`color-mix(in oklch, ...)`) to ensure resolved colors paint correctly (`paint_color_mix_polar_display_list_test.rs`).
@@ -1480,5 +1471,3 @@ Actionable borrowings:
 - Added prefers-contrast media coverage: MediaContext setter, evaluation regression, and env override invalid-value guard.
 - Added a TextRun regression ensuring half-leading can be negative when line-height is smaller than text height (test_text_run_negative_half_leading).
 - Inline bidi: added layout regression `bidi_isolate_positions_between_surrounding_runs` to ensure a unicode-bidi:isolate RTL run stays contiguous and is positioned between surrounding LTR text in visual order.
-- Display-list outlines bypass clip masks like CSS outlines; regression `outline_ignores_clip_region` ensures outlines extend outside clipped regions.
-- Added new fetch targets: cloudflare.com, aliexpress.com, apnews.com, aljazeera.com, tripadvisor.com in fetch_pages PAGES; cargo check --bin fetch_pages passes.
