@@ -1622,15 +1622,9 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
         return;
     }
 
-    let mut applied_default_reset = false;
     let tag_name = styled.node.tag_name().map(|t| t.to_ascii_lowercase());
     let is_ol = tag_name.as_deref() == Some("ol");
     let reversed = is_ol && styled.node.get_attribute("reversed").is_some();
-
-    if let Some(reset) = &styled.styles.counters.counter_reset {
-        counters.apply_reset(reset);
-        applied_default_reset = true;
-    }
 
     let is_list_container = matches!(
         tag_name.as_deref(),
@@ -1645,7 +1639,23 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
         }
     }
 
-    if !applied_default_reset && is_list_container {
+    let css_reset = styled.styles.counters.counter_reset.clone();
+    let reset_is_ua_default = matches!(
+        css_reset.as_ref(),
+        Some(reset) if reset.items.len() == 1 && reset.items[0].name == "list-item" && reset.items[0].value == 0
+    );
+    let mut applied_reset = false;
+
+    if let Some(reset) = css_reset {
+        if is_list_container && reset_is_ua_default {
+            // Defer to HTML list defaults below so start/reversed can override UA list-item reset.
+        } else {
+            counters.apply_reset(&reset);
+            applied_reset = true;
+        }
+    }
+
+    if is_list_container && !applied_reset {
         let start = styled.node.get_attribute("start").and_then(|s| s.parse::<i32>().ok());
         let step = counters.list_item_increment();
         let start_value = if is_ol {
@@ -1677,8 +1687,19 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
         }
     }
 
-    if let Some(increment) = &styled.styles.counters.counter_increment {
-        counters.apply_increment(increment);
+    let css_increment = styled.styles.counters.counter_increment.as_ref();
+    let increment_is_ua_default = matches!(
+        css_increment,
+        Some(increment) if increment.items.len() == 1 && increment.items[0].name == "list-item" && increment.items[0].value == 1
+    );
+
+    if let Some(increment) = css_increment {
+        if increment_is_ua_default && styled.styles.display == Display::ListItem {
+            let step = counters.list_item_increment();
+            counters.apply_increment(&CounterSet::single("list-item", step));
+        } else {
+            counters.apply_increment(increment);
+        }
     } else if styled.styles.display == Display::ListItem {
         let step = counters.list_item_increment();
         counters.apply_increment(&CounterSet::single("list-item", step));
@@ -3719,6 +3740,46 @@ mod tests {
 
         // Only top-level list items should contribute to the count: markers 2, 1.
         assert_eq!(markers, vec!["2 ", "1 "]);
+    }
+
+    #[test]
+    fn ordered_list_start_attribute_overrides_ua_counter_reset() {
+        let dom = crate::dom::parse_html(r#"<ol start="5"><li>one</li><li>two</li></ol>"#).unwrap();
+        let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+        let tree = generate_box_tree(&styled);
+
+        let markers: Vec<String> = BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
+            .into_iter()
+            .filter_map(|node| match &node.box_type {
+                BoxType::Marker(marker) => match &marker.content {
+                    MarkerContent::Text(text) => Some(text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(markers, vec!["5 ", "6 "]);
+    }
+
+    #[test]
+    fn reversed_ordered_list_counts_down_with_ua_defaults() {
+        let dom = crate::dom::parse_html(r#"<ol reversed><li>one</li><li>two</li><li>three</li></ol>"#).unwrap();
+        let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+        let tree = generate_box_tree(&styled);
+
+        let markers: Vec<String> = BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
+            .into_iter()
+            .filter_map(|node| match &node.box_type {
+                BoxType::Marker(marker) => match &marker.content {
+                    MarkerContent::Text(text) => Some(text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(markers, vec!["3 ", "2 ", "1 "]);
     }
 
     #[test]
