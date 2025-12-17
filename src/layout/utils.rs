@@ -930,7 +930,7 @@ mod tests {
     fn compute_replaced_applies_border_box_box_sizing() {
         let mut style = ComputedStyle::default();
         style.box_sizing = BoxSizing::BorderBox;
-        style.width = Some(Length::px(120.0));
+        style.width = Some(Length::px(360.0));
         style.padding_left = Length::px(10.0);
         style.padding_right = Length::px(10.0);
         style.border_left_width = Length::px(5.0);
@@ -1014,6 +1014,36 @@ mod tests {
         // The aspect ratio applies to the content box, so the returned height is 160/2 = 80px.
         assert!((size.width - 160.0).abs() < 0.01);
         assert!((size.height - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn compute_replaced_max_height_percentage_resolves_with_base() {
+        let mut style = ComputedStyle::default();
+        style.max_height = Some(Length::percent(50.0));
+        style.width = Some(Length::px(360.0));
+        style.aspect_ratio = crate::style::types::AspectRatio::Ratio(1.5);
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            intrinsic_size: Some(Size::new(300.0, 400.0)),
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(
+            &style,
+            &replaced,
+            Some(Size::new(200.0, 300.0)),
+            Size::new(800.0, 600.0),
+        );
+
+        // Max-height 50% of 300px base clamps height to 150px; width stays specified.
+        assert!((size.height - 150.0).abs() < 0.01);
+        assert!((size.width - 360.0).abs() < 0.01);
     }
 
     #[test]
