@@ -168,7 +168,8 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
         _location: cssparser::SourceLocation,
         name: cssparser::CowRcStr<'i>,
     ) -> std::result::Result<PseudoClass, ParseError<'i, Self::Error>> {
-        match &*name {
+        let lowered = name.to_ascii_lowercase();
+        match lowered.as_str() {
             "root" => Ok(PseudoClass::Root),
             "first-child" => Ok(PseudoClass::FirstChild),
             "last-child" => Ok(PseudoClass::LastChild),
@@ -200,7 +201,8 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
         parser: &mut Parser<'i, 't>,
         _is_starting_single_colon: bool,
     ) -> std::result::Result<PseudoClass, ParseError<'i, Self::Error>> {
-        match &*name {
+        let lowered = name.to_ascii_lowercase();
+        match lowered.as_str() {
             "nth-child" => {
                 let (a, b) = parse_nth(parser).map_err(|_| {
                     parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()))
@@ -270,7 +272,8 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
         _location: cssparser::SourceLocation,
         name: cssparser::CowRcStr<'i>,
     ) -> std::result::Result<PseudoElement, ParseError<'i, Self::Error>> {
-        match &*name {
+        let lowered = name.to_ascii_lowercase();
+        match lowered.as_str() {
             "before" => Ok(PseudoElement::Before),
             "after" => Ok(PseudoElement::After),
             "marker" => Ok(PseudoElement::Marker),
@@ -297,7 +300,8 @@ fn parse_nth<'i, 't>(parser: &mut Parser<'i, 't>) -> std::result::Result<(i32, i
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cssparser::{ParserInput, ToCss};
+    use cssparser::{ParserInput, SourceLocation, ToCss};
+    use selectors::Parser as SelectorsParser;
 
     fn parse(expr: &str) -> (i32, i32) {
         let mut input = ParserInput::new(expr);
@@ -322,6 +326,41 @@ mod tests {
         let mut input = ParserInput::new("n+");
         let mut parser = Parser::new(&mut input);
         assert!(parse_nth(&mut parser).is_err());
+    }
+
+    #[test]
+    fn parses_pseudo_classes_case_insensitively() {
+        let parser = PseudoClassParser;
+        let loc = SourceLocation { line: 0, column: 0 };
+        let root = parser
+            .parse_non_ts_pseudo_class(loc, cssparser::CowRcStr::from("RoOt"))
+            .expect("root pseudo should parse");
+        assert_eq!(root, PseudoClass::Root);
+
+        let mut input = ParserInput::new("2n+1");
+        let mut css_parser = Parser::new(&mut input);
+        let nth = parser
+            .parse_non_ts_functional_pseudo_class(cssparser::CowRcStr::from("NTH-CHILD"), &mut css_parser, false)
+            .expect("nth-child pseudo should parse");
+        assert!(matches!(nth, PseudoClass::NthChild(_, _)));
+    }
+
+    #[test]
+    fn parses_pseudo_elements_case_insensitively() {
+        let parser = PseudoClassParser;
+        let loc = SourceLocation { line: 0, column: 0 };
+        assert_eq!(
+            parser
+                .parse_pseudo_element(loc, cssparser::CowRcStr::from("BeFoRe"))
+                .expect("before pseudo"),
+            PseudoElement::Before
+        );
+        assert_eq!(
+            parser
+                .parse_pseudo_element(loc, cssparser::CowRcStr::from("MARKER"))
+                .expect("marker pseudo"),
+            PseudoElement::Marker
+        );
     }
 
     #[test]

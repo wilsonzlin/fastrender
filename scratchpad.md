@@ -436,6 +436,7 @@ Inline coordinate fix (Mar 2026):
 
 ## Recent changes (this branch)
 - Pseudo-element selector matching now reports support for ::before/::after/::marker instead of rejecting all pseudo-elements; added a dom test to cover match_pseudo_element for these pseudos.
+- CSS pseudo-class/element parsing is now ASCII case-insensitive (e.g., `:ROOT`, `:NTH-CHILD`, `::BEFORE` parse correctly); added parser tests to lock case-insensitive handling.
 - HTML `nowrap` presentational hint now maps `td`/`th` `nowrap` attributes to `white-space: nowrap`, and UA defaults set `<nobr>` to `white-space: nowrap`; cascade tests cover the hint, override, and nobr default.
 - `<wbr>` elements now synthesize a zero-width break text child during DOM conversion so optional break opportunities participate in line breaking without losing selector styling; regression added in dom tests.
 - Flex-to-fragment conversion was dropping flex item contents: `taffy_to_fragment` rebuilt child fragments without using real layout results, so flex items lost their text/images (CNN rendered almost blank). Fixed by re-laying out each flex child with the definite size Taffy resolved and positioning the resulting fragment at the Taffy coordinates, preserving the measured content. `FASTR_DUMP_COMMANDS` debug flag now prints display list command types/rects.
