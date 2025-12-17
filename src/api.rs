@@ -1740,6 +1740,26 @@ fn hash_overflow(overflow: &crate::style::types::Overflow, hasher: &mut DefaultH
     hash_enum_discriminant(overflow, hasher);
 }
 
+fn hash_scrollbar_color(color: &crate::style::types::ScrollbarColor, hasher: &mut DefaultHasher) {
+    use crate::style::types::ScrollbarColor::*;
+    match color {
+        Auto => 0u8.hash(hasher),
+        Dark => 1u8.hash(hasher),
+        Light => 2u8.hash(hasher),
+        Colors { thumb, track } => {
+            3u8.hash(hasher);
+            thumb.r.hash(hasher);
+            thumb.g.hash(hasher);
+            thumb.b.hash(hasher);
+            thumb.a.to_bits().hash(hasher);
+            track.r.hash(hasher);
+            track.g.hash(hasher);
+            track.b.hash(hasher);
+            track.a.to_bits().hash(hasher);
+        }
+    }
+}
+
 fn hash_border_style(style: &crate::style::types::BorderStyle, hasher: &mut DefaultHasher) {
     hash_enum_discriminant(style, hasher);
 }
@@ -2325,6 +2345,9 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
     hash_enum_discriminant(&style.forced_color_adjust, &mut h);
     hash_enum_discriminant(&style.color_scheme, &mut h);
     hash_enum_discriminant(&style.writing_mode, &mut h);
+    hash_enum_discriminant(&style.scrollbar_width, &mut h);
+    hash_scrollbar_color(&style.scrollbar_color, &mut h);
+    hash_enum_discriminant(&style.forced_color_adjust, &mut h);
     hash_list_style_type(&style.list_style_type, &mut h);
     hash_enum_discriminant(&style.list_style_position, &mut h);
     hash_list_style_image(&style.list_style_image, &mut h);
