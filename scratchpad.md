@@ -28,6 +28,7 @@
 - Media query caching optimized: `MediaQueryCache` memoizes per-query keys and tracks results internally instead of exposing a raw HashMap, reducing rebuilds while keeping the existing API. `cargo test media_query_cache_reused_between_collections -- --nocapture` passes.
 - Added a display-list renderer regression for clip-path from the builder: `builder_clip_path_masks_rendered_output` builds a stacking tree with a circular clip-path and ensures the rendered output is clipped (center red, corners white).
 - Added a display-list renderer regression for clip-path polygons: `builder_clip_path_polygon_masks_rendered_output` builds via DisplayListBuilder with a triangular clip-path and asserts interior pixels paint while clipped corners stay white.
+- Added a display-list renderer regression for inset clip-paths: `builder_clip_path_inset_masks_rendered_output` clips a padded rectangle so only the inner region paints (center red, corners white).
 - Display-list skip-ink: builder regressions ensure skip-ink auto carves underline segments and skip-ink none emits a solid line.
 - Added display-list renderer regression for `color-mix(in oklab, ...)` backgrounds to ensure mixed colors render as resolved RGBA.
 - Added display-list renderer regression for `color-mix(in srgb, currentColor, blue)` backgrounds to ensure currentColor participates in mixing correctly at render time.
