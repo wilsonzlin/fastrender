@@ -1165,6 +1165,7 @@ fn is_inherited_property(name: &str) -> bool {
             | "text-align-all"
             | "text-align-last"
             | "text-justify"
+            | "text-rendering"
             | "text-indent"
             | "text-decoration-skip-ink"
             | "text-underline-offset"
@@ -2262,6 +2263,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         }
         "text-align-last" => styles.text_align_last = source.text_align_last,
         "text-justify" => styles.text_justify = source.text_justify,
+        "text-rendering" => styles.text_rendering = source.text_rendering,
         "text-orientation" => {
             styles.text_orientation = match source.text_orientation {
                 crate::style::types::TextOrientation::SidewaysRight => crate::style::types::TextOrientation::Sideways,
@@ -5201,6 +5203,17 @@ pub fn apply_declaration_with_base(
                     "justify" => TextAlignLast::Justify,
                     "match-parent" => TextAlignLast::MatchParent,
                     _ => styles.text_align_last,
+                };
+            }
+        }
+        "text-rendering" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.text_rendering = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => TextRendering::Auto,
+                    "optimizespeed" => TextRendering::OptimizeSpeed,
+                    "optimizelegibility" => TextRendering::OptimizeLegibility,
+                    "geometricprecision" => TextRendering::GeometricPrecision,
+                    _ => styles.text_rendering,
                 };
             }
         }
@@ -9284,10 +9297,7 @@ fn parse_text_underline_position(value: &PropertyValue) -> Option<TextUnderlineP
             }
             kws
         }
-        PropertyValue::Keyword(kw) => kw
-            .split_whitespace()
-            .map(|s| s.to_ascii_lowercase())
-            .collect(),
+        PropertyValue::Keyword(kw) => kw.split_whitespace().map(|s| s.to_ascii_lowercase()).collect(),
         _ => return None,
     };
 
@@ -11140,6 +11150,76 @@ mod tests {
     }
 
     #[test]
+    fn text_rendering_parses_keywords() {
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-rendering".into(),
+                value: PropertyValue::Keyword("optimizeLegibility".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_rendering, TextRendering::OptimizeLegibility));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-rendering".into(),
+                value: PropertyValue::Keyword("geometricprecision".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_rendering, TextRendering::GeometricPrecision));
+    }
+
+    #[test]
+    fn text_rendering_inherit_and_initial() {
+        let parent = ComputedStyle {
+            text_rendering: TextRendering::OptimizeSpeed,
+            ..ComputedStyle::default()
+        };
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-rendering".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_rendering, TextRendering::OptimizeSpeed));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "text-rendering".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.text_rendering, TextRendering::Auto));
+    }
+
+    #[test]
     fn accent_color_parses_and_inherits() {
         let mut style = ComputedStyle::default();
         apply_declaration(
@@ -12882,7 +12962,10 @@ mod tests {
             16.0,
             16.0,
         );
-        assert!(matches!(style.text_decoration.thickness, TextDecorationThickness::FromFont));
+        assert!(matches!(
+            style.text_decoration.thickness,
+            TextDecorationThickness::FromFont
+        ));
 
         apply_declaration(
             &mut style,
@@ -12910,7 +12993,10 @@ mod tests {
             16.0,
             16.0,
         );
-        assert!(matches!(style.text_underline_position, TextUnderlinePosition::UnderRight));
+        assert!(matches!(
+            style.text_underline_position,
+            TextUnderlinePosition::UnderRight
+        ));
     }
 
     #[test]

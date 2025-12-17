@@ -1639,6 +1639,23 @@ pub enum TextJustify {
     Distribute,
 }
 
+/// CSS `text-rendering`
+///
+/// Reference: SVG/CSS (non-standard, inherited)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextRendering {
+    Auto,
+    OptimizeSpeed,
+    OptimizeLegibility,
+    GeometricPrecision,
+}
+
+impl Default for TextRendering {
+    fn default() -> Self {
+        TextRendering::Auto
+    }
+}
+
 /// CSS `text-indent`
 ///
 /// Reference: CSS Text Module Level 3

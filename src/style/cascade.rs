@@ -1323,6 +1323,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
     styles.text_align = parent.text_align;
     styles.text_align_last = parent.text_align_last;
     styles.text_justify = parent.text_justify;
+    styles.text_rendering = parent.text_rendering;
     styles.text_indent = parent.text_indent;
     styles.text_decoration_skip_ink = parent.text_decoration_skip_ink;
     styles.text_underline_offset = parent.text_underline_offset;
