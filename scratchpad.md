@@ -24,6 +24,7 @@ Idle; no current tasks. Available for new tasks.
 <<<<<<< HEAD
 - Border-spacing validation: border-spacing now rejects percentage values, clamps negative lengths to zero (including calc resolution), and resolves spacing with non-negative clamp. Added cascade + table tests. Git push currently timing out (SSH to github).
 - Rebased/pushed the border-spacing validation work; `cargo test border_spacing_percentages_are_ignored` passes locally.
+- Added vertical text-overflow regressions: vertical-rl with clip/ellipsis and inline-start ellipsis now tested to ensure markers appear and inline-axis extents clamp to the available height.
 - CLI: fetch_and_render/render_pages/inspect_frag accept `--prefers-reduced-transparency reduce|no-preference` to set `FASTR_PREFERS_REDUCED_TRANSPARENCY` for media overrides (help text updated).
 =======
 - Added shaping regression for sideways writing: pipeline shapes sideways-LR text with CW90 rotation to keep glyph orientation correct. Test skips when fonts unavailable.
