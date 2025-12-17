@@ -3237,6 +3237,24 @@ mod tests {
     }
 
     #[test]
+    fn aria_label_has_no_visual_effect() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "img".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    ("src".to_string(), "data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A//www.w3.org/2000/svg'%20width%3D'1'%20height%3D'1'%3E%3C/svg%3E".to_string()),
+                    ("aria-label".to_string(), "decorative".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_ne!(styled.styles.display, Display::None, "aria-label should not hide elements");
+    }
+
+    #[test]
     fn bgcolor_presentational_hint_applies_to_descendants() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
