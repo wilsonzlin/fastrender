@@ -2892,7 +2892,18 @@ fn resolve_length_for_border_image(
     root_font_size: f32,
     viewport: Option<(f32, f32)>,
 ) -> f32 {
-    let (vw, vh) = viewport.unwrap_or((0.0, 0.0));
+    let needs_viewport = len.unit.is_viewport_relative()
+        || len
+            .calc
+            .as_ref()
+            .map(|c| c.has_viewport_relative())
+            .unwrap_or(false);
+    let (vw, vh) = match viewport {
+        Some(vp) => vp,
+        None if needs_viewport => (f32::NAN, f32::NAN),
+        None => (0.0, 0.0),
+    };
+
     len.resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
         .unwrap_or_else(|| {
             if len.unit.is_absolute() {
@@ -3489,7 +3500,7 @@ mod tests {
         BorderStyle as CssBorderStyle, TextDecorationLine, TextDecorationThickness, TextEmphasisFill,
         TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     };
-    use crate::style::values::Length;
+    use crate::style::values::{CalcLength, Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::tree::fragment_tree::FragmentNode;
     use std::sync::Arc;
@@ -3637,6 +3648,18 @@ mod tests {
         assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 0, 255));
         // Inside the original rect stays untouched.
         assert_eq!(pixel(&pixmap, 3, 3), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn viewport_relative_border_image_length_requires_viewport() {
+        // 10vw should resolve to 20px with a 200px viewport, and remain unresolved without one.
+        let len = Length::calc(CalcLength::single(LengthUnit::Vw, 10.0));
+
+        let resolved = resolve_length_for_border_image(&len, 100.0, 16.0, 16.0, Some((200.0, 100.0)));
+        assert!((resolved - 20.0).abs() < 0.001);
+
+        let unresolved = resolve_length_for_border_image(&len, 100.0, 16.0, 16.0, None);
+        assert_eq!(unresolved, 0.0);
     }
 
     #[test]
