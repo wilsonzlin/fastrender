@@ -433,7 +433,11 @@ impl ImageCache {
     pub fn render_svg_to_image(&self, svg_content: &str) -> Result<(DynamicImage, Option<f32>, bool)> {
         use resvg::usvg;
 
-        let parsed_ratio = svg_intrinsic_aspect_ratio(svg_content);
+        const DEFAULT_WIDTH: f32 = 300.0;
+        const DEFAULT_HEIGHT: f32 = 150.0;
+
+        let (meta_width, meta_height, meta_ratio, aspect_ratio_none) =
+            svg_intrinsic_metadata(svg_content).unwrap_or((None, None, None, false));
 
         // Parse SVG
         let options = usvg::Options::default();
@@ -445,41 +449,60 @@ impl ImageCache {
         })?;
 
         let size = tree.size();
-        let width = size.width() as u32;
-        let height = size.height() as u32;
-
-        // Handle zero-size SVGs
-        if width == 0 || height == 0 {
-            return Err(Error::Render(RenderError::CanvasCreationFailed { width, height }));
+        let source_width = size.width();
+        let source_height = size.height();
+        if source_width <= 0.0 || source_height <= 0.0 {
+            return Err(Error::Render(RenderError::CanvasCreationFailed {
+                width: source_width as u32,
+                height: source_height as u32,
+            }));
         }
 
-        // Render SVG to pixmap
-        let mut pixmap = tiny_skia::Pixmap::new(width, height)
-            .ok_or(Error::Render(RenderError::CanvasCreationFailed { width, height }))?;
+        let ratio = meta_ratio.filter(|r| *r > 0.0);
+        let (target_width, target_height) = match (meta_width.filter(|w| *w > 0.0), meta_height.filter(|h| *h > 0.0), ratio) {
+            (Some(w), Some(h), _) => (w, h),
+            (Some(w), None, Some(r)) => (w, (w / r).max(1.0)),
+            (None, Some(h), Some(r)) => ((h * r).max(1.0), h),
+            (Some(w), None, None) => (w, DEFAULT_HEIGHT),
+            (None, Some(h), None) => (DEFAULT_WIDTH, h),
+            (None, None, Some(r)) => (DEFAULT_WIDTH, (DEFAULT_WIDTH / r).max(1.0)),
+            (None, None, None) => (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+        };
 
-        resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+        let render_width = target_width.max(1.0).round() as u32;
+        let render_height = target_height.max(1.0).round() as u32;
+
+        // Render SVG to pixmap, scaling to the target intrinsic dimensions when needed
+        let mut pixmap = tiny_skia::Pixmap::new(render_width, render_height)
+            .ok_or(Error::Render(RenderError::CanvasCreationFailed { width: render_width, height: render_height }))?;
+
+        let scale_x = target_width / source_width;
+        let scale_y = target_height / source_height;
+        let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
 
         // Convert pixmap to image
         let rgba_data = pixmap.take();
-        let img = image::RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
+        let img = image::RgbaImage::from_raw(render_width, render_height, rgba_data).ok_or_else(|| {
             Error::Image(ImageError::DecodeFailed {
                 url: "SVG content".to_string(),
-            reason: "Failed to create image from SVG pixmap".to_string(),
-        })
+                reason: "Failed to create image from SVG pixmap".to_string(),
+            })
         })?;
 
-        let ratio = match parsed_ratio {
-            Some(r) => r,
-            None => {
-                if height > 0 {
-                    Some(width as f32 / height as f32)
+        let ratio = if aspect_ratio_none {
+            None
+        } else {
+            ratio.or_else(|| {
+                if render_height > 0 {
+                    Some(render_width as f32 / render_height as f32)
                 } else {
                     None
                 }
-            }
+            })
         };
 
-        Ok((image::DynamicImage::ImageRgba8(img), ratio, matches!(parsed_ratio, Some(None))))
+        Ok((image::DynamicImage::ImageRgba8(img), ratio, aspect_ratio_none))
     }
 }
 
@@ -505,50 +528,51 @@ fn parse_svg_length(value: &str) -> Option<f32> {
     trimmed[..end].parse::<f32>().ok()
 }
 
-/// Returns `Some(None)` when the SVG explicitly disables aspect-ratio preservation via
-/// `preserveAspectRatio="none"`, `Some(Some(ratio))` when a ratio can be determined, and `None`
-/// when parsing fails.
-fn svg_intrinsic_aspect_ratio(svg_content: &str) -> Option<Option<f32>> {
+/// Returns intrinsic metadata extracted from the SVG root element: explicit width/height when
+/// present (absolute units only), an intrinsic aspect ratio (if not disabled), and whether
+/// preserveAspectRatio="none" was specified.
+fn svg_intrinsic_metadata(svg_content: &str) -> Option<(Option<f32>, Option<f32>, Option<f32>, bool)> {
     let doc = Document::parse(svg_content).ok()?;
     let root = doc.root_element();
     if !root.tag_name().name().eq_ignore_ascii_case("svg") {
         return None;
     }
 
-    if let Some(par) = root.attribute("preserveAspectRatio") {
-        if par
-            .split_whitespace()
-            .next()
-            .map(|v| v.eq_ignore_ascii_case("none"))
-            .unwrap_or(false)
-        {
-            return Some(None);
-        }
-    }
+    let aspect_ratio_none = root
+        .attribute("preserveAspectRatio")
+        .and_then(|par| par.split_whitespace().next())
+        .map(|v| v.eq_ignore_ascii_case("none"))
+        .unwrap_or(false);
 
     let width = root.attribute("width").and_then(parse_svg_length);
     let height = root.attribute("height").and_then(parse_svg_length);
-    if let (Some(w), Some(h)) = (width, height) {
-        if h > 0.0 {
-            return Some(Some(w / h));
-        }
-    }
 
-    if let Some(view_box) = root.attribute("viewBox") {
-        let mut parts = view_box
-            .split(|c: char| c == ',' || c.is_whitespace())
-            .filter(|s| !s.is_empty())
-            .filter_map(|s| s.parse::<f32>().ok());
-        let _ = parts.next();
-        let _ = parts.next();
-        if let (Some(w), Some(h)) = (parts.next(), parts.next()) {
+    let mut ratio = None;
+    if !aspect_ratio_none {
+        if let (Some(w), Some(h)) = (width, height) {
             if h > 0.0 {
-                return Some(Some(w / h));
+                ratio = Some(w / h);
+            }
+        }
+
+        if ratio.is_none() {
+            if let Some(view_box) = root.attribute("viewBox") {
+                let mut parts = view_box
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .filter(|s| !s.is_empty())
+                    .filter_map(|s| s.parse::<f32>().ok());
+                let _ = parts.next();
+                let _ = parts.next();
+                if let (Some(w), Some(h)) = (parts.next(), parts.next()) {
+                    if h > 0.0 {
+                        ratio = Some(w / h);
+                    }
+                }
             }
         }
     }
 
-    None
+    Some((width, height, ratio, aspect_ratio_none))
 }
 
 // ============================================================================
@@ -612,6 +636,43 @@ mod tests {
     use image::RgbaImage;
     use std::path::PathBuf;
     use std::time::SystemTime;
+    use crate::style::types::OrientationTransform;
+
+    #[test]
+    fn svg_width_height_set_intrinsic_size_and_ratio() {
+        let cache = ImageCache::new();
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100'></svg>";
+        let img = cache.render_svg(svg).expect("rendered");
+
+        assert_eq!(img.width(), 200);
+        assert_eq!(img.height(), 100);
+        assert_eq!(img.intrinsic_ratio(OrientationTransform::IDENTITY), Some(2.0));
+        assert!(!img.aspect_ratio_none);
+    }
+
+    #[test]
+    fn svg_viewbox_defaults_to_300x150_with_ratio() {
+        let cache = ImageCache::new();
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 20'></svg>";
+        let img = cache.render_svg(svg).expect("rendered");
+
+        assert_eq!(img.width(), 300);
+        assert_eq!(img.height(), 150);
+        assert_eq!(img.intrinsic_ratio(OrientationTransform::IDENTITY), Some(2.0));
+        assert!(!img.aspect_ratio_none);
+    }
+
+    #[test]
+    fn svg_preserve_aspect_ratio_none_disables_ratio() {
+        let cache = ImageCache::new();
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 50' preserveAspectRatio='none'></svg>";
+        let img = cache.render_svg(svg).expect("rendered");
+
+        assert_eq!(img.width(), 300);
+        assert_eq!(img.height(), 150);
+        assert!(img.aspect_ratio_none);
+        assert_eq!(img.intrinsic_ratio(OrientationTransform::IDENTITY), None);
+    }
 
     #[test]
     fn render_inline_svg_returns_image() {

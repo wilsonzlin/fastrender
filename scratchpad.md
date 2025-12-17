@@ -1,3 +1,5 @@
+- Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
+- SVG intrinsic sizing: render_svg now falls back to 300×150 with viewBox-derived aspect ratios when width/height are absent, preserves preserveAspectRatio="none", and tests cover width/height, viewBox-only, and aspect-ratio none cases.
 # Scratchpad – rendering engine session notes
 - Scroll snapping now honors scroll-padding and scroll-margin: CSS parsing/cascade accept physical scroll-padding/scroll-margin properties, layout fingerprints include them, and snap target computation accounts for container padding insets and target margins. Added scroll snap regressions for padding/margin alignment.
 - Color-scheme now inherits through the cascade: `inherit_styles` copies the computed color-scheme to children, and a regression (`color_scheme_inherits_to_descendants`) ensures author-supported schemes propagate. `cargo test color_scheme_inherits_to_descendants --quiet` passes. Push previously timed out; rebase in progress.
