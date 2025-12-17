@@ -349,7 +349,6 @@ fn render_once(
     scroll_y: u32,
     dpr: f32,
 ) -> Result<()> {
-    let _ = scroll_x; // horizontal scroll not yet supported by the renderer API
     println!("Fetching HTML from: {}", url);
     let (html_bytes, html_content_type) = fetch_bytes(url)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
