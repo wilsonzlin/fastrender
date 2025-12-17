@@ -2227,6 +2227,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "user-select" => styles.user_select = source.user_select,
         "scrollbar-width" => styles.scrollbar_width = source.scrollbar_width,
         "scrollbar-color" => styles.scrollbar_color = source.scrollbar_color,
+        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
             styles.vertical_align_specified = source.vertical_align_specified;
@@ -11178,77 +11179,6 @@ mod tests {
     }
 
     #[test]
-    fn forced_color_adjust_parses_and_defaults() {
-        let mut style = ComputedStyle::default();
-        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
-
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "forced-color-adjust".into(),
-                value: PropertyValue::Keyword("none".into()),
-                raw_value: String::new(),
-                important: false,
-            },
-            &ComputedStyle::default(),
-            16.0,
-            16.0,
-        );
-        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::None));
-
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "forced-color-adjust".into(),
-                value: PropertyValue::Keyword("preserve-parent-color".into()),
-                raw_value: String::new(),
-                important: false,
-            },
-            &ComputedStyle::default(),
-            16.0,
-            16.0,
-        );
-        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::PreserveParentColor));
-    }
-
-    #[test]
-    fn forced_color_adjust_inherit_and_initial() {
-        let parent = ComputedStyle {
-            forced_color_adjust: ForcedColorAdjust::None,
-            ..ComputedStyle::default()
-        };
-        let mut style = ComputedStyle::default();
-
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "forced-color-adjust".into(),
-                value: PropertyValue::Keyword("inherit".into()),
-                raw_value: String::new(),
-                important: false,
-            },
-            &parent,
-            16.0,
-            16.0,
-        );
-        assert_eq!(style.forced_color_adjust, parent.forced_color_adjust);
-
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "forced-color-adjust".into(),
-                value: PropertyValue::Keyword("initial".into()),
-                raw_value: String::new(),
-                important: false,
-            },
-            &parent,
-            16.0,
-            16.0,
-        );
-        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
-    }
-
-    #[test]
     fn text_rendering_parses_keywords() {
         let mut style = ComputedStyle::default();
 
@@ -13093,6 +13023,20 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".to_string(),
+                value: PropertyValue::Keyword("preserve-parent-color".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::PreserveParentColor));
 
         let parent = ComputedStyle {
             forced_color_adjust: ForcedColorAdjust::None,
