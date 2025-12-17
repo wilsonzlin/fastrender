@@ -31,7 +31,7 @@ use url::Url;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
-fn fetch_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
+fn fetch_bytes(url: &str, timeout: Option<Duration>) -> Result<(Vec<u8>, Option<String>)> {
     // Handle file:// URLs
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
@@ -40,9 +40,7 @@ fn fetch_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
     }
 
     // Configure agent with timeout for ureq 3.x
-    let config = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_secs(30)))
-        .build();
+    let config = ureq::Agent::config_builder().timeout_global(timeout).build();
     let agent: ureq::Agent = config.into();
 
     let mut current = url.to_string();
@@ -389,9 +387,19 @@ fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
     None
 }
 
-fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_x: u32, scroll_y: u32, dpr: f32) -> Result<()> {
+fn render_once(
+    url: &str,
+    output: &str,
+    width: u32,
+    height: u32,
+    scroll_x: u32,
+    scroll_y: u32,
+    dpr: f32,
+    timeout_secs: Option<u64>,
+) -> Result<()> {
     println!("Fetching HTML from: {}", url);
-    let (html_bytes, html_content_type) = fetch_bytes(url)?;
+    let timeout = timeout_secs.map(Duration::from_secs);
+    let (html_bytes, html_content_type) = fetch_bytes(url, timeout)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
     let resource_base = infer_base_url(&html, url).into_owned();
 
@@ -416,14 +424,14 @@ fn render_once(url: &str, output: &str, width: u32, height: u32, scroll_x: u32, 
     for css_url in css_links {
         println!("Fetching CSS from: {}", css_url);
         seen_imports.insert(css_url.clone());
-        match fetch_bytes(&css_url) {
+        match fetch_bytes(&css_url, timeout) {
             Ok((bytes, content_type)) => {
                 let css_text = decode_css_bytes(&bytes, content_type.as_deref());
                 let rewritten = absolutize_css_urls(&css_text, &css_url);
                 let inlined = inline_imports(
                     &rewritten,
                     &css_url,
-                    &|u| fetch_bytes(u).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref())),
+                    &|u| fetch_bytes(u, timeout).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref())),
                     &mut seen_imports,
                 );
                 combined_css.push_str(&inlined);
@@ -532,6 +540,7 @@ fn main() -> Result<()> {
                 scroll_x,
                 scroll_y,
                 dpr,
+                timeout_secs,
             ));
         })
         .expect("spawn render worker");
