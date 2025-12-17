@@ -1108,6 +1108,7 @@ fn is_inherited_property(name: &str) -> bool {
             | "cursor"
             | "visibility"
             | "pointer-events"
+            | "user-select"
             | "direction"
             | "writing-mode"
             | "font"
