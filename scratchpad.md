@@ -1356,3 +1356,4 @@ Actionable borrowings:
 - Painter now supports a scroll/translation offset and FastRender exposes `render_html_with_scroll`/`render_to_png_with_scroll`; the fetch_and_render CLI scroll_y argument now applies that offset instead of warning. Added regression `render_html_with_scroll_offsets_viewport` covering the shifted viewport.
 - render_pages CLI gained `--scroll-y` support and passes the offset through `render_to_png_with_scroll`; per-page logs include the scroll value.
 - Added prefers-contrast media coverage: MediaContext setter, evaluation regression, and env override invalid-value guard.
+- UA link states: added user-agent CSS defaults for `a:link`/`:visited`/`:active` colors, and pseudo matching can be toggled via `data-fastr-visited`/`data-fastr-active` for testing. Cascade/DOM regressions cover unvisited (blue/underline/pointer), visited (purple), and active (red) defaults.
