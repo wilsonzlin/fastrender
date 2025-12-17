@@ -7543,6 +7543,19 @@ mod tests {
     }
 
     #[test]
+    fn marker_gap_defaults_to_half_em_when_no_inline_margin() {
+        let mut style = ComputedStyle::default();
+        style.font_size = 20.0;
+
+        let gap = marker_inline_gap(&style, &FontContext::new(), Size::new(800.0, 600.0));
+        assert!(
+            (9.5..10.5).contains(&gap),
+            "expected default 0.5em gap when inline-end margin is zero, got {}",
+            gap
+        );
+    }
+
+    #[test]
     fn upright_vertical_forces_ltr_base_direction() {
         let mut style = ComputedStyle::default();
         style.direction = crate::style::types::Direction::Rtl;
