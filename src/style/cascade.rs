@@ -637,6 +637,8 @@ pub fn apply_styles_with_media_target_and_imports(
             } else {
                 None
             };
+            let user_color_scheme =
+                media_ctx.prefers_color_scheme.unwrap_or(ColorScheme::NoPreference);
             apply_styles_internal(
                 dom,
                 &rule_index,
@@ -646,9 +648,7 @@ pub fn apply_styles_with_media_target_and_imports(
                 16.0,
                 16.0,
                 Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
-                media_ctx
-                    .prefers_color_scheme
-                    .unwrap_or(ColorScheme::NoPreference),
+                user_color_scheme,
                 &mut node_counter,
                 &mut ancestor_ids,
                 container_ctx,

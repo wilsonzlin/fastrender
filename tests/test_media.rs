@@ -4,6 +4,34 @@
 //! real-world use cases and CSS specification requirements.
 
 use fastrender::style::media::{ColorScheme, MediaContext, MediaQuery};
+use std::env;
+
+struct EnvGuard {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl EnvGuard {
+    fn new(key: &'static str, value: Option<&str>) -> Self {
+        let prev = env::var(key).ok();
+        if let Some(v) = value {
+            env::set_var(key, v);
+        } else {
+            env::remove_var(key);
+        }
+        EnvGuard { key, prev }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        if let Some(v) = &self.prev {
+            env::set_var(self.key, v);
+        } else {
+            env::remove_var(self.key);
+        }
+    }
+}
 
 // ============================================================================
 // Responsive Web Design Tests
@@ -376,6 +404,36 @@ fn test_prefers_reduced_motion() {
     // User prefers reduced motion
     assert!(reduced_ctx.evaluate(&reduce_query));
     assert!(!reduced_ctx.evaluate(&no_pref_query));
+}
+
+/// Tests prefers-reduced-transparency media feature
+#[test]
+fn test_prefers_reduced_transparency() {
+    let normal_ctx = MediaContext::screen(1024.0, 768.0);
+    let reduced_ctx = MediaContext::screen(1024.0, 768.0).with_reduced_transparency(true);
+
+    let reduce_query = MediaQuery::parse("(prefers-reduced-transparency: reduce)").unwrap();
+    let no_pref_query = MediaQuery::parse("(prefers-reduced-transparency: no-preference)").unwrap();
+
+    assert!(!normal_ctx.evaluate(&reduce_query));
+    assert!(normal_ctx.evaluate(&no_pref_query));
+
+    assert!(reduced_ctx.evaluate(&reduce_query));
+    assert!(!reduced_ctx.evaluate(&no_pref_query));
+}
+
+/// Tests env override for prefers-reduced-transparency
+#[test]
+fn env_override_prefers_reduced_transparency() {
+    let guard = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("reduce"));
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(ctx.prefers_reduced_transparency);
+    drop(guard);
+
+    let guard_invalid = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("invalid"));
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(!ctx.prefers_reduced_transparency);
+    drop(guard_invalid);
 }
 
 // ============================================================================
