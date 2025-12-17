@@ -40,11 +40,11 @@ use types::{
     FontVariantPosition, FontVariationSetting, FontWeight, GridTrack, HyphensMode, ImageOrientation, ImageRendering,
     ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
     ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
-    OverscrollBehavior, PointerEvents, ScrollBehavior, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright,
-    TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify,
-    TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox,
-    TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak,
-    WritingMode,
+    OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, TabSize, TableLayout, TextAlign, TextAlignLast,
+    TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent,
+    TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction,
+    TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange,
+    WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -452,6 +452,8 @@ pub struct ComputedStyle {
     pub will_change: WillChange,
     /// CSS containment
     pub containment: Containment,
+    /// Whether user selection is enabled
+    pub user_select: UserSelect,
 
     // Visual effects
     pub opacity: f32,
@@ -460,6 +462,9 @@ pub struct ComputedStyle {
     pub transform: Vec<Transform>,
     pub transform_box: TransformBox,
     pub transform_origin: TransformOrigin,
+    pub transform_style: TransformStyle,
+    pub backface_visibility: BackfaceVisibility,
+    pub resize: Resize,
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
     pub border_spacing_horizontal: Length,
@@ -682,6 +687,9 @@ impl Default for ComputedStyle {
                 x: Length::percent(50.0),
                 y: Length::percent(50.0),
             },
+            transform_style: TransformStyle::Flat,
+            backface_visibility: BackfaceVisibility::Visible,
+            resize: Resize::None,
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             border_spacing_horizontal: Length::px(0.0),

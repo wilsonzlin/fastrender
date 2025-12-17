@@ -689,6 +689,12 @@ pub enum UserSelect {
     Contain,
 }
 
+impl Default for UserSelect {
+    fn default() -> Self {
+        UserSelect::Auto
+    }
+}
+
 impl Default for ScrollBehavior {
     fn default() -> Self {
         ScrollBehavior::Auto
@@ -706,6 +712,23 @@ pub enum OverscrollBehavior {
 impl Default for OverscrollBehavior {
     fn default() -> Self {
         OverscrollBehavior::Auto
+    }
+}
+
+/// CSS `resize` property
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resize {
+    None,
+    Both,
+    Horizontal,
+    Vertical,
+    Block,
+    Inline,
+}
+
+impl Default for Resize {
+    fn default() -> Self {
+        Resize::None
     }
 }
 

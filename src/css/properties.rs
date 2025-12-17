@@ -234,6 +234,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "place-self",
     "position",
     "quotes",
+    "resize",
     "scroll-behavior",
     "right",
     "tab-size",

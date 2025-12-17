@@ -1272,6 +1272,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "overflow-y" => styles.overflow_y = source.overflow_y,
         "position" => styles.position = source.position,
         "appearance" => styles.appearance = source.appearance.clone(),
+        "resize" => styles.resize = source.resize,
         "box-sizing" => styles.box_sizing = source.box_sizing,
         "top" => set_inset_side(styles, crate::style::PhysicalSide::Top, source.top, order),
         "right" => set_inset_side(styles, crate::style::PhysicalSide::Right, source.right, order),
@@ -5672,6 +5673,19 @@ pub fn apply_declaration_with_base(
                     }
                 }
                 _ => {}
+            }
+        }
+        "resize" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.resize = match kw.to_ascii_lowercase().as_str() {
+                    "none" => Resize::None,
+                    "both" => Resize::Both,
+                    "horizontal" => Resize::Horizontal,
+                    "vertical" => Resize::Vertical,
+                    "block" => Resize::Block,
+                    "inline" => Resize::Inline,
+                    _ => styles.resize,
+                };
             }
         }
 
@@ -11212,6 +11226,54 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.overscroll_behavior_y, OverscrollBehavior::Auto));
+    }
+
+    #[test]
+    fn resize_parses_keywords() {
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "resize".into(),
+                value: PropertyValue::Keyword("both".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.resize, Resize::Both));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "resize".into(),
+                value: PropertyValue::Keyword("inline".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.resize, Resize::Inline));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "resize".into(),
+                value: PropertyValue::Keyword("invalid".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        // Should preserve previous value on invalid input
+        assert!(matches!(style.resize, Resize::Inline));
     }
 
     #[test]
