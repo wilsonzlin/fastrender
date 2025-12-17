@@ -3783,6 +3783,46 @@ mod tests {
     }
 
     #[test]
+    fn ordered_list_value_attribute_respected_with_ua_defaults() {
+        let dom = crate::dom::parse_html(r#"<ol start="5"><li value="10">one</li><li>two</li></ol>"#).unwrap();
+        let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+        let tree = generate_box_tree(&styled);
+
+        let markers: Vec<String> = BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
+            .into_iter()
+            .filter_map(|node| match &node.box_type {
+                BoxType::Marker(marker) => match &marker.content {
+                    MarkerContent::Text(text) => Some(text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(markers, vec!["10 ", "11 "]);
+    }
+
+    #[test]
+    fn reversed_list_value_attribute_counts_down_with_ua_defaults() {
+        let dom = crate::dom::parse_html(r#"<ol reversed><li value="5">one</li><li>two</li><li>three</li></ol>"#).unwrap();
+        let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+        let tree = generate_box_tree(&styled);
+
+        let markers: Vec<String> = BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
+            .into_iter()
+            .filter_map(|node| match &node.box_type {
+                BoxType::Marker(marker) => match &marker.content {
+                    MarkerContent::Text(text) => Some(text.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(markers, vec!["5 ", "4 ", "3 "]);
+    }
+
+    #[test]
     fn test_iframe_replaced_element() {
         let generator = BoxGenerator::new();
         let style = default_style();
