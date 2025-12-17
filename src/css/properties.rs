@@ -492,7 +492,18 @@ fn parse_angle_component(parser: &mut Parser) -> Result<f32, ()> {
                 || name.eq_ignore_ascii_case("max")
                 || name.eq_ignore_ascii_case("clamp") =>
         {
-            let component = parser.parse_nested_block(parse_calc_angle_sum).map_err(|_| ())?;
+            let func = name.as_ref().to_ascii_lowercase();
+            let component = match func.as_str() {
+                "calc" => parser.parse_nested_block(parse_calc_angle_sum).map_err(|_| ())?,
+                "min" => parser
+                    .parse_nested_block(|block| parse_min_max_angle(block, MathFn::Min))
+                    .map_err(|_| ())?,
+                "max" => parser
+                    .parse_nested_block(|block| parse_min_max_angle(block, MathFn::Max))
+                    .map_err(|_| ())?,
+                "clamp" => parser.parse_nested_block(parse_clamp_angle).map_err(|_| ())?,
+                _ => return Err(()),
+            };
             if component.is_angle {
                 Ok(component.value)
             } else {
@@ -1934,6 +1945,21 @@ mod tests {
 
         match &transforms[1] {
             Transform::Rotate(deg) => assert!((*deg - 60.0).abs() < 0.01),
+            other => panic!("unexpected transform {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_transform_min_max_clamp_angles() {
+        let min_rot = parse_transform_list("rotate(min(90deg, 180deg))").expect("min angle");
+        match &min_rot[0] {
+            Transform::Rotate(deg) => assert!((*deg - 90.0).abs() < 0.01),
+            other => panic!("unexpected transform {other:?}"),
+        }
+
+        let clamp_rot = parse_transform_list("rotate(clamp(10deg, 20deg, 15deg))").expect("clamp angle");
+        match &clamp_rot[0] {
+            Transform::Rotate(deg) => assert!((*deg - 15.0).abs() < 0.01),
             other => panic!("unexpected transform {other:?}"),
         }
     }
