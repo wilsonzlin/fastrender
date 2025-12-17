@@ -4580,6 +4580,34 @@ mod tests {
     }
 
     #[test]
+    fn background_image_rendering_pixelated_sets_nearest_filter_quality() {
+        let url = data_url_for_color([255, 0, 0, 255]);
+
+        let mut style = ComputedStyle::default();
+        style.image_rendering = ImageRendering::Pixelated;
+        style.background_color = Rgba::TRANSPARENT;
+        style.background_layers = vec![BackgroundLayer {
+            image: Some(BackgroundImage::Url(url)),
+            repeat: BackgroundRepeat::no_repeat(),
+            ..BackgroundLayer::default()
+        }];
+
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+
+        let list = DisplayListBuilder::new().build(&fragment);
+        let image = list
+            .items()
+            .iter()
+            .find_map(|item| match item {
+                DisplayItem::Image(img) => Some(img),
+                _ => None,
+            })
+            .expect("background image should emit an image item");
+
+        assert_eq!(image.filter_quality, ImageFilterQuality::Nearest);
+    }
+
+    #[test]
     fn filters_resolve_font_relative_lengths_in_display_list() {
         let mut style = ComputedStyle::default();
         style.font_size = 20.0;

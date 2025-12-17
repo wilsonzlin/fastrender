@@ -462,7 +462,7 @@ This is a living document that will be updated as features are implemented.
 | `tab-size` | P2 | ❌ | CSS3 Text | Text rendering | |
 | `object-fit` | P2 | ❌ | CSS3 Images | Image rendering | contain, cover |
 | `object-position` | P2 | ❌ | CSS3 Images | Image rendering | |
-| `image-rendering` | P2 | ❌ | CSS3 Images | Image rendering | pixelated, crisp-edges |
+| `image-rendering` | P2 | ✅ | CSS3 Images | Image rendering | pixelated, crisp-edges |
 | `will-change` | P3 | 🚫 | CSS Will Change | Optimization hint | Not needed for static |
 | `pointer-events` | P2 | 🚫 | SVG | Not applicable | UI only |
 | `user-select` | P3 | 🚫 | CSS3 UI | Not applicable | UI only |
