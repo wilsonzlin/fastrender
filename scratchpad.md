@@ -6,6 +6,7 @@
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Table intrinsic: added regression ensuring percent padding on table cells is ignored when the table width is indefinite (percent padding treated as auto without a base).
+# Table intrinsic: percent padding on cells counts toward intrinsic widths when the table width is definite; regression uses 200px table with 10% padding per side to add 40px.
 # Color-scheme inheritance still validated; further palette audits ongoing.
 # Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
 # Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
