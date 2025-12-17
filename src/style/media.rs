@@ -1975,83 +1975,83 @@ impl MediaContext {
         match feature {
             // Width features
             MediaFeature::Width(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
                 (self.viewport_width - target).abs() < 0.5
             }
             MediaFeature::MinWidth(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
                 self.viewport_width >= target
             }
             MediaFeature::MaxWidth(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
                 self.viewport_width <= target
             }
 
             // Inline-size (alias of width for container queries)
             MediaFeature::InlineSize(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
                 (self.viewport_width - target).abs() < 0.5
             }
             MediaFeature::MinInlineSize(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
                 self.viewport_width >= target
             }
             MediaFeature::MaxInlineSize(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_width, self.viewport_height);
                 self.viewport_width <= target
             }
 
             // Height features
             MediaFeature::Height(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
                 (self.viewport_height - target).abs() < 0.5
             }
             MediaFeature::MinHeight(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
                 self.viewport_height >= target
             }
             MediaFeature::MaxHeight(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
                 self.viewport_height <= target
             }
 
             // Block-size (alias of height for container queries)
             MediaFeature::BlockSize(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
                 (self.viewport_height - target).abs() < 0.5
             }
             MediaFeature::MinBlockSize(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
                 self.viewport_height >= target
             }
             MediaFeature::MaxBlockSize(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.viewport_height, self.viewport_width);
                 self.viewport_height <= target
             }
 
             // Device dimensions
             MediaFeature::DeviceWidth(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.device_width, self.device_height);
                 (self.device_width - target).abs() < 0.5
             }
             MediaFeature::MinDeviceWidth(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.device_width, self.device_height);
                 self.device_width >= target
             }
             MediaFeature::MaxDeviceWidth(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.device_width, self.device_height);
                 self.device_width <= target
             }
             MediaFeature::DeviceHeight(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.device_height, self.device_width);
                 (self.device_height - target).abs() < 0.5
             }
             MediaFeature::MinDeviceHeight(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.device_height, self.device_width);
                 self.device_height >= target
             }
             MediaFeature::MaxDeviceHeight(length) => {
-                let target = self.resolve_length(length);
+                let target = self.resolve_length(length, self.device_height, self.device_width);
                 self.device_height <= target
             }
 
@@ -2176,27 +2176,27 @@ impl MediaContext {
             },
             MediaFeature::Range { feature, op, value } => match (feature, value) {
                 (RangeFeature::Width, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len);
+                    let target = self.resolve_length(len, self.viewport_width, self.viewport_height);
                     compare_with_op(*op, self.viewport_width, target)
                 }
                 (RangeFeature::InlineSize, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len);
+                    let target = self.resolve_length(len, self.viewport_width, self.viewport_height);
                     compare_with_op(*op, self.viewport_width, target)
                 }
                 (RangeFeature::BlockSize, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len);
+                    let target = self.resolve_length(len, self.viewport_height, self.viewport_width);
                     compare_with_op(*op, self.viewport_height, target)
                 }
                 (RangeFeature::Height, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len);
+                    let target = self.resolve_length(len, self.viewport_height, self.viewport_width);
                     compare_with_op(*op, self.viewport_height, target)
                 }
                 (RangeFeature::DeviceWidth, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len);
+                    let target = self.resolve_length(len, self.device_width, self.device_height);
                     compare_with_op(*op, self.device_width, target)
                 }
                 (RangeFeature::DeviceHeight, RangeValue::Length(len)) => {
-                    let target = self.resolve_length(len);
+                    let target = self.resolve_length(len, self.device_height, self.device_width);
                     compare_with_op(*op, self.device_height, target)
                 }
                 (RangeFeature::AspectRatio, RangeValue::AspectRatio(w, h)) => {
@@ -2218,7 +2218,7 @@ impl MediaContext {
         }
     }
 
-    fn resolve_length(&self, length: &Length) -> f32 {
+    fn resolve_length(&self, length: &Length, inline_base: f32, block_base: f32) -> f32 {
         // For media/container queries, resolve lengths to pixels using the
         // context viewport and base font size (em/rem derived from the query context).
         use crate::style::values::LengthUnit;
@@ -2232,9 +2232,9 @@ impl MediaContext {
         if length.unit == LengthUnit::Calc {
             return length
                 .resolve_with_context(
-                    Some(self.viewport_width),
-                    self.viewport_width,
-                    self.viewport_height,
+                    Some(inline_base),
+                    inline_base,
+                    block_base,
                     base_font,
                     base_font,
                 )
@@ -2244,7 +2244,7 @@ impl MediaContext {
             LengthUnit::Px => length.value,
             LengthUnit::Em => length.value * base_font,
             LengthUnit::Rem => length.value * base_font,
-            LengthUnit::Percent => length.value / 100.0 * self.viewport_width,
+            LengthUnit::Percent => length.value / 100.0 * inline_base,
             LengthUnit::Vw => length.value / 100.0 * self.viewport_width,
             LengthUnit::Vh => length.value / 100.0 * self.viewport_height,
             LengthUnit::Vmin => {
@@ -3013,6 +3013,20 @@ mod tests {
     #[test]
     fn test_media_feature_rejects_negative_width() {
         assert!(MediaFeature::parse("max-width", Some("-10px")).is_err());
+    }
+
+    #[test]
+    fn range_percentage_uses_block_axis_base_for_height() {
+        let ctx = MediaContext {
+            viewport_width: 50.0,
+            viewport_height: 100.0,
+            ..MediaContext::screen(50.0, 100.0)
+        };
+        let query = MediaQuery::parse("(min-height: 60vh)").expect("parse query");
+        assert!(ctx.evaluate(&query));
+
+        let query_fail = MediaQuery::parse("(min-height: 120vh)").expect("parse query");
+        assert!(!ctx.evaluate(&query_fail));
     }
 
     #[test]
