@@ -52,7 +52,10 @@ use crate::layout::formatting_context::{
 };
 use crate::layout::inline::float_integration::InlineFloatIntegration;
 use crate::layout::profile::{layout_timer, LayoutKind};
-use crate::layout::utils::{border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length};
+use crate::layout::utils::{
+    border_size_from_box_sizing, compute_replaced_size, resolve_font_relative_length,
+    resolve_length_with_percentage_metrics,
+};
 use crate::style::display::FormattingContextType;
 use crate::style::types::{
     Direction, FontStyle, HyphensMode, LineBreak, ListStylePosition, OverflowWrap, TabSize, TextAlign,
@@ -3251,17 +3254,17 @@ fn resolve_length_for_width(
     font_context: &FontContext,
     viewport: crate::geometry::Size,
 ) -> f32 {
-    if length.unit.is_percentage() {
-        length.resolve_against(percentage_base).unwrap_or(0.0)
-    } else if length.unit.is_absolute() {
-        length.to_px()
-    } else if length.unit.is_viewport_relative() {
-        length
-            .resolve_with_viewport(viewport.width, viewport.height)
-            .unwrap_or(0.0)
-    } else {
-        resolve_font_relative_length(length, style, font_context)
-    }
+    let base = if percentage_base.is_finite() { Some(percentage_base) } else { None };
+    resolve_length_with_percentage_metrics(
+        length,
+        base,
+        viewport,
+        style.font_size,
+        style.root_font_size,
+        Some(style),
+        Some(font_context),
+    )
+    .unwrap_or(0.0)
 }
 
 fn resolve_length_with_percentage_inline(

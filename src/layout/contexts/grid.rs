@@ -44,7 +44,7 @@ use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::profile::{layout_timer, LayoutKind};
-use crate::layout::utils::{resolve_font_relative_length, resolve_scrollbar_width};
+use crate::layout::utils::{resolve_length_with_percentage_metrics, resolve_scrollbar_width};
 use crate::style::display::Display as CssDisplay;
 use crate::style::grid::validate_area_rectangles;
 use crate::style::types::{
@@ -152,17 +152,17 @@ impl GridFormattingContext {
     }
 
     fn resolve_length_for_width(&self, length: Length, percentage_base: f32, style: &ComputedStyle) -> f32 {
-        if length.unit.is_percentage() {
-            length.resolve_against(percentage_base).unwrap_or(0.0)
-        } else if length.unit.is_absolute() {
-            length.to_px()
-        } else if length.unit.is_viewport_relative() {
-            length
-                .resolve_with_viewport(self.viewport_size.width, self.viewport_size.height)
-                .unwrap_or_else(|| length.to_px())
-        } else {
-            resolve_font_relative_length(length, style, &self.font_context)
-        }
+        let base = if percentage_base.is_finite() { Some(percentage_base) } else { None };
+        resolve_length_with_percentage_metrics(
+            length,
+            base,
+            self.viewport_size,
+            style.font_size,
+            style.root_font_size,
+            Some(style),
+            Some(&self.font_context),
+        )
+        .unwrap_or(0.0)
     }
 
     /// Builds a Taffy tree from a BoxNode tree

@@ -28,9 +28,9 @@
 //!
 //! Reference: <https://www.w3.org/TR/CSS21/visudet.html#Computing_widths_and_margins>
 
-use crate::layout::utils::{content_size_from_box_sizing, resolve_scrollbar_width};
+use crate::layout::utils::{content_size_from_box_sizing, resolve_length_with_percentage, resolve_scrollbar_width};
 use crate::style::types::{Direction, Overflow};
-use crate::style::values::{Length, LengthUnit};
+use crate::style::values::Length;
 use crate::style::ComputedStyle;
 
 /// Result of width computation
@@ -403,34 +403,8 @@ fn resolve_length(
     root_font_size: f32,
     viewport: crate::geometry::Size,
 ) -> f32 {
-    if length.unit == LengthUnit::Calc {
-        return length
-            .resolve_with_context(
-                Some(containing_width),
-                viewport.width,
-                viewport.height,
-                font_size,
-                root_font_size,
-            )
-            .unwrap_or(0.0);
-    }
-    if length.unit.is_percentage() {
-        length.resolve_against(containing_width).unwrap_or(0.0)
-    } else if length.unit.is_absolute() {
-        length.to_px()
-    } else if length.unit.is_viewport_relative() {
-        length
-            .resolve_with_viewport(viewport.width, viewport.height)
-            .unwrap_or_else(|| length.to_px())
-    } else {
-        match length.unit {
-            LengthUnit::Em => length.value * font_size,
-            LengthUnit::Ex => length.value * font_size * 0.5,
-            LengthUnit::Ch => length.value * font_size * 0.5,
-            LengthUnit::Rem => length.value * root_font_size,
-            _ => length.value,
-        }
-    }
+    let base = if containing_width.is_finite() { Some(containing_width) } else { None };
+    resolve_length_with_percentage(length, base, viewport, font_size, root_font_size).unwrap_or(0.0)
 }
 
 #[cfg(test)]
@@ -438,6 +412,7 @@ mod tests {
     use super::*;
     use crate::geometry::Size;
     use crate::style::types::{BoxSizing, Direction, Overflow, ScrollbarWidth};
+    use crate::style::values::LengthUnit;
 
     fn default_style() -> ComputedStyle {
         ComputedStyle::default()

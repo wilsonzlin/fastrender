@@ -39,8 +39,8 @@ use crate::layout::formatting_context::{
 };
 use crate::layout::profile::{layout_timer, LayoutKind};
 use crate::layout::utils::{
-    border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_font_relative_length,
-    resolve_length_with_percentage, resolve_scrollbar_width,
+    border_size_from_box_sizing, compute_replaced_size, content_size_from_box_sizing, resolve_length_with_percentage,
+    resolve_length_with_percentage_metrics, resolve_scrollbar_width,
 };
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
@@ -2299,17 +2299,17 @@ fn resolve_length_for_width(
     font_context: &FontContext,
     viewport: crate::geometry::Size,
 ) -> f32 {
-    if length.unit.is_percentage() {
-        length.resolve_against(percentage_base).unwrap_or(0.0)
-    } else if length.unit.is_absolute() {
-        length.to_px()
-    } else if length.unit.is_viewport_relative() {
-        length
-            .resolve_with_viewport(viewport.width, viewport.height)
-            .unwrap_or_else(|| length.to_px())
-    } else {
-        resolve_font_relative_length(length, style, font_context)
-    }
+    let base = if percentage_base.is_finite() { Some(percentage_base) } else { None };
+    resolve_length_with_percentage_metrics(
+        length,
+        base,
+        viewport,
+        style.font_size,
+        style.root_font_size,
+        Some(style),
+        Some(font_context),
+    )
+    .unwrap_or(0.0)
 }
 
 fn horizontal_padding_and_borders(

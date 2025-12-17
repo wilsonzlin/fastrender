@@ -576,8 +576,10 @@ fn resolve_font_relative(len: Length, font_size: f32, root_font_size: f32) -> f3
 mod tests {
     use super::*;
     use crate::style::types::{BoxSizing, ScrollbarWidth};
-    use crate::style::values::{Length, LengthUnit};
+    use crate::style::values::{CalcLength, Length, LengthUnit};
     use crate::style::ComputedStyle;
+    use crate::PositionedStyle;
+    use crate::text::font_loader::FontContext;
     use crate::tree::box_tree::ReplacedBox;
 
     #[test]
@@ -614,6 +616,21 @@ mod tests {
         assert_eq!(
             resolve_offset(&value, 100.0, Size::new(800.0, 600.0), 16.0, 16.0),
             Some(50.0)
+        );
+    }
+
+    #[test]
+    fn resolve_offset_for_positioned_calc_percent_without_base_is_none() {
+        let calc = CalcLength::single(LengthUnit::Percent, 50.0)
+            .add_scaled(&CalcLength::single(LengthUnit::Px, 10.0), 1.0)
+            .expect("calc terms");
+        let length = Length::calc(calc);
+        let style = PositionedStyle::default();
+        let font_context = FontContext::new();
+
+        assert_eq!(
+            resolve_offset_for_positioned(&LengthOrAuto::Length(length), None, Size::new(800.0, 600.0), &style, &font_context),
+            None
         );
     }
 
