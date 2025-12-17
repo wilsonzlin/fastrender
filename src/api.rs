@@ -3310,7 +3310,7 @@ mod tests {
 
     #[test]
     fn sticky_without_offsets_does_not_move() {
-        let mut renderer = FastRender::new().unwrap();
+        let renderer = FastRender::new().unwrap();
 
         let mut root = FragmentNode::new(
             Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
