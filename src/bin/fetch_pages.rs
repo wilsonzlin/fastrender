@@ -114,6 +114,15 @@ fn parse_args() -> Config {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--help" | "-h" => {
+                println!("Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c]");
+                println!("\nOptions:");
+                println!("  --refresh           Re-fetch all pages even if cached");
+                println!("  --jobs N            Number of parallel fetches (default: num_cpus)");
+                println!("  --timeout SECONDS   Per-request timeout (default: 30)");
+                println!("  --pages a,b,c       Fetch only the listed pages (use url_to_filename stems)");
+                std::process::exit(0);
+            }
             "--refresh" => refresh = true,
             "--jobs" => {
                 if let Some(val) = args.next() {
