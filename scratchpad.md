@@ -1,3 +1,10 @@
+- Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes. Added media query invalid units regression and SVG percent dimension fallback regression; pushed.
+- SVG intrinsic sizing: render_svg now falls back to 300×150 with viewBox-derived aspect ratios when width/height are absent, preserves preserveAspectRatio="none", and tests cover width/height, viewBox-only, and aspect-ratio none cases.
+- Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse.
+- SVG percent width/height are ignored for intrinsic sizing: percent-specified dimensions fall back to default 300×150 while preserving viewBox aspect ratios; added regression.
+# Scratchpad – rendering engine session notes
+Idle; no current tasks. Available for new tasks.
+- Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 # Scratchpad – rendering engine session notes
 Idle; no current tasks. Available for new tasks.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
