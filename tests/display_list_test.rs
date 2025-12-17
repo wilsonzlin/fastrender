@@ -11,10 +11,10 @@ use fastrender::css::types::{Declaration, PropertyValue};
 use fastrender::style::properties::{apply_declaration, with_image_set_dpr};
 use fastrender::style::types::{
     BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
-    TextDecorationLine, WritingMode,
+    TextDecorationLine, TextDecorationSkipInk, WritingMode,
 };
 use fastrender::style::values::Length;
-use fastrender::text::pipeline::{Direction, GlyphPosition, RunRotation, ShapedRun};
+use fastrender::text::pipeline::{Direction, GlyphPosition, RunRotation, ShapedRun, ShapingPipeline};
 use fastrender::tree::box_tree::ReplacedType;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use fastrender::{
@@ -873,6 +873,92 @@ fn sideways_writing_mode_emits_vertical_text_and_decorations() {
     assert!(decoration.inline_vertical);
     assert_eq!(decoration.line_start, 0.0);
     assert_eq!(decoration.line_width, 40.0);
+}
+
+#[test]
+fn builder_skip_ink_carves_segments() {
+    let mut style = ComputedStyle::default();
+    style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+    style.font_size = 20.0;
+
+    let text = "gg";
+    let font_ctx = FontContext::new();
+    let shaper = ShapingPipeline::new();
+    let runs = match shaper.shape(text, &style, &font_ctx) {
+        Ok(r) if !r.is_empty() => r,
+        _ => return,
+    };
+
+    let fragment = FragmentNode::new_text_shaped(
+        Rect::from_xywh(0.0, 0.0, 60.0, 20.0),
+        text.to_string(),
+        15.0,
+        runs,
+        Arc::new(style),
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let deco = list
+        .items()
+        .iter()
+        .find_map(|i| match i {
+            DisplayItem::TextDecoration(d) => Some(d),
+            _ => None,
+        })
+        .expect("decoration item");
+
+    let underline = deco
+        .decorations
+        .first()
+        .and_then(|d| d.underline.as_ref())
+        .expect("underline present");
+
+    let segments = underline.segments.as_ref().expect("segments for skip-ink auto");
+    assert!(segments.len() > 1, "expected carved underline segments");
+    let total: f32 = segments.iter().map(|(s, e)| e - s).sum();
+    assert!(total < deco.line_width, "segments should carve out ink");
+}
+
+#[test]
+fn builder_skip_ink_none_draws_full_line() {
+    let mut style = ComputedStyle::default();
+    style.text_decoration.lines = TextDecorationLine::UNDERLINE;
+    style.text_decoration_skip_ink = TextDecorationSkipInk::None;
+    style.font_size = 20.0;
+
+    let text = "gg";
+    let font_ctx = FontContext::new();
+    let shaper = ShapingPipeline::new();
+    let runs = match shaper.shape(text, &style, &font_ctx) {
+        Ok(r) if !r.is_empty() => r,
+        _ => return,
+    };
+
+    let fragment = FragmentNode::new_text_shaped(
+        Rect::from_xywh(0.0, 0.0, 60.0, 20.0),
+        text.to_string(),
+        15.0,
+        runs,
+        Arc::new(style),
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let deco = list
+        .items()
+        .iter()
+        .find_map(|i| match i {
+            DisplayItem::TextDecoration(d) => Some(d),
+            _ => None,
+        })
+        .expect("decoration item");
+
+    let underline = deco
+        .decorations
+        .first()
+        .and_then(|d| d.underline.as_ref())
+        .expect("underline present");
+
+    assert!(underline.segments.is_none(), "skip-ink:none should not carve segments");
 }
 
 // ============================================================================
