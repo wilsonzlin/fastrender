@@ -273,6 +273,14 @@ impl CalcLength {
         self.terms().iter().any(|t| t.unit == LengthUnit::Percent)
     }
 
+    pub fn has_viewport_relative(&self) -> bool {
+        self.terms().iter().any(|t| t.unit.is_viewport_relative())
+    }
+
+    pub fn has_font_relative(&self) -> bool {
+        self.terms().iter().any(|t| t.unit.is_font_relative())
+    }
+
     pub fn resolve(
         &self,
         percentage_base: Option<f32>,
@@ -597,6 +605,33 @@ mod tests {
     }
 
     #[test]
+    fn calc_resolution_helpers_require_context() {
+        // Percentage-based calcs need an explicit base even in viewport/font helpers.
+        let mut percent_calc = CalcLength::empty();
+        percent_calc.push(LengthUnit::Percent, 50.0).unwrap();
+        let percent = Length::calc(percent_calc);
+
+        assert_eq!(percent.resolve_with_viewport(800.0, 600.0), None);
+        assert_eq!(percent.resolve_with_font_size(16.0), None);
+
+        // Viewport-only calcs resolve with viewport context but stay unresolved without it.
+        let mut viewport_calc = CalcLength::empty();
+        viewport_calc.push(LengthUnit::Vw, 10.0).unwrap();
+        let viewport_len = Length::calc(viewport_calc);
+
+        assert_eq!(viewport_len.resolve_against(200.0), None);
+        assert_eq!(viewport_len.resolve_with_viewport(500.0, 400.0), Some(50.0));
+
+        // Font-relative calcs resolve with a font size but not with viewport-only context.
+        let mut font_calc = CalcLength::empty();
+        font_calc.push(LengthUnit::Em, 2.0).unwrap();
+        let font_len = Length::calc(font_calc);
+
+        assert_eq!(font_len.resolve_with_viewport(800.0, 600.0), None);
+        assert_eq!(font_len.resolve_with_font_size(12.0), Some(24.0));
+    }
+
+    #[test]
     fn test_length_or_auto_from_length() {
         let length = Length::px(100.0);
         let auto_length: LengthOrAuto = length.into();
@@ -804,6 +839,10 @@ impl Length {
             return None;
         }
         if let Some(calc) = self.calc {
+            if calc.has_viewport_relative() || calc.has_font_relative() {
+                return None;
+            }
+
             return calc.resolve(Some(percentage_base), 0.0, 0.0, 0.0, 0.0);
         }
         match self.unit {
@@ -835,9 +874,11 @@ impl Length {
             return None;
         }
         if let Some(calc) = self.calc {
-            return calc
-                .resolve(None, 0.0, 0.0, font_size_px, font_size_px)
-                .or_else(|| Some(self.value * font_size_px));
+            if calc.has_percentage() || calc.has_viewport_relative() {
+                return None;
+            }
+
+            return calc.resolve(None, 0.0, 0.0, font_size_px, font_size_px);
         }
         match self.unit {
             LengthUnit::Em | LengthUnit::Rem => Some(self.value * font_size_px),
@@ -866,9 +907,11 @@ impl Length {
             return None;
         }
         if let Some(calc) = self.calc {
-            return calc
-                .resolve(None, viewport_width, viewport_height, 0.0, 0.0)
-                .or_else(|| Some(self.value));
+            if calc.has_percentage() || calc.has_font_relative() {
+                return None;
+            }
+
+            return calc.resolve(None, viewport_width, viewport_height, 0.0, 0.0);
         }
         match self.unit {
             LengthUnit::Vw => Some((self.value / 100.0) * viewport_width),
