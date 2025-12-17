@@ -557,41 +557,12 @@ impl<'a> ElementRef<'a> {
     }
 
     fn select_value(&self) -> Option<String> {
-        let mut first_option: Option<String> = None;
-        let mut selected: Option<String> = None;
-
-        for child in &self.node.children {
-            if let DomNodeType::Element { tag_name, attributes } = &child.node_type {
-                if tag_name.eq_ignore_ascii_case("option") {
-                    let value = attributes
-                        .iter()
-                        .find(|(k, _)| k.eq_ignore_ascii_case("value"))
-                        .map(|(_, v)| v.clone())
-                        .unwrap_or_else(|| {
-                            child
-                                .children
-                                .iter()
-                                .filter_map(|c| match &c.node_type {
-                                    DomNodeType::Text { content } => Some(content.clone()),
-                                    _ => None,
-                                })
-                                .collect()
-                        });
-
-                    if first_option.is_none() {
-                        first_option = Some(value.clone());
-                    }
-
-                    let is_selected = attributes.iter().any(|(k, _)| k.eq_ignore_ascii_case("selected"));
-                    if is_selected {
-                        selected = Some(value);
-                        break;
-                    }
-                }
-            }
+        let explicit = find_selected_option_value(self.node);
+        if explicit.is_some() {
+            return explicit;
         }
 
-        selected.or(first_option)
+        first_enabled_option(self.node, false).map(option_value_from_node)
     }
 
     fn parse_number(value: &str) -> Option<f64> {
@@ -861,6 +832,39 @@ fn select_has_explicit_selection(select: &DomNode) -> bool {
         }
     });
     found
+}
+
+fn option_value_from_node(node: &DomNode) -> String {
+    if let DomNodeType::Element { attributes, .. } = &node.node_type {
+        if let Some((_, v)) = attributes.iter().find(|(k, _)| k.eq_ignore_ascii_case("value")) {
+            return v.clone();
+        }
+    }
+
+    node
+        .children
+        .iter()
+        .filter_map(|c| match &c.node_type {
+            DomNodeType::Text { content } => Some(content.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn find_selected_option_value(node: &DomNode) -> Option<String> {
+    let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
+    let is_option = tag.as_deref() == Some("option");
+
+    if is_option && node.get_attribute("selected").is_some() {
+        return Some(option_value_from_node(node));
+    }
+
+    for child in &node.children {
+        if let Some(val) = find_selected_option_value(child) {
+            return Some(val);
+        }
+    }
+    None
 }
 
 fn first_enabled_option<'a>(node: &'a DomNode, optgroup_disabled: bool) -> Option<&'a DomNode> {
@@ -1754,6 +1758,34 @@ mod tests {
         let ancestors: Vec<&DomNode> = vec![&select_with_explicit];
         let first = &select_with_explicit.children[0];
         let second = &select_with_explicit.children[1];
+        assert!(!matches(first, &ancestors, &PseudoClass::Checked));
+        assert!(matches(second, &ancestors, &PseudoClass::Checked));
+
+        let select_disabled_first = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![],
+            },
+            children: vec![
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "option".to_string(),
+                        attributes: vec![("disabled".to_string(), "disabled".to_string())],
+                    },
+                    children: vec![],
+                },
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "option".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                },
+            ],
+        };
+        let ancestors: Vec<&DomNode> = vec![&select_disabled_first];
+        let first = &select_disabled_first.children[0];
+        let second = &select_disabled_first.children[1];
         assert!(!matches(first, &ancestors, &PseudoClass::Checked));
         assert!(matches(second, &ancestors, &PseudoClass::Checked));
 
