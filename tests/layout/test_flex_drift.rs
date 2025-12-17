@@ -37,3 +37,28 @@ fn flex_row_clamps_pathological_inline_drift() {
     let positions: Vec<f32> = fragment.children.iter().map(|c| c.bounds.x()).collect();
     assert!(positions.iter().all(|&x| x.abs() < 1.0), "children should be translated back toward the origin: {:?}", positions);
 }
+
+#[test]
+fn flex_wrap_reflows_far_inline_offsets() {
+    let mut parent_style = ComputedStyle::default();
+    parent_style.display = Display::Flex;
+    parent_style.flex_wrap = fastrender::style::types::FlexWrap::Wrap;
+    parent_style.width = Some(Length::px(50.0));
+    parent_style.height = Some(Length::px(40.0));
+
+    // Two items with huge inline offsets should be reflowed to start at the row origin when wrapping.
+    let parent = BoxNode::new_block(
+        Arc::new(parent_style),
+        FormattingContextType::Flex,
+        vec![make_child(1, 4000.0), make_child(2, 4000.0)],
+    );
+
+    let fc = FlexFormattingContext::new();
+    let fragment = fc
+        .layout(&parent, &LayoutConstraints::definite(50.0, 40.0))
+        .expect("layout succeeds");
+
+    let xs: Vec<f32> = fragment.children.iter().map(|c| c.bounds.x()).collect();
+    assert!(xs.iter().all(|&x| x >= -0.5 && x <= 50.0), "wrapped items should start within the container: {:?}", xs);
+    assert!(xs[0] <= 1.0, "first item should start at row origin: {:?}", xs);
+}

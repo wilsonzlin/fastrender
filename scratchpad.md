@@ -5,6 +5,46 @@
 - SVG percent width/height are ignored for intrinsic sizing: percent-specified dimensions fall back to default 300×150 while preserving viewBox aspect ratios; added regression.
 # Scratchpad – rendering engine session notes
 Idle; no current tasks. Available for new tasks.
+<<<<<<< HEAD
+=======
+- Pull/push to origin have been failing (SSH timeouts/HTTPS creds). A full patch series for all local commits lives in `local_patches/` (0001–0018) so others can apply while pushes are blocked.
+- Fixed display-list underline currentColor test to assert resolved color/thickness and remove unused vars; warnings cleared.
+- PositionedLayout absolute helper delegates to AbsoluteLayout for spec-accurate shrink-to-fit/auto-margin handling; positioned layout tests updated (shrink-to-fit expectation) and an auto-margin centering regression added. `cargo test --quiet test_absolute_position_left_right_shrink_to_fit` and `cargo test --quiet absolute_position_auto_margins_center_between_insets` pass.
+- ::marker coverage improved: property-filtering regressions ensure markers ignore box/background sizing/padding overrides and allow text-affecting properties; horizontal-writing marker gap asserted to use inline-end margin (LRT) or inline-start in RTL, ignoring block-axis margins.
+- Pull from origin currently times out (ssh fetch). Commit `f888136` is local; push pending once network permits.
+- Push over SSH still timing out; HTTPS requires creds. Origin reset to SSH. Commits `f888136` and `d47eb9a` remain local.
+- Archived local commits as patches in `local_patches/` (full series covering all local commits) so others can apply while pushes are blocked. Push over SSH still timing out; HTTPS requires creds.
+- Fixed display list underline currentColor test to assert resolved color/thickness (removed unused vars); warnings gone. Patch archive in `local_patches/` continues to carry all local commits while push remains blocked (SSH timeouts/HTTPS creds).
+- Added CSS `scrollbar-gutter` support: property parses (`auto`/`stable` + optional `both-edges`), cascades, and fingerprints. Block layout reserves gutters when stable or scroll overflow is set (both-edges adds start/end or top/bottom gutters), flex/grid map stable auto overflow to scroll to reserve space, and regressions cover gutter reservation widths and global keyword handling.
+- Replaced-element box-sizing fix: percentage padding on replaced elements now resolves against the containing block width in both axes when computing content size (compute_replaced_size). Added regression `compute_replaced_border_box_padding_uses_width_base` covering border-box height with 10% top padding and differing width/height bases.
+- Replaced-element min-height coverage: percentage min-height with an indefinite height base is ignored; added regression `compute_replaced_ignores_min_height_percentage_without_base` to lock the behavior.
+- Replaced aspect-ratio + padding coverage: border-box width with percent padding derives content size before applying the aspect ratio; regression `compute_replaced_border_box_ratio_respects_padding` checks a 200px box with 10% padding yields a 160px content width and 80px content height.
+- Replaced max-height percentage coverage: when max-height uses a definite percentage base, it clamps height while leaving specified width unchanged; regression `compute_replaced_max_height_percentage_resolves_with_base` covers a 360px wide, 1.5 ratio image with max-height:50% of a 300px base.
+- Replaced intrinsic size unaffected by padding: compute_replaced_size returns content-box dimensions; percent padding doesn’t inflate intrinsic size. Regression `compute_replaced_intrinsic_size_unaffected_by_padding` checks intrinsic 120×80 remains unchanged with padding set.
+- Text-overflow in vertical writing now respects the inline-axis overflow property: ellipses apply when overflow-y clips and skip when it’s visible. Added vertical writing regressions for inline-axis overflow mapping.
+- Replaced min-height percentage with aspect ratio: percentage min-height on a definite base expands height and adjusts width via the aspect ratio; regression `compute_replaced_min_height_percentage_expands_with_ratio` locks height=150px and width=300px for a 2:1 ratio with 50% of a 300px base.
+- Color-mix/currentColor cascade fix: PropertyValue::Color now stores Color (not RGBA) so currentColor mixes resolve with the computed color during cascade; outline/background/text decoration/emphasis shorthands updated, and a cascade regression asserts inherited currentColor mixes.
+- Added painter filter regression: grayscale filter on a blue box yields grayscale pixels (~18/255 per channel) to verify filter application.
+- Added painter mix-blend-mode regression: a semi-opaque blue child over red background with multiply blend darkens red/blue channels and keeps green near zero, ensuring blend math is applied.
+- Added display-list mix-blend-mode regression: a multiply stacking context over 50% gray yields ~128 red and near-zero green/blue, confirming blend math in the display list renderer.
+- Added display-list backdrop filter regression: a stacking context with `backdrop-filter: invert(1)` over a red backdrop produces cyan pixels, verifying backdrop filters apply to underlying content.
+- Added display-list blur regression: blur outsets scale with device pixel ratio (Blur(2) at scale=2 matches Blur(4) at scale=1).
+- Replaced height percentage derives width from ratio: with a definite percentage height and aspect-ratio, width derives from the resolved height. Regression `compute_replaced_height_percentage_derives_width_from_ratio` covers height 60% of 300px → 180px and width 225px at 1.25 ratio.
+- Replaced percentage width ignored without base even with ratio: when width is a percentage and the base is indefinite, we fall back to default size and apply the ratio. Regression `compute_replaced_percentage_width_ignored_without_base_even_with_ratio` expects 300×150 for 50% width, ratio 2.
+- Flex align-self adjustment now zips against the in-flow children (sorted by order) instead of all box children, so positioned siblings no longer misapply alignment after Taffy order sorting. Added regression `align_self_respects_in_flow_child_order` covering a positioned sibling before flex items. Commit 8937693 (pushed).
+- Text-indent no longer shrinks line width: indentation is applied as an offset without reducing available width, and regression `text_indent_does_not_reduce_available_width` locks the wrapping behavior.
+- Added mozilla.org, theguardian.com, washingtonpost.com, fandom.com, ikea.com, and bing.com to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
+- Positioned descendants now keep positioned containing blocks during intrinsic layout: out-of-flow candidates are laid out as relative with cleared offsets so nested positioned children resolve against their parent padding, flex absolute layout threads the containing block through, and nested absolute regressions for block/flex percent offsets were added.
+- Flex row fallback now clamps runaway cross-axis positions: when Taffy returns row items with y-offsets far beyond the container height, placement snaps them back to the row origin instead of rendering thousands of pixels offscreen. Remaining CNN drift likely comes from offscreen x positions; need further tracing of row wrapping and constraint bases.
+- Flex rows now also recentre pathological horizontal drift: when every child sits multiple container widths to the right, we translate the row back so the leftmost child starts at the origin while preserving relative spacing.
+- Action: still need to inspect cnn.com cached HTML via inspect_frag with FASTR_LOG_FLEX_CHILD_IDS targeting ribbon items to see if x drift persists after the new clamp.
+- Added regression `flex_row_clamps_pathological_inline_drift`: a flex row whose items carry massive left margins is translated back toward the origin, keeping child x positions near 0.
+- Added wrap regression `flex_wrap_reflows_far_inline_offsets`: wrapped flex rows with large inline offsets are reflowed so items start within the container instead of drifting thousands of pixels to the right.
+- Flex drift clamp now logs when triggered if `FASTR_LOG_FLEX_DRIFT` is set, printing parent id/selector and clamp amounts.
+- Pending: build times out when running fetch_and_render; need to reattempt inspect_frag/fetch once compilation completes or reuse cached CNN HTML.
+- FUTURE: run `examples/inspect_frag --page cnn.com --log FLEX_CHILD_IDS=... --timeout 60` once build succeeds to confirm row positions after clamps.
+- Push pending: latest flex drift logging + wrap regression committed (a6a6308) but SSH to GitHub currently timing out; retry push later.
+>>>>>>> a6a6308 (Add flex wrap drift regression and drift logging, fix test var)
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
 =======
 - Added discord.com, weather.com, and bbc.co.uk to the fetch_pages target list; `cargo check --bin fetch_pages` passes.
