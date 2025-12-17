@@ -2009,6 +2009,7 @@ pub enum WordBreak {
     BreakAll,
     KeepAll,
     BreakWord,
+    Anywhere,
 }
 
 /// CSS `overflow-wrap` (formerly `word-wrap`)

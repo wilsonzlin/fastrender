@@ -4076,6 +4076,9 @@ fn apply_break_properties(
             // to word-break: normal, so add break opportunities at every character boundary.
             result.extend(char_boundary_breaks(text));
         }
+        WordBreak::Anywhere => {
+            result.extend(char_boundary_breaks(text));
+        }
         WordBreak::KeepAll => {
             result.retain(|brk| {
                 if brk.break_type == BreakType::Mandatory {
@@ -8081,6 +8084,62 @@ mod tests {
         assert!(
             breaking_min < normal_min * 0.75,
             "break-word should add anywhere-style break opportunities and shrink min-content width"
+        );
+    }
+
+    #[test]
+    fn word_break_anywhere_behaves_like_anywhere_breaks() {
+        let mut text_style = ComputedStyle::default();
+        text_style.word_break = WordBreak::Anywhere;
+        text_style.white_space = WhiteSpace::Normal;
+        let root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style.clone()),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let constraints = LayoutConstraints::definite_width(40.0);
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+        assert!(fragment.children.len() > 1, "anywhere should allow breaking long tokens when they overflow");
+
+        let mut text_style_nowrap = text_style.clone();
+        text_style_nowrap.white_space = WhiteSpace::Nowrap;
+        let nowrap_root = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style_nowrap),
+                "supercalifragilisticexpialidocious".to_string(),
+            )],
+        );
+        let fragment_nowrap = ifc.layout(&nowrap_root, &constraints).expect("layout");
+        assert_eq!(
+            fragment_nowrap.children.len(),
+            1,
+            "nowrap should suppress word-break:anywhere added breaks"
+        );
+
+        let breaking = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(Arc::new(text_style), "longtoken".to_string())],
+        );
+        let normal = BoxNode::new_block(
+            default_style(),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(ComputedStyle::default()),
+                "longtoken".to_string(),
+            )],
+        );
+        let anywhere_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
+        let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
+        assert!(
+            anywhere_min < normal_min * 0.75,
+            "word-break:anywhere should shrink min-content width with added break opportunities"
         );
     }
 

@@ -655,7 +655,8 @@ impl TextItem {
             return best_break;
         }
 
-        let can_overflow_break_word = self.style.word_break == WordBreak::BreakWord;
+        let can_overflow_break_word =
+            self.style.word_break == WordBreak::BreakWord || self.style.word_break == WordBreak::Anywhere;
         let can_overflow_break_by_wrap = self.style.overflow_wrap == OverflowWrap::BreakWord;
 
         if can_overflow_break_word || can_overflow_break_by_wrap {
