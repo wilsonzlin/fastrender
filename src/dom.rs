@@ -962,6 +962,7 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::ReadOnly => !self.is_read_write(),
             PseudoClass::ReadWrite => self.is_read_write(),
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
+            PseudoClass::Autofill => false,
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => false,
             PseudoClass::Link => self.is_link(),
@@ -1448,6 +1449,22 @@ mod tests {
             }],
         };
         assert!(!matches(&prefilled_textarea, &[], &PseudoClass::PlaceholderShown));
+    }
+
+    #[test]
+    fn autofill_never_matches_without_state() {
+        let input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "text".to_string()),
+                    ("value".to_string(), "filled".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        assert!(!matches(&input, &[], &PseudoClass::Autofill));
     }
 
     #[test]

@@ -74,6 +74,7 @@ pub enum PseudoClass {
     ReadOnly,
     ReadWrite,
     PlaceholderShown,
+    Autofill,
     Link,
     Visited,
 }
@@ -139,6 +140,7 @@ impl ToCss for PseudoClass {
             PseudoClass::ReadOnly => dest.write_str(":read-only"),
             PseudoClass::ReadWrite => dest.write_str(":read-write"),
             PseudoClass::PlaceholderShown => dest.write_str(":placeholder-shown"),
+            PseudoClass::Autofill => dest.write_str(":autofill"),
             PseudoClass::Link => dest.write_str(":link"),
             PseudoClass::Visited => dest.write_str(":visited"),
         }
@@ -214,6 +216,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "read-only" => Ok(PseudoClass::ReadOnly),
             "read-write" => Ok(PseudoClass::ReadWrite),
             "placeholder-shown" => Ok(PseudoClass::PlaceholderShown),
+            "autofill" => Ok(PseudoClass::Autofill),
             "link" => Ok(PseudoClass::Link),
             "visited" => Ok(PseudoClass::Visited),
             "any-link" => Ok(PseudoClass::AnyLink),
@@ -426,5 +429,6 @@ mod tests {
         assert_eq!(PseudoClass::ReadOnly.to_css_string(), ":read-only");
         assert_eq!(PseudoClass::ReadWrite.to_css_string(), ":read-write");
         assert_eq!(PseudoClass::PlaceholderShown.to_css_string(), ":placeholder-shown");
+        assert_eq!(PseudoClass::Autofill.to_css_string(), ":autofill");
     }
 }
