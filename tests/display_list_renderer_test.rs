@@ -949,6 +949,33 @@ fn filter_blur_not_clipped_to_bounds() {
 }
 
 #[test]
+fn filter_blur_zero_has_no_effect() {
+    let renderer = DisplayListRenderer::new(4, 1, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(1.0, 0.0, 1.0, 1.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+        is_isolated: true,
+        transform: None,
+        filters: vec![ResolvedFilter::Blur(0.0)],
+        backdrop_filters: Vec::new(),
+        radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(1.0, 0.0, 1.0, 1.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    // No blur: red stays confined to its rect and does not leak to neighbors.
+    assert_eq!(pixel(&pixmap, 1, 0), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+}
+
+#[test]
 fn color_mix_background_renders_purple() {
     let mut style = fastrender::ComputedStyle::default();
     style.set_background_layers(vec![BackgroundLayer {
