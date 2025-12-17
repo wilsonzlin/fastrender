@@ -8,6 +8,7 @@ use fastrender::paint::display_list::{
 };
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
+use fastrender::style::color::Color;
 use fastrender::style::types::{
     BackgroundImage, BackgroundPosition, BackgroundPositionComponent, BasicShape, BorderImage, BorderImageSlice,
     BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius, TextDecorationStyle,
@@ -171,11 +172,11 @@ fn builder_clip_path_masks_rendered_output() {
 }
 
 #[test]
-fn builder_clip_path_polygon_masks_rendered_output() {
-    let mut style = fastrender::ComputedStyle::default();
-    style.background_color = Rgba::RED;
-    style.clip_path = ClipPath::BasicShape(
-        BasicShape::Polygon {
+    fn builder_clip_path_polygon_masks_rendered_output() {
+        let mut style = fastrender::ComputedStyle::default();
+        style.background_color = Rgba::RED;
+        style.clip_path = ClipPath::BasicShape(
+            BasicShape::Polygon {
             fill: FillRule::NonZero,
             points: vec![
                 (Length::px(0.0), Length::px(0.0)),
@@ -197,9 +198,65 @@ fn builder_clip_path_polygon_masks_rendered_output() {
     let pixmap = renderer.render(&list).expect("render");
 
     // Pixel inside triangle should be filled; bottom-right should stay white.
-    assert_eq!(pixel(&pixmap, 2, 2), (255, 0, 0, 255));
-    assert_eq!(pixel(&pixmap, 9, 9), (255, 255, 255, 255));
-}
+        assert_eq!(pixel(&pixmap, 2, 2), (255, 0, 0, 255));
+        assert_eq!(pixel(&pixmap, 9, 9), (255, 255, 255, 255));
+    }
+
+    #[test]
+    fn color_mix_srgb_renders_expected_color() {
+        let mut style = fastrender::ComputedStyle::default();
+        style.background_color = Color::parse("color-mix(in srgb, red 25%, blue 75%)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
+
+        let fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
+            vec![],
+            Arc::new(style),
+        );
+
+        let list = DisplayListBuilder::new().build(&fragment);
+        let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
+            .unwrap()
+            .render(&list)
+            .unwrap();
+
+        let expected = Color::parse("color-mix(in srgb, red 25%, blue 75%)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
+        assert_eq!(
+            pixel(&pixmap, 0, 0),
+            (expected.r, expected.g, expected.b, expected.alpha_u8())
+        );
+    }
+
+    #[test]
+    fn color_mix_srgb_linear_matches_resolved_color() {
+        let mut style = fastrender::ComputedStyle::default();
+        style.background_color = Color::parse("color-mix(in srgb-linear, red 50%, blue 50%)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
+
+        let fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
+            vec![],
+            Arc::new(style),
+        );
+
+        let list = DisplayListBuilder::new().build(&fragment);
+        let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
+            .unwrap()
+            .render(&list)
+            .unwrap();
+
+        let expected = Color::parse("color-mix(in srgb-linear, red 50%, blue 50%)")
+            .unwrap()
+            .to_rgba(Rgba::BLACK);
+        assert_eq!(
+            pixel(&pixmap, 0, 0),
+            (expected.r, expected.g, expected.b, expected.alpha_u8())
+        );
+    }
 
 #[test]
 fn display_list_renderer_paints_text_decoration_color() {
