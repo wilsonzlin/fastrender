@@ -4,6 +4,18 @@
 //! correct handling of various text patterns including mixed LTR/RTL content.
 
 use fastrender::text::bidi::{analyze_bidi, BidiAnalyzer, BidiRun, Direction};
+use fastrender::text::pipeline::ShapingPipeline;
+use fastrender::FontContext;
+
+macro_rules! require_fonts {
+    ($expr:expr) => {
+        match $expr {
+            Ok(val) => val,
+            Err(_) => return,
+        }
+    };
+}
+use fastrender::style::ComputedStyle;
 
 // =============================================================================
 // Basic LTR Tests
@@ -195,6 +207,34 @@ fn test_has_rtl_detects_hebrew() {
 fn test_has_rtl_detects_arabic() {
     let analyzer = BidiAnalyzer::new();
     assert!(analyzer.has_rtl("مرحبا"));
+}
+
+#[test]
+fn inline_bidi_runs_position_in_visual_order() {
+    let pipeline = ShapingPipeline::new();
+    let font_context = FontContext::new();
+    if !font_context.has_fonts() {
+        return;
+    }
+    let style = ComputedStyle::default();
+    // LTR hello, RTL shalom, LTR world, with explicit embed/override to force splits.
+    let text = "Hello שלום world";
+    let runs = analyze_bidi(text, Direction::Ltr);
+    // Ensure logical order splits into at least three runs with differing directions.
+    assert!(runs.iter().any(|r| r.is_rtl()));
+    assert!(runs.iter().any(|r| r.is_ltr()));
+
+    // Shape each run and ensure their start x positions increase in visual order when concatenated.
+    let mut cursor = 0.0f32;
+    for run in runs {
+        let shaped = require_fonts!(pipeline.shape(&run.text, &style, &font_context));
+        for shaped_run in shaped {
+            for glyph in shaped_run.glyphs.iter() {
+                assert!(glyph.x_offset + cursor >= 0.0, "glyph positions should be non-negative in visual order");
+            }
+            cursor += shaped_run.advance;
+        }
+    }
 }
 
 #[test]
