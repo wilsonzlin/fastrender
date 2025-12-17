@@ -1512,3 +1512,4 @@ Actionable borrowings:
 - Media queries: range resolution accepts the `x` alias for dppx; regression `range_resolution_accepts_x_alias` added.
 - Media queries: aspect-ratio with zero denominator stays invalid; regression `aspect_ratio_zero_denominator_rejected` added.
 - Media queries: device-width/height features now have a regression ensuring negative lengths are rejected (`device_dimensions_reject_negative_values`).
+- Media queries: range equality now rejects percentage operands; regression `range_equality_rejects_percentages` added.

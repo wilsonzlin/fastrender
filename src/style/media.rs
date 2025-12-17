@@ -3584,6 +3584,12 @@ mod tests {
     }
 
     #[test]
+    fn range_equality_rejects_percentages() {
+        assert!(MediaQuery::parse("(width = 50%)").is_err());
+        assert!(MediaQuery::parse("(50% = width)").is_err());
+    }
+
+    #[test]
     fn range_length_rejects_percentage_and_invalid_units() {
         assert!(MediaQuery::parse("(width > 50%)").is_err());
         assert!(MediaQuery::parse("(50% < width < 100%)").is_err());
