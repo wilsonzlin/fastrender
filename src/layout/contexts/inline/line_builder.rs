@@ -3404,6 +3404,64 @@ mod tests {
     }
 
     #[test]
+    fn bidi_isolate_override_keeps_inner_isolate_atomic() {
+        // An isolate-override should reverse its own content while keeping nested isolates grouped.
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+
+        let mut inner = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Ltr,
+            UnicodeBidi::Isolate,
+        );
+        inner.add_child(InlineItem::Text(make_text_item("BD", 20.0)));
+
+        let mut outer = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::IsolateOverride,
+        );
+        outer.add_child(InlineItem::Text(make_text_item("A", 10.0)));
+        outer.add_child(InlineItem::InlineBox(inner));
+        outer.add_child(InlineItem::Text(make_text_item("C", 10.0)));
+
+        builder.add_item(InlineItem::InlineBox(outer));
+        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+
+        let actual: String = lines[0]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+
+        let logical = format!(
+            "L {}{}A{}BD{}C{}{} R",
+            '\u{2067}', // RLI (rtl isolate)
+            '\u{202e}', // RLO (rtl override)
+            '\u{2066}', // LRI (ltr isolate)
+            '\u{2069}', // PDI
+            '\u{202c}', // PDF
+            '\u{2069}', // PDI
+        );
+        let expected = reorder_with_controls(&logical, Some(Level::ltr()));
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn bidi_override_does_not_apply_inside_isolate() {
         let mut builder = make_builder(200.0);
 
