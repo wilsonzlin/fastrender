@@ -8934,8 +8934,7 @@ mod tests {
             bottom: ClipComponent::Length(Length::px(15.0)),
             left: ClipComponent::Length(Length::px(5.0)),
         });
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
 
         let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");

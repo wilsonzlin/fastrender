@@ -556,6 +556,34 @@ impl<'a> ElementRef<'a> {
         None
     }
 
+    fn is_indeterminate(&self) -> bool {
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+
+        let lower = tag.to_ascii_lowercase();
+        if lower == "input" {
+            let input_type = self
+                .node
+                .get_attribute("type")
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+            if input_type == "checkbox" {
+                return self.node.get_attribute("indeterminate").is_some();
+            }
+            return false;
+        }
+
+        if lower == "progress" {
+            match self.node.get_attribute("value") {
+                None => return true,
+                Some(v) => return v.parse::<f32>().is_err(),
+            }
+        }
+
+        false
+    }
+
     fn select_value(&self) -> Option<String> {
         let explicit = find_selected_option_value(self.node);
         if explicit.is_some() {

@@ -389,16 +389,15 @@ impl DisplayListBuilder {
             let resolve = |component: &crate::style::types::ClipComponent, base: f32| -> f32 {
                 match component {
                     crate::style::types::ClipComponent::Auto => base,
-                    crate::style::types::ClipComponent::Length(len) => {
-                        len.resolve_with_context(
+                    crate::style::types::ClipComponent::Length(len) => len
+                        .resolve_with_context(
                             Some(base),
                             viewport.0,
                             viewport.1,
                             style.font_size,
                             style.root_font_size,
                         )
-                        .unwrap_or_else(|| len.to_px())
-                    }
+                        .unwrap_or_else(|| len.to_px()),
                 }
             };
 

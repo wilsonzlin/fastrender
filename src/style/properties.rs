@@ -2370,6 +2370,8 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "text-shadow" => styles.text_shadow = source.text_shadow.clone(),
         "transform" => styles.transform = source.transform.clone(),
         "transform-box" => styles.transform_box = source.transform_box,
+        "transform-style" => styles.transform_style = source.transform_style,
+        "backface-visibility" => styles.backface_visibility = source.backface_visibility,
         "filter" => styles.filter = source.filter.clone(),
         "backdrop-filter" => styles.backdrop_filter = source.backdrop_filter.clone(),
         "clip-path" => styles.clip_path = source.clip_path.clone(),
@@ -5831,6 +5833,20 @@ pub fn apply_declaration_with_base(
                 }
             }
         }
+        "transform-style" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(value) = parse_transform_style(kw) {
+                    styles.transform_style = value;
+                }
+            }
+        }
+        "backface-visibility" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                if let Some(value) = parse_backface_visibility(kw) {
+                    styles.backface_visibility = value;
+                }
+            }
+        }
         "filter" => {
             if let Some(filters) = parse_filter_list(&resolved_value) {
                 styles.filter = filters;
@@ -6952,12 +6968,28 @@ fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
 }
 
 fn parse_transform_box(kw: &str) -> Option<TransformBox> {
-    match kw {
+    match kw.to_ascii_lowercase().as_str() {
         "border-box" => Some(TransformBox::BorderBox),
         "content-box" => Some(TransformBox::ContentBox),
         "fill-box" => Some(TransformBox::FillBox),
         "stroke-box" => Some(TransformBox::StrokeBox),
         "view-box" => Some(TransformBox::ViewBox),
+        _ => None,
+    }
+}
+
+fn parse_transform_style(kw: &str) -> Option<TransformStyle> {
+    match kw.to_ascii_lowercase().as_str() {
+        "flat" => Some(TransformStyle::Flat),
+        "preserve-3d" => Some(TransformStyle::Preserve3d),
+        _ => None,
+    }
+}
+
+fn parse_backface_visibility(kw: &str) -> Option<BackfaceVisibility> {
+    match kw.to_ascii_lowercase().as_str() {
+        "visible" => Some(BackfaceVisibility::Visible),
+        "hidden" => Some(BackfaceVisibility::Hidden),
         _ => None,
     }
 }
@@ -8613,7 +8645,12 @@ fn parse_clip_value(value: &PropertyValue) -> Option<Option<ClipRect>> {
                             Some(c) => c,
                             None => return Ok(None),
                         };
-                        Ok(Some(ClipRect { top, right, bottom, left }))
+                        Ok(Some(ClipRect {
+                            top,
+                            right,
+                            bottom,
+                            left,
+                        }))
                     })
                     .ok()
                     .flatten()
@@ -10007,6 +10044,100 @@ mod tests {
             16.0,
         );
         assert_eq!(style.transform_box, TransformBox::ContentBox);
+    }
+
+    #[test]
+    fn parses_transform_style_and_backface_visibility() {
+        let mut style = ComputedStyle::default();
+        let parent = ComputedStyle {
+            transform_style: TransformStyle::Preserve3d,
+            backface_visibility: BackfaceVisibility::Hidden,
+            ..ComputedStyle::default()
+        };
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "transform-style".to_string(),
+                value: PropertyValue::Keyword("preserve-3d".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.transform_style, TransformStyle::Preserve3d);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "transform-style".to_string(),
+                value: PropertyValue::Keyword("inherit".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.transform_style, TransformStyle::Preserve3d);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "transform-style".to_string(),
+                value: PropertyValue::Keyword("flat".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.transform_style, TransformStyle::Flat);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "backface-visibility".to_string(),
+                value: PropertyValue::Keyword("hidden".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.backface_visibility, BackfaceVisibility::Hidden);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "backface-visibility".to_string(),
+                value: PropertyValue::Keyword("inherit".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.backface_visibility, BackfaceVisibility::Hidden);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "backface-visibility".to_string(),
+                value: PropertyValue::Keyword("visible".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.backface_visibility, BackfaceVisibility::Visible);
     }
 
     #[test]

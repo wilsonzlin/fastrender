@@ -2093,6 +2093,18 @@ pub enum TransformBox {
     ViewBox,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransformStyle {
+    Flat,
+    Preserve3d,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackfaceVisibility {
+    Visible,
+    Hidden,
+}
+
 /// Background attachment behavior
 ///
 /// CSS: `background-attachment`

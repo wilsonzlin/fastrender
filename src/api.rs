@@ -2286,6 +2286,8 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
     hash_object_position(&style.object_position, &mut h);
     hash_transforms(&style.transform, &mut h);
     hash_enum_discriminant(&style.transform_box, &mut h);
+    hash_enum_discriminant(&style.transform_style, &mut h);
+    hash_enum_discriminant(&style.backface_visibility, &mut h);
     h.finish()
 }
 
