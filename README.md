@@ -56,6 +56,27 @@ cargo build --release
 # Output: fetched_output.png
 ```
 
+### Batch Fetch & Render
+
+Cache a set of common pages for debugging and profiling:
+
+```bash
+# Fetch cached HTML (default set, 30s timeout per page, parallelized)
+./target/release/fetch_pages
+
+# Fetch only specific pages with custom parallelism/timeout
+./target/release/fetch_pages --pages cnn.com,wikipedia.org --jobs 8 --timeout 20
+```
+
+Render all cached pages to `fetches/renders/` (PNG + per-page logs):
+
+```bash
+./target/release/render_pages
+
+# Render only specific cached pages with a custom viewport/timeout
+./target/release/render_pages --pages cnn.com,wikipedia.org --viewport 1366x768 --timeout 60
+```
+
 ### API Usage
 
 ```rust
