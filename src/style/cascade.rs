@@ -3220,6 +3220,23 @@ mod tests {
     }
 
     #[test]
+    fn aria_hidden_does_not_hide_element() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("aria-hidden".to_string(), "true".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_ne!(styled.styles.display, Display::None);
+        assert_ne!(styled.styles.visibility, Visibility::Collapse);
+        assert_ne!(styled.styles.visibility, Visibility::Hidden);
+    }
+
+    #[test]
     fn bgcolor_presentational_hint_applies_to_descendants() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
