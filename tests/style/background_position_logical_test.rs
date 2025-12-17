@@ -59,3 +59,17 @@ fn background_position_defaults_to_zero_zero() {
     let node = &styled.children[0];
     assert_eq!(bg_pos(node), (0.0, 0.0));
 }
+
+#[test]
+fn background_position_shorthand_resets_positions() {
+    let dom = dom::parse_html(
+        r#"<div style="background-position: 20% 30%; background: red;"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("bg-pos", r#""#, None).unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = &styled.children[0];
+    // background shorthand should reset position to initial 0% 0%
+    assert_eq!(bg_pos(node), (0.0, 0.0));
+}
