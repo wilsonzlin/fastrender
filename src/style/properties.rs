@@ -15108,6 +15108,12 @@ mod tests {
     }
 
     #[test]
+    fn filter_none_returns_empty_list() {
+        let filters = parse_filter_list(&PropertyValue::Keyword("none".to_string())).expect("filters");
+        assert!(filters.is_empty());
+    }
+
+    #[test]
     fn filter_arguments_default_when_omitted() {
         let filters = parse_filter_list(&PropertyValue::Keyword(
             "blur() brightness() contrast() grayscale() sepia() saturate() invert() opacity() hue-rotate()".to_string(),
