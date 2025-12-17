@@ -1512,3 +1512,4 @@ Actionable borrowings:
 - Media queries: device-width/height features now have a regression ensuring negative lengths are rejected (`device_dimensions_reject_negative_values`).
 - Media queries: range equality now rejects percentage operands; regression `range_equality_rejects_percentages` added.
 - Media queries: resolution parsing retains fractional precision; regression in `test_resolution_parse` asserts 1.3333dppx is preserved.
+- Media queries: `prefers-color-scheme` parsing is case-insensitive; regression updated to accept uppercase inputs.
