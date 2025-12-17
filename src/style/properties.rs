@@ -2300,7 +2300,6 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.cursor = source.cursor;
             styles.cursor_images = source.cursor_images.clone();
         }
-        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "accent-color" => styles.accent_color = source.accent_color,
         "caret-color" => styles.caret_color = source.caret_color,
         "color-scheme" => styles.color_scheme = source.color_scheme.clone(),
@@ -5765,15 +5764,6 @@ pub fn apply_declaration_with_base(
         "color-scheme" => {
             if let Some(pref) = parse_color_scheme(&resolved_value) {
                 styles.color_scheme = pref;
-            }
-        }
-        "forced-color-adjust" => {
-            if let PropertyValue::Keyword(kw) = &resolved_value {
-                styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
-                    "auto" => ForcedColorAdjust::Auto,
-                    "none" => ForcedColorAdjust::None,
-                    _ => styles.forced_color_adjust,
-                };
             }
         }
         "color" => {

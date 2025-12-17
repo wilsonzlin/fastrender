@@ -1162,7 +1162,9 @@ impl FormattingContext for FlexFormattingContext {
                     if let Ok(mut map) = measured_fragments.lock() {
                         let entry = map.entry(cache_key).or_default();
                         if entry.len() >= MAX_MEASURE_CACHE_PER_NODE {
-                            entry.clear();
+                            if let Some(first_key) = entry.keys().next().cloned() {
+                                entry.remove(&first_key);
+                            }
                         }
                         let new_key = !entry.contains_key(&key);
                         let stored_size = Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
@@ -1534,7 +1536,9 @@ impl FormattingContext for FlexFormattingContext {
             if let Ok(mut cache) = self.layout_fragments.lock() {
                 let entry = cache.entry(cache_key).or_default();
                 if entry.len() >= MAX_LAYOUT_CACHE_PER_NODE {
-                    entry.clear();
+                    if let Some(first_key) = entry.keys().next().cloned() {
+                        entry.remove(&first_key);
+                    }
                 }
                 let size = fragment.bounds.size;
                 entry
