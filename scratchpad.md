@@ -1,5 +1,5 @@
 # Scratchpad – rendering engine session notes
-- Idle; no current tasks. Available for new tasks.
+Idle; no current tasks. Available for new tasks.
 - Added a regression for nested isolate-override containing an inner isolate: inline bidi reordering now has test `bidi_isolate_override_keeps_inner_isolate_atomic` comparing the render with unicode-bidi controls. `cargo test bidi_isolate_override_keeps_inner_isolate_atomic -- --nocapture` passes. Stashed unrelated WIP (`pre-bidi-wip`) that tweaks rowspan weight defaults/match-parent text-align_last propagation.
 - font-variant-emoji now has picker regressions: text preference avoids emoji fonts, emoji preference selects emoji fonts, unicode uses text for non-emoji, and FE0E/FE0F variation selectors force text/emoji choices accordingly.
 - Media query caching optimized: `MediaQueryCache` memoizes per-query keys and tracks results internally instead of exposing a raw HashMap, reducing rebuilds while keeping the existing API. `cargo test media_query_cache_reused_between_collections -- --nocapture` passes.
@@ -8,6 +8,7 @@
 - Added a display-list renderer regression for border images: `display_list_border_image_nine_slice` encodes a 3×3 PNG with distinct corners/edges, builds via DisplayListBuilder, renders, and asserts the nine-slice corners/edges land in the correct pixels.
 - Added a display-list renderer regression for border-image gradients: `display_list_border_image_generated_uniform_color` uses a uniform linear-gradient source and checks all corners render red, exercising generated border-image sources in the builder/renderer.
 - Added a display-list regression for `background-attachment: local`: display-list builder/renderer keep backgrounds clipped to the padding box for scrollable elements (border stays transparent, padding paints red). `cargo test background_attachment_local_clips_to_padding_box_in_display_list -- --nocapture` passes.
+- Painter now has a matching clip-path polygon regression to ensure raster clipping aligns with the display-list path (triangle fills inside, keeps clipped corners white).
 - Added a display-list regression for `background-attachment: fixed` that renders two adjacent fragments through the display list renderer; fixed backgrounds stay anchored to the viewport (colors differ across x). `cargo test background_attachment_fixed_anchors_to_viewport_in_display_list -- --nocapture` passes.
 - text-align-last now allows `justify-all` to justify the final line even when `text-align-last:auto`; last-line justification is blocked only for `justify`+auto. Static-position alignment uses the same gating, and a regression covers justify-all single-line justification.
 - Added a regression to ensure `text-align: justify` with `text-align-last:auto` keeps single-line paragraphs start-aligned (no justification); `cargo test text_align_justify_single_line_respects_auto_last_line --quiet` passes after the change.

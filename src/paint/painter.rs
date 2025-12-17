@@ -9333,6 +9333,34 @@ mod tests {
     }
 
     #[test]
+    fn clip_path_polygon_masks_painter_output() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::RED;
+        style.clip_path = crate::style::types::ClipPath::BasicShape(
+            crate::style::types::BasicShape::Polygon {
+                fill: crate::style::types::FillRule::NonZero,
+                points: vec![
+                    (Length::px(0.0), Length::px(0.0)),
+                    (Length::px(0.0), Length::px(10.0)),
+                    (Length::px(10.0), Length::px(0.0)),
+                ],
+            },
+            None,
+        );
+        let fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            vec![],
+            Arc::new(style),
+        );
+        let tree = FragmentTree::new(fragment);
+
+        let pixmap = paint_tree(&FragmentTree::new(tree.root.clone()), 10, 10, Rgba::WHITE).expect("paint");
+
+        assert_eq!(color_at(&pixmap, 2, 2), (255, 0, 0, 255));
+        assert_eq!(color_at(&pixmap, 9, 9), (255, 255, 255, 255));
+    }
+
+    #[test]
     fn background_blend_mode_color_preserves_luminance() {
         let dst = (30u8, 120u8, 220u8);
         let src = (200u8, 30u8, 30u8);
