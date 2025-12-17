@@ -1136,6 +1136,31 @@ mod tests {
     }
 
     #[test]
+    fn compute_replaced_percentage_width_ignored_without_base_even_with_ratio() {
+        let mut style = ComputedStyle::default();
+        style.width = Some(Length::percent(50.0));
+        style.aspect_ratio = crate::style::types::AspectRatio::Ratio(2.0);
+
+        let replaced = ReplacedBox {
+            replaced_type: crate::tree::box_tree::ReplacedType::Image {
+                src: "img".into(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+            },
+            intrinsic_size: None,
+            aspect_ratio: None,
+        };
+
+        let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
+
+        // Without a percentage base, width falls back to the default 300px and the 2:1 ratio
+        // derives height 150px.
+        assert!((size.width - 300.0).abs() < 0.01);
+        assert!((size.height - 150.0).abs() < 0.01);
+    }
+
+    #[test]
     fn resolves_scrollbar_width_keywords() {
         let mut style = ComputedStyle::default();
         style.scrollbar_width = ScrollbarWidth::Auto;
