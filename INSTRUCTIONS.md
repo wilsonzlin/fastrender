@@ -8,21 +8,34 @@ Build a CORRECT renderer that works on REAL pages. Both matter equally:
 Do NOT hack, ignore specs, or implement incompatibly. Incomplete is OK, incorrect is not.
 Example: Table layout must follow CSS 2.1 Section 17, not fake it with flexbox.
 
-## Development Approach
-1. Test against real pages:
-   - cargo run --release --bin fetch_pages  (fetches HTML, caches in fetches/html/)
-   - cargo run --release --bin render_pages (renders cached HTML to fetches/renders/)
-2. Inspect the PNG outputs visually
-3. When something breaks, understand WHY per the spec
-4. Implement the correct fix per spec
-5. Verify fix doesnt break other pages
-6. Commit and continue
+## The Work
+Your job is to RENDER PAGES and make them better. The work loop:
+1. Render pages: `cargo run --release --bin render_pages`
+2. Inspect PNGs in fetches/renders/ - find what's broken or slow
+3. Fix it: layout bugs, missing spec coverage, performance issues
+4. Verify fix doesn't regress other pages
+5. Commit and continue
+
+Also: EXTEND the test page set. Add pages that exercise new features or expose bugs.
+Edit `src/bin/fetch_pages.rs` (the `PAGES` constant) to add new URLs.
+
+This is the work. Not theoretical improvements - actual pages rendering correctly and fast.
+
+To fetch fresh pages: `cargo run --release --bin fetch_pages`
+
+## Commit Workflow
+- Before committing: run QUICK checks (e.g. `cargo check`, `cargo clippy`)
+- Fix any errors/warnings from quick checks BEFORE committing
+- Do NOT run expensive test suites or renders as a pre-commit gate
+- If planning to push: update coordinator AFTER pushing, not before
+- Keep commits focused and atomic
 
 ## Priority Order
 1. NO CRASHES - panics are never acceptable
 2. CORRECT LAYOUT - positions/sizes match spec algorithms  
 3. VISIBLE CONTENT - text and images render
 4. VISUAL FIDELITY - colors, fonts, decorations
+5. PERFORMANCE - render pages fast, profile and fix bottlenecks
 
 ## Testing
 - fetch_pages: fetches 50+ target pages in parallel, caches HTML to fetches/html/
@@ -31,6 +44,18 @@ Example: Table layout must follow CSS 2.1 Section 17, not fake it with flexbox.
 - Summary in fetches/renders/_summary.log
 - Visually inspect fetches/renders/*.png
 - Fix regressions before adding features
+
+## Writing Tests
+Write tests REGULARLY as you implement features. Tests must be:
+- USEFUL: test actual behavior that matters, not implementation details
+- EXHAUSTIVE: cover edge cases, boundaries, and interactions
+- RIGOROUS: verify correctness against spec, not just "doesn't crash"
+
+Tests must NOT be:
+- Pointless: testing trivial getters/setters or obvious code
+- Noisy: asserting on irrelevant details that break on valid changes
+- Phony: tests that pass but don't actually verify correctness (e.g. assert!(true))
+- Appearance-only: tests that look comprehensive but test nothing meaningful
 
 ## You Are Empowered To
 - Research specs deeply - read CSS 2.1, CSS3 modules, HTML5
