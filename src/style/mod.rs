@@ -31,19 +31,21 @@ use position::Position;
 use std::collections::HashMap;
 use types::{
     AccentColor, AlignContent, AlignItems, Appearance, AspectRatio, BackfaceVisibility, BackgroundAttachment,
-    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse,
-    BorderImage, BorderStyle, BoxSizing, CaptionSide, CaretColor, ClipPath, ClipRect, ColorSchemePreference, ContainerType,
-    Containment, CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
-    FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle,
-    FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantEmoji,
-    FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust,
-    GridTrack, HyphensMode, ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak,
-    LineHeight, ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
-    OutlineStyle, Overflow, OverflowAnchor, OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior,
-    ScrollbarColor, ScrollbarWidth, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration,
-    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow,
-    TextRendering, TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox,
-    TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    BorderCollapse, BorderImage, BorderStyle, BoxSizing, CaptionSide, CaretColor, ClipPath, ClipRect,
+    ColorSchemePreference, ContainerType, Containment, CursorImage, CursorKeyword, Direction, EmptyCells,
+    FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride,
+    FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
+    FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
+    FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, GridTrack, HyphensMode, ImageOrientation,
+    ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
+    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowAnchor,
+    OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarColor, ScrollbarWidth, TabSize,
+    TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk,
+    TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextRendering,
+    TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox,
+    TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak,
+    WritingMode,
 };
 use values::Length;
 
@@ -378,8 +380,11 @@ pub struct ComputedStyle {
     pub text_align: TextAlign,
     pub text_align_last: TextAlignLast,
     pub text_justify: TextJustify,
-    pub text_indent: TextIndent,
     pub text_rendering: TextRendering,
+<<<<<<< HEAD
+=======
+    pub text_indent: TextIndent,
+>>>>>>> f749693 (Apply color-scheme preference to root defaults)
     pub text_size_adjust: TextSizeAdjust,
     pub text_overflow: TextOverflow,
     pub text_decoration: TextDecoration,
@@ -419,7 +424,6 @@ pub struct ComputedStyle {
     pub counters: CounterProperties,
 
     // Color and background
-    pub forced_color_adjust: ForcedColorAdjust,
     pub color_scheme: ColorSchemePreference,
     pub forced_color_adjust: ForcedColorAdjust,
     pub caret_color: CaretColor,
@@ -499,7 +503,6 @@ impl Default for ComputedStyle {
             scroll_behavior: ScrollBehavior::Auto,
             overscroll_behavior_x: OverscrollBehavior::Auto,
             overscroll_behavior_y: OverscrollBehavior::Auto,
-            overflow_anchor: OverflowAnchor::Auto,
             pointer_events: PointerEvents::Auto,
             user_select: UserSelect::Auto,
             touch_action: TouchAction::auto(),
@@ -621,8 +624,11 @@ impl Default for ComputedStyle {
             text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
             text_justify: TextJustify::Auto,
-            text_indent: TextIndent::default(),
             text_rendering: TextRendering::Auto,
+<<<<<<< HEAD
+=======
+            text_indent: TextIndent::default(),
+>>>>>>> f749693 (Apply color-scheme preference to root defaults)
             text_size_adjust: TextSizeAdjust::Auto,
             text_overflow: TextOverflow::clip(),
             text_decoration: TextDecoration::default(),
@@ -654,7 +660,6 @@ impl Default for ComputedStyle {
             list_style_image: ListStyleImage::None,
             counters: CounterProperties::default(),
 
-            forced_color_adjust: ForcedColorAdjust::Auto,
             color_scheme: ColorSchemePreference::Normal,
             forced_color_adjust: ForcedColorAdjust::Auto,
             caret_color: CaretColor::Auto,
@@ -703,6 +708,7 @@ impl Default for ComputedStyle {
             resize: Resize::None,
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            overflow_anchor: OverflowAnchor::Auto,
             border_spacing_horizontal: Length::px(0.0),
             border_spacing_vertical: Length::px(0.0),
             border_collapse: BorderCollapse::Separate,

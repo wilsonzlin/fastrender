@@ -14,9 +14,10 @@ use crate::geometry::Size;
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
-use crate::style::media::MediaContext;
+use crate::style::media::{ColorScheme, MediaContext};
 use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties, with_image_set_dpr};
-use crate::style::types::ContainerType;
+use crate::style::color::Rgba;
+use crate::style::types::{ColorSchemeEntry, ColorSchemePreference, ContainerType};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::{normalize_language_tag, ComputedStyle, Direction};
 use selectors::context::{QuirksMode, SelectorCaches};
@@ -78,6 +79,29 @@ fn log_cascade_profile(elapsed_ms: f64) {
         "cascade profile: total_ms={:.2} nodes={} candidates={} matches={} avg_candidates={:.1} avg_matches={:.1} find_ms={:.2} decl_ms={:.2} pseudo_ms={:.2}",
         elapsed_ms, nodes, candidates, matches, avg_candidates, avg_matches, find_ms, decl_ms, pseudo_ms
     );
+}
+
+fn select_color_scheme(pref: &ColorSchemePreference, user: ColorScheme) -> Option<ColorSchemeEntry> {
+    match pref {
+        ColorSchemePreference::Normal => None,
+        ColorSchemePreference::Supported { schemes, .. } => {
+            if schemes.is_empty() {
+                return None;
+            }
+
+            if user != ColorScheme::NoPreference {
+                if let Some(matched) = schemes.iter().find(|entry| match (entry, user) {
+                    (ColorSchemeEntry::Light, ColorScheme::Light) => true,
+                    (ColorSchemeEntry::Dark, ColorScheme::Dark) => true,
+                    _ => false,
+                }) {
+                    return Some(matched.clone());
+                }
+            }
+
+            schemes.first().cloned()
+        }
+    }
 }
 
 fn record_node_visit(node: &DomNode) {
@@ -622,6 +646,7 @@ pub fn apply_styles_with_media_target_and_imports(
                 16.0,
                 16.0,
                 Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
+                media_ctx.prefers_color_scheme,
                 &mut node_counter,
                 &mut ancestor_ids,
                 container_ctx,
@@ -856,6 +881,7 @@ fn apply_styles_internal(
     root_font_size: f32,
     ua_root_font_size: f32,
     viewport: Size,
+    color_scheme_pref: ColorScheme,
     node_counter: &mut usize,
     ancestor_ids: &mut Vec<usize>,
     container_ctx: Option<&ContainerQueryContext>,
@@ -926,6 +952,8 @@ fn apply_styles_internal(
     ua_styles.root_font_size = current_ua_root_font_size;
     resolve_line_height_length(&mut ua_styles, viewport);
     resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
+    let ua_default_color = ua_styles.color;
+    let ua_default_background = ua_styles.background_color;
 
     let mut styles = get_default_styles_for_element(node);
 
@@ -972,6 +1000,27 @@ fn apply_styles_internal(
     let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
     styles.root_font_size = current_root_font_size;
     resolve_line_height_length(&mut styles, viewport);
+
+    if is_root {
+        if let Some(selected) = select_color_scheme(&styles.color_scheme, color_scheme_pref) {
+            if matches!(selected, ColorSchemeEntry::Dark) {
+                let dark_text = Rgba::rgb(232, 232, 232);
+                let dark_background = Rgba::rgb(16, 16, 16);
+                if styles.color == ua_default_color {
+                    styles.color = dark_text;
+                }
+                if ua_styles.color == ua_default_color {
+                    ua_styles.color = dark_text;
+                }
+                if styles.background_color == ua_default_background {
+                    styles.background_color = dark_background;
+                }
+                if ua_styles.background_color == ua_default_background {
+                    ua_styles.background_color = dark_background;
+                }
+            }
+        }
+    }
 
     // Compute pseudo-element styles
     let pseudo_start = prof.then(|| Instant::now());
@@ -1038,6 +1087,7 @@ fn apply_styles_internal(
             current_root_font_size,
             current_ua_root_font_size,
             viewport,
+            color_scheme_pref,
             &mut ancestors,
             node_counter,
             ancestor_ids,
@@ -1071,6 +1121,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     root_font_size: f32,
     ua_root_font_size: f32,
     viewport: Size,
+    color_scheme_pref: ColorScheme,
     ancestors: &mut Vec<&'a DomNode>,
     node_counter: &mut usize,
     ancestor_ids: &mut Vec<usize>,
@@ -1167,6 +1218,9 @@ fn apply_styles_internal_with_ancestors<'a>(
     };
     ua_styles.root_font_size = current_ua_root_font_size;
     resolve_line_height_length(&mut ua_styles, viewport);
+    let ua_default_color = ua_styles.color;
+    let ua_default_background = ua_styles.background_color;
+    resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
 
     let mut styles = get_default_styles_for_element(node);
 
@@ -1203,6 +1257,27 @@ fn apply_styles_internal_with_ancestors<'a>(
     styles.root_font_size = current_root_font_size;
     resolve_line_height_length(&mut styles, viewport);
     resolve_absolute_lengths(&mut styles, current_root_font_size, viewport);
+
+    if is_root {
+        if let Some(selected) = select_color_scheme(&styles.color_scheme, color_scheme_pref) {
+            if matches!(selected, ColorSchemeEntry::Dark) {
+                let dark_text = Rgba::rgb(232, 232, 232);
+                let dark_background = Rgba::rgb(16, 16, 16);
+                if styles.color == ua_default_color {
+                    styles.color = dark_text;
+                }
+                if ua_styles.color == ua_default_color {
+                    ua_styles.color = dark_text;
+                }
+                if styles.background_color == ua_default_background {
+                    styles.background_color = dark_background;
+                }
+                if ua_styles.background_color == ua_default_background {
+                    ua_styles.background_color = dark_background;
+                }
+            }
+        }
+    }
 
     let pseudo_start = prof.then(|| Instant::now());
     let before_styles = if rules.has_pseudo_rules(&PseudoElement::Before) {
@@ -1268,6 +1343,7 @@ fn apply_styles_internal_with_ancestors<'a>(
             current_root_font_size,
             current_ua_root_font_size,
             viewport,
+            color_scheme_pref,
             ancestors,
             node_counter,
             ancestor_ids,
@@ -1980,6 +2056,79 @@ mod tests {
             None,
         );
         assert_eq!(styled.styles.color, Rgba::rgb(1, 2, 3));
+    }
+
+    #[test]
+    fn color_scheme_dark_applies_default_palette() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "body".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+        let stylesheet = parse_stylesheet("html { color-scheme: light dark; }").unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Dark);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+        assert_eq!(styled.styles.color, Rgba::rgb(232, 232, 232));
+        assert_eq!(styled.styles.background_color, Rgba::rgb(16, 16, 16));
+        let body = styled.children.first().expect("body");
+        assert_eq!(body.styles.color, styled.styles.color);
+        assert_eq!(body.styles.background_color, Rgba::TRANSPARENT);
+    }
+
+    #[test]
+    fn color_scheme_prefers_light_when_requested() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+        let stylesheet = parse_stylesheet("html { color-scheme: light dark; }").unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Light);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+        assert_eq!(styled.styles.color, Rgba::BLACK);
+        assert_eq!(styled.styles.background_color, Rgba::WHITE);
+    }
+
+    #[test]
+    fn color_scheme_does_not_override_authored_colors() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "body".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+        let stylesheet = parse_stylesheet(
+            "html { color-scheme: light dark; } body { color: rgb(10, 20, 30); background: rgb(1, 2, 3); }",
+        )
+        .unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Dark);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+        let body = styled.children.first().expect("body");
+        assert_eq!(styled.styles.background_color, Rgba::rgb(16, 16, 16));
+        assert_eq!(body.styles.color, Rgba::rgb(10, 20, 30));
+        assert_eq!(body.styles.background_color, Rgba::rgb(1, 2, 3));
     }
 
     #[test]

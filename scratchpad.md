@@ -1,7 +1,12 @@
 # Scratchpad – rendering engine session notes
 Idle; no current tasks.
+
 - 2027-XX-XX: Fixed style rebase fallout (restored `text_rendering`/`overflow_anchor` fields in `ComputedStyle`, removed duplicate `text-size-adjust` definitions, added missing namespaces in scrollbar-color cascade test). Block layout now reserves scrollbar gutters: overflow-y scroll adds a directional inline gutter via resolved scrollbar width, overflow-x scroll adds a bottom gutter; added unit tests.
 - 2027-XX-XX: Flex style fingerprints now include overflow axes and `scrollbar-width`, and a regression test ensures cache keys change when scrollbars/overflow differ. This prevents flex cache reuse across differing scrollbar gutters.
+
+### Agent4 (current)
+- Added color-scheme handling: the root now chooses a scheme based on `color-scheme` and the media preference, and when dark is selected it updates the default text/background palette (without overriding authored colors). Added cascade tests for dark selection, light preference, and author overrides.
+- Fixed build breakages while here: removed duplicate `TextSizeAdjust` enum, reintroduced missing `text_rendering` and `overflow_anchor` fields in `ComputedStyle` (with defaults/inheritance), and updated cascade tests to include namespaces. `cargo test color_scheme_dark_applies_default_palette --quiet` passes.
 ## Current Status (Dec 2025)
 - **39 pages tested**: 39 pass, 0 crash, 0 error (latest sweep Dec 15)
 - **Testing**: `cargo run --release --bin render_pages` → see `fetches/renders/_summary.log` (latest run: 207.1s; amazon/walmart/cnn still slow)
