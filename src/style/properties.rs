@@ -2303,6 +2303,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "accent-color" => styles.accent_color = source.accent_color,
         "caret-color" => styles.caret_color = source.caret_color,
         "color-scheme" => styles.color_scheme = source.color_scheme.clone(),
+        "forced-color-adjust" => styles.forced_color_adjust = source.forced_color_adjust,
         "color" => styles.color = source.color,
         "background-color" => styles.background_color = source.background_color,
         "background-image" => {
@@ -5763,6 +5764,15 @@ pub fn apply_declaration_with_base(
         "color-scheme" => {
             if let Some(pref) = parse_color_scheme(&resolved_value) {
                 styles.color_scheme = pref;
+            }
+        }
+        "forced-color-adjust" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
+                    "auto" => ForcedColorAdjust::Auto,
+                    "none" => ForcedColorAdjust::None,
+                    _ => styles.forced_color_adjust,
+                };
             }
         }
         "color" => {
@@ -13041,6 +13051,59 @@ mod tests {
         );
 
         assert_eq!(style.text_size_adjust, parent.text_size_adjust);
+    }
+
+    #[test]
+    fn forced_color_adjust_parses_and_handles_globals() {
+        let mut style = ComputedStyle::default();
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".to_string(),
+                value: PropertyValue::Keyword("none".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::None));
+
+        let parent = ComputedStyle {
+            forced_color_adjust: ForcedColorAdjust::None,
+            ..ComputedStyle::default()
+        };
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".to_string(),
+                value: PropertyValue::Keyword("inherit".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.forced_color_adjust, parent.forced_color_adjust);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".to_string(),
+                value: PropertyValue::Keyword("unset".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
     }
 
     #[test]

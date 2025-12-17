@@ -572,6 +572,21 @@ impl Default for ColorSchemePreference {
     }
 }
 
+/// CSS `forced-color-adjust`
+///
+/// Reference: CSS Color Adjustment Module Level 1
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForcedColorAdjust {
+    Auto,
+    None,
+}
+
+impl Default for ForcedColorAdjust {
+    fn default() -> Self {
+        ForcedColorAdjust::Auto
+    }
+}
+
 /// Computed caret color (`caret-color`)
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CaretColor {

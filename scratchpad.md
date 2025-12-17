@@ -43,22 +43,10 @@ Idle; no current tasks.
 - Added CSS `text-size-adjust`: new computed type/default (auto), inherited, parsed keywords/percentages, property list updates, and cascade tests. `cargo test text_size_adjust --quiet` passes.
 - Added CSS `text-rendering`: new computed type/default (auto), inherited, property parsing (optimizeSpeed/optimizeLegibility/geometricPrecision), property lists, and regression tests. `cargo test text_rendering --quiet` passes.
 
-- Added media query coverage for `prefers-reduced-transparency` (evaluation and env override) plus a MediaContext setter; restored `text_size_adjust` field in ComputedStyle to fix build break from earlier merge.
-
-- Added `:target-within` pseudo-class: selector parsing/serialization, DOM subtree target detection, and parsing/matching regression covering ancestors and target elements.
-
-- Added regression for `scrollbar-width` global keywords (inherit/revert/revert-layer/unset) to lock cascade behavior; no functional change needed.
-- Flex pass-cache now keys on the measurement-adjusted style and seeds from the shared measure cache so intrinsic probes reuse cached sizes/fragments even when we clone styles (aimed at the CNN carousel flex hotspots).
-- Flex pass-cache now tolerance-matches stored layouts within a size epsilon to reuse cached fragments across near-identical probes; deduped `text-size-adjust` type definition and restored missing `text-rendering`/`overflow-anchor` computed fields after merge.
-- Flex layout/measure cache tolerance widens with target size (4–32px) so large carousel probes coalesce across near-identical constraints; should reduce key churn on wide flex containers.
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
 - Implemented `text-size-adjust`: parses auto/none/percentage, cascades/inherits with regression coverage.
 
 - DOM now tracks element namespaces: parse_html captures the element namespace, selector matching respects the actual namespace (HTML vs foreign), and local-name/type comparisons are case-insensitive only for HTML elements. Tests cover namespace matching, HTML vs. SVG casing, and namespace-aware type equality. HTML-only form states (disabled/required/etc.) are gated to HTML elements.
-
-- Added `inverted-colors` media feature: parses/evaluates against a new MediaContext field, supports `FASTR_INVERTED_COLORS` env override, and includes regression coverage for parsing/evaluation/env handling.
-- Media env overrides now accept `FASTR_COLOR_DEPTH`, `FASTR_COLOR_INDEX`, and `FASTR_MONOCHROME_DEPTH` to drive color/monochrome media features; added helper setters and tests for overrides/invalid values.
-- Added CSS `forced-colors` media feature support: parses/evaluates via MediaContext (with `FASTR_FORCED_COLORS` env override), plus regression tests for matching and overrides.
 
 - Fixed stacking context bounds computation to recurse into children and avoid the implicit zero origin (paint containment clip test now passes).
 - Added regression test to ensure stacking context bounds include child contexts without precomputed bounds.
@@ -483,7 +471,7 @@ Inline coordinate fix (Mar 2026):
 - Latest run: `FASTR_RENDER_TIMINGS=1 FASTR_INTRINSIC_STATS=1 target/release/fetch_and_render file:///root/r/fastrender/fetches/html/cnn.com.html` → parse ~30–36ms, cascade ~4.4–5.8s, box_tree ~0.9–1.1s, box_count 8715, layout ~1.4–1.7s, paint ~22–29s, total ~30–55s. Intrinsic stats stable: lookups ~58k, hits ~38k (65%), stores ~15k, block_calls ~52k, flex_calls ~460, inline_calls ~5k. Paint remains dominant bottleneck.
 
 ## Recent changes (this branch)
-- Fixed merge fallout: deduped `TextSizeAdjust` definition, added missing `text_rendering`/`overflow_anchor` fields to computed/positioned styles (defaults, hashing), updated cascade tests for DOM namespaces, and added `forced-color-adjust` support (auto/none, inherited) with parsing/cascade wiring and regression coverage. `cargo test --quiet` now passes.
+- Fixed merge fallout: deduped `TextSizeAdjust`, restored missing `text_rendering`/`overflow_anchor` fields in computed styles, and added `forced-color-adjust` (auto/none, non-inherited) with parsing/cascade wiring and regression coverage; cascade scrollbar-color test now includes the HTML namespace.
 - Added `color-gamut` media feature support: parse/evaluate against MediaContext (srgb/p3/rec2020), env override via `FASTR_COLOR_GAMUT`, and regression tests.
 - Text decoration keyword parsing is now ASCII case-insensitive (line/style/thickness/skip-ink/underline-position), with regression coverage for uppercase inputs.
 - text-decoration-color now treats currentColor case-insensitively; parsing accepts any casing of the keyword and the regression for decoration longhands covers CurrentColor.

@@ -37,15 +37,15 @@ use types::{
     FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride,
     FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
     FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
-    FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, GridTrack, HyphensMode,
-    ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight,
-    ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
-    OutlineStyle, Overflow, OverflowAnchor, OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior,
-    ScrollbarColor, ScrollbarWidth, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright,
-    TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify,
-    TextOrientation, TextOverflow, TextRendering, TextSizeAdjust, TextTransform, TextUnderlineOffset,
-    TextUnderlinePosition, TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect,
-    VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    FontVariantPosition, FontVariationSetting, FontWeight, ForcedColorAdjust, GridTrack, HyphensMode, ImageOrientation,
+    ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage,
+    ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow,
+    OverflowAnchor, OverflowWrap, OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarColor,
+    ScrollbarWidth, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright, TextDecoration,
+    TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify, TextOrientation,
+    TextOverflow, TextRendering, TextSizeAdjust, TextTransform, TextUnderlineOffset, TextUnderlinePosition,
+    TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace,
+    WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -424,6 +424,7 @@ pub struct ComputedStyle {
 
     // Color and background
     pub color_scheme: ColorSchemePreference,
+    pub forced_color_adjust: ForcedColorAdjust,
     pub caret_color: CaretColor,
     pub accent_color: AccentColor,
     pub color: Rgba,
@@ -657,6 +658,7 @@ impl Default for ComputedStyle {
             counters: CounterProperties::default(),
 
             color_scheme: ColorSchemePreference::Normal,
+            forced_color_adjust: ForcedColorAdjust::Auto,
             caret_color: CaretColor::Auto,
             accent_color: AccentColor::Auto,
             color: Rgba::BLACK,
