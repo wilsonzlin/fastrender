@@ -2347,6 +2347,11 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
     hash_enum_discriminant(&style.overflow_wrap, &mut h);
     hash_enum_discriminant(&style.color_scheme, &mut h);
     hash_enum_discriminant(&style.writing_mode, &mut h);
+    hash_enum_discriminant(&style.scroll_snap_type.axis, &mut h);
+    hash_enum_discriminant(&style.scroll_snap_type.strictness, &mut h);
+    hash_enum_discriminant(&style.scroll_snap_align.inline, &mut h);
+    hash_enum_discriminant(&style.scroll_snap_align.block, &mut h);
+    hash_enum_discriminant(&style.scroll_snap_stop, &mut h);
     hash_enum_discriminant(&style.scrollbar_width, &mut h);
     hash_scrollbar_color(&style.scrollbar_color, &mut h);
     hash_list_style_type(&style.list_style_type, &mut h);
