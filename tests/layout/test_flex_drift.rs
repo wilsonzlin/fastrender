@@ -1,6 +1,7 @@
 use fastrender::layout::constraints::LayoutConstraints;
 use fastrender::layout::contexts::flex::FlexFormattingContext;
 use fastrender::style::display::Display;
+use fastrender::style::types::JustifyContent;
 use fastrender::style::values::Length;
 use fastrender::{BoxNode, ComputedStyle, FormattingContext, FormattingContextType};
 use std::sync::Arc;
@@ -61,4 +62,45 @@ fn flex_wrap_reflows_far_inline_offsets() {
     let xs: Vec<f32> = fragment.children.iter().map(|c| c.bounds.x()).collect();
     assert!(xs.iter().all(|&x| x >= -0.5 && x <= 50.0), "wrapped items should start within the container: {:?}", xs);
     assert!(xs[0] <= 1.0, "first item should start at row origin: {:?}", xs);
+}
+
+#[test]
+fn nested_flex_children_use_local_origins() {
+    // Center a flex item inside a larger flex container, then ensure the grandchildren start at
+    // the parent's origin instead of inheriting the ancestor's offset.
+    let mut outer_style = ComputedStyle::default();
+    outer_style.display = Display::Flex;
+    outer_style.width = Some(Length::px(500.0));
+    outer_style.height = Some(Length::px(200.0));
+    outer_style.justify_content = JustifyContent::Center;
+
+    let mut mid_style = ComputedStyle::default();
+    mid_style.display = Display::Flex;
+    mid_style.width = Some(Length::px(300.0));
+    mid_style.height = Some(Length::px(150.0));
+    // Default justify-content: flex-start keeps children at x=0 within the mid container.
+
+    let mut inner_style = ComputedStyle::default();
+    inner_style.display = Display::Block;
+    inner_style.width = Some(Length::px(100.0));
+    inner_style.height = Some(Length::px(50.0));
+
+    let mut inner = BoxNode::new_block(Arc::new(inner_style), FormattingContextType::Block, vec![]);
+    inner.id = 3;
+
+    let mut mid = BoxNode::new_block(Arc::new(mid_style), FormattingContextType::Flex, vec![inner]);
+    mid.id = 2;
+
+    let mut outer = BoxNode::new_block(Arc::new(outer_style), FormattingContextType::Flex, vec![mid]);
+    outer.id = 1;
+
+    let fc = FlexFormattingContext::new();
+    let fragment = fc
+        .layout(&outer, &LayoutConstraints::definite(500.0, 200.0))
+        .expect("layout succeeds");
+
+    let mid_frag = &fragment.children[0];
+    let inner_frag = &mid_frag.children[0];
+    assert!(mid_frag.bounds.x() > 90.0 && mid_frag.bounds.x() < 110.0);
+    assert!(inner_frag.bounds.x().abs() < 1e-3, "grandchild should start at the mid container's origin: {}", inner_frag.bounds.x());
 }

@@ -1605,12 +1605,11 @@ impl FormattingContext for FlexFormattingContext {
                 self.nearest_positioned_cb
             };
 
-            let factory =
-                crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-                    self.font_context.clone(),
-                    self.viewport_size,
-                    cb,
-                );
+            let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+                self.font_context.clone(),
+                self.viewport_size,
+                cb,
+            );
 
             for child in positioned_children {
                 // Layout child as static to obtain intrinsic size.
@@ -2386,6 +2385,8 @@ impl FlexFormattingContext {
                 let child_layout = taffy_tree
                     .layout(child_taffy)
                     .map_err(|e| LayoutError::MissingContext(format!("Failed to get Taffy layout: {:?}", e)))?;
+                let child_loc_x = child_layout.location.x - rect.origin.x;
+                let child_loc_y = child_layout.location.y - rect.origin.y;
                 let eps = 0.01;
                 let rect_w = rect.width();
                 let rect_h = rect.height();
@@ -2421,8 +2422,8 @@ impl FlexFormattingContext {
                             .unwrap_or_else(|| "<anon>".to_string()),
                         layout_width,
                         layout_height,
-                        child_layout.location.x,
-                        child_layout.location.y,
+                        child_loc_x,
+                        child_loc_y,
                         child_box.style.flex_grow,
                         child_box.style.flex_shrink,
                         child_box.style.flex_basis
@@ -2533,8 +2534,8 @@ impl FlexFormattingContext {
                                 if rect.height().is_finite() && rect.height() > 0.0 {
                                     resolved_height = resolved_height.min(rect.height());
                                 }
-                                let mut origin_x = child_layout.location.x;
-                                let mut origin_y = child_layout.location.y;
+                                let mut origin_x = child_loc_x;
+                                let mut origin_y = child_loc_y;
                                 if main_axis_is_row && rect.height().is_finite() {
                                     let limit = rect.height().max(1.0) * 5.0;
                                     if origin_y.abs() > limit {
@@ -2548,7 +2549,7 @@ impl FlexFormattingContext {
                                     manual_col_positions = true;
                                 }
                                 if main_axis_is_row && rect_w.is_finite() && rect_w > wrap_eps {
-                                    let runaway = child_layout.location.x.abs() > rect_w * 2.0;
+                                    let runaway = child_loc_x.abs() > rect_w * 2.0;
                                     if runaway {
                                         manual_row_positions = true;
                                         fallback_cursor_x = rect.origin.x;
@@ -2556,27 +2557,27 @@ impl FlexFormattingContext {
                                 }
                                 if main_axis_is_row {
                                     let same_row = last_layout_y
-                                        .map(|prev_y| (child_layout.location.y - prev_y).abs() < wrap_eps)
+                                        .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
                                         .unwrap_or(true);
                                     if same_row {
-                                        if child_layout.location.x > rect.width() + wrap_eps {
+                                        if child_loc_x > rect.width() + wrap_eps {
                                             manual_row_positions = true;
                                             fallback_cursor_x = rect.origin.x;
                                         }
-                                        if child_layout.location.x < rect.origin.x - rect.width().abs().max(wrap_eps) {
+                                        if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
                                             manual_row_positions = true;
                                             fallback_cursor_x = rect.origin.x;
                                         }
                                         if let Some(prev) = last_layout_x {
-                                            if child_layout.location.x <= prev + 0.1 {
+                                            if child_loc_x <= prev + 0.1 {
                                                 manual_row_positions = true;
                                             }
                                         } else if !manual_row_positions {
-                                            fallback_cursor_x = child_layout.location.x;
+                                            fallback_cursor_x = child_loc_x;
                                         }
                                     } else {
                                         manual_row_positions = false;
-                                        fallback_cursor_x = child_layout.location.x;
+                                        fallback_cursor_x = child_loc_x;
                                     }
                                     if manual_row_positions {
                                         let cap_base = if rect.width().is_finite() && rect.width() > wrap_eps {
@@ -2594,24 +2595,24 @@ impl FlexFormattingContext {
                                         origin_x = fallback_cursor_x;
                                         fallback_cursor_x += resolved_width;
                                     } else {
-                                        fallback_cursor_x = child_layout.location.x + resolved_width;
-                                        last_layout_x = Some(child_layout.location.x);
-                                        last_layout_y = Some(child_layout.location.y);
+                                        fallback_cursor_x = child_loc_x + resolved_width;
+                                        last_layout_x = Some(child_loc_x);
+                                        last_layout_y = Some(child_loc_y);
                                     }
                                 } else {
                                     if let Some(prev) = last_layout_y {
-                                        if child_layout.location.y <= prev + 0.1 {
+                                        if child_loc_y <= prev + 0.1 {
                                             manual_col_positions = true;
                                         }
                                     } else {
-                                        fallback_cursor_y = child_layout.location.y;
+                                        fallback_cursor_y = child_loc_y;
                                     }
                                     if manual_col_positions {
                                         origin_y = fallback_cursor_y;
                                         fallback_cursor_y += resolved_height;
                                     } else {
-                                        fallback_cursor_y = child_layout.location.y + resolved_height;
-                                        last_layout_y = Some(child_layout.location.y);
+                                        fallback_cursor_y = child_loc_y + resolved_height;
+                                        last_layout_y = Some(child_loc_y);
                                     }
                                 }
                                 let log_child_ids = LOG_CHILD_IDS.get_or_init(|| {
@@ -2639,8 +2640,8 @@ impl FlexFormattingContext {
                                         selector,
                                         layout_width,
                                         layout_height,
-                                        child_layout.location.x,
-                                        child_layout.location.y,
+                                        child_loc_x,
+                                        child_loc_y,
                                         resolved_width,
                                         resolved_height,
                                         rect.width(),
@@ -2654,10 +2655,10 @@ impl FlexFormattingContext {
                                         child_box.style.max_width
                                     );
                                 }
-                                let delta = Point::new(origin_x - cloned.bounds.x(), origin_y - cloned.bounds.y());
-                                translate_fragment_tree(&mut cloned, delta);
-                                cloned.bounds =
-                                    Rect::new(cloned.bounds.origin, Size::new(resolved_width, resolved_height));
+                                cloned.bounds = Rect::new(
+                                    Point::new(origin_x, origin_y),
+                                    Size::new(resolved_width, resolved_height),
+                                );
                                 reused = Some(cloned);
                             }
                         }
@@ -2669,7 +2670,7 @@ impl FlexFormattingContext {
                     final_fragment = Some(child_fragment);
                 } else if let crate::tree::box_tree::BoxType::Replaced(replaced_box) = &child_box.box_type {
                     let bounds = Rect::new(
-                        Point::new(child_layout.location.x, child_layout.location.y),
+                        Point::new(child_loc_x, child_loc_y),
                         Size::new(layout_width, layout_height),
                     );
                     let fragment = FragmentNode::new_with_style(
@@ -2789,32 +2790,32 @@ impl FlexFormattingContext {
                             if rect.height().is_finite() && rect.height() > 0.0 {
                                 mc_size.height = mc_size.height.min(rect.height());
                             }
-                            let mut origin = Point::new(child_layout.location.x, child_layout.location.y);
+                            let mut origin = Point::new(child_loc_x, child_loc_y);
                             if main_axis_is_row {
                                 let same_row = last_layout_y
-                                    .map(|prev_y| (child_layout.location.y - prev_y).abs() < wrap_eps)
+                                    .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
                                     .unwrap_or(true);
                                 if !same_row || last_layout_x.is_none() {
-                                    fallback_cursor_x = child_layout.location.x;
+                                    fallback_cursor_x = child_loc_x;
                                 }
                                 origin.x = fallback_cursor_x;
                                 fallback_cursor_x += mc_size.width;
-                                last_layout_x = Some(child_layout.location.x);
-                                last_layout_y = Some(child_layout.location.y);
+                                last_layout_x = Some(child_loc_x);
+                                last_layout_y = Some(child_loc_y);
                             } else {
                                 let same_col = last_layout_x
-                                    .map(|prev_x| (child_layout.location.x - prev_x).abs() < wrap_eps)
+                                    .map(|prev_x| (child_loc_x - prev_x).abs() < wrap_eps)
                                     .unwrap_or(true);
                                 if !same_col || last_layout_y.is_none() {
-                                    fallback_cursor_y = child_layout.location.y;
+                                    fallback_cursor_y = child_loc_y;
                                 }
                                 origin.y = fallback_cursor_y;
                                 fallback_cursor_y += mc_size.height;
-                                last_layout_x = Some(child_layout.location.x);
-                                last_layout_y = Some(child_layout.location.y);
+                                last_layout_x = Some(child_loc_x);
+                                last_layout_y = Some(child_loc_y);
                             }
                             if !main_axis_is_row && layout_width > eps {
-                                origin.x = child_layout.location.x;
+                                origin.x = child_loc_x;
                             }
                             mc_fragment.bounds = Rect::new(origin, mc_size);
                             final_fragment = Some(mc_fragment);
@@ -2837,8 +2838,8 @@ impl FlexFormattingContext {
                         if rect.height().is_finite() && rect.height() > 0.0 {
                             resolved_height = resolved_height.min(rect.height());
                         }
-                        let mut origin_x = child_layout.location.x;
-                        let mut origin_y = child_layout.location.y;
+                        let mut origin_x = child_loc_x;
+                        let mut origin_y = child_loc_y;
                         if main_axis_is_row && rect.height().is_finite() {
                             let limit = rect.height().max(1.0) * 5.0;
                             if origin_y.abs() > limit {
@@ -2852,7 +2853,7 @@ impl FlexFormattingContext {
                             manual_col_positions = true;
                         }
                         if main_axis_is_row && rect_w.is_finite() && rect_w > wrap_eps {
-                            let runaway = child_layout.location.x.abs() > rect_w * 2.0;
+                            let runaway = child_loc_x.abs() > rect_w * 2.0;
                             if runaway {
                                 manual_row_positions = true;
                                 fallback_cursor_x = rect.origin.x;
@@ -2860,27 +2861,27 @@ impl FlexFormattingContext {
                         }
                         if main_axis_is_row {
                             let same_row = last_layout_y
-                                .map(|prev_y| (child_layout.location.y - prev_y).abs() < wrap_eps)
+                                .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
                                 .unwrap_or(true);
                             if same_row {
-                                if child_layout.location.x > rect.width() + wrap_eps {
+                                if child_loc_x > rect.width() + wrap_eps {
                                     manual_row_positions = true;
                                     fallback_cursor_x = rect.origin.x;
                                 }
-                                if child_layout.location.x < rect.origin.x - rect.width().abs().max(wrap_eps) {
+                                if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
                                     manual_row_positions = true;
                                     fallback_cursor_x = rect.origin.x;
                                 }
                                 if let Some(prev) = last_layout_x {
-                                    if child_layout.location.x <= prev + 0.1 {
+                                    if child_loc_x <= prev + 0.1 {
                                         manual_row_positions = true;
                                     }
                                 } else if !manual_row_positions {
-                                    fallback_cursor_x = child_layout.location.x;
+                                    fallback_cursor_x = child_loc_x;
                                 }
                             } else {
                                 manual_row_positions = false;
-                                fallback_cursor_x = child_layout.location.x;
+                                fallback_cursor_x = child_loc_x;
                             }
                             if manual_row_positions {
                                 let cap_base = if rect.width().is_finite() && rect.width() > wrap_eps {
@@ -2898,24 +2899,24 @@ impl FlexFormattingContext {
                                 origin_x = fallback_cursor_x;
                                 fallback_cursor_x += resolved_width;
                             } else {
-                                fallback_cursor_x = child_layout.location.x + resolved_width;
-                                last_layout_x = Some(child_layout.location.x);
-                                last_layout_y = Some(child_layout.location.y);
+                                fallback_cursor_x = child_loc_x + resolved_width;
+                                last_layout_x = Some(child_loc_x);
+                                last_layout_y = Some(child_loc_y);
                             }
                         } else {
                             if let Some(prev) = last_layout_y {
-                                if child_layout.location.y <= prev + 0.1 {
+                                if child_loc_y <= prev + 0.1 {
                                     manual_col_positions = true;
                                 }
                             } else {
-                                fallback_cursor_y = child_layout.location.y;
+                                fallback_cursor_y = child_loc_y;
                             }
                             if manual_col_positions {
                                 origin_y = fallback_cursor_y;
                                 fallback_cursor_y += resolved_height;
                             } else {
-                                fallback_cursor_y = child_layout.location.y + resolved_height;
-                                last_layout_y = Some(child_layout.location.y);
+                                fallback_cursor_y = child_loc_y + resolved_height;
+                                last_layout_y = Some(child_loc_y);
                             }
                         }
                         let log_child_ids = LOG_CHILD_IDS.get_or_init(|| {
@@ -2943,8 +2944,8 @@ impl FlexFormattingContext {
                                 selector,
                                 layout_width,
                                 layout_height,
-                                child_layout.location.x,
-                                child_layout.location.y,
+                                child_loc_x,
+                                child_loc_y,
                                 resolved_width,
                                 resolved_height,
                                 rect.width(),
@@ -3393,13 +3394,16 @@ impl FlexFormattingContext {
         // at the origin while preserving relative spacing.
         if main_axis_is_row && !children.is_empty() {
             let min_x = children.iter().map(|c| c.bounds.x()).fold(f32::INFINITY, f32::min);
-            let max_x = children.iter().map(|c| c.bounds.max_x()).fold(f32::NEG_INFINITY, f32::max);
+            let max_x = children
+                .iter()
+                .map(|c| c.bounds.max_x())
+                .fold(f32::NEG_INFINITY, f32::max);
             let drift_limit = rect.width().max(1.0) * 4.0;
             if min_x.is_finite() && min_x > drift_limit && max_x.is_finite() {
                 let dx = min_x;
                 static LOG_DRIFT: OnceLock<bool> = OnceLock::new();
-                let log_drift = *LOG_DRIFT
-                    .get_or_init(|| std::env::var("FASTR_LOG_FLEX_DRIFT").map(|v| v != "0").unwrap_or(false));
+                let log_drift =
+                    *LOG_DRIFT.get_or_init(|| std::env::var("FASTR_LOG_FLEX_DRIFT").map(|v| v != "0").unwrap_or(false));
                 if log_drift {
                     let selector = box_node
                         .debug_info
@@ -3418,10 +3422,7 @@ impl FlexFormattingContext {
                     );
                 }
                 for child in &mut children {
-                    child.bounds = Rect::new(
-                        Point::new(child.bounds.x() - dx, child.bounds.y()),
-                        child.bounds.size,
-                    );
+                    child.bounds = Rect::new(Point::new(child.bounds.x() - dx, child.bounds.y()), child.bounds.size);
                 }
             }
         }
@@ -3982,7 +3983,11 @@ impl FlexFormattingContext {
     }
 
     fn resolve_length_for_width(&self, length: Length, percentage_base: f32, style: &ComputedStyle) -> f32 {
-        let base = if percentage_base.is_finite() { Some(percentage_base) } else { None };
+        let base = if percentage_base.is_finite() {
+            Some(percentage_base)
+        } else {
+            None
+        };
         resolve_length_with_percentage_metrics(
             length,
             base,
