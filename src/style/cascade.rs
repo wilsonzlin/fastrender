@@ -691,6 +691,9 @@ fn append_presentational_hints<'a>(
     if let Some(presentational_rule) = replaced_alignment_presentational_hint(node, 9) {
         matching_rules.push(presentational_rule);
     }
+    if let Some(presentational_rule) = nowrap_presentational_hint(node, 10) {
+        matching_rules.push(presentational_rule);
+    }
 }
 
 fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedRule<'static>> {
@@ -827,6 +830,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
             "font: inherit; color: inherit; border: 2px inset rgb(204,204,204); background: white; padding: 2px 3px; box-sizing: border-box; display: inline-block;",
             0,
         ),
+        "nobr" => add_rule("white-space: nowrap;", 0),
         _ => {}
     }
 
@@ -1364,10 +1368,9 @@ fn resolve_line_height_length(style: &mut ComputedStyle, viewport: Size) {
             LengthUnit::Rem => len.value * style.root_font_size,
             LengthUnit::Ex => len.value * style.font_size * 0.5,
             LengthUnit::Ch => len.value * style.font_size * 0.5,
-            u if u.is_viewport_relative() => {
-                len.resolve_with_viewport(viewport.width, viewport.height)
-                    .unwrap_or(len.value)
-            }
+            u if u.is_viewport_relative() => len
+                .resolve_with_viewport(viewport.width, viewport.height)
+                .unwrap_or(len.value),
             _ => len.value,
         };
 
@@ -3491,6 +3494,60 @@ mod tests {
     }
 
     #[test]
+    fn nowrap_attribute_sets_white_space_nowrap() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "td".to_string(),
+                attributes: vec![("nowrap".to_string(), "".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.white_space,
+            crate::style::types::WhiteSpace::Nowrap
+        ));
+    }
+
+    #[test]
+    fn author_css_overrides_nowrap_presentational_hint() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "td".to_string(),
+                attributes: vec![
+                    ("nowrap".to_string(), "".to_string()),
+                    ("style".to_string(), "white-space: normal;".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.white_space,
+            crate::style::types::WhiteSpace::Normal
+        ));
+    }
+
+    #[test]
+    fn nobr_element_defaults_to_nowrap() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "nobr".to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!(matches!(
+            styled.styles.white_space,
+            crate::style::types::WhiteSpace::Nowrap
+        ));
+    }
+
+    #[test]
     fn text_align_shorthand_resets_text_align_last_to_auto() {
         let dom = element_with_style("text-align-last: right; text-align: center;");
         let styled = apply_styles(&dom, &StyleSheet::new());
@@ -5247,6 +5304,24 @@ fn replaced_alignment_presentational_hint(node: &DomNode, order: usize) -> Optio
         order,
         layer_order: vec![u32::MAX],
         declarations: Cow::Owned(parse_declarations(&declarations)),
+    })
+}
+
+fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
+    let tag = node.tag_name()?.to_ascii_lowercase();
+    if tag != "td" && tag != "th" {
+        return None;
+    }
+    if node.get_attribute("nowrap").is_none() {
+        return None;
+    }
+
+    Some(MatchedRule {
+        origin: StyleOrigin::Author,
+        specificity: 0,
+        order,
+        layer_order: vec![u32::MAX],
+        declarations: Cow::Owned(parse_declarations("white-space: nowrap;")),
     })
 }
 
