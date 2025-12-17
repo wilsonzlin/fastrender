@@ -10685,7 +10685,7 @@ mod tests {
             snap: true,
         };
         // device 2 / 1.5 = 1.333 -> round to 1 device px per image px => used resolution becomes 2dppx
-        assert!((res.used_resolution(None, 2.0) - 2.0).abs() < 1e-6);
+        assert!((res.used_resolution(None, None, 2.0) - 2.0).abs() < 1e-6);
 
         let res = ImageResolution {
             from_image: false,
@@ -10693,7 +10693,23 @@ mod tests {
             snap: true,
         };
         // device 3 / 1.6 = 1.875 -> round to 2 => used resolution 1.5dppx
-        assert!((res.used_resolution(None, 3.0) - 1.5).abs() < 1e-6);
+        assert!((res.used_resolution(None, None, 3.0) - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn image_resolution_prefers_override_and_ignores_metadata_by_default() {
+        let default_res = ImageResolution::default();
+        // Override (e.g., srcset density) should apply even when from-image is false.
+        assert!((default_res.used_resolution(Some(2.0), Some(3.0), 1.0) - 2.0).abs() < 1e-6);
+        // Metadata (e.g., EXIF DPI) is ignored unless from-image is set.
+        assert!((default_res.used_resolution(None, Some(2.5), 1.0) - 1.0).abs() < 1e-6);
+
+        let from_image = ImageResolution {
+            from_image: true,
+            specified: None,
+            snap: false,
+        };
+        assert!((from_image.used_resolution(None, Some(2.5), 1.0) - 2.5).abs() < 1e-6);
     }
 
     #[test]

@@ -370,7 +370,7 @@ impl Default for ImageResolution {
     fn default() -> Self {
         Self {
             from_image: false,
-            specified: Some(1.0),
+            specified: None,
             snap: false,
         }
     }
@@ -379,15 +379,26 @@ impl Default for ImageResolution {
 impl ImageResolution {
     /// Computes the used image resolution in dppx given optional resource metadata and device DPR.
     ///
-    /// `resource_resolution` is the resolution supplied by the image itself (e.g. EXIF).
-    pub fn used_resolution(self, resource_resolution: Option<f32>, device_pixel_ratio: f32) -> f32 {
-        let base = if self.from_image {
-            resource_resolution.or(self.specified).unwrap_or(1.0)
-        } else {
-            self.specified.unwrap_or(1.0)
-        };
+    /// `override_resolution` comes from the chosen resource (e.g. srcset density or image-set
+    /// selection). `metadata_resolution` is extracted from the resource itself (e.g. EXIF DPI) and
+    /// is only honored when `from_image` is set.
+    pub fn used_resolution(
+        self,
+        override_resolution: Option<f32>,
+        metadata_resolution: Option<f32>,
+        device_pixel_ratio: f32,
+    ) -> f32 {
+        let sanitize = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0);
 
-        let mut resolved = if base.is_finite() && base > 0.0 { base } else { 1.0 };
+        let override_resolution = sanitize(override_resolution);
+        let metadata_resolution = sanitize(metadata_resolution);
+        let specified = sanitize(self.specified);
+
+        let mut resolved = if self.from_image {
+            override_resolution.or(metadata_resolution).or(specified).unwrap_or(1.0)
+        } else {
+            specified.or(override_resolution).unwrap_or(1.0)
+        };
         if self.snap {
             resolved = snap_resolution(resolved, device_pixel_ratio);
         }

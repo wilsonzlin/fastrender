@@ -199,6 +199,13 @@ pub struct ImageSelectionContext<'a> {
     pub font_size: Option<f32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SelectedImageSource<'a> {
+    pub url: &'a str,
+    /// Resolution in image pixels per CSS px (e.g. srcset density). None when unknown.
+    pub resolution: Option<f32>,
+}
+
 impl ReplacedType {
     /// Returns a priority-ordered list of candidate image sources for painting.
     ///
@@ -260,10 +267,18 @@ impl ReplacedType {
     ///
     /// Returns the authored `src` when no better candidate exists.
     pub fn image_source_for_context<'a>(&'a self, ctx: ImageSelectionContext<'_>) -> &'a str {
+        self.selected_image_source_for_context(ctx).url
+    }
+
+    /// Selects the best image source along with its declared resolution (when known).
+    pub fn selected_image_source_for_context<'a>(&'a self, ctx: ImageSelectionContext<'_>) -> SelectedImageSource<'a> {
         match self {
             ReplacedType::Image { src, srcset, sizes, .. } => {
                 if srcset.is_empty() || !ctx.scale.is_finite() || ctx.scale <= 0.0 {
-                    return src;
+                    return SelectedImageSource {
+                        url: src,
+                        resolution: None,
+                    };
                 }
 
                 let slot_width = ctx.slot_width.filter(|w| *w > 0.0 && w.is_finite());
@@ -308,9 +323,23 @@ impl ReplacedType {
                         }
                     }
                 }
-                best.map(|(c, _)| c.url.as_str()).unwrap_or(src)
+
+                if let Some((candidate, density)) = best {
+                    SelectedImageSource {
+                        url: candidate.url.as_str(),
+                        resolution: Some(density),
+                    }
+                } else {
+                    SelectedImageSource {
+                        url: src,
+                        resolution: None,
+                    }
+                }
             }
-            _ => "",
+            _ => SelectedImageSource {
+                url: "",
+                resolution: None,
+            },
         }
     }
 }

@@ -60,8 +60,7 @@ impl CachedImage {
         if self.is_vector {
             return Some((w as f32, h as f32));
         }
-        let resource_resolution = override_resolution.or(self.resolution);
-        let used = resolution.used_resolution(resource_resolution, device_pixel_ratio);
+        let used = resolution.used_resolution(override_resolution, self.resolution, device_pixel_ratio);
         if used <= 0.0 || !used.is_finite() {
             return None;
         }

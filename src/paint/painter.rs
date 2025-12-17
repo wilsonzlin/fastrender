@@ -494,30 +494,28 @@ impl Painter {
                 let needs_ratio = replaced_box.aspect_ratio.is_none();
                 let mut have_resource_dimensions = false;
 
-                let chosen_src = if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+                let selected = if (needs_intrinsic || needs_ratio) && !src.is_empty() {
                     let media_ctx = crate::style::media::MediaContext::screen(viewport.width, viewport.height)
                         .with_device_pixel_ratio(self.scale)
                         .with_env_overrides();
-                    Some(
-                        replaced_box
-                            .replaced_type
-                            .image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-                                scale: self.scale,
-                                slot_width: None,
-                                viewport: Some(viewport),
-                                media_context: Some(&media_ctx),
-                                font_size: Some(style.font_size),
-                            })
-                            .to_string(),
-                    )
+                    Some(replaced_box.replaced_type.selected_image_source_for_context(
+                        crate::tree::box_tree::ImageSelectionContext {
+                            scale: self.scale,
+                            slot_width: None,
+                            viewport: Some(viewport),
+                            media_context: Some(&media_ctx),
+                            font_size: Some(style.font_size),
+                        },
+                    ))
                 } else {
                     None
                 };
 
-                if let Some(url) = chosen_src {
-                    if let Ok(img) = self.image_cache.load(&url) {
+                if let Some(selected) = selected {
+                    if let Ok(img) = self.image_cache.load(selected.url) {
                         let orientation = style.image_orientation.resolve(img.orientation, false);
-                        if let Some((w, h)) = img.css_dimensions(orientation, &style.image_resolution, self.scale, None)
+                        if let Some((w, h)) =
+                            img.css_dimensions(orientation, &style.image_resolution, self.scale, selected.resolution)
                         {
                             if needs_intrinsic {
                                 replaced_box.intrinsic_size = Some(Size::new(w, h));
