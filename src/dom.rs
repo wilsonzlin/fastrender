@@ -420,7 +420,8 @@ impl<'a> ElementRef<'a> {
     }
 
     fn is_option_selected(&self) -> bool {
-        if self.node.get_attribute("selected").is_some() {
+        let explicitly_selected = self.node.get_attribute("selected").is_some();
+        if explicitly_selected {
             return true;
         }
 
@@ -436,9 +437,10 @@ impl<'a> ElementRef<'a> {
             return false;
         };
 
-        // Multiple selects do not auto-select the first option.
-        if select_node.get_attribute("multiple").is_some() {
-            return false;
+        let is_multiple = select_node.get_attribute("multiple").is_some();
+        if is_multiple {
+            // Multiple selects require explicit selection.
+            return explicitly_selected;
         }
 
         // If any option under this select has an explicit selected attribute, only that one is selected.
