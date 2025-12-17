@@ -42,9 +42,9 @@ use types::{
     ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
     OverscrollBehavior, PointerEvents, Resize, ScrollBehavior, ScrollbarColor, ScrollbarWidth, TabSize, TableLayout,
     TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition,
-    TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextSizeAdjust, TextTransform,
-    TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox, TransformOrigin, TransformStyle,
-    UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
+    TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset,
+    TextUnderlinePosition, TouchAction, TransformBox, TransformOrigin, TransformStyle, UnicodeBidi, UserSelect,
+    OverflowAnchor, VerticalAlign, WhiteSpace, WillChange, WordBreak, WritingMode,
 };
 use values::Length;
 
@@ -372,7 +372,6 @@ pub struct ComputedStyle {
     pub font_stretch: FontStretch,
     pub font_kerning: FontKerning,
     pub line_height: LineHeight,
-    pub text_size_adjust: TextSizeAdjust,
     pub direction: Direction,
     pub unicode_bidi: UnicodeBidi,
     /// Computed root element font size for resolving rem units
@@ -406,6 +405,7 @@ pub struct ComputedStyle {
     pub hyphens: HyphensMode,
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
+    pub overflow_anchor: OverflowAnchor,
     pub vertical_align: VerticalAlign,
     /// True when vertical-align came from an authored/UA declaration or presentational hint.
     /// Used to distinguish default UA values from explicit ones when applying table row fallbacks.
@@ -611,7 +611,6 @@ impl Default for ComputedStyle {
             font_stretch: FontStretch::Normal,
             font_kerning: FontKerning::Auto,
             line_height: LineHeight::Normal,
-            text_size_adjust: TextSizeAdjust::Auto,
             direction: Direction::Ltr,
             unicode_bidi: UnicodeBidi::Normal,
             root_font_size: 16.0,
@@ -641,6 +640,7 @@ impl Default for ComputedStyle {
             hyphens: HyphensMode::Manual,
             word_break: WordBreak::Normal,
             overflow_wrap: OverflowWrap::Normal,
+            overflow_anchor: OverflowAnchor::Auto,
             vertical_align: VerticalAlign::Baseline,
             vertical_align_specified: false,
             language: "en".to_string(),

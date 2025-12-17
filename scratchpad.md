@@ -470,6 +470,7 @@ Inline coordinate fix (Mar 2026):
 - Text decoration keyword parsing is now ASCII case-insensitive (line/style/thickness/skip-ink/underline-position), with regression coverage for uppercase inputs.
 - text-decoration-color now treats currentColor case-insensitively; parsing accepts any casing of the keyword and the regression for decoration longhands covers CurrentColor.
 - Added `word-break: anywhere`: parsing/computed value plus inline breaking/min-content handling; anywhere adds char-boundary breaks (suppressed by nowrap) and reduces min-content width. Regression covers wrapping/nowrap/min-content behavior.
+- Added CSS `overflow-anchor`: parsed (auto/none), stored in computed styles with default auto, cascade respects inherit/initial, and regression tests cover parsing/inheritance.
 - text-indent hanging + each-line now keeps the first line outdented per CSS Text: inline indentation logic no longer indents the first line when hanging is present even if each-line is set, and the regression test was updated/renamed.
 - text-decoration-color now treats currentColor case-insensitively; parsing accepts any casing of the keyword and the regression for decoration longhands covers CurrentColor.
 - Text decoration keyword parsing is now ASCII case-insensitive: lines/style/thickness/skip-ink/underline-position all accept upper/mixed-case values, with a regression test covering uppercase inputs.

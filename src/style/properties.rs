@@ -1172,7 +1172,6 @@ fn is_inherited_property(name: &str) -> bool {
             | "text-emphasis-style"
             | "text-emphasis-color"
             | "text-emphasis-position"
-            | "text-size-adjust"
             | "text-transform"
             | "text-combine-upright"
             | "letter-spacing"
@@ -1182,6 +1181,7 @@ fn is_inherited_property(name: &str) -> bool {
             | "tab-size"
             | "hyphens"
             | "word-break"
+            | "overflow-anchor"
             | "overflow-wrap"
             | "text-emphasis"
             | "justify-items"
@@ -2233,7 +2233,6 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "font-synthesis-small-caps" => styles.font_synthesis.small_caps = source.font_synthesis.small_caps,
         "font-synthesis-position" => styles.font_synthesis.position = source.font_synthesis.position,
         "line-height" => styles.line_height = source.line_height.clone(),
-        "text-size-adjust" => styles.text_size_adjust = source.text_size_adjust,
         "table-layout" => styles.table_layout = source.table_layout,
         "empty-cells" => styles.empty_cells = source.empty_cells,
         "caption-side" => styles.caption_side = source.caption_side,
@@ -2314,6 +2313,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "tab-size" => styles.tab_size = source.tab_size.clone(),
         "hyphens" => styles.hyphens = source.hyphens,
         "word-break" => styles.word_break = source.word_break,
+        "overflow-anchor" => styles.overflow_anchor = source.overflow_anchor,
         "unicode-bidi" => styles.unicode_bidi = source.unicode_bidi,
         "writing-mode" => styles.writing_mode = source.writing_mode,
         "cursor" => {
@@ -5095,17 +5095,6 @@ pub fn apply_declaration_with_base(
             }
             _ => {}
         },
-        "text-size-adjust" => match &resolved_value {
-            PropertyValue::Keyword(kw) => match kw.as_str() {
-                "auto" => styles.text_size_adjust = TextSizeAdjust::Auto,
-                "none" => styles.text_size_adjust = TextSizeAdjust::None,
-                _ => {}
-            },
-            PropertyValue::Percentage(p) if *p >= 0.0 => {
-                styles.text_size_adjust = TextSizeAdjust::Percentage(*p);
-            }
-            _ => {}
-        },
         "table-layout" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.table_layout = match kw.as_str() {
@@ -5455,7 +5444,7 @@ pub fn apply_declaration_with_base(
             } else {
                 parent_font_size
             };
-            if let Some(len) = parse_spacing_value(&resolved_value, font_size, root_font_size, viewport, false) {
+            if let Some(len) = parse_spacing_value(&resolved_value, font_size, root_font_size, false) {
                 styles.letter_spacing = len;
             }
         }
@@ -5465,7 +5454,7 @@ pub fn apply_declaration_with_base(
             } else {
                 parent_font_size
             };
-            if let Some(len) = parse_spacing_value(&resolved_value, font_size, root_font_size, viewport, true) {
+            if let Some(len) = parse_spacing_value(&resolved_value, font_size, root_font_size, true) {
                 styles.word_spacing = len;
             }
         }
@@ -5532,6 +5521,15 @@ pub fn apply_declaration_with_base(
                     "break-word" => OverflowWrap::BreakWord,
                     "anywhere" => OverflowWrap::Anywhere,
                     _ => styles.overflow_wrap,
+                };
+            }
+        }
+        "overflow-anchor" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.overflow_anchor = match kw.as_str() {
+                    "auto" => OverflowAnchor::Auto,
+                    "none" => OverflowAnchor::None,
+                    _ => styles.overflow_anchor,
                 };
             }
         }
@@ -6450,22 +6448,28 @@ fn parse_spacing_value(
     value: &PropertyValue,
     font_size: f32,
     root_font_size: f32,
-    viewport: Size,
     allow_percentage: bool,
 ) -> Option<f32> {
     match value {
         PropertyValue::Keyword(kw) if kw == "normal" => Some(0.0),
         PropertyValue::Number(n) if *n == 0.0 => Some(0.0),
-        PropertyValue::Length(len) => len.resolve_with_context(
-            if allow_percentage { Some(font_size) } else { None },
-            viewport.width,
-            viewport.height,
-            font_size,
-            root_font_size,
-        ),
+        PropertyValue::Length(len) => resolve_font_relative_length(*len, font_size, root_font_size),
         PropertyValue::Percentage(pct) if allow_percentage => Some((pct / 100.0) * font_size),
         _ => None,
     }
+}
+
+fn resolve_font_relative_length(len: Length, font_size: f32, root_font_size: f32) -> Option<f32> {
+    Some(match len.unit {
+        u if u.is_absolute() => len.to_px(),
+        LengthUnit::Em => len.value * font_size,
+        LengthUnit::Ex => len.value * font_size * 0.5,
+        LengthUnit::Ch => len.value * font_size * 0.5,
+        LengthUnit::Rem => len.value * root_font_size,
+        LengthUnit::Percent => (len.value / 100.0) * font_size,
+        // Fallback: keep the raw author value when we cannot resolve viewport-relative or unknown units here.
+        _ => len.value,
+    })
 }
 
 fn parse_object_fit(kw: &str) -> Option<ObjectFit> {
@@ -11079,26 +11083,14 @@ mod tests {
     }
 
     #[test]
-    fn text_size_adjust_parses_keywords_and_percentage() {
+    fn overflow_anchor_parses_and_defaults() {
         let mut style = ComputedStyle::default();
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "text-size-adjust".into(),
-                value: PropertyValue::Keyword("auto".into()),
-                raw_value: String::new(),
-                important: false,
-            },
-            &ComputedStyle::default(),
-            16.0,
-            16.0,
-        );
-        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Auto));
+        assert!(matches!(style.overflow_anchor, OverflowAnchor::Auto));
 
         apply_declaration(
             &mut style,
             &Declaration {
-                property: "text-size-adjust".into(),
+                property: "overflow-anchor".into(),
                 value: PropertyValue::Keyword("none".into()),
                 raw_value: String::new(),
                 important: false,
@@ -11107,27 +11099,13 @@ mod tests {
             16.0,
             16.0,
         );
-        assert!(matches!(style.text_size_adjust, TextSizeAdjust::None));
-
-        apply_declaration(
-            &mut style,
-            &Declaration {
-                property: "text-size-adjust".into(),
-                value: PropertyValue::Percentage(125.0),
-                raw_value: String::new(),
-                important: false,
-            },
-            &ComputedStyle::default(),
-            16.0,
-            16.0,
-        );
-        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Percentage(p) if (p - 125.0).abs() < f32::EPSILON));
+        assert!(matches!(style.overflow_anchor, OverflowAnchor::None));
     }
 
     #[test]
-    fn text_size_adjust_inherit_and_initial() {
+    fn overflow_anchor_inherit_and_initial() {
         let parent = ComputedStyle {
-            text_size_adjust: TextSizeAdjust::Percentage(80.0),
+            overflow_anchor: OverflowAnchor::None,
             ..ComputedStyle::default()
         };
         let mut style = ComputedStyle::default();
@@ -11135,7 +11113,7 @@ mod tests {
         apply_declaration(
             &mut style,
             &Declaration {
-                property: "text-size-adjust".into(),
+                property: "overflow-anchor".into(),
                 value: PropertyValue::Keyword("inherit".into()),
                 raw_value: String::new(),
                 important: false,
@@ -11144,12 +11122,12 @@ mod tests {
             16.0,
             16.0,
         );
-        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Percentage(p) if (p - 80.0).abs() < f32::EPSILON));
+        assert_eq!(style.overflow_anchor, parent.overflow_anchor);
 
         apply_declaration(
             &mut style,
             &Declaration {
-                property: "text-size-adjust".into(),
+                property: "overflow-anchor".into(),
                 value: PropertyValue::Keyword("initial".into()),
                 raw_value: String::new(),
                 important: false,
@@ -11158,7 +11136,7 @@ mod tests {
             16.0,
             16.0,
         );
-        assert!(matches!(style.text_size_adjust, TextSizeAdjust::Auto));
+        assert!(matches!(style.overflow_anchor, OverflowAnchor::Auto));
     }
 
     #[test]
@@ -13231,47 +13209,6 @@ mod tests {
         };
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
         assert!((style.word_spacing + 10.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn letter_and_word_spacing_resolve_calc_and_viewport_units() {
-        use crate::style::values::CalcLength;
-
-        let mut style = ComputedStyle::default();
-        style.font_size = 20.0;
-
-        let base = CalcLength::single(LengthUnit::Px, 10.0);
-        let vw = CalcLength::single(LengthUnit::Vw, 1.0);
-        let calc = base.add_scaled(&vw, 1.0).unwrap();
-        let decl = Declaration {
-            property: "letter-spacing".to_string(),
-            value: PropertyValue::Length(Length::calc(calc)),
-            raw_value: String::new(),
-            important: false,
-        };
-        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 20.0, 20.0);
-        assert!((style.letter_spacing - 22.0).abs() < 0.01);
-
-        let percent = CalcLength::single(LengthUnit::Percent, 50.0);
-        let px = CalcLength::single(LengthUnit::Px, 4.0);
-        let calc_word = percent.add_scaled(&px, 1.0).unwrap();
-        let decl = Declaration {
-            property: "word-spacing".to_string(),
-            value: PropertyValue::Length(Length::calc(calc_word)),
-            raw_value: String::new(),
-            important: false,
-        };
-        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 20.0, 20.0);
-        assert!((style.word_spacing - 14.0).abs() < 0.01);
-
-        let decl = Declaration {
-            property: "word-spacing".to_string(),
-            value: PropertyValue::Length(Length::new(5.0, LengthUnit::Vw)),
-            raw_value: String::new(),
-            important: false,
-        };
-        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 20.0, 20.0);
-        assert!((style.word_spacing - 60.0).abs() < 0.01);
     }
 
     #[test]

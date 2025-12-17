@@ -2026,6 +2026,15 @@ pub enum WordBreak {
     Anywhere,
 }
 
+/// CSS `overflow-anchor`
+///
+/// Reference: CSS Scroll Anchoring Module Level 1
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverflowAnchor {
+    Auto,
+    None,
+}
+
 /// CSS `overflow-wrap` (formerly `word-wrap`)
 ///
 /// Reference: CSS Text Module Level 3
