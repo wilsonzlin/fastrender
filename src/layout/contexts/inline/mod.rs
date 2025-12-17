@@ -2568,6 +2568,16 @@ impl InlineFormattingContext {
         // Floats are taken out-of-flow; if any remain in the line items, skip them
         // so they don't affect justification or fragment construction.
         items.retain(|p| !matches!(p.item, InlineItem::Floating(_)));
+        if rtl {
+            let is_marker_item = |p: &PositionedItem| match &p.item {
+                InlineItem::Text(t) => t.is_marker,
+                InlineItem::Replaced(r) => r.is_marker,
+                _ => false,
+            };
+            let (mut markers, others): (Vec<_>, Vec<_>) = items.into_iter().partition(is_marker_item);
+            markers.extend(others);
+            items = markers;
+        }
 
         let mut children = Vec::new();
         let usable_width = if available_width.is_finite() {
@@ -6540,6 +6550,55 @@ mod tests {
 
         assert!(text_x.unwrap_or(-100.0) >= -0.01 && text_x.unwrap() <= 0.1);
         assert!(marker_x.unwrap_or(0.0) < -5.0);
+    }
+
+    #[test]
+    fn marker_outside_positions_inline_start_in_horizontal_rtl() {
+        let ifc = InlineFormattingContext::new();
+
+        let mut root_style = ComputedStyle::default();
+        root_style.direction = crate::style::types::Direction::Rtl;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(200.0, 200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let mut marker_bounds = None;
+        let mut text_bounds = None;
+        for child in &line.children {
+            match child.content {
+                FragmentContent::Text { is_marker: true, .. } | FragmentContent::Replaced { .. } => {
+                    if marker_bounds.is_none() {
+                        marker_bounds = Some(child.bounds);
+                    }
+                }
+                FragmentContent::Text { is_marker: false, .. } => {
+                    if text_bounds.is_none() {
+                        text_bounds = Some(child.bounds);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let marker = marker_bounds.expect("marker fragment");
+        let text = text_bounds.expect("text fragment");
+        assert!(
+            marker.x() > text.max_x() + 4.0,
+            "RTL outside marker should sit at inline-start (right) of text: marker_x={} text_max_x={}",
+            marker.x(),
+            text.max_x()
+        );
     }
 
     #[test]
