@@ -1482,6 +1482,7 @@ Actionable borrowings:
 - Row flex conversion now reflows children whenever any item extends beyond the container width (instead of 1.5×), keeping row items anchored at the start edge when Taffy produces shifted positions. Tests still pass; CNN bbox unchanged (~1200×9361) but far-right fragments remain absent—media still appear slightly offscreen, so need to trace flex constraints/styles for those wrappers.
 - Painter now supports a scroll/translation offset and FastRender exposes `render_html_with_scroll`/`render_to_png_with_scroll`; the fetch_and_render CLI scroll_y argument now applies that offset instead of warning. Added regression `render_html_with_scroll_offsets_viewport` covering the shifted viewport.
 - render_pages CLI gained `--scroll-y` support and passes the offset through `render_to_png_with_scroll`; per-page logs include the scroll value.
+- Rendered example.org (render timed out locally at 120s build/run); no output generated. Pending retry if needed.
 - Added prefers-contrast media coverage: MediaContext setter, evaluation regression, and env override invalid-value guard.
 - Added a TextRun regression ensuring half-leading can be negative when line-height is smaller than text height (test_text_run_negative_half_leading).
 - Inline bidi: added layout regression `bidi_isolate_positions_between_surrounding_runs` to ensure a unicode-bidi:isolate RTL run stays contiguous and is positioned between surrounding LTR text in visual order.
