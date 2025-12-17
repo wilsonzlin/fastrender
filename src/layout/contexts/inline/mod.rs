@@ -2480,8 +2480,7 @@ impl InlineFormattingContext {
                 base_align = map_text_align(TextAlign::Start, line_direction);
             }
             let align_last_auto = matches!(text_align_last, crate::style::types::TextAlignLast::Auto);
-            let allow_justify =
-                !is_last_line || !align_last_auto || matches!(text_align, TextAlign::JustifyAll);
+            let allow_justify = !is_last_line || !align_last_auto || matches!(text_align, TextAlign::JustifyAll);
             let has_justify = if !allow_justify || matches!(resolved_justify, TextJustify::None) {
                 false
             } else {
@@ -4452,9 +4451,13 @@ impl InlineFormattingContext {
         mut lines: Vec<Line>,
         style: &Arc<ComputedStyle>,
         strut_metrics: &BaselineMetrics,
-        _inline_vertical: bool,
+        inline_vertical: bool,
     ) -> Result<Vec<Line>, LayoutError> {
-        let overflow_axis = style.overflow_x;
+        let overflow_axis = if inline_vertical {
+            style.overflow_y
+        } else {
+            style.overflow_x
+        };
         let clipping = matches!(
             overflow_axis,
             crate::style::types::Overflow::Hidden
@@ -7945,16 +7948,16 @@ mod tests {
         );
 
         // Inline axis is the available height in vertical writing; make it tight to force overflow.
-        let constraints = LayoutConstraints::new(
-            AvailableSpace::Definite(80.0),
-            AvailableSpace::Definite(40.0),
-        );
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(80.0), AvailableSpace::Definite(40.0));
         let ifc = InlineFormattingContext::new();
         let fragment = ifc.layout(&root, &constraints).expect("layout");
 
         let mut texts = Vec::new();
         collect_text_fragments(&fragment, &mut texts);
-        assert!(texts.iter().any(|t| t.contains('…')), "expected ellipsis in vertical text overflow");
+        assert!(
+            texts.iter().any(|t| t.contains('…')),
+            "expected ellipsis in vertical text overflow"
+        );
 
         let line_fragment = fragment
             .children
@@ -7991,10 +7994,7 @@ mod tests {
             )],
         );
 
-        let constraints = LayoutConstraints::new(
-            AvailableSpace::Definite(80.0),
-            AvailableSpace::Definite(40.0),
-        );
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(80.0), AvailableSpace::Definite(40.0));
         let ifc = InlineFormattingContext::new();
         let fragment = ifc.layout(&root, &constraints).expect("layout");
 
@@ -8016,6 +8016,80 @@ mod tests {
         assert!(
             line_fragment.bounds.height() <= 40.1,
             "line inline-axis extent should clamp to the available height in vertical writing"
+        );
+    }
+
+    #[test]
+    fn text_overflow_uses_inline_axis_overflow_in_vertical_writing_mode() {
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.writing_mode = WritingMode::VerticalRl;
+        container_style.overflow_x = Overflow::Visible;
+        container_style.overflow_y = Overflow::Hidden;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Clip,
+            inline_end: TextOverflowSide::Ellipsis,
+        };
+
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = container_style.white_space;
+        text_style.writing_mode = container_style.writing_mode;
+
+        let root = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "vertical text that will overflow the inline axis".to_string(),
+            )],
+        );
+
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(80.0), AvailableSpace::Definite(40.0));
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_fragments(&fragment, &mut texts);
+        assert!(
+            texts.iter().any(|t| t.contains('…')),
+            "expected ellipsis when inline overflow clips via overflow-y"
+        );
+    }
+
+    #[test]
+    fn text_overflow_does_not_apply_when_inline_overflow_is_visible_in_vertical_writing_mode() {
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.writing_mode = WritingMode::VerticalRl;
+        container_style.overflow_x = Overflow::Hidden;
+        container_style.overflow_y = Overflow::Visible;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Clip,
+            inline_end: TextOverflowSide::Ellipsis,
+        };
+
+        let mut text_style = ComputedStyle::default();
+        text_style.white_space = container_style.white_space;
+        text_style.writing_mode = container_style.writing_mode;
+
+        let root = BoxNode::new_block(
+            Arc::new(container_style),
+            FormattingContextType::Block,
+            vec![BoxNode::new_text(
+                Arc::new(text_style),
+                "vertical text that overflows but should not ellipsize when inline overflow is visible".to_string(),
+            )],
+        );
+
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(80.0), AvailableSpace::Definite(40.0));
+        let ifc = InlineFormattingContext::new();
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut texts = Vec::new();
+        collect_text_fragments(&fragment, &mut texts);
+        assert!(
+            !texts.iter().any(|t| t.contains('…')),
+            "ellipsis should not appear when inline overflow is visible"
         );
     }
 
@@ -9442,10 +9516,7 @@ mod tests {
         let root = BoxNode::new_block(
             Arc::new(root_style),
             FormattingContextType::Block,
-            vec![BoxNode::new_text(
-                Arc::new(text_style),
-                "foo bar\nbaz qux".to_string(),
-            )],
+            vec![BoxNode::new_text(Arc::new(text_style), "foo bar\nbaz qux".to_string())],
         );
         let constraints = LayoutConstraints::definite_width(140.0);
 
