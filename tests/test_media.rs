@@ -3,7 +3,8 @@
 //! These tests verify the media query parser and evaluator against
 //! real-world use cases and CSS specification requirements.
 
-use fastrender::style::media::{ColorScheme, ContrastPreference, MediaContext, MediaQuery};
+use fastrender::css::parser::parse_stylesheet;
+use fastrender::style::media::{ColorScheme, ContrastPreference, MediaContext, MediaQuery, MediaQueryCache};
 use std::env;
 
 struct EnvGuard {
@@ -835,4 +836,22 @@ fn test_dark_mode_pattern() {
 
     // Dark mode user sees dark theme
     assert!(dark_ctx.evaluate(&dark_mode));
+}
+
+#[test]
+fn media_query_cache_reused_between_collections() {
+    let sheet = parse_stylesheet(
+        "@media (min-width: 10px) { @font-face { font-family: cache; src: url(cache.woff); } .foo { color: red; } }",
+    )
+    .unwrap();
+    let ctx = MediaContext::screen(100.0, 100.0);
+    let mut cache = MediaQueryCache::default();
+
+    let faces = sheet.collect_font_face_rules_with_cache(&ctx, Some(&mut cache));
+    assert_eq!(faces.len(), 1);
+    let cached_len = cache.len();
+
+    let rules = sheet.collect_style_rules_with_cache(&ctx, Some(&mut cache));
+    assert_eq!(rules.len(), 1);
+    assert_eq!(cache.len(), cached_len);
 }

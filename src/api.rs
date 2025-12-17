@@ -71,11 +71,11 @@ use crate::layout::profile::{layout_profile_enabled, log_layout_profile, reset_l
 use crate::paint::painter::{paint_tree_with_resources_scaled, paint_tree_with_resources_scaled_offset};
 use crate::resource::{HttpFetcher, ResourceFetcher};
 use crate::style::cascade::{
-    apply_styles_with_media_and_target, apply_styles_with_media_target_and_imports, ContainerQueryContext,
-    ContainerQueryInfo, StyledNode,
+    apply_styles_with_media_target_and_imports, apply_styles_with_media_target_and_imports_cached,
+    ContainerQueryContext, ContainerQueryInfo, StyledNode,
 };
 use crate::style::color::Rgba;
-use crate::style::media::MediaContext;
+use crate::style::media::{MediaContext, MediaQueryCache};
 use crate::style::types::{
     ContainerType, ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, WritingMode,
 };
@@ -868,14 +868,31 @@ impl FastRender {
             .with_device_pixel_ratio(self.device_pixel_ratio)
             .with_env_overrides();
         let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
-        let resolved_stylesheet = stylesheet.resolve_imports(&import_loader, self.base_url.as_deref(), &media_ctx);
+        let mut media_query_cache = MediaQueryCache::default();
+        let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
+            &import_loader,
+            self.base_url.as_deref(),
+            &media_ctx,
+            Some(&mut media_query_cache),
+        );
         let has_container_queries = resolved_stylesheet.has_container_rules();
         self.font_context.clear_web_fonts();
-        let font_faces = resolved_stylesheet.collect_font_face_rules(&media_ctx);
+        let font_faces =
+            resolved_stylesheet.collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
         // Best-effort loading; rendering should continue even if a web font fails.
         let _ = self.font_context.load_web_fonts(&font_faces, self.base_url.as_deref());
-        let styled_tree =
-            apply_styles_with_media_and_target(dom, &resolved_stylesheet, &media_ctx, target_fragment.as_deref());
+        let styled_tree = apply_styles_with_media_target_and_imports_cached(
+            dom,
+            &resolved_stylesheet,
+            &media_ctx,
+            target_fragment.as_deref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&mut media_query_cache),
+        );
         let first_style_fingerprints = has_container_queries.then(|| styled_fingerprint_map(&styled_tree));
 
         if let Some(start) = stage_start.as_mut() {

@@ -15,7 +15,7 @@ use crate::style::color::Rgba;
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
-use crate::style::media::{ColorScheme, MediaContext};
+use crate::style::media::{ColorScheme, MediaContext, MediaQueryCache};
 use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties, with_image_set_dpr};
 use crate::style::types::{ColorSchemeEntry, ColorSchemePreference, ContainerType};
 use crate::style::values::{Length, LengthUnit};
@@ -605,13 +605,14 @@ pub fn apply_styles_with_media_and_target(
     media_ctx: &MediaContext,
     target_fragment: Option<&str>,
 ) -> StyledNode {
-    apply_styles_with_media_target_and_imports(
+    apply_styles_with_media_target_and_imports_cached(
         dom,
         stylesheet,
         media_ctx,
         target_fragment,
         None,
         None::<&str>,
+        None,
         None,
         None,
         None,
@@ -630,6 +631,33 @@ pub fn apply_styles_with_media_target_and_imports(
     container_scope: Option<&HashSet<usize>>,
     reuse_map: Option<&HashMap<usize, *const StyledNode>>,
 ) -> StyledNode {
+    apply_styles_with_media_target_and_imports_cached(
+        dom,
+        stylesheet,
+        media_ctx,
+        target_fragment,
+        import_loader,
+        base_url,
+        container_ctx,
+        container_scope,
+        reuse_map,
+        None,
+    )
+}
+
+/// Apply styles with optional media-query caching to share media evaluation across passes.
+pub fn apply_styles_with_media_target_and_imports_cached(
+    dom: &DomNode,
+    stylesheet: &StyleSheet,
+    media_ctx: &MediaContext,
+    target_fragment: Option<&str>,
+    import_loader: Option<&dyn CssImportLoader>,
+    base_url: Option<&str>,
+    container_ctx: Option<&ContainerQueryContext>,
+    container_scope: Option<&HashSet<usize>>,
+    reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+    mut media_cache: Option<&mut MediaQueryCache>,
+) -> StyledNode {
     let profile_enabled = cascade_profile_enabled();
     let profile_start = profile_enabled.then(|| Instant::now());
     if profile_enabled {
@@ -645,15 +673,23 @@ pub fn apply_styles_with_media_target_and_imports(
 
     // Resolve imports if a loader is provided
     let author_sheet = if let Some(loader) = import_loader {
-        stylesheet.resolve_imports(loader, base_url, media_ctx)
+        stylesheet.resolve_imports_with_cache(loader, base_url, media_ctx, media_cache.as_deref_mut())
     } else {
         stylesheet.clone()
     };
 
     // Collect applicable rules from both stylesheets
     // User-agent rules come first (lower priority)
-    let ua_rules = ua_stylesheet.collect_style_rules(media_ctx);
-    let author_rules = author_sheet.collect_style_rules(media_ctx);
+    let ua_rules = if let Some(cache) = media_cache.as_deref_mut() {
+        ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+        ua_stylesheet.collect_style_rules(media_ctx)
+    };
+    let author_rules = if let Some(cache) = media_cache.as_deref_mut() {
+        author_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+        author_sheet.collect_style_rules(media_ctx)
+    };
 
     let mut all_rules: Vec<CascadeRule<'_>> = Vec::with_capacity(ua_rules.len() + author_rules.len());
     for (order, rule) in ua_rules.iter().enumerate() {

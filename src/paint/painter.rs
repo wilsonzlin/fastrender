@@ -40,7 +40,7 @@ use crate::paint::text_shadow::{resolve_text_shadows, PathBounds, ResolvedTextSh
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::display::Display;
-use crate::style::media::MediaContext;
+use crate::style::media::{MediaContext, MediaQueryCache};
 use crate::style::position::Position;
 use crate::style::types::{
     BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
@@ -3771,23 +3771,35 @@ impl Painter {
         let import_loader = EmbeddedImportFetcher {
             base_url: self.image_cache.base_url(),
         };
-        let resolved_stylesheet =
-            stylesheet.resolve_imports(&import_loader, self.image_cache.base_url().as_deref(), &media_ctx);
+        let mut media_query_cache = MediaQueryCache::default();
+        let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
+            &import_loader,
+            self.image_cache.base_url().as_deref(),
+            &media_ctx,
+            Some(&mut media_query_cache),
+        );
         let target_fragment = self
             .image_cache
             .base_url()
             .as_ref()
             .and_then(|url| url.split('#').nth(1))
             .map(String::from);
-        let font_faces = resolved_stylesheet.collect_font_face_rules(&media_ctx);
+        let font_faces =
+            resolved_stylesheet.collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
         let _ = self
             .font_ctx
             .load_web_fonts(&font_faces, self.image_cache.base_url().as_deref());
-        let styled_tree = style::cascade::apply_styles_with_media_and_target(
+        let styled_tree = style::cascade::apply_styles_with_media_target_and_imports_cached(
             &dom,
             &resolved_stylesheet,
             &media_ctx,
             target_fragment.as_deref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&mut media_query_cache),
         );
         let mut box_tree = tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
         let viewport = Size::new(content_rect.width(), content_rect.height());

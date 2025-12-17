@@ -3,7 +3,7 @@
 //! Core types for representing CSS stylesheets, rules, and values.
 
 use crate::style::color::{Color, Rgba};
-use crate::style::media::{MediaContext, MediaQuery};
+use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache};
 use crate::style::values::Length;
 use cssparser::{Parser, ParserInput, ToCss};
 use selectors::parser::SelectorList;
@@ -179,16 +179,46 @@ impl StyleSheet {
     ///
     /// This flattens nested @media rules and filters by the given media context.
     pub fn collect_style_rules(&self, media_ctx: &MediaContext) -> Vec<CollectedRule<'_>> {
+        self.collect_style_rules_with_cache(media_ctx, None)
+    }
+
+    /// Collects applicable style rules using an optional media-query cache.
+    ///
+    /// Providing a cache allows callers to reuse media query evaluations across
+    /// multiple collection passes (e.g., @font-face and style rules), reducing
+    /// duplicate media feature work.
+    pub fn collect_style_rules_with_cache(
+        &self,
+        media_ctx: &MediaContext,
+        mut cache: Option<&mut MediaQueryCache>,
+    ) -> Vec<CollectedRule<'_>> {
         let mut result = Vec::new();
         let mut registry = LayerRegistry::new();
-        collect_rules_recursive(&self.rules, media_ctx, &mut registry, &[], &[], &mut result);
+        collect_rules_recursive(
+            &self.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            &mut registry,
+            &[],
+            &[],
+            &mut result,
+        );
         result
     }
 
     /// Collects all @font-face rules that apply to the current media context.
     pub fn collect_font_face_rules(&self, media_ctx: &MediaContext) -> Vec<FontFaceRule> {
+        self.collect_font_face_rules_with_cache(media_ctx, None)
+    }
+
+    /// Collects applicable @font-face rules using an optional media-query cache.
+    pub fn collect_font_face_rules_with_cache(
+        &self,
+        media_ctx: &MediaContext,
+        mut cache: Option<&mut MediaQueryCache>,
+    ) -> Vec<FontFaceRule> {
         let mut result = Vec::new();
-        collect_font_faces_recursive(&self.rules, media_ctx, &mut result);
+        collect_font_faces_recursive(&self.rules, media_ctx, cache.as_deref_mut(), &mut result);
         result
     }
 
@@ -202,9 +232,28 @@ impl StyleSheet {
         base_url: Option<&str>,
         media_ctx: &MediaContext,
     ) -> Self {
+        self.resolve_imports_with_cache(loader, base_url, media_ctx, None)
+    }
+
+    /// Resolve @import rules with an optional media-query cache for reuse.
+    pub fn resolve_imports_with_cache<L: CssImportLoader + ?Sized>(
+        &self,
+        loader: &L,
+        base_url: Option<&str>,
+        media_ctx: &MediaContext,
+        mut cache: Option<&mut MediaQueryCache>,
+    ) -> Self {
         let mut resolved = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        resolve_rules(&self.rules, loader, base_url, media_ctx, &mut seen, &mut resolved);
+        resolve_rules(
+            &self.rules,
+            loader,
+            base_url,
+            media_ctx,
+            cache.as_deref_mut(),
+            &mut seen,
+            &mut resolved,
+        );
         StyleSheet { rules: resolved }
     }
 
@@ -243,11 +292,13 @@ impl StyleSheet {
 fn collect_rules_recursive<'a>(
     rules: &'a [CssRule],
     media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
     registry: &mut LayerRegistry,
     current_layer: &[u32],
     container_conditions: &[ContainerCondition],
     out: &mut Vec<CollectedRule<'a>>,
 ) {
+    let mut cache = cache;
     for rule in rules {
         match rule {
             CssRule::Style(style_rule) => {
@@ -264,10 +315,11 @@ fn collect_rules_recursive<'a>(
             }
             CssRule::Media(media_rule) => {
                 // Only include rules from @media blocks that match
-                if media_ctx.evaluate(&media_rule.query) {
+                if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
                     collect_rules_recursive(
                         &media_rule.rules,
                         media_ctx,
+                        cache.as_deref_mut(),
                         registry,
                         current_layer,
                         container_conditions,
@@ -284,6 +336,7 @@ fn collect_rules_recursive<'a>(
                 collect_rules_recursive(
                     &container_rule.rules,
                     media_ctx,
+                    cache.as_deref_mut(),
                     registry,
                     current_layer,
                     &updated_conditions,
@@ -295,6 +348,7 @@ fn collect_rules_recursive<'a>(
                     collect_rules_recursive(
                         &supports_rule.rules,
                         media_ctx,
+                        cache.as_deref_mut(),
                         registry,
                         current_layer,
                         container_conditions,
@@ -318,7 +372,15 @@ fn collect_rules_recursive<'a>(
 
                 if layer_rule.anonymous {
                     let path = registry.ensure_anonymous(current_layer);
-                    collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, container_conditions, out);
+                    collect_rules_recursive(
+                        &layer_rule.rules,
+                        media_ctx,
+                        cache.as_deref_mut(),
+                        registry,
+                        &path,
+                        container_conditions,
+                        out,
+                    );
                     continue;
                 }
 
@@ -327,30 +389,44 @@ fn collect_rules_recursive<'a>(
                     continue;
                 }
                 let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
-                collect_rules_recursive(&layer_rule.rules, media_ctx, registry, &path, container_conditions, out);
+                collect_rules_recursive(
+                    &layer_rule.rules,
+                    media_ctx,
+                    cache.as_deref_mut(),
+                    registry,
+                    &path,
+                    container_conditions,
+                    out,
+                );
             }
             CssRule::FontFace(_) => {}
         }
     }
 }
 
-fn collect_font_faces_recursive(rules: &[CssRule], media_ctx: &MediaContext, out: &mut Vec<FontFaceRule>) {
+fn collect_font_faces_recursive(
+    rules: &[CssRule],
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+    out: &mut Vec<FontFaceRule>,
+) {
+    let mut cache = cache;
     for rule in rules {
         match rule {
             CssRule::FontFace(face) => out.push(face.clone()),
             CssRule::Media(media_rule) => {
-                if media_ctx.evaluate(&media_rule.query) {
-                    collect_font_faces_recursive(&media_rule.rules, media_ctx, out);
+                if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+                    collect_font_faces_recursive(&media_rule.rules, media_ctx, cache.as_deref_mut(), out);
                 }
             }
             CssRule::Container(container_rule) => {
-                if media_ctx.evaluate(&container_rule.query) {
-                    collect_font_faces_recursive(&container_rule.rules, media_ctx, out);
+                if media_ctx.evaluate_with_cache(&container_rule.query, cache.as_deref_mut()) {
+                    collect_font_faces_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
                 }
             }
             CssRule::Supports(supports_rule) => {
                 if supports_rule.condition.matches() {
-                    collect_font_faces_recursive(&supports_rule.rules, media_ctx, out);
+                    collect_font_faces_recursive(&supports_rule.rules, media_ctx, cache.as_deref_mut(), out);
                 }
             }
             CssRule::Layer(layer_rule) => {
@@ -358,13 +434,13 @@ fn collect_font_faces_recursive(rules: &[CssRule], media_ctx: &MediaContext, out
                     continue;
                 }
                 if layer_rule.anonymous {
-                    collect_font_faces_recursive(&layer_rule.rules, media_ctx, out);
+                    collect_font_faces_recursive(&layer_rule.rules, media_ctx, cache.as_deref_mut(), out);
                     continue;
                 }
                 if layer_rule.names.len() != 1 {
                     continue;
                 }
-                collect_font_faces_recursive(&layer_rule.rules, media_ctx, out);
+                collect_font_faces_recursive(&layer_rule.rules, media_ctx, cache.as_deref_mut(), out);
             }
             CssRule::Style(_) | CssRule::Import(_) => {}
         }
@@ -722,10 +798,13 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
     loader: &L,
     base_url: Option<&str>,
     media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
     seen: &mut std::collections::HashSet<String>,
     out: &mut Vec<CssRule>,
 ) {
     use url::Url;
+
+    let mut cache = cache;
 
     for rule in rules {
         match rule {
@@ -737,6 +816,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                     loader,
                     base_url,
                     media_ctx,
+                    cache.as_deref_mut(),
                     seen,
                     &mut resolved_children,
                 );
@@ -753,6 +833,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                     loader,
                     base_url,
                     media_ctx,
+                    cache.as_deref_mut(),
                     seen,
                     &mut resolved_children,
                 );
@@ -768,6 +849,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                     loader,
                     base_url,
                     media_ctx,
+                    cache.as_deref_mut(),
                     seen,
                     &mut resolved_children,
                 );
@@ -778,7 +860,8 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                 }));
             }
             CssRule::Import(import) => {
-                let media_matches = import.media.is_empty() || media_ctx.evaluate_list(&import.media);
+                let media_matches =
+                    import.media.is_empty() || media_ctx.evaluate_list_with_cache(&import.media, cache.as_deref_mut());
                 if !media_matches {
                     continue;
                 }
@@ -802,7 +885,15 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                     Ok(css_text) => {
                         seen.insert(resolved_href.clone());
                         if let Ok(sheet) = crate::css::parser::parse_stylesheet(&css_text) {
-                            resolve_rules(&sheet.rules, loader, Some(&resolved_href), media_ctx, seen, out);
+                            resolve_rules(
+                                &sheet.rules,
+                                loader,
+                                Some(&resolved_href),
+                                media_ctx,
+                                cache.as_deref_mut(),
+                                seen,
+                                out,
+                            );
                         }
                     }
                     Err(_) => {

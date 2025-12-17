@@ -31,7 +31,7 @@ use std::fmt;
 /// let font_unit = LengthUnit::Em;
 /// assert!(font_unit.is_font_relative());
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LengthUnit {
     /// Pixels (px) - CSS reference unit, 1/96th of an inch
     Px,

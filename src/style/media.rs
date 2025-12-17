@@ -42,6 +42,7 @@
 //! - CSS Media Queries Level 5: <https://www.w3.org/TR/mediaqueries-5/>
 
 use crate::style::values::Length;
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
 
@@ -393,7 +394,7 @@ pub enum MediaFeature {
 }
 
 /// Comparison operator for range-based media features
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ComparisonOp {
     LessThan,
     LessThanEqual,
@@ -403,7 +404,7 @@ pub enum ComparisonOp {
 }
 
 /// Which media dimension/value a range comparison targets
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RangeFeature {
     Width,
     InlineSize,
@@ -419,6 +420,187 @@ pub enum RangeValue {
     Length(Length),
     AspectRatio(u32, u32),
     Resolution(Resolution),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MediaQueryKey {
+    media_type: Option<MediaType>,
+    modifier: Option<MediaModifier>,
+    features: Vec<MediaFeatureKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum MediaFeatureKey {
+    Width(LengthKey),
+    MinWidth(LengthKey),
+    MaxWidth(LengthKey),
+    InlineSize(LengthKey),
+    MinInlineSize(LengthKey),
+    MaxInlineSize(LengthKey),
+    Height(LengthKey),
+    MinHeight(LengthKey),
+    MaxHeight(LengthKey),
+    BlockSize(LengthKey),
+    MinBlockSize(LengthKey),
+    MaxBlockSize(LengthKey),
+    Orientation(Orientation),
+    AspectRatio {
+        width: u32,
+        height: u32,
+    },
+    MinAspectRatio {
+        width: u32,
+        height: u32,
+    },
+    MaxAspectRatio {
+        width: u32,
+        height: u32,
+    },
+    Resolution(ResolutionKey),
+    MinResolution(ResolutionKey),
+    MaxResolution(ResolutionKey),
+    Color,
+    MinColor(u32),
+    MaxColor(u32),
+    ColorIndex,
+    MinColorIndex(u32),
+    MaxColorIndex(u32),
+    Monochrome,
+    MinMonochrome(u32),
+    MaxMonochrome(u32),
+    Hover(HoverCapability),
+    AnyHover(HoverCapability),
+    Pointer(PointerCapability),
+    AnyPointer(PointerCapability),
+    PrefersColorScheme(ColorScheme),
+    PrefersReducedMotion(ReducedMotion),
+    PrefersContrast(ContrastPreference),
+    PrefersReducedTransparency(ReducedTransparency),
+    PrefersReducedData(ReducedData),
+    ColorGamut(ColorGamut),
+    ForcedColors(ForcedColors),
+    InvertedColors(InvertedColors),
+    Range {
+        feature: RangeFeature,
+        op: ComparisonOp,
+        value: RangeValueKey,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct LengthKey {
+    unit: crate::style::values::LengthUnit,
+    bits: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ResolutionKey {
+    unit: ResolutionUnit,
+    bits: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RangeValueKey {
+    Length(LengthKey),
+    AspectRatio(u32, u32),
+    Resolution(ResolutionKey),
+}
+
+pub type MediaQueryCache = HashMap<MediaQueryKey, bool>;
+
+impl From<&MediaQuery> for MediaQueryKey {
+    fn from(query: &MediaQuery) -> Self {
+        Self {
+            media_type: query.media_type,
+            modifier: query.modifier,
+            features: query.features.iter().map(MediaFeatureKey::from).collect(),
+        }
+    }
+}
+
+impl From<&MediaFeature> for MediaFeatureKey {
+    fn from(feature: &MediaFeature) -> Self {
+        match feature {
+            MediaFeature::Width(len) => MediaFeatureKey::Width(length_key(len)),
+            MediaFeature::MinWidth(len) => MediaFeatureKey::MinWidth(length_key(len)),
+            MediaFeature::MaxWidth(len) => MediaFeatureKey::MaxWidth(length_key(len)),
+            MediaFeature::InlineSize(len) => MediaFeatureKey::InlineSize(length_key(len)),
+            MediaFeature::MinInlineSize(len) => MediaFeatureKey::MinInlineSize(length_key(len)),
+            MediaFeature::MaxInlineSize(len) => MediaFeatureKey::MaxInlineSize(length_key(len)),
+            MediaFeature::Height(len) => MediaFeatureKey::Height(length_key(len)),
+            MediaFeature::MinHeight(len) => MediaFeatureKey::MinHeight(length_key(len)),
+            MediaFeature::MaxHeight(len) => MediaFeatureKey::MaxHeight(length_key(len)),
+            MediaFeature::BlockSize(len) => MediaFeatureKey::BlockSize(length_key(len)),
+            MediaFeature::MinBlockSize(len) => MediaFeatureKey::MinBlockSize(length_key(len)),
+            MediaFeature::MaxBlockSize(len) => MediaFeatureKey::MaxBlockSize(length_key(len)),
+            MediaFeature::Orientation(o) => MediaFeatureKey::Orientation(*o),
+            MediaFeature::AspectRatio { width, height } => MediaFeatureKey::AspectRatio {
+                width: *width,
+                height: *height,
+            },
+            MediaFeature::MinAspectRatio { width, height } => MediaFeatureKey::MinAspectRatio {
+                width: *width,
+                height: *height,
+            },
+            MediaFeature::MaxAspectRatio { width, height } => MediaFeatureKey::MaxAspectRatio {
+                width: *width,
+                height: *height,
+            },
+            MediaFeature::Resolution(res) => MediaFeatureKey::Resolution(resolution_key(res)),
+            MediaFeature::MinResolution(res) => MediaFeatureKey::MinResolution(resolution_key(res)),
+            MediaFeature::MaxResolution(res) => MediaFeatureKey::MaxResolution(resolution_key(res)),
+            MediaFeature::Color => MediaFeatureKey::Color,
+            MediaFeature::MinColor(depth) => MediaFeatureKey::MinColor(*depth),
+            MediaFeature::MaxColor(depth) => MediaFeatureKey::MaxColor(*depth),
+            MediaFeature::ColorIndex => MediaFeatureKey::ColorIndex,
+            MediaFeature::MinColorIndex(count) => MediaFeatureKey::MinColorIndex(*count),
+            MediaFeature::MaxColorIndex(count) => MediaFeatureKey::MaxColorIndex(*count),
+            MediaFeature::Monochrome => MediaFeatureKey::Monochrome,
+            MediaFeature::MinMonochrome(depth) => MediaFeatureKey::MinMonochrome(*depth),
+            MediaFeature::MaxMonochrome(depth) => MediaFeatureKey::MaxMonochrome(*depth),
+            MediaFeature::Hover(cap) => MediaFeatureKey::Hover(*cap),
+            MediaFeature::AnyHover(cap) => MediaFeatureKey::AnyHover(*cap),
+            MediaFeature::Pointer(cap) => MediaFeatureKey::Pointer(*cap),
+            MediaFeature::AnyPointer(cap) => MediaFeatureKey::AnyPointer(*cap),
+            MediaFeature::PrefersColorScheme(scheme) => MediaFeatureKey::PrefersColorScheme(*scheme),
+            MediaFeature::PrefersReducedMotion(motion) => MediaFeatureKey::PrefersReducedMotion(*motion),
+            MediaFeature::PrefersContrast(contrast) => MediaFeatureKey::PrefersContrast(*contrast),
+            MediaFeature::PrefersReducedTransparency(pref) => MediaFeatureKey::PrefersReducedTransparency(*pref),
+            MediaFeature::PrefersReducedData(pref) => MediaFeatureKey::PrefersReducedData(*pref),
+            MediaFeature::ColorGamut(gamut) => MediaFeatureKey::ColorGamut(*gamut),
+            MediaFeature::ForcedColors(state) => MediaFeatureKey::ForcedColors(*state),
+            MediaFeature::InvertedColors(state) => MediaFeatureKey::InvertedColors(*state),
+            MediaFeature::Range { feature, op, value } => MediaFeatureKey::Range {
+                feature: *feature,
+                op: *op,
+                value: RangeValueKey::from(value),
+            },
+        }
+    }
+}
+
+impl From<&RangeValue> for RangeValueKey {
+    fn from(value: &RangeValue) -> Self {
+        match value {
+            RangeValue::Length(len) => RangeValueKey::Length(length_key(len)),
+            RangeValue::AspectRatio(w, h) => RangeValueKey::AspectRatio(*w, *h),
+            RangeValue::Resolution(res) => RangeValueKey::Resolution(resolution_key(res)),
+        }
+    }
+}
+
+fn length_key(length: &Length) -> LengthKey {
+    LengthKey {
+        unit: length.unit,
+        bits: length.value.to_bits(),
+    }
+}
+
+fn resolution_key(resolution: &Resolution) -> ResolutionKey {
+    ResolutionKey {
+        unit: resolution.unit,
+        bits: resolution.value.to_bits(),
+    }
 }
 
 impl MediaFeature {
@@ -1559,6 +1741,24 @@ impl MediaContext {
         queries.iter().any(|q| self.evaluate(q))
     }
 
+    /// Evaluates a media query list using an optional cache.
+    ///
+    /// When a cache is provided, media query results are memoized for the
+    /// lifetime of the cache, avoiding repeated evaluation of identical queries
+    /// (useful when collecting both style rules and @font-face rules).
+    pub fn evaluate_list_with_cache(&self, queries: &[MediaQuery], cache: Option<&mut MediaQueryCache>) -> bool {
+        if let Some(cache) = cache {
+            for query in queries {
+                if self.evaluate_with_cache(query, Some(cache)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        self.evaluate_list(queries)
+    }
+
     /// Evaluates a single media query
     ///
     /// # Examples
@@ -1594,6 +1794,22 @@ impl MediaContext {
             Some(MediaModifier::Only) => features_match, // 'only' is just for old browser compat
             None => features_match,
         }
+    }
+
+    /// Evaluates a single media query with optional caching.
+    pub fn evaluate_with_cache(&self, query: &MediaQuery, cache: Option<&mut MediaQueryCache>) -> bool {
+        if let Some(cache) = cache {
+            let key = MediaQueryKey::from(query);
+            if let Some(hit) = cache.get(&key) {
+                return *hit;
+            }
+
+            let result = self.evaluate(query);
+            cache.insert(key, result);
+            return result;
+        }
+
+        self.evaluate(query)
     }
 
     fn matches_media_type(&self, media_type: MediaType) -> bool {
