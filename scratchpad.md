@@ -1457,3 +1457,4 @@ Actionable borrowings:
 - Added prefers-contrast media coverage: MediaContext setter, evaluation regression, and env override invalid-value guard.
 - Added a TextRun regression ensuring half-leading can be negative when line-height is smaller than text height (test_text_run_negative_half_leading).
 - Inline bidi: added layout regression `bidi_isolate_positions_between_surrounding_runs` to ensure a unicode-bidi:isolate RTL run stays contiguous and is positioned between surrounding LTR text in visual order.
+- Text overflow: added regression `text_overflow_does_not_emit_ellipsis_when_content_fits` to ensure ellipses are only emitted when inline content actually overflows.
