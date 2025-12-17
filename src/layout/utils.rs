@@ -920,4 +920,39 @@ mod tests {
         style.scrollbar_width = ScrollbarWidth::None;
         assert_eq!(resolve_scrollbar_width(&style), 0.0);
     }
+
+    #[test]
+    fn clamp_with_order_handles_normal_and_inverted_bounds() {
+        assert_eq!(clamp_with_order(5.0, 1.0, 10.0), 5.0);
+        assert_eq!(clamp_with_order(0.0, 1.0, 10.0), 1.0);
+        assert_eq!(clamp_with_order(20.0, 1.0, 10.0), 10.0);
+
+        // Inverted bounds are swapped internally.
+        assert_eq!(clamp_with_order(5.0, 10.0, 1.0), 5.0);
+        assert_eq!(clamp_with_order(0.0, 10.0, 1.0), 1.0);
+        assert_eq!(clamp_with_order(20.0, 10.0, 1.0), 10.0);
+    }
+
+    #[test]
+    fn clamp_with_order_handles_nan_bounds_as_unbounded() {
+        let nan = f32::NAN;
+        // NaN min -> unbounded below
+        assert_eq!(clamp_with_order(5.0, nan, 2.0), 2.0);
+        // NaN max -> unbounded above
+        assert_eq!(clamp_with_order(1.0, 2.0, nan), 2.0);
+        assert_eq!(clamp_with_order(5.0, 2.0, nan), 5.0);
+        // Both NaN -> no clamping
+        assert_eq!(clamp_with_order(7.0, nan, nan), 7.0);
+    }
+
+    #[test]
+    fn clamp_with_order_handles_infinite_bounds() {
+        let inf = f32::INFINITY;
+        let ninf = f32::NEG_INFINITY;
+        assert_eq!(clamp_with_order(5.0, 2.0, inf), 5.0);
+        assert_eq!(clamp_with_order(1.0, 2.0, inf), 2.0);
+        // Negative infinity lower bound behaves like unbounded below
+        assert_eq!(clamp_with_order(5.0, ninf, 3.0), 3.0);
+        assert_eq!(clamp_with_order(1.0, ninf, 3.0), 1.0);
+    }
 }
