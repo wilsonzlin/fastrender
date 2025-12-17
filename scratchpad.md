@@ -4,6 +4,7 @@
 # Calc helpers now require proper context: calc lengths with percentage/viewport/font terms return None in viewport/font resolvers when bases are missing, and a regression `calc_resolution_helpers_require_context` covers the helpers. Transform/object-fit/clip-path now resolve calc lengths via context-aware helpers (avoiding raw-value fallbacks); added builder/painter/object-fit regressions for calc translate/object-position. Display-list renderer border-image resolution now guards viewport-relative calcs when no viewport is provided (regression added). Display-list background offsets now guard viewport-relative calcs when no viewport is available (regression added).
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
+# Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Color-scheme inheritance still validated; further palette audits ongoing.
 # Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
 # Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
