@@ -565,9 +565,7 @@ fn resolve_font_relative(len: Length, font_size: f32, root_font_size: f32) -> f3
         LengthUnit::Ex => len.value * font_size * 0.5,
         LengthUnit::Ch => len.value * font_size * 0.5,
         LengthUnit::Rem => len.value * root_font_size,
-        _ => len
-            .resolve_with_font_size(font_size)
-            .unwrap_or(len.value * font_size),
+        _ => len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size),
     }
 }
 

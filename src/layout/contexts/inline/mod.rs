@@ -3412,8 +3412,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace, text_wrap
             NormalizedText {
                 text: out,
                 forced_breaks: Vec::new(),
-                allow_soft_wrap: white_space != WhiteSpace::Nowrap
-                    && !matches!(text_wrap, TextWrap::NoWrap),
+                allow_soft_wrap: white_space != WhiteSpace::Nowrap && !matches!(text_wrap, TextWrap::NoWrap),
                 leading_collapsible,
                 trailing_collapsible,
             }
@@ -3497,8 +3496,7 @@ fn normalize_text_for_white_space(text: &str, white_space: WhiteSpace, text_wrap
             NormalizedText {
                 text: out,
                 forced_breaks: mandatory_breaks,
-                allow_soft_wrap: white_space == WhiteSpace::PreWrap
-                    && !matches!(text_wrap, TextWrap::NoWrap),
+                allow_soft_wrap: white_space == WhiteSpace::PreWrap && !matches!(text_wrap, TextWrap::NoWrap),
                 leading_collapsible: false,
                 trailing_collapsible: false,
             }
@@ -5721,8 +5719,7 @@ fn edge_combinability(node: &BoxNode, mode: TextCombineUpright, edge: CombineEdg
                 node.style.white_space,
                 &node.style.language,
             );
-            let normalized =
-                normalize_text_for_white_space(&transformed, node.style.white_space, node.style.text_wrap);
+            let normalized = normalize_text_for_white_space(&transformed, node.style.white_space, node.style.text_wrap);
             let mut saw_whitespace = match edge {
                 CombineEdge::Leading => normalized.leading_collapsible,
                 CombineEdge::Trailing => normalized.trailing_collapsible,
@@ -8226,7 +8223,10 @@ mod tests {
         let constraints = LayoutConstraints::definite_width(40.0);
         let ifc = InlineFormattingContext::new();
         let fragment = ifc.layout(&root, &constraints).expect("layout");
-        assert!(fragment.children.len() > 1, "anywhere should allow breaking long tokens when they overflow");
+        assert!(
+            fragment.children.len() > 1,
+            "anywhere should allow breaking long tokens when they overflow"
+        );
 
         let mut text_style_nowrap = text_style.clone();
         text_style_nowrap.white_space = WhiteSpace::Nowrap;
@@ -8282,7 +8282,11 @@ mod tests {
         let constraints = LayoutConstraints::definite_width(40.0);
         let ifc = InlineFormattingContext::new();
         let fragment = ifc.layout(&root, &constraints).expect("layout");
-        assert_eq!(fragment.children.len(), 1, "text-wrap:nowrap should prevent soft wrapping");
+        assert_eq!(
+            fragment.children.len(),
+            1,
+            "text-wrap:nowrap should prevent soft wrapping"
+        );
     }
 
     #[test]

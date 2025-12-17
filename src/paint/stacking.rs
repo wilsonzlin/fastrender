@@ -334,11 +334,9 @@ impl StackingContext {
         }
 
         let mut bounds: Option<Rect> = None;
-        let accumulate = |rect: Rect, current: &mut Option<Rect>| {
-            match current {
-                Some(existing) => *existing = existing.union(rect),
-                None => *current = Some(rect),
-            }
+        let accumulate = |rect: Rect, current: &mut Option<Rect>| match current {
+            Some(existing) => *existing = existing.union(rect),
+            None => *current = Some(rect),
         };
 
         // Union all fragment bounds from all layers

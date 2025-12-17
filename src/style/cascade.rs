@@ -11,12 +11,12 @@ use crate::css::selectors::{PseudoElement, TextDirection};
 use crate::css::types::{ContainerCondition, CssImportLoader, Declaration, StyleRule, StyleSheet};
 use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, ElementRef};
 use crate::geometry::Size;
+use crate::style::color::Rgba;
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
 use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::{ColorScheme, MediaContext};
 use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties, with_image_set_dpr};
-use crate::style::color::Rgba;
 use crate::style::types::{ColorSchemeEntry, ColorSchemePreference, ContainerType};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::{normalize_language_tag, ComputedStyle, Direction};
@@ -637,8 +637,7 @@ pub fn apply_styles_with_media_target_and_imports(
             } else {
                 None
             };
-            let user_color_scheme =
-                media_ctx.prefers_color_scheme.unwrap_or(ColorScheme::NoPreference);
+            let color_scheme_pref = media_ctx.prefers_color_scheme.unwrap_or(ColorScheme::NoPreference);
             apply_styles_internal(
                 dom,
                 &rule_index,
@@ -648,7 +647,7 @@ pub fn apply_styles_with_media_target_and_imports(
                 16.0,
                 16.0,
                 Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
-                user_color_scheme,
+                color_scheme_pref,
                 &mut node_counter,
                 &mut ancestor_ids,
                 container_ctx,

@@ -648,6 +648,7 @@ pub struct TouchAction {
     pub pinch_zoom: bool,
     pub manipulation: bool,
 }
+
 impl TouchAction {
     pub fn auto() -> Self {
         Self {

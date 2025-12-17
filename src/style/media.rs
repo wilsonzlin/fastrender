@@ -1355,12 +1355,8 @@ impl MediaContext {
             let v = value.trim().to_ascii_lowercase();
             self.inverted_colors = match InvertedColors::parse(&v) {
                 Ok(state) => state,
-                Err(_) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => {
-                    InvertedColors::Inverted
-                }
-                Err(_) if matches!(v.as_str(), "0" | "false" | "off" | "none") => {
-                    InvertedColors::None
-                }
+                Err(_) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => InvertedColors::Inverted,
+                Err(_) if matches!(v.as_str(), "0" | "false" | "off" | "none") => InvertedColors::None,
                 _ => self.inverted_colors,
             };
         }
@@ -2309,7 +2305,11 @@ impl fmt::Display for MediaParseError {
                 )
             }
             MediaParseError::InvalidColorScheme(s) => {
-                write!(f, "Invalid color scheme: '{}' (expected 'light' or 'dark')", s)
+                write!(
+                    f,
+                    "Invalid color scheme: '{}' (expected 'light', 'dark', or 'no-preference')",
+                    s
+                )
             }
             MediaParseError::InvalidReducedMotion(s) => {
                 write!(
@@ -2346,11 +2346,7 @@ impl fmt::Display for MediaParseError {
                 write!(f, "Invalid forced-colors: '{}' (expected 'none' or 'active')", s)
             }
             MediaParseError::InvalidInvertedColors(s) => {
-                write!(
-                    f,
-                    "Invalid inverted-colors: '{}' (expected 'none' or 'inverted')",
-                    s
-                )
+                write!(f, "Invalid inverted-colors: '{}' (expected 'none' or 'inverted')", s)
             }
             MediaParseError::EmptyQuery => {
                 write!(f, "Empty media query")
@@ -2568,9 +2564,20 @@ mod tests {
     fn test_media_feature_parse_prefers_color_scheme() {
         let feature = MediaFeature::parse("prefers-color-scheme", Some("dark")).unwrap();
         assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::Dark));
-
+        let feature = MediaFeature::parse("prefers-color-scheme", Some("light")).unwrap();
+        assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::Light));
         let feature = MediaFeature::parse("prefers-color-scheme", Some("no-preference")).unwrap();
         assert_eq!(feature, MediaFeature::PrefersColorScheme(ColorScheme::NoPreference));
+        assert!(MediaFeature::parse("prefers-color-scheme", Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn test_media_feature_parse_inverted_colors() {
+        let feature = MediaFeature::parse("inverted-colors", Some("inverted")).unwrap();
+        assert_eq!(feature, MediaFeature::InvertedColors(InvertedColors::Inverted));
+        let feature = MediaFeature::parse("inverted-colors", Some("none")).unwrap();
+        assert_eq!(feature, MediaFeature::InvertedColors(InvertedColors::None));
+        assert!(MediaFeature::parse("inverted-colors", Some("foo")).is_err());
     }
 
     #[test]
@@ -3058,6 +3065,16 @@ mod tests {
         drop(guard_forced);
         drop(guard_transparency);
         drop(guard_contrast);
+    }
+
+    #[test]
+    fn env_overrides_no_preference_scheme() {
+        let guard_scheme = EnvGuard::new("FASTR_PREFERS_COLOR_SCHEME", Some("no-preference"));
+        let ctx = MediaContext::screen(800.0, 600.0)
+            .with_color_scheme(ColorScheme::Dark)
+            .with_env_overrides();
+        assert_eq!(ctx.prefers_color_scheme, None);
+        drop(guard_scheme);
     }
 
     #[test]

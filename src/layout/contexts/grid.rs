@@ -1102,7 +1102,9 @@ impl FormattingContext for GridFormattingContext {
 mod tests {
     use super::*;
     use crate::style::display::FormattingContextType;
-    use crate::style::types::{AlignItems, AspectRatio, GridAutoFlow, GridTrack, Overflow, ScrollbarWidth, WritingMode};
+    use crate::style::types::{
+        AlignItems, AspectRatio, GridAutoFlow, GridTrack, Overflow, ScrollbarWidth, WritingMode,
+    };
     use std::sync::Arc;
 
     fn make_grid_style() -> Arc<ComputedStyle> {

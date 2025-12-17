@@ -991,8 +991,7 @@ pub fn distribute_spanning_cell_width(
                         }
                         remaining = 0.0;
                     } else {
-                        let weights: Vec<f32> =
-                            indices.iter().map(|&i| cols[i].max_width.max(1.0)).collect();
+                        let weights: Vec<f32> = indices.iter().map(|&i| cols[i].max_width.max(1.0)).collect();
                         let total_weight: f32 = weights.iter().sum();
                         if total_weight > 0.0 {
                             let mut distributed = 0.0;

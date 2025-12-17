@@ -2810,10 +2810,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
     } else {
         structure.border_spacing.1
     };
-    let content_available = available_height.map(|h| {
-        (h - spacing * structure.row_count as f32)
-            .max(0.0)
-    });
+    let content_available = available_height.map(|h| (h - spacing * structure.row_count as f32).max(0.0));
 
     let row_floor = |row: &RowInfo| -> f32 {
         let mut floor = row.min_height;
@@ -3147,7 +3144,11 @@ impl TableFormattingContext {
                 LengthUnit::Percent => percent_base.map(|base| {
                     crate::layout::utils::clamp_with_order((width.value / 100.0) * base, min_w, effective_max)
                 }),
-                _ => Some(crate::layout::utils::clamp_with_order(width.to_px(), min_w, effective_max)),
+                _ => Some(crate::layout::utils::clamp_with_order(
+                    width.to_px(),
+                    min_w,
+                    effective_max,
+                )),
             });
             let span_specified_width = if width_is_percent && cell.colspan > 1 {
                 None
@@ -5544,7 +5545,11 @@ mod tests {
             LengthUnit::Percent => percent_base.map(|base| {
                 crate::layout::utils::clamp_with_order((width.value / 100.0) * base, span_min, f32::INFINITY)
             }),
-            _ => Some(crate::layout::utils::clamp_with_order(width.to_px(), span_min, f32::INFINITY)),
+            _ => Some(crate::layout::utils::clamp_with_order(
+                width.to_px(),
+                span_min,
+                f32::INFINITY,
+            )),
         });
         tfc.populate_column_constraints(
             &table,

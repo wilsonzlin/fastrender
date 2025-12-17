@@ -56,9 +56,7 @@ pub fn resolve_text_shadows(style: &ComputedStyle) -> Vec<ResolvedTextShadow> {
 fn resolve_shadow_length(len: &Length, font_size: f32) -> f32 {
     match len.unit {
         LengthUnit::Percent => len.resolve_against(font_size).unwrap_or(0.0),
-        LengthUnit::Em | LengthUnit::Rem => {
-            len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size)
-        }
+        LengthUnit::Em | LengthUnit::Rem => len.resolve_with_font_size(font_size).unwrap_or(len.value * font_size),
         _ if len.unit.is_absolute() => len.to_px(),
         _ => len.value * font_size,
     }

@@ -723,16 +723,16 @@ impl Length {
     ///
     /// ```
     /// use fastrender::Length;
-///
-/// let length = Length::em(2.0);
-/// assert_eq!(length.resolve_with_font_size(16.0), Some(32.0));
-///
-/// let rem_length = Length::rem(1.5);
-/// assert_eq!(rem_length.resolve_with_font_size(16.0), Some(24.0));
-///
-/// // ex/ch fallback to 0.5em when font metrics are unavailable
-/// let ex_length = Length::ex(2.0);
-/// assert_eq!(ex_length.resolve_with_font_size(16.0), Some(16.0));
+    ///
+    /// let length = Length::em(2.0);
+    /// assert_eq!(length.resolve_with_font_size(16.0), Some(32.0));
+    ///
+    /// let rem_length = Length::rem(1.5);
+    /// assert_eq!(rem_length.resolve_with_font_size(16.0), Some(24.0));
+    ///
+    /// // ex/ch fallback to 0.5em when font metrics are unavailable
+    /// let ex_length = Length::ex(2.0);
+    /// assert_eq!(ex_length.resolve_with_font_size(16.0), Some(16.0));
     /// ```
     pub fn resolve_with_font_size(self, font_size_px: f32) -> Option<f32> {
         if let Some(calc) = self.calc {
@@ -755,13 +755,13 @@ impl Length {
     ///
     /// ```
     /// use fastrender::{Length, LengthUnit};
-///
-/// let length = Length::new(50.0, LengthUnit::Vw);
-/// assert_eq!(length.resolve_with_viewport(800.0, 600.0), Some(400.0));
-///
-/// let vh_length = Length::new(50.0, LengthUnit::Vh);
-/// assert_eq!(vh_length.resolve_with_viewport(800.0, 600.0), Some(300.0));
-/// ```
+    ///
+    /// let length = Length::new(50.0, LengthUnit::Vw);
+    /// assert_eq!(length.resolve_with_viewport(800.0, 600.0), Some(400.0));
+    ///
+    /// let vh_length = Length::new(50.0, LengthUnit::Vh);
+    /// assert_eq!(vh_length.resolve_with_viewport(800.0, 600.0), Some(300.0));
+    /// ```
     pub fn resolve_with_viewport(self, viewport_width: f32, viewport_height: f32) -> Option<f32> {
         if let Some(calc) = self.calc {
             return calc

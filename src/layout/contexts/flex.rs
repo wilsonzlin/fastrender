@@ -34,13 +34,13 @@ use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutCo
 use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::positioned::ContainingBlock;
-use crate::layout::utils::resolve_scrollbar_width;
 use crate::layout::flex_profile::{self, record_node_measure_hit, record_node_measure_store, DimState};
 use crate::layout::formatting_context::{
     count_flex_intrinsic_call, intrinsic_cache_lookup, intrinsic_cache_store, FormattingContext, IntrinsicSizingMode,
     LayoutError,
 };
 use crate::layout::profile::{layout_timer, LayoutKind};
+use crate::layout::utils::resolve_scrollbar_width;
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::position::Position;
 use crate::style::types::{

@@ -13404,7 +13404,10 @@ mod tests {
             16.0,
             16.0,
         );
-        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::PreserveParentColor));
+        assert!(matches!(
+            style.forced_color_adjust,
+            ForcedColorAdjust::PreserveParentColor
+        ));
 
         let parent = ComputedStyle {
             forced_color_adjust: ForcedColorAdjust::None,
