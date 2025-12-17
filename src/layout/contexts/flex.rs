@@ -1897,29 +1897,23 @@ fn layout_cache_key(constraints: &LayoutConstraints, viewport: Size) -> Option<(
 }
 
 fn cache_tolerances(target_size: Size) -> (f32, f32) {
-    let eps_w = if target_size.width > 4096.0 {
-        32.0
-    } else if target_size.width > 2048.0 {
-        16.0
-    } else if target_size.width > 1024.0 {
-        8.0
-    } else if target_size.width > 512.0 {
-        6.0
-    } else {
-        4.0
+    let band = |v: f32| {
+        if v > 4096.0 {
+            32.0
+        } else if v > 2048.0 {
+            16.0
+        } else if v > 1024.0 {
+            8.0
+        } else if v > 512.0 {
+            6.0
+        } else {
+            4.0
+        }
     };
 
-    let eps_h = if target_size.height > 4096.0 {
-        32.0
-    } else if target_size.height > 2048.0 {
-        16.0
-    } else if target_size.height > 1024.0 {
-        8.0
-    } else if target_size.height > 512.0 {
-        6.0
-    } else {
-        4.0
-    };
+    // Bias tolerance slightly toward the larger axis so extremely wide/tall probes coalesce more.
+    let eps_w = band(target_size.width).max(band(target_size.height) * 0.75);
+    let eps_h = band(target_size.height).max(band(target_size.width) * 0.5);
 
     (eps_w, eps_h)
 }
