@@ -39,6 +39,8 @@ Idle; no current tasks.
 
 ## Session notes (latest)
 
+- Fixed stacking context bounds computation to recurse into children and avoid the implicit zero origin (paint containment clip test now passes).
+
 - Transform parsing accepts calc/min/max/clamp() in translate/rotate/skew functions; angles resolve math functions and lengths keep calc terms. Added regression covering calc transforms.
 - Transform angle parsing now supports min/max/clamp() inside rotate/skew via calc-angle helpers, with a regression for min/clamp rotate.
 - Text-transform casing is now locale-aware: Turkish/Azeri text uses dotted/dotless I mappings for uppercase/lowercase, and Greek sigma lowercases to the final form only at word ends. Added inline layout tests covering Turkish casing and final sigma boundaries.

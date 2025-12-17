@@ -328,31 +328,39 @@ impl StackingContext {
 
     /// Computes bounds from all fragments in this context
     pub fn compute_bounds(&mut self) {
-        let mut bounds = Rect::from_xywh(0.0, 0.0, 0.0, 0.0);
+        let mut bounds: Option<Rect> = None;
+
+        let add = |rect: Rect, bounds: &mut Option<Rect>| {
+            *bounds = Some(match *bounds {
+                Some(existing) => existing.union(rect),
+                None => rect,
+            });
+        };
 
         // Union all fragment bounds from all layers
         for frag in &self.fragments {
-            bounds = bounds.union(frag.bounds);
+            add(frag.bounds, &mut bounds);
         }
         for frag in &self.layer3_blocks {
-            bounds = bounds.union(frag.bounds);
+            add(frag.bounds, &mut bounds);
         }
         for frag in &self.layer4_floats {
-            bounds = bounds.union(frag.bounds);
+            add(frag.bounds, &mut bounds);
         }
         for frag in &self.layer5_inlines {
-            bounds = bounds.union(frag.bounds);
+            add(frag.bounds, &mut bounds);
         }
         for frag in &self.layer6_positioned {
-            bounds = bounds.union(frag.bounds);
+            add(frag.bounds, &mut bounds);
         }
 
-        // Union child stacking context bounds
-        for child in &self.children {
-            bounds = bounds.union(child.bounds);
+        // Union child stacking context bounds (compute them first)
+        for child in &mut self.children {
+            child.compute_bounds();
+            add(child.bounds, &mut bounds);
         }
 
-        self.bounds = bounds;
+        self.bounds = bounds.unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 0.0, 0.0));
     }
 
     /// Returns total fragment count across all layers
