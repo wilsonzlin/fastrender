@@ -43,8 +43,8 @@ use crate::style::display::Display;
 use crate::style::media::{MediaContext, MediaQueryCache};
 use crate::style::position::Position;
 use crate::style::types::{
-    BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeatKeyword,
-    BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BackfaceVisibility, BorderImage,
+    BackfaceVisibility, BackgroundAttachment, BackgroundImage, BackgroundLayer, BackgroundPosition,
+    BackgroundRepeatKeyword, BackgroundSize, BackgroundSizeComponent, BackgroundSizeKeyword, BorderImage,
     BorderImageOutsetValue, BorderImageRepeat, BorderImageSource, BorderImageWidthValue, BorderStyle as CssBorderStyle,
     ClipComponent, ImageOrientation, ImageRendering, ObjectFit, OrientationTransform, TextDecorationLine,
     TextDecorationSkipInk, TextDecorationStyle, TextDecorationThickness,
@@ -1732,18 +1732,24 @@ impl Painter {
                 };
                 let device_root_rect = self.device_rect(root_rect);
                 let has_clip = clip.is_some();
-                let (mut unclipped, clipped): (Vec<DisplayCommand>, Vec<DisplayCommand>) =
-                    translated.into_iter().partition(|cmd| match cmd {
-                        DisplayCommand::Outline { .. } => true,
-                        DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. } => {
-                            !has_clip
+                let mut outline_commands = Vec::new();
+                let mut unclipped = Vec::new();
+                let mut clipped = Vec::new();
+                for cmd in translated.into_iter() {
+                    match cmd {
+                        DisplayCommand::Outline { .. } => outline_commands.push(cmd),
+                        DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. }
+                            if !has_clip
                                 && (rect.x() - root_rect.x()).abs() < f32::EPSILON
                                 && (rect.y() - root_rect.y()).abs() < f32::EPSILON
                                 && (rect.width() - root_rect.width()).abs() < f32::EPSILON
-                                && (rect.height() - root_rect.height()).abs() < f32::EPSILON
+                                && (rect.height() - root_rect.height()).abs() < f32::EPSILON =>
+                        {
+                            unclipped.push(cmd)
                         }
-                        _ => false,
-                    });
+                        _ => clipped.push(cmd),
+                    }
+                }
 
                 let layer = match Pixmap::new(width as u32, height as u32) {
                     Some(p) => p,
@@ -1837,6 +1843,23 @@ impl Painter {
                         }
                     }
                 }
+                if !outline_commands.is_empty() {
+                    let mut outline_painter = Painter {
+                        pixmap: layer_pixmap,
+                        scale: self.scale,
+                        css_width: self.css_width,
+                        css_height: self.css_height,
+                        background: Rgba::new(0, 0, 0, 0.0),
+                        shaper: ShapingPipeline::new(),
+                        font_ctx: self.font_ctx.clone(),
+                        image_cache: self.image_cache.clone(),
+                        text_shape_cache: Arc::clone(&self.text_shape_cache),
+                    };
+                    for cmd in outline_commands {
+                        outline_painter.execute_command(cmd)?;
+                    }
+                    layer_pixmap = outline_painter.pixmap;
+                }
                 if !filters.is_empty() {
                     apply_filters(&mut layer_pixmap, &filters, self.scale);
                 }
@@ -1860,7 +1883,8 @@ impl Painter {
                 let device_offset_x = self.device_length(offset.x);
                 let device_offset_y = self.device_length(offset.y);
                 let mut final_transform = self.device_transform(transform).unwrap_or_else(Transform::identity);
-                final_transform = final_transform.pre_concat(Transform::from_translate(device_offset_x, device_offset_y));
+                final_transform =
+                    final_transform.pre_concat(Transform::from_translate(device_offset_x, device_offset_y));
 
                 if !backdrop_filters.is_empty() {
                     let backdrop_bounds = transform_rect(device_root_rect, &final_transform);
@@ -5798,6 +5822,26 @@ fn compute_descendant_bounds(commands: &[DisplayCommand], root_rect: Rect) -> Op
     current
 }
 
+fn compute_outline_bounds(commands: &[DisplayCommand]) -> Option<Rect> {
+    let mut current: Option<Rect> = None;
+
+    for cmd in commands {
+        match cmd {
+            DisplayCommand::Outline { rect, .. } => {
+                current = Some(current.map(|acc| acc.union(*rect)).unwrap_or(*rect));
+            }
+            DisplayCommand::StackingContext { commands, .. } => {
+                if let Some(r) = compute_outline_bounds(commands) {
+                    current = Some(current.map(|acc| acc.union(r)).unwrap_or(r));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    current
+}
+
 fn stacking_context_bounds(
     commands: &[DisplayCommand],
     filters: &[ResolvedFilter],
@@ -5808,6 +5852,7 @@ fn stacking_context_bounds(
     clip_path: Option<&ResolvedClipPath>,
 ) -> Option<Rect> {
     let mut base = rect;
+    let outline_bounds = compute_outline_bounds(commands);
     if let Some(desc) = compute_descendant_bounds(commands, rect) {
         let clipped = if let Some((clip_rect, _, clip_x, clip_y)) = clip {
             clip_non_outline(commands, desc, *clip_rect, *clip_x, *clip_y)
@@ -5819,6 +5864,9 @@ fn stacking_context_bounds(
     if let Some(path) = clip_path {
         let clip_bounds = path.bounds();
         base = base.intersection(clip_bounds).unwrap_or(clip_bounds);
+    }
+    if let Some(outline_bounds) = outline_bounds {
+        base = base.union(outline_bounds);
     }
     let (l, t, r, b) = filter_outset(filters, 1.0);
     let (bl, bt, br, bb) = filter_outset(backdrop_filters, 1.0);
@@ -8044,12 +8092,16 @@ mod tests {
         let filters = vec![ResolvedFilter::Blur(4.0)];
         let (l, t, r, b) = filter_outset(&filters, 1.0);
         // Blur outset is radius * 3 per side.
-        assert!((l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01);
+        assert!(
+            (l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01
+        );
 
         let filters = vec![ResolvedFilter::Blur(2.0)];
         let (l, t, r, b) = filter_outset(&filters, 2.0);
         // Device pixel ratio doubles the blur radius before computing outsets.
-        assert!((l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01);
+        assert!(
+            (l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01
+        );
     }
 
     #[test]
@@ -8156,8 +8208,16 @@ mod tests {
 
         // Multiply red (1,0,0) by blue (0,0,1) → (0,0,0); with 50% alpha over red bg we expect
         // the result to stay dark and keep a nonzero blue component but low green.
-        assert!(pixel.red() < 200, "red should darken under multiply (got {})", pixel.red());
-        assert!(pixel.blue() < 130, "blue should darken under multiply (got {})", pixel.blue());
+        assert!(
+            pixel.red() < 200,
+            "red should darken under multiply (got {})",
+            pixel.red()
+        );
+        assert!(
+            pixel.blue() < 130,
+            "blue should darken under multiply (got {})",
+            pixel.blue()
+        );
         // Green should remain near zero for red*blue.
         assert!(pixel.green() < 30, "green should stay low (got {})", pixel.green());
     }
@@ -9459,11 +9519,7 @@ mod tests {
             },
             None,
         );
-        let fragment = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            vec![],
-            Arc::new(style),
-        );
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
         let tree = FragmentTree::new(fragment);
 
         let pixmap = paint_tree(&FragmentTree::new(tree.root.clone()), 10, 10, Rgba::WHITE).expect("paint");
@@ -9716,7 +9772,11 @@ mod tests {
         let pixmap = painter.pixmap;
 
         let origin_px = color_at(&pixmap, 1, 1);
-        assert_eq!(origin_px, (0, 0, 255, 255), "backdrop filter should not affect the origin");
+        assert_eq!(
+            origin_px,
+            (0, 0, 255, 255),
+            "backdrop filter should not affect the origin"
+        );
 
         let mut inverted = Vec::new();
         let (w, h) = (pixmap.width(), pixmap.height());
@@ -9837,6 +9897,38 @@ mod tests {
         let pixmap = paint_tree(&tree, 40, 40, Rgba::WHITE).expect("paint");
         // Outline should extend beyond the 10..20 box even though overflow is hidden.
         assert_eq!(color_at(&pixmap, 8, 15), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn outline_not_clipped_by_clip_path() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::WHITE;
+        style.outline_style = OutlineStyle::Solid;
+        style.outline_width = Length::px(4.0);
+        style.outline_color = OutlineColor::Color(Rgba::RED);
+        style.clip_path = ClipPath::BasicShape(
+            crate::style::types::BasicShape::Circle {
+                radius: ShapeRadius::Length(Length::px(2.0)),
+                position: BackgroundPosition::Position {
+                    x: BackgroundPositionComponent {
+                        alignment: 0.5,
+                        offset: Length::px(0.0),
+                    },
+                    y: BackgroundPositionComponent {
+                        alignment: 0.5,
+                        offset: Length::px(0.0),
+                    },
+                },
+            },
+            None,
+        );
+
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(5.0, 5.0, 10.0, 10.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+
+        let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+        // Outline should remain visible outside the clip-path bounds.
+        assert_eq!(color_at(&pixmap, 4, 10), (255, 0, 0, 255));
     }
 
     #[test]
