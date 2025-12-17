@@ -14,6 +14,7 @@ Idle; no current tasks. Available for new tasks.
 - Added a display-list renderer regression for clip-path polygons: `builder_clip_path_polygon_masks_rendered_output` builds via DisplayListBuilder with a triangular clip-path and asserts interior pixels paint while clipped corners stay white.
 - Display-list skip-ink: builder regressions ensure skip-ink auto carves underline segments and skip-ink none emits a solid line.
 - Added display-list renderer regression for `color-mix(in oklab, ...)` backgrounds to ensure mixed colors render as resolved RGBA.
+- Added display-list renderer regression for `color-mix(in srgb, currentColor, blue)` backgrounds to ensure currentColor participates in mixing correctly at render time.
 - Added a display-list renderer regression for border images: `display_list_border_image_nine_slice` encodes a 3×3 PNG with distinct corners/edges, builds via DisplayListBuilder, renders, and asserts the nine-slice corners/edges land in the correct pixels.
 - Added a display-list renderer regression for border-image gradients: `display_list_border_image_generated_uniform_color` uses a uniform linear-gradient source and checks all corners render red, exercising generated border-image sources in the builder/renderer.
 - Added a display-list regression for `background-attachment: local`: display-list builder/renderer keep backgrounds clipped to the padding box for scrollable elements (border stays transparent, padding paints red). `cargo test background_attachment_local_clips_to_padding_box_in_display_list -- --nocapture` passes.

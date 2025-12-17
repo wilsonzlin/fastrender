@@ -247,6 +247,35 @@ fn color_mix_srgb_linear_matches_resolved_color() {
     );
 }
 
+    #[test]
+    fn color_mix_current_color_resolves_in_renderer() {
+        let mut style = fastrender::ComputedStyle::default();
+        style.color = Rgba::GREEN;
+        style.background_color = Color::parse("color-mix(in srgb, currentColor 50%, blue 50%)")
+            .unwrap()
+            .to_rgba(style.color);
+
+        let fragment = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
+            vec![],
+            Arc::new(style),
+        );
+
+        let list = DisplayListBuilder::new().build(&fragment);
+        let pixmap = DisplayListRenderer::new(1, 1, Rgba::WHITE, FontContext::new())
+            .unwrap()
+            .render(&list)
+            .unwrap();
+
+        let expected = Color::parse("color-mix(in srgb, currentColor 50%, blue 50%)")
+            .unwrap()
+            .to_rgba(Rgba::GREEN);
+        assert_eq!(
+            pixel(&pixmap, 0, 0),
+            (expected.r, expected.g, expected.b, expected.alpha_u8())
+        );
+    }
+
 #[test]
 fn display_list_renderer_paints_text_decoration_color() {
     let mut list = DisplayList::new();
