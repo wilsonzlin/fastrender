@@ -28,6 +28,7 @@
 # Media queries: added regression to ensure pointer/hover media features reject invalid values (non-enum inputs fail to parse).
 # Added python.org to fetch_pages targets; cargo check --bin fetch_pages passes.
 # Painter/renderer: added display-list renderer regression to verify opacity filter halves alpha (premultiplies color and alpha).
+# Media queries: added regression ensuring unknown media types fail to parse (e.g., `foo`, `foo and (min-width:10px)`).
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.

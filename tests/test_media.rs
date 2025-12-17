@@ -676,6 +676,12 @@ fn pointer_and_hover_reject_invalid_values() {
     assert!(MediaQuery::parse("(hover: 1)").is_err());
 }
 
+#[test]
+fn rejects_unknown_media_type() {
+    assert!(MediaQuery::parse("foo").is_err());
+    assert!(MediaQuery::parse("foo and (min-width: 10px)").is_err());
+}
+
 // ============================================================================
 // Complex Query Tests
 // ============================================================================
