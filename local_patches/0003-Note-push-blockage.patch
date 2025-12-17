@@ -1,7 +1,7 @@
 From e495d80364cfb1d1b6ac4557a653f3bea31fb3ff Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 14:52:39 -0500
-Subject: [PATCH 3/3] Note push blockage
+Subject: [PATCH 3/5] Note push blockage
 
 ---
  scratchpad.md | 1 +
