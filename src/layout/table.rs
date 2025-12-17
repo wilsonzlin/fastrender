@@ -4565,7 +4565,8 @@ impl FormattingContext for TableFormattingContext {
                     }
                     let baseline = if laid.cell.rowspan > 1 {
                         let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
-                        spanning_baseline_allocation(spanned_height, baseline, row_start, span_end, &row_metric_heights).0
+                        spanning_baseline_allocation(spanned_height, baseline, row_start, span_end, &row_metric_heights)
+                            .0
                     } else {
                         let row_h = row_metrics.get(row_start).map(|r| r.height).unwrap_or(baseline);
                         baseline.min(row_h).min(spanned_height)
@@ -5630,6 +5631,77 @@ mod tests {
     }
 
     #[test]
+    fn cell_percentage_min_width_uses_definite_table_width() {
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.min_width = Some(Length::percent(50.0));
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        table_style.width = Some(Length::px(200.0));
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(
+            &table,
+            &structure,
+            &mut constraints,
+            DistributionMode::Auto,
+            Some(200.0),
+        );
+
+        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        assert!(
+            (min - 100.0).abs() < 0.5,
+            "50% min-width should resolve against definite 200px table width (got {:.2})",
+            min
+        );
+    }
+
+    #[test]
+    fn cell_percentage_min_width_ignored_without_definite_base() {
+        let mut cell_style = ComputedStyle::default();
+        cell_style.display = Display::TableCell;
+        cell_style.min_width = Some(Length::percent(50.0));
+        let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+
+        let mut row_style = ComputedStyle::default();
+        row_style.display = Display::TableRow;
+        let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell]);
+
+        let mut table_style = ComputedStyle::default();
+        table_style.display = Display::Table;
+        table_style.border_spacing_horizontal = Length::px(0.0);
+        table_style.border_spacing_vertical = Length::px(0.0);
+        let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row]);
+
+        let structure = TableStructure::from_box_tree(&table);
+        let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
+            .map(|_| ColumnConstraints::new(0.0, 0.0))
+            .collect();
+        let tfc = TableFormattingContext::new();
+        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
+
+        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        assert!(
+            min < 1.0,
+            "percentage min-width should be ignored without a definite base (got {:.2})",
+            min
+        );
+    }
+
+    #[test]
     fn cell_max_width_caps_column_maximum() {
         let text_style = Arc::new(ComputedStyle::default());
         let text = BoxNode::new_text(text_style, "hi hi hi hi hi hi hi hi hi".to_string());
@@ -5871,7 +5943,13 @@ mod tests {
             .map(|_| ColumnConstraints::new(0.0, 0.0))
             .collect();
         let tfc = TableFormattingContext::new();
-        tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, Some(200.0));
+        tfc.populate_column_constraints(
+            &table,
+            &structure,
+            &mut constraints,
+            DistributionMode::Auto,
+            Some(200.0),
+        );
 
         let col = constraints.first().expect("column constraints");
         assert!(
@@ -8888,7 +8966,10 @@ mod tests {
 
         calculate_row_heights(&mut structure, None);
 
-        assert!(structure.rows[0].computed_height <= 40.01, "row 0 should respect its max cap");
+        assert!(
+            structure.rows[0].computed_height <= 40.01,
+            "row 0 should respect its max cap"
+        );
         assert!(
             structure.rows[1].computed_height >= 79.0,
             "remaining spanning height should flow to uncapped rows"
@@ -9697,7 +9778,11 @@ mod tests {
         tiny_child_style.height = Some(Length::px(4.0));
 
         let tiny_child = BoxNode::new_block(Arc::new(tiny_child_style), FormattingContextType::Block, vec![]);
-        let row1_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![tiny_child]);
+        let row1_cell = BoxNode::new_block(
+            Arc::new(cell_style.clone()),
+            FormattingContextType::Block,
+            vec![tiny_child],
+        );
         let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![row1_cell]);
 
         let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![row0, row1]);
@@ -9746,17 +9831,29 @@ mod tests {
         span_child_style.height = Some(Length::px(40.0));
 
         let short_child = BoxNode::new_block(Arc::new(short_child_style), FormattingContextType::Block, vec![]);
-        let short_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![short_child]);
+        let short_cell = BoxNode::new_block(
+            Arc::new(cell_style.clone()),
+            FormattingContextType::Block,
+            vec![short_child],
+        );
 
         let span_child = BoxNode::new_block(Arc::new(span_child_style), FormattingContextType::Block, vec![]);
-        let span_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![span_child])
-            .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 2));
+        let span_cell = BoxNode::new_block(
+            Arc::new(cell_style.clone()),
+            FormattingContextType::Block,
+            vec![span_child],
+        )
+        .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(1, 2));
 
         let mut filler_child_style = ComputedStyle::default();
         filler_child_style.display = Display::Block;
         filler_child_style.height = Some(Length::px(4.0));
         let filler_child = BoxNode::new_block(Arc::new(filler_child_style), FormattingContextType::Block, vec![]);
-        let filler_cell = BoxNode::new_block(Arc::new(cell_style.clone()), FormattingContextType::Block, vec![filler_child]);
+        let filler_cell = BoxNode::new_block(
+            Arc::new(cell_style.clone()),
+            FormattingContextType::Block,
+            vec![filler_child],
+        );
 
         let row0 = BoxNode::new_block(
             Arc::new(row_style.clone()),
