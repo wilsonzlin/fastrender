@@ -51,6 +51,71 @@ fn current_image_set_dpr() -> f32 {
     IMAGE_SET_DPR.with(|cell| cell.get())
 }
 
+/// Populate line names for named grid areas (`<name>-start`/`<name>-end`).
+fn synthesize_area_line_names(styles: &mut ComputedStyle) {
+    if styles.grid_template_areas.is_empty() {
+        return;
+    }
+
+    let col_count = styles.grid_template_columns.len();
+    let row_count = styles.grid_template_rows.len();
+    if col_count == 0 || row_count == 0 {
+        return;
+    }
+
+    if let Some(bounds) = crate::style::grid::validate_area_rectangles(&styles.grid_template_areas) {
+        let ensure_line = |lines: &mut Vec<Vec<String>>, names: &mut HashMap<String, Vec<usize>>, idx: usize, name: String| {
+            if lines.len() <= idx {
+                lines.resize(idx + 1, Vec::new());
+            }
+            if !lines[idx].contains(&name) {
+                lines[idx].push(name.clone());
+                names.entry(name).or_default().push(idx);
+            }
+        };
+
+        // Ensure line vectors are large enough for the current track counts.
+        if styles.grid_column_line_names.len() < col_count + 1 {
+            styles.grid_column_line_names.resize(col_count + 1, Vec::new());
+        }
+        if styles.grid_row_line_names.len() < row_count + 1 {
+            styles.grid_row_line_names.resize(row_count + 1, Vec::new());
+        }
+
+        for (name, (top, bottom, left, right)) in bounds {
+            let col_start = left;
+            let col_end = right + 1;
+            let row_start = top;
+            let row_end = bottom + 1;
+
+            ensure_line(
+                &mut styles.grid_column_line_names,
+                &mut styles.grid_column_names,
+                col_start,
+                format!("{}-start", name),
+            );
+            ensure_line(
+                &mut styles.grid_column_line_names,
+                &mut styles.grid_column_names,
+                col_end,
+                format!("{}-end", name),
+            );
+            ensure_line(
+                &mut styles.grid_row_line_names,
+                &mut styles.grid_row_names,
+                row_start,
+                format!("{}-start", name),
+            );
+            ensure_line(
+                &mut styles.grid_row_line_names,
+                &mut styles.grid_row_names,
+                row_end,
+                format!("{}-end", name),
+            );
+        }
+    }
+}
+
 fn split_layers(tokens: &[PropertyValue]) -> Vec<Vec<PropertyValue>> {
     let mut layers = Vec::new();
     let mut current = Vec::new();
@@ -4517,51 +4582,7 @@ pub fn apply_declaration_with_base(
                         styles.grid_template_rows = vec![GridTrack::Auto; row_count];
                         styles.grid_row_line_names = vec![Vec::new(); row_count + 1];
                     }
-
-                    // Per CSS Grid, each named area also defines start/end line names on its
-                    // row and column boundaries. Populate line-name vectors and name maps so
-                    // `grid-column`/`grid-row` placements can reference `<name>-start`/`<name>-end`.
-                    if let Some(bounds) = crate::style::grid::validate_area_rectangles(&styles.grid_template_areas) {
-                        let ensure_line = |lines: &mut Vec<Vec<String>>, names: &mut HashMap<String, Vec<usize>>, idx: usize, name: String| {
-                            if lines.len() <= idx {
-                                lines.resize(idx + 1, Vec::new());
-                            }
-                            lines[idx].push(name.clone());
-                            names.entry(name).or_default().push(idx);
-                        };
-
-                        for (name, (top, bottom, left, right)) in bounds {
-                            let col_start = left;
-                            let col_end = right + 1;
-                            let row_start = top;
-                            let row_end = bottom + 1;
-
-                            ensure_line(
-                                &mut styles.grid_column_line_names,
-                                &mut styles.grid_column_names,
-                                col_start,
-                                format!("{}-start", name),
-                            );
-                            ensure_line(
-                                &mut styles.grid_column_line_names,
-                                &mut styles.grid_column_names,
-                                col_end,
-                                format!("{}-end", name),
-                            );
-                            ensure_line(
-                                &mut styles.grid_row_line_names,
-                                &mut styles.grid_row_names,
-                                row_start,
-                                format!("{}-start", name),
-                            );
-                            ensure_line(
-                                &mut styles.grid_row_line_names,
-                                &mut styles.grid_row_names,
-                                row_end,
-                                format!("{}-end", name),
-                            );
-                        }
-                    }
+                    synthesize_area_line_names(styles);
                 }
             }
             _ => {}
@@ -4580,6 +4601,8 @@ pub fn apply_declaration_with_base(
                     if let Some(areas) = parsed.areas {
                         styles.grid_template_areas = areas;
                     }
+
+                    synthesize_area_line_names(styles);
                 }
             }
         }
@@ -4606,6 +4629,8 @@ pub fn apply_declaration_with_base(
                     if let Some(flow) = parsed.auto_flow {
                         styles.grid_auto_flow = flow;
                     }
+
+                    synthesize_area_line_names(styles);
                 }
             }
         }
