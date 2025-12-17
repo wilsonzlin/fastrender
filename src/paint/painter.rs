@@ -7529,8 +7529,8 @@ mod tests {
     use crate::tree::box_tree::{SrcsetCandidate, SrcsetDescriptor};
     use crate::Position;
     use base64::Engine;
-    use image::ImageEncoder;
-    use image::RgbaImage;
+    use image::codecs::png::PngEncoder;
+    use image::{ExtendedColorType, ImageEncoder, RgbaImage};
     use std::sync::Arc;
 
     fn make_empty_tree() -> FragmentTree {
@@ -7610,11 +7610,52 @@ mod tests {
         }
     }
 
+    fn two_color_data_url() -> String {
+        let pixels = vec![
+            255, 0, 0, 255, // red
+            0, 0, 255, 255, // blue
+        ];
+        let mut buf = Vec::new();
+        PngEncoder::new(&mut buf)
+            .write_image(&pixels, 2, 1, ExtendedColorType::Rgba8)
+            .expect("encode png");
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(buf)
+        )
+    }
+
     #[test]
     fn image_rendering_crisp_edges_uses_nearest_filter_quality() {
         let mut style = ComputedStyle::default();
         style.image_rendering = ImageRendering::CrispEdges;
         assert_eq!(Painter::filter_quality_for_image(Some(&style)), FilterQuality::Nearest);
+    }
+
+    #[test]
+    fn background_image_rendering_pixelated_uses_nearest_sampling() {
+        let url = two_color_data_url();
+
+        let mut style = ComputedStyle::default();
+        style.image_rendering = ImageRendering::Pixelated;
+        style.background_color = Rgba::WHITE;
+        style.background_layers = vec![BackgroundLayer {
+            image: Some(BackgroundImage::Url(url)),
+            size: BackgroundSize::Explicit(
+                BackgroundSizeComponent::Length(Length::px(5.0)),
+                BackgroundSizeComponent::Length(Length::px(1.0)),
+            ),
+            repeat: BackgroundRepeat::no_repeat(),
+            ..BackgroundLayer::default()
+        }];
+
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 5.0, 1.0), vec![], Arc::new(style));
+        let tree = FragmentTree::new(fragment);
+        let pixmap = paint_tree(&tree, 5, 1, Rgba::WHITE).expect("paint");
+
+        // Pixelated sampling should keep the left half fully red and the right half blue without purple blending.
+        assert_eq!(color_at(&pixmap, 1, 0), (255, 0, 0, 255));
+        assert_eq!(color_at(&pixmap, 3, 0), (0, 0, 255, 255));
     }
 
     #[test]
