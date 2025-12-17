@@ -14,7 +14,7 @@ use fastrender::text::pipeline::{
 };
 use fastrender::ComputedStyle;
 use fastrender::FontContext;
-use fastrender::style::types::{TextOrientation, WritingMode};
+use fastrender::style::types::{TextOrientation, UnicodeBidi, WritingMode};
 
 /// Helper macro to skip test if font shaping fails due to missing fonts
 macro_rules! require_fonts {
@@ -326,6 +326,24 @@ fn test_itemize_single_latin() {
     assert_eq!(runs[0].text, "Hello");
     assert_eq!(runs[0].script, Script::Latin);
     assert!(runs[0].direction.is_ltr());
+}
+
+#[test]
+fn bidi_override_does_not_cross_paragraph_boundary() {
+    let mut style = ComputedStyle::default();
+    style.direction = fastrender::style::types::Direction::Rtl;
+    style.unicode_bidi = UnicodeBidi::BidiOverride;
+
+    // Two paragraphs separated by a newline. Second paragraph has an embedded RLE.
+    let text = "ABC\n\u{202B}DEF"; // ABC\nRLE DEF
+    let bidi = BidiAnalysis::analyze(text, &style);
+
+    assert_eq!(bidi.paragraphs().len(), 2);
+
+    // Runs should stay within their paragraph and not reorder across the line break.
+    let runs = itemize_text(text, &bidi);
+    let directions: Vec<_> = runs.iter().map(|r| r.direction.is_rtl()).collect();
+    assert!(directions.iter().all(|d| *d), "runs should remain RTL within paragraphs");
 }
 
 #[test]
