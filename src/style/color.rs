@@ -2164,6 +2164,17 @@ mod tests {
     }
 
     #[test]
+    fn color_mix_resolves_current_color() {
+        // currentColor should be supplied by the caller when resolving the mix.
+        let color = Color::parse("color-mix(in srgb, currentColor 50%, blue)").expect("parsed");
+        let rgba = color.to_rgba(Rgba::RED);
+        // Mixing red and blue 50/50 in srgb should yield purple.
+        assert!(rgba.r > 0 && rgba.b > 0);
+        assert!(rgba.r == rgba.b);
+        assert_eq!(rgba.g, 0);
+    }
+
+    #[test]
     fn parses_color_function_srgb_and_p3() {
         let c = Color::parse("color(srgb 1 0 0 / 50%)").unwrap().to_rgba(Rgba::BLACK);
         assert_eq!(c.r, 255);
