@@ -6,6 +6,8 @@
 use fastrender::css::types::{BoxShadow, ColorStop};
 use fastrender::geometry::{Point, Rect};
 use fastrender::paint::display_list::ClipShape;
+use fastrender::css::types::{Declaration, PropertyValue};
+use fastrender::style::properties::{apply_declaration, with_image_set_dpr};
 use fastrender::style::types::{
     BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment, TextDecorationLine,
     WritingMode,
@@ -138,6 +140,51 @@ fn fragment_mixed_borders_emit_border_item() {
     assert_eq!(border.top.width, 1.0);
     assert_eq!(border.right.width, 2.0);
     assert_eq!(border.left.width, 3.0);
+}
+
+#[test]
+fn background_image_set_chooses_best_density_for_display_list() {
+    // Two inline SVG candidates with different intrinsic sizes; DPR=2 should pick the larger one.
+    let low = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'></svg>";
+    let high = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'></svg>";
+
+    let mut style = ComputedStyle::default();
+    with_image_set_dpr(2.0, || {
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "background-image".to_string(),
+                value: PropertyValue::Keyword(format!("image-set(url(\"{}\") 1x, url(\"{}\") 2x)", low, high)),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+    });
+
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+        Vec::new(),
+        Arc::new(style),
+    );
+
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
+        .with_device_pixel_ratio(2.0)
+        .build(&fragment);
+
+    let image_item = list
+        .items()
+        .iter()
+        .find_map(|item| match item {
+            DisplayItem::Image(img) => Some(img),
+            _ => None,
+        })
+        .expect("background image to emit an Image item");
+
+    assert_eq!(image_item.image.width, 4);
+    assert_eq!(image_item.image.height, 4);
 }
 
 #[test]
