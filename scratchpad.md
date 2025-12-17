@@ -8,6 +8,7 @@
 # Attempted https://www.wsj.com at 1200×800; fetch failed with 401 (likely paywall/auth). Skipped for now.
 # Attempted https://www.theverge.com at 1200×800; render timed out after fetching CSS (likely heavy client-side). No output produced.
 # Rendered https://www.wikipedia.org at 1200×800 (wiki.png); page renders correctly (simple static HTML, white background). No issues noted.
+# Rendered https://www.foxnews.com at 1200×800 (fox.png); page loads and renders with content visible (header/sections). No obvious issues spotted in quick scan.
 # Sticky positioning: fixed a bug where sticky elements with all-auto offsets were still clamped to the viewport/container (unwrap_or(0)), causing unintended movement. Now we only clamp axes with specified offsets. Added regression ensuring a sticky box with no offsets stays put.
 # Added background image-rendering coverage: display-list builder regression ensures pixelated backgrounds use nearest-neighbor sampling; roadmap marks image-rendering implemented. `cargo test background_image_rendering_pixelated_sets_nearest_filter_quality --quiet` passes.
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
