@@ -1831,7 +1831,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         }
     }
 
-    fn resolve_candidates(candidates: &[BorderCandidate], direction: Direction) -> BorderCandidate {
+    fn resolve_candidates(candidates: &[BorderCandidate], _direction: Direction) -> BorderCandidate {
         if candidates.is_empty() {
             return BorderCandidate::none();
         }
@@ -1864,27 +1864,12 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         let best_origin = non_none.iter().map(|c| origin_priority(c.origin)).max().unwrap_or(0);
         non_none.retain(|c| origin_priority(c.origin) == best_origin);
 
-        fn is_more_top_left(first: &BorderCandidate, second: &BorderCandidate, direction: Direction) -> bool {
-            if first.row != second.row {
-                return first.row < second.row;
-            }
-            match direction {
-                Direction::Ltr => first.col < second.col,
-                Direction::Rtl => first.col > second.col,
-            }
-        }
-
-        let default_candidate = BorderCandidate::none();
-        let mut winner = *non_none.first().copied().unwrap_or(&default_candidate);
-        for cand in non_none.into_iter().skip(1) {
-            if is_more_top_left(cand, &winner, direction) {
-                winner = *cand;
-            } else if cand.row == winner.row && cand.col == winner.col && cand.source_order > winner.source_order {
-                // Preserve deterministic ordering when positions tie exactly.
-                winner = *cand;
-            }
-        }
-        winner
+        // Final tiebreaker: later source order wins (CSS 2.1 §17.6.2.1 step f).
+        non_none
+            .into_iter()
+            .max_by_key(|c| c.source_order)
+            .copied()
+            .unwrap_or_else(BorderCandidate::none)
     }
 
     fn length_to_px(len: &crate::style::values::Length) -> f32 {
@@ -6058,7 +6043,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_borders_tie_prefers_left_cell_in_ltr() {
+    fn collapsed_borders_tie_prefers_later_cell_in_ltr() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -6086,11 +6071,11 @@ mod tests {
         let borders = compute_collapsed_borders(&table, &structure);
 
         let middle_border = &borders.vertical[1][0];
-        assert_eq!(middle_border.color, Rgba::from_rgba8(255, 0, 0, 255));
+        assert_eq!(middle_border.color, Rgba::from_rgba8(0, 255, 0, 255));
     }
 
     #[test]
-    fn collapsed_borders_tie_prefers_right_cell_in_rtl() {
+    fn collapsed_borders_tie_prefers_later_cell_in_rtl() {
         let mut table_style = ComputedStyle::default();
         table_style.display = Display::Table;
         table_style.border_collapse = BorderCollapse::Collapse;
@@ -6586,7 +6571,7 @@ mod tests {
         let horizontal_border = &borders.horizontal[1][0];
         assert_eq!(horizontal_border.style, BorderStyle::Solid);
         assert!((horizontal_border.width - 4.0).abs() < f32::EPSILON);
-        assert_eq!(horizontal_border.color, Rgba::from_rgba8(255, 0, 0, 255));
+        assert_eq!(horizontal_border.color, Rgba::from_rgba8(0, 0, 255, 255));
     }
 
     #[test]
