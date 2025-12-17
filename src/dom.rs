@@ -1312,7 +1312,12 @@ impl<'a> Element for ElementRef<'a> {
     ) -> bool {
         match pseudo {
             PseudoClass::Root => {
-                matches!(self.node.tag_name(), Some("html"))
+                matches!(self.node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+                    && self
+                        .node
+                        .tag_name()
+                        .map(|t| t.eq_ignore_ascii_case("html"))
+                        .unwrap_or(false)
             }
             PseudoClass::FirstChild => self.element_index() == Some(0),
             PseudoClass::LastChild => {
@@ -1568,6 +1573,30 @@ mod tests {
         assert!(element_ref.has_namespace(""));
         assert!(element_ref.has_namespace(HTML_NAMESPACE));
         assert!(!element_ref.has_namespace("http://www.w3.org/2000/svg"));
+    }
+
+    #[test]
+    fn root_matches_html_case_insensitive() {
+        let upper = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "HTML".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        let svg_root = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "svg".to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
+        };
+
+        assert!(matches(&upper, &[], &PseudoClass::Root));
+        assert!(!matches(&svg_root, &[], &PseudoClass::Root));
     }
 
     #[test]

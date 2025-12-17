@@ -35,6 +35,7 @@
 # Scratchpad – rendering engine session notes
 - Grid auto margins now align items: grid items with auto inline/block margins map to self-alignment (center/end/start), and a regression ensures auto inline margins center a 50px item in a 200px track.
 - Bidi visual ordering now covered: added regression ensuring mixed LTR + RTL runs produce expected visual sequence (LTR text, RTL word, trailing LTR) to guard against logical-order painting overlap.
+- :root matching is now case-insensitive in HTML namespace; `<HTML>` matches :root while foreign/SVG roots do not. Added regression in dom.rs.
 - Removed unused mut in sticky presentational test (warning noise cleanup).
 - :focus-within now walks descendants for data-fastr-focus (respecting SVG focusable=true), and :focus-visible matches data-fastr-focus-visible on focused elements. Added DOM regressions for self/descendant focus-within, SVG gating, and focus-visible flagging.
 - Float shrink-to-fit now uses float-context availability: auto floats shrink against the space left by existing floats instead of the full containing width. Regression `float_auto_width_shrinks_to_available_space_next_to_float` added (`cargo test float_auto_width_shrinks_to_available_space_next_to_float --quiet`); pushed as c7b21f4.
