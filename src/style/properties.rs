@@ -674,6 +674,48 @@ fn parse_overscroll_keyword(kw: &str) -> Option<OverscrollBehavior> {
     }
 }
 
+fn parse_touch_action_keywords(tokens: &[String]) -> Option<TouchAction> {
+    if tokens.is_empty() {
+        return None;
+    }
+
+    if tokens.len() == 1 {
+        let kw = tokens[0].as_str();
+        return match kw {
+            "auto" => Some(TouchAction::auto()),
+            "none" => Some(TouchAction::none()),
+            "pan-x" => Some(TouchAction { pan_x: true, ..TouchAction::empty() }),
+            "pan-y" => Some(TouchAction { pan_y: true, ..TouchAction::empty() }),
+            "pan-left" => Some(TouchAction { pan_left: true, ..TouchAction::empty() }),
+            "pan-right" => Some(TouchAction { pan_right: true, ..TouchAction::empty() }),
+            "pan-up" => Some(TouchAction { pan_up: true, ..TouchAction::empty() }),
+            "pan-down" => Some(TouchAction { pan_down: true, ..TouchAction::empty() }),
+            "pinch-zoom" => Some(TouchAction { pinch_zoom: true, ..TouchAction::empty() }),
+            "manipulation" => Some(TouchAction { manipulation: true, ..TouchAction::empty() }),
+            _ => None,
+        };
+    }
+
+    let mut action = TouchAction::empty();
+    for kw in tokens {
+        match kw.as_str() {
+            "auto" => return Some(TouchAction::auto()),
+            "none" => return Some(TouchAction::none()),
+            "pan-x" => action.pan_x = true,
+            "pan-y" => action.pan_y = true,
+            "pan-left" => action.pan_left = true,
+            "pan-right" => action.pan_right = true,
+            "pan-up" => action.pan_up = true,
+            "pan-down" => action.pan_down = true,
+            "pinch-zoom" => action.pinch_zoom = true,
+            "manipulation" => action.manipulation = true,
+            _ => {}
+        }
+    }
+
+    Some(action)
+}
+
 fn parse_layer_list<T>(value: &PropertyValue, parse: impl Fn(&PropertyValue) -> Option<T>) -> Option<Vec<T>> {
     match value {
         PropertyValue::Multiple(tokens)
@@ -2175,6 +2217,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "overscroll-behavior-x" => styles.overscroll_behavior_x = source.overscroll_behavior_x,
         "overscroll-behavior-y" => styles.overscroll_behavior_y = source.overscroll_behavior_y,
         "pointer-events" => styles.pointer_events = source.pointer_events,
+        "touch-action" => styles.touch_action = source.touch_action,
         "user-select" => styles.user_select = source.user_select,
         "vertical-align" => {
             styles.vertical_align = source.vertical_align;
@@ -5604,6 +5647,30 @@ pub fn apply_declaration_with_base(
                     "contain" => UserSelect::Contain,
                     _ => styles.user_select,
                 };
+            }
+        }
+        "touch-action" => {
+            match &resolved_value {
+                PropertyValue::Keyword(kw) => {
+                    if let Some(val) = parse_touch_action_keywords(&[kw.to_ascii_lowercase()]) {
+                        styles.touch_action = val;
+                    }
+                }
+                PropertyValue::Multiple(tokens) => {
+                    let mut parts = Vec::new();
+                    for token in tokens {
+                        if let PropertyValue::Keyword(k) = token {
+                            if k == "," {
+                                continue;
+                            }
+                            parts.push(k.to_ascii_lowercase());
+                        }
+                    }
+                    if let Some(val) = parse_touch_action_keywords(&parts) {
+                        styles.touch_action = val;
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -11244,6 +11311,47 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.user_select, UserSelect::Contain));
+    }
+
+    #[test]
+    fn touch_action_parses_keywords_and_lists() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "touch-action".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(style.touch_action.none);
+        assert!(!style.touch_action.auto);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "touch-action".into(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Keyword("pan-x".into()),
+                    PropertyValue::Keyword("pan-y".into()),
+                    PropertyValue::Keyword("pinch-zoom".into()),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(style.touch_action.pan_x);
+        assert!(style.touch_action.pan_y);
+        assert!(style.touch_action.pinch_zoom);
+        assert!(!style.touch_action.none);
+        assert!(!style.touch_action.auto);
     }
 
     #[test]

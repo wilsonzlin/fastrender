@@ -620,6 +620,67 @@ pub enum ScrollBehavior {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TouchAction {
+    pub auto: bool,
+    pub none: bool,
+    pub pan_x: bool,
+    pub pan_y: bool,
+    pub pan_left: bool,
+    pub pan_right: bool,
+    pub pan_up: bool,
+    pub pan_down: bool,
+    pub pinch_zoom: bool,
+    pub manipulation: bool,
+}
+
+impl TouchAction {
+    pub fn auto() -> Self {
+        Self {
+            auto: true,
+            none: false,
+            pan_x: false,
+            pan_y: false,
+            pan_left: false,
+            pan_right: false,
+            pan_up: false,
+            pan_down: false,
+            pinch_zoom: false,
+            manipulation: false,
+        }
+    }
+
+    pub fn none() -> Self {
+        Self {
+            auto: false,
+            none: true,
+            pan_x: false,
+            pan_y: false,
+            pan_left: false,
+            pan_right: false,
+            pan_up: false,
+            pan_down: false,
+            pinch_zoom: false,
+            manipulation: false,
+        }
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            auto: false,
+            none: false,
+            pan_x: false,
+            pan_y: false,
+            pan_left: false,
+            pan_right: false,
+            pan_up: false,
+            pan_down: false,
+            pinch_zoom: false,
+            manipulation: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserSelect {
     Auto,
     Text,
