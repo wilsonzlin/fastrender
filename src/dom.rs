@@ -2057,6 +2057,21 @@ mod tests {
     }
 
     #[test]
+    fn hover_and_focus_do_not_match_by_default() {
+        let link = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("href".to_string(), "https://example.com".to_string())],
+            },
+            children: vec![],
+        };
+
+        assert!(!matches(&link, &[], &PseudoClass::Hover));
+        assert!(!matches(&link, &[], &PseudoClass::Focus));
+    }
+
+    #[test]
     fn checked_matches_inputs_and_options() {
         let checkbox = DomNode {
             node_type: DomNodeType::Element {

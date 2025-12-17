@@ -4484,6 +4484,22 @@ mod tests {
     }
 
     #[test]
+    fn ua_hover_focus_do_not_apply_without_flags() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![("href".to_string(), "https://example.com".to_string())],
+            },
+            children: vec![],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.color, Rgba::new(0, 0, 238, 1.0));
+        assert_eq!(styled.styles.outline_style, OutlineStyle::None);
+    }
+
+    #[test]
     fn text_align_match_parent_maps_start_end_using_parent_direction() {
         let parent = DomNode {
             node_type: DomNodeType::Element {
