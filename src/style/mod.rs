@@ -463,10 +463,7 @@ pub struct ComputedStyle {
     pub transform_origin: TransformOrigin,
     pub transform_style: TransformStyle,
     pub backface_visibility: BackfaceVisibility,
-<<<<<<< HEAD
     pub resize: Resize,
-=======
->>>>>>> e1540a6 (Fix touch-action parsing and restore transform/backface fields)
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
     pub border_spacing_horizontal: Length,
@@ -692,10 +689,7 @@ impl Default for ComputedStyle {
             },
             transform_style: TransformStyle::Flat,
             backface_visibility: BackfaceVisibility::Visible,
-<<<<<<< HEAD
             resize: Resize::None,
-=======
->>>>>>> e1540a6 (Fix touch-action parsing and restore transform/backface fields)
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             border_spacing_horizontal: Length::px(0.0),
