@@ -4553,6 +4553,33 @@ mod tests {
     }
 
     #[test]
+    fn image_rendering_crisp_edges_sets_nearest_filter_quality() {
+        let mut style = ComputedStyle::default();
+        style.image_rendering = ImageRendering::CrispEdges;
+        let fragment = FragmentNode {
+            bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            content: FragmentContent::Replaced {
+                box_id: None,
+                replaced_type: ReplacedType::Image {
+                    src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
+                    alt: None,
+                    sizes: None,
+                    srcset: Vec::new(),
+                },
+            },
+            baseline: None,
+            children: vec![],
+            style: Some(Arc::new(style)),
+        };
+
+        let list = DisplayListBuilder::new().build(&fragment);
+        let DisplayItem::Image(img) = &list.items()[0] else {
+            panic!("Expected image item");
+        };
+        assert_eq!(img.filter_quality, ImageFilterQuality::Nearest);
+    }
+
+    #[test]
     fn filters_resolve_font_relative_lengths_in_display_list() {
         let mut style = ComputedStyle::default();
         style.font_size = 20.0;
