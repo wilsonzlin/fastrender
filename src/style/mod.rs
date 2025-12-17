@@ -280,6 +280,9 @@ pub struct ComputedStyle {
     pub container_type: ContainerType,
     /// Space-separated list of container names (empty when none).
     pub container_name: Vec<String>,
+    /// Whether the auto inline size should shrink-to-fit rather than span the containing block.
+    /// Used for elements like `<legend>` that size to their contents by default.
+    pub shrink_to_fit_inline_size: bool,
 
     // Box model
     pub width: Option<Length>,
@@ -548,6 +551,7 @@ impl Default for ComputedStyle {
             box_sizing: BoxSizing::ContentBox,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
+            shrink_to_fit_inline_size: false,
 
             width: None,
             height: None,

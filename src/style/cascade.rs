@@ -3535,6 +3535,7 @@ mod tests {
 
         let styled_legend = apply_styles(&legend, &StyleSheet::new());
         assert_eq!(styled_legend.styles.display, Display::Block);
+        assert!(styled_legend.styles.shrink_to_fit_inline_size);
         assert!(
             styled_legend
                 .styles

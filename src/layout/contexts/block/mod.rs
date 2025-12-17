@@ -277,6 +277,55 @@ impl BlockFormattingContext {
             }
         }
 
+        if style.shrink_to_fit_inline_size && style.width.is_none() {
+            let horizontal_edges = computed_width.border_left
+                + computed_width.padding_left
+                + computed_width.padding_right
+                + computed_width.border_right;
+            let margin_left = style
+                .margin_left
+                .as_ref()
+                .map(|l| resolve_length_for_width(*l, containing_width, style, &self.font_context, self.viewport_size))
+                .unwrap_or(0.0);
+            let margin_right = style
+                .margin_right
+                .as_ref()
+                .map(|l| resolve_length_for_width(*l, containing_width, style, &self.font_context, self.viewport_size))
+                .unwrap_or(0.0);
+
+            let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+                self.font_context.clone(),
+                self.viewport_size,
+                *nearest_positioned_cb,
+            );
+            let fc_type = child.formatting_context().unwrap_or(FormattingContextType::Block);
+            let fc = factory.create(fc_type);
+            let preferred_min_content = fc.compute_intrinsic_inline_size(child, IntrinsicSizingMode::MinContent)?;
+            let preferred_content = fc
+                .compute_intrinsic_inline_size(child, IntrinsicSizingMode::MaxContent)
+                .unwrap_or(preferred_min_content);
+
+            let preferred_min = preferred_min_content + horizontal_edges;
+            let preferred = preferred_content + horizontal_edges;
+            let available = (containing_width - margin_left - margin_right).max(0.0);
+            let shrink_border_box = preferred.min(available.max(preferred_min));
+            let shrink_content = (shrink_border_box - horizontal_edges).max(0.0);
+            let (margin_left, margin_right) = recompute_margins_for_width(
+                style,
+                containing_width,
+                shrink_content,
+                computed_width.border_left,
+                computed_width.padding_left,
+                computed_width.padding_right,
+                computed_width.border_right,
+                self.viewport_size,
+                &self.font_context,
+            );
+            computed_width.content_width = shrink_content;
+            computed_width.margin_left = margin_left;
+            computed_width.margin_right = margin_right;
+        }
+
         let child_constraints = LayoutConstraints::new(
             AvailableSpace::Definite(computed_width.content_width),
             child_height_space,
@@ -1691,6 +1740,71 @@ impl FormattingContext for BlockFormattingContext {
         };
 
         let mut computed_width = compute_block_width(style_for_width, containing_width, self.viewport_size);
+        if style.shrink_to_fit_inline_size && style_for_width.width.is_none() {
+            static LOG_SHRINK: OnceLock<bool> = OnceLock::new();
+            let log_shrink = *LOG_SHRINK.get_or_init(|| {
+                std::env::var("FASTR_LOG_SHRINK_TO_FIT")
+                    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                    .unwrap_or(false)
+            });
+            let horizontal_edges = computed_width.border_left
+                + computed_width.padding_left
+                + computed_width.padding_right
+                + computed_width.border_right;
+            let margin_left = style
+                .margin_left
+                .as_ref()
+                .map(|l| resolve_length_for_width(*l, containing_width, style, &self.font_context, self.viewport_size))
+                .unwrap_or(0.0);
+            let margin_right = style
+                .margin_right
+                .as_ref()
+                .map(|l| resolve_length_for_width(*l, containing_width, style, &self.font_context, self.viewport_size))
+                .unwrap_or(0.0);
+
+            let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+                self.font_context.clone(),
+                self.viewport_size,
+                self.nearest_positioned_cb,
+            );
+            let fc_type = box_node.formatting_context().unwrap_or(FormattingContextType::Block);
+            let fc = factory.create(fc_type);
+            let preferred_min_content = fc.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)?;
+            let preferred_content = fc
+                .compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
+                .unwrap_or(preferred_min_content);
+
+            let preferred_min = preferred_min_content + horizontal_edges;
+            let preferred = preferred_content + horizontal_edges;
+            let available = (containing_width - margin_left - margin_right).max(0.0);
+            let shrink_border_box = preferred.min(available.max(preferred_min));
+            let shrink_content = (shrink_border_box - horizontal_edges).max(0.0);
+            if log_shrink {
+                let selector = box_node
+                    .debug_info
+                    .as_ref()
+                    .map(|d| d.to_selector())
+                    .unwrap_or_else(|| "<anon>".to_string());
+                eprintln!(
+                    "[shrink-to-fit] id={} selector={} preferred_min={:.1} preferred={:.1} available={:.1} content={:.1} edges={:.1}",
+                    box_node.id, selector, preferred_min, preferred, available, shrink_content, horizontal_edges
+                );
+            }
+            let (margin_left, margin_right) = recompute_margins_for_width(
+                style,
+                containing_width,
+                shrink_content,
+                computed_width.border_left,
+                computed_width.padding_left,
+                computed_width.padding_right,
+                computed_width.border_right,
+                self.viewport_size,
+                &self.font_context,
+            );
+            computed_width.content_width = shrink_content;
+            computed_width.margin_left = margin_left;
+            computed_width.margin_right = margin_right;
+        }
         // When asked for intrinsic max-/min-content sizes, override the constraint equation with
         // the corresponding intrinsic inline size so flex/inline shrink-to-fit measurements don't
         // default to the full containing block width.
@@ -2300,7 +2414,11 @@ fn resolve_length_for_width(
     font_context: &FontContext,
     viewport: crate::geometry::Size,
 ) -> f32 {
-    let base = if percentage_base.is_finite() { Some(percentage_base) } else { None };
+    let base = if percentage_base.is_finite() {
+        Some(percentage_base)
+    } else {
+        None
+    };
     resolve_length_with_percentage_metrics(
         length,
         base,
@@ -2465,6 +2583,73 @@ mod tests {
 
         assert_eq!(fragment.bounds.width(), 800.0);
         assert_eq!(fragment.bounds.height(), 200.0);
+    }
+
+    #[test]
+    fn legend_auto_width_shrinks_to_content() {
+        let mut legend_style = ComputedStyle::default();
+        legend_style.display = Display::Block;
+        legend_style.shrink_to_fit_inline_size = true;
+
+        let mut legend_child_style = ComputedStyle::default();
+        legend_child_style.display = Display::Block;
+        legend_child_style.width = Some(Length::px(80.0));
+        legend_child_style.height = Some(Length::px(10.0));
+        let legend_child = BoxNode::new_block(Arc::new(legend_child_style), FormattingContextType::Block, vec![]);
+
+        let legend = BoxNode::new_block(Arc::new(legend_style), FormattingContextType::Block, vec![legend_child]);
+
+        let mut sibling_style = ComputedStyle::default();
+        sibling_style.display = Display::Block;
+        let sibling = BoxNode::new_block(Arc::new(sibling_style), FormattingContextType::Block, vec![]);
+
+        let fc = BlockFormattingContext::with_font_context_viewport_and_cb(
+            FontContext::new(),
+            Size::new(200.0, 200.0),
+            ContainingBlock::viewport(Size::new(200.0, 200.0)),
+        );
+        let constraints = LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite);
+        let solo = fc.layout(&legend, &constraints).expect("legend layout");
+        assert!(
+            (solo.bounds.width() - 80.0).abs() < 0.1,
+            "legend root should shrink to its contents; got width {}",
+            solo.bounds.width()
+        );
+
+        let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![legend, sibling]);
+        let fragment = fc.layout(&root, &constraints).expect("block layout");
+
+        assert_eq!(fragment.children.len(), 2, "root should produce two children");
+        let legend_fragment = &fragment.children[0];
+        assert!(
+            legend_fragment
+                .style
+                .as_ref()
+                .map(|s| s.shrink_to_fit_inline_size)
+                .unwrap_or(false),
+            "legend fragment should carry shrink-to-fit flag"
+        );
+        assert!(
+            (legend_fragment.bounds.width() - 80.0).abs() < 0.1,
+            "legend should shrink to its contents; got width {}",
+            legend_fragment.bounds.width()
+        );
+        assert!(
+            legend_fragment.bounds.x().abs() < 0.01,
+            "legend should start at the origin"
+        );
+
+        let sibling_fragment = &fragment.children[1];
+        assert!(
+            (sibling_fragment.bounds.width() - 200.0).abs() < 0.1,
+            "normal block should span the containing width; got width {}",
+            sibling_fragment.bounds.width()
+        );
+        assert!(
+            sibling_fragment.bounds.x().abs() < 0.01,
+            "sibling should start at the container origin; got {}",
+            sibling_fragment.bounds.x()
+        );
     }
 
     #[test]

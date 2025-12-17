@@ -105,6 +105,9 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
                 // CSS 2.1 §17.5.3: table cells default to middle alignment
                 styles.vertical_align = crate::style::types::VerticalAlign::Middle;
             }
+            "legend" => {
+                styles.shrink_to_fit_inline_size = true;
+            }
             "th" => {
                 // Header cells inherit td defaults plus bold/centered text
                 styles.padding_top = Length::px(1.0);
