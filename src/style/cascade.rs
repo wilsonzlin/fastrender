@@ -31,6 +31,7 @@ use std::time::Instant;
 
 /// User-agent stylesheet containing default browser styles
 const USER_AGENT_STYLESHEET: &str = include_str!("../user_agent.css");
+static UA_STYLESHEET: OnceLock<StyleSheet> = OnceLock::new();
 
 // Optional cascade profiling for large-page performance analysis.
 // Enable with FASTR_CASCADE_PROFILE=1.
@@ -48,6 +49,10 @@ fn cascade_profile_enabled() -> bool {
             .map(|v| v != "0")
             .unwrap_or(false)
     })
+}
+
+fn user_agent_stylesheet() -> &'static StyleSheet {
+    UA_STYLESHEET.get_or_init(|| parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new()))
 }
 
 fn reset_cascade_profile() {
@@ -737,8 +742,8 @@ pub fn apply_styles_with_media_target_and_imports_cached(
         .unwrap_or(false);
     let mut reuse_counter: usize = 0;
 
-    // Parse user-agent stylesheet
-    let ua_stylesheet = parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new());
+    // Parse user-agent stylesheet once
+    let ua_stylesheet = user_agent_stylesheet();
 
     // Resolve imports if a loader is provided
     let author_sheet = if let Some(loader) = import_loader {
