@@ -1441,6 +1441,9 @@ mod tests {
         assert_eq!(CounterStyle::LowerGreek.format(1), "α");
         assert_eq!(CounterStyle::LowerGreek.format(2), "β");
         assert_eq!(CounterStyle::LowerGreek.format(24), "ω");
+        // Outside the defined range, fall back to decimal
+        assert_eq!(CounterStyle::LowerGreek.format(0), "0");
+        assert_eq!(CounterStyle::LowerGreek.format(25), "25");
     }
 
     #[test]
@@ -1451,6 +1454,8 @@ mod tests {
         assert_eq!(CounterStyle::LowerArmenian.format(1492), "ռնղբ");
         assert_eq!(CounterStyle::Armenian.format(0), "0");
         assert_eq!(CounterStyle::Armenian.format(10000), "10000");
+        assert_eq!(CounterStyle::LowerArmenian.format(0), "0");
+        assert_eq!(CounterStyle::LowerArmenian.format(10000), "10000");
     }
 
     #[test]
