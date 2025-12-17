@@ -2377,7 +2377,12 @@ fn styled_style_map(root: &StyledNode) -> HashMap<usize, Arc<ComputedStyle>> {
 
 fn styled_summary_map(root: &StyledNode) -> HashMap<usize, String> {
     fn summary(node: &StyledNode) -> String {
-        if let crate::dom::DomNodeType::Element { tag_name, attributes } = &node.node.node_type {
+        if let crate::dom::DomNodeType::Element {
+            tag_name,
+            namespace: _,
+            attributes,
+        } = &node.node.node_type
+        {
             let mut out = tag_name.clone();
             if let Some((_, id_val)) = attributes.iter().find(|(k, _)| k.eq_ignore_ascii_case("id")) {
                 out.push('#');

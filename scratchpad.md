@@ -42,6 +42,8 @@ Idle; no current tasks.
 
 - Added `scrollbar-color` parsing/computed support (keywords + thumb/track colors), inherited via cascade with regression coverage.
 
+- DOM now tracks element namespaces: parse_html captures the element namespace, selector matching respects the actual namespace (HTML vs foreign), and local-name/type comparisons are case-insensitive only for HTML elements. Tests cover namespace matching, HTML vs. SVG casing, and namespace-aware type equality. HTML-only form states (disabled/required/etc.) are gated to HTML elements.
+
 - Fixed stacking context bounds computation to recurse into children and avoid the implicit zero origin (paint containment clip test now passes).
 - Added regression test to ensure stacking context bounds include child contexts without precomputed bounds.
 

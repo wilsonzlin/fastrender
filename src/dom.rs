@@ -14,7 +14,9 @@ use std::ptr;
 use std::thread_local;
 use unicode_bidi::bidi_class;
 
-const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+pub const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+pub const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
+pub const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
 
 #[derive(Debug, Clone)]
 pub struct DomNode {
@@ -27,6 +29,7 @@ pub enum DomNodeType {
     Document,
     Element {
         tag_name: String,
+        namespace: String,
         attributes: Vec<(String, String)>,
     },
     Text {
@@ -108,13 +111,18 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
         NodeData::Document => DomNodeType::Document,
         NodeData::Element { name, attrs, .. } => {
             let tag_name = name.local.to_string();
+            let namespace = name.ns.to_string();
             let attributes = attrs
                 .borrow()
                 .iter()
                 .map(|attr| (attr.name.local.to_string(), attr.value.to_string()))
                 .collect();
 
-            DomNodeType::Element { tag_name, attributes }
+            DomNodeType::Element {
+                tag_name,
+                namespace,
+                attributes,
+            }
         }
         NodeData::Text { contents } => {
             let content = contents.borrow().to_string();
@@ -167,6 +175,13 @@ impl DomNode {
     pub fn tag_name(&self) -> Option<&str> {
         match &self.node_type {
             DomNodeType::Element { tag_name, .. } => Some(tag_name),
+            _ => None,
+        }
+    }
+
+    pub fn namespace(&self) -> Option<&str> {
+        match &self.node_type {
+            DomNodeType::Element { namespace, .. } => Some(namespace),
             _ => None,
         }
     }
@@ -272,6 +287,14 @@ impl<'a> ElementRef<'a> {
         siblings.iter().position(|&sibling| ptr::eq(sibling, self.node))
     }
 
+    fn is_html_element(&self) -> bool {
+        matches!(
+            self.node.node_type,
+            DomNodeType::Element { ref namespace, .. }
+                if namespace.is_empty() || namespace == HTML_NAMESPACE
+        )
+    }
+
     /// Position (index, total) among siblings filtered by a predicate.
     fn position_in_siblings<F>(&self, predicate: F) -> Option<(usize, usize)>
     where
@@ -285,10 +308,21 @@ impl<'a> ElementRef<'a> {
     /// Position among siblings of the same element type (case-insensitive).
     fn position_in_type(&self) -> Option<(usize, usize)> {
         let tag = self.node.tag_name()?;
+        let namespace = self.node.namespace();
+        let is_html = self.is_html_element();
         self.position_in_siblings(|sibling| {
+            if sibling.namespace() != namespace {
+                return false;
+            }
             sibling
                 .tag_name()
-                .map(|name| name.eq_ignore_ascii_case(tag))
+                .map(|name| {
+                    if is_html {
+                        name.eq_ignore_ascii_case(tag)
+                    } else {
+                        name == tag
+                    }
+                })
                 .unwrap_or(false)
         })
     }
@@ -315,6 +349,9 @@ impl<'a> ElementRef<'a> {
     }
 
     fn supports_disabled(&self) -> bool {
+        if !self.is_html_element() {
+            return false;
+        }
         self.node
             .tag_name()
             .map(|tag| match tag.to_ascii_lowercase().as_str() {
@@ -380,6 +417,9 @@ impl<'a> ElementRef<'a> {
     }
 
     fn is_contenteditable(&self) -> bool {
+        if !self.is_html_element() {
+            return false;
+        }
         if let Some(value) = self.node.get_attribute("contenteditable") {
             let v = value.to_ascii_lowercase();
             return v.is_empty() || v == "true";
@@ -388,6 +428,9 @@ impl<'a> ElementRef<'a> {
     }
 
     fn is_text_editable_input(&self) -> bool {
+        if !self.is_html_element() {
+            return false;
+        }
         let Some(tag) = self.node.tag_name() else {
             return false;
         };
@@ -478,6 +521,10 @@ impl<'a> ElementRef<'a> {
             return false;
         }
 
+        if !self.is_html_element() {
+            return false;
+        }
+
         if self.is_text_editable_input() {
             return self.node.get_attribute("readonly").is_none();
         }
@@ -495,6 +542,9 @@ impl<'a> ElementRef<'a> {
     }
 
     fn supports_required(&self) -> bool {
+        if !self.is_html_element() {
+            return false;
+        }
         let Some(tag) = self.node.tag_name() else {
             return false;
         };
@@ -520,6 +570,9 @@ impl<'a> ElementRef<'a> {
     }
 
     fn supports_validation(&self) -> bool {
+        if !self.is_html_element() {
+            return false;
+        }
         let Some(tag) = self.node.tag_name() else {
             return false;
         };
@@ -754,11 +807,7 @@ impl<'a> ElementRef<'a> {
         let mut ancestors = vec![form];
         let target = self.node as *const DomNode;
 
-        fn traverse<'a>(
-            node: &'a DomNode,
-            ancestors: &mut Vec<&'a DomNode>,
-            target: *const DomNode,
-        ) -> Option<bool> {
+        fn traverse<'a>(node: &'a DomNode, ancestors: &mut Vec<&'a DomNode>, target: *const DomNode) -> Option<bool> {
             if ElementRef::is_default_submit_candidate(node, ancestors) {
                 return Some(ptr::eq(node, target));
             }
@@ -911,8 +960,7 @@ fn option_value_from_node(node: &DomNode) -> String {
         }
     }
 
-    node
-        .children
+    node.children
         .iter()
         .filter_map(|c| match &c.node_type {
             DomNodeType::Text { content } => Some(content.clone()),
@@ -1022,27 +1070,57 @@ impl<'a> Element for ElementRef<'a> {
     }
 
     fn is_html_element_in_html_document(&self) -> bool {
-        true // Simplification: assume all HTML
+        match &self.node.node_type {
+            DomNodeType::Element { namespace, .. } => namespace.is_empty() || namespace == HTML_NAMESPACE,
+            _ => false,
+        }
     }
 
     fn has_local_name(&self, local_name: &str) -> bool {
-        self.node
-            .tag_name()
-            .map(|tag| tag.eq_ignore_ascii_case(local_name))
-            .unwrap_or(false)
+        self.node.tag_name().map_or(false, |tag| {
+            if self.is_html_element() {
+                tag.eq_ignore_ascii_case(local_name)
+            } else {
+                tag == local_name
+            }
+        })
     }
 
     fn has_namespace(&self, ns: &str) -> bool {
-        if self.node.tag_name().is_none() {
-            return false;
+        match &self.node.node_type {
+            DomNodeType::Element { namespace, .. } => {
+                if ns.is_empty() {
+                    return true;
+                }
+                if namespace == ns {
+                    return true;
+                }
+                namespace.is_empty() && ns == HTML_NAMESPACE
+            }
+            _ => false,
         }
-
-        ns.is_empty() || ns == HTML_NAMESPACE
     }
 
     fn is_same_type(&self, other: &Self) -> bool {
-        match (self.node.tag_name(), other.node.tag_name()) {
-            (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+        match (&self.node.node_type, &other.node.node_type) {
+            (
+                DomNodeType::Element {
+                    tag_name: a,
+                    namespace: a_ns,
+                    ..
+                },
+                DomNodeType::Element {
+                    tag_name: b,
+                    namespace: b_ns,
+                    ..
+                },
+            ) if a_ns == b_ns => {
+                if a_ns == HTML_NAMESPACE || a_ns.is_empty() {
+                    a.eq_ignore_ascii_case(b)
+                } else {
+                    a == b
+                }
+            }
             _ => false,
         }
     }
@@ -1292,9 +1370,21 @@ mod tests {
         DomNode {
             node_type: DomNodeType::Element {
                 tag_name: tag.to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children,
+        }
+    }
+
+    fn svg_element(tag: &str) -> DomNode {
+        DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: tag.to_string(),
+                namespace: SVG_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![],
         }
     }
 
@@ -1342,6 +1432,37 @@ mod tests {
         assert!(upper_ref.is_same_type(&lower_ref));
     }
 
+    #[test]
+    fn is_same_type_accounts_for_namespace() {
+        let html_div = element("div", vec![]);
+        let svg_div = svg_element("div");
+
+        let html_ref = ElementRef::new(&html_div);
+        let svg_ref = ElementRef::new(&svg_div);
+
+        assert!(!html_ref.is_same_type(&svg_ref));
+    }
+
+    #[test]
+    fn has_local_name_respects_case_for_foreign_elements() {
+        let svg = svg_element("linearGradient");
+        let svg_ref = ElementRef::new(&svg);
+
+        assert!(svg_ref.has_local_name("linearGradient"));
+        assert!(!svg_ref.has_local_name("lineargradient"));
+        assert!(!svg_ref.has_local_name("LINEARGRADIENT"));
+    }
+
+    #[test]
+    fn namespace_matching_uses_element_namespace() {
+        let svg = svg_element("svg");
+        let svg_ref = ElementRef::new(&svg);
+
+        assert!(svg_ref.has_namespace(""));
+        assert!(svg_ref.has_namespace(SVG_NAMESPACE));
+        assert!(!svg_ref.has_namespace(HTML_NAMESPACE));
+    }
+
     fn collect_wbr_texts(node: &DomNode, out: &mut Vec<String>) {
         if let DomNodeType::Element { tag_name, .. } = &node.node_type {
             if tag_name.eq_ignore_ascii_case("wbr") {
@@ -1362,6 +1483,7 @@ mod tests {
         let node = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("HREF".to_string(), "foo".to_string())],
             },
             children: vec![],
@@ -1378,6 +1500,7 @@ mod tests {
         let node = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("foo".to_string(), "Bar".to_string())],
             },
             children: vec![],
@@ -1411,6 +1534,7 @@ mod tests {
         let node = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("id".to_string(), "Foo".to_string()),
                     ("class".to_string(), "Bar baz".to_string()),
@@ -1495,6 +1619,7 @@ mod tests {
             vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "div".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("lang".to_string(), "en-US".to_string())],
                 },
                 children: vec![child],
@@ -1525,6 +1650,7 @@ mod tests {
             vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "p".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("dir".to_string(), "rtl".to_string())],
                 },
                 children: vec![child],
@@ -1548,6 +1674,7 @@ mod tests {
         let root = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("dir".to_string(), "auto".to_string())],
             },
             children: vec![rtl_text],
@@ -1568,6 +1695,7 @@ mod tests {
         let container = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "p".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("dir".to_string(), "auto".to_string())],
             },
             children: vec![rtl_text, child],
@@ -1583,6 +1711,7 @@ mod tests {
         let link = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("href".to_string(), "#foo".to_string())],
             },
             children: vec![],
@@ -1595,6 +1724,7 @@ mod tests {
         let area = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "area".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("href".to_string(), "/foo".to_string())],
             },
             children: vec![],
@@ -1602,6 +1732,7 @@ mod tests {
         let stylesheet_link = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "link".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("href".to_string(), "style.css".to_string())],
             },
             children: vec![],
@@ -1616,6 +1747,7 @@ mod tests {
         let input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("placeholder".to_string(), "Search".to_string())],
             },
             children: vec![],
@@ -1625,6 +1757,7 @@ mod tests {
         let with_value = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("placeholder".to_string(), "Search".to_string()),
                     ("value".to_string(), "query".to_string()),
@@ -1637,6 +1770,7 @@ mod tests {
         let checkbox = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "checkbox".to_string()),
                     ("placeholder".to_string(), "X".to_string()),
@@ -1649,6 +1783,7 @@ mod tests {
         let empty_textarea = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "textarea".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("placeholder".to_string(), "Describe".to_string())],
             },
             children: vec![],
@@ -1658,6 +1793,7 @@ mod tests {
         let prefilled_textarea = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "textarea".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("placeholder".to_string(), "Describe".to_string())],
             },
             children: vec![DomNode {
@@ -1675,6 +1811,7 @@ mod tests {
         let input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "text".to_string()),
                     ("value".to_string(), "filled".to_string()),
@@ -1691,6 +1828,7 @@ mod tests {
         let text_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "text".to_string())],
             },
             children: vec![],
@@ -1701,6 +1839,7 @@ mod tests {
         let required_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "email".to_string()),
                     ("required".to_string(), "true".to_string()),
@@ -1714,6 +1853,7 @@ mod tests {
         let disabled_required = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("required".to_string(), "true".to_string()),
                     ("disabled".to_string(), "disabled".to_string()),
@@ -1727,6 +1867,7 @@ mod tests {
         let submit_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "submit".to_string()),
                     ("required".to_string(), "true".to_string()),
@@ -1740,6 +1881,7 @@ mod tests {
         let select = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("required".to_string(), "required".to_string())],
             },
             children: vec![],
@@ -1749,11 +1891,13 @@ mod tests {
         let fieldset = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "fieldset".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("disabled".to_string(), "true".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "input".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![
                         ("type".to_string(), "text".to_string()),
                         ("required".to_string(), "true".to_string()),
@@ -1773,6 +1917,7 @@ mod tests {
         let checkbox = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "checkbox".to_string()),
                     ("checked".to_string(), "checked".to_string()),
@@ -1785,6 +1930,7 @@ mod tests {
         let radio = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "radio".to_string())],
             },
             children: vec![],
@@ -1794,6 +1940,7 @@ mod tests {
         let option_selected = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "option".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("selected".to_string(), "selected".to_string())],
             },
             children: vec![],
@@ -1803,12 +1950,14 @@ mod tests {
         let select = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "option".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -1816,6 +1965,7 @@ mod tests {
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "option".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -1831,12 +1981,14 @@ mod tests {
         let select_with_explicit = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "option".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -1844,6 +1996,7 @@ mod tests {
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "option".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![("selected".to_string(), "selected".to_string())],
                     },
                     children: vec![],
@@ -1859,12 +2012,14 @@ mod tests {
         let select_disabled_first = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "option".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![("disabled".to_string(), "disabled".to_string())],
                     },
                     children: vec![],
@@ -1872,6 +2027,7 @@ mod tests {
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "option".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -1887,11 +2043,13 @@ mod tests {
         let select_multiple = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("multiple".to_string(), "multiple".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "option".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -1904,11 +2062,13 @@ mod tests {
         let select_multiple_selected = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("multiple".to_string(), "multiple".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "option".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("selected".to_string(), "selected".to_string())],
                 },
                 children: vec![],
@@ -1924,6 +2084,7 @@ mod tests {
         let checkbox = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "checkbox".to_string()),
                     ("indeterminate".to_string(), "true".to_string()),
@@ -1936,6 +2097,7 @@ mod tests {
         let normal_checkbox = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "checkbox".to_string())],
             },
             children: vec![],
@@ -1945,6 +2107,7 @@ mod tests {
         let radio = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "radio".to_string()),
                     ("indeterminate".to_string(), "true".to_string()),
@@ -1957,6 +2120,7 @@ mod tests {
         let progress_indeterminate = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "progress".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -1966,6 +2130,7 @@ mod tests {
         let progress_value = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "progress".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("value".to_string(), "0.5".to_string())],
             },
             children: vec![],
@@ -1975,6 +2140,7 @@ mod tests {
         let progress_invalid_value = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "progress".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("value".to_string(), "not-a-number".to_string())],
             },
             children: vec![],
@@ -1987,13 +2153,11 @@ mod tests {
         let form = element(
             "form",
             vec![
-                element(
-                    "input",
-                    vec![],
-                ),
+                element("input", vec![]),
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "button".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -2001,6 +2165,7 @@ mod tests {
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "button".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![("type".to_string(), "submit".to_string())],
                     },
                     children: vec![],
@@ -2019,6 +2184,7 @@ mod tests {
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "button".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![("disabled".to_string(), "disabled".to_string())],
                     },
                     children: vec![],
@@ -2026,6 +2192,7 @@ mod tests {
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "button".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -2041,12 +2208,14 @@ mod tests {
         let select = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "option".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![("disabled".to_string(), "disabled".to_string())],
                     },
                     children: vec![],
@@ -2054,6 +2223,7 @@ mod tests {
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "option".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -2069,6 +2239,7 @@ mod tests {
         let checkbox = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "checkbox".to_string()),
                     ("checked".to_string(), "checked".to_string()),
@@ -2084,6 +2255,7 @@ mod tests {
         let input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2094,6 +2266,7 @@ mod tests {
         let disabled_button = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "button".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("disabled".to_string(), "true".to_string())],
             },
             children: vec![],
@@ -2105,6 +2278,7 @@ mod tests {
         let legend_child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2112,6 +2286,7 @@ mod tests {
         let legend = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "legend".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![legend_child.clone()],
@@ -2119,6 +2294,7 @@ mod tests {
         let outer_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2126,6 +2302,7 @@ mod tests {
         let fieldset = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "fieldset".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("disabled".to_string(), "true".to_string())],
             },
             children: vec![legend.clone(), outer_input.clone()],
@@ -2146,6 +2323,7 @@ mod tests {
         let text_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "text".to_string())],
             },
             children: vec![],
@@ -2156,6 +2334,7 @@ mod tests {
         let required_empty = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("required".to_string(), "true".to_string())],
             },
             children: vec![],
@@ -2166,6 +2345,7 @@ mod tests {
         let number_in_range = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "number".to_string()),
                     ("value".to_string(), "5".to_string()),
@@ -2182,6 +2362,7 @@ mod tests {
         let number_out_of_range = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "number".to_string()),
                     ("value".to_string(), "15".to_string()),
@@ -2198,6 +2379,7 @@ mod tests {
         let number_nan = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "number".to_string()),
                     ("value".to_string(), "abc".to_string()),
@@ -2211,6 +2393,7 @@ mod tests {
         let disabled_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("required".to_string(), "true".to_string()),
                     ("disabled".to_string(), "true".to_string()),
@@ -2224,6 +2407,7 @@ mod tests {
         let required_multiple_select = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("required".to_string(), "true".to_string()),
                     ("multiple".to_string(), "multiple".to_string()),
@@ -2232,6 +2416,7 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "option".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -2242,6 +2427,7 @@ mod tests {
         let valid_multiple_select = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("required".to_string(), "true".to_string()),
                     ("multiple".to_string(), "multiple".to_string()),
@@ -2250,6 +2436,7 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "option".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![
                         ("selected".to_string(), "selected".to_string()),
                         ("value".to_string(), "a".to_string()),
@@ -2267,6 +2454,7 @@ mod tests {
         let text_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "text".to_string())],
             },
             children: vec![],
@@ -2277,6 +2465,7 @@ mod tests {
         let readonly_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "text".to_string()),
                     ("readonly".to_string(), "readonly".to_string()),
@@ -2290,6 +2479,7 @@ mod tests {
         let disabled_textarea = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "textarea".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("disabled".to_string(), "true".to_string())],
             },
             children: vec![],
@@ -2300,6 +2490,7 @@ mod tests {
         let checkbox = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "checkbox".to_string())],
             },
             children: vec![],
@@ -2310,6 +2501,7 @@ mod tests {
         let select = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2320,6 +2512,7 @@ mod tests {
         let editable_div = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("contenteditable".to_string(), "true".to_string())],
             },
             children: vec![],
@@ -2333,6 +2526,7 @@ mod tests {
         let target = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("id".to_string(), "section".to_string())],
             },
             children: vec![],
@@ -2350,6 +2544,7 @@ mod tests {
         let anchor = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("name".to_string(), "anchor".to_string())],
             },
             children: vec![],

@@ -1,4 +1,4 @@
-use fastrender::dom::{DomNode, DomNodeType};
+use fastrender::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use fastrender::style::defaults::get_default_styles_for_element;
 use fastrender::style::values::Length;
 
@@ -6,6 +6,7 @@ fn element(tag: &str) -> DomNode {
     DomNode {
         node_type: DomNodeType::Element {
             tag_name: tag.to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
             attributes: Vec::new(),
         },
         children: Vec::new(),
@@ -38,8 +39,5 @@ fn table_headers_are_bold_and_centered() {
 
     // UA defaults for header cells (CSS2/HTML)
     assert_eq!(th.text_align, fastrender::style::types::TextAlign::Center);
-    assert!(matches!(
-        th.font_weight,
-        fastrender::style::types::FontWeight::Bold
-    ));
+    assert!(matches!(th.font_weight, fastrender::style::types::FontWeight::Bold));
 }

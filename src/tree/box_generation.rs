@@ -6,7 +6,7 @@
 //! CSS Specification: CSS 2.1 Section 9.2 - Box Generation
 //! <https://www.w3.org/TR/CSS21/visuren.html#box-gen>
 
-use crate::dom::{DomNode, DomNodeType};
+use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::geometry::Size;
 use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
 use crate::style::counters::{CounterManager, CounterSet};
@@ -890,6 +890,7 @@ impl BoxGenerator {
         let dummy_dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "li".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -1162,7 +1163,9 @@ fn escape_text(value: &str) -> String {
 fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
     match &node.node_type {
         crate::dom::DomNodeType::Text { content } => escape_text(content),
-        crate::dom::DomNodeType::Element { tag_name, attributes } => {
+        crate::dom::DomNodeType::Element {
+            tag_name, attributes, ..
+        } => {
             let mut out = String::new();
             out.push('<');
             out.push_str(tag_name);
@@ -2008,6 +2011,7 @@ mod tests {
         let li_dom = dom::DomNode {
             node_type: dom::DomNodeType::Element {
                 tag_name: "li".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![text_dom],
@@ -2468,6 +2472,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: tag.to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -2675,6 +2680,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -2731,6 +2737,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -2889,6 +2896,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "div".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -2942,6 +2950,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "div".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("data-label".to_string(), "hello".to_string())],
                 },
                 children: vec![],
@@ -3000,6 +3009,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -3038,6 +3048,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -3077,6 +3088,7 @@ mod tests {
         let ol_dom = dom::DomNode {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("start".to_string(), "5".to_string())],
             },
             children: vec![],
@@ -3087,6 +3099,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![dom::DomNode {
@@ -3157,6 +3170,7 @@ mod tests {
         let ol_dom = dom::DomNode {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3167,6 +3181,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![dom::DomNode {
@@ -3237,6 +3252,7 @@ mod tests {
         let ol_dom = dom::DomNode {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("reversed".to_string(), "".to_string())],
             },
             children: vec![],
@@ -3247,6 +3263,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![dom::DomNode {
@@ -3317,6 +3334,7 @@ mod tests {
         let ol_dom = dom::DomNode {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3327,6 +3345,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: value
                         .map(|v| vec![("value".to_string(), v.to_string())])
                         .unwrap_or_else(Vec::new),
@@ -3399,6 +3418,7 @@ mod tests {
         let ol_dom = dom::DomNode {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("reversed".to_string(), "".to_string())],
             },
             children: vec![],
@@ -3409,6 +3429,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: value
                         .map(|v| vec![("value".to_string(), v.to_string())])
                         .unwrap_or_else(Vec::new),
@@ -3483,6 +3504,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "ol".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("reversed".to_string(), "".to_string())],
                 },
                 children: vec![],
@@ -3496,6 +3518,7 @@ mod tests {
                 node: dom::DomNode {
                     node_type: dom::DomNodeType::Element {
                         tag_name: "li".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![dom::DomNode {
@@ -3529,6 +3552,7 @@ mod tests {
         let ol_dom = dom::DomNode {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("reversed".to_string(), "".to_string())],
             },
             children: vec![],
@@ -3539,6 +3563,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![child.node.clone()],
@@ -3629,6 +3654,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -3645,6 +3671,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "menu".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -3661,6 +3688,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "ol".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("reversed".to_string(), "".to_string())],
                 },
                 children: vec![],
@@ -4061,6 +4089,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -4077,6 +4106,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "ol".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -4093,6 +4123,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -4109,6 +4140,7 @@ mod tests {
             node: dom::DomNode {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "ol".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("reversed".to_string(), "".to_string())],
                 },
                 children: vec![],

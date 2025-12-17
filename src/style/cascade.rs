@@ -1467,7 +1467,7 @@ mod tests {
     use crate::css::parser::parse_stylesheet;
     use crate::css::types::CssImportLoader;
     use crate::css::types::StyleSheet;
-    use crate::dom::DomNodeType;
+    use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
     use crate::style::color::Rgba;
     use crate::style::computed::Visibility;
     use crate::style::display::Display;
@@ -1486,6 +1486,7 @@ mod tests {
         DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), style.to_string())],
             },
             children: vec![],
@@ -1496,11 +1497,13 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), parent_style.to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), child_style.to_string())],
                 },
                 children: vec![],
@@ -1521,6 +1524,7 @@ mod tests {
         DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes,
             },
             children: vec![],
@@ -1563,6 +1567,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("class".to_string(), "pagetop".to_string())],
             },
             children: vec![],
@@ -1603,11 +1608,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "color: rgb(1, 2, 3);".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("id".to_string(), "target".to_string())],
                 },
                 children: vec![],
@@ -1732,6 +1739,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "direction: rtl; unicode-bidi: bidi-override; color: red; background-color: blue; all: initial;"
@@ -1757,11 +1765,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "display: inline;".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![
                         ("id".to_string(), "target".to_string()),
                         ("style".to_string(), "all: inherit;".to_string()),
@@ -1781,11 +1791,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "color: rgb(10, 20, 30);".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "color: green; all: revert;".to_string())],
                 },
                 children: vec![],
@@ -1802,11 +1814,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "nav".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -1824,11 +1838,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "nav".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![
                         ("style".to_string(), "visibility: hidden;".to_string()),
                         ("role".to_string(), "navigation".to_string()),
@@ -1848,11 +1864,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "div".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![(
                         "class".to_string(),
                         "ad-slot ad-slot-header ad-slot-header__wrapper".to_string(),
@@ -1881,6 +1899,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     r#"font-variation-settings: "wght" 600;"#.to_string(),
@@ -1889,6 +1908,7 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -1907,11 +1927,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), r#"font-language-override: "SRB";"#.to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -1938,6 +1960,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("id".to_string(), "target".to_string())],
             },
             children: vec![],
@@ -1963,6 +1986,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("dir".to_string(), "rtl".to_string())],
             },
             children: vec![],
@@ -1981,6 +2005,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("dir".to_string(), "rtl".to_string())],
             },
             children: vec![],
@@ -2000,6 +2025,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2021,6 +2047,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("dir".to_string(), "rtl".to_string()),
                     ("style".to_string(), "direction: ltr;".to_string()),
@@ -2038,6 +2065,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "img".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("width".to_string(), "320".to_string()),
                     ("height".to_string(), "240".to_string()),
@@ -2056,6 +2084,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "img".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("width".to_string(), "640".to_string()),
                     ("height".to_string(), "480".to_string()),
@@ -2075,6 +2104,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2089,6 +2119,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "body".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2107,6 +2138,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("href".to_string(), "https://example.com".to_string())],
             },
             children: vec![],
@@ -2127,6 +2159,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "a".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("href".to_string(), "https://example.com".to_string())],
             },
             children: vec![],
@@ -2146,6 +2179,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "h1".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2163,6 +2197,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "p".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2178,6 +2213,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "pre".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2195,6 +2231,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "blockquote".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2212,6 +2249,7 @@ mod tests {
         let ul = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2228,6 +2266,7 @@ mod tests {
         let li = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "li".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2238,6 +2277,7 @@ mod tests {
         let ol = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2253,6 +2293,7 @@ mod tests {
             let dom = DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: tag.to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -2269,6 +2310,7 @@ mod tests {
         let dd = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "dd".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2283,6 +2325,7 @@ mod tests {
         let hr = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "hr".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2303,6 +2346,7 @@ mod tests {
         let bdi = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "bdi".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
@@ -2323,6 +2367,7 @@ mod tests {
         let bdo = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "bdo".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("dir".to_string(), "rtl".to_string())],
             },
             children: vec![],
@@ -2338,6 +2383,7 @@ mod tests {
         let bdo = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "bdo".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2353,6 +2399,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("dir".to_string(), "auto".to_string())],
             },
             children: vec![DomNode {
@@ -2365,6 +2412,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("dir".to_string(), "rtl".to_string())],
             },
             children: vec![child],
@@ -2381,6 +2429,7 @@ mod tests {
         let bdi = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "bdi".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
@@ -2393,6 +2442,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("dir".to_string(), "rtl".to_string())],
             },
             children: vec![bdi],
@@ -2409,6 +2459,7 @@ mod tests {
         let small = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "small".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2416,6 +2467,7 @@ mod tests {
         let big = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "big".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2455,6 +2507,7 @@ mod tests {
         let sub = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "sub".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2462,6 +2515,7 @@ mod tests {
         let sup = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "sup".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2487,6 +2541,7 @@ mod tests {
         let mark = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "mark".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2503,6 +2558,7 @@ mod tests {
             let dom = DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: tag.to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -2517,6 +2573,7 @@ mod tests {
         let ins = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ins".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2524,6 +2581,7 @@ mod tests {
         let del = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "del".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2549,6 +2607,7 @@ mod tests {
         let abbr = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "abbr".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("title".to_string(), "World Health Organization".to_string())],
             },
             children: vec![],
@@ -2568,6 +2627,7 @@ mod tests {
         let u = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "u".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2575,6 +2635,7 @@ mod tests {
         let s = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "s".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2582,6 +2643,7 @@ mod tests {
         let strike = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "strike".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2609,6 +2671,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "center".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2623,6 +2686,7 @@ mod tests {
         let text_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "text".to_string())],
             },
             children: vec![],
@@ -2630,6 +2694,7 @@ mod tests {
         let submit_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "submit".to_string())],
             },
             children: vec![],
@@ -2637,6 +2702,7 @@ mod tests {
         let hidden_input = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "input".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "hidden".to_string())],
             },
             children: vec![],
@@ -2644,6 +2710,7 @@ mod tests {
         let textarea = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "textarea".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2651,6 +2718,7 @@ mod tests {
         let select = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2658,6 +2726,7 @@ mod tests {
         let button = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "button".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2665,6 +2734,7 @@ mod tests {
         let option = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "option".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2672,6 +2742,7 @@ mod tests {
         let optgroup = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "optgroup".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2679,6 +2750,7 @@ mod tests {
         let fieldset = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "fieldset".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2686,6 +2758,7 @@ mod tests {
         let legend = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "legend".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2693,6 +2766,7 @@ mod tests {
         let details = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "details".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2700,6 +2774,7 @@ mod tests {
         let summary = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "summary".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2707,6 +2782,7 @@ mod tests {
         let details_with_summary = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "details".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("open".to_string(), "".to_string())],
             },
             children: vec![summary.clone()],
@@ -2714,6 +2790,7 @@ mod tests {
         let details_closed_with_content = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "details".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![
@@ -2721,6 +2798,7 @@ mod tests {
                 DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "div".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -2730,6 +2808,7 @@ mod tests {
         let details_open_with_content = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "details".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("open".to_string(), "".to_string())],
             },
             children: details_closed_with_content.children.clone(),
@@ -2840,6 +2919,7 @@ mod tests {
         let th = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "th".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2855,6 +2935,7 @@ mod tests {
         let q = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "q".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -2872,11 +2953,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "img".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![
                         ("width".to_string(), "120".to_string()),
                         ("height".to_string(), "60".to_string()),
@@ -2897,6 +2980,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("bgcolor".to_string(), "#ff0000".to_string())],
             },
             children: vec![],
@@ -2911,6 +2995,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("bgcolor".to_string(), "#ff0000".to_string())],
             },
             children: vec![],
@@ -2926,6 +3011,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("hidden".to_string(), "".to_string())],
             },
             children: vec![],
@@ -2940,6 +3026,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("hidden".to_string(), "".to_string())],
             },
             children: vec![],
@@ -2955,11 +3042,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "td".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("bgcolor".to_string(), "#ff6600".to_string())],
                 },
                 children: vec![],
@@ -2976,6 +3065,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("cellspacing".to_string(), "0".to_string())],
             },
             children: vec![],
@@ -2991,6 +3081,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3006,6 +3097,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("cellspacing".to_string(), "12".to_string())],
             },
             children: vec![],
@@ -3022,16 +3114,19 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("cellpadding".to_string(), "10".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "tr".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "td".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -3052,16 +3147,19 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("cellpadding".to_string(), "8".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "tr".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "td".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -3083,16 +3181,19 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("bordercolor".to_string(), "#00ff00".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "tr".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "td".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![("bordercolor".to_string(), "rgb(255, 0, 0)".to_string())],
                     },
                     children: vec![],
@@ -3111,6 +3212,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("bordercolor".to_string(), "#00ff00".to_string())],
             },
             children: vec![],
@@ -3126,16 +3228,19 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("border".to_string(), "3".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "tr".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "td".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -3158,16 +3263,19 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("border".to_string(), "3".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "tr".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "td".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![],
                     },
                     children: vec![],
@@ -3192,11 +3300,13 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "cursor: move;".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -3210,11 +3320,13 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "cursor: move;".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "cursor: pointer;".to_string())],
                 },
                 children: vec![],
@@ -3261,6 +3373,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "A".to_string())],
             },
             children: vec![],
@@ -3278,6 +3391,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "li".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "i".to_string())],
             },
             children: vec![],
@@ -3285,6 +3399,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "A".to_string())],
             },
             children: vec![child],
@@ -3303,6 +3418,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "circle".to_string())],
             },
             children: vec![],
@@ -3320,6 +3436,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ol".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("type".to_string(), "I".to_string())],
             },
             children: vec![],
@@ -3338,6 +3455,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("align".to_string(), "right".to_string())],
             },
             children: vec![],
@@ -3355,6 +3473,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("valign".to_string(), "middle".to_string())],
             },
             children: vec![],
@@ -3372,6 +3491,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3389,6 +3509,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("align".to_string(), "center".to_string()),
                     ("style".to_string(), "text-align: left;".to_string()),
@@ -3406,6 +3527,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("align".to_string(), "center".to_string())],
             },
             children: vec![],
@@ -3423,6 +3545,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("align".to_string(), "center".to_string())],
             },
             children: vec![],
@@ -3442,6 +3565,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("align".to_string(), "left".to_string())],
             },
             children: vec![],
@@ -3458,6 +3582,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "table".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("align".to_string(), "right".to_string())],
             },
             children: vec![],
@@ -3477,6 +3602,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "img".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("align".to_string(), "left".to_string())],
             },
             children: vec![],
@@ -3491,6 +3617,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "img".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("align".to_string(), "middle".to_string())],
             },
             children: vec![],
@@ -3508,6 +3635,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "img".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("align".to_string(), "right".to_string()),
                     ("style".to_string(), "float: left; vertical-align: top;".to_string()),
@@ -3529,6 +3657,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "center".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3546,6 +3675,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3563,6 +3693,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("nowrap".to_string(), "".to_string())],
             },
             children: vec![],
@@ -3580,6 +3711,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("nowrap".to_string(), "".to_string()),
                     ("style".to_string(), "white-space: normal;".to_string()),
@@ -3600,6 +3732,7 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "nobr".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3674,6 +3807,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3681,6 +3815,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "text-decoration: underline;".to_string())],
             },
             children: vec![child],
@@ -3700,6 +3835,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3707,6 +3843,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "text-underline-offset: 2px; text-underline-position: under right;".to_string(),
@@ -3738,6 +3875,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3745,6 +3883,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "text-emphasis-style: open dot; text-emphasis-color: red; text-emphasis-position: under left;"
@@ -3775,6 +3914,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3782,6 +3922,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "line-break: anywhere;".to_string())],
             },
             children: vec![child],
@@ -3797,6 +3938,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3804,6 +3946,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "display: grid; \
@@ -3839,6 +3982,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![],
@@ -3846,6 +3990,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "image-rendering: pixelated;".to_string())],
             },
             children: vec![child],
@@ -3867,6 +4012,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "text-decoration: none;".to_string())],
             },
             children: vec![],
@@ -3874,6 +4020,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "text-decoration: underline;".to_string())],
             },
             children: vec![child],
@@ -3889,6 +4036,7 @@ mod tests {
         let child = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "span".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "text-decoration: overline;".to_string())],
             },
             children: vec![],
@@ -3896,6 +4044,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "text-decoration: underline;".to_string())],
             },
             children: vec![child],
@@ -3933,11 +4082,13 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "direction: rtl; text-align: start;".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "text-align: match-parent;".to_string())],
                 },
                 children: vec![],
@@ -3953,11 +4104,13 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "text-align: center;".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "text-align: match-parent;".to_string())],
                 },
                 children: vec![],
@@ -3976,6 +4129,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "direction: rtl; text-align-last: start;".to_string(),
@@ -3984,6 +4138,7 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "text-align-last: match-parent;".to_string())],
                 },
                 children: vec![],
@@ -4004,6 +4159,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "width: 80px;".to_string())],
             },
             children: vec![child],
@@ -4020,6 +4176,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "color: red;".to_string())],
             },
             children: vec![child],
@@ -4036,6 +4193,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "border-style: solid; border-width: 2px;".to_string(),
@@ -4058,6 +4216,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "background-color: red;".to_string())],
             },
             children: vec![child],
@@ -4073,6 +4232,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "direction: rtl; text-align-last: start;".to_string(),
@@ -4081,6 +4241,7 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "text-align: match-parent;".to_string())],
                 },
                 children: vec![],
@@ -4111,6 +4272,7 @@ mod tests {
         let parent = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![(
                     "style".to_string(),
                     "list-style-type: square; list-style-position: inside;".to_string(),
@@ -4119,6 +4281,7 @@ mod tests {
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "color: red;".to_string())],
                 },
                 children: vec![],
@@ -4136,6 +4299,7 @@ mod tests {
         let lone_li = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "li".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "color: red;".to_string())],
             },
             children: vec![],
@@ -4161,11 +4325,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "color: red;".to_string())],
                 },
                 children: vec![],
@@ -4216,16 +4382,19 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![("style".to_string(), "color: blue;".to_string())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "ul".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![DomNode {
                     node_type: DomNodeType::Element {
                         tag_name: "li".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
                         attributes: vec![("style".to_string(), "color: red;".to_string())],
                     },
                     children: vec![],
@@ -4249,11 +4418,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "list-style-type: decimal;".to_string())],
                 },
                 children: vec![],
@@ -4289,11 +4460,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "letter-spacing: 0px;".to_string())],
                 },
                 children: vec![],
@@ -4386,11 +4559,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -4426,11 +4601,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -4493,11 +4670,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![(
                         "style".to_string(),
                         "text-align: center; text-align-last: right; text-indent: 2em;".to_string(),
@@ -4531,11 +4710,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
@@ -4566,11 +4747,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "color: black;".to_string())],
                 },
                 children: vec![],
@@ -4612,11 +4795,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![("style".to_string(), "color: black;".to_string())],
                 },
                 children: vec![],
@@ -4663,11 +4848,13 @@ mod tests {
         let dom = DomNode {
             node_type: DomNodeType::Element {
                 tag_name: "ul".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
                     tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
                     attributes: vec![],
                 },
                 children: vec![],
