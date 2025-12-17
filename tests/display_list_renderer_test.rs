@@ -270,6 +270,64 @@ fn display_list_border_image_nine_slice() {
 }
 
 #[test]
+fn background_attachment_local_clips_to_padding_box_in_display_list() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::TRANSPARENT;
+    style.set_background_layers(vec![fastrender::style::types::BackgroundLayer {
+        image: Some(BackgroundImage::LinearGradient {
+            angle: 0.0,
+            stops: vec![
+                ColorStop {
+                    color: fastrender::Color::Rgba(Rgba::RED),
+                    position: Some(0.0),
+                },
+                ColorStop {
+                    color: fastrender::Color::Rgba(Rgba::BLUE),
+                    position: Some(1.0),
+                },
+            ],
+        }),
+        position: BackgroundPosition::Position {
+            x: BackgroundPositionComponent {
+                alignment: 0.0,
+                offset: Length::px(0.0),
+            },
+            y: BackgroundPositionComponent {
+                alignment: 0.0,
+                offset: Length::px(0.0),
+            },
+        },
+        size: fastrender::style::types::BackgroundSize::Keyword(
+            fastrender::style::types::BackgroundSizeKeyword::Contain,
+        ),
+        repeat: fastrender::style::types::BackgroundRepeat {
+            x: fastrender::style::types::BackgroundRepeatKeyword::NoRepeat,
+            y: fastrender::style::types::BackgroundRepeatKeyword::NoRepeat,
+        },
+        origin: fastrender::style::types::BackgroundBox::PaddingBox,
+        clip: fastrender::style::types::BackgroundBox::PaddingBox,
+        attachment: fastrender::style::types::BackgroundAttachment::Local,
+        ..Default::default()
+    }]);
+    style.padding_top = Length::px(2.0);
+    style.padding_right = Length::px(2.0);
+    style.padding_bottom = Length::px(2.0);
+    style.padding_left = Length::px(2.0);
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Background should anchor to the padding box; interior should paint.
+    assert_ne!(pixel(&pixmap, 3, 3), (255, 255, 255, 255));
+}
+
+#[test]
 fn display_list_border_image_generated_uniform_color() {
     let mut style = fastrender::ComputedStyle::default();
     style.border_top_width = Length::px(4.0);
