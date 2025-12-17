@@ -12,7 +12,8 @@ use fastrender::style::color::Color;
 use fastrender::style::types::{
     BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundPositionComponent, BackgroundRepeat,
     BackgroundRepeatKeyword, BackgroundSize, BackgroundSizeComponent, BasicShape, BorderImage, BorderImageSlice,
-    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ShapeRadius, TextDecorationStyle,
+    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ImageRendering, ShapeRadius,
+    TextDecorationStyle,
 };
 use fastrender::ComputedStyle;
 use fastrender::style::values::Length;
@@ -140,6 +141,15 @@ fn assert_hsl_components(
 fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let px = pixmap.pixel(x, y).unwrap();
     (px.red(), px.green(), px.blue(), px.alpha())
+}
+
+fn two_color_data_url() -> String {
+    let pixels: [u8; 8] = [255, 0, 0, 255, 0, 0, 255, 255];
+    let mut buf = Vec::new();
+    PngEncoder::new(&mut buf)
+        .write_image(&pixels, 2, 1, ExtendedColorType::Rgba8)
+        .expect("encode png");
+    format!("data:image/png;base64,{}", STANDARD.encode(&buf))
 }
 
 #[test]
@@ -671,6 +681,68 @@ fn display_list_border_image_generated_uniform_color() {
     assert_eq!(tr, (255, 0, 0, 255));
     assert_eq!(bl, (255, 0, 0, 255));
     assert_eq!(br, (255, 0, 0, 255));
+}
+
+#[test]
+fn display_list_background_pixelated_uses_nearest_sampling() {
+    let url = two_color_data_url();
+
+    let mut style = fastrender::ComputedStyle::default();
+    style.image_rendering = ImageRendering::Pixelated;
+    style.background_color = Rgba::WHITE;
+    style.background_layers = vec![BackgroundLayer {
+        image: Some(BackgroundImage::Url(url)),
+        size: BackgroundSize::Explicit(
+            BackgroundSizeComponent::Length(Length::px(5.0)),
+            BackgroundSizeComponent::Length(Length::px(1.0)),
+        ),
+        repeat: BackgroundRepeat {
+            x: BackgroundRepeatKeyword::NoRepeat,
+            y: BackgroundRepeatKeyword::NoRepeat,
+        },
+        ..BackgroundLayer::default()
+    }];
+
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 5.0, 1.0), vec![], Arc::new(style));
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(5, 1, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Pixelated sampling should keep the left half fully red and the right half blue without purple blending.
+    assert_eq!(pixel(&pixmap, 1, 0), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 3, 0), (0, 0, 255, 255));
+}
+
+#[test]
+fn display_list_background_smooth_blends_when_upscaled() {
+    let url = two_color_data_url();
+
+    let mut style = fastrender::ComputedStyle::default();
+    style.image_rendering = ImageRendering::Auto;
+    style.background_color = Rgba::WHITE;
+    style.background_layers = vec![BackgroundLayer {
+        image: Some(BackgroundImage::Url(url)),
+        size: BackgroundSize::Explicit(
+            BackgroundSizeComponent::Length(Length::px(5.0)),
+            BackgroundSizeComponent::Length(Length::px(1.0)),
+        ),
+        repeat: BackgroundRepeat {
+            x: BackgroundRepeatKeyword::NoRepeat,
+            y: BackgroundRepeatKeyword::NoRepeat,
+        },
+        ..BackgroundLayer::default()
+    }];
+
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 5.0, 1.0), vec![], Arc::new(style));
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(5, 1, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    let mid = pixel(&pixmap, 2, 0);
+    // Linear sampling should blend the two source pixels, producing a non-primary color.
+    assert_ne!(mid, (255, 0, 0, 255));
+    assert_ne!(mid, (0, 0, 255, 255));
+    assert!(mid.0 > 0 && mid.2 > 0, "mid pixel should be blended: {:?}", mid);
 }
 
 #[test]
