@@ -497,6 +497,20 @@ fn env_override_prefers_reduced_transparency() {
     drop(guard_invalid);
 }
 
+/// Tests env override for prefers-reduced-data
+#[test]
+fn env_override_prefers_reduced_data() {
+    let guard = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("reduce"));
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(ctx.prefers_reduced_data);
+    drop(guard);
+
+    let guard_invalid = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("invalid"));
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(!ctx.prefers_reduced_data);
+    drop(guard_invalid);
+}
+
 // ============================================================================
 // Pointer and Hover Tests
 // ============================================================================
