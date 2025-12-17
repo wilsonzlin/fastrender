@@ -7988,6 +7988,56 @@ mod tests {
     }
 
     #[test]
+    fn marker_text_shadow_is_painted() {
+        let mut style = ComputedStyle::default();
+        style.display = Display::Inline;
+        style.color = Rgba::BLACK;
+        style.font_size = 16.0;
+        style.text_shadow = vec![TextShadow {
+            offset_x: Length::px(3.0),
+            offset_y: Length::px(0.0),
+            blur_radius: Length::px(0.0),
+            color: Some(Rgba::from_rgba8(255, 0, 0, 255)),
+        }];
+        let style = Arc::new(style);
+
+        let marker = FragmentNode::new_with_style(
+            Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+            FragmentContent::Text {
+                text: "•".to_string(),
+                box_id: None,
+                baseline_offset: 16.0,
+                shaped: None,
+                is_marker: true,
+            },
+            vec![],
+            style,
+        );
+
+        let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 40.0, 30.0), vec![marker]);
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 60, 40, Rgba::WHITE).expect("paint");
+
+        let glyph_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32)
+            .expect("marker glyph");
+        let shadow_bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| {
+            let (r, g, b) = (r as u16, g as u16, b as u16);
+            r > g + 20 && r > b + 20
+        })
+        .expect("marker shadow");
+
+        assert!(
+            shadow_bbox.0 > glyph_bbox.0,
+            "shadow should render to the inline end of the marker glyph"
+        );
+        assert!(
+            shadow_bbox.1.abs_diff(glyph_bbox.1) <= 2,
+            "shadow should stay vertically aligned with the marker glyph"
+        );
+    }
+
+    #[test]
     fn filter_lengths_resolve_viewport_units() {
         let mut style = ComputedStyle::default();
         style.filter = vec![FilterFunction::Blur(Length::new(10.0, LengthUnit::Vw))];
