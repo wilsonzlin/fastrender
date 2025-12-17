@@ -3,7 +3,7 @@
 //! These tests verify the media query parser and evaluator against
 //! real-world use cases and CSS specification requirements.
 
-use fastrender::style::media::{ColorScheme, MediaContext, MediaQuery};
+use fastrender::style::media::{ColorScheme, ContrastPreference, MediaContext, MediaQuery};
 use std::env;
 
 struct EnvGuard {
@@ -420,6 +420,67 @@ fn test_prefers_reduced_transparency() {
 
     assert!(reduced_ctx.evaluate(&reduce_query));
     assert!(!reduced_ctx.evaluate(&no_pref_query));
+}
+
+/// Tests prefers-contrast media feature
+#[test]
+fn test_prefers_contrast() {
+    let normal_ctx = MediaContext::screen(1024.0, 768.0);
+    let more_ctx = MediaContext::screen(1024.0, 768.0).with_prefers_contrast(ContrastPreference::More);
+    let less_ctx = MediaContext::screen(1024.0, 768.0).with_prefers_contrast(ContrastPreference::Less);
+    let custom_ctx = MediaContext::screen(1024.0, 768.0).with_prefers_contrast(ContrastPreference::Custom);
+
+    let more_query = MediaQuery::parse("(prefers-contrast: more)").unwrap();
+    let less_query = MediaQuery::parse("(prefers-contrast: less)").unwrap();
+    let custom_query = MediaQuery::parse("(prefers-contrast: custom)").unwrap();
+    let no_pref_query = MediaQuery::parse("(prefers-contrast: no-preference)").unwrap();
+
+    // Defaults to no-preference
+    assert!(!normal_ctx.evaluate(&more_query));
+    assert!(!normal_ctx.evaluate(&less_query));
+    assert!(!normal_ctx.evaluate(&custom_query));
+    assert!(normal_ctx.evaluate(&no_pref_query));
+
+    assert!(more_ctx.evaluate(&more_query));
+    assert!(!more_ctx.evaluate(&less_query));
+    assert!(!more_ctx.evaluate(&custom_query));
+    assert!(!more_ctx.evaluate(&no_pref_query));
+
+    assert!(less_ctx.evaluate(&less_query));
+    assert!(!less_ctx.evaluate(&more_query));
+    assert!(!less_ctx.evaluate(&custom_query));
+    assert!(!less_ctx.evaluate(&no_pref_query));
+
+    assert!(custom_ctx.evaluate(&custom_query));
+    assert!(!custom_ctx.evaluate(&more_query));
+    assert!(!custom_ctx.evaluate(&less_query));
+    assert!(!custom_ctx.evaluate(&no_pref_query));
+}
+
+/// Tests env override for prefers-contrast
+#[test]
+fn env_override_prefers_contrast() {
+    let guard = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("high"));
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
+    drop(guard);
+
+    let guard_low = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("low"));
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(matches!(ctx.prefers_contrast, ContrastPreference::Less));
+    drop(guard_low);
+
+    let guard_custom = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("forced"));
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(matches!(ctx.prefers_contrast, ContrastPreference::Custom));
+    drop(guard_custom);
+
+    let guard_invalid = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("unknown"));
+    let ctx = MediaContext::screen(800.0, 600.0)
+        .with_prefers_contrast(ContrastPreference::More)
+        .with_env_overrides();
+    assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
+    drop(guard_invalid);
 }
 
 /// Tests env override for prefers-reduced-transparency
