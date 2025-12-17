@@ -2017,6 +2017,18 @@ fn reorder_paragraph(
 
         let mut segments: Vec<VisualSegment> = Vec::new();
         let push_segment = |mapping: &ByteMapping, level: Level, segments: &mut Vec<VisualSegment>| {
+            let leaf_override = paragraph_leaves
+                .get(mapping.leaf_index)
+                .and_then(|p| p.bidi_context)
+                .map_or(false, |ctx| ctx.override_all);
+            if leaf_override {
+                segments.push(VisualSegment {
+                    mapping: *mapping,
+                    level,
+                });
+                return;
+            }
+
             if let Some(last) = segments.last_mut() {
                 let same_leaf = last.mapping.leaf_index == mapping.leaf_index && last.level == level;
                 let same_isolate_leaf = mapping.leaf_isolate
@@ -3491,6 +3503,64 @@ mod tests {
             .collect();
 
         assert_eq!(visual, expected);
+    }
+
+    #[test]
+    fn bidi_override_allows_embed_to_reset_override() {
+        // Outer override should force RTL ordering for its direct children, but an inner
+        // unicode-bidi: embed establishes a fresh embedding level without the override so its
+        // content keeps logical order.
+        let mut builder = make_builder(200.0);
+
+        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+
+        let mut inner = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            1,
+            Direction::Ltr,
+            UnicodeBidi::Embed,
+        );
+        inner.add_child(InlineItem::Text(make_text_item("abc", 30.0)));
+
+        let mut outer = InlineBoxItem::new(
+            0.0,
+            0.0,
+            0.0,
+            make_strut_metrics(),
+            Arc::new(ComputedStyle::default()),
+            0,
+            Direction::Rtl,
+            UnicodeBidi::BidiOverride,
+        );
+        outer.add_child(InlineItem::Text(make_text_item("X ", 20.0)));
+        outer.add_child(InlineItem::InlineBox(inner));
+        outer.add_child(InlineItem::Text(make_text_item(" Y", 20.0)));
+
+        builder.add_item(InlineItem::InlineBox(outer));
+        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+        let lines = builder.finish();
+        assert_eq!(lines.len(), 1);
+
+        let actual: String = lines[0]
+            .items
+            .iter()
+            .map(|p| flatten_text(&p.item))
+            .collect();
+
+        let logical = format!(
+            "L {}X {}abc{} Y{} R",
+            '\u{202e}', // RLO
+            '\u{202a}', // LRE
+            '\u{202c}', // PDF
+            '\u{202c}'  // PDF
+        );
+        let expected = reorder_with_controls(&logical, Some(Level::ltr()));
+        assert_eq!(actual, expected);
     }
 
     fn nested_inline_box_with_depth(
