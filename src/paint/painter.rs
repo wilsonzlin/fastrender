@@ -1857,21 +1857,21 @@ impl Painter {
                     apply_clip_mask_rect(&mut layer_pixmap, clip_rect, device_radii);
                 }
 
+                let device_offset_x = self.device_length(offset.x);
+                let device_offset_y = self.device_length(offset.y);
+                let mut final_transform = self.device_transform(transform).unwrap_or_else(Transform::identity);
+                final_transform = final_transform.pre_concat(Transform::from_translate(device_offset_x, device_offset_y));
+
                 if !backdrop_filters.is_empty() {
+                    let backdrop_bounds = transform_rect(device_root_rect, &final_transform);
                     apply_backdrop_filters(
                         &mut self.pixmap,
-                        &device_root_rect,
+                        &backdrop_bounds,
                         &backdrop_filters,
                         device_radii,
                         self.scale,
                     );
                 }
-
-                let mut final_transform = self.device_transform(transform).unwrap_or_else(Transform::identity);
-                final_transform = final_transform.pre_concat(Transform::from_translate(
-                    self.device_length(offset.x),
-                    self.device_length(offset.y),
-                ));
                 let fallback_blend = if isolated {
                     SkiaBlendMode::SourceOver
                 } else {
@@ -6196,7 +6196,7 @@ fn apply_backdrop_filters(
     let dest = region.data_mut();
     for row in 0..region_h as usize {
         let src_offset = start + row * bytes_per_row;
-        let dst_offset = row * (region_w as usize);
+        let dst_offset = row * region_row_bytes;
         let src_slice = &data[src_offset..src_offset + region_row_bytes];
         let dst_slice = &mut dest[dst_offset..dst_offset + region_row_bytes];
         dst_slice.copy_from_slice(src_slice);
@@ -9596,6 +9596,68 @@ mod tests {
             alpha_near < 255,
             "blurred spill should be softer than solid fill; alpha at (0,1) was {alpha_near}"
         );
+    }
+
+    #[test]
+    fn backdrop_filters_follow_transforms() {
+        let mut painter = Painter::new(24, 16, Rgba::BLUE).expect("painter");
+        painter.fill_background();
+
+        let cmd = DisplayCommand::StackingContext {
+            rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+            opacity: 1.0,
+            transform: Some(Transform::from_translate(12.0, 8.0)),
+            blend_mode: MixBlendMode::Normal,
+            isolated: false,
+            filters: Vec::new(),
+            backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
+            radii: BorderRadii::ZERO,
+            clip: None,
+            clip_path: None,
+            commands: Vec::new(),
+        };
+
+        painter.execute_command(cmd).expect("execute");
+        let pixmap = painter.pixmap;
+
+        let origin_px = color_at(&pixmap, 1, 1);
+        assert_eq!(origin_px, (0, 0, 255, 255), "backdrop filter should not affect the origin");
+
+        let mut inverted = Vec::new();
+        let (w, h) = (pixmap.width(), pixmap.height());
+        for y in 0..h {
+            for x in 0..w {
+                let (r, g, b, _) = color_at(&pixmap, x, y);
+                if r > 200 && g > 200 && b < 80 {
+                    inverted.push((x, y));
+                }
+            }
+        }
+        let expected: Vec<(u32, u32)> = (8..14).flat_map(|y| (12..18).map(move |x| (x, y))).collect();
+        assert_eq!(inverted, expected, "backdrop filter should track the translated box");
+    }
+
+    #[test]
+    fn backdrop_filters_cover_bounds() {
+        let mut pixmap = Pixmap::new(10, 10).expect("pixmap");
+        pixmap.fill(tiny_skia::Color::from_rgba8(0, 0, 255, 255));
+
+        let bounds = Rect::from_xywh(2.0, 3.0, 4.0, 2.0);
+        let filters = vec![ResolvedFilter::Invert(1.0)];
+        apply_backdrop_filters(&mut pixmap, &bounds, &filters, BorderRadii::ZERO, 1.0);
+
+        let mut inverted = Vec::new();
+        for y in 0..pixmap.height() {
+            for x in 0..pixmap.width() {
+                let (r, g, b, _) = color_at(&pixmap, x, y);
+                if r > 200 && g > 200 && b < 80 {
+                    inverted.push((x, y));
+                }
+            }
+        }
+
+        let expected: Vec<(u32, u32)> = (3..5).flat_map(|y| (2..6).map(move |x| (x, y))).collect();
+        assert_eq!(inverted, expected, "backdrop filter should invert the full bounds");
     }
 
     #[test]

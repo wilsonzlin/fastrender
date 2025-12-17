@@ -56,6 +56,30 @@ fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
     }
 }
 
+fn transform_rect(rect: Rect, ts: &Transform) -> Rect {
+    let corners = [
+        (rect.min_x(), rect.min_y()),
+        (rect.max_x(), rect.min_y()),
+        (rect.max_x(), rect.max_y()),
+        (rect.min_x(), rect.max_y()),
+    ];
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for (x, y) in corners {
+        let tx = x * ts.sx + y * ts.kx + ts.tx;
+        let ty = x * ts.ky + y * ts.sy + ts.ty;
+        min_x = min_x.min(tx);
+        min_y = min_y.min(ty);
+        max_x = max_x.max(tx);
+        max_y = max_y.max(ty);
+    }
+
+    Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
 fn shade_color(color: &Rgba, factor: f32) -> Rgba {
     let clamp = |v: f32| v.max(0.0).min(255.0) as u8;
     let r = clamp(color.r as f32 * factor);
@@ -1882,8 +1906,22 @@ impl DisplayListRenderer {
                 let bounds = self.ds_rect(item.bounds);
                 let radii = self.ds_radii(item.radii);
 
+                let mut combined_transform = self.canvas.transform();
+                if let Some(matrix) = item.transform.as_ref() {
+                    let t = Transform::from_row(
+                        matrix.a,
+                        matrix.b,
+                        matrix.c,
+                        matrix.d,
+                        self.ds_len(matrix.e),
+                        self.ds_len(matrix.f),
+                    );
+                    combined_transform = combined_transform.post_concat(t);
+                }
+
                 if !scaled_backdrop.is_empty() {
-                    apply_backdrop_filters(self.canvas.pixmap_mut(), &bounds, &scaled_backdrop, radii, self.scale);
+                    let backdrop_bounds = transform_rect(bounds, &combined_transform);
+                    apply_backdrop_filters(self.canvas.pixmap_mut(), &backdrop_bounds, &scaled_backdrop, radii, self.scale);
                 }
 
                 let needs_layer = item.is_isolated
@@ -1907,17 +1945,8 @@ impl DisplayListRenderer {
                     mask_bounds: bounds,
                 });
 
-                if let Some(matrix) = item.transform {
-                    let t = Transform::from_row(
-                        matrix.a,
-                        matrix.b,
-                        matrix.c,
-                        matrix.d,
-                        self.ds_len(matrix.e),
-                        self.ds_len(matrix.f),
-                    );
-                    let combined = self.canvas.transform().post_concat(t);
-                    self.canvas.set_transform(combined);
+                if item.transform.is_some() {
+                    self.canvas.set_transform(combined_transform);
                 }
             }
             DisplayItem::PopStackingContext => {
@@ -4516,6 +4545,44 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         // Pixel inside outer clip but outside inner clip should be blue (second fill) not red.
         assert_eq!(pixel(&pixmap, 1, 1), (0, 0, 255, 255));
+    }
+
+    #[test]
+    fn backdrop_filters_respect_stacking_transforms() {
+        let renderer = DisplayListRenderer::new(8, 6, Rgba::BLUE, FontContext::new()).unwrap();
+        let mut list = DisplayList::new();
+
+        list.push(DisplayItem::PushStackingContext(StackingContextItem {
+            z_index: 0,
+            creates_stacking_context: true,
+            bounds: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+            mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
+            is_isolated: false,
+            transform: Some(crate::paint::display_list::Transform2D {
+                a: 1.0,
+                b: 0.0,
+                c: 0.0,
+                d: 1.0,
+                e: 2.0,
+                f: 1.0,
+            }),
+            filters: Vec::new(),
+            backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
+            radii: BorderRadii::ZERO,
+        }));
+        list.push(DisplayItem::PopStackingContext);
+
+        let pixmap = renderer.render(&list).expect("render");
+
+        let origin_px = pixel(&pixmap, 0, 0);
+        assert_eq!(origin_px, (0, 0, 255, 255), "backdrop filter should not run at the origin");
+
+        let translated_px = pixel(&pixmap, 2, 1);
+        assert!(
+            translated_px.0 > 200 && translated_px.1 > 200 && translated_px.2 < 80,
+            "translated backdrop region should invert the backdrop, got {:?}",
+            translated_px
+        );
     }
 
     #[test]
