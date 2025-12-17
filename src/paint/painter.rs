@@ -9618,6 +9618,37 @@ mod tests {
     }
 
     #[test]
+    fn clip_path_polygon_masks_paint_output() {
+        let mut style = ComputedStyle::default();
+        style.background_color = Rgba::RED;
+        style.clip_path = ClipPath::BasicShape(
+            crate::style::types::BasicShape::Polygon {
+                fill: crate::style::types::FillRule::NonZero,
+                points: vec![
+                    (Length::px(0.0), Length::px(0.0)),
+                    (Length::px(0.0), Length::px(10.0)),
+                    (Length::px(10.0), Length::px(0.0)),
+                ],
+            },
+            None,
+        );
+
+        let mut root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![]);
+        root.style = Some(Arc::new(style));
+        let tree = FragmentTree::new(root);
+
+        let pixmap = paint_tree(&tree, 10, 10, Rgba::WHITE).expect("painted");
+        let inside = pixmap.pixel(2, 2).expect("inside pixel");
+        let outside = pixmap.pixel(9, 9).expect("outside pixel");
+
+        assert!(inside.red() > 200 && inside.green() < 60 && inside.blue() < 60);
+        assert_eq!(
+            (outside.red(), outside.green(), outside.blue(), outside.alpha()),
+            (255, 255, 255, 255)
+        );
+    }
+
+    #[test]
     fn outline_not_clipped_by_overflow_hidden() {
         let mut style = ComputedStyle::default();
         style.background_color = Rgba::WHITE;
