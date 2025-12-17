@@ -17,7 +17,7 @@ use crate::style::display::Display;
 use crate::style::grid::finalize_grid_placement;
 use crate::style::media::{ColorScheme, MediaContext, MediaQueryCache};
 use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties, with_image_set_dpr};
-use crate::style::types::{ColorSchemeEntry, ColorSchemePreference, ContainerType};
+use crate::style::types::{ColorSchemeEntry, ColorSchemePreference, ContainerType, OutlineColor};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::{normalize_language_tag, ComputedStyle, Direction};
 use selectors::context::{QuirksMode, SelectorCaches};
@@ -102,6 +102,57 @@ fn select_color_scheme(pref: &ColorSchemePreference, user: ColorScheme) -> Optio
             schemes.first().cloned()
         }
     }
+}
+
+fn apply_color_scheme_palette(
+    styles: &mut ComputedStyle,
+    ua_styles: &mut ComputedStyle,
+    ua_default_color: Rgba,
+    ua_default_background: Rgba,
+    selected_scheme: &Option<ColorSchemeEntry>,
+    is_root: bool,
+) {
+    if !matches!(selected_scheme, Some(ColorSchemeEntry::Dark)) {
+        return;
+    }
+
+    let dark_text = Rgba::rgb(232, 232, 232);
+    let dark_background = Rgba::rgb(16, 16, 16);
+    let dark_surface = Rgba::rgb(24, 24, 24);
+    let dark_border = Rgba::rgb(96, 96, 96);
+    let ua_border = Rgba::rgb(204, 204, 204);
+
+    let apply = |style: &mut ComputedStyle| {
+        if is_root && style.color == ua_default_color {
+            style.color = dark_text;
+        }
+        if is_root && style.background_color == ua_default_background {
+            style.background_color = dark_background;
+        }
+        let default_surface = style.background_color == ua_default_background && ua_default_background == Rgba::WHITE;
+        if default_surface {
+            style.background_color = dark_surface;
+        }
+        if default_surface
+            && style.border_top_color == ua_border
+            && style.border_right_color == ua_border
+            && style.border_bottom_color == ua_border
+            && style.border_left_color == ua_border
+        {
+            style.border_top_color = dark_border;
+            style.border_right_color = dark_border;
+            style.border_bottom_color = dark_border;
+            style.border_left_color = dark_border;
+        }
+        if let OutlineColor::Color(color) = style.outline_color {
+            if color == Rgba::BLACK {
+                style.outline_color = OutlineColor::Color(dark_text);
+            }
+        }
+    };
+
+    apply(styles);
+    apply(ua_styles);
 }
 
 fn record_node_visit(node: &DomNode) {
@@ -1031,8 +1082,10 @@ fn apply_styles_internal(
     styles.root_font_size = current_root_font_size;
     resolve_line_height_length(&mut styles, viewport);
 
+    let selected_scheme = select_color_scheme(&styles.color_scheme, color_scheme_pref);
+
     if is_root {
-        if let Some(selected) = select_color_scheme(&styles.color_scheme, color_scheme_pref) {
+        if let Some(selected) = &selected_scheme {
             if matches!(selected, ColorSchemeEntry::Dark) {
                 let dark_text = Rgba::rgb(232, 232, 232);
                 let dark_background = Rgba::rgb(16, 16, 16);
@@ -1051,6 +1104,15 @@ fn apply_styles_internal(
             }
         }
     }
+
+    apply_color_scheme_palette(
+        &mut styles,
+        &mut ua_styles,
+        ua_default_color,
+        ua_default_background,
+        &selected_scheme,
+        is_root,
+    );
 
     // Compute pseudo-element styles
     let pseudo_start = prof.then(|| Instant::now());
@@ -1294,8 +1356,10 @@ fn apply_styles_internal_with_ancestors<'a>(
     resolve_line_height_length(&mut styles, viewport);
     resolve_absolute_lengths(&mut styles, current_root_font_size, viewport);
 
+    let selected_scheme = select_color_scheme(&styles.color_scheme, color_scheme_pref);
+
     if is_root {
-        if let Some(selected) = select_color_scheme(&styles.color_scheme, color_scheme_pref) {
+        if let Some(selected) = &selected_scheme {
             if matches!(selected, ColorSchemeEntry::Dark) {
                 let dark_text = Rgba::rgb(232, 232, 232);
                 let dark_background = Rgba::rgb(16, 16, 16);
@@ -1314,6 +1378,15 @@ fn apply_styles_internal_with_ancestors<'a>(
             }
         }
     }
+
+    apply_color_scheme_palette(
+        &mut styles,
+        &mut ua_styles,
+        ua_default_color,
+        ua_default_background,
+        &selected_scheme,
+        is_root,
+    );
 
     let pseudo_start = prof.then(|| Instant::now());
     let before_styles = if rules.has_pseudo_rules(&PseudoElement::Before) {
@@ -2210,6 +2283,98 @@ mod tests {
         assert_eq!(body.styles.color_scheme, expected);
         let div = body.children.first().expect("div");
         assert_eq!(div.styles.color_scheme, expected);
+    }
+
+    #[test]
+    fn color_scheme_dark_recolors_form_controls() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "body".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![
+                    DomNode {
+                        node_type: DomNodeType::Element {
+                            tag_name: "input".to_string(),
+                            namespace: HTML_NAMESPACE.to_string(),
+                            attributes: vec![("type".to_string(), "text".to_string())],
+                        },
+                        children: vec![],
+                    },
+                    DomNode {
+                        node_type: DomNodeType::Element {
+                            tag_name: "textarea".to_string(),
+                            namespace: HTML_NAMESPACE.to_string(),
+                            attributes: vec![],
+                        },
+                        children: vec![],
+                    },
+                ],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet("html { color-scheme: light dark; } body { margin: 0; }").unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Dark);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+        let body = styled.children.first().expect("body");
+        let input = body.children.first().expect("input");
+        let textarea = body.children.get(1).expect("textarea");
+
+        assert_eq!(styled.styles.background_color, Rgba::rgb(16, 16, 16));
+        let expected_surface = Rgba::rgb(24, 24, 24);
+        let expected_border = Rgba::rgb(96, 96, 96);
+        assert_eq!(input.styles.background_color, expected_surface);
+        assert_eq!(textarea.styles.background_color, expected_surface);
+        assert_eq!(input.styles.border_top_color, expected_border);
+        assert_eq!(input.styles.border_left_color, expected_border);
+        assert_eq!(textarea.styles.border_top_color, expected_border);
+        assert_eq!(textarea.styles.border_left_color, expected_border);
+    }
+
+    #[test]
+    fn color_scheme_dark_respects_authored_control_colors() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "html".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "body".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "input".to_string(),
+                        namespace: HTML_NAMESPACE.to_string(),
+                        attributes: vec![("type".to_string(), "text".to_string())],
+                    },
+                    children: vec![],
+                }],
+            }],
+        };
+
+        let stylesheet = parse_stylesheet(
+            "html { color-scheme: light dark; } input { background: yellow; border-color: rgb(204, 204, 204); }",
+        )
+        .unwrap();
+        let media = MediaContext::screen(800.0, 600.0).with_color_scheme(ColorScheme::Dark);
+        let styled = apply_styles_with_media(&dom, &stylesheet, &media);
+        let body = styled.children.first().expect("body");
+        let input = body.children.first().expect("input");
+
+        assert_eq!(input.styles.background_color, Rgba::new(255, 255, 0, 1.0));
+        assert_eq!(input.styles.border_top_color, Rgba::rgb(204, 204, 204));
+        assert_eq!(input.styles.border_left_color, Rgba::rgb(204, 204, 204));
     }
 
     #[test]
