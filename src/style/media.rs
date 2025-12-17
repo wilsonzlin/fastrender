@@ -1449,6 +1449,12 @@ impl MediaContext {
         self
     }
 
+    /// Sets the contrast preference
+    pub fn with_prefers_contrast(mut self, contrast: ContrastPreference) -> Self {
+        self.prefers_contrast = contrast;
+        self
+    }
+
     /// Sets the reduced transparency preference
     pub fn with_reduced_transparency(mut self, reduce: bool) -> Self {
         self.prefers_reduced_transparency = reduce;
@@ -2748,6 +2754,21 @@ mod tests {
     }
 
     #[test]
+    fn test_evaluate_prefers_contrast() {
+        let ctx = MediaContext::screen(1024.0, 768.0).with_prefers_contrast(ContrastPreference::More);
+
+        let query = MediaQuery::parse("(prefers-contrast: more)").unwrap();
+        assert!(ctx.evaluate(&query));
+
+        let query = MediaQuery::parse("(prefers-contrast: less)").unwrap();
+        assert!(!ctx.evaluate(&query));
+
+        let default_ctx = MediaContext::screen(800.0, 600.0);
+        let no_pref = MediaQuery::parse("(prefers-contrast: no-preference)").unwrap();
+        assert!(default_ctx.evaluate(&no_pref));
+    }
+
+    #[test]
     fn test_evaluate_prefers_reduced_data() {
         let ctx = MediaContext::screen(1024.0, 768.0).with_reduced_data(true);
 
@@ -2941,6 +2962,7 @@ mod tests {
         let guard_color_depth = EnvGuard::new("FASTR_COLOR_DEPTH", Some("abc"));
         let guard_forced = EnvGuard::new("FASTR_FORCED_COLORS", Some("maybe"));
         let guard_transparency = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("maybe"));
+        let guard_contrast = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("maybe"));
         let ctx = MediaContext::screen(800.0, 600.0)
             .with_color_scheme(ColorScheme::Light)
             .with_env_overrides();
@@ -2949,11 +2971,13 @@ mod tests {
         assert_eq!(ctx.color_depth, 8);
         assert!(!ctx.forced_colors);
         assert!(!ctx.prefers_reduced_transparency);
+        assert!(matches!(ctx.prefers_contrast, ContrastPreference::NoPreference));
         drop(guard_scheme);
         drop(guard_inverted);
         drop(guard_color_depth);
         drop(guard_forced);
         drop(guard_transparency);
+        drop(guard_contrast);
     }
 
     #[test]
