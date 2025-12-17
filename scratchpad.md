@@ -40,6 +40,7 @@
 ## Session notes (latest)
 
 - Added `:autofill` pseudo-class: parsed/serialized via selectors, DOM matching always false (no autofill state available). Added basic parse/match tests.
+- Added `:checked` selector support: parsed/serialized and DOM matching for checkable inputs (checkbox/radio with the checked attribute) and option elements (selected attribute or default first option when no selection on a single select). Tests cover inputs, default-selected options, and multiple selects.
 - Added `:placeholder-shown` selector support: parsed/serialized, DOM matching approximates HTML behavior (input/textarea with placeholder and empty value/content, supported text-like input types). Tests cover parsing and matching.
 - Added `:read-only` / `:read-write` pseudo-classes: parsing/serialization plus DOM matching for text-like inputs/textarea/select/contenteditable. Disabled or readonly controls match `:read-only`; editable text controls and select/contenteditable match `:read-write`. Tests cover form controls and contenteditable cases.
 - Added `:required` / `:optional` pseudo-classes: parsing/serialization and DOM matching for form controls that support the required attribute (most inputs except button/submit/reset/image/hidden, plus select/textarea). Disabled controls are excluded; required is true only when the attribute is present, optional when eligible and not required. Tests cover required/optional inputs, disabled required, submit exclusion, and select cases. Fieldset-disabled descendants are treated as disabled (legend exception considered).
