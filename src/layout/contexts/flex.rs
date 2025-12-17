@@ -1896,6 +1896,34 @@ fn layout_cache_key(constraints: &LayoutConstraints, viewport: Size) -> Option<(
     Some((w, h))
 }
 
+fn cache_tolerances(target_size: Size) -> (f32, f32) {
+    let eps_w = if target_size.width > 4096.0 {
+        32.0
+    } else if target_size.width > 2048.0 {
+        16.0
+    } else if target_size.width > 1024.0 {
+        8.0
+    } else if target_size.width > 512.0 {
+        6.0
+    } else {
+        4.0
+    };
+
+    let eps_h = if target_size.height > 4096.0 {
+        32.0
+    } else if target_size.height > 2048.0 {
+        16.0
+    } else if target_size.height > 1024.0 {
+        8.0
+    } else if target_size.height > 512.0 {
+        6.0
+    } else {
+        4.0
+    };
+
+    (eps_w, eps_h)
+}
+
 fn find_layout_cache_fragment(
     cache: &HashMap<(Option<u32>, Option<u32>), (Size, std::sync::Arc<FragmentNode>)>,
     target_size: Size,
@@ -1905,8 +1933,7 @@ fn find_layout_cache_fragment(
     // Allow small deltas so quantized sizes can still reuse a prior layout. Loosen tolerance
     // for very large targets (wide carousels) to merge near-identical probes that differ by
     // a handful of pixels while keeping smaller layouts precise.
-    let eps_w = if target_size.width > 800.0 { 8.0 } else { 4.0 };
-    let eps_h = if target_size.height > 400.0 { 8.0 } else { 4.0 };
+    let (eps_w, eps_h) = cache_tolerances(target_size);
     for (_key, (size, frag)) in cache {
         if !size.width.is_finite() || !size.height.is_finite() {
             continue;
@@ -2237,16 +2264,16 @@ impl FlexFormattingContext {
         ) -> Option<(Size, std::sync::Arc<FragmentNode>)> {
             let mut best = None;
             let mut best_score = f32::MAX;
+            let (eps_w, eps_h) = cache_tolerances(target_size);
             // Match cached fragments within a tolerance so quantized measurements (2–8px)
             // can be reused without relayout.
-            let eps = 4.0;
             for (_key, (size, frag)) in cache {
                 if !size.width.is_finite() || !size.height.is_finite() {
                     continue;
                 }
                 let dw = (size.width - target_size.width).abs();
                 let dh = (size.height - target_size.height).abs();
-                if dw <= eps && dh <= eps {
+                if dw <= eps_w && dh <= eps_h {
                     let score = dw + dh;
                     if score < best_score {
                         best_score = score;
