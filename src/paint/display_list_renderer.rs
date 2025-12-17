@@ -4170,6 +4170,19 @@ mod tests {
     }
 
     #[test]
+    fn blur_filter_outset_scales_with_device_pixel_ratio() {
+        let filters = vec![ResolvedFilter::Blur(4.0)];
+        let (l, t, r, b) = filter_outset(&filters, 1.0);
+        // Blur outset is radius * 3 per side.
+        assert!((l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01);
+
+        let filters = vec![ResolvedFilter::Blur(2.0)];
+        let (l, t, r, b) = filter_outset(&filters, 2.0);
+        // Device pixel ratio doubles the blur radius before computing outsets.
+        assert!((l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01);
+    }
+
+    #[test]
     fn renders_text_shadows() {
         let font_ctx = FontContext::new();
         let Some(font) = font_ctx.get_sans_serif() else {
