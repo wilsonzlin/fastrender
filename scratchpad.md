@@ -38,6 +38,7 @@ Idle; no current tasks.
    - Triggered by: cnn.com
 
 ## Session notes (latest)
+- Fixed build fallout from rebase: removed the duplicate `TextSizeAdjust` definition and restored `text_rendering`/`overflow_anchor` fields on `ComputedStyle` so `cargo check` passes again.
 - Added CSS `text-size-adjust`: new computed type/default (auto), inherited, parsed keywords/percentages, property list updates, and cascade tests. `cargo test text_size_adjust --quiet` passes.
 - Added CSS `text-rendering`: new computed type/default (auto), inherited, property parsing (optimizeSpeed/optimizeLegibility/geometricPrecision), property lists, and regression tests. `cargo test text_rendering --quiet` passes.
 
