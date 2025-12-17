@@ -674,6 +674,55 @@ fn parse_overscroll_keyword(kw: &str) -> Option<OverscrollBehavior> {
     }
 }
 
+fn parse_scroll_snap_type_keywords(parts: &[String]) -> Option<ScrollSnapType> {
+    if parts.is_empty() || parts.len() > 2 {
+        return None;
+    }
+    let axis = match parts[0].to_ascii_lowercase().as_str() {
+        "none" => ScrollSnapAxis::None,
+        "x" => ScrollSnapAxis::X,
+        "y" => ScrollSnapAxis::Y,
+        "block" => ScrollSnapAxis::Block,
+        "inline" => ScrollSnapAxis::Inline,
+        "both" => ScrollSnapAxis::Both,
+        _ => return None,
+    };
+    let mut strictness = ScrollSnapStrictness::Proximity;
+    if parts.len() == 2 {
+        strictness = match parts[1].to_ascii_lowercase().as_str() {
+            "mandatory" => ScrollSnapStrictness::Mandatory,
+            "proximity" => ScrollSnapStrictness::Proximity,
+            _ => return None,
+        };
+    }
+    Some(ScrollSnapType { axis, strictness })
+}
+
+fn parse_scroll_snap_align_keywords(parts: &[String]) -> Option<ScrollSnapAlignments> {
+    if parts.is_empty() || parts.len() > 2 {
+        return None;
+    }
+    let parse_align = |kw: &str| match kw {
+        "none" => Some(ScrollSnapAlign::None),
+        "start" => Some(ScrollSnapAlign::Start),
+        "end" => Some(ScrollSnapAlign::End),
+        "center" => Some(ScrollSnapAlign::Center),
+        _ => None,
+    };
+
+    let first = parse_align(&parts[0].to_ascii_lowercase())?;
+    let second = if parts.len() == 2 {
+        parse_align(&parts[1].to_ascii_lowercase())?
+    } else {
+        first
+    };
+
+    Some(ScrollSnapAlignments {
+        inline: first,
+        block: second,
+    })
+}
+
 fn parse_touch_action_keywords(tokens: &[String]) -> Option<TouchAction> {
     if tokens.is_empty() {
         return None;
@@ -684,14 +733,38 @@ fn parse_touch_action_keywords(tokens: &[String]) -> Option<TouchAction> {
         return match kw {
             "auto" => Some(TouchAction::auto()),
             "none" => Some(TouchAction::none()),
-            "pan-x" => Some(TouchAction { pan_x: true, ..TouchAction::empty() }),
-            "pan-y" => Some(TouchAction { pan_y: true, ..TouchAction::empty() }),
-            "pan-left" => Some(TouchAction { pan_left: true, ..TouchAction::empty() }),
-            "pan-right" => Some(TouchAction { pan_right: true, ..TouchAction::empty() }),
-            "pan-up" => Some(TouchAction { pan_up: true, ..TouchAction::empty() }),
-            "pan-down" => Some(TouchAction { pan_down: true, ..TouchAction::empty() }),
-            "pinch-zoom" => Some(TouchAction { pinch_zoom: true, ..TouchAction::empty() }),
-            "manipulation" => Some(TouchAction { manipulation: true, ..TouchAction::empty() }),
+            "pan-x" => Some(TouchAction {
+                pan_x: true,
+                ..TouchAction::empty()
+            }),
+            "pan-y" => Some(TouchAction {
+                pan_y: true,
+                ..TouchAction::empty()
+            }),
+            "pan-left" => Some(TouchAction {
+                pan_left: true,
+                ..TouchAction::empty()
+            }),
+            "pan-right" => Some(TouchAction {
+                pan_right: true,
+                ..TouchAction::empty()
+            }),
+            "pan-up" => Some(TouchAction {
+                pan_up: true,
+                ..TouchAction::empty()
+            }),
+            "pan-down" => Some(TouchAction {
+                pan_down: true,
+                ..TouchAction::empty()
+            }),
+            "pinch-zoom" => Some(TouchAction {
+                pinch_zoom: true,
+                ..TouchAction::empty()
+            }),
+            "manipulation" => Some(TouchAction {
+                manipulation: true,
+                ..TouchAction::empty()
+            }),
             _ => None,
         };
     }
@@ -2221,6 +2294,10 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         }
         "overscroll-behavior-x" => styles.overscroll_behavior_x = source.overscroll_behavior_x,
         "overscroll-behavior-y" => styles.overscroll_behavior_y = source.overscroll_behavior_y,
+        "scroll-snap-type" => styles.scroll_snap_type = source.scroll_snap_type,
+        "scroll-snap-align" => styles.scroll_snap_align = source.scroll_snap_align,
+        "scroll-snap-stop" => styles.scroll_snap_stop = source.scroll_snap_stop,
+        "overflow-anchor" => styles.overflow_anchor = source.overflow_anchor,
         "pointer-events" => styles.pointer_events = source.pointer_events,
         "touch-action" => styles.touch_action = source.touch_action,
         "user-select" => styles.user_select = source.user_select,
@@ -2296,7 +2373,6 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
         "tab-size" => styles.tab_size = source.tab_size.clone(),
         "hyphens" => styles.hyphens = source.hyphens,
         "word-break" => styles.word_break = source.word_break,
-        "overflow-anchor" => styles.overflow_anchor = source.overflow_anchor,
         "unicode-bidi" => styles.unicode_bidi = source.unicode_bidi,
         "writing-mode" => styles.writing_mode = source.writing_mode,
         "cursor" => {
@@ -5689,6 +5765,55 @@ pub fn apply_declaration_with_base(
                 }
             }
         }
+        "scroll-snap-type" => {
+            let mut parts = Vec::new();
+            match &resolved_value {
+                PropertyValue::Keyword(kw) => parts.extend(kw.split_whitespace().map(|s| s.to_string())),
+                PropertyValue::Multiple(tokens) => {
+                    for token in tokens {
+                        if let PropertyValue::Keyword(k) = token {
+                            if k == "," {
+                                continue;
+                            }
+                            parts.push(k.to_ascii_lowercase());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if let Some(val) = parse_scroll_snap_type_keywords(&parts) {
+                styles.scroll_snap_type = val;
+            }
+        }
+        "scroll-snap-align" => {
+            let mut parts = Vec::new();
+            match &resolved_value {
+                PropertyValue::Keyword(kw) => parts.extend(kw.split_whitespace().map(|s| s.to_string())),
+                PropertyValue::Multiple(tokens) => {
+                    for token in tokens {
+                        if let PropertyValue::Keyword(k) = token {
+                            if k == "," {
+                                continue;
+                            }
+                            parts.push(k.to_ascii_lowercase());
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if let Some(val) = parse_scroll_snap_align_keywords(&parts) {
+                styles.scroll_snap_align = val;
+            }
+        }
+        "scroll-snap-stop" => {
+            if let PropertyValue::Keyword(kw) = &resolved_value {
+                styles.scroll_snap_stop = match kw.to_ascii_lowercase().as_str() {
+                    "normal" => ScrollSnapStop::Normal,
+                    "always" => ScrollSnapStop::Always,
+                    _ => styles.scroll_snap_stop,
+                };
+            }
+        }
         "pointer-events" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.pointer_events = match kw.to_ascii_lowercase().as_str() {
@@ -5718,30 +5843,28 @@ pub fn apply_declaration_with_base(
                 };
             }
         }
-        "touch-action" => {
-            match &resolved_value {
-                PropertyValue::Keyword(kw) => {
-                    if let Some(val) = parse_touch_action_keywords(&[kw.to_ascii_lowercase()]) {
-                        styles.touch_action = val;
-                    }
+        "touch-action" => match &resolved_value {
+            PropertyValue::Keyword(kw) => {
+                if let Some(val) = parse_touch_action_keywords(&[kw.to_ascii_lowercase()]) {
+                    styles.touch_action = val;
                 }
-                PropertyValue::Multiple(tokens) => {
-                    let mut parts = Vec::new();
-                    for token in tokens {
-                        if let PropertyValue::Keyword(k) = token {
-                            if k == "," {
-                                continue;
-                            }
-                            parts.push(k.to_ascii_lowercase());
-                        }
-                    }
-                    if let Some(val) = parse_touch_action_keywords(&parts) {
-                        styles.touch_action = val;
-                    }
-                }
-                _ => {}
             }
-        }
+            PropertyValue::Multiple(tokens) => {
+                let mut parts = Vec::new();
+                for token in tokens {
+                    if let PropertyValue::Keyword(k) = token {
+                        if k == "," {
+                            continue;
+                        }
+                        parts.push(k.to_ascii_lowercase());
+                    }
+                }
+                if let Some(val) = parse_touch_action_keywords(&parts) {
+                    styles.touch_action = val;
+                }
+            }
+            _ => {}
+        },
         "scrollbar-width" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.scrollbar_width = match kw.to_ascii_lowercase().as_str() {
@@ -9978,9 +10101,10 @@ mod tests {
         AlignContent, AlignItems, AspectRatio, BackgroundRepeatKeyword, BoxSizing, CaseTransform, FlexDirection,
         FlexWrap, FontStretch, FontVariant, GridAutoFlow, GridTrack, ImageOrientation, ImageRendering, ImageResolution,
         JustifyContent, ListStylePosition, ListStyleType, MixBlendMode, OutlineColor, OutlineStyle, PositionComponent,
-        PositionKeyword, TextCombineUpright, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
-        TextEmphasisFill, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle, TextOrientation,
-        TextOverflowSide, TextSizeAdjust, TextTransform, TransformBox, WritingMode,
+        PositionKeyword, ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, TextCombineUpright,
+        TextDecorationLine, TextDecorationStyle, TextDecorationThickness, TextEmphasisFill, TextEmphasisPosition,
+        TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextOverflowSide, TextSizeAdjust, TextTransform,
+        TransformBox, WritingMode,
     };
     use cssparser::{Parser, ParserInput};
 
@@ -11179,6 +11303,80 @@ mod tests {
     }
 
     #[test]
+    fn forced_color_adjust_parses_and_defaults() {
+        let mut style = ComputedStyle::default();
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::None));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("preserve-parent-color".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert!(matches!(
+            style.forced_color_adjust,
+            ForcedColorAdjust::PreserveParentColor
+        ));
+    }
+
+    #[test]
+    fn forced_color_adjust_inherit_and_initial() {
+        let parent = ComputedStyle {
+            forced_color_adjust: ForcedColorAdjust::None,
+            ..ComputedStyle::default()
+        };
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("inherit".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.forced_color_adjust, parent.forced_color_adjust);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "forced-color-adjust".into(),
+                value: PropertyValue::Keyword("initial".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &parent,
+            16.0,
+            16.0,
+        );
+        assert!(matches!(style.forced_color_adjust, ForcedColorAdjust::Auto));
+    }
+
+    #[test]
     fn text_rendering_parses_keywords() {
         let mut style = ComputedStyle::default();
 
@@ -11246,6 +11444,105 @@ mod tests {
             16.0,
         );
         assert!(matches!(style.text_rendering, TextRendering::Auto));
+    }
+
+    #[test]
+    fn scroll_snap_type_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-snap-type".into(),
+                value: PropertyValue::Keyword("x mandatory".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scroll_snap_type.axis, ScrollSnapAxis::X);
+        assert_eq!(style.scroll_snap_type.strictness, ScrollSnapStrictness::Mandatory);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-snap-type".into(),
+                value: PropertyValue::Keyword("none".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scroll_snap_type.axis, ScrollSnapAxis::None);
+    }
+
+    #[test]
+    fn scroll_snap_align_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-snap-align".into(),
+                value: PropertyValue::Keyword("start end".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scroll_snap_align.inline, ScrollSnapAlign::Start);
+        assert_eq!(style.scroll_snap_align.block, ScrollSnapAlign::End);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-snap-align".into(),
+                value: PropertyValue::Keyword("center".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scroll_snap_align.inline, ScrollSnapAlign::Center);
+        assert_eq!(style.scroll_snap_align.block, ScrollSnapAlign::Center);
+    }
+
+    #[test]
+    fn scroll_snap_stop_parses_keywords() {
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-snap-stop".into(),
+                value: PropertyValue::Keyword("always".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scroll_snap_stop, ScrollSnapStop::Always);
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-snap-stop".into(),
+                value: PropertyValue::Keyword("normal".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.scroll_snap_stop, ScrollSnapStop::Normal);
     }
 
     #[test]
@@ -14600,11 +14897,8 @@ mod tests {
     #[test]
     fn font_family_parses_quoted_names_with_commas() {
         let mut style = ComputedStyle::default();
-        let value = parse_property_value(
-            "font-family",
-            "\"Font, With, Commas\", Open Sans, serif",
-        )
-        .expect("font-family parse");
+        let value =
+            parse_property_value("font-family", "\"Font, With, Commas\", Open Sans, serif").expect("font-family parse");
         let decl = Declaration {
             property: "font-family".to_string(),
             value,

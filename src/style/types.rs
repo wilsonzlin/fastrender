@@ -648,24 +648,6 @@ pub struct TouchAction {
     pub pinch_zoom: bool,
     pub manipulation: bool,
 }
-
-/// Scrollbar width preference (UI hint; currently unused in layout)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScrollbarWidth {
-    Auto,
-    Thin,
-    None,
-}
-
-/// Scrollbar color preference (UI hint; currently unused in layout)
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ScrollbarColor {
-    Auto,
-    Dark,
-    Light,
-    Colors { thumb: Rgba, track: Rgba },
-}
-
 impl TouchAction {
     pub fn auto() -> Self {
         Self {
@@ -710,6 +692,113 @@ impl TouchAction {
             pinch_zoom: false,
             manipulation: false,
         }
+    }
+}
+
+/// Scrollbar width preference (UI hint; currently unused in layout)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarWidth {
+    Auto,
+    Thin,
+    None,
+}
+
+/// Scrollbar color preference (UI hint; currently unused in layout)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScrollbarColor {
+    Auto,
+    Dark,
+    Light,
+    Colors { thumb: Rgba, track: Rgba },
+}
+
+/// Scroll snap type strictness
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollSnapStrictness {
+    Proximity,
+    Mandatory,
+}
+
+impl Default for ScrollSnapStrictness {
+    fn default() -> Self {
+        ScrollSnapStrictness::Proximity
+    }
+}
+
+/// Scroll snap axis selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollSnapAxis {
+    None,
+    X,
+    Y,
+    Block,
+    Inline,
+    Both,
+}
+
+impl Default for ScrollSnapAxis {
+    fn default() -> Self {
+        ScrollSnapAxis::None
+    }
+}
+
+/// CSS `scroll-snap-type`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollSnapType {
+    pub axis: ScrollSnapAxis,
+    pub strictness: ScrollSnapStrictness,
+}
+
+impl Default for ScrollSnapType {
+    fn default() -> Self {
+        ScrollSnapType {
+            axis: ScrollSnapAxis::None,
+            strictness: ScrollSnapStrictness::Proximity,
+        }
+    }
+}
+
+/// Scroll snap alignment per axis
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollSnapAlign {
+    None,
+    Start,
+    End,
+    Center,
+}
+
+impl Default for ScrollSnapAlign {
+    fn default() -> Self {
+        ScrollSnapAlign::None
+    }
+}
+
+/// CSS `scroll-snap-align`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScrollSnapAlignments {
+    pub inline: ScrollSnapAlign,
+    pub block: ScrollSnapAlign,
+}
+
+impl Default for ScrollSnapAlignments {
+    fn default() -> Self {
+        ScrollSnapAlignments {
+            inline: ScrollSnapAlign::None,
+            block: ScrollSnapAlign::None,
+        }
+    }
+}
+
+/// CSS `scroll-snap-stop`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollSnapStop {
+    Normal,
+    Always,
+}
+
+impl Default for ScrollSnapStop {
+    fn default() -> Self {
+        ScrollSnapStop::Normal
     }
 }
 
