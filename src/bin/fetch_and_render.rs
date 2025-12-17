@@ -27,6 +27,7 @@ use std::env;
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
+use url::Url;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
@@ -44,23 +45,45 @@ fn fetch_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
         .build();
     let agent: ureq::Agent = config.into();
 
-    let mut response = agent
-        .get(url)
-        .call()
-        .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+    let mut current = url.to_string();
+    for _ in 0..10 {
+        let mut response = agent
+            .get(&current)
+            .call()
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
+        let status = response.status();
+        if (300..400).contains(&status.as_u16()) {
+            if let Some(loc) = response.headers().get("location").and_then(|h| h.to_str().ok()) {
+                if let Ok(base) = Url::parse(&current) {
+                    if let Ok(next) = base.join(loc) {
+                        current = next.to_string();
+                        continue;
+                    }
+                }
+                current = loc.to_string();
+                continue;
+            }
+        }
 
-    let bytes = response
-        .body_mut()
-        .read_to_vec()
-        .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
 
-    Ok((bytes, content_type))
+        let bytes = response
+            .body_mut()
+            .read_to_vec()
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+        return Ok((bytes, content_type));
+    }
+
+    Err(Error::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Too many redirects",
+    )))
 }
 
 fn decode_html_bytes(bytes: &[u8], content_type: Option<&str>) -> String {
