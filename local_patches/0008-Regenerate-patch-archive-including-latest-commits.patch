@@ -1,7 +1,7 @@
 From 55c3d85b77ae84a46387675b9d0c1b09c2323eb7 Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 14:58:42 -0500
-Subject: [PATCH 08/11] Regenerate patch archive including latest commits
+Subject: [PATCH 08/13] Regenerate patch archive including latest commits
 
 ---
  ...ate-PositionedLayout-absolute-helper.patch |   2 +-

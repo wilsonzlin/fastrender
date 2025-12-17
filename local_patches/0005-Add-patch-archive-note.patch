@@ -1,7 +1,7 @@
 From 027bfb953a60c8c3638a8cf1b2c8f5e68c8e37ce Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 14:55:47 -0500
-Subject: [PATCH 05/11] Add patch archive note
+Subject: [PATCH 05/13] Add patch archive note
 
 ---
  scratchpad.md | 1 +

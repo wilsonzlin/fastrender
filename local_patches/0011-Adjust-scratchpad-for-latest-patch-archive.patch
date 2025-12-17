@@ -1,7 +1,7 @@
 From f0119ef77adb590279a5da685bf5eeccd137051e Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 14:59:24 -0500
-Subject: [PATCH 11/11] Adjust scratchpad for latest patch archive
+Subject: [PATCH 11/13] Adjust scratchpad for latest patch archive
 
 ---
  scratchpad.md | 2 +-

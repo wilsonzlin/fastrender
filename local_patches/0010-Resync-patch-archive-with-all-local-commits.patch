@@ -1,7 +1,7 @@
 From 32cb3c7b5db83b6403f71cafcbf89fe433db830c Mon Sep 17 00:00:00 2001
 From: Wilson Lin <code@wilsonl.in>
 Date: Wed, 17 Dec 2025 14:59:15 -0500
-Subject: [PATCH 10/11] Resync patch archive with all local commits
+Subject: [PATCH 10/13] Resync patch archive with all local commits
 
 ---
  ...ate-PositionedLayout-absolute-helper.patch |   2 +-
