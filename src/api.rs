@@ -2951,6 +2951,56 @@ mod tests {
     }
 
     #[test]
+    fn render_html_with_horizontal_scroll_offsets_viewport() {
+        let mut renderer = FastRender::new().unwrap();
+        let html = r#"
+            <style>
+                html, body { margin: 0; padding: 0; }
+                body {
+                    width: 20px;
+                    height: 10px;
+                    background: linear-gradient(90deg, rgb(255, 0, 0) 0px 10px, rgb(0, 255, 0) 10px 20px);
+                    background-repeat: no-repeat;
+                    background-size: 20px 10px;
+                }
+            </style>
+            <div></div>
+        "#;
+
+        // Reference render to sample both halves of the gradient.
+        let reference = renderer
+            .render_html_with_scroll(html, 20, 10, 0.0, 0.0)
+            .expect("reference render");
+        let left = renderer
+            .render_html_with_scroll(html, 10, 10, 0.0, 0.0)
+            .expect("render at scroll 0");
+        let scrolled = renderer
+            .render_html_with_scroll(html, 10, 10, 10.0, 0.0)
+            .expect("render with horizontal scroll offset");
+
+        let sample = |pixmap: &Pixmap, x: u32, y: u32| -> (u8, u8, u8, u8) {
+            let width = pixmap.width();
+            let data = pixmap.data();
+            let idx = ((y * width + x) * 4) as usize;
+            let (r, g, b, a) = (data[idx], data[idx + 1], data[idx + 2], data[idx + 3]);
+            if a == 0 {
+                (0, 0, 0, 0)
+            } else {
+                let r = ((r as u16 * 255) / a as u16) as u8;
+                let g = ((g as u16 * 255) / a as u16) as u8;
+                let b = ((b as u16 * 255) / a as u16) as u8;
+                (r, g, b, a)
+            }
+        };
+
+        let ref_left = sample(&reference, 0, 0);
+        let ref_right = sample(&reference, 10, 0);
+
+        assert_eq!(sample(&left, 0, 0), ref_left);
+        assert_eq!(sample(&scrolled, 0, 0), ref_right);
+    }
+
+    #[test]
     fn test_config_builder() {
         let config = FastRenderConfig::new()
             .with_default_background(Rgba::rgb(100, 100, 100))
