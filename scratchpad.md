@@ -488,6 +488,7 @@ Inline coordinate fix (Mar 2026):
 - Media `prefers-color-scheme` now defaults to `no-preference`; env overrides accept `no-preference`, evaluation treats missing prefs as no-preference, and tests cover parsing/evaluation/env handling.
 - Fixed merge fallout: deduped `TextSizeAdjust`, restored missing `text_rendering`/`overflow_anchor` fields in computed styles, and added `forced-color-adjust` (auto/none, non-inherited) with parsing/cascade wiring and regression coverage; cascade scrollbar-color test now includes the HTML namespace.
 - Added `color-gamut` media feature support: parse/evaluate against MediaContext (srgb/p3/rec2020), env override via `FASTR_COLOR_GAMUT`, and regression tests.
+- Added CSS `text-wrap` property: computed enum (wrap/nowrap/balance/pretty, inherited), parsing/property lists, hashing/cascade support, and inline layout respects `text-wrap: nowrap` by disabling soft wraps even under `white-space: normal`. Added parsing/inheritance and wrapping-behavior regressions.
 - Fixed flex cache tolerance computation (explicit f32 bands) to resolve ambiguous `.max` type inference after upstream changes.
 - Text decoration keyword parsing is now ASCII case-insensitive (line/style/thickness/skip-ink/underline-position), with regression coverage for uppercase inputs.
 - text-decoration-color now treats currentColor case-insensitively; parsing accepts any casing of the keyword and the regression for decoration longhands covers CurrentColor.
