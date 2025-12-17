@@ -406,6 +406,10 @@ fn main() -> Result<()> {
     let mut positional: Vec<String> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--help" | "-h" => {
+                usage(&program);
+                return Ok(());
+            }
             "--timeout" => {
                 if let Some(val) = args.next() {
                     timeout_secs = val.parse().ok();

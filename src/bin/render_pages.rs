@@ -31,6 +31,14 @@ const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
+fn usage() {
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c]");
+    println!("  --jobs N          Number of parallel renders (default: num_cpus)");
+    println!("  --timeout SECONDS Per-page timeout (optional)");
+    println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
+    println!("  --pages a,b,c     Render only the listed cached pages (use cache stems like cnn.com)");
+}
+
 struct PageResult {
     name: String,
     status: Status,
@@ -53,6 +61,10 @@ fn main() {
     let mut device_pixel_ratio: f32 = 1.0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--help" | "-h" => {
+                usage();
+                return;
+            }
             "--jobs" => {
                 if let Some(val) = args.next() {
                     if let Ok(parsed) = val.parse() {
