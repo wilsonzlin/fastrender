@@ -2136,17 +2136,10 @@ impl MediaContext {
 
             // Pointer capability
             MediaFeature::Pointer(capability) => self.pointer == *capability,
-            MediaFeature::AnyPointer(capability) => {
-                // any-pointer matches if any input device has this capability
-                // For simplicity, check if any_pointer is at least as fine
-                match (self.any_pointer, capability) {
-                    (PointerCapability::Fine, PointerCapability::Fine) => true,
-                    (PointerCapability::Fine, PointerCapability::Coarse) => true,
-                    (PointerCapability::Coarse, PointerCapability::Coarse) => true,
-                    (_, PointerCapability::None) => self.any_pointer == PointerCapability::None,
-                    _ => self.any_pointer == *capability,
-                }
-            }
+            MediaFeature::AnyPointer(capability) => match capability {
+                PointerCapability::None => self.any_pointer == PointerCapability::None,
+                _ => self.any_pointer == *capability,
+            },
 
             // User preferences
             MediaFeature::PrefersColorScheme(scheme) => match self.prefers_color_scheme {
@@ -3279,6 +3272,29 @@ mod tests {
         let query = MediaQuery::parse("(pointer: coarse)").unwrap();
         assert!(!desktop.evaluate(&query));
         assert!(mobile.evaluate(&query));
+    }
+
+    #[test]
+    fn test_evaluate_any_pointer() {
+        let desktop = MediaContext::screen(1024.0, 768.0);
+        let mobile = MediaContext::mobile(375.0, 667.0);
+        let printer = MediaContext::print(816.0, 1056.0);
+
+        let fine_query = MediaQuery::parse("(any-pointer: fine)").unwrap();
+        let coarse_query = MediaQuery::parse("(any-pointer: coarse)").unwrap();
+        let none_query = MediaQuery::parse("(any-pointer: none)").unwrap();
+
+        assert!(desktop.evaluate(&fine_query));
+        assert!(!desktop.evaluate(&coarse_query));
+        assert!(!desktop.evaluate(&none_query));
+
+        assert!(!mobile.evaluate(&fine_query));
+        assert!(mobile.evaluate(&coarse_query));
+        assert!(!mobile.evaluate(&none_query));
+
+        assert!(!printer.evaluate(&fine_query));
+        assert!(!printer.evaluate(&coarse_query));
+        assert!(printer.evaluate(&none_query));
     }
 
     #[test]
