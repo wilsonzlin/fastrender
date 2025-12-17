@@ -15591,6 +15591,21 @@ mod tests {
     }
 
     #[test]
+    fn oblique_font_style_rejects_out_of_range_angle() {
+        let mut style = ComputedStyle::default();
+        let decl = Declaration {
+            property: "font-style".to_string(),
+            value: PropertyValue::Keyword("oblique 120deg".to_string()),
+            raw_value: String::new(),
+            important: false,
+        };
+
+        apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+        assert_eq!(style.font_style, FontStyle::Normal);
+    }
+
+    #[test]
     fn font_shorthand_oblique_angle_rejects_out_of_range_calc() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {

@@ -376,8 +376,10 @@ fn text_decoration_currentcolor_resolves_in_display_list() {
         .and_then(|d| d.underline.as_ref())
         .expect("underline present");
 
-    let renderer = DisplayListRenderer::new(30, 20, Rgba::WHITE, FontContext::new()).unwrap();
-    let pixmap = renderer.render(&list).expect("render");
+    let pixmap = DisplayListRenderer::new(30, 20, Rgba::WHITE, FontContext::new())
+        .unwrap()
+        .render(&list)
+        .expect("render");
 
     // Verify some pixels are non-white (decoration rendered) and dominated by the text color channels.
     let mut max_r = 0u8;
