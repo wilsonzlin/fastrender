@@ -4071,6 +4071,96 @@ mod tests {
         let chosen = picker.finish().expect("fallback emoji font");
         assert_eq!(chosen.family, emoji_font.family);
     }
+
+    #[test]
+    fn font_variant_emoji_text_prefers_text_fonts() {
+        let text_font = dummy_font("Example Text");
+        let emoji_font = dummy_font("Noto Color Emoji");
+        let pref = emoji_preference_for_char('😀', FontVariantEmoji::Text);
+        assert_eq!(pref, EmojiPreference::AvoidEmoji);
+        let mut picker = FontPreferencePicker::new(pref);
+        let idx = picker.bump_order();
+        assert!(picker
+            .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
+            .is_none());
+        let idx = picker.bump_order();
+        let chosen = picker
+            .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
+            .expect("should pick text font when avoiding emoji");
+        assert_eq!(chosen.family, text_font.family);
+    }
+
+    #[test]
+    fn font_variant_emoji_emoji_prefers_emoji_fonts() {
+        let text_font = dummy_font("Example Text");
+        let emoji_font = dummy_font("Twemoji");
+        let pref = emoji_preference_for_char('😀', FontVariantEmoji::Emoji);
+        assert_eq!(pref, EmojiPreference::PreferEmoji);
+        let mut picker = FontPreferencePicker::new(pref);
+        let idx = picker.bump_order();
+        assert!(picker
+            .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
+            .is_none());
+        let idx = picker.bump_order();
+        let chosen = picker
+            .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
+            .expect("should pick emoji font for emoji preference");
+        assert_eq!(chosen.family, emoji_font.family);
+    }
+
+    #[test]
+    fn font_variant_emoji_unicode_prefers_text_for_non_emoji() {
+        let text_font = dummy_font("Example Text");
+        let emoji_font = dummy_font("EmojiOne");
+        let pref = emoji_preference_for_char('#', FontVariantEmoji::Unicode);
+        assert_eq!(pref, EmojiPreference::AvoidEmoji);
+        let mut picker = FontPreferencePicker::new(pref);
+        let idx = picker.bump_order();
+        assert!(picker
+            .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
+            .is_none());
+        let idx = picker.bump_order();
+        let chosen = picker
+            .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
+            .expect("unicode text should pick text font for non-emoji chars");
+        assert_eq!(chosen.family, text_font.family);
+    }
+
+    #[test]
+    fn emoji_variation_selector_fe0e_forces_text_font() {
+        let text_font = dummy_font("Example Text");
+        let emoji_font = dummy_font("Noto Color Emoji");
+        let pref = emoji_preference_with_selector('😀', Some('\u{fe0e}'), FontVariantEmoji::Emoji);
+        assert_eq!(pref, EmojiPreference::AvoidEmoji);
+        let mut picker = FontPreferencePicker::new(pref);
+        let idx = picker.bump_order();
+        assert!(picker
+            .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
+            .is_none());
+        let idx = picker.bump_order();
+        let chosen = picker
+            .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
+            .expect("FE0E should force text presentation");
+        assert_eq!(chosen.family, text_font.family);
+    }
+
+    #[test]
+    fn emoji_variation_selector_fe0f_prefers_emoji_font() {
+        let text_font = dummy_font("Example Text");
+        let emoji_font = dummy_font("Twemoji");
+        let pref = emoji_preference_with_selector('😀', Some('\u{fe0f}'), FontVariantEmoji::Text);
+        assert_eq!(pref, EmojiPreference::PreferEmoji);
+        let mut picker = FontPreferencePicker::new(pref);
+        let idx = picker.bump_order();
+        assert!(picker
+            .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
+            .is_none());
+        let idx = picker.bump_order();
+        let chosen = picker
+            .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
+            .expect("FE0F should prefer emoji font even when property requests text");
+        assert_eq!(chosen.family, emoji_font.family);
+    }
 }
 fn number_tag(prefix: &[u8; 2], n: u8) -> Option<[u8; 4]> {
     if n == 0 {
