@@ -9,9 +9,12 @@
 //!
 //! Note: Many tests require system fonts. Tests will be skipped if fonts are unavailable.
 
-use fastrender::text::pipeline::{itemize_text, BidiAnalysis, Direction, ItemizedRun, Script, ShapingPipeline};
+use fastrender::text::pipeline::{
+    itemize_text, BidiAnalysis, Direction, ItemizedRun, RunRotation, Script, ShapingPipeline,
+};
 use fastrender::ComputedStyle;
 use fastrender::FontContext;
+use fastrender::style::types::WritingMode;
 
 /// Helper macro to skip test if font shaping fails due to missing fonts
 macro_rules! require_fonts {
@@ -54,6 +57,24 @@ fn test_direction_is_ltr() {
 fn test_direction_is_rtl() {
     assert!(Direction::RightToLeft.is_rtl());
     assert!(!Direction::LeftToRight.is_rtl());
+}
+
+// ============================================================================
+// Writing Mode Tests
+// ============================================================================
+
+#[test]
+fn sideways_writing_mode_shapes_with_rotation() {
+    let pipeline = ShapingPipeline::new();
+    let font_ctx = FontContext::new();
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::SidewaysLr;
+
+    let runs = require_fonts!(pipeline.shape_with_direction("abc", &style, &font_ctx, Direction::LeftToRight));
+    assert!(!runs.is_empty());
+    for run in runs {
+        assert_eq!(run.rotation, RunRotation::Cw90);
+    }
 }
 
 // ============================================================================
