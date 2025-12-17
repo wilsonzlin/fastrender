@@ -75,6 +75,7 @@ pub enum PseudoClass {
     ReadWrite,
     PlaceholderShown,
     Autofill,
+    Checked,
     Link,
     Visited,
 }
@@ -141,6 +142,8 @@ impl ToCss for PseudoClass {
             PseudoClass::ReadWrite => dest.write_str(":read-write"),
             PseudoClass::PlaceholderShown => dest.write_str(":placeholder-shown"),
             PseudoClass::Autofill => dest.write_str(":autofill"),
+            PseudoClass::Checked => dest.write_str(":checked"),
+            PseudoClass::Checked => dest.write_str(":checked"),
             PseudoClass::Link => dest.write_str(":link"),
             PseudoClass::Visited => dest.write_str(":visited"),
         }
@@ -217,6 +220,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "read-write" => Ok(PseudoClass::ReadWrite),
             "placeholder-shown" => Ok(PseudoClass::PlaceholderShown),
             "autofill" => Ok(PseudoClass::Autofill),
+            "checked" => Ok(PseudoClass::Checked),
             "link" => Ok(PseudoClass::Link),
             "visited" => Ok(PseudoClass::Visited),
             "any-link" => Ok(PseudoClass::AnyLink),

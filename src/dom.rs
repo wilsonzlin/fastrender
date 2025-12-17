@@ -419,6 +419,58 @@ impl<'a> ElementRef<'a> {
             .unwrap_or(true)
     }
 
+    fn is_option_selected(&self) -> bool {
+        if self.node.get_attribute("selected").is_some() {
+            return true;
+        }
+
+        // Find the nearest select ancestor.
+        let select = self
+            .all_ancestors
+            .iter()
+            .rev()
+            .copied()
+            .find(|ancestor| ancestor.tag_name().map(|t| t.eq_ignore_ascii_case("select")).unwrap_or(false));
+
+        let Some(select_node) = select else {
+            return false;
+        };
+
+        // Multiple selects do not auto-select the first option.
+        if select_node.get_attribute("multiple").is_some() {
+            return false;
+        }
+
+        // If any option under this select has an explicit selected attribute, only that one is selected.
+        if select_has_explicit_selection(select_node) {
+            return false;
+        }
+
+        // Otherwise, the first non-disabled option is selected by default.
+        let first_option = first_enabled_option(select_node, false);
+        matches!(first_option, Some(opt) if ptr::eq(opt, self.node))
+    }
+
+    fn is_checked(&self) -> bool {
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+
+        if tag.eq_ignore_ascii_case("input") {
+            let input_type = self.node.get_attribute("type").map(|t| t.to_ascii_lowercase());
+            if matches!(input_type.as_deref(), Some("checkbox") | Some("radio")) {
+                return self.node.get_attribute("checked").is_some();
+            }
+            return false;
+        }
+
+        if tag.eq_ignore_ascii_case("option") {
+            return self.is_option_selected();
+        }
+
+        false
+    }
+
     fn is_read_write(&self) -> bool {
         if self.is_disabled() {
             return false;
@@ -768,6 +820,41 @@ fn supports_placeholder(input_type: &Option<String>) -> bool {
     }
 }
 
+fn select_has_explicit_selection(select: &DomNode) -> bool {
+    let mut found = false;
+    select.walk_tree(&mut |node| {
+        if found {
+            return;
+        }
+        if let Some(tag) = node.tag_name() {
+            if tag.eq_ignore_ascii_case("option") && node.get_attribute("selected").is_some() {
+                found = true;
+            }
+        }
+    });
+    found
+}
+
+fn first_enabled_option<'a>(node: &'a DomNode, optgroup_disabled: bool) -> Option<&'a DomNode> {
+    let tag = node.tag_name().map(|t| t.to_ascii_lowercase());
+    let is_option = tag.as_deref() == Some("option");
+
+    let option_disabled = node.get_attribute("disabled").is_some();
+    let next_optgroup_disabled = optgroup_disabled
+        || (tag.as_deref() == Some("optgroup") && option_disabled);
+
+    if is_option && !(option_disabled || optgroup_disabled) {
+        return Some(node);
+    }
+
+    for child in &node.children {
+        if let Some(opt) = first_enabled_option(child, next_optgroup_disabled) {
+            return Some(opt);
+        }
+    }
+    None
+}
+
 impl<'a> Element for ElementRef<'a> {
     type Impl = FastRenderSelectorImpl;
 
@@ -965,6 +1052,7 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Autofill => false,
             // Interactive pseudo-classes (not supported in static rendering)
             PseudoClass::Hover | PseudoClass::Active | PseudoClass::Focus => false,
+            PseudoClass::Checked => self.is_checked(),
             PseudoClass::Link => self.is_link(),
             PseudoClass::Visited => false, // Can't determine visited state
         }
@@ -1547,6 +1635,129 @@ mod tests {
         let child = &fieldset.children[0];
         assert!(!matches(child, &ancestors, &PseudoClass::Required));
         assert!(!matches(child, &ancestors, &PseudoClass::Optional));
+    }
+
+    #[test]
+    fn checked_matches_inputs_and_options() {
+        let checkbox = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "checkbox".to_string()),
+                    ("checked".to_string(), "checked".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&checkbox, &[], &PseudoClass::Checked));
+
+        let radio = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "radio".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&radio, &[], &PseudoClass::Checked));
+
+        let option_selected = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "option".to_string(),
+                attributes: vec![("selected".to_string(), "selected".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&option_selected, &[], &PseudoClass::Checked));
+
+        let select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![],
+            },
+            children: vec![
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "option".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                },
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "option".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                },
+            ],
+        };
+        let ancestors: Vec<&DomNode> = vec![&select];
+        let first = &select.children[0];
+        let second = &select.children[1];
+        assert!(matches(first, &ancestors, &PseudoClass::Checked));
+        assert!(!matches(second, &ancestors, &PseudoClass::Checked));
+
+        let select_with_explicit = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![],
+            },
+            children: vec![
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "option".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                },
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "option".to_string(),
+                        attributes: vec![("selected".to_string(), "selected".to_string())],
+                    },
+                    children: vec![],
+                },
+            ],
+        };
+        let ancestors: Vec<&DomNode> = vec![&select_with_explicit];
+        let first = &select_with_explicit.children[0];
+        let second = &select_with_explicit.children[1];
+        assert!(!matches(first, &ancestors, &PseudoClass::Checked));
+        assert!(matches(second, &ancestors, &PseudoClass::Checked));
+
+        let select_multiple = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![("multiple".to_string(), "multiple".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "option".to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+        let ancestors: Vec<&DomNode> = vec![&select_multiple];
+        let only_option = &select_multiple.children[0];
+        assert!(!matches(only_option, &ancestors, &PseudoClass::Checked));
+
+        let select_multiple_selected = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![("multiple".to_string(), "multiple".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "option".to_string(),
+                    attributes: vec![("selected".to_string(), "selected".to_string())],
+                },
+                children: vec![],
+            }],
+        };
+        let ancestors: Vec<&DomNode> = vec![&select_multiple_selected];
+        let selected_option = &select_multiple_selected.children[0];
+        assert!(matches(selected_option, &ancestors, &PseudoClass::Checked));
     }
 
     #[test]
