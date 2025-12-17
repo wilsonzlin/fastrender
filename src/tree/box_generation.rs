@@ -1471,7 +1471,11 @@ fn create_pseudo_element_box(
 
 fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<BoxNode> {
     // Prefer authored ::marker styles; fall back to the originating style when absent.
-    let mut marker_style = styled.marker_styles.clone().unwrap_or_else(|| styled.styles.clone());
+    let (mut marker_style, has_pseudo_styles) = if let Some(styles) = styled.marker_styles.clone() {
+        (styles, true)
+    } else {
+        (styled.styles.clone(), false)
+    };
     // ::marker boxes are inline and should not carry layout-affecting edges from the list item.
     crate::style::cascade::reset_marker_box_properties(&mut marker_style);
     marker_style.display = Display::Inline;
@@ -1479,7 +1483,10 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
     let content = marker_content_from_style(styled, &marker_style, counters)?;
     marker_style.list_style_type = ListStyleType::None;
     marker_style.list_style_image = crate::style::types::ListStyleImage::None;
-    marker_style.text_transform = TextTransform::none();
+    if !has_pseudo_styles {
+        // Ensure list-item text transforms do not alter markers when no ::marker styles are authored.
+        marker_style.text_transform = TextTransform::none();
+    }
 
     let mut node = BoxNode::new_marker(Arc::new(marker_style), content);
     node.styled_node_id = Some(styled.node_id);
@@ -2789,6 +2796,45 @@ mod tests {
         assert!(style.padding_left.is_zero());
         assert!(style.margin_left.unwrap().is_zero());
         assert_eq!(style.background_color, Rgba::TRANSPARENT);
+    }
+
+    #[test]
+    fn marker_styles_preserve_text_transform() {
+        use crate::style::counters::CounterManager;
+        use crate::style::types::{CaseTransform, ListStyleType};
+
+        let mut li_style = ComputedStyle::default();
+        li_style.display = Display::ListItem;
+        li_style.list_style_type = ListStyleType::String("abc".to_string());
+
+        let mut marker_styles = ComputedStyle::default();
+        marker_styles.display = Display::Inline;
+        marker_styles.list_style_type = ListStyleType::String("abc".to_string());
+        marker_styles.text_transform = TextTransform::with_case(CaseTransform::Uppercase);
+
+        let styled = StyledNode {
+            node_id: 0,
+            node: dom::DomNode {
+                node_type: dom::DomNodeType::Element {
+                    tag_name: "li".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            },
+            styles: li_style,
+            before_styles: None,
+            after_styles: None,
+            marker_styles: Some(marker_styles),
+            children: vec![],
+        };
+
+        let marker_box = create_marker_box(&styled, &CounterManager::default()).expect("marker should be generated");
+        assert!(matches!(marker_box.box_type, BoxType::Marker(_)));
+        assert_eq!(
+            marker_box.style.text_transform,
+            TextTransform::with_case(CaseTransform::Uppercase)
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@
 # Attempted https://www.theverge.com at 1200×800; render timed out after fetching CSS (likely heavy client-side). No output produced.
 # Sticky positioning: fixed a bug where sticky elements with all-auto offsets were still clamped to the viewport/container (unwrap_or(0)), causing unintended movement. Now we only clamp axes with specified offsets. Added regression ensuring a sticky box with no offsets stays put.
 # Added background image-rendering coverage: display-list builder regression ensures pixelated backgrounds use nearest-neighbor sampling; roadmap marks image-rendering implemented. `cargo test background_image_rendering_pixelated_sets_nearest_filter_quality --quiet` passes.
+# ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # Color-scheme inheritance still validated; further palette audits ongoing.
