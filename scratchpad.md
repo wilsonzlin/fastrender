@@ -1,3 +1,8 @@
+# Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
+# Color-scheme inheritance still validated; further palette audits ongoing.
+# Rendered https://news.ycombinator.com at 1200×800 (hn.png) during a random bug hunt; output looked consistent (no obvious new defects spotted). Continue hunting for visible/layout issues.
+# Rendered https://www.theguardian.com/international at 1200×800 (guardian.png) during bug hunt; output small/print CSS only (page fetched print.css). No obvious layout defects noted in the minimal render.
+# Rendered https://www.aljazeera.com at 1200×800 (aljazeera.png); page loads but renders mostly blank white with sparse text (likely heavy client-side content). Potential issue: critical content missing without JS; leaving as observation for now (no code change).
 # Scratchpad – rendering engine session notes
 - Scroll snapping now honors scroll-padding and scroll-margin: CSS parsing/cascade accept physical scroll-padding/scroll-margin properties, layout fingerprints include them, and snap target computation accounts for container padding insets and target margins. Added scroll snap regressions for padding/margin alignment.
 - Color-scheme now inherits through the cascade: `inherit_styles` copies the computed color-scheme to children, and a regression (`color_scheme_inherits_to_descendants`) ensures author-supported schemes propagate. `cargo test color_scheme_inherits_to_descendants --quiet` passes. Push previously timed out; rebase in progress.
