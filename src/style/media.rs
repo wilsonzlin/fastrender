@@ -1108,13 +1108,20 @@ impl Resolution {
     pub fn parse(s: &str) -> Result<Self, MediaParseError> {
         let s = s.trim().to_lowercase();
 
+        let validate = |value: f32, unit: ResolutionUnit, original: &str| -> Result<Self, MediaParseError> {
+            if !value.is_finite() || value < 0.0 {
+                return Err(MediaParseError::InvalidResolution(original.to_string()));
+            }
+            Ok(Resolution::new(value, unit))
+        };
+
         // Try each unit suffix
         if let Some(value_str) = s.strip_suffix("dppx") {
             let value = value_str
                 .trim()
                 .parse::<f32>()
                 .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
-            return Ok(Resolution::new(value, ResolutionUnit::Dppx));
+            return validate(value, ResolutionUnit::Dppx, &s);
         }
 
         if let Some(value_str) = s.strip_suffix("dpcm") {
@@ -1122,7 +1129,7 @@ impl Resolution {
                 .trim()
                 .parse::<f32>()
                 .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
-            return Ok(Resolution::new(value, ResolutionUnit::Dpcm));
+            return validate(value, ResolutionUnit::Dpcm, &s);
         }
 
         if let Some(value_str) = s.strip_suffix("dpi") {
@@ -1130,7 +1137,7 @@ impl Resolution {
                 .trim()
                 .parse::<f32>()
                 .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
-            return Ok(Resolution::new(value, ResolutionUnit::Dpi));
+            return validate(value, ResolutionUnit::Dpi, &s);
         }
 
         // Try 'x' as alias for dppx
@@ -1139,7 +1146,7 @@ impl Resolution {
                 .trim()
                 .parse::<f32>()
                 .map_err(|_| MediaParseError::InvalidResolution(s.clone()))?;
-            return Ok(Resolution::new(value, ResolutionUnit::Dppx));
+            return validate(value, ResolutionUnit::Dppx, &s);
         }
 
         Err(MediaParseError::InvalidResolution(s))
@@ -2836,7 +2843,11 @@ fn parse_length(s: &str) -> Option<Length> {
     for (suffix, constructor) in units {
         if let Some(value_str) = s.strip_suffix(suffix) {
             if let Ok(value) = value_str.trim().parse::<f32>() {
-                return Some(constructor(value));
+                let length = constructor(value);
+                if !length.value.is_finite() || length.value < 0.0 || length.unit.is_percentage() {
+                    return None;
+                }
+                return Some(length);
             }
         }
     }
@@ -2959,6 +2970,9 @@ mod tests {
         let res = Resolution::parse("2x").unwrap();
         assert_eq!(res.value, 2.0);
         assert_eq!(res.unit, ResolutionUnit::Dppx);
+
+        assert!(Resolution::parse("-1dpi").is_err());
+        assert!(Resolution::parse("infdppx").is_err());
     }
 
     #[test]
@@ -2979,6 +2993,16 @@ mod tests {
             MediaFeature::MinWidth(length) => assert_eq!(length.value, 768.0),
             _ => panic!("Expected MinWidth"),
         }
+    }
+
+    #[test]
+    fn test_media_feature_rejects_percentage_width() {
+        assert!(MediaFeature::parse("min-width", Some("50%")).is_err());
+    }
+
+    #[test]
+    fn test_media_feature_rejects_negative_width() {
+        assert!(MediaFeature::parse("max-width", Some("-10px")).is_err());
     }
 
     #[test]
