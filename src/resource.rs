@@ -209,7 +209,7 @@ impl Default for HttpFetcher {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(30),
-            user_agent: "Mozilla/5.0 (compatible; fastrender/0.1)".to_string(),
+            user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 fastrender/0.1".to_string(),
             max_size: 50 * 1024 * 1024, // 50MB default limit
         }
     }

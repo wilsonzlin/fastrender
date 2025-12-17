@@ -101,7 +101,44 @@ pub fn parse_html(html: &str) -> Result<DomNode> {
             })
         })?;
 
-    Ok(convert_handle_to_node(&dom.document))
+    let mut root = convert_handle_to_node(&dom.document);
+    toggle_no_js_class(&mut root);
+    Ok(root)
+}
+
+/// Some documents bootstrap by marking the root with `no-js` and replacing it with a
+/// `js-enabled` class once scripts execute. Since we do not run author scripts, mirror
+/// that initialization so content that relies on the class flip (e.g., initial opacity)
+/// is visible in static renders.
+fn toggle_no_js_class(node: &mut DomNode) {
+    if let DomNodeType::Element {
+        tag_name, attributes, ..
+    } = &mut node.node_type
+    {
+        if tag_name.eq_ignore_ascii_case("html") {
+            let mut classes: Vec<String> = attributes
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+                .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+            if classes.iter().any(|c| c == "no-js") {
+                classes.retain(|c| c != "no-js");
+                if !classes.iter().any(|c| c == "js-enabled") {
+                    classes.push("js-enabled".to_string());
+                }
+                let class_value = classes.join(" ");
+                if let Some((_, value)) = attributes.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("class")) {
+                    *value = class_value;
+                } else {
+                    attributes.push(("class".to_string(), class_value));
+                }
+            }
+        }
+    }
+
+    for child in &mut node.children {
+        toggle_no_js_class(child);
+    }
 }
 
 fn convert_handle_to_node(handle: &Handle) -> DomNode {
@@ -336,9 +373,7 @@ impl<'a> ElementRef<'a> {
             return true;
         }
 
-        node.children
-            .iter()
-            .any(Self::node_or_descendant_has_focus)
+        node.children.iter().any(Self::node_or_descendant_has_focus)
     }
 
     /// Find index of this element among sibling elements and the total number of element siblings.
@@ -721,14 +756,8 @@ impl<'a> ElementRef<'a> {
     }
 
     fn numeric_in_range(&self, value: f64) -> Option<bool> {
-        let min = self
-            .node
-            .get_attribute_ref("min")
-            .and_then(|m| Self::parse_number(m));
-        let max = self
-            .node
-            .get_attribute_ref("max")
-            .and_then(|m| Self::parse_number(m));
+        let min = self.node.get_attribute_ref("min").and_then(|m| Self::parse_number(m));
+        let max = self.node.get_attribute_ref("max").and_then(|m| Self::parse_number(m));
 
         if min.is_none() && max.is_none() {
             return None;
@@ -960,10 +989,7 @@ impl<'a> ElementRef<'a> {
                 return false;
             }
 
-            let input_type = self
-                .node
-                .get_attribute_ref("type")
-                .map(|t| t.to_ascii_lowercase());
+            let input_type = self.node.get_attribute_ref("type").map(|t| t.to_ascii_lowercase());
 
             if !supports_placeholder(&input_type) {
                 return false;
@@ -1320,27 +1346,22 @@ impl<'a> Element for ElementRef<'a> {
                         .unwrap_or(false)
             }
             PseudoClass::FirstChild => self.element_index() == Some(0),
-            PseudoClass::LastChild => {
-                self.element_index_and_len()
-                    .map(|(idx, len)| idx == len.saturating_sub(1))
-                    .unwrap_or(false)
-            }
-            PseudoClass::OnlyChild => self
+            PseudoClass::LastChild => self
                 .element_index_and_len()
-                .map(|(_, len)| len == 1)
+                .map(|(idx, len)| idx == len.saturating_sub(1))
                 .unwrap_or(false),
+            PseudoClass::OnlyChild => self.element_index_and_len().map(|(_, len)| len == 1).unwrap_or(false),
             PseudoClass::NthChild(a, b) => self
                 .element_index()
                 .map(|index| matches_an_plus_b(*a, *b, (index + 1) as i32))
                 .unwrap_or(false),
-            PseudoClass::NthLastChild(a, b) => {
-                self.element_index_and_len()
-                    .map(|(index, len)| {
-                        let n = (len - index) as i32;
-                        matches_an_plus_b(*a, *b, n)
-                    })
-                    .unwrap_or(false)
-            }
+            PseudoClass::NthLastChild(a, b) => self
+                .element_index_and_len()
+                .map(|(index, len)| {
+                    let n = (len - index) as i32;
+                    matches_an_plus_b(*a, *b, n)
+                })
+                .unwrap_or(false),
             PseudoClass::FirstOfType => self.position_in_type().map(|(index, _)| index == 0).unwrap_or(false),
             PseudoClass::LastOfType => self
                 .position_in_type()

@@ -1,8 +1,10 @@
 # Cascade performance: cached UA default form declarations, bypassed full rule matching for non-element nodes, added zero-declaration fast path in apply_cascaded_declarations, and added a text-node inheritance regression.
 # Border-collapse conflict resolution now follows CSS 2.1: final ties pick the later source-order border instead of the top/left neighbor; regressions updated.
-# Border-collapse tie-breaking now follows CSS 2.1 physical edge preference: equal-style/width borders pick the start edge (top/left or top/right in RTL) before source order. Updated collapsed border conflict resolution and regressions for LTR/RTL vertical ties and horizontal ties.
 # Cascade perf: UA stylesheet is now parsed once via a cached OnceLock instead of per-cascade parsing.
 # Calc helpers now require proper context: calc lengths with percentage/viewport/font terms return None in viewport/font resolvers when bases are missing, and a regression `calc_resolution_helpers_require_context` covers the helpers. Transform/object-fit/clip-path now resolve calc lengths via context-aware helpers (avoiding raw-value fallbacks); added builder/painter/object-fit regressions for calc translate/object-position. Display-list renderer border-image resolution now guards viewport-relative calcs when no viewport is provided (regression added). Display-list background offsets now guard viewport-relative calcs when no viewport is available (regression added).
+# Render bug hunt: arstechnica.com fetched/rendered at 1200×800 (/tmp/ars.png); page largely white (likely JS-driven) with no actionable defect identified yet. Stackoverflow.com rendered at 1200×800 (/tmp/so.png); output appears normal from ASCII scan. Economist.com fetch blocked with 403.
+# Wikipedia portal render: root `no-js` class now auto-flips to `js-enabled` during HTML parse to mimic JS bootstrap; default fetcher UA now uses a Chrome-like string. Rendering still shows a tiny centered block (likely CSS-driven); further layout investigation pending.
+# Render bug hunt: stackoverflow.com (1200×800) looked normal; no regression added. Economist.com fetch blocked with 403.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
@@ -22,7 +24,6 @@
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.
 # Marker display-list regression: display-list renderer test now checks ::marker text fragments honor authored text-shadow as well.
->>>>>>> 017f394 (Follow CSS2.1 border-collapse physical tie-breaking)
 # Marker outline ignored: marker cascade now resets outline properties; regression ensures authored/inherited outlines are cleared on ::marker.
 # Added hanging text-indent soft-wrap regression: soft-wrapped lines now explicitly covered when text-indent:hanging is set (first line unindented, subsequent soft wraps indented). `cargo test text_indent_hanging_indents_soft_wrapped_lines --quiet` passes.
 # Added zillow.com to fetch_pages targets; `cargo check --bin fetch_pages` passes.
