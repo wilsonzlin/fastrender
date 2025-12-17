@@ -1,8 +1,13 @@
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::{DisplayItem, DisplayList, FillRectItem, ResolvedFilter, StackingContextItem};
+use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
+use fastrender::style::types::{BackgroundPosition, BackgroundPositionComponent, BasicShape, ClipPath, ShapeRadius};
+use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
+use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::Rgba;
+use std::sync::Arc;
 
 fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
     let r = r as f32 / 255.0;
@@ -121,6 +126,42 @@ fn assert_hsl_components(
 fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let px = pixmap.pixel(x, y).unwrap();
     (px.red(), px.green(), px.blue(), px.alpha())
+}
+
+#[test]
+fn builder_clip_path_masks_rendered_output() {
+    let mut style = fastrender::ComputedStyle::default();
+    style.background_color = Rgba::RED;
+    style.clip_path = ClipPath::BasicShape(
+        BasicShape::Circle {
+            radius: ShapeRadius::Length(Length::px(3.0)),
+            position: BackgroundPosition::Position {
+                x: BackgroundPositionComponent {
+                    alignment: 0.5,
+                    offset: Length::px(0.0),
+                },
+                y: BackgroundPositionComponent {
+                    alignment: 0.5,
+                    offset: Length::px(0.0),
+                },
+            },
+        },
+        None,
+    );
+
+    let fragment = FragmentNode::new_block_styled(
+        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        vec![],
+        Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // Center pixel should be clipped in, corner should remain the clear background.
+    assert_eq!(pixel(&pixmap, 5, 5), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
 }
 
 #[test]
