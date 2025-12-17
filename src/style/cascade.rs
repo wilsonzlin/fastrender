@@ -9,7 +9,7 @@
 use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::{PseudoElement, TextDirection};
 use crate::css::types::{ContainerCondition, CssImportLoader, Declaration, StyleRule, StyleSheet};
-use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, ElementRef};
+use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, DomNodeType, ElementRef};
 use crate::geometry::Size;
 use crate::style::color::Rgba;
 use crate::style::defaults::{get_default_styles_for_element, parse_color_attribute, parse_dimension_attribute};
@@ -38,6 +38,10 @@ static UA_STYLESHEET: OnceLock<StyleSheet> = OnceLock::new();
 static CASCADE_PROFILE_NODES: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_RULE_CANDIDATES: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_RULE_MATCHES: AtomicU64 = AtomicU64::new(0);
+
+fn is_root_element(ancestors: &[&DomNode]) -> bool {
+    ancestors.is_empty() || (ancestors.len() == 1 && matches!(ancestors[0].node_type, DomNodeType::Document))
+}
 static CASCADE_PROFILE_FIND_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_DECL_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_PSEUDO_TIME_NS: AtomicU64 = AtomicU64::new(0);
@@ -1016,7 +1020,7 @@ fn apply_styles_internal(
         inherit_styles(&mut styles, parent_styles);
         propagate_text_decorations(&mut styles, parent_styles);
 
-        let is_root = ancestors.is_empty();
+        let is_root = is_root_element(&ancestors);
         let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
         let current_ua_root_font_size = if is_root {
             ua_styles.font_size
@@ -1115,13 +1119,14 @@ fn apply_styles_internal(
         ua_styles.language = normalize_language_tag(&lang);
     }
 
+    let is_root = is_root_element(&ancestors);
+
     finalize_grid_placement(&mut ua_styles);
-    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, ancestors.is_empty());
-    resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, ancestors.is_empty());
+    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, is_root);
+    resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, is_root);
     resolve_relative_font_weight(&mut ua_styles, parent_ua_styles);
     propagate_text_decorations(&mut ua_styles, parent_ua_styles);
 
-    let is_root = ancestors.is_empty();
     let current_ua_root_font_size = if is_root {
         ua_styles.font_size
     } else {
@@ -1168,13 +1173,13 @@ fn apply_styles_internal(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
-    resolve_match_parent_text_align(&mut styles, parent_styles, ancestors.is_empty());
-    resolve_match_parent_text_align_last(&mut styles, parent_styles, ancestors.is_empty());
+    let is_root = is_root_element(&ancestors);
+    resolve_match_parent_text_align(&mut styles, parent_styles, is_root);
+    resolve_match_parent_text_align_last(&mut styles, parent_styles, is_root);
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
     // Root font size for rem resolution: the document root sets the value for all descendants.
-    let is_root = ancestors.is_empty();
     let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
     styles.root_font_size = current_root_font_size;
     resolve_line_height_length(&mut styles, viewport);
@@ -1364,7 +1369,7 @@ fn apply_styles_internal_with_ancestors<'a>(
         inherit_styles(&mut styles, parent_styles);
         propagate_text_decorations(&mut styles, parent_styles);
 
-        let is_root = ancestors.is_empty();
+        let is_root = is_root_element(&ancestors);
         let current_root_font_size = if is_root { styles.font_size } else { root_font_size };
         let current_ua_root_font_size = if is_root {
             ua_styles.font_size
@@ -1463,13 +1468,14 @@ fn apply_styles_internal_with_ancestors<'a>(
         ua_styles.language = normalize_language_tag(&lang);
     }
 
+    let is_root = is_root_element(&ancestors);
+
     finalize_grid_placement(&mut ua_styles);
-    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, ancestors.is_empty());
-    resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, ancestors.is_empty());
+    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, is_root);
+    resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, is_root);
     resolve_relative_font_weight(&mut ua_styles, parent_ua_styles);
     propagate_text_decorations(&mut ua_styles, parent_ua_styles);
 
-    let is_root = ancestors.is_empty();
     let current_ua_root_font_size = if is_root {
         ua_styles.font_size
     } else {
@@ -1507,8 +1513,8 @@ fn apply_styles_internal_with_ancestors<'a>(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
-    resolve_match_parent_text_align(&mut styles, parent_styles, ancestors.is_empty());
-    resolve_match_parent_text_align_last(&mut styles, parent_styles, ancestors.is_empty());
+    resolve_match_parent_text_align(&mut styles, parent_styles, is_root);
+    resolve_match_parent_text_align_last(&mut styles, parent_styles, is_root);
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
