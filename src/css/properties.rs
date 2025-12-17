@@ -458,6 +458,15 @@ fn parse_length_component(parser: &mut Parser) -> Result<Length, ()> {
             Ok(Length::new(*value, unit))
         }
         Token::Number { value, .. } => Ok(Length::px(*value)),
+        Token::Function(ref name)
+            if name.eq_ignore_ascii_case("calc")
+                || name.eq_ignore_ascii_case("min")
+                || name.eq_ignore_ascii_case("max")
+                || name.eq_ignore_ascii_case("clamp") =>
+        {
+            let calc = parser.parse_nested_block(parse_calc_sum).map_err(|_| ())?;
+            calc_component_to_length(calc).ok_or(())
+        }
         _ => Err(()),
     }
 }
@@ -477,6 +486,19 @@ fn parse_angle_component(parser: &mut Parser) -> Result<f32, ()> {
             Ok(deg)
         }
         Token::Number { value, .. } if *value == 0.0 => Ok(0.0),
+        Token::Function(ref name)
+            if name.eq_ignore_ascii_case("calc")
+                || name.eq_ignore_ascii_case("min")
+                || name.eq_ignore_ascii_case("max")
+                || name.eq_ignore_ascii_case("clamp") =>
+        {
+            let component = parser.parse_nested_block(parse_calc_angle_sum).map_err(|_| ())?;
+            if component.is_angle {
+                Ok(component.value)
+            } else {
+                Err(())
+            }
+        }
         _ => Err(()),
     }
 }
@@ -1878,6 +1900,45 @@ mod tests {
     }
 
     #[test]
+    fn parses_transform_calc_lengths_and_angles() {
+        let transforms =
+            parse_transform_list("translate(calc(10px + 5%), calc(20% - 4px)) rotate(calc(45deg + 15deg))")
+                .expect("parsed transforms with calc");
+
+        assert_eq!(transforms.len(), 2);
+
+        match &transforms[0] {
+            Transform::Translate(x, y) => {
+                let calc_x = x.calc.as_ref().expect("calc preserved for x");
+                assert!(calc_x
+                    .terms()
+                    .iter()
+                    .any(|t| t.unit == LengthUnit::Px && (t.value - 10.0).abs() < 0.01));
+                assert!(calc_x
+                    .terms()
+                    .iter()
+                    .any(|t| t.unit == LengthUnit::Percent && (t.value - 5.0).abs() < 0.01));
+
+                let calc_y = y.calc.as_ref().expect("calc preserved for y");
+                assert!(calc_y
+                    .terms()
+                    .iter()
+                    .any(|t| t.unit == LengthUnit::Percent && (t.value - 20.0).abs() < 0.01));
+                assert!(calc_y
+                    .terms()
+                    .iter()
+                    .any(|t| t.unit == LengthUnit::Px && (t.value + 4.0).abs() < 0.01));
+            }
+            other => panic!("unexpected transform {other:?}"),
+        }
+
+        match &transforms[1] {
+            Transform::Rotate(deg) => assert!((*deg - 60.0).abs() < 0.01),
+            other => panic!("unexpected transform {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_matrix3d_with_translation() {
         let transforms = parse_transform_list("matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 5,6,0,1)").expect("parsed matrix3d");
         match &transforms[0] {
@@ -2283,6 +2344,211 @@ fn reduce_components<'i>(
             Ok(CalcComponent::Length(CalcLength::single(first_term.unit, extremum)))
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct AngleComponent {
+    value: f32,
+    is_angle: bool,
+}
+
+fn angle_component_from_unit(unit: &str, value: f32) -> Option<AngleComponent> {
+    match unit {
+        "deg" => Some(AngleComponent { value, is_angle: true }),
+        "grad" => Some(AngleComponent {
+            value: value * 0.9,
+            is_angle: true,
+        }),
+        "turn" => Some(AngleComponent {
+            value: value * 360.0,
+            is_angle: true,
+        }),
+        "rad" => Some(AngleComponent {
+            value: value * (180.0 / std::f32::consts::PI),
+            is_angle: true,
+        }),
+        _ => None,
+    }
+}
+
+fn combine_angle_sum<'i>(
+    left: AngleComponent,
+    right: AngleComponent,
+    sign: f32,
+    location: cssparser::SourceLocation,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    if left.is_angle && right.is_angle {
+        Ok(AngleComponent {
+            value: left.value + sign * right.value,
+            is_angle: true,
+        })
+    } else {
+        Err(location.new_custom_error(()))
+    }
+}
+
+fn combine_angle_product<'i>(
+    left: AngleComponent,
+    right: AngleComponent,
+    op: char,
+    location: cssparser::SourceLocation,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    match (left.is_angle, right.is_angle, op) {
+        (true, false, '*') => Ok(AngleComponent {
+            value: left.value * right.value,
+            is_angle: true,
+        }),
+        (false, true, '*') => Ok(AngleComponent {
+            value: left.value * right.value,
+            is_angle: true,
+        }),
+        (true, false, '/') if right.value != 0.0 => Ok(AngleComponent {
+            value: left.value / right.value,
+            is_angle: true,
+        }),
+        (false, false, '*') => Ok(AngleComponent {
+            value: left.value * right.value,
+            is_angle: false,
+        }),
+        (false, false, '/') if right.value != 0.0 => Ok(AngleComponent {
+            value: left.value / right.value,
+            is_angle: false,
+        }),
+        _ => Err(location.new_custom_error(())),
+    }
+}
+
+fn parse_calc_angle_sum<'i, 't>(input: &mut Parser<'i, 't>) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    let mut left = parse_calc_angle_product(input)?;
+    loop {
+        let op = match input.try_parse(|p| match p.next()? {
+            Token::Delim('+') => Ok(1.0),
+            Token::Delim('-') => Ok(-1.0),
+            _ => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: p.current_source_location(),
+            }),
+        }) {
+            Ok(sign) => sign,
+            Err(_) => break,
+        };
+        let right = parse_calc_angle_product(input)?;
+        let location = input.current_source_location();
+        left = combine_angle_sum(left, right, op, location)?;
+    }
+    Ok(left)
+}
+
+fn parse_calc_angle_product<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    let mut left = parse_calc_angle_factor(input)?;
+    loop {
+        let op = match input.try_parse(|p| match p.next()? {
+            Token::Delim('*') => Ok('*'),
+            Token::Delim('/') => Ok('/'),
+            _ => Err(cssparser::ParseError {
+                kind: cssparser::ParseErrorKind::Custom(()),
+                location: p.current_source_location(),
+            }),
+        }) {
+            Ok(op) => op,
+            Err(_) => break,
+        };
+        let right = parse_calc_angle_factor(input)?;
+        let location = input.current_source_location();
+        left = combine_angle_product(left, right, op, location)?;
+    }
+    Ok(left)
+}
+
+fn parse_calc_angle_factor<'i, 't>(
+    input: &mut Parser<'i, 't>,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    let location = input.current_source_location();
+    match input.next()? {
+        Token::Number { value, .. } => Ok(AngleComponent {
+            value: *value,
+            is_angle: false,
+        }),
+        Token::Dimension { value, ref unit, .. } => {
+            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or(location.new_custom_error(()))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
+            input.parse_nested_block(parse_calc_angle_sum)
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
+            input.parse_nested_block(|block| parse_min_max_angle(block, MathFn::Min))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
+            input.parse_nested_block(|block| parse_min_max_angle(block, MathFn::Max))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => input.parse_nested_block(parse_clamp_angle),
+        Token::ParenthesisBlock => input.parse_nested_block(parse_calc_angle_sum),
+        Token::Delim('+') => parse_calc_angle_factor(input),
+        Token::Delim('-') => {
+            let inner = parse_calc_angle_factor(input)?;
+            Ok(AngleComponent {
+                value: -inner.value,
+                is_angle: inner.is_angle,
+            })
+        }
+        _ => Err(location.new_custom_error(())),
+    }
+}
+
+fn parse_min_max_angle<'i, 't>(
+    input: &mut Parser<'i, 't>,
+    func: MathFn,
+) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    let mut values = Vec::new();
+    loop {
+        input.skip_whitespace();
+        values.push(parse_calc_angle_sum(input)?);
+        input.skip_whitespace();
+        if input.try_parse(|p| p.expect_comma()).is_err() {
+            break;
+        }
+    }
+
+    if values.len() < 2 || values.iter().any(|v| !v.is_angle) {
+        return Err(input.new_custom_error(()));
+    }
+
+    let init = match func {
+        MathFn::Min => f32::INFINITY,
+        MathFn::Max => f32::NEG_INFINITY,
+    };
+    let value = values.into_iter().fold(init, |acc, v| match func {
+        MathFn::Min => acc.min(v.value),
+        MathFn::Max => acc.max(v.value),
+    });
+
+    Ok(AngleComponent { value, is_angle: true })
+}
+
+fn parse_clamp_angle<'i, 't>(input: &mut Parser<'i, 't>) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
+    input.skip_whitespace();
+    let min = parse_calc_angle_sum(input)?;
+    input.skip_whitespace();
+    input.expect_comma()?;
+    input.skip_whitespace();
+    let preferred = parse_calc_angle_sum(input)?;
+    input.skip_whitespace();
+    input.expect_comma()?;
+    input.skip_whitespace();
+    let max = parse_calc_angle_sum(input)?;
+
+    if !min.is_angle || !preferred.is_angle || !max.is_angle {
+        return Err(input.new_custom_error(()));
+    }
+
+    let upper = if max.value < min.value { min.value } else { max.value };
+    let clamped = preferred.value.max(min.value).min(upper);
+    Ok(AngleComponent {
+        value: clamped,
+        is_angle: true,
+    })
 }
 
 fn combine_sum<'i>(
