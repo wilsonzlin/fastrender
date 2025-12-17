@@ -544,6 +544,24 @@ mod tests {
             Some(110.0)
         );
 
+        // Non-finite viewport/font contexts should fail resolution.
+        assert_eq!(
+            length.resolve_with_context(Some(200.0), NAN, 600.0, 16.0, 16.0),
+            None
+        );
+        assert_eq!(
+            length.resolve_with_context(Some(200.0), 800.0, NAN, 16.0, 16.0),
+            None
+        );
+        assert_eq!(
+            length.resolve_with_context(Some(200.0), 800.0, 600.0, NAN, 16.0),
+            None
+        );
+        assert_eq!(
+            length.resolve_with_context(Some(200.0), 800.0, 600.0, 16.0, NAN),
+            None
+        );
+
         let mut absolute_calc = CalcLength::empty();
         absolute_calc.push(LengthUnit::Px, 5.0).unwrap();
         absolute_calc.push(LengthUnit::Em, 1.0).unwrap();

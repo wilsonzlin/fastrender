@@ -54,6 +54,7 @@
 - Pending: build times out when running fetch_and_render; need to reattempt inspect_frag/fetch once compilation completes or reuse cached CNN HTML.
 - FUTURE: run `examples/inspect_frag --page cnn.com --log FLEX_CHILD_IDS=... --timeout 60` once build succeeds to confirm row positions after clamps.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
+- Calc resolution: CalcLength now fails resolution when viewport/font contexts are non-finite, and tests cover calc() percentage lengths rejecting indefinite bases and non-finite contexts.
 - Added display-list regression for `color-mix()` backgrounds: srgb/srgb-linear mixes and currentColor participation render to the resolved color (`paint_color_mix_display_list_test.rs`).
 - Added counter-style fallback regressions for out-of-range lower-greek/lower-armenian counters falling back to decimal markers.
 - Added display-list regression for polar color-mix backgrounds (`color-mix(in oklch, ...)`) to ensure resolved colors paint correctly (`paint_color_mix_polar_display_list_test.rs`).
