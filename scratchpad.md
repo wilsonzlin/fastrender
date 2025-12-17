@@ -1499,3 +1499,4 @@ Actionable borrowings:
 - Media queries: range equality now rejects percentage operands; regression `range_equality_rejects_percentages` added.
 - Media queries: resolution parsing retains fractional precision; regression in `test_resolution_parse` asserts 1.3333dppx is preserved.
 - Media queries: `prefers-color-scheme` parsing is case-insensitive; regression updated to accept uppercase inputs.
+- Table rowspans: spanning height distribution now shares evenly when uncapped; regression `baseline_height_computation_skips_rowspanning_cells` ensures a tall rowspan cell doesn’t overinflate the preceding row.

@@ -372,7 +372,7 @@ fn distribute_rowspan_targets(
         let weight = match headroom {
             Some(h) if h > 0.0 => h,
             Some(_) => 0.0,
-            None => current.max(1.0), // Uncapped rows fall back to their current height weighting.
+            None => 1.0, // Uncapped rows share spanning contributions evenly.
         };
         weights.push(weight);
         caps.push(headroom);
@@ -9618,6 +9618,69 @@ mod tests {
         assert!(structure.rows[0].computed_height > 0.0);
         assert!(structure.rows[1].computed_height > 0.0);
         assert!((structure.rows[0].computed_height - structure.rows[1].computed_height).abs() < 25.0);
+    }
+
+    #[test]
+    fn baseline_height_computation_skips_rowspanning_cells() {
+        // Build a two-row table with a tall rowspanning cell; row 0 metrics should not be inflated.
+        let mut structure = TableStructure::new();
+        structure.row_count = 2;
+        structure.rows = vec![RowInfo::new(0), RowInfo::new(1)];
+        structure.border_spacing = (0.0, 0.0);
+        structure.cells = vec![
+            // Regular cell in row 0
+            CellInfo {
+                index: 0,
+                source_row: 0,
+                source_col: 0,
+                row: 0,
+                col: 0,
+                rowspan: 1,
+                colspan: 1,
+                box_index: 0,
+                min_width: 50.0,
+                max_width: 100.0,
+                min_height: 20.0,
+                bounds: Rect::ZERO,
+            },
+            // Tall cell spanning both rows
+            CellInfo {
+                index: 1,
+                source_row: 0,
+                source_col: 1,
+                row: 0,
+                col: 1,
+                rowspan: 2,
+                colspan: 1,
+                box_index: 1,
+                min_width: 50.0,
+                max_width: 100.0,
+                min_height: 200.0,
+                bounds: Rect::ZERO,
+            },
+        ];
+
+        calculate_row_heights(&mut structure, None);
+
+        let row0 = structure.rows[0].clone();
+        let row1 = structure.rows[1].clone();
+
+        assert!(
+            row0.computed_height < 140.0,
+            "row 0 height should not be over-inflated by spanning cell (got {:.2})",
+            row0.computed_height
+        );
+        assert!(
+            row1.computed_height > 90.0,
+            "row 1 height should reflect spanning cell contribution (got {:.2})",
+            row1.computed_height
+        );
+        assert!(
+            row1.computed_height + 30.0 >= row0.computed_height,
+            "row 0 height should stay near the spanning share: row0 {:.2} row1 {:.2}",
+            row0.computed_height,
+            row1.computed_height
+        );
     }
 
     #[test]
