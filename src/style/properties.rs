@@ -5628,10 +5628,8 @@ pub fn apply_declaration_with_base(
         "forced-color-adjust" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
                 styles.forced_color_adjust = match kw.to_ascii_lowercase().as_str() {
-                    "inherit" => parent_styles.forced_color_adjust,
                     "auto" => ForcedColorAdjust::Auto,
                     "none" => ForcedColorAdjust::None,
-                    "initial" | "unset" | "revert" => ForcedColorAdjust::Auto,
                     "preserve-parent-color" => ForcedColorAdjust::PreserveParentColor,
                     _ => styles.forced_color_adjust,
                 };
