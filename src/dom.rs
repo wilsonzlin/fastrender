@@ -558,34 +558,6 @@ impl<'a> ElementRef<'a> {
         None
     }
 
-    fn is_indeterminate(&self) -> bool {
-        let Some(tag) = self.node.tag_name() else {
-            return false;
-        };
-
-        let lower = tag.to_ascii_lowercase();
-        if lower == "input" {
-            let input_type = self
-                .node
-                .get_attribute("type")
-                .map(|s| s.to_ascii_lowercase())
-                .unwrap_or_else(|| "text".to_string());
-            if input_type == "checkbox" {
-                return self.node.get_attribute("indeterminate").is_some();
-            }
-            return false;
-        }
-
-        if lower == "progress" {
-            match self.node.get_attribute("value") {
-                None => return true,
-                Some(v) => return v.parse::<f32>().is_err(),
-            }
-        }
-
-        false
-    }
-
     fn select_value(&self) -> Option<String> {
         let explicit = find_selected_option_value(self.node);
         if explicit.is_some() {
@@ -719,7 +691,7 @@ impl<'a> ElementRef<'a> {
                 .map(|t| t.to_ascii_lowercase())
                 .unwrap_or_else(|| "text".to_string());
 
-            if matches!(input_type.as_str(), "checkbox" | "radio") {
+            if input_type == "checkbox" {
                 return self.node.get_attribute("indeterminate").is_some();
             }
             return false;
@@ -734,6 +706,71 @@ impl<'a> ElementRef<'a> {
         }
 
         false
+    }
+
+    fn nearest_form(&self) -> Option<&DomNode> {
+        self.all_ancestors
+            .iter()
+            .rev()
+            .copied()
+            .find(|node| node.tag_name().map(|t| t.eq_ignore_ascii_case("form")).unwrap_or(false))
+    }
+
+    fn is_default_submit_candidate(node: &DomNode, ancestors: &[&DomNode]) -> bool {
+        let Some(tag) = node.tag_name() else {
+            return false;
+        };
+        let lower = tag.to_ascii_lowercase();
+
+        let is_submit_input = lower == "input"
+            && node
+                .get_attribute("type")
+                .map(|t| t.eq_ignore_ascii_case("submit") || t.eq_ignore_ascii_case("image"))
+                .unwrap_or(false);
+
+        let is_button_submit = lower == "button"
+            && node
+                .get_attribute("type")
+                .map(|t| t.eq_ignore_ascii_case("submit"))
+                .unwrap_or(true);
+
+        if !(is_submit_input || is_button_submit) {
+            return false;
+        }
+
+        let element_ref = ElementRef::with_ancestors(node, ancestors);
+        !(element_ref.supports_disabled() && element_ref.is_disabled())
+    }
+
+    fn is_default_submit(&self) -> bool {
+        let Some(form) = self.nearest_form() else {
+            return false;
+        };
+
+        let mut ancestors = vec![form];
+        let target = self.node as *const DomNode;
+
+        fn traverse<'a>(
+            node: &'a DomNode,
+            ancestors: &mut Vec<&'a DomNode>,
+            target: *const DomNode,
+        ) -> Option<bool> {
+            if ElementRef::is_default_submit_candidate(node, ancestors) {
+                return Some(ptr::eq(node, target));
+            }
+
+            ancestors.push(node);
+            for child in &node.children {
+                if let Some(res) = traverse(child, ancestors, target) {
+                    ancestors.pop();
+                    return Some(res);
+                }
+            }
+            ancestors.pop();
+            None
+        }
+
+        traverse(form, &mut ancestors, target).unwrap_or(false)
     }
 
     /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
@@ -1108,6 +1145,28 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::InRange => !self.is_disabled() && self.range_state() == Some(true),
             PseudoClass::OutOfRange => !self.is_disabled() && self.range_state() == Some(false),
             PseudoClass::Indeterminate => self.is_indeterminate(),
+            PseudoClass::Default => {
+                if let Some(tag) = self.node.tag_name() {
+                    let lower = tag.to_ascii_lowercase();
+                    if lower == "option" {
+                        return self.is_checked();
+                    }
+                    if lower == "input" {
+                        let t = self
+                            .node
+                            .get_attribute("type")
+                            .map(|s| s.to_ascii_lowercase())
+                            .unwrap_or_else(|| "text".to_string());
+                        if t == "checkbox" || t == "radio" {
+                            return self.node.get_attribute("checked").is_some();
+                        }
+                    }
+                    if matches!(lower.as_str(), "input" | "button") {
+                        return self.is_default_submit();
+                    }
+                }
+                false
+            }
             PseudoClass::ReadOnly => !self.is_read_write(),
             PseudoClass::ReadWrite => self.is_read_write(),
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
@@ -1915,6 +1974,103 @@ mod tests {
             children: vec![],
         };
         assert!(matches(&progress_invalid_value, &[], &PseudoClass::Indeterminate));
+    }
+
+    #[test]
+    fn default_matches_submit_controls_and_options() {
+        let form = element(
+            "form",
+            vec![
+                element(
+                    "input",
+                    vec![],
+                ),
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "button".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                },
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "button".to_string(),
+                        attributes: vec![("type".to_string(), "submit".to_string())],
+                    },
+                    children: vec![],
+                },
+            ],
+        );
+        let ancestors: Vec<&DomNode> = vec![&form];
+        let default_button = &form.children[1];
+        let submit_button = &form.children[2];
+        assert!(matches(default_button, &ancestors, &PseudoClass::Default));
+        assert!(!matches(submit_button, &ancestors, &PseudoClass::Default));
+
+        let form_disabled_first = element(
+            "form",
+            vec![
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "button".to_string(),
+                        attributes: vec![("disabled".to_string(), "disabled".to_string())],
+                    },
+                    children: vec![],
+                },
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "button".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                },
+            ],
+        );
+        let ancestors: Vec<&DomNode> = vec![&form_disabled_first];
+        let disabled = &form_disabled_first.children[0];
+        let enabled = &form_disabled_first.children[1];
+        assert!(!matches(disabled, &ancestors, &PseudoClass::Default));
+        assert!(matches(enabled, &ancestors, &PseudoClass::Default));
+
+        let select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![],
+            },
+            children: vec![
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "option".to_string(),
+                        attributes: vec![("disabled".to_string(), "disabled".to_string())],
+                    },
+                    children: vec![],
+                },
+                DomNode {
+                    node_type: DomNodeType::Element {
+                        tag_name: "option".to_string(),
+                        attributes: vec![],
+                    },
+                    children: vec![],
+                },
+            ],
+        };
+        let ancestors: Vec<&DomNode> = vec![&select];
+        let first = &select.children[0];
+        let second = &select.children[1];
+        assert!(!matches(first, &ancestors, &PseudoClass::Default));
+        assert!(matches(second, &ancestors, &PseudoClass::Default));
+
+        let checkbox = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "checkbox".to_string()),
+                    ("checked".to_string(), "checked".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&checkbox, &[], &PseudoClass::Default));
     }
 
     #[test]

@@ -30,20 +30,21 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use types::{
-    AccentColor, AlignContent, AlignItems, Appearance, AspectRatio, BackgroundAttachment, BackgroundBox, BackgroundImage,
-    BackgroundLayer, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderCollapse, BorderImage, BorderStyle,
-    BoxSizing, CaptionSide, CaretColor, ClipPath, ClipRect, ColorSchemePreference, ContainerType, Containment,
-    CursorImage, CursorKeyword, Direction, EmptyCells, FilterFunction, FlexBasis, FlexDirection, FlexWrap,
-    FontFeatureSetting, FontKerning, FontLanguageOverride, FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle,
-    FontSynthesis, FontVariant, FontVariantAlternates, FontVariantCaps, FontVariantEastAsian, FontVariantEmoji,
-    FontVariantLigatures, FontVariantNumeric, FontVariantPosition, FontVariationSetting, FontWeight, GridTrack,
-    HyphensMode, ImageOrientation, ImageRendering, ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight,
-    ListStyleImage, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor,
-    OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents, ScrollBehavior, TabSize, TableLayout,
-    TextAlign, TextAlignLast, TextCombineUpright, TextDecoration, TextDecorationSkipInk, TextEmphasisPosition,
-    TextEmphasisStyle, TextIndent, TextJustify, TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset,
-    TextUnderlinePosition, TouchAction, TransformBox, TransformOrigin, UnicodeBidi, UserSelect, VerticalAlign,
-    WhiteSpace, WillChange, WordBreak, WritingMode,
+    AccentColor, AlignContent, AlignItems, Appearance, AspectRatio, BackfaceVisibility, BackgroundAttachment,
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    BorderCollapse, BorderImage, BorderStyle, BoxSizing, CaptionSide, CaretColor, ClipPath, ClipRect,
+    ColorSchemePreference, ContainerType, Containment, CursorImage, CursorKeyword, Direction, EmptyCells,
+    FilterFunction, FlexBasis, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontLanguageOverride,
+    FontOpticalSizing, FontSizeAdjust, FontStretch, FontStyle, FontSynthesis, FontVariant, FontVariantAlternates,
+    FontVariantCaps, FontVariantEastAsian, FontVariantEmoji, FontVariantLigatures, FontVariantNumeric,
+    FontVariantPosition, FontVariationSetting, FontWeight, GridTrack, HyphensMode, ImageOrientation, ImageRendering,
+    ImageResolution, Isolation, JustifyContent, LineBreak, LineHeight, ListStyleImage, ListStylePosition,
+    ListStyleType, MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
+    OverscrollBehavior, PointerEvents, ScrollBehavior, TabSize, TableLayout, TextAlign, TextAlignLast, TextCombineUpright,
+    TextDecoration, TextDecorationSkipInk, TextEmphasisPosition, TextEmphasisStyle, TextIndent, TextJustify,
+    TextOrientation, TextOverflow, TextTransform, TextUnderlineOffset, TextUnderlinePosition, TouchAction, TransformBox,
+    TransformOrigin, TransformStyle, UnicodeBidi, UserSelect, VerticalAlign, WhiteSpace, WillChange, WordBreak,
+    WritingMode,
 };
 use values::Length;
 

@@ -79,6 +79,7 @@ pub enum PseudoClass {
     Autofill,
     Checked,
     Indeterminate,
+    Default,
     Link,
     Visited,
 }
@@ -151,6 +152,7 @@ impl ToCss for PseudoClass {
             PseudoClass::InRange => dest.write_str(":in-range"),
             PseudoClass::OutOfRange => dest.write_str(":out-of-range"),
             PseudoClass::Indeterminate => dest.write_str(":indeterminate"),
+            PseudoClass::Default => dest.write_str(":default"),
             PseudoClass::ReadOnly => dest.write_str(":read-only"),
             PseudoClass::ReadWrite => dest.write_str(":read-write"),
             PseudoClass::PlaceholderShown => dest.write_str(":placeholder-shown"),
@@ -231,6 +233,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
             "in-range" => Ok(PseudoClass::InRange),
             "out-of-range" => Ok(PseudoClass::OutOfRange),
             "indeterminate" => Ok(PseudoClass::Indeterminate),
+            "default" => Ok(PseudoClass::Default),
             "read-only" => Ok(PseudoClass::ReadOnly),
             "read-write" => Ok(PseudoClass::ReadWrite),
             "placeholder-shown" => Ok(PseudoClass::PlaceholderShown),
@@ -446,6 +449,7 @@ mod tests {
         assert_eq!(PseudoClass::InRange.to_css_string(), ":in-range");
         assert_eq!(PseudoClass::OutOfRange.to_css_string(), ":out-of-range");
         assert_eq!(PseudoClass::Indeterminate.to_css_string(), ":indeterminate");
+        assert_eq!(PseudoClass::Default.to_css_string(), ":default");
         assert_eq!(PseudoClass::FocusWithin.to_css_string(), ":focus-within");
         assert_eq!(PseudoClass::FocusVisible.to_css_string(), ":focus-visible");
         assert_eq!(PseudoClass::ReadOnly.to_css_string(), ":read-only");
