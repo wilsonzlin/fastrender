@@ -2,9 +2,7 @@
 - SVG intrinsic sizing: render_svg now falls back to 300×150 with viewBox-derived aspect ratios when width/height are absent, preserves preserveAspectRatio="none", and tests cover width/height, viewBox-only, and aspect-ratio none cases.
 - Media queries now reject percentage widths: added regression ensuring `(max-width: 50%)` and similar percent-valued media features fail to parse.
 - SVG percent width/height are ignored for intrinsic sizing: percent-specified dimensions fall back to default 300×150 while preserving viewBox aspect ratios; added regression.
-# Scratchpad – rendering engine session notes
-Idle; no current tasks. Available for new tasks.
-- Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
+- List markers: image markers now use `marker_inline_gap` and keep inline-end spacing even in vertical RTL flows. RTL line positioning shifts marker content by its gap so the space stays between marker and text. Added regressions `marker_image_inside_uses_inline_end_margin_in_vertical_ltr`/`_rtl` under inline context tests. Branch `agent13/marker-gap` carries the change (push to main pending).
 # Scratchpad – rendering engine session notes
 Idle; no current tasks. Available for new tasks.
 - Added aria-label/aria-labelledby no-op regressions: aria attributes do not change display/visibility (`aria_label_does_not_change_display`, `aria_labelledby_does_not_hide`).
