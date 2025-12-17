@@ -315,18 +315,54 @@ impl<'a> ElementRef<'a> {
     }
 
     fn is_disabled(&self) -> bool {
-        if self.node.get_attribute("disabled").is_some() {
-            return true;
-        }
-
-        // Options/optgroups inherit disabled from ancestor select/optgroup/fieldset.
         if let Some(tag) = self.node.tag_name() {
             let lower = tag.to_ascii_lowercase();
+
+            // Elements that honor the disabled attribute themselves.
+            let self_supports_disabled = matches!(
+                lower.as_str(),
+                "button" | "input" | "select" | "textarea" | "option" | "optgroup" | "fieldset"
+            );
+
+            if self_supports_disabled && self.node.get_attribute("disabled").is_some() {
+                return true;
+            }
+
+            // Fieldset disabled state propagates to descendants except those inside the first legend.
+            for (i, ancestor) in self.all_ancestors.iter().enumerate().rev() {
+                if let Some(a_tag) = ancestor.tag_name() {
+                    if a_tag.eq_ignore_ascii_case("fieldset") && ancestor.get_attribute("disabled").is_some() {
+                        // Find first legend child of this fieldset.
+                        let first_legend = ancestor.element_children().into_iter().find(|child| {
+                            child
+                                .tag_name()
+                                .map(|t| t.eq_ignore_ascii_case("legend"))
+                                .unwrap_or(false)
+                        });
+
+                        if let Some(legend) = first_legend {
+                            // If we are inside this legend, the fieldset doesn't disable us.
+                            let in_legend = self
+                                .all_ancestors
+                                .get(i + 1..)
+                                .into_iter()
+                                .flatten()
+                                .any(|n| ptr::eq(*n, legend));
+                            if in_legend {
+                                continue;
+                            }
+                        }
+
+                        return true;
+                    }
+                }
+            }
+
             if lower == "option" || lower == "optgroup" {
                 for ancestor in self.all_ancestors.iter().rev() {
                     if let Some(a_tag) = ancestor.tag_name() {
                         let a_lower = a_tag.to_ascii_lowercase();
-                        if a_lower == "select" || a_lower == "optgroup" || a_lower == "fieldset" {
+                        if matches!(a_lower.as_str(), "select" | "optgroup" | "fieldset") {
                             if ancestor.get_attribute("disabled").is_some() {
                                 return true;
                             }
@@ -398,6 +434,31 @@ impl<'a> ElementRef<'a> {
         }
 
         self.is_contenteditable()
+    }
+
+    fn supports_required(&self) -> bool {
+        let Some(tag) = self.node.tag_name() else {
+            return false;
+        };
+
+        let lower = tag.to_ascii_lowercase();
+        match lower.as_str() {
+            "select" | "textarea" => true,
+            "input" => {
+                let t = self
+                    .node
+                    .get_attribute("type")
+                    .map(|s| s.to_ascii_lowercase())
+                    .unwrap_or_else(|| "text".to_string());
+
+                !matches!(t.as_str(), "hidden" | "button" | "reset" | "submit" | "image")
+            }
+            _ => false,
+        }
+    }
+
+    fn is_required(&self) -> bool {
+        self.supports_required() && !self.is_disabled() && self.node.get_attribute("required").is_some()
     }
 
     /// Direction from dir/xml:dir attributes, inherited; defaults to LTR when none found.
@@ -693,6 +754,8 @@ impl<'a> Element for ElementRef<'a> {
             PseudoClass::Target => self.is_target(),
             PseudoClass::Scope => self.all_ancestors.is_empty(),
             PseudoClass::Empty => self.is_empty(),
+            PseudoClass::Required => self.is_required(),
+            PseudoClass::Optional => self.supports_required() && !self.is_disabled() && !self.is_required(),
             PseudoClass::ReadOnly => !self.is_read_write(),
             PseudoClass::ReadWrite => self.is_read_write(),
             PseudoClass::PlaceholderShown => self.is_placeholder_shown(),
@@ -1182,6 +1245,88 @@ mod tests {
             }],
         };
         assert!(!matches(&prefilled_textarea, &[], &PseudoClass::PlaceholderShown));
+    }
+
+    #[test]
+    fn required_and_optional_match_supported_controls() {
+        let text_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![("type".to_string(), "text".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&text_input, &[], &PseudoClass::Optional));
+        assert!(!matches(&text_input, &[], &PseudoClass::Required));
+
+        let required_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "email".to_string()),
+                    ("required".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(matches(&required_input, &[], &PseudoClass::Required));
+        assert!(!matches(&required_input, &[], &PseudoClass::Optional));
+
+        let disabled_required = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("required".to_string(), "true".to_string()),
+                    ("disabled".to_string(), "disabled".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&disabled_required, &[], &PseudoClass::Required));
+        assert!(!matches(&disabled_required, &[], &PseudoClass::Optional));
+
+        let submit_input = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "input".to_string(),
+                attributes: vec![
+                    ("type".to_string(), "submit".to_string()),
+                    ("required".to_string(), "true".to_string()),
+                ],
+            },
+            children: vec![],
+        };
+        assert!(!matches(&submit_input, &[], &PseudoClass::Required));
+        assert!(!matches(&submit_input, &[], &PseudoClass::Optional));
+
+        let select = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "select".to_string(),
+                attributes: vec![("required".to_string(), "required".to_string())],
+            },
+            children: vec![],
+        };
+        assert!(matches(&select, &[], &PseudoClass::Required));
+
+        let fieldset = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "fieldset".to_string(),
+                attributes: vec![("disabled".to_string(), "true".to_string())],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "input".to_string(),
+                    attributes: vec![
+                        ("type".to_string(), "text".to_string()),
+                        ("required".to_string(), "true".to_string()),
+                    ],
+                },
+                children: vec![],
+            }],
+        };
+        let ancestors: Vec<&DomNode> = vec![&fieldset];
+        let child = &fieldset.children[0];
+        assert!(!matches(child, &ancestors, &PseudoClass::Required));
+        assert!(!matches(child, &ancestors, &PseudoClass::Optional));
     }
 
     #[test]
