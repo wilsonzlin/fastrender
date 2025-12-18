@@ -519,7 +519,7 @@ impl Hyphenator {
         };
 
         // Filter breaks
-        breaks.retain(|&pos| pos >= left_boundary && pos <= right_boundary);
+        breaks.retain(|&pos| pos >= left_boundary && pos <= right_boundary && word.is_char_boundary(pos));
 
         breaks
     }
@@ -798,6 +798,19 @@ mod tests {
         // Short word should return single segment
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0], "cat");
+    }
+
+    #[test]
+    fn filter_break_points_rejects_non_char_boundaries() {
+        let hyphenator = Hyphenator::new("en-us").unwrap();
+        let word = "al😊pha";
+
+        // Simulate a break landing inside the emoji's UTF-8 sequence (offset 3)
+        let filtered = hyphenator.filter_break_points(word, vec![2, 3, 7]);
+
+        assert!(filtered.iter().all(|&pos| word.is_char_boundary(pos)));
+        assert!(!filtered.contains(&3), "non-char-boundary break should be dropped");
+        assert!(filtered.contains(&2) && filtered.contains(&7));
     }
 
     #[test]
