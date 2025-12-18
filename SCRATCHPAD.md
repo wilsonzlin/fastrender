@@ -105,3 +105,8 @@ calc(0) is now accepted for margin/inset shorthands: parse_length falls back to 
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
 - Added mozilla.org to fetch_pages targets for broader coverage. Fetch/render mozilla.org (1200x800, 60s) succeeds (~79KB PNG, visible content).
+<<<<<<< HEAD
+=======
+- fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
+Added fast.com and kotlinlang.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
+>>>>>>> be0c12a (Note fast.com target render success)
