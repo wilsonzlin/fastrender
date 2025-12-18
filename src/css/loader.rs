@@ -501,6 +501,18 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
             end += 1;
         }
 
+        // Skip identifiers like `window.css = ...` where the token is an assignment target
+        // rather than a URL. If the next non-whitespace character after the match is '=',
+        // treat it as a property access and ignore it.
+        let mut lookahead = end;
+        while lookahead < bytes.len() && (bytes[lookahead] as char).is_whitespace() {
+            lookahead += 1;
+        }
+        if lookahead < bytes.len() && bytes[lookahead] == b'=' {
+            idx = end;
+            continue;
+        }
+
         if end > start {
             let candidate = &html[start..end];
             if candidate.len() < 512 {

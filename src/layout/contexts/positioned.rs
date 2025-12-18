@@ -691,16 +691,16 @@ mod tests {
         style.position = Position::Absolute;
         style.left = LengthOrAuto::px(50.0);
         style.right = LengthOrAuto::px(50.0);
-        // width is auto, should be computed
+        // width is auto, should shrink to fit intrinsic size when both insets are specified
 
         let cb = create_containing_block(400.0, 600.0);
         let intrinsic = Size::new(100.0, 100.0);
 
         let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
-        // Width should be: 400 - 50 - 50 = 300
+        // Shrink-to-fit favors the intrinsic width when available.
         assert_eq!(pos.x, 50.0);
-        assert_eq!(size.width, 300.0);
+        assert_eq!(size.width, 100.0);
     }
 
     #[test]

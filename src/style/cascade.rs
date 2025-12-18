@@ -20,7 +20,7 @@ use crate::style::properties::{apply_declaration_with_base, resolve_pending_logi
 use crate::style::types::{ColorSchemeEntry, ColorSchemePreference, ContainerType, OutlineColor};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::{normalize_language_tag, ComputedStyle, Direction};
-use selectors::context::{QuirksMode, SelectorCaches};
+use selectors::context::{IncludeStartingStyle, QuirksMode, SelectorCaches, VisitedHandlingMode};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 use selectors::parser::Selector;
 use std::borrow::Cow;
@@ -95,6 +95,10 @@ static UA_INPUT_BASE_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
 static UA_INPUT_HIDDEN_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
 static UA_INPUT_TEXT_CURSOR_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
 static UA_INPUT_POINTER_CURSOR_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_LINK_VISITED_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_LINK_ACTIVE_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_LINK_HOVER_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
+static UA_LINK_FOCUS_DECLS: OnceLock<Vec<Declaration>> = OnceLock::new();
 
 fn cached_declarations(cache: &'static OnceLock<Vec<Declaration>>, css: &'static str) -> Cow<'static, [Declaration]> {
     Cow::Borrowed(cache.get_or_init(|| parse_declarations(css)).as_slice())
@@ -909,6 +913,69 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
     };
 
     match tag.as_str() {
+        "a" | "area" | "link" => {
+            if node.get_attribute("href").is_some() {
+                let is_true = |name: &str| {
+                    node.get_attribute_ref(name)
+                        .map(|v| v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false)
+                };
+                let specificity = (1 << 10) + 1; // tag selector + pseudo-class weight
+                let base_order = 1000;
+
+                if is_true("data-fastr-visited") {
+                    rules.push(MatchedRule {
+                        origin: StyleOrigin::UserAgent,
+                        specificity,
+                        order: base_order + 1,
+                        layer_order: vec![u32::MAX],
+                        declarations: cached_declarations(
+                            &UA_LINK_VISITED_DECLS,
+                            "color: rgb(85, 26, 139);",
+                        ),
+                    });
+                }
+
+                if is_true("data-fastr-active") {
+                    rules.push(MatchedRule {
+                        origin: StyleOrigin::UserAgent,
+                        specificity,
+                        order: base_order + 2,
+                        layer_order: vec![u32::MAX],
+                        declarations: cached_declarations(
+                            &UA_LINK_ACTIVE_DECLS,
+                            "color: rgb(255, 0, 0);",
+                        ),
+                    });
+                }
+
+                if is_true("data-fastr-hover") {
+                    rules.push(MatchedRule {
+                        origin: StyleOrigin::UserAgent,
+                        specificity,
+                        order: base_order + 3,
+                        layer_order: vec![u32::MAX],
+                        declarations: cached_declarations(
+                            &UA_LINK_HOVER_DECLS,
+                            "color: rgb(255, 0, 0);",
+                        ),
+                    });
+                }
+
+                if is_true("data-fastr-focus") {
+                    rules.push(MatchedRule {
+                        origin: StyleOrigin::UserAgent,
+                        specificity,
+                        order: base_order + 4,
+                        layer_order: vec![u32::MAX],
+                        declarations: cached_declarations(
+                            &UA_LINK_FOCUS_DECLS,
+                            "outline: 1px dotted rgb(0, 0, 0); outline-offset: 2px;",
+                        ),
+                    });
+                }
+            }
+        }
         "bdi" if node.get_attribute("dir").is_none() => {
             let resolved = resolve_first_strong_direction(node).map(|d| match d {
                 TextDirection::Ltr => crate::style::types::Direction::Ltr,
@@ -1122,8 +1189,8 @@ fn apply_styles_internal(
     let is_root = is_root_element(&ancestors);
 
     finalize_grid_placement(&mut ua_styles);
-    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, is_root);
     resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, is_root);
+    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, is_root);
     resolve_relative_font_weight(&mut ua_styles, parent_ua_styles);
     propagate_text_decorations(&mut ua_styles, parent_ua_styles);
 
@@ -1174,8 +1241,8 @@ fn apply_styles_internal(
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
     let is_root = is_root_element(&ancestors);
-    resolve_match_parent_text_align(&mut styles, parent_styles, is_root);
     resolve_match_parent_text_align_last(&mut styles, parent_styles, is_root);
+    resolve_match_parent_text_align(&mut styles, parent_styles, is_root);
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
@@ -1471,8 +1538,8 @@ fn apply_styles_internal_with_ancestors<'a>(
     let is_root = is_root_element(&ancestors);
 
     finalize_grid_placement(&mut ua_styles);
-    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, is_root);
     resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, is_root);
+    resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, is_root);
     resolve_relative_font_weight(&mut ua_styles, parent_ua_styles);
     propagate_text_decorations(&mut ua_styles, parent_ua_styles);
 
@@ -1513,8 +1580,8 @@ fn apply_styles_internal_with_ancestors<'a>(
 
     // Finalize grid placement - resolve named grid lines
     finalize_grid_placement(&mut styles);
-    resolve_match_parent_text_align(&mut styles, parent_styles, is_root);
     resolve_match_parent_text_align_last(&mut styles, parent_styles, is_root);
+    resolve_match_parent_text_align(&mut styles, parent_styles, is_root);
     resolve_relative_font_weight(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
@@ -1745,9 +1812,12 @@ fn resolve_line_height_length(style: &mut ComputedStyle, viewport: Size) {
 }
 
 fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &ComputedStyle, is_root: bool) {
-    use crate::style::types::TextAlign;
+    use crate::style::types::{TextAlign, TextAlignLast};
     if !matches!(styles.text_align, TextAlign::MatchParent) {
         return;
+    }
+    if matches!(styles.text_align_last, TextAlignLast::Auto) {
+        styles.text_align_last = TextAlignLast::MatchParent;
     }
     if is_root {
         styles.text_align = TextAlign::Start;
@@ -1784,7 +1854,10 @@ fn resolve_match_parent_text_align(styles: &mut ComputedStyle, parent: &Computed
 }
 
 fn resolve_match_parent_text_align_last(styles: &mut ComputedStyle, parent: &ComputedStyle, is_root: bool) {
-    use crate::style::types::TextAlignLast;
+    use crate::style::types::{TextAlign, TextAlignLast};
+    if matches!(styles.text_align, TextAlign::MatchParent) && styles.text_align_last == parent.text_align_last {
+        styles.text_align_last = TextAlignLast::MatchParent;
+    }
     if !matches!(styles.text_align_last, TextAlignLast::MatchParent) {
         return;
     }
@@ -3579,14 +3652,7 @@ mod tests {
         );
 
         let styled_iframe = apply_styles(&iframe, &StyleSheet::new());
-        assert_eq!(
-            styled_iframe
-                .styles
-                .max_width
-                .as_ref()
-                .and_then(|l| l.resolve_with_font_size(styled_iframe.styles.font_size)),
-            Some(100.0)
-        );
+        assert_eq!(styled_iframe.styles.max_width, Some(Length::percent(100.0)));
 
         let styled_details = apply_styles(&details, &StyleSheet::new());
         assert_eq!(styled_details.styles.display, Display::Block);
@@ -5999,10 +6065,12 @@ fn find_matching_rules<'a>(
     let element_ref = build_element_ref_chain(node, ancestors);
 
     // Create selector caches and matching context
-    let mut context = MatchingContext::new(
+    let mut context = MatchingContext::new_for_visited(
         MatchingMode::Normal,
         None,
         selector_caches,
+        VisitedHandlingMode::AllLinksVisitedAndUnvisited,
+        IncludeStartingStyle::No,
         QuirksMode::NoQuirks,
         selectors::matching::NeedsSelectorFlags::No,
         selectors::matching::MatchingForInvalidation::No,
@@ -6746,8 +6814,8 @@ fn compute_pseudo_element_styles(
         &ComputedStyle::default(),
         |_| true,
     );
-    resolve_match_parent_text_align(&mut ua_styles, ua_parent_styles, false);
     resolve_match_parent_text_align_last(&mut ua_styles, ua_parent_styles, false);
+    resolve_match_parent_text_align(&mut ua_styles, ua_parent_styles, false);
     resolve_relative_font_weight(&mut ua_styles, ua_parent_styles);
     propagate_text_decorations(&mut ua_styles, ua_parent_styles);
     ua_styles.root_font_size = ua_root_font_size;
@@ -6841,8 +6909,8 @@ fn compute_marker_styles(
         &ComputedStyle::default(),
         |_| true,
     );
-    resolve_match_parent_text_align(&mut ua_styles, ua_list_item_styles, false);
     resolve_match_parent_text_align_last(&mut ua_styles, ua_list_item_styles, false);
+    resolve_match_parent_text_align(&mut ua_styles, ua_list_item_styles, false);
     resolve_relative_font_weight(&mut ua_styles, ua_list_item_styles);
     propagate_text_decorations(&mut ua_styles, ua_list_item_styles);
     ua_styles.root_font_size = ua_root_font_size;

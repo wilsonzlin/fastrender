@@ -965,7 +965,9 @@ mod tests {
         };
 
         let size = compute_replaced_size(&style, &replaced, None, Size::new(800.0, 600.0));
-        assert!((size.width - 90.0).abs() < 0.01);
+        // Specified border-box width should be converted to a content width for callers.
+        // 360px border-box - 10px padding each side - 5px borders each side = 330px content box.
+        assert!((size.width - 330.0).abs() < 0.01);
     }
 
     #[test]
