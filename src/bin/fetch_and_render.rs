@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -16,6 +16,7 @@
 //!                        User media preference for reduced data (overrides env)
 //!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
 //!   --user-agent UA     Override the User-Agent header (default: Chrome-like)
+//!   --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)
 //!   --timings           Enable FASTR_RENDER_TIMINGS for per-stage logs
 
 #![allow(clippy::io_other_error)]
@@ -28,7 +29,7 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::resource::DEFAULT_USER_AGENT;
+use fastrender::resource::{DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
 use std::env;
@@ -43,7 +44,12 @@ fn fetch_bytes(
     url: &str,
     timeout: Option<Duration>,
     user_agent: &str,
+<<<<<<< HEAD
 ) -> Result<(Vec<u8>, Option<String>, Option<String>)> {
+=======
+    accept_language: &str,
+) -> Result<(Vec<u8>, Option<String>)> {
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
     // Handle file:// URLs
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
@@ -73,6 +79,7 @@ fn fetch_bytes(
         let mut response = agent
             .get(&current)
             .header("User-Agent", user_agent)
+            .header("Accept-Language", accept_language)
             .call()
             .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
@@ -238,7 +245,11 @@ mod tests {
         std::fs::write(&meta_path, "text/html; charset=shift_jis").unwrap();
 
         let url = format!("file://{}", html_path.display());
+<<<<<<< HEAD
         let (bytes, ct, base_url) = fetch_bytes(&url, None, DEFAULT_USER_AGENT).expect("fetch bytes");
+=======
+        let (bytes, ct) = fetch_bytes(&url, None, DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE).expect("fetch bytes");
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
         assert_eq!(ct.as_deref(), Some("text/html; charset=shift_jis"));
         assert!(base_url.is_none(), "legacy meta should not include a url");
         let decoded = decode_html_bytes(&bytes, ct.as_deref());
@@ -294,7 +305,11 @@ mod tests {
 
 fn usage(program: &str) {
     eprintln!(
+<<<<<<< HEAD
         "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
+=======
+        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--full-page] [--user-agent UA] [--accept-language LANG] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
     );
     eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
@@ -305,7 +320,11 @@ fn usage(program: &str) {
     eprintln!("  prefers-reduced-data: reduce|no-preference|true|false (overrides env)");
     eprintln!("  full-page: expand render target to full content size (or set FASTR_FULL_PAGE)");
     eprintln!("  user-agent: override the User-Agent header (default: Chrome-like)");
+<<<<<<< HEAD
     eprintln!("  timings: set FASTR_RENDER_TIMINGS to print per-stage timings");
+=======
+    eprintln!("  accept-language: override Accept-Language header (default: en-US,en;q=0.9)");
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
     eprintln!("  scroll_x: horizontal scroll offset (default: 0)");
     eprintln!("  scroll_y: vertical scroll offset (default: 0)");
 }
@@ -362,10 +381,15 @@ fn render_once(
     dpr: f32,
     timeout_secs: Option<u64>,
     user_agent: &str,
+    accept_language: &str,
 ) -> Result<()> {
     println!("Fetching HTML from: {}", url);
     let timeout = timeout_secs.map(Duration::from_secs);
+<<<<<<< HEAD
     let (html_bytes, html_content_type, source_url) = fetch_bytes(url, timeout, user_agent)?;
+=======
+    let (html_bytes, html_content_type) = fetch_bytes(url, timeout, user_agent, accept_language)?;
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
     let base_hint = source_url.as_deref().unwrap_or(url);
     let resource_base = infer_base_url(&html, base_hint).into_owned();
@@ -391,16 +415,26 @@ fn render_once(
     for css_url in css_links {
         println!("Fetching CSS from: {}", css_url);
         seen_imports.insert(css_url.clone());
+<<<<<<< HEAD
         match fetch_bytes(&css_url, timeout, user_agent) {
             Ok((bytes, content_type, _)) => {
+=======
+        match fetch_bytes(&css_url, timeout, user_agent, accept_language) {
+            Ok((bytes, content_type)) => {
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
                 let css_text = decode_css_bytes(&bytes, content_type.as_deref());
                 let rewritten = absolutize_css_urls(&css_text, &css_url);
                 let inlined = inline_imports(
                     &rewritten,
                     &css_url,
                     &|u| {
+<<<<<<< HEAD
                         fetch_bytes(u, timeout, user_agent)
                             .map(|(b, ct, _)| decode_css_bytes(&b, ct.as_deref()))
+=======
+                        fetch_bytes(u, timeout, user_agent, accept_language)
+                            .map(|(b, ct)| decode_css_bytes(&b, ct.as_deref()))
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
                     },
                     &mut seen_imports,
                 );
@@ -448,7 +482,11 @@ fn main() -> Result<()> {
     let mut positional: Vec<String> = Vec::new();
     let mut full_page = false;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
+<<<<<<< HEAD
     let mut enable_timings = false;
+=======
+    let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -494,8 +532,17 @@ fn main() -> Result<()> {
                     }
                 }
             }
+<<<<<<< HEAD
             "--timings" => {
                 enable_timings = true;
+=======
+            "--accept-language" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        accept_language = val;
+                    }
+                }
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
             }
             _ => positional.push(arg),
         }
@@ -546,13 +593,14 @@ fn main() -> Result<()> {
     }
 
     eprintln!(
-        "User-Agent: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",
-        user_agent, width, height, dpr, scroll_x, scroll_y, output
+        "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",
+        user_agent, accept_language, width, height, dpr, scroll_x, scroll_y, output
     );
 
     let (tx, rx) = channel();
     let url_clone = url.clone();
     let output_clone = output.clone();
+    let accept_language_clone = accept_language.clone();
     thread::Builder::new()
         .name("fetch_and_render-worker".to_string())
         .stack_size(STACK_SIZE)
@@ -567,6 +615,7 @@ fn main() -> Result<()> {
                 dpr,
                 timeout_secs,
                 &user_agent,
+                &accept_language_clone,
             ));
         })
         .expect("spawn render worker");

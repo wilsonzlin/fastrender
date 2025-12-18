@@ -44,8 +44,12 @@ fn usage() {
     println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
     println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
+<<<<<<< HEAD
     println!("  --accept-language LANG Override the Accept-Language header (default: en-US,en;q=0.9)");
     println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
+=======
+    println!("  --accept-language LANG  Override the Accept-Language header (default: en-US,en;q=0.9)");
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
@@ -117,7 +121,10 @@ fn main() {
     let mut scroll_y: f32 = 0.0;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
     let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
+<<<<<<< HEAD
     let mut enable_timings = false;
+=======
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -216,9 +223,12 @@ fn main() {
                     }
                 }
             }
+<<<<<<< HEAD
             "--timings" => {
                 enable_timings = true;
             }
+=======
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
             _ => {}
         }
     }

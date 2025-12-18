@@ -13,7 +13,13 @@ HttpFetcher now follows redirects (up to 10) with the shared User-Agent, and a l
 HttpFetcher now sends an Accept-Language header by default (en-US,en;q=0.9); regression inspects an HTTP request to ensure the header is present.
 Accept-Language default is exported as DEFAULT_ACCEPT_LANGUAGE so callers can share the header value; fetch_and_render already uses HttpFetcher so it inherits the default.
 fetch_pages now accepts --accept-language to override the header and passes it through HttpFetcher; a local TCP regression asserts the override is sent when fetching.
+<<<<<<< HEAD
 HttpFetcher now retries misreported Content-Encoding by falling back to identity encoding when decompression fails; regression `fetch_http_retries_on_bad_gzip` covers invalid gzip bodies.
+=======
+render_pages and fetch_and_render now accept --accept-language, pass it through HttpFetcher/fetch_bytes, and print the chosen header.
+SSH access to origin is currently failing (Bye Bye disconnect), so the Accept-Language CLI changes are committed locally but not yet pushed.
+cloudflare.com fetch/render timed out at 60s; no changes made
+>>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
 latimes.com fetch/render timed out at 60s; no changes made
 HTML parsing now disables scripting so <noscript> fallbacks are parsed/renderable; regression added for noscript content.
 Logging: fetch_and_render prints UA/viewport/scroll/output parameters; render_pages per-page logs include the UA used. Note: push intermittently timing out; local formatting-only commit (unitless zero test) may remain pending until connectivity stabilizes.
