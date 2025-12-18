@@ -63,7 +63,9 @@ CNN render with split_at char-boundary guard now finishes: render_pages --pages 
 
 Wired.com blank render investigation (Mar 2025): max-height:max-content is now parsed/propagated (flag on ComputedStyle/PositionedStyle), percentage heights resolve only when the parent height is definite, and the stacking tree skips visibility:hidden fragments. Render still blank (PNG nonwhite bbox 0,172–1200,173). inspect_frag shows overlays hidden but a nav drawer container (`OneNavRowGrid` under `FocusTrapContainer`) still lays out at (0,439,1200,800) keeping `main` at y≈1239, and carousel row content begins at x≈1080 even though the container flex-wrap=wrap/justify=center. Need to debug why the hidden nav/drawer occupies normal flow and why flex items are offset right (possibly wrap not honored or min_x anchored by earlier items).
 
----
-Agent7: github.com blank render now resolves after upstream positioned-children fix; inspect_frag shows nav/hero text near y≈35..210. `render_pages --pages github.com --viewport 1200x800 --timeout 60` completes in ~7s with visible content.
-- Preserved original computed styles on out-of-flow positioned fragments across block/flex/grid/inline/table layout so painting/stacking see `position` (fixed creates its own stacking context again).
-- Added regression `positioned_fragments_keep_computed_style_for_stacking` under layout/test_positioned.rs to ensure fixed fragments retain style and build a stacking context.
+Agent7: github.com blank render now resolves after upstream positioned-children fix; inspect_frag shows nav/hero text near y≈35..210. `render_pages --pages github.com --viewport 1200x800 --timeout 60` completes in ~7s with visible content. Preserved original computed styles on out-of-flow positioned fragments across block/flex/grid/inline/table layout so painting/stacking see `position` (fixed creates its own stacking context again). Added regression `positioned_fragments_keep_computed_style_for_stacking` under layout/test_positioned.rs to ensure fixed fragments retain style and build a stacking context.
+
+Added newyorker.com to fetch_pages (fetch/renders succeed ~17s, ~158KB PNG).
+
+Mix-blend-mode: regressions ensure non-isolated multiply darkens backdrop and isolated uses source-over.
+CNN render with split_at guard now completes: render_pages --pages cnn.com --timeout 60 ~44s (cascade ~7s, box_tree ~4.6s, layout ~42s, paint ~0.5s).

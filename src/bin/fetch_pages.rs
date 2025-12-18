@@ -142,6 +142,7 @@ const PAGES: &[&str] = &[
     "https://tripadvisor.com",
     "https://vogue.com",
     "https://theatlantic.com",
+    "https://newyorker.com",
     "https://sqlite.org",
     "https://nginx.org",
     "https://go.dev",
@@ -521,7 +522,12 @@ mod tests {
         });
 
         let url = format!("http://{}", addr);
-        let result = fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE);
+        let result = fetch_page(
+            &url,
+            Duration::from_secs(5),
+            DEFAULT_USER_AGENT,
+            DEFAULT_ACCEPT_LANGUAGE,
+        );
         assert!(result.is_err(), "empty bodies should be treated as failures");
         handle.join().unwrap();
     }
