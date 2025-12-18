@@ -56,6 +56,10 @@ Rowspan height distribution adjusted to favor auto rows while sharing spans; ver
 - HttpFetcher now errors on empty HTTP bodies (UnexpectedEof) to avoid caching blank responses; regression added. fetch_and_render already treats empty bodies as errors.
 - Meta refresh parsing now decodes common HTML entity quotes (quot/apos/&#39;/&#x27;) and keeps semicolons inside quoted URLs, so encoded or quoted refresh targets are extracted correctly; regressions added.
 
+- Grid context had an unresolved merge marker; fixed by wiring convert_to_fragments to the context-aware Taffy tree, reusing measured fragments when sizes match, and storing grid layout results back into GRID_LAYOUT_CACHE. Rebased after upstream grid measurement/logging updates.
+- Re-rendered duckduckgo.com with meta refresh follow; PNG now has content (bbox ~179..996 x 0..235). Logs note refresh to html.duckduckgo.com. aliexpress/pinterest rerenders still mostly header-only (pinterest bbox ~463..663 x 2..66).
+- Stashes: `stash@{0}` "wip local changes" and `stash@{1}` "pre-new-task-local-wip" remain.
+
 - Rendered additional pages and found `openbsd.org` PNG was completely blank. Root cause: block layout dropped absolutely positioned children when the parent block was laid out via `layout_block_child` (positioned_children from `layout_children` were ignored). Added absolute-position handling to that path so out-of-flow children are laid out against the block's padding box, and regression `absolute_position_body_with_insets_renders_content` covers the scenario.
 - `openbsd.org` now renders with visible sidebar/content; `render_pages --pages openbsd.org` succeeds (PNG unique colors ~32k).
 - Previous notes: marker baseline/list-style-position/ellipsis regressions landed upstream. Cloudflare/latimes fetch/render had timed out at 60s; no changes made.
