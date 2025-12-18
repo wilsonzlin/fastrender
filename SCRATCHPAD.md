@@ -193,3 +193,4 @@ box-shadow appears ~56 times.
 border-radius appears ~143 times.
 filter appears ~10 times.
 linear-gradient appears ~24 times.
+z-index appears ~87 times.
