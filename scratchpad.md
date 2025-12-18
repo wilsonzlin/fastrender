@@ -39,6 +39,7 @@
 # Added background image-rendering coverage: crisp-edges backgrounds now assert nearest-neighbor sampling in both display-list builder and painter (`cargo test background_image_rendering_crisp_edges_sets_nearest_filter_quality --quiet`, `cargo test background_image_rendering_crisp_edges_uses_nearest_sampling --quiet`).
 # Bidi isolate regression: inline visual-order test ensures unicode-bidi:isolate keeps surrounding parentheses outside the RTL run (layout stacks brackets around the isolate rather than flipping them).
 # Bidi isolate-override regression: visual-order test covers unicode-bidi:isolate-override keeping surrounding parentheses outside the RTL run as well.
+# Render crash observed during `render_pages --single example.org`: worker for latimes.com panicked with UTF-8 boundary error (`byte index 22 is not a char boundary` in “bruises and blood”/“Christy”). Needs investigation into text splitting/shaping on latimes content.
 # Media queries: added regression to ensure pointer/hover media features reject invalid values (non-enum inputs fail to parse).
 # Added python.org to fetch_pages targets; cargo check --bin fetch_pages passes.
 # Painter/renderer: added display-list renderer regression to verify opacity filter halves alpha (premultiplies color and alpha).
