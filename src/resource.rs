@@ -30,6 +30,9 @@ use url::Url;
 pub const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 fastrender/0.1";
 
+/// Default Accept-Language header value
+pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
+
 // ============================================================================
 // Core types
 // ============================================================================
@@ -248,7 +251,7 @@ impl Default for HttpFetcher {
         Self {
             timeout: Duration::from_secs(30),
             user_agent: DEFAULT_USER_AGENT.to_string(),
-            accept_language: "en-US,en;q=0.9".to_string(),
+            accept_language: DEFAULT_ACCEPT_LANGUAGE.to_string(),
             max_size: 50 * 1024 * 1024, // 50MB default limit
         }
     }
