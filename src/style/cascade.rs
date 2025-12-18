@@ -6959,6 +6959,10 @@ pub(crate) fn reset_marker_box_properties(styles: &mut ComputedStyle) {
     styles.text_justify = defaults.text_justify;
     styles.text_indent = defaults.text_indent;
     styles.text_overflow = defaults.text_overflow;
+
+    // Vertical alignment does not apply to ::marker; keep default baseline alignment.
+    styles.vertical_align = defaults.vertical_align;
+    styles.vertical_align_specified = false;
 }
 
 fn marker_allows_property(property: &str) -> bool {
