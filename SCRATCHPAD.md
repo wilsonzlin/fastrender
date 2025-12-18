@@ -4,6 +4,8 @@ Added regression coverage for meta refresh/JS redirects in fetch_and_render: quo
 Cleaned stray merge marker in grid.rs and aligned grid TaffyTree usage to the <*const BoxNode> variant used at call sites (build was failing during tests); no behavior change intended.
 JS redirect parsing now unescapes HTML entities and escaped slashes/hex/unicode (location.assign/replace/href), so entity-escaped or backslash-escaped targets are resolved correctly.
 
+cnn.com cascade profiling: FASTR_CASCADE_PROFILE shows style_prepare ~2.3s and style_apply ~5.5s (cascade ~7.9s) before a 30s timeout. HTML is inline-CSS only (3 <style> blocks, largest ~1.49MB, total ~1.7MB); ~4321 tags (~3073 styled nodes), ~5.3M selector candidates (~1.7k/node), ~31k matches. Pseudo matching dominates (~3.0s). No fixes yet; cache at fetches/html/cnn.com.html.
+
 Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
 Added figma.com to fetch_pages targets. Fetch succeeds (~1.25MB HTML); render_pages finishes in ~5s but current PNG is blank (bbox None) due to JS redirect to /redirect_home and missing CSS (bogus encoded webpack-artifacts URL); needs follow-up if we want visible content.
 Figma follow-up: fetch_pages caches https://figma.com/redirect_home (JS redirect not followed), while render_pages now follows the JS redirect to https://figma.com/unsupported_browser and renders the unsupported modal (gray overlay, nonwhite bbox).
