@@ -127,6 +127,9 @@ enum Status {
 }
 
 fn main() {
+    if std::env::var("FASTR_LAYOUT_PROFILE").map(|v| v != "0").unwrap_or(false) {
+        eprintln!("FASTR_LAYOUT_PROFILE enabled: layout timings will be logged");
+    }
     let mut args = std::env::args().skip(1);
     let mut jobs = num_cpus::get();
     let mut page_filter: Option<HashSet<String>> = None;
