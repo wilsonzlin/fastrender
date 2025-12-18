@@ -450,32 +450,40 @@ impl<'a> RuleIndex<'a> {
             return;
         }
 
-        if let Some(id) = node.get_attribute("id") {
-            if let Some(list) = self.by_id.get(&id) {
-                out.extend(list.iter().copied());
+        if !self.by_id.is_empty() {
+            if let Some(id) = node.get_attribute("id") {
+                if let Some(list) = self.by_id.get(&id) {
+                    out.extend(list.iter().copied());
+                }
             }
         }
 
-        if let Some(class_attr) = node.get_attribute("class") {
-            for cls in class_attr.split_whitespace() {
-                if !cls.is_empty() {
-                    if let Some(list) = self.by_class.get(cls) {
-                        out.extend(list.iter().copied());
+        if !self.by_class.is_empty() {
+            if let Some(class_attr) = node.get_attribute("class") {
+                for cls in class_attr.split_whitespace() {
+                    if !cls.is_empty() {
+                        if let Some(list) = self.by_class.get(cls) {
+                            out.extend(list.iter().copied());
+                        }
                     }
                 }
             }
         }
 
-        if let Some(tag) = node.tag_name() {
-            if let Some(list) = self.by_tag.get(tag) {
-                out.extend(list.iter().copied());
+        if !self.by_tag.is_empty() {
+            if let Some(tag) = node.tag_name() {
+                if let Some(list) = self.by_tag.get(tag) {
+                    out.extend(list.iter().copied());
+                }
             }
         }
 
-        for (name, _) in node.attributes_iter() {
-            let key = name.to_ascii_lowercase();
-            if let Some(list) = self.by_attr.get(&key) {
-                out.extend(list.iter().copied());
+        if !self.by_attr.is_empty() {
+            for (name, _) in node.attributes_iter() {
+                let key = name.to_ascii_lowercase();
+                if let Some(list) = self.by_attr.get(&key) {
+                    out.extend(list.iter().copied());
+                }
             }
         }
 
@@ -496,32 +504,40 @@ impl<'a> RuleIndex<'a> {
             return;
         };
 
-        if let Some(id) = node.get_attribute("id") {
-            if let Some(list) = bucket.by_id.get(&id) {
-                out.extend(list.iter().copied());
+        if !bucket.by_id.is_empty() {
+            if let Some(id) = node.get_attribute("id") {
+                if let Some(list) = bucket.by_id.get(&id) {
+                    out.extend(list.iter().copied());
+                }
             }
         }
 
-        if let Some(class_attr) = node.get_attribute("class") {
-            for cls in class_attr.split_whitespace() {
-                if !cls.is_empty() {
-                    if let Some(list) = bucket.by_class.get(cls) {
-                        out.extend(list.iter().copied());
+        if !bucket.by_class.is_empty() {
+            if let Some(class_attr) = node.get_attribute("class") {
+                for cls in class_attr.split_whitespace() {
+                    if !cls.is_empty() {
+                        if let Some(list) = bucket.by_class.get(cls) {
+                            out.extend(list.iter().copied());
+                        }
                     }
                 }
             }
         }
 
-        if let Some(tag) = node.tag_name() {
-            if let Some(list) = bucket.by_tag.get(tag) {
-                out.extend(list.iter().copied());
+        if !bucket.by_tag.is_empty() {
+            if let Some(tag) = node.tag_name() {
+                if let Some(list) = bucket.by_tag.get(tag) {
+                    out.extend(list.iter().copied());
+                }
             }
         }
 
-        for (name, _) in node.attributes_iter() {
-            let key = name.to_ascii_lowercase();
-            if let Some(list) = bucket.by_attr.get(&key) {
-                out.extend(list.iter().copied());
+        if !bucket.by_attr.is_empty() {
+            for (name, _) in node.attributes_iter() {
+                let key = name.to_ascii_lowercase();
+                if let Some(list) = bucket.by_attr.get(&key) {
+                    out.extend(list.iter().copied());
+                }
             }
         }
 
