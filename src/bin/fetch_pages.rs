@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
@@ -358,6 +358,7 @@ fn main() {
     let success = Arc::new(AtomicUsize::new(0));
     let failed = Arc::new(AtomicUsize::new(0));
     let skipped = Arc::new(AtomicUsize::new(0));
+    let failed_urls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     let pool = ThreadPoolBuilder::new()
         .num_threads(config.jobs)
@@ -369,6 +370,7 @@ fn main() {
             let success = Arc::clone(&success);
             let failed = Arc::clone(&failed);
             let skipped = Arc::clone(&skipped);
+            let failed_urls = Arc::clone(&failed_urls);
             let refresh = config.refresh;
             let timeout = config.timeout;
             let user_agent = config.user_agent.clone();
@@ -403,6 +405,7 @@ fn main() {
                             println!("✗ {} (write failed)", url);
                         }
                         failed.fetch_add(1, Ordering::Relaxed);
+                        let _ = failed_urls.lock().map(|mut v| v.push(url.to_string()));
                     }
                     Err(e) => {
                         if let Some(start) = start {
@@ -411,6 +414,7 @@ fn main() {
                             println!("✗ {} ({})", url, e);
                         }
                         failed.fetch_add(1, Ordering::Relaxed);
+                        let _ = failed_urls.lock().map(|mut v| v.push(url.to_string()));
                     }
                 }
             });
@@ -424,6 +428,11 @@ fn main() {
         failed.load(Ordering::Relaxed),
         skipped.load(Ordering::Relaxed)
     );
+    if let Ok(urls) = failed_urls.lock() {
+        if !urls.is_empty() {
+            println!("Failed URLs: {}", urls.join(", "));
+        }
+    }
     println!("Cache: {}/", CACHE_DIR);
 }
 
