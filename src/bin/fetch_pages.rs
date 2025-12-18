@@ -162,6 +162,7 @@ const PAGES: &[&str] = &[
     "https://docs.rs",
     "https://doc.rust-lang.org",
     "https://blog.rust-lang.org",
+    "https://www.openstreetmap.org",
     "https://docs.python.org",
     "https://kotlinlang.org",
 ];

@@ -92,3 +92,4 @@ Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_a
 - Added mozilla.org to fetch_pages targets for broader coverage. Fetch/render mozilla.org (1200x800, 60s) succeeds (~79KB PNG, visible content).
 - Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background). Fetch/render at 1200x800 completes quickly (~0.5s render, PNG ~243KB).
 - fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
+- Added www.openstreetmap.org to fetch_pages targets; current fetch fails (404 JS redirect), needs improved redirect/meta follow before caching.
