@@ -361,7 +361,6 @@ impl TextItem {
         font_context: &FontContext,
     ) -> Option<(TextItem, TextItem)> {
         const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
-
         let text_len = self.text.len();
         if byte_offset == 0 || byte_offset >= text_len {
             return None;
@@ -390,7 +389,8 @@ impl TextItem {
         }
 
         // Split the text
-        let (before_text, after_text) = self.text.split_at(split_offset);
+        let before_text = self.text.get(..split_offset)?;
+        let after_text = self.text.get(split_offset..)?;
 
         let (mut before_runs, after_runs) = self.split_runs_preserving_shaping(split_offset).or_else(|| {
             let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
@@ -876,7 +876,8 @@ impl TextItem {
                 return None;
             }
 
-            let (left_text, right_text) = run.text.split_at(local);
+            let left_text = run.text.get(..local)?;
+            let right_text = run.text.get(local..)?;
 
             let mut left_glyphs = Vec::new();
             let mut right_glyphs = Vec::new();

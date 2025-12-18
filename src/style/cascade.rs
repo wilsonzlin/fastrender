@@ -278,6 +278,7 @@ impl PseudoBuckets {
 
 struct RuleIndex<'a> {
     rules: Vec<CascadeRule<'a>>,
+    rule_sets_content: Vec<bool>,
     selectors: Vec<IndexedSelector<'a>>,
     by_id: HashMap<String, Vec<usize>>,
     by_class: HashMap<String, Vec<usize>>,
@@ -436,6 +437,7 @@ impl<'a> RuleIndex<'a> {
     fn new(rules: Vec<CascadeRule<'a>>) -> Self {
         let mut index = RuleIndex {
             rules: Vec::new(),
+            rule_sets_content: Vec::new(),
             selectors: Vec::new(),
             by_id: HashMap::new(),
             by_class: HashMap::new(),
@@ -448,8 +450,14 @@ impl<'a> RuleIndex<'a> {
         };
 
         for rule in rules {
+            let sets_content = rule
+                .rule
+                .declarations
+                .iter()
+                .any(|decl| decl.property.eq_ignore_ascii_case("content"));
             let rule_idx = index.rules.len();
             index.rules.push(rule);
+            index.rule_sets_content.push(sets_content);
             let stored_rule = &index.rules[rule_idx];
 
             for selector in stored_rule.rule.selectors.slice().iter() {
@@ -6226,6 +6234,12 @@ fn find_matching_rules<'a>(
 
     for &selector_idx in candidates.iter() {
         let indexed = &rules.selectors[selector_idx];
+        if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
+            if indexed.specificity <= matches[pos].specificity {
+                continue;
+            }
+        }
+
         let selector = indexed.selector;
         if matches_selector(selector, 0, None, &element_ref, &mut context) {
             let spec = indexed.specificity;
@@ -6286,6 +6300,16 @@ fn find_pseudo_element_rules<'a>(
         scratch.match_index.reset();
         return Vec::new();
     }
+    if matches!(pseudo, PseudoElement::Before | PseudoElement::After) {
+        let has_content_rule = candidates.iter().any(|&idx| {
+            let rule_idx = rules.pseudo_selectors[idx].rule_idx;
+            rules.rule_sets_content[rule_idx]
+        });
+        if !has_content_rule {
+            scratch.match_index.reset();
+            return Vec::new();
+        }
+    }
     let mut matches: Vec<MatchedRule<'a>> = Vec::new();
 
     // Build ElementRef chain with proper parent links
@@ -6301,8 +6325,14 @@ fn find_pseudo_element_rules<'a>(
         selectors::matching::MatchingForInvalidation::No,
     );
 
-    for &selector_idx in candidates.iter() {
+    let mut match_candidate = |selector_idx: usize, matches: &mut Vec<MatchedRule<'a>>| -> bool {
         let indexed = &rules.pseudo_selectors[selector_idx];
+        if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
+            if indexed.specificity <= matches[pos].specificity {
+                return false;
+            }
+        }
+
         let selector = indexed.selector;
         if matches_selector(selector, 0, None, &element_ref, &mut context) {
             let spec = indexed.specificity;
@@ -6322,6 +6352,37 @@ fn find_pseudo_element_rules<'a>(
                     declarations: Cow::Borrowed(&rule.rule.declarations),
                 });
             }
+            return true;
+        }
+
+        false
+    };
+
+    if matches!(pseudo, PseudoElement::Before | PseudoElement::After) {
+        let mut content_matched = false;
+        for &selector_idx in candidates.iter().filter(|&&idx| {
+            let rule_idx = rules.pseudo_selectors[idx].rule_idx;
+            rules.rule_sets_content[rule_idx]
+        }) {
+            if match_candidate(selector_idx, &mut matches) {
+                content_matched = true;
+            }
+        }
+
+        if !content_matched {
+            scratch.match_index.reset();
+            return Vec::new();
+        }
+
+        for &selector_idx in candidates.iter().filter(|&&idx| {
+            let rule_idx = rules.pseudo_selectors[idx].rule_idx;
+            !rules.rule_sets_content[rule_idx]
+        }) {
+            let _ = match_candidate(selector_idx, &mut matches);
+        }
+    } else {
+        for &selector_idx in candidates.iter() {
+            let _ = match_candidate(selector_idx, &mut matches);
         }
     }
 
