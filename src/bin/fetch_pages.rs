@@ -61,9 +61,7 @@ const PAGES: &[&str] = &[
     "https://linkedin.com",
     "https://microsoft.com",
     "https://apple.com",
-    "https://developer.apple.com",
     "https://openai.com",
-    "https://fast.com",
     "https://icloud.com",
     "https://nytimes.com",
     "http://neverssl.com",
@@ -119,6 +117,7 @@ const PAGES: &[&str] = &[
     "https://engadget.com",
     "https://figma.com",
     "https://ft.com",
+    "https://fast.com",
     "https://cnet.com",
     "https://developer.mozilla.org",
     "https://doc.rust-lang.org",
@@ -147,9 +146,10 @@ const PAGES: &[&str] = &[
     "https://npmjs.com",
     "https://latimes.com",
     "https://cloudflare.com",
+    "https://fast.com",
     "https://kotlinlang.org",
+    "https://openstreetmap.org",
     "https://stanford.edu",
-    "https://developer.apple.com",
     "https://aliexpress.com",
     "https://apnews.com",
     "https://aljazeera.com",
@@ -162,8 +162,10 @@ const PAGES: &[&str] = &[
     "https://nginx.org",
     "https://go.dev",
     "https://docs.rs",
+    "https://doc.rust-lang.org",
     "https://blog.rust-lang.org",
     "https://docs.python.org",
+    "https://kotlinlang.org",
 ];
 
 fn url_to_filename(url: &str) -> String {
@@ -358,7 +360,9 @@ fn fetch_page(
                         current_url = next.to_string();
                         html = decode_html_bytes(&res.0, res.1.as_deref());
                     }
-                    Err(e) => return Err(format!("meta refresh fetch failed: {}", e)),
+                    Err(e) => {
+                        eprintln!("Warning: meta refresh fetch failed: {}", e);
+                    }
                 }
             }
         }
@@ -368,9 +372,14 @@ fn fetch_page(
     if let Some(js_redirect) = extract_js_location_redirect(&html) {
         if let Ok(base) = Url::parse(&current_url) {
             if let Ok(next) = base.join(&js_redirect) {
-                if let Ok(next_res) = fetch(next.as_str()) {
-                    res = next_res;
-                    current_url = next.to_string();
+                match fetch(next.as_str()) {
+                    Ok(next_res) => {
+                        res = next_res;
+                        current_url = next.to_string();
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: js redirect fetch failed: {}", e);
+                    }
                 }
             }
         }
