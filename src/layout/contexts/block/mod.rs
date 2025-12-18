@@ -639,7 +639,9 @@ impl BlockFormattingContext {
                     .formatting_context()
                     .unwrap_or(FormattingContextType::Block);
                 let fc = factory.create(fc_type);
-                let child_height_space = cb_block_base
+                let child_height_space = cb
+                    .block_percentage_base()
+                    .or(cb_block_base)
                     .map(AvailableSpace::Definite)
                     .unwrap_or(AvailableSpace::Indefinite);
                 let child_constraints =
@@ -678,6 +680,21 @@ impl BlockFormattingContext {
                 input.preferred_block_size = preferred_block;
 
                 let result = abs.layout_absolute(&input, &cb)?;
+
+                if result.size.width.is_finite() && result.size.height.is_finite() {
+                    let mut relayout_child = layout_child.clone();
+                    let mut relayout_style = (*relayout_child.style).clone();
+                    relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
+                    relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
+                    relayout_child.style = Arc::new(relayout_style);
+
+                    let mut relayout_constraints = LayoutConstraints::new(
+                        AvailableSpace::Definite(result.size.width),
+                        AvailableSpace::Definite(result.size.height),
+                    );
+                    relayout_constraints.inline_percentage_base = Some(result.size.width);
+                    child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+                }
                 child_fragment.bounds = Rect::new(result.position, result.size);
                 child_fragment.style = Some(original_style);
                 child_fragments.push(child_fragment);
@@ -2209,7 +2226,9 @@ impl FormattingContext for BlockFormattingContext {
                     .formatting_context()
                     .unwrap_or(FormattingContextType::Block);
                 let fc = factory.create(fc_type);
-                let child_height_space = cb_block_base
+                let child_height_space = cb
+                    .block_percentage_base()
+                    .or(cb_block_base)
                     .map(AvailableSpace::Definite)
                     .unwrap_or(AvailableSpace::Indefinite);
                 let child_constraints =
@@ -2252,6 +2271,20 @@ impl FormattingContext for BlockFormattingContext {
                 input.preferred_block_size = preferred_block;
 
                 let result = abs.layout_absolute(&input, &cb)?;
+                if result.size.width.is_finite() && result.size.height.is_finite() {
+                    let mut relayout_child = layout_child.clone();
+                    let mut relayout_style = (*relayout_child.style).clone();
+                    relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
+                    relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
+                    relayout_child.style = Arc::new(relayout_style);
+
+                    let mut relayout_constraints = LayoutConstraints::new(
+                        AvailableSpace::Definite(result.size.width),
+                        AvailableSpace::Definite(result.size.height),
+                    );
+                    relayout_constraints.inline_percentage_base = Some(result.size.width);
+                    child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+                }
                 child_fragment.bounds = Rect::new(result.position, result.size);
                 child_fragment.style = Some(original_style);
                 child_fragments.push(child_fragment);

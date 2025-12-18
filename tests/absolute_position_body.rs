@@ -12,6 +12,10 @@ fn pixel(pixmap: &resvg::tiny_skia::Pixmap, x: u32, y: u32) -> [u8; 4] {
     [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]
 }
 
+fn is_red(pixel: [u8; 4]) -> bool {
+    pixel == [255, 0, 0, 255]
+}
+
 #[test]
 fn absolutely_positioned_body_with_insets_renders_content() {
     std::thread::Builder::new()
@@ -88,6 +92,45 @@ fn absolute_inset_auto_width_fills_parent() {
                 pixel(&pixmap, 150, 10),
                 [0, 255, 0, 255],
                 "absolute inset element should span its parent's width"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn fixed_flex_container_centers_children_with_insets() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let mut renderer = FastRender::new().expect("renderer");
+            let html = r#"
+            <style>
+              body { margin: 0; background: white; }
+              .overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+              }
+              .message { width: 120px; height: 20px; background: rgb(255, 0, 0); }
+            </style>
+            <div class="overlay"><div class="message"></div></div>
+            "#;
+
+            let pixmap = renderer.render_html(html, 200, 200).expect("render");
+
+            // Centered vertically means the red bar should appear near the middle, not stuck at the top.
+            assert!(is_red(pixel(&pixmap, 100, 100)), "center pixel should be red");
+            assert!(
+                !is_red(pixel(&pixmap, 100, 10)),
+                "top padding should remain white when justified center"
             );
         })
         .unwrap()
