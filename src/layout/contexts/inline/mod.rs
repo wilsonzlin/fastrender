@@ -6493,6 +6493,19 @@ mod tests {
         (marker_base, text_base)
     }
 
+    fn first_text_x(fragment: &FragmentNode) -> Option<f32> {
+        let mut stack = vec![fragment];
+        while let Some(node) = stack.pop() {
+            if let FragmentContent::Text { is_marker: false, .. } = node.content {
+                return Some(node.bounds.x());
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
+        }
+        None
+    }
+
     fn marker_and_text_positions_vertical(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {
         let mut marker_y = None;
         let mut text_y = None;
@@ -6789,6 +6802,37 @@ mod tests {
             "marker baseline should align with text: marker_base={} text_base={}",
             marker_base,
             text_base
+        );
+    }
+
+    #[test]
+    fn marker_outside_wraps_without_extra_indent() {
+        let ifc = InlineFormattingContext::new();
+        let marker_style = Arc::new(ComputedStyle::default());
+        let text_style = Arc::new(ComputedStyle::default());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content that wraps onto a new line".to_string());
+        let root = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite_width(120.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let lines: Vec<_> = fragment.children.iter().collect();
+        assert!(lines.len() >= 2, "expected wrapping into multiple lines");
+
+        let first_line_text_x = first_text_x(lines[0]).expect("first line text");
+        let second_line_text_x = first_text_x(lines[1]).expect("second line text");
+
+        assert!(
+            first_line_text_x.abs() < 0.5,
+            "outside marker should not indent first line; got {}",
+            first_line_text_x
+        );
+        assert!(
+            (second_line_text_x - first_line_text_x).abs() < 0.5,
+            "wrapped line should align with first line start; first={} second={}",
+            first_line_text_x,
+            second_line_text_x
         );
     }
 
