@@ -184,3 +184,4 @@ Latest profiling (45s timeout): cascade ~6.7s (find ~0.8s, decl ~0.9s, pseudo ~2
 ~126 !important declarations in inline CSS (small impact versus overall size).
 display:grid appears ~11 times in inline CSS.
 calc() appears ~93 times in inline CSS.
+mask-image appears ~12 times in inline CSS.
