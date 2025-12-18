@@ -4,6 +4,7 @@ use fastrender::style::display::Display;
 use fastrender::style::types::GridTrack;
 use fastrender::style::values::Length;
 use fastrender::{BoxNode, ComputedStyle, FormattingContext, FormattingContextType};
+use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use std::sync::Arc;
 
 fn grid_container(children: Vec<BoxNode>) -> BoxNode {
@@ -52,6 +53,18 @@ fn grid_item_with_block_margins() -> BoxNode {
     BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![])
 }
 
+fn count_text_fragments(fragment: &FragmentNode) -> usize {
+    let mut count = 0usize;
+    let mut stack = vec![fragment];
+    while let Some(node) = stack.pop() {
+        if matches!(node.content, FragmentContent::Text { .. }) {
+            count += 1;
+        }
+        stack.extend(node.children.iter());
+    }
+    count
+}
+
 #[test]
 fn grid_item_auto_margins_center_item() {
     let container = grid_container(vec![grid_item()]);
@@ -83,4 +96,32 @@ fn grid_item_auto_block_margins_center_vertically() {
     // With a 20px tall item and auto block margins, it should center in the 100px content and start around y=50.
     assert!((child.bounds.y() - 50.0).abs() <= 0.5, "expected vertically centered item, got y={}", child.bounds.y());
     assert_eq!(child.bounds.height(), 20.0);
+}
+
+#[test]
+fn grid_children_are_laid_out_even_when_taffy_reports_zero_width() {
+    // Reproduce the w3.org grid root where Taffy returns zero-width children when
+    // it has no intrinsic measurement for grid items: a grid container with auto width
+    // and a child block containing inline text. The child must still be laid out using
+    // its own formatting context so text fragments appear.
+    let mut grid_style = ComputedStyle::default();
+    grid_style.display = Display::Grid;
+    grid_style.min_height = Some(Length::new(100.0, fastrender::style::values::LengthUnit::Vh));
+    let text_style = Arc::new(ComputedStyle::default());
+    let text = BoxNode::new_text(text_style.clone(), "Grid child text".to_string());
+    let child = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![text]);
+    let grid = BoxNode::new_block(Arc::new(grid_style), FormattingContextType::Grid, vec![child]);
+
+    let fc = GridFormattingContext::new();
+    let fragment = fc
+        .layout(&grid, &LayoutConstraints::definite(300.0, 400.0))
+        .expect("layout succeeds");
+
+    assert_eq!(fragment.children.len(), 1, "grid should produce a child fragment");
+    let child_frag = &fragment.children[0];
+
+    // The child should occupy space in the grid instead of collapsing to zero width, and
+    // its subtree should contain the laid-out text fragments.
+    assert!(child_frag.bounds.width() > 0.0);
+    assert!(count_text_fragments(child_frag) > 0, "expected text fragments inside grid child");
 }
