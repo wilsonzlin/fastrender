@@ -3119,6 +3119,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_html_preserves_head_noscript_children() {
+        let html = "<!doctype html><html><head><noscript><style id='fallback-style'>body{color:green;}</style></noscript></head><body></body></html>";
+        let dom = parse_html(html).expect("parse");
+
+        let style = find_element_by_id(&dom, "fallback-style");
+        assert!(style.is_some(), "style inside <noscript> in <head> should be retained");
+    }
+
+    #[test]
     fn scope_matches_document_root_only() {
         let child = element("div", vec![]);
         let root = element("html", vec![child.clone()]);
