@@ -42,10 +42,12 @@ use taffy::tree::{NodeId as TaffyNodeId, TaffyTree};
 
 use crate::geometry::Rect;
 use crate::layout::constraints::{AvailableSpace as CrateAvailableSpace, LayoutConstraints};
+use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::{FormattingContext, IntrinsicSizingMode, LayoutError};
 use crate::layout::profile::{layout_timer, LayoutKind};
 use crate::layout::utils::{resolve_length_with_percentage_metrics, resolve_scrollbar_width};
 use crate::style::display::Display as CssDisplay;
+use crate::style::display::FormattingContextType;
 use crate::style::grid::validate_area_rectangles;
 use crate::style::types::{
     AlignContent, AlignItems, AspectRatio, BoxSizing, Direction, GridAutoFlow, GridTrack, JustifyContent,
@@ -152,7 +154,11 @@ impl GridFormattingContext {
     }
 
     fn resolve_length_for_width(&self, length: Length, percentage_base: f32, style: &ComputedStyle) -> f32 {
-        let base = if percentage_base.is_finite() { Some(percentage_base) } else { None };
+        let base = if percentage_base.is_finite() {
+            Some(percentage_base)
+        } else {
+            None
+        };
         resolve_length_with_percentage_metrics(
             length,
             base,
@@ -456,27 +462,51 @@ impl GridFormattingContext {
         if containing_grid.is_some() {
             // Auto margins override alignment per-axis; map them to self-alignment to keep grid items centered or pushed.
             let inline_start_auto = if inline_is_horizontal_item {
-                if inline_positive_item { margin_left_auto } else { margin_right_auto }
+                if inline_positive_item {
+                    margin_left_auto
+                } else {
+                    margin_right_auto
+                }
             } else if block_positive_item {
                 margin_top_auto
             } else {
                 margin_bottom_auto
             };
             let inline_end_auto = if inline_is_horizontal_item {
-                if inline_positive_item { margin_right_auto } else { margin_left_auto }
+                if inline_positive_item {
+                    margin_right_auto
+                } else {
+                    margin_left_auto
+                }
             } else if block_positive_item {
                 margin_bottom_auto
             } else {
                 margin_top_auto
             };
 
-            let block_start_auto = if block_positive_item { margin_top_auto } else { margin_bottom_auto };
-            let block_end_auto = if block_positive_item { margin_bottom_auto } else { margin_top_auto };
+            let block_start_auto = if block_positive_item {
+                margin_top_auto
+            } else {
+                margin_bottom_auto
+            };
+            let block_end_auto = if block_positive_item {
+                margin_bottom_auto
+            } else {
+                margin_top_auto
+            };
 
             let justify_override = match (inline_start_auto, inline_end_auto) {
                 (true, true) => Some(AlignItems::Center),
-                (true, false) => Some(if inline_positive_item { AlignItems::FlexEnd } else { AlignItems::FlexStart }),
-                (false, true) => Some(if inline_positive_item { AlignItems::FlexStart } else { AlignItems::FlexEnd }),
+                (true, false) => Some(if inline_positive_item {
+                    AlignItems::FlexEnd
+                } else {
+                    AlignItems::FlexStart
+                }),
+                (false, true) => Some(if inline_positive_item {
+                    AlignItems::FlexStart
+                } else {
+                    AlignItems::FlexEnd
+                }),
                 _ => None,
             };
             if let Some(justify) = justify_override {
@@ -485,8 +515,16 @@ impl GridFormattingContext {
 
             let align_override = match (block_start_auto, block_end_auto) {
                 (true, true) => Some(AlignItems::Center),
-                (true, false) => Some(if block_positive_item { AlignItems::FlexEnd } else { AlignItems::FlexStart }),
-                (false, true) => Some(if block_positive_item { AlignItems::FlexStart } else { AlignItems::FlexEnd }),
+                (true, false) => Some(if block_positive_item {
+                    AlignItems::FlexEnd
+                } else {
+                    AlignItems::FlexStart
+                }),
+                (false, true) => Some(if block_positive_item {
+                    AlignItems::FlexStart
+                } else {
+                    AlignItems::FlexEnd
+                }),
                 _ => None,
             };
             if let Some(align) = align_override {
@@ -833,7 +871,50 @@ impl GridFormattingContext {
         }
     }
 
+    fn constraints_from_taffy(
+        &self,
+        known: taffy::geometry::Size<Option<f32>>,
+        available: taffy::geometry::Size<taffy::style::AvailableSpace>,
+    ) -> LayoutConstraints {
+        let clamp_def_width = |w: f32| w.min(self.viewport_size.width);
+        let clamp_def_height = |h: f32| h.min(self.viewport_size.height);
+        let width = match (known.width, available.width) {
+            (Some(w), _) => CrateAvailableSpace::Definite(clamp_def_width(w)),
+            (_, taffy::style::AvailableSpace::Definite(w)) => {
+                if w <= 1.0 {
+                    CrateAvailableSpace::Indefinite
+                } else {
+                    CrateAvailableSpace::Definite(clamp_def_width(w))
+                }
+            }
+            (_, taffy::style::AvailableSpace::MinContent) => CrateAvailableSpace::MinContent,
+            (_, taffy::style::AvailableSpace::MaxContent) => CrateAvailableSpace::MaxContent,
+        };
+        let height = match (known.height, available.height) {
+            (Some(h), _) => CrateAvailableSpace::Definite(clamp_def_height(h)),
+            (_, taffy::style::AvailableSpace::Definite(h)) => {
+                if h <= 1.0 {
+                    CrateAvailableSpace::Indefinite
+                } else {
+                    CrateAvailableSpace::Definite(clamp_def_height(h))
+                }
+            }
+            (_, taffy::style::AvailableSpace::MinContent) => CrateAvailableSpace::MinContent,
+            (_, taffy::style::AvailableSpace::MaxContent) => CrateAvailableSpace::MaxContent,
+        };
+
+        let mut constraints = LayoutConstraints::new(width, height);
+        if constraints.inline_percentage_base.is_none() {
+            constraints.inline_percentage_base = match available.width {
+                taffy::style::AvailableSpace::Definite(w) => Some(w),
+                _ => constraints.width(),
+            };
+        }
+        constraints
+    }
+
     /// Converts Taffy layout results to FragmentNode tree
+    #[allow(dead_code)]
     fn convert_to_fragments(
         taffy: &TaffyTree<()>,
         node_id: TaffyNodeId,
@@ -988,7 +1069,7 @@ impl FormattingContext for GridFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let _profile = layout_timer(LayoutKind::Grid);
         // Create fresh Taffy tree for this layout
-        let mut taffy = TaffyTree::new();
+        let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
 
         // Partition children into in-flow vs. out-of-flow positioned.
         let mut in_flow_children: Vec<&BoxNode> = Vec::new();
@@ -1002,8 +1083,28 @@ impl FormattingContext for GridFormattingContext {
             }
         }
 
-        // Build Taffy tree from in-flow children
-        let (root_id, node_map) = self.build_taffy_tree_children(&mut taffy, box_node, &in_flow_children)?;
+        // Build Taffy tree from in-flow children (grid items only)
+        let mut node_map: HashMap<TaffyNodeId, &BoxNode> = HashMap::new();
+        let mut child_ids: Vec<TaffyNodeId> = Vec::new();
+        for child in &in_flow_children {
+            let style = self.convert_style(&child.style, Some(&box_node.style));
+            let node_id = taffy
+                .new_leaf_with_context(style, (*child) as *const BoxNode)
+                .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+            node_map.insert(node_id, *child);
+            child_ids.push(node_id);
+        }
+
+        let root_style = self.convert_style(&box_node.style, None);
+        let root_id = if child_ids.is_empty() {
+            taffy
+                .new_leaf(root_style)
+                .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?
+        } else {
+            taffy
+                .new_with_children(root_style, &child_ids)
+                .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?
+        };
 
         // Convert constraints to Taffy available space
         let available_space = taffy::geometry::Size {
@@ -1021,13 +1122,111 @@ impl FormattingContext for GridFormattingContext {
             },
         };
 
-        // Run Taffy layout
+        let mut measured_fragments: HashMap<TaffyNodeId, FragmentNode> = HashMap::new();
+        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            self.nearest_positioned_cb,
+        );
+
+        // Run Taffy layout with measurement to size grid items using their own formatting contexts.
         taffy
-            .compute_layout(root_id, available_space)
+            .compute_layout_with_measure(
+                root_id,
+                available_space,
+                |known_dimensions, available, node_id, node_context, _style| {
+                    if let Some(node_ptr) = node_context.as_ref().map(|p| **p) {
+                        let box_node = unsafe { &*node_ptr };
+                        let mut known_dimensions = known_dimensions;
+                        let mut available = available;
+                        if known_dimensions.width == Some(0.0)
+                            && matches!(available.width, taffy::style::AvailableSpace::Definite(v) if v == 0.0)
+                            && box_node.style.width.is_none()
+                        {
+                            known_dimensions.width = None;
+                            available.width = taffy::style::AvailableSpace::MaxContent;
+                        }
+                        if known_dimensions.height == Some(0.0)
+                            && matches!(available.height, taffy::style::AvailableSpace::Definite(v) if v == 0.0)
+                            && box_node.style.height.is_none()
+                        {
+                            known_dimensions.height = None;
+                            available.height = taffy::style::AvailableSpace::MaxContent;
+                        }
+
+                        let constraints = self.constraints_from_taffy(known_dimensions, available);
+                        let fc_type = box_node.formatting_context().unwrap_or(FormattingContextType::Block);
+                        let fc = factory.create(fc_type);
+                        match fc.layout(box_node, &constraints) {
+                            Ok(fragment) => {
+                                let size = taffy::geometry::Size {
+                                    width: fragment.bounds.width(),
+                                    height: fragment.bounds.height(),
+                                };
+                                measured_fragments.insert(node_id, fragment);
+                                size
+                            }
+                            Err(_) => taffy::geometry::Size {
+                                width: 0.0,
+                                height: 0.0,
+                            },
+                        }
+                    } else {
+                        taffy::geometry::Size {
+                            width: 0.0,
+                            height: 0.0,
+                        }
+                    }
+                },
+            )
             .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
 
-        // Convert back to FragmentNode tree
-        let mut fragment = Self::convert_to_fragments(&taffy, root_id, &node_map)?;
+        let root_layout = taffy
+            .layout(root_id)
+            .map_err(|e| LayoutError::MissingContext(format!("Taffy layout error: {:?}", e)))?;
+
+        let mut children_fragments = Vec::new();
+        for child_id in child_ids {
+            let child_box = node_map.get(&child_id).copied().unwrap();
+            let layout = taffy
+                .layout(child_id)
+                .map_err(|e| LayoutError::MissingContext(format!("Taffy child layout error: {:?}", e)))?;
+
+            let mut constraints = LayoutConstraints::new(
+                CrateAvailableSpace::Definite(layout.size.width),
+                if layout.size.height > 0.0 {
+                    CrateAvailableSpace::Definite(layout.size.height)
+                } else {
+                    CrateAvailableSpace::Indefinite
+                },
+            );
+            constraints.inline_percentage_base = Some(layout.size.width);
+            let fc_type = child_box.formatting_context().unwrap_or(FormattingContextType::Block);
+            let fc = factory.create(fc_type);
+            let mut child_fragment = match measured_fragments.remove(&child_id) {
+                Some(frag)
+                    if (frag.bounds.width() - layout.size.width).abs() < 0.5
+                        && (frag.bounds.height() - layout.size.height).abs() < 0.5 =>
+                {
+                    frag
+                }
+                _ => fc.layout(child_box, &constraints)?,
+            };
+            child_fragment.bounds = crate::geometry::Rect::new(
+                crate::geometry::Point::new(layout.location.x, layout.location.y),
+                crate::geometry::Size::new(layout.size.width, layout.size.height),
+            );
+            children_fragments.push(child_fragment);
+        }
+
+        let mut fragment = FragmentNode::new_block_styled(
+            Rect::new(
+                crate::geometry::Point::new(root_layout.location.x, root_layout.location.y),
+                crate::geometry::Size::new(root_layout.size.width, root_layout.size.height),
+            ),
+            children_fragments,
+            box_node.style.clone(),
+        );
 
         // Position out-of-flow children against the appropriate containing block.
         if !positioned_children.is_empty() {

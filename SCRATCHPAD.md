@@ -3,6 +3,13 @@ Cloudflare render perf fixed: web font loading filters to the page’s codepoint
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
 fetch_and_render now reads .meta sidecars for file:// HTML inputs (e.g., cached pages) and passes the cached Content-Type through decode_html_bytes; added a regression ensuring Shift-JIS HTML decodes via the meta charset.
+Agent18:
+- Fixed embedded CSS URL scan to ignore assignment targets like `window.css = ...`, preventing bogus fetches; regression `unescapes_json_style_embedded_urls` now passes.
+- Absolute-position helper uses AbsoluteLayout shrink-to-fit behavior; updated test expects width derived from intrinsic when both left/right are set.
+- Replaced element sizing test adjusted to expect content-box width from border-box width (360px -> 330px content) per box-sizing.
+- UA defaults now apply link state styles via data-fastr flags (visited/active/hover/focus) and iframe max-width check asserts 100% length.
+- Match-parent text-align now propagates to text-align-last (resolution runs before text-align) so match-parent sets last-line alignment as expected.
+- Remaining failing tests (vertical text-overflow ellipsis, table rowspans) untouched.
 Aligned fetcher user-agents: exported DEFAULT_USER_AGENT in resource.rs, fetch_and_render now sends it on HTTP requests, and fetch_pages uses the same Chrome-like UA instead of the old compatible string. Deduplicated DEFAULT_USER_AGENT after rebase.
 Hyphenation breaks now filter out non-char-boundary offsets before use; itemized run splitting validates UTF-8 boundaries; shaping clusters clamp to UTF-8 boundaries with regression coverage.
 HttpFetcher now follows redirects (up to 10) with the shared User-Agent; sends Accept-Language by default; retries misreported Content-Encoding by falling back to identity (`fetch_http_retries_on_bad_gzip`).
@@ -31,7 +38,6 @@ Rowspan height distribution adjusted to favor auto rows while sharing spans; ver
 - `openbsd.org` now renders with visible sidebar/content; `render_pages --pages openbsd.org` succeeds (PNG unique colors ~32k).
 - Previous notes: marker baseline/list-style-position/ellipsis regressions landed upstream. Cloudflare/latimes fetch/render had timed out at 60s; no changes made.
 CNN render with split_at char-boundary guard now finishes: render_pages --pages cnn.com --timeout 60 succeeded (~44s, ~196KB PNG); fetch_and_render timings ~7s cascade, ~4.6s box_tree, ~42s layout, ~0.5s paint.
-
 - Fetched full page set (fetch_pages). Several 403/401s remain expected; cache populated for 85+ pages.
 - render_pages was crashing on latimes.com due to splitting text at non-UTF-8 boundaries. TextItem::split_at now clamps to char boundaries and split_runs_preserving_shaping bails out when the run offset isn't a boundary, falling back to reshaping; added regression test split_at_handles_non_char_boundary_offsets.
 - Reran render_pages for all cached pages; 86/86 pass, latimes.com now renders (PNG ~106KB). Summary in fetches/renders/_summary.log.
@@ -45,3 +51,6 @@ Agent7: Added CLI parity for media preferences: `fetch_and_render` now accepts `
 Profiling latimes.com (60s timeout, --timings, jobs=1, dev build): parse 0.25s, css_parse 0.10s, style_prepare 2.77s, style_apply 17.96s (cascade total 21.09s), box_tree 6.57s (12,699 boxes), layout 29.13s, layout_document_total 56.8s, paint not reached before timeout (~57s total before 60s timeout). Needs cascade/layout perf work to fit under 60s.
 
 Fixed merge conflicts in the CLI binaries: render_pages/fetch_and_render now compile with both Accept-Language overrides and --timings enabled; fetch_bytes continues returning base_url from cached meta. Re-ran render_pages --pages latimes.com --jobs 1 --timeout 90 --timings (release, FASTR_LAYOUT_PROFILE=1); render completes in ~25.9s (parse 42ms, css_parse 10ms, cascade 4.2s, layout 4.0s, paint 16.2s, PNG ~103KB).
+
+Merged CLI flag streams: fetch_and_render/render_pages accept both --accept-language and --timings again after resolving conflict markers.
+Grid layout now measures grid items with their own formatting contexts and reuses those fragments, so grid children with inline text still lay out even when Taffy would otherwise report zero widths (test_grid_margins coverage passes).
