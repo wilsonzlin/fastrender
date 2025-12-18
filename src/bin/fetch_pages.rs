@@ -122,6 +122,7 @@ const PAGES: &[&str] = &[
     "https://wired.com",
     "https://arstechnica.com",
     "https://engadget.com",
+    "https://nbcnews.com",
     "https://figma.com",
     "https://ft.com",
     "https://phoronix.com",
