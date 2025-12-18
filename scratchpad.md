@@ -29,6 +29,7 @@
 # Marker image paint: regression `marker_image_paints_shadow` ensures marker fragments paint text-shadow even when the marker content is an image.
 # Marker paint order: regression `marker_paints_after_background` ensures marker text paints over its background in the display list.
 # Marker counter font: regression `marker_inherits_counter_font` asserts list-style markers inherit the list item’s font family and weight.
+# Marker shadow order: regression `marker_shadow_paints_after_background` ensures shadows emit after marker backgrounds.
 # List-style-image marker: regression `list_style_image_produces_image_marker` asserts image list markers emit replaced fragments during layout.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
