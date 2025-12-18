@@ -32,7 +32,7 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--user-agent UA]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--user-agent UA] [--timings]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
@@ -44,6 +44,7 @@ fn usage() {
     println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
     println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
+    println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
@@ -114,6 +115,7 @@ fn main() {
     let mut scroll_x: f32 = 0.0;
     let mut scroll_y: f32 = 0.0;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
+    let mut enable_timings = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -205,8 +207,15 @@ fn main() {
                     }
                 }
             }
+            "--timings" => {
+                enable_timings = true;
+            }
             _ => {}
         }
+    }
+
+    if enable_timings {
+        std::env::set_var("FASTR_RENDER_TIMINGS", "1");
     }
 
     if let Some(reduce) = prefers_reduced_transparency {
