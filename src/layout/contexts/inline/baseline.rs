@@ -620,6 +620,24 @@ mod tests {
     }
 
     #[test]
+    fn line_accumulator_tracks_mixed_font_runs() {
+        let strut = BaselineMetrics::new(10.0, 16.0, 10.0, 6.0);
+        let mut acc = LineBaselineAccumulator::new(&strut);
+
+        let small = BaselineMetrics::new(8.0, 14.0, 8.0, 6.0);
+        let shift_small = acc.add_baseline_relative(&small, VerticalAlign::Baseline, None);
+        assert_eq!(shift_small, 0.0);
+
+        let large = BaselineMetrics::new(12.0, 18.0, 12.0, 6.0);
+        let shift_large = acc.add_baseline_relative(&large, VerticalAlign::Baseline, None);
+        assert_eq!(shift_large, 0.0);
+
+        assert!((acc.max_ascent - 12.0).abs() < 1e-3);
+        assert!((acc.max_descent - 6.0).abs() < 1e-3);
+        assert!((acc.line_height() - 18.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn test_line_accumulator_top_aligned() {
         let strut = BaselineMetrics::new(12.0, 16.0, 12.0, 4.0);
         let mut acc = LineBaselineAccumulator::new(&strut);
