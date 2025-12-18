@@ -4621,7 +4621,8 @@ impl InlineFormattingContext {
         }
 
         if let Some(marker) = start_marker {
-            items.insert(0, marker);
+            let insert_at = items.iter().position(|i| !is_marker_item(i)).unwrap_or(items.len());
+            items.insert(insert_at, marker);
         }
         if let Some(marker) = end_marker {
             items.push(marker);
@@ -4685,7 +4686,8 @@ impl InlineFormattingContext {
             if items.is_empty() {
                 break;
             }
-            let item = items.remove(0);
+            let Some(idx) = items.iter().position(|i| !is_marker_item(i)) else { break };
+            let item = items.remove(idx);
             let remaining = target_width - self.line_items_width(items);
             if remaining <= WIDTH_EPS {
                 continue;
@@ -4693,7 +4695,7 @@ impl InlineFormattingContext {
 
             if let InlineItem::Text(text) = item {
                 if let Some(kept) = self.truncate_text_item_from_start(&text, remaining) {
-                    items.insert(0, InlineItem::Text(kept));
+                    items.insert(idx, InlineItem::Text(kept));
                     break;
                 }
             }
@@ -6652,6 +6654,58 @@ mod tests {
 
         assert!(marker_x < -5.0, "outside marker should sit before content");
         assert!(ellipsis_x >= 0.0, "ellipsis should appear within the content region");
+    }
+
+    #[test]
+    fn text_overflow_start_with_outside_marker_keeps_ellipsis_in_content() {
+        let ifc = InlineFormattingContext::new();
+
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.overflow_x = Overflow::Hidden;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Ellipsis,
+            inline_end: TextOverflowSide::Clip,
+        };
+        let container_style = Arc::new(container_style);
+
+        let mut marker_style = (*container_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+
+        let marker = BoxNode::new_marker(Arc::new(marker_style), MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(container_style.clone(), "long content that will overflow".to_string());
+        let root = BoxNode::new_block(container_style, FormattingContextType::Block, vec![marker, text]);
+
+        let constraints = LayoutConstraints::definite_width(80.0);
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut marker_x = None;
+        let mut ellipsis_x = None;
+        let mut texts = Vec::new();
+        let mut stack = vec![&fragment];
+        while let Some(node) = stack.pop() {
+            match node.content {
+                FragmentContent::Text { ref text, is_marker, .. } => {
+                    if is_marker {
+                        marker_x.get_or_insert(node.bounds.x());
+                    } else if text.contains('…') {
+                        ellipsis_x.get_or_insert(node.bounds.x());
+                    }
+                    texts.push(text.clone());
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
+        }
+
+        assert!(texts.iter().any(|t| t.contains('…')));
+        let marker_x = marker_x.expect("marker x");
+        let ellipsis_x = ellipsis_x.expect("ellipsis x");
+
+        assert!(marker_x < -5.0, "outside marker should sit before content");
+        assert!(ellipsis_x >= 0.0, "start ellipsis should appear within the content region");
     }
 
     fn marker_and_text_positions_vertical(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {

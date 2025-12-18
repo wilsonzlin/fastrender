@@ -22,7 +22,7 @@ Current task (Agent 6): investigating wikipedia.org blank/white render. Fetched 
 Fixed nowrap text-overflow + outside markers: avoid breaking overflowing unbreakable text onto a new line when wrapping is disabled, keeping ellipsis in the content region. Added regression test in inline context tests.
 Unitless zero parsing fixed: CSS numbers are parsed before lengths so `opacity:0`/`z-index:0` no longer get dropped as lengths (wired overlay now hides instead of a gray veil). Added cascade regressions for opacity/z-index accepting unitless zero.
 Added image-marker coverage for the same nowrap text-overflow scenario to ensure ellipsis stays in content while outside list images remain at inline-start.
-
+Added start-side text-overflow regression with outside markers and fixed overflow trimming to preserve list markers and place start ellipsis after them.
 Agent18:
 - Fixed embedded CSS URL scan to ignore assignment targets like `window.css = ...`, preventing bogus fetches; regression `unescapes_json_style_embedded_urls` now passes.
 - Absolute-position helper uses AbsoluteLayout shrink-to-fit behavior; updated test expects width derived from intrinsic when both left/right are set.
