@@ -33,3 +33,4 @@ Agent18:
 Container queries respect inline-size without requiring a block dimension: media length resolution no longer demands finite viewport height when the query lacks viewport-relative units, so inline-size containers evaluate size queries correctly while block-size queries still fail for inline-only containers. Added optional logging for container sizes (FASTR_LOG_CONTAINER_QUERY).
 
 latimes.com UTF-8 boundary panic fixed: text splits now clamp requested offsets to prior char boundaries, run splitting validates local boundaries and falls back to reshaping when misaligned. latimes.com renders successfully (≈72s at 1200×800).
+Added regression ensuring mid-codepoint split requests clamp to the previous char boundary (no panics, split_at aligns to codepoint start).
