@@ -221,7 +221,7 @@ impl GridFormattingContext {
     /// the root node ID and a mapping from Taffy nodes to BoxNodes.
     fn build_taffy_tree<'a>(
         &self,
-        taffy: &mut TaffyTree<()>,
+        taffy: &mut TaffyTree<*const BoxNode>,
         box_node: &'a BoxNode,
     ) -> Result<(TaffyNodeId, HashMap<TaffyNodeId, &'a BoxNode>), LayoutError> {
         self.build_taffy_tree_children(taffy, box_node, &box_node.children.iter().collect::<Vec<_>>())
@@ -230,7 +230,7 @@ impl GridFormattingContext {
     /// Builds a Taffy tree using an explicit slice of root children (used to exclude out-of-flow boxes).
     fn build_taffy_tree_children<'a>(
         &self,
-        taffy: &mut TaffyTree<()>,
+        taffy: &mut TaffyTree<*const BoxNode>,
         box_node: &'a BoxNode,
         root_children: &[&'a BoxNode],
     ) -> Result<(TaffyNodeId, HashMap<TaffyNodeId, &'a BoxNode>), LayoutError> {
@@ -242,7 +242,7 @@ impl GridFormattingContext {
     /// Recursively builds a Taffy node and its children
     fn build_node_recursive<'a>(
         &self,
-        taffy: &mut TaffyTree<()>,
+        taffy: &mut TaffyTree<*const BoxNode>,
         box_node: &'a BoxNode,
         node_map: &mut HashMap<TaffyNodeId, &'a BoxNode>,
         containing_grid: Option<&'a ComputedStyle>,
