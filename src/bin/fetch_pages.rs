@@ -159,6 +159,7 @@ const PAGES: &[&str] = &[
     "https://docs.rs",
     "https://doc.rust-lang.org",
     "https://docs.python.org",
+    "https://kotlinlang.org",
 ];
 
 fn url_to_filename(url: &str) -> String {
