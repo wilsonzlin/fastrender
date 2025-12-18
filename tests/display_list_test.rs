@@ -72,7 +72,8 @@ fn fragment_background_emits_fill() {
     let fragment =
         fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
 
-    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
+        .build_with_stacking_tree(&fragment);
     assert!(!list.is_empty());
     match &list.items()[0] {
         DisplayItem::FillRect(item) => {
