@@ -111,6 +111,7 @@ Added newyorker.com to fetch_pages (fetch/renders succeed ~17s, ~158KB PNG).
 Added economist.com to fetch_pages (fetch/renders succeed ~12s, ~36KB PNG).
 Added fast.com to fetch_pages (fetch ~0.1s, render ~0.4s PNG ~35KB at 1200x800).
 Pinterest cached HTML is JS-only (runtime bundles, noscript notice only); render shows only the noscript warning/header without scripting. No actionable static content to surface.
+openstreetmap.org added to fetch_pages; upstream noted JS redirect 404 failures—left disabled locally to avoid breaking fetches.
 
 Flex measure caching now treats tiny definite available sizes (≤1px) as max-content and clears matching known dimensions, reducing pathological skinny flex probes (e.g., wired.com nav/CTA loops). Added a regression ensuring measure cache keys normalize tiny definites to max-content.
 fetch_pages filtering now accepts full URLs and strips leading www when matching --pages; e.g., --pages https://www.w3.org works. Help text updated and regression added.
