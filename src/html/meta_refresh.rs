@@ -100,10 +100,11 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
     if let Some(mut idx) = lower.find("var url") {
         if let Some(eq) = lower[idx..].find('=') {
             idx += eq + 1;
-            while idx < lower.len() && lower.as_bytes()[idx].is_ascii_whitespace() {
+            // Seek forward to the first quote in the initializer (allows concatenation before the literal)
+            while idx < lower.len() && lower.as_bytes()[idx] != b'"' && lower.as_bytes()[idx] != b'\'' {
                 idx += 1;
             }
-            if idx < lower.len() && (lower.as_bytes()[idx] == b'"' || lower.as_bytes()[idx] == b'\'') {
+            if idx < lower.len() {
                 let quote = lower.as_bytes()[idx];
                 idx += 1;
                 let start = idx;
