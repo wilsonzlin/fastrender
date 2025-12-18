@@ -1465,6 +1465,12 @@ impl FastRender {
             ReplacedType::Image {
                 src, alt: stored_alt, ..
             } => {
+                // If intrinsic dimensions are already known (e.g., width/height attributes), avoid
+                // fetching the image just to rederive them. This keeps box tree construction fast
+                // on image-heavy pages while still honoring provided intrinsic sizes/aspect ratios.
+                if replaced_box.intrinsic_size.is_some() {
+                    return;
+                }
                 // If both width and height are specified (non-auto), intrinsic data is unused per
                 // replaced element sizing. Avoid network fetches in that case to speed up heavy pages.
                 if style.width.is_some() && style.height.is_some() {
