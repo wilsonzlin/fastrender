@@ -20,6 +20,7 @@ use crate::style::properties::{apply_declaration_with_base, resolve_pending_logi
 use crate::style::types::{ColorSchemeEntry, ColorSchemePreference, ContainerType, OutlineColor};
 use crate::style::values::{Length, LengthUnit};
 use crate::style::{normalize_language_tag, ComputedStyle, Direction};
+use cssparser::ToCss;
 use selectors::context::{IncludeStartingStyle, QuirksMode, SelectorCaches, VisitedHandlingMode};
 use selectors::matching::{matches_selector, MatchingContext, MatchingMode};
 use selectors::parser::Selector;
@@ -459,8 +460,15 @@ impl<'a> RuleIndex<'a> {
             index.rules.push(rule);
             index.rule_sets_content.push(sets_content);
             let stored_rule = &index.rules[rule_idx];
+            let mut seen_selectors: HashSet<String> = HashSet::new();
 
             for selector in stored_rule.rule.selectors.slice().iter() {
+                // Skip duplicate selectors within the same rule to avoid redundant matching work.
+                let selector_css = selector.to_css_string();
+                if !seen_selectors.insert(selector_css) {
+                    continue;
+                }
+
                 if let Some(pe) = selector.pseudo_element() {
                     let bucket = index
                         .pseudo_buckets
@@ -2030,6 +2038,7 @@ mod tests {
     use crate::style::content::ContentValue;
     use crate::style::display::Display;
     use crate::style::float::Float;
+    use crate::style::media::MediaContext;
     use crate::style::properties::apply_declaration;
     use crate::style::types::{
         BorderCollapse, BorderStyle, Direction, ImageOrientation, LineBreak, ListStylePosition, ListStyleType,
@@ -2048,6 +2057,30 @@ mod tests {
             },
             children: vec![],
         }
+    }
+
+    #[test]
+    fn rule_index_deduplicates_identical_selectors_in_rule() {
+        let stylesheet = parse_stylesheet(".foo, .foo { color: red; }").unwrap();
+        let media_ctx = MediaContext::default();
+        let collected = stylesheet.collect_style_rules(&media_ctx);
+
+        let rules: Vec<CascadeRule<'_>> = collected
+            .iter()
+            .enumerate()
+            .map(|(order, rule)| CascadeRule {
+                origin: StyleOrigin::Author,
+                order,
+                rule: rule.rule,
+                layer_order: rule.layer_order.clone(),
+                container_conditions: rule.container_conditions.clone(),
+            })
+            .collect();
+
+        let index = RuleIndex::new(rules);
+        assert_eq!(index.selectors.len(), 1);
+        let class_bucket_len = index.by_class.get("foo").map(|v| v.len()).unwrap_or(0);
+        assert_eq!(class_bucket_len, 1);
     }
 
     fn child_font_weight(parent_style: &str, child_style: &str) -> u16 {
