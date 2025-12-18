@@ -3,8 +3,8 @@ use base64::Engine;
 use fastrender::css::types::ColorStop;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::{
-    ClipItem, ClipShape, DecorationPaint, DecorationStroke, DisplayItem, DisplayList, FillRectItem, OutlineItem,
-    ResolvedFilter, StackingContextItem, TextDecorationItem,
+    BlendMode, BorderRadii, ClipItem, ClipShape, DecorationPaint, DecorationStroke, DisplayItem, DisplayList,
+    FillRectItem, OutlineItem, ResolvedFilter, StackingContextItem, TextDecorationItem,
 };
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
@@ -141,6 +141,71 @@ fn assert_hsl_components(
 fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let px = pixmap.pixel(x, y).unwrap();
     (px.red(), px.green(), px.blue(), px.alpha())
+}
+
+#[test]
+fn mix_blend_mode_multiplies_backdrop_when_not_isolated() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        mix_blend_mode: BlendMode::Multiply,
+        is_isolated: false,
+        transform: None,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        color: Rgba::BLUE,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    let center = pixel(&pixmap, 5, 5);
+    assert!(
+        center.0 < 10 && center.1 < 10 && center.2 < 10,
+        "multiply should darken the red backdrop, got {center:?}"
+    );
+}
+
+#[test]
+fn isolation_blocks_mix_blend_mode_backdrop() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        mix_blend_mode: BlendMode::Multiply,
+        is_isolated: true,
+        transform: None,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        color: Rgba::BLUE,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    let center = pixel(&pixmap, 5, 5);
+    assert_eq!(center, (0, 0, 255, 255), "isolated context should composite with source-over, got {center:?}");
 }
 
 fn two_color_data_url() -> String {
