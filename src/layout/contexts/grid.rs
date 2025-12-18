@@ -94,9 +94,6 @@ impl GridFormattingContext {
         if !matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid) {
             return false;
         }
-        if children.len() > 1 {
-            return false;
-        }
         if !style.grid_template_columns.is_empty() || !style.grid_template_rows.is_empty() {
             return false;
         }
@@ -126,7 +123,7 @@ impl GridFormattingContext {
             return false;
         }
 
-        if let Some(child) = children.first() {
+        for child in children {
             let cs = &child.style;
             if cs.grid_column_start != 0
                 || cs.grid_column_end != 0
@@ -1376,8 +1373,10 @@ mod tests {
     fn simple_grids_use_block_fast_path() {
         // Grid with default implicit tracks and a single child should use the simple fast path.
         let mut parent = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Grid, vec![]);
-        let child = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![]);
-        parent.children.push(child);
+        let child1 = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![]);
+        let child2 = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![]);
+        parent.children.push(child1);
+        parent.children.push(child2);
 
         let gc = GridFormattingContext::new();
         let (_root_id, _map) = gc
