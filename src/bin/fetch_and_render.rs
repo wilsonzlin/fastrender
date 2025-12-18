@@ -366,6 +366,87 @@ mod tests {
     }
 
     #[test]
+    fn render_once_fetches_assets_with_cli_headers() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        const PNG_BYTES: &[u8] = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\nIDATx\x9cc```\x00\x00\x00\x04\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82";
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().unwrap();
+        let requests: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let requests_clone = std::sync::Arc::clone(&requests);
+
+        let handle = thread::spawn(move || {
+            for i in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut buf = String::new();
+                while reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false) {
+                    if buf.ends_with("\r\n\r\n") || buf == "\r\n" {
+                        break;
+                    }
+                }
+                requests_clone.lock().unwrap().push(buf.clone());
+                if i == 0 {
+                    let html = format!(
+                        "<html><body><img src=\"http://{}/img.png\"></body></html>",
+                        addr
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                        html.len(), html
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                } else {
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
+                        PNG_BYTES.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.write_all(PNG_BYTES);
+                }
+            }
+        });
+
+        let url = format!("http://{}/", addr);
+        let tmp = tempfile::tempdir().unwrap();
+        let output = tmp.path().join("out.png");
+        render_once(
+            &url,
+            output.to_str().unwrap(),
+            200,
+            200,
+            0,
+            0,
+            1.0,
+            Some(5),
+            "TestAgent/1.0",
+            "fr-CA,fr;q=0.7",
+        )
+        .expect("render_once should succeed");
+
+        handle.join().expect("server thread");
+        let combined = requests
+            .lock()
+            .unwrap()
+            .join("\n")
+            .to_ascii_lowercase();
+        assert!(
+            combined.contains("accept-language: fr-ca,fr;q=0.7"),
+            "asset requests should include Accept-Language: {}",
+            combined
+        );
+        assert!(
+            combined.contains("user-agent: testagent/1.0"),
+            "asset requests should include User-Agent: {}",
+            combined
+        );
+    }
+
+    #[test]
     fn parse_prefers_reduced_data_values() {
         assert_eq!(parse_prefers_reduced_data("reduce"), Some(true));
         assert_eq!(parse_prefers_reduced_data("no-preference"), Some(false));
