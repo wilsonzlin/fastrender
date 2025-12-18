@@ -1,0 +1,22 @@
+From 363dbfd26d935cb2ff2e45a0ea18c47fe8fc950a Mon Sep 17 00:00:00 2001
+From: Wilson Lin <code@wilsonl.in>
+Date: Wed, 17 Dec 2025 23:24:16 -0500
+Subject: [PATCH] Note opacity/z-index unitless zero parsing
+
+---
+ scratchpad.md | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/scratchpad.md b/scratchpad.md
+index d1167b5..9289144 100644
+--- a/scratchpad.md
++++ b/scratchpad.md
+@@ -1615,3 +1615,5 @@ Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199
+ - Added new fetch targets: sqlite.org (table-heavy), nginx.org (simple static), and go.dev (modern) to broaden coverage.
+ - Added --user-agent overrides to render_pages and fetch_and_render so batch/one-off renders can use the Chrome-like UA or a caller-specified string (HttpFetcher default remains unchanged).
+ - fetch_and_render now uses HttpFetcher for network fetches (UA override honored), and render_pages logs the UA per-page to match runtime fetcher behavior.
++- Unitless zero values now parse as numbers for opacity/z-index, avoiding bogus length parsing that could block overlays (e.g., wired.com); regression added.
++- Push of the above scratchpad note pending; git push timing out (commit f3b10ff queued).
+-- 
+2.43.0
+
