@@ -2249,6 +2249,22 @@ mod tests {
     }
 
     #[test]
+    fn opacity_accepts_unitless_zero() {
+        let dom = element_with_style("opacity: 0;");
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.opacity, 0.0);
+    }
+
+    #[test]
+    fn z_index_accepts_unitless_zero() {
+        let dom = element_with_style("position: relative; z-index: 0;");
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.z_index, Some(0));
+    }
+
+    #[test]
     fn ad_slot_classes_do_not_collapse_without_css_rules() {
         let dom = DomNode {
             node_type: DomNodeType::Element {

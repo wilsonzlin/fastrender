@@ -945,14 +945,14 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         }
     }
 
-    // Try to parse as length
-    if let Some(length) = parse_length(value_str) {
-        return Some(PropertyValue::Length(length));
-    }
-
     // Try to parse as number
     if let Ok(num) = value_str.parse::<f32>() {
         return Some(PropertyValue::Number(num));
+    }
+
+    // Try to parse as length
+    if let Some(length) = parse_length(value_str) {
+        return Some(PropertyValue::Length(length));
     }
 
     // Check for percentage
