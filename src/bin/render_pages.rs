@@ -260,6 +260,7 @@ fn main() {
             let results = &results;
             let path = entry.path();
             let fetcher = Arc::clone(&fetcher);
+            let user_agent = user_agent.clone();
 
             s.spawn(move |_| {
                 let name = path.file_stem().unwrap().to_string_lossy().to_string();
@@ -272,7 +273,8 @@ fn main() {
 
                 log.push_str(&format!("=== {} ===\n", name));
                 log.push_str(&format!("Source: {}\n", path.display()));
-                log.push_str(&format!("Output: {}\n\n", output_path.display()));
+                log.push_str(&format!("Output: {}\n", output_path.display()));
+                log.push_str(&format!("User-Agent: {}\n\n", user_agent));
 
                 // Read HTML first (before catch_unwind)
                 let html_bytes = match fs::read(&path) {
