@@ -25,6 +25,7 @@ Wikipedia.org render now complete: base_url/meta fixes + jsl10n-visible injectio
 Fixed nowrap text-overflow + outside markers: avoid breaking overflowing unbreakable text onto a new line when wrapping is disabled, keeping ellipsis in the content region. Added regression test in inline context tests.
 Unitless zero parsing fixed: CSS numbers are parsed before lengths so `opacity:0`/`z-index:0` no longer get dropped as lengths (wired overlay now hides instead of a gray veil). Added cascade regressions for opacity/z-index accepting unitless zero.
 Calc numbers now parse for numeric properties: calc/min/max/clamp expressions with unitless results are parsed as numbers (so `opacity: calc(1 - .25)` and `z-index: calc(2+3)` work). Added cascade tests for opacity/z-index with calc().
+Order property now parses (added to KNOWN_PROPERTIES) and accepts calc() integer results; non-integer calc order values are ignored per spec. Tests added.
 Added image-marker coverage for the same nowrap text-overflow scenario to ensure ellipsis stays in content while outside list images remain at inline-start.
 Added start-side text-overflow regression with outside markers and fixed overflow trimming to preserve list markers and place start ellipsis after them.
 Agent18:
