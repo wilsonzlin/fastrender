@@ -68,3 +68,29 @@ fn fixed_positioned_inset_auto_width_fills_viewport() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn absolute_inset_auto_width_fills_parent() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            let mut renderer = FastRender::new().expect("renderer");
+            let html = r#"
+            <style>
+              body { margin: 0; }
+              .parent { position: relative; width: 300px; height: 80px; background: white; }
+              .child { position: absolute; left: 0; right: 0; top: 0; height: 30px; background: rgb(0, 255, 0); }
+            </style>
+            <div class="parent"><div class="child"></div></div>
+            "#;
+            let pixmap = renderer.render_html(html, 400, 120).expect("render");
+            assert_eq!(
+                pixel(&pixmap, 150, 10),
+                [0, 255, 0, 255],
+                "absolute inset element should span its parent's width"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
