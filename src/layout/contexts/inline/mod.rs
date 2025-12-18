@@ -6665,7 +6665,7 @@ mod tests {
                 }
                 FragmentContent::Text { is_marker: false, .. } => {
                     let x = node.bounds.x();
-                    min_text_x = Some(min_text_x.map_or(x, |m| m.min(x)));
+                    min_text_x = Some(min_text_x.map_or(x, |m: f32| m.min(x)));
                 }
                 _ => {}
             }
@@ -6686,6 +6686,56 @@ mod tests {
             "marker should remain outside at inline-start; marker_x={}",
             marker_x
         );
+    }
+
+    #[test]
+    fn marker_outside_skips_intercharacter_justify() {
+        let ifc = InlineFormattingContext::new();
+
+        let mut root_style = ComputedStyle::default();
+        root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = TextAlignLast::Justify;
+        root_style.text_justify = TextJustify::InterCharacter;
+        let root_style = Arc::new(root_style);
+
+        let mut marker_style = (*root_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new((*root_style).clone());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "abc".to_string());
+        let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite(300.0, 100.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let mut marker_x = None;
+        let mut min_text_x = None;
+        let mut stack = vec![line];
+        while let Some(node) = stack.pop() {
+            match node.content {
+                FragmentContent::Text { is_marker: true, .. } | FragmentContent::Replaced { .. } => {
+                    if marker_x.is_none() {
+                        marker_x = Some(node.bounds.x());
+                    }
+                }
+                FragmentContent::Text { is_marker: false, .. } => {
+                    let x = node.bounds.x();
+                    min_text_x = Some(min_text_x.map_or(x, |m: f32| m.min(x)));
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
+        }
+        let marker_x = marker_x.expect("marker x");
+        let text_x = min_text_x.expect("text x");
+
+        assert!(text_x < 1.0, "intercharacter justify should not shift text; text_x={}", text_x);
+        assert!(marker_x < -5.0, "marker should stay outside; marker_x={}", marker_x);
     }
 
     #[test]
