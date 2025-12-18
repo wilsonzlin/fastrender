@@ -1588,3 +1588,5 @@ Actionable borrowings:
 - Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 - Rendered https://w3.org at 1200×800: content clustered to the left/top (bbox ~0,188–659,799); likely responsive/min-content behavior or missing resources. Logged for future investigation.
 - Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199,799); no obvious issues. Logged for reference.
+Rendered developer.apple.com at 1200×800: content filled most of the viewport (bbox 12,44–1187,799). No issues noted.
+Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199,799); no obvious issues. Logged for reference.
