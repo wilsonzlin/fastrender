@@ -145,7 +145,6 @@ const PAGES: &[&str] = &[
     "https://openstreetmap.org",
     "https://www.haskell.org",
     "https://tesco.com",
-    "https://bing.com",
     "https://discord.com",
     "https://weather.com",
     "https://bbc.co.uk",
