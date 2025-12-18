@@ -29,6 +29,7 @@ const PAGES: &[&str] = &[
     // Tier 1: Simple
     "https://example.com",
     "https://example.org",
+    "https://example.net",
     // Tier 2: Text-heavy
     "https://news.ycombinator.com",
     "https://lite.cnn.com",
