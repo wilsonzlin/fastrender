@@ -3,17 +3,41 @@ Notes (Agent19)
 - Grid/hero fix on main: grid items are laid out via their own formatting contexts using Taffy-resolved sizes, preserving child fragments/box_ids. GitHub hero text renders.
 - Shaping cache in `text/shaper.rs` (4k entries keyed by font ptr/index/size/script/direction/text) to reuse shaping work.
 - `inspect_frag` supports `--timeout SECONDS` to exit after the given duration.
-- CNN: render still slow (~82s) and shows only the top ~275px strip; likely JS-driven/hidden content. Wired.com renders full frame.
+CNN: render still slow (~82s) and shows only the top ~275px strip; likely JS-driven/hidden content. Wired.com renders full frame.
+CNN profiling notes: cascade ~4s after selector dedup (720k candidates); layout dominates (~78s). Flex profiling shows product-zone__inner and vertical-shelf carousels repeatedly laid out; cache histogram shows heavy reuse of a few keys. Flex cache tolerances relaxed (min epsilon 1px) and cache key now includes debug selector to merge identical components; flex measure cache quantizes definite available sizes.
+CNN carousels: container_vertical-shelf-carousel markup is present in HTML (lazy class, cards/links/media wrappers). Need to reduce repeated layouts (e.g., cache reuse/skip offscreen) for these containers.
 
-Working tree clean, up to date (targets added: vox.com, nationalgeographic.com, hbr.org). Idle/available for new assignment.
+msnbc.com: render at 1200x800 (~18s, ~4,138 boxes) produces an all-white PNG (single color, full bbox); page has many scripts/styles (53 scripts incl. 35 external src, 28 style tags; 12 media queries; 33 calc; 734 var(); display:none=4; z-index=13; no noscript/meta refresh), so likely JS-dependent content.
 
-Status: synced to origin/main; workspace clean.
-
-CNN note: no external CSS links; three large inline <style> blocks (~1.7MB) drive layout. PNG shows only header strip; likely runtime-driven content hidden without JS.
+Working tree clean, up to date (targets added: vox.com, nationalgeographic.com, hbr.org). Repo clean/synced to origin/main (latest scratchpad/msnbc notes, add msn.com). Idle/available for new assignment.
+Repo still clean and up to date; idle/available for new assignment.
 
 <<<<<<< HEAD
 Status: synced to origin/main; workspace clean.
 =======
+cnn.com cascade profiling (release, 1200x800, 45s timeout): inline CSS only (~1.7MB). Cascade ~6.5–6.7s (find ~0.8–0.9s, decl ~0.9s, pseudo ~2.9s), box_tree ~2.4s; render still times out at 30–45s. ~5.3M selector candidates (~1.7k/node), ~31k matches; 3 <style> blocks (~1.7MB total), ~5.5k rules, ~16.7k declarations; heavy :has (~526), var() (~2.8k), ~199 media queries.
+
+cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (3 <style> blocks, total ~1.7MB). Cascade ~7–8s (FASTR_CASCADE_PROFILE: ~5.3M selector candidates, ~31k matches, ~3s pseudo), box_tree ~2.4s; render still times out at 40s. Pseudo fast-path/candidate dedup attempts unchanged timing; further selector/cascade optimization needed.
+Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
+Added figma.com to fetch_pages targets. Fetch succeeds (~1.25MB HTML); render_pages finishes in ~5s but current PNG is blank (bbox None) due to JS redirect to /redirect_home and missing CSS (bogus encoded webpack-artifacts URL); needs follow-up if we want visible content.
+Figma follow-up: fetch_pages caches https://figma.com/redirect_home (JS redirect not followed), while render_pages now follows the JS redirect to https://figma.com/unsupported_browser and renders the unsupported modal (gray overlay, nonwhite bbox).
+JS redirect parsing now ignores identifier-only targets and data-* attributes (e.g., data-location), preventing bogus redirects like openstreetmap.org's data-location JSON from being treated as a JS redirect. Added a regression to ignore data-location attributes.
+If a JS redirect fetch fails, fetch_page now keeps the original response (local regression covers 404 target); prevents cache failures when redirects point to missing pages (e.g., cnn.com).
+Added openstreetmap.org to fetch_pages targets; fetch succeeds (~34KB) and render completes (~60KB PNG, mostly white page with header/nav visible).
+Scroll snapping: mandatory inline-axis snapping now preserves snap target offsets when the smallest target is positive; horizontal snapping to centered items works (regression added). Mandatory snaps no longer discard the minimum target offset.
+cnn.com fetch now succeeds (JS redirect 404 kept original HTML), but render_pages times out at 60s (cascade ~8.2s, box_tree ~2.6s, no paint). Needs cascade/layout perf follow-up.
+CSS link extraction now decodes HTML entities (including odd forms like &/#47;) and embedded CSS URL scans decode entities too; covers cases like figma.com emitting entity-escaped stylesheet URLs. Grid context conflict marker removed and convert_to_fragments now accepts generic Taffy trees (TaffyTree<*const BoxNode> caller compiles).
+Entity-decoded CSS URLs now collapse surplus slashes after schemes (e.g., https:////host////path → https://host/path); regressions cover link and embedded CSS cases. figma.com still blank (JS app) but entity-escaped hrefs now normalize correctly.
+Stylesheet discovery now falls back to loading print-only styles when no screen/all stylesheets are present (e.g., pages that only ship a print stylesheet statically); regression added. theguardian.com still renders sparse content (JS-driven), but print styles can help other minimalist pages.
+
+Added fast.com to fetch_pages targets; fetch succeeds (~25KB HTML) and renders in ~0.3s at 1200×800 (PNG ~35KB, bbox roughly centered speed UI).
+Added blog.rust-lang.org to fetch_pages targets. Fetch succeeds (~87KB HTML) and renders in ~1.5s at 1200×800 (PNG ~106KB; full content visible).
+Added xkcd.com to fetch_pages targets. Fetch succeeds (~7KB HTML) and renders in ~0.9s at 1200×800 (PNG ~186KB; comic visible).
+Added arxiv.org to fetch_pages targets. Fetch succeeds (~43KB HTML) and renders in ~2s at 1200×800 (PNG ~97KB; content visible across full width/top).
+Added www.haskell.org to fetch_pages targets. Fetch succeeds (~65KB HTML) and renders in ~12s at 1200×800 (PNG ~59KB; content visible starting near y≈100).
+Added slashdot.org to fetch_pages targets; cache hit renders quickly (~0.04s) at 1200×800 (PNG ~110KB, bbox x=0..1199 y≈30..338).
+Added phoronix.com to fetch_pages targets. Fetch succeeds (~60KB HTML) and renders in ~25s at 1200×800 (PNG ~198KB; full-page content visible).
+
 Render pipeline now decodes cached HTML with proper charset sniffing: fetch_pages stores the response Content-Type alongside each cached HTML (.html.meta), render_pages decodes bytes via the shared html::encoding helper (BOM/header/meta/default Windows-1252), and fetch_and_render reuses the shared decoder instead of its local copy. cloudflare.com and latimes.com timeouts still outstanding from earlier notes.
 Absolute/fixed elements with both left/right insets and width:auto now use the constraint equation instead of shrink-to-fit, so inset overlays fill the containing block; regressions `fixed_positioned_inset_auto_width_fills_viewport` and `absolute_inset_auto_width_fills_parent` cover fixed and absolute bars spanning their containing blocks.
 Investigating w3.org: cached fetches/html/w3.org.html (+ .meta). render_pages --pages w3.org was mostly white (bbox x=0..667, y=184..799; only white/#f8f8fb/blue) because grid items measured to zero and were never laid out. Grid FC now lays out item contents even when Taffy returns zero sizes: grid items are treated as leaves in the Taffy tree, then laid out via their own formatting contexts with a viewport-width fallback when Taffy reports 0 width. Grid measurement now feeds Taffy via compute_layout_with_measure and rebuilds fragments using the measured sizes, falling back to viewport width when needed. W3.org now renders visible content at the top of the viewport (bbox 0..1173 x 10..699, ~88 colors) without scrolling. Added FASTR_LOG_GRID_CHILDREN to trace grid item measurements. Added w3.org to fetch_pages targets now that above-the-fold content renders correctly.
@@ -28,6 +52,13 @@ Cloudflare render perf fixed: web font loading filters to the page’s codepoint
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
 fetch_and_render now reads .meta sidecars for file:// HTML inputs (e.g., cached pages) and passes the cached Content-Type through decode_html_bytes; added a regression ensuring Shift-JIS HTML decodes via the meta charset.
+
+Cascade: RuleIndex now deduplicates identical selectors within a rule to avoid redundant matching work; added test `rule_index_deduplicates_identical_selectors_in_rule`.
+Wired.com: release render (1200x800) finishes in ~16s with full-frame bbox; debug fetch_and_render/file:// times out at 60s (debug too slow for this page).
+
+CNN cascade after selector dedup (release, 1200x800, FASTR_CASCADE_PROFILE=1, 60s timeout): cascade 3.93s (candidates ~720,503 across 3,094 nodes; matches 25,649; avg 233 candidates/node), style_apply 3.17s, box_tree 2.40s; render still times out at 60s before layout/paint completes. Much lower cascade candidate count vs ~5.3M before; layout still dominates.
+
+CNN rerun (release, 1200x800, FASTR_LAYOUT_PROFILE=1, timeout 90s): render completes in ~81s. Cascade ~3.98s (style_apply 3.23s, box_tree 2.46s); layout dominates at ~78.7s (layout ms: block 192,841 over 77,934 calls, flex 157,478 over 8,999 calls, grid 5,614 over 36 calls). PNG mostly blank except top ~275px (2 colors). Layout perf is now the bottleneck; cascade candidate count ~720k.
 Agent18:
 - Fixed embedded CSS URL scan to ignore assignment targets like `window.css = ...`, preventing bogus fetches; regression `unescapes_json_style_embedded_urls` now passes.
 - Absolute-position helper uses AbsoluteLayout shrink-to-fit behavior; updated test expects width derived from intrinsic when both left/right are set.
@@ -149,7 +180,8 @@ Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages 
 - Added hbr.org to fetch_pages targets; fetch succeeds (~322KB HTML). render_pages --pages hbr.org 1200x800 completes in ~4.4s; PNG ~40KB with bbox x≈29..1150, y≈227..616 (~104 colors). Visible content appears mid-frame.
 - Added vox.com to fetch_pages targets; fetch succeeds (~938KB HTML). render_pages --pages vox.com 1200x800 completes in ~15–24s; PNG ~110KB with bbox filling the frame (content spans most of the frame). Log at fetches/renders/vox.com.log.
 - Added nbcnews.com to fetch_pages targets; fetch succeeds (~1.17MB HTML). render_pages --pages nbcnews.com 1200x800 completes in ~27s; PNG ~40KB with full-frame nonwhite content.
- - Added huffpost.com to fetch_pages targets. Fetch succeeds (~873KB HTML) and render_pages finishes in ~5s at 1200x800; PNG bbox fills viewport (7 colors), content visible. No further work pending.
+- Added huffpost.com to fetch_pages targets. Fetch succeeds (~873KB HTML) and render_pages finishes in ~5s at 1200x800; PNG bbox fills viewport (7 colors), content visible.
+- Added fortune.com to fetch_pages targets. Fetch succeeds (~2.0MB HTML) and render_pages completes in ~37s at 1200x800; PNG ~290KB with full-frame content (bbox 0..1199 x 0..799, ~75.6k colors).
 
 cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (~1.7MB, 3 <style> blocks). Cascade ~7–8s (FASTR_CASCADE_PROFILE: ~5.3M selector candidates, ~31k matches, ~3s pseudo), box_tree ~2.4s; render still times out at 40s. Pseudo fast-path/candidate dedup attempts didn't reduce timing; further selector/cascade optimizations needed.
 CNN CSS complexity: ~1933 unique classes, ~190 unique IDs; ~1381 unique properties; ~5302 :not() usages; ~1063 selectors with ≥4 combinators. HTML uses ~762 unique classes across ~4.8k class tokens and ~36 inline style attrs (~528 hrefs). Cascade still ~7–8s.
@@ -176,4 +208,11 @@ filter appears ~10 times.
 linear-gradient appears ~24 times.
 z-index appears ~87 times.
 
-BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over ~1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout).
+BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over 1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout).
+Inline CSS stats: 74 display:grid rules and 49 grid-template-columns rules in the main inline block (~70KB).
+
+Added msnbc.com to fetch_pages; fetch succeeds (~328KB HTML) and render_pages completes in ~19s at 1200x800 (cascade ~1.3s, box_tree ~9.3s, layout ~2.2s, paint ~1.8s; PNG ~21KB, full-frame bbox).
+Added foxnews.com to fetch_pages; fetch ~0.17s (~0.80MB HTML). render_pages finishes in ~57s at 1200x800 (cascade ~0.8s, box_tree ~1.3s, layout ~52.6s, paint ~2.1s; PNG ~363KB, full-frame bbox).
+
+- CNN cascade perf and crash fix: reduced selector matching work by skipping repeated selectors per rule and short-circuiting ::before/::after matching to rules that declare content (content-only prepass). Text splitting now guards UTF-8 boundaries (safe slicing in TextItem::split_at and run splitting) to avoid panics on misdecoded strings. cnn.com release render now completes (~56s; render_pages --pages cnn.com --timeout 120 passes in ~108s). Full test suite (`cargo test --quiet`) still fails existing cases (container queries, css loader unescape, text overflow vertical ellipsis, abs positioning with left+right, table rowspan height distribution, replaced sizing box-sizing, UA link defaults, text-align match-parent, etc.).
+- Added regression to keep ::before/::after matching gated on rules with content (and to allow styling from separate rules once content matches). Added UTF-8 boundary safety regression for TextItem::split_at to guard panics when splits land mid-codepoint.
