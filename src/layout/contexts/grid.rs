@@ -90,6 +90,58 @@ pub struct GridFormattingContext {
 }
 
 impl GridFormattingContext {
+    fn is_simple_grid(&self, style: &ComputedStyle, children: &[&BoxNode]) -> bool {
+        if !matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid) {
+            return false;
+        }
+        if children.len() > 1 {
+            return false;
+        }
+        if !style.grid_template_columns.is_empty() || !style.grid_template_rows.is_empty() {
+            return false;
+        }
+        if !style.grid_template_areas.is_empty()
+            || !style.grid_column_names.is_empty()
+            || !style.grid_row_names.is_empty()
+            || !style.grid_column_line_names.is_empty()
+            || !style.grid_row_line_names.is_empty()
+        {
+            return false;
+        }
+        let auto_track = |tracks: &[GridTrack]| tracks.iter().all(|t| matches!(t, GridTrack::Auto));
+        if !auto_track(&style.grid_auto_rows) || !auto_track(&style.grid_auto_columns) {
+            return false;
+        }
+        if style.grid_gap.value != 0.0 || style.grid_row_gap.value != 0.0 || style.grid_column_gap.value != 0.0 {
+            return false;
+        }
+        if style.grid_auto_flow != GridAutoFlow::Row {
+            return false;
+        }
+        if style.align_items != AlignItems::Stretch
+            || style.justify_items != AlignItems::Stretch
+            || style.align_content != AlignContent::Stretch
+            || style.justify_content != JustifyContent::FlexStart
+        {
+            return false;
+        }
+
+        if let Some(child) = children.first() {
+            let cs = &child.style;
+            if cs.grid_column_start != 0
+                || cs.grid_column_end != 0
+                || cs.grid_row_start != 0
+                || cs.grid_row_end != 0
+                || cs.align_self.is_some()
+                || cs.justify_self.is_some()
+            {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Creates a new GridFormattingContext
     pub fn new() -> Self {
         let viewport_size = crate::geometry::Size::new(800.0, 600.0);
@@ -218,8 +270,10 @@ impl GridFormattingContext {
             })
             .collect::<Result<_, _>>()?;
 
+        let simple_grid = self.is_simple_grid(&box_node.style, &children_iter);
+
         // Convert style
-        let taffy_style = self.convert_style(&box_node.style, containing_grid);
+        let taffy_style = self.convert_style(&box_node.style, containing_grid, simple_grid);
 
         // Create Taffy node
         let node_id = if child_ids.is_empty() {
@@ -237,7 +291,12 @@ impl GridFormattingContext {
     }
 
     /// Converts ComputedStyle to Taffy Style
-    fn convert_style(&self, style: &ComputedStyle, containing_grid: Option<&ComputedStyle>) -> TaffyStyle {
+    fn convert_style(
+        &self,
+        style: &ComputedStyle,
+        containing_grid: Option<&ComputedStyle>,
+        simple_grid: bool,
+    ) -> TaffyStyle {
         let mut taffy_style = TaffyStyle::default();
         let inline_positive_container = self.inline_axis_positive(style);
         let block_positive_container = self.block_axis_positive(style);
@@ -268,7 +327,7 @@ impl GridFormattingContext {
         let inline_is_horizontal_item = self.inline_axis_is_horizontal(item_axis_style);
 
         // Display mode
-        let is_grid = matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid);
+        let is_grid = matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid) && !simple_grid;
         if is_grid {
             taffy_style.display = Display::Grid;
         } else {
@@ -1306,11 +1365,27 @@ mod tests {
 
         let node = BoxNode::new_block(Arc::new(style), FormattingContextType::Grid, vec![]);
         let gc = GridFormattingContext::new();
-        let taffy_style = gc.convert_style(&node.style, None);
+        let taffy_style = gc.convert_style(&node.style, None, false);
 
         assert_eq!(taffy_style.overflow.x, TaffyOverflow::Scroll);
         assert_eq!(taffy_style.overflow.y, TaffyOverflow::Clip);
         assert_eq!(taffy_style.scrollbar_width, resolve_scrollbar_width(&node.style));
+    }
+
+    #[test]
+    fn simple_grids_use_block_fast_path() {
+        // Grid with default implicit tracks and a single child should use the simple fast path.
+        let mut parent = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Grid, vec![]);
+        let child = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![]);
+        parent.children.push(child);
+
+        let gc = GridFormattingContext::new();
+        let (_root_id, _map) = gc
+            .build_taffy_tree(&mut TaffyTree::new(), &parent)
+            .expect("grid conversion");
+        // If the fast path is taken, the parent container style should have been converted to block.
+        let taffy_style = gc.convert_style(&parent.style, None, true);
+        assert_eq!(taffy_style.display, Display::Block);
     }
 
     // Test 1: Basic grid container creation
