@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -10,6 +10,8 @@
 //!   --dpr FLOAT         Device pixel ratio for media queries/srcset (default: 1.0)
 //!   --prefers-reduced-transparency reduce|no-preference|true|false
 //!                        User media preference for reduced transparency (overrides env)
+//!   --prefers-reduced-motion reduce|no-preference|true|false
+//!                        User media preference for reduced motion (overrides env)
 //!   --prefers-reduced-data reduce|no-preference|true|false
 //!                        User media preference for reduced data (overrides env)
 //!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
@@ -254,17 +256,27 @@ mod tests {
         assert_eq!(parse_prefers_reduced_data("off"), Some(false));
         assert_eq!(parse_prefers_reduced_data("maybe"), None);
     }
+
+    #[test]
+    fn parse_prefers_reduced_motion_values() {
+        assert_eq!(parse_prefers_reduced_motion("reduce"), Some(true));
+        assert_eq!(parse_prefers_reduced_motion("no-preference"), Some(false));
+        assert_eq!(parse_prefers_reduced_motion("yes"), Some(true));
+        assert_eq!(parse_prefers_reduced_motion("off"), Some(false));
+        assert_eq!(parse_prefers_reduced_motion("maybe"), None);
+    }
 }
 
 fn usage(program: &str) {
     eprintln!(
-        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
+        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
     );
     eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
     eprintln!("  height: viewport height (default: 800)");
     eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
     eprintln!("  prefers-reduced-transparency: reduce|no-preference|true|false (overrides env)");
+    eprintln!("  prefers-reduced-motion: reduce|no-preference|true|false (overrides env)");
     eprintln!("  prefers-reduced-data: reduce|no-preference|true|false (overrides env)");
     eprintln!("  full-page: expand render target to full content size (or set FASTR_FULL_PAGE)");
     eprintln!("  user-agent: override the User-Agent header (default: Chrome-like)");
@@ -291,6 +303,20 @@ fn parse_prefers_reduced_data(val: &str) -> Option<bool> {
     if matches!(
         v.as_str(),
         "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+    ) {
+        return Some(true);
+    }
+    if matches!(v.as_str(), "0" | "false" | "no" | "off" | "none" | "no-preference") {
+        return Some(false);
+    }
+    None
+}
+
+fn parse_prefers_reduced_motion(val: &str) -> Option<bool> {
+    let v = val.trim().to_ascii_lowercase();
+    if matches!(
+        v.as_str(),
+        "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer" | "reduce-motion"
     ) {
         return Some(true);
     }
@@ -387,6 +413,7 @@ fn main() -> Result<()> {
     let mut timeout_secs: Option<u64> = None;
     let mut dpr: f32 = 1.0;
     let mut prefers_reduced_transparency: Option<bool> = None;
+    let mut prefers_reduced_motion: Option<bool> = None;
     let mut prefers_reduced_data: Option<bool> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut full_page = false;
@@ -414,6 +441,11 @@ fn main() -> Result<()> {
             "--prefers-reduced-transparency" => {
                 if let Some(val) = args.next() {
                     prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
+                }
+            }
+            "--prefers-reduced-motion" => {
+                if let Some(val) = args.next() {
+                    prefers_reduced_motion = parse_prefers_reduced_motion(&val);
                 }
             }
             "--prefers-reduced-data" => {
@@ -453,6 +485,13 @@ fn main() -> Result<()> {
     if let Some(reduce) = prefers_reduced_transparency {
         std::env::set_var(
             "FASTR_PREFERS_REDUCED_TRANSPARENCY",
+            if reduce { "reduce" } else { "no-preference" },
+        );
+    }
+
+    if let Some(reduce) = prefers_reduced_motion {
+        std::env::set_var(
+            "FASTR_PREFERS_REDUCED_MOTION",
             if reduce { "reduce" } else { "no-preference" },
         );
     }
