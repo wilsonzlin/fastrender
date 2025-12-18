@@ -188,3 +188,15 @@ Latest profiling (45s timeout): cascade ~6.7s (find ~0.8s, decl ~0.9s, pseudo ~2
 display:grid appears ~11 times in inline CSS.
 calc() appears ~93 times in inline CSS.
 mask-image appears ~12 times in inline CSS.
+<<<<<<< HEAD
+=======
+@supports appears ~5 times.
+display:flex appears ~327 times.
+display:block appears ~351 times.
+transform appears ~204 times.
+box-shadow appears ~56 times.
+border-radius appears ~143 times.
+filter appears ~10 times.
+linear-gradient appears ~24 times.
+z-index appears ~87 times.
+overflow:hidden appears ~39 times.
