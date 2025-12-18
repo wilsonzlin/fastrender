@@ -110,6 +110,10 @@ pub struct PositionedStyle {
     /// Initial: none
     pub max_height: Length,
 
+    /// Whether `max-height` was authored as the keyword `max-content`.
+    /// When set, the used max-height should clamp to the box’s max-content size.
+    pub max_height_is_max_content: bool,
+
     /// Margin on all sides
     ///
     /// CSS: `margin-top`, `margin-right`, `margin-bottom`, `margin-left`
@@ -523,6 +527,7 @@ impl Default for PositionedStyle {
             box_sizing: BoxSizing::ContentBox,
             min_height: Length::px(0.0),
             max_height: Length::px(f32::INFINITY),
+            max_height_is_max_content: false,
             margin: EdgeOffsets::ZERO,
             margin_left_auto: false,
             margin_right_auto: false,

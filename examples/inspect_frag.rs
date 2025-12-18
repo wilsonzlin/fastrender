@@ -1072,7 +1072,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(style) = box_styles.get(&target_id) {
                 println!(
-                    "  style: display={:?} position={:?} width={:?} height={:?} min=({:?},{:?}) max=({:?},{:?}) flex=({:?},{:?},{:?}) align=({:?},{:?})",
+                    "  style: display={:?} position={:?} width={:?} height={:?} min=({:?},{:?}) max=({:?},{:?}) flex=({:?},{:?},{:?}) flex_dir={:?} flex_wrap={:?} align=({:?},{:?}) justify={:?} opacity={:.2} visibility={:?}",
                     style.display,
                     style.position,
                     style.width,
@@ -1084,8 +1084,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     style.flex_grow,
                     style.flex_shrink,
                     style.flex_basis,
+                    style.flex_direction,
+                    style.flex_wrap,
                     style.align_items,
                     style.align_self,
+                    style.justify_content,
+                    style.opacity,
+                    style.visibility,
                 );
             }
         } else {

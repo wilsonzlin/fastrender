@@ -291,6 +291,8 @@ pub struct ComputedStyle {
     pub min_height: Option<Length>,
     pub max_width: Option<Length>,
     pub max_height: Option<Length>,
+    /// Whether max-height was authored as the keyword `max-content`.
+    pub max_height_is_max_content: bool,
 
     pub margin_top: Option<Length>,
     pub margin_right: Option<Length>,
@@ -559,6 +561,7 @@ impl Default for ComputedStyle {
             min_height: None,
             max_width: None,
             max_height: None,
+            max_height_is_max_content: false,
 
             margin_top: Some(Length::px(0.0)),
             margin_right: Some(Length::px(0.0)),

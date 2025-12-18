@@ -1539,12 +1539,15 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             sanitize_max_length(source.max_width),
             order,
         ),
-        "max-height" => set_length_with_order(
-            &mut styles.max_height,
-            &mut styles.logical.max_height_order,
-            sanitize_max_length(source.max_height),
-            order,
-        ),
+        "max-height" => {
+            styles.max_height_is_max_content = source.max_height_is_max_content;
+            set_length_with_order(
+                &mut styles.max_height,
+                &mut styles.logical.max_height_order,
+                sanitize_max_length(source.max_height),
+                order,
+            );
+        }
         "inline-size" => {
             let value = if inline_axis_is_horizontal(source.writing_mode) {
                 source.width
@@ -3406,12 +3409,15 @@ pub fn apply_declaration_with_base(
             extract_length(&resolved_value),
             order,
         ),
-        "height" => set_length_with_order(
-            &mut styles.height,
-            &mut styles.logical.height_order,
-            extract_length(&resolved_value),
-            order,
-        ),
+        "height" => {
+            styles.max_height_is_max_content = false;
+            set_length_with_order(
+                &mut styles.height,
+                &mut styles.logical.height_order,
+                extract_length(&resolved_value),
+                order,
+            );
+        }
         "min-width" => set_length_with_order(
             &mut styles.min_width,
             &mut styles.logical.min_width_order,
@@ -3430,12 +3436,28 @@ pub fn apply_declaration_with_base(
             sanitize_max_length(extract_length(&resolved_value)),
             order,
         ),
-        "max-height" => set_length_with_order(
-            &mut styles.max_height,
-            &mut styles.logical.max_height_order,
-            sanitize_max_length(extract_length(&resolved_value)),
-            order,
-        ),
+        "max-height" => {
+            if let PropertyValue::Keyword(ref kw) = resolved_value {
+                if kw.eq_ignore_ascii_case("max-content")
+                    || kw.eq_ignore_ascii_case("-webkit-max-content")
+                    || kw.eq_ignore_ascii_case("-moz-max-content")
+                {
+                    if order >= styles.logical.max_height_order {
+                        styles.max_height_is_max_content = true;
+                        styles.logical.max_height_order = order;
+                        styles.max_height = Some(Length::px(f32::INFINITY));
+                    }
+                    return;
+                }
+            }
+            styles.max_height_is_max_content = false;
+            set_length_with_order(
+                &mut styles.max_height,
+                &mut styles.logical.max_height_order,
+                sanitize_max_length(extract_length(&resolved_value)),
+                order,
+            );
+        }
         "inline-size" => {
             push_logical(
                 styles,

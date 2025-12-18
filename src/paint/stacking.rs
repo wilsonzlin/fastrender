@@ -843,6 +843,11 @@ where
 
         for child in &fragment.children {
             let child_style = get_style(child);
+            if let Some(s) = child_style.as_deref() {
+                if !matches!(s.visibility, crate::style::computed::Visibility::Visible) {
+                    continue;
+                }
+            }
             let child_context = build_stacking_tree_with_styles_internal(
                 child,
                 child_style.as_ref().map(|s| s.as_ref()),
@@ -885,6 +890,11 @@ where
 
         for child in &fragment.children {
             let child_style = get_style(child);
+            if let Some(s) = child_style.as_deref() {
+                if !matches!(s.visibility, crate::style::computed::Visibility::Visible) {
+                    continue;
+                }
+            }
             let child_context = build_stacking_tree_with_styles_internal(
                 child,
                 child_style.as_ref().map(|s| s.as_ref()),

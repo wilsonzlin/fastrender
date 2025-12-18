@@ -201,7 +201,14 @@ impl BlockFormattingContext {
 
         let style = &child.style;
         let font_size = style.font_size; // Get font-size for resolving em units
-        let containing_height = constraints.height();
+                                         // Percentage heights only resolve when the containing block has a definite height. If the
+                                         // parent’s height is auto, treat the base as indefinite even if the available height came
+                                         // from the viewport.
+        let containing_height = if parent.style.height.is_some() {
+            constraints.height()
+        } else {
+            None
+        };
 
         // Handle vertical margins (resolve em/rem units with font-size)
         let margin_top = resolve_opt_length(
@@ -2094,9 +2101,12 @@ impl FormattingContext for BlockFormattingContext {
                 )
             })
             .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing));
-        let child_height_space = resolved_height
+        let mut child_height_space = resolved_height
             .map(|h| AvailableSpace::Definite(h.max(0.0)))
             .unwrap_or(AvailableSpace::Indefinite);
+        if style.max_height_is_max_content {
+            child_height_space = AvailableSpace::Indefinite;
+        }
 
         let child_constraints = LayoutConstraints::new(
             AvailableSpace::Definite(computed_width.content_width),
@@ -2126,7 +2136,7 @@ impl FormattingContext for BlockFormattingContext {
             })
             .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
             .unwrap_or(0.0);
-        let max_height = style
+        let mut max_height = style
             .max_height
             .as_ref()
             .and_then(|l| {
@@ -2140,6 +2150,9 @@ impl FormattingContext for BlockFormattingContext {
             })
             .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
+        if style.max_height_is_max_content {
+            max_height = content_height;
+        }
 
         let max_height = if max_height.is_finite() && max_height < min_height {
             min_height
