@@ -1092,6 +1092,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     style.opacity,
                     style.visibility,
                 );
+
+                if !style.background_layers.is_empty() {
+                    let summaries: Vec<String> = style
+                        .background_layers
+                        .iter()
+                        .map(|layer| match &layer.image {
+                            Some(fastrender::style::types::BackgroundImage::Url(url)) => {
+                                format!("url({})", url)
+                            }
+                            Some(fastrender::style::types::BackgroundImage::None) => "none".to_string(),
+                            Some(_) => "gradient".to_string(),
+                            None => "(none)".to_string(),
+                        })
+                        .collect();
+                    println!("  backgrounds: {:?}", summaries);
+                }
             }
         } else {
             println!("box_id {target_id} not found in fragments");

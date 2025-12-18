@@ -67,3 +67,4 @@ CNN render with split_at guard now completes: render_pages --pages cnn.com --tim
 apple.com render repro: fetch_and_render --timeout 60 1200x800 succeeds (PNG ~86KB, nonwhite bbox full frame). One font CSS endpoint 404s (wss/fonts?), but page still renders; no blank/gray issue observed.
 Apple.com already present in fetch_pages PAGES list; no changes needed.
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
+- Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
