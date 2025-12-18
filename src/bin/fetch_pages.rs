@@ -118,7 +118,6 @@ const PAGES: &[&str] = &[
     "https://engadget.com",
     "https://figma.com",
     "https://ft.com",
-    "https://fast.com",
     "https://cnet.com",
     "https://developer.mozilla.org",
     "https://doc.rust-lang.org",
@@ -147,7 +146,6 @@ const PAGES: &[&str] = &[
     "https://npmjs.com",
     "https://latimes.com",
     "https://cloudflare.com",
-    "https://fast.com",
     "https://kotlinlang.org",
     "https://openstreetmap.org",
     "https://stanford.edu",
@@ -163,10 +161,8 @@ const PAGES: &[&str] = &[
     "https://nginx.org",
     "https://go.dev",
     "https://docs.rs",
-    "https://doc.rust-lang.org",
     "https://blog.rust-lang.org",
     "https://docs.python.org",
-    "https://kotlinlang.org",
 ];
 
 fn url_to_filename(url: &str) -> String {
