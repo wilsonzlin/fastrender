@@ -607,6 +607,19 @@ fn media_query_with_reduced_transparency_env_overrides_cache() {
 }
 
 #[test]
+fn media_query_cache_invalidation_on_viewport_change() {
+    let query = MediaQuery::parse("(min-width: 500px)").unwrap();
+    let mut cache = MediaQueryCache::default();
+
+    let wide = MediaContext::screen(800.0, 600.0);
+    assert!(wide.evaluate_with_cache(&query, Some(&mut cache)), "wide viewport should match");
+
+    // Change to a narrower context; cached result must not leak.
+    let narrow = MediaContext::screen(320.0, 480.0);
+    assert!(!narrow.evaluate_with_cache(&query, Some(&mut cache)), "narrow viewport should not match");
+}
+
+#[test]
 fn media_query_cache_reuses_existing_entry() {
     let query = MediaQuery::parse("(min-width: 10px)").unwrap();
     let ctx = MediaContext::screen(100.0, 100.0);
