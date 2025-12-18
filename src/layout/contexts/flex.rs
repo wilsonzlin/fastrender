@@ -399,6 +399,34 @@ impl FormattingContext for FlexFormattingContext {
                 root_node,
                 available_space,
                 move |known_dimensions, mut avail, _node_id, node_context, _style| {
+                    // Treat zero/near-zero definite sizes as absent to avoid pathological
+                    // measurement probes when Taffy propagates a 0px available size. This
+                    // aligns with constraints_from_taffy, which promotes tiny definites to
+                    // Indefinite/MaxContent.
+                    let mut known_dimensions = known_dimensions;
+                    if let Some(w) = known_dimensions.width {
+                        if w <= 1.0 && matches!(avail.width, AvailableSpace::Definite(v) if v <= 1.0) {
+                            known_dimensions.width = None;
+                            avail.width = AvailableSpace::MaxContent;
+                        }
+                    }
+                    if let AvailableSpace::Definite(w) = avail.width {
+                        if w <= 1.0 {
+                            avail.width = AvailableSpace::MaxContent;
+                        }
+                    }
+                    if let Some(h) = known_dimensions.height {
+                        if h <= 1.0 && matches!(avail.height, AvailableSpace::Definite(v) if v <= 1.0) {
+                            known_dimensions.height = None;
+                            avail.height = AvailableSpace::MaxContent;
+                        }
+                    }
+                    if let AvailableSpace::Definite(h) = avail.height {
+                        if h <= 1.0 {
+                            avail.height = AvailableSpace::MaxContent;
+                        }
+                    }
+
                     flex_profile::record_measure_lookup();
                     let measure_timer = flex_profile::timer();
                     let mut known_dimensions = known_dimensions;
@@ -1745,6 +1773,29 @@ fn measure_cache_key(
     viewport: Size,
     drop_available_height: bool,
 ) -> (Option<u32>, Option<u32>) {
+    fn normalize_available(space: AvailableSpace) -> AvailableSpace {
+        match space {
+            AvailableSpace::Definite(w) if w <= 1.0 => AvailableSpace::MaxContent,
+            other => other,
+        }
+    }
+
+    let mut known = known.clone();
+    let avail = taffy::geometry::Size {
+        width: normalize_available(avail.width),
+        height: normalize_available(avail.height),
+    };
+    if let Some(w) = known.width {
+        if w <= 1.0 && matches!(avail.width, AvailableSpace::MaxContent) {
+            known.width = None;
+        }
+    }
+    if let Some(h) = known.height {
+        if h <= 1.0 && matches!(avail.height, AvailableSpace::MaxContent) {
+            known.height = None;
+        }
+    }
+
     fn quantize(val: f32) -> f32 {
         // Quantize measure keys to merge near-duplicate probes without visibly affecting layout.
         // Use progressively coarser steps as sizes grow to curb key cardinality on large pages
@@ -3438,8 +3489,7 @@ impl FlexFormattingContext {
                 let target_min = ((rect.width() - span).max(0.0)) / 2.0;
                 let dx = min_x - target_min;
                 for child in &mut children {
-                    child.bounds =
-                        Rect::new(Point::new(child.bounds.x() - dx, child.bounds.y()), child.bounds.size);
+                    child.bounds = Rect::new(Point::new(child.bounds.x() - dx, child.bounds.y()), child.bounds.size);
                 }
             }
         }
@@ -4086,6 +4136,38 @@ mod tests {
 
         assert_ne!(fp_a, fp_b, "scrollbar width should affect flex style fingerprint");
         assert_ne!(fp_a, fp_c, "overflow should affect flex style fingerprint");
+    }
+
+    #[test]
+    fn measure_cache_coerces_tiny_definite_to_max_content_key() {
+        use crate::geometry::Size as GeoSize;
+        use taffy::style::AvailableSpace;
+
+        let viewport = GeoSize::new(1200.0, 800.0);
+        let tiny_known = taffy::geometry::Size {
+            width: Some(0.5),
+            height: None,
+        };
+        let tiny_avail = taffy::geometry::Size {
+            width: AvailableSpace::Definite(0.5),
+            height: AvailableSpace::Definite(100.0),
+        };
+        let tiny_key = super::measure_cache_key(&tiny_known, &tiny_avail, viewport, false);
+
+        let max_key = super::measure_cache_key(
+            &taffy::geometry::Size {
+                width: None,
+                height: None,
+            },
+            &taffy::geometry::Size {
+                width: AvailableSpace::MaxContent,
+                height: AvailableSpace::Definite(100.0),
+            },
+            viewport,
+            false,
+        );
+
+        assert_eq!(tiny_key.0, max_key.0);
     }
 
     #[test]

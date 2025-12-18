@@ -60,7 +60,9 @@ Grid layout now measures grid items with their own formatting contexts and reuse
 Added newyorker.com to fetch_pages (fetch/renders succeed ~17s, ~158KB PNG).
 Added economist.com to fetch_pages (fetch/renders succeed ~12s, ~36KB PNG).
 
+Flex measure caching now treats tiny definite available sizes (≤1px) as max-content and clears matching known dimensions, reducing pathological skinny flex probes (e.g., wired.com nav/CTA loops). Added a regression ensuring measure cache keys normalize tiny definites to max-content.
 fetch_pages filtering now accepts full URLs and strips leading www when matching --pages; e.g., --pages https://www.w3.org works. Help text updated and regression added.
+Flex measure caching now treats tiny definite available sizes (≤1px) as max-content and clears matching known dimensions, reducing pathological skinny flex probes (e.g., wired.com nav/CTA loops). Added a regression ensuring measure cache keys normalize tiny definites to max-content.
 
 Mix-blend-mode: regressions ensure non-isolated multiply darkens backdrop and isolated uses source-over.
 CNN render with split_at guard now completes: render_pages --pages cnn.com --timeout 60 ~44s (cascade ~7s, box_tree ~4.6s, layout ~42s, paint ~0.5s).
