@@ -107,7 +107,7 @@ pub fn log_layout_profile(total: Duration) {
         return;
     }
     let total_ms = total.as_secs_f64() * 1000.0;
-    eprintln!("layout profile: total_ms={:.2}", total_ms);
+    eprintln!("layout profile: total_ms={:.2} (FASTR_LAYOUT_PROFILE=1)", total_ms);
     let mut parts = Vec::new();
     for (kind_idx, kind) in [
         (0, LayoutKind::Block),
