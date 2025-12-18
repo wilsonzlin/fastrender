@@ -6303,9 +6303,7 @@ fn has_justify_opportunities(items: &[PositionedItem], mode: TextJustify) -> boo
             if non_marker.len() > 1 {
                 return true;
             }
-            non_marker
-                .iter()
-                .any(|pos| item_has_interchar_opportunity(&pos.item))
+            non_marker.iter().any(|pos| item_has_interchar_opportunity(&pos.item))
         }
         _ => {
             if non_marker
@@ -6315,9 +6313,7 @@ fn has_justify_opportunities(items: &[PositionedItem], mode: TextJustify) -> boo
                 return true;
             }
 
-            non_marker
-                .iter()
-                .any(|pos| item_has_space_boundary(&pos.item))
+            non_marker.iter().any(|pos| item_has_space_boundary(&pos.item))
         }
     }
 }
@@ -6416,11 +6412,11 @@ mod tests {
         TextCombineUpright, TextJustify, TextOverflow, TextOverflowSide, TextTransform, TextWrap, WhiteSpace,
         WordBreak, WritingMode,
     };
-    use crate::tree::box_tree::{self};
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
     use crate::text::line_break::BreakType;
+    use crate::tree::box_tree::{self};
     use crate::tree::box_tree::{MarkerContent, ReplacedType};
     use crate::tree::fragment_tree::FragmentContent;
     use std::sync::Arc;
@@ -6523,6 +6519,68 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn text_overflow_with_outside_marker_keeps_ellipsis_in_content() {
+        let ifc = InlineFormattingContext::new();
+
+        let mut container_style = ComputedStyle::default();
+        container_style.white_space = WhiteSpace::Nowrap;
+        container_style.overflow_x = Overflow::Hidden;
+        container_style.text_overflow = TextOverflow {
+            inline_start: TextOverflowSide::Clip,
+            inline_end: TextOverflowSide::Ellipsis,
+        };
+        let container_style = Arc::new(container_style);
+
+        let mut marker_style = (*container_style).clone();
+        marker_style.list_style_position = ListStylePosition::Outside;
+
+        let marker = BoxNode::new_marker(Arc::new(marker_style), MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(container_style.clone(), "long content that will overflow".to_string());
+        let root = BoxNode::new_block(container_style, FormattingContextType::Block, vec![marker, text]);
+
+        let constraints = LayoutConstraints::definite_width(80.0);
+        let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+        let mut line_count = 0;
+        let mut marker_x = None;
+        let mut ellipsis_x = None;
+        let mut texts = Vec::new();
+        let mut stack = vec![&fragment];
+        while let Some(node) = stack.pop() {
+            match node.content {
+                FragmentContent::Line { .. } => {
+                    line_count += 1;
+                }
+                FragmentContent::Text {
+                    ref text, is_marker, ..
+                } => {
+                    if is_marker {
+                        marker_x.get_or_insert(node.bounds.x());
+                    } else if text.contains('…') {
+                        ellipsis_x.get_or_insert(node.bounds.x());
+                    }
+                    texts.push(text.clone());
+                }
+                _ => {}
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
+        }
+
+        assert!(texts.iter().any(|t| t.contains('…')));
+        assert_eq!(
+            line_count, 1,
+            "marker and content should share a single line when no wrapping occurs"
+        );
+        let marker_x = marker_x.expect("marker x");
+        let ellipsis_x = ellipsis_x.expect("ellipsis x");
+
+        assert!(marker_x < -5.0, "outside marker should sit before content");
+        assert!(ellipsis_x >= 0.0, "ellipsis should appear within the content region");
     }
 
     fn marker_and_text_positions_vertical(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {
@@ -6791,7 +6849,11 @@ mod tests {
         let marker_x = marker_x.expect("marker x");
         let text_x = min_text_x.expect("text x");
 
-        assert!(text_x < 1.0, "intercharacter justify should not shift text; text_x={}", text_x);
+        assert!(
+            text_x < 1.0,
+            "intercharacter justify should not shift text; text_x={}",
+            text_x
+        );
         assert!(marker_x < -5.0, "marker should stay outside; marker_x={}", marker_x);
     }
 
@@ -6807,7 +6869,11 @@ mod tests {
 
         let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
         let text = BoxNode::new_text(text_style, "content".to_string());
-        let root = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![marker, text]);
+        let root = BoxNode::new_block(
+            Arc::new(ComputedStyle::default()),
+            FormattingContextType::Block,
+            vec![marker, text],
+        );
         let constraints = LayoutConstraints::definite_width(200.0);
 
         let fragment = ifc.layout(&root, &constraints).unwrap();
@@ -6832,7 +6898,11 @@ mod tests {
 
         let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
         let text = BoxNode::new_text(text_style, "content that wraps onto a new line".to_string());
-        let root = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![marker, text]);
+        let root = BoxNode::new_block(
+            Arc::new(ComputedStyle::default()),
+            FormattingContextType::Block,
+            vec![marker, text],
+        );
         let constraints = LayoutConstraints::definite_width(120.0);
 
         let fragment = ifc.layout(&root, &constraints).unwrap();
@@ -6874,7 +6944,11 @@ mod tests {
         );
         let text = BoxNode::new_text(Arc::new(ComputedStyle::default()), "content".to_string());
 
-        let root = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![marker, text]);
+        let root = BoxNode::new_block(
+            Arc::new(ComputedStyle::default()),
+            FormattingContextType::Block,
+            vec![marker, text],
+        );
         let constraints = LayoutConstraints::definite_width(200.0);
         let fragment = ifc.layout(&root, &constraints).unwrap();
         let line = fragment.children.first().expect("line fragment");

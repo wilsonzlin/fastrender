@@ -1614,8 +1614,8 @@ impl<'a> LineBuilder<'a> {
                 }
             } else {
                 // No break point found within remaining width
-                if self.current_line.is_empty() {
-                    // Line is empty, must place item (overflow)
+                if self.current_line.is_empty() || !allows_soft_wrap(text_item.style.as_ref()) {
+                    // Wrapping is disabled or nothing is on the line; overflow in place.
                     let width = text_item.advance_for_layout;
                     self.place_item_with_width(InlineItem::Text(text_item), width);
                 } else {
