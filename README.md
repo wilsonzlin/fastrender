@@ -90,17 +90,32 @@ You can drive media queries that depend on user preferences via CLI flags or env
 # Reduce transparency for a single render
 ./target/release/fetch_and_render --prefers-reduced-transparency reduce https://example.com
 
-# Fetch and render a live URL with a custom User-Agent
-./target/release/fetch_and_render --user-agent "MyBot/1.0" https://example.com
+# Reduce motion and data, pick a color scheme and contrast
+./target/release/fetch_and_render \
+  --prefers-reduced-motion reduce \
+  --prefers-reduced-data reduce \
+  --prefers-color-scheme dark \
+  --prefers-contrast high \
+  https://example.com
 
-# Apply the same preference when rendering cached pages
-./target/release/render_pages --prefers-reduced-transparency reduce
+# Apply the same preferences when rendering cached pages
+./target/release/render_pages --prefers-reduced-transparency reduce --prefers-contrast high
 
-# Or set the environment variable for any invocation
-FASTR_PREFERS_REDUCED_TRANSPARENCY=reduce ./target/release/inspect_frag fetches/html/example.com.html
+# Or set environment variables for any invocation
+FASTR_PREFERS_REDUCED_TRANSPARENCY=reduce \ 
+FASTR_PREFERS_REDUCED_MOTION=reduce \ 
+FASTR_PREFERS_REDUCED_DATA=reduce \ 
+FASTR_PREFERS_CONTRAST=high \ 
+FASTR_PREFERS_COLOR_SCHEME=dark \ 
+  ./target/release/inspect_frag fetches/html/example.com.html
 ```
 
-Accepted values are `reduce` and `no-preference` (default). Flags are also available on `inspect_frag`.
+Accepted values:
+- Transparency/motion/data: `reduce` or `no-preference` (default); motion/data flags also accept truthy/falsy aliases.
+- Contrast: `more`/`high`, `less`/`low`, `custom`/`forced`, or `no-preference` (default).
+- Color scheme: `light`, `dark`, or `no-preference` (default).
+
+Flags are available on `render_pages`, `fetch_and_render`, and `inspect_frag`.
 
 Environment variables are also supported when invoking the API directly:
 
