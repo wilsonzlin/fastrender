@@ -1620,3 +1620,4 @@ Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199
 - Push of the above scratchpad note pending; git push timing out (commit 363dbfd queued). Patch saved at local_patches/363dbfd-note-unitless-zero.patch for sharing.
 - Numeric calc/min/max/clamp now parse for opacity/z-index: property parser accepts calc()/min()/max()/clamp() as numbers for numeric properties, with regression tests in css_numeric_functions.rs.
 - Pushes currently timing out; latest numeric calc support saved as patch local_patches/5a7b075-calc-numeric.patch (commit 5a7b075 queued).
+- booking.com fetch blocked: CloudFront/WAF returns 202 with empty body (x-amzn-waf-action: challenge), so fetch_pages can’t cache HTML. Investigating render not feasible without bypass; noted and leaving target untouched.
