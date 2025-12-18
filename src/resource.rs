@@ -77,6 +77,40 @@ impl FetchedResource {
     }
 }
 
+/// Parses cached HTML metadata sidecars.
+///
+/// Supports the legacy format where the meta file contains only the content-type
+/// string, and a key/value format where lines are prefixed with `content-type:`
+/// and `url:`. Returns `(content_type, url)`.
+pub fn parse_cached_html_meta(meta: &str) -> (Option<String>, Option<String>) {
+    let trimmed = meta.trim();
+    if trimmed.is_empty() {
+        return (None, None);
+    }
+
+    let mut content_type: Option<String> = None;
+    let mut url: Option<String> = None;
+
+    for line in meta.lines() {
+        let mut parts = line.splitn(2, ':');
+        let key = parts.next().map(|s| s.trim().to_ascii_lowercase());
+        let value = parts.next().map(|s| s.trim());
+        match (key.as_deref(), value) {
+            (Some("content-type"), Some(v)) if !v.is_empty() => {
+                content_type = Some(v.to_string())
+            }
+            (Some("url"), Some(v)) if !v.is_empty() => url = Some(v.to_string()),
+            _ => {}
+        }
+    }
+
+    if content_type.is_none() && url.is_none() && !trimmed.contains('\n') {
+        return (Some(trimmed.to_string()), None);
+    }
+
+    (content_type, url)
+}
+
 // ============================================================================
 // ResourceFetcher trait
 // ============================================================================
@@ -471,6 +505,21 @@ mod tests {
         let resource = decode_data_url(url).unwrap();
         assert_eq!(resource.bytes, b"hello");
         assert_eq!(resource.content_type, None);
+    }
+
+    #[test]
+    fn parse_cached_meta_supports_legacy_content_type() {
+        let (ct, url) = parse_cached_html_meta("text/html; charset=utf-8");
+        assert_eq!(ct.as_deref(), Some("text/html; charset=utf-8"));
+        assert_eq!(url, None);
+    }
+
+    #[test]
+    fn parse_cached_meta_reads_key_value_lines() {
+        let meta = "content-type: text/html\nurl: https://example.com/page\n";
+        let (ct, url) = parse_cached_html_meta(meta);
+        assert_eq!(ct.as_deref(), Some("text/html"));
+        assert_eq!(url.as_deref(), Some("https://example.com/page"));
     }
 
     #[test]

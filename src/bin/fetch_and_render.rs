@@ -38,7 +38,11 @@ use url::Url;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
-fn fetch_bytes(url: &str, timeout: Option<Duration>, user_agent: &str) -> Result<(Vec<u8>, Option<String>)> {
+fn fetch_bytes(
+    url: &str,
+    timeout: Option<Duration>,
+    user_agent: &str,
+) -> Result<(Vec<u8>, Option<String>, Option<String>)> {
     // Handle file:// URLs
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
@@ -50,9 +54,13 @@ fn fetch_bytes(url: &str, timeout: Option<Duration>, user_agent: &str) -> Result
         } else {
             meta_path.set_extension("meta");
         }
-        let content_type = std::fs::read_to_string(&meta_path).ok().map(|s| s.trim().to_string());
+        let meta = std::fs::read_to_string(&meta_path).ok();
+        let (content_type, source_url) = meta
+            .as_deref()
+            .map(fastrender::resource::parse_cached_html_meta)
+            .unwrap_or((None, None));
 
-        return Ok((bytes, content_type));
+        return Ok((bytes, content_type, source_url));
     }
 
     // Configure agent with timeout for ureq 3.x
@@ -92,7 +100,7 @@ fn fetch_bytes(url: &str, timeout: Option<Duration>, user_agent: &str) -> Result
             .read_to_vec()
             .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-        return Ok((bytes, content_type));
+        return Ok((bytes, content_type, None));
     }
 
     Err(Error::Io(std::io::Error::new(
@@ -229,8 +237,9 @@ mod tests {
         std::fs::write(&meta_path, "text/html; charset=shift_jis").unwrap();
 
         let url = format!("file://{}", html_path.display());
-        let (bytes, ct) = fetch_bytes(&url, None, DEFAULT_USER_AGENT).expect("fetch bytes");
+        let (bytes, ct, base_url) = fetch_bytes(&url, None, DEFAULT_USER_AGENT).expect("fetch bytes");
         assert_eq!(ct.as_deref(), Some("text/html; charset=shift_jis"));
+        assert!(base_url.is_none(), "legacy meta should not include a url");
         let decoded = decode_html_bytes(&bytes, ct.as_deref());
         assert!(
             decoded.contains('デ'),
@@ -339,9 +348,10 @@ fn render_once(
 ) -> Result<()> {
     println!("Fetching HTML from: {}", url);
     let timeout = timeout_secs.map(Duration::from_secs);
-    let (html_bytes, html_content_type) = fetch_bytes(url, timeout, user_agent)?;
+    let (html_bytes, html_content_type, source_url) = fetch_bytes(url, timeout, user_agent)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
-    let resource_base = infer_base_url(&html, url).into_owned();
+    let base_hint = source_url.as_deref().unwrap_or(url);
+    let resource_base = infer_base_url(&html, base_hint).into_owned();
 
     println!("Extracting CSS links...");
     let mut css_links = extract_css_links(&html, &resource_base);
@@ -365,13 +375,16 @@ fn render_once(
         println!("Fetching CSS from: {}", css_url);
         seen_imports.insert(css_url.clone());
         match fetch_bytes(&css_url, timeout, user_agent) {
-            Ok((bytes, content_type)) => {
+            Ok((bytes, content_type, _)) => {
                 let css_text = decode_css_bytes(&bytes, content_type.as_deref());
                 let rewritten = absolutize_css_urls(&css_text, &css_url);
                 let inlined = inline_imports(
                     &rewritten,
                     &css_url,
-                    &|u| fetch_bytes(u, timeout, user_agent).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref())),
+                    &|u| {
+                        fetch_bytes(u, timeout, user_agent)
+                            .map(|(b, ct, _)| decode_css_bytes(&b, ct.as_deref()))
+                    },
                     &mut seen_imports,
                 );
                 combined_css.push_str(&inlined);

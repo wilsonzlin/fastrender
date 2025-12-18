@@ -15,7 +15,7 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_USER_AGENT};
+use fastrender::resource::{parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_USER_AGENT};
 use fastrender::FastRender;
 use std::collections::HashSet;
 use std::fs;
@@ -331,10 +331,11 @@ fn main() {
 
                 let mut meta_path = path.clone();
                 meta_path.set_extension("html.meta");
-                let content_type = fs::read_to_string(meta_path)
+                let (content_type, source_url) = fs::read_to_string(meta_path)
                     .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty());
+                    .as_deref()
+                    .map(parse_cached_html_meta)
+                    .unwrap_or((None, None));
 
                 let html = decode_html_bytes(&html_bytes, content_type.as_deref());
                 log.push_str(&format!("HTML bytes: {}\n", html_bytes.len()));
@@ -345,8 +346,9 @@ fn main() {
                 log.push_str(&format!("Scroll-X: {}px\n", scroll_x));
                 log.push_str(&format!("Scroll-Y: {}px\n", scroll_y));
 
-                let input_url = format!("file://{}", path.display());
+                let input_url = source_url.unwrap_or_else(|| format!("file://{}", path.display()));
                 let resource_base = infer_base_url(&html, &input_url).into_owned();
+                log.push_str(&format!("Resource base: {}\n", resource_base));
 
                 let mut css_links = extract_css_links(&html, &resource_base);
                 let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();

@@ -259,7 +259,12 @@ fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
         .collect()
 }
 
-fn write_cached_html(cache_path: &Path, bytes: &[u8], content_type: Option<&str>) -> std::io::Result<()> {
+fn write_cached_html(
+    cache_path: &Path,
+    bytes: &[u8],
+    content_type: Option<&str>,
+    source_url: Option<&str>,
+) -> std::io::Result<()> {
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -267,13 +272,22 @@ fn write_cached_html(cache_path: &Path, bytes: &[u8], content_type: Option<&str>
     std::fs::write(cache_path, bytes)?;
 
     let meta_path = cache_path.with_extension("html.meta");
-    match content_type {
-        Some(ct) if !ct.is_empty() => {
-            let _ = std::fs::write(meta_path, ct);
+    let mut meta = String::new();
+    if let Some(ct) = content_type {
+        if !ct.is_empty() {
+            meta.push_str(&format!("content-type: {}\n", ct));
         }
-        _ => {
-            let _ = std::fs::remove_file(meta_path);
+    }
+    if let Some(url) = source_url {
+        if !url.trim().is_empty() {
+            meta.push_str(&format!("url: {}\n", url.trim()));
         }
+    }
+
+    if meta.is_empty() {
+        let _ = std::fs::remove_file(meta_path);
+    } else {
+        let _ = std::fs::write(meta_path, meta);
     }
 
     Ok(())
@@ -366,7 +380,7 @@ fn main() {
 
                 match fetch_page(url, timeout, &user_agent, &accept_language) {
                     Ok((bytes, content_type)) => {
-                        if write_cached_html(&cache_path, &bytes, content_type.as_deref()).is_ok() {
+                        if write_cached_html(&cache_path, &bytes, content_type.as_deref(), Some(url)).is_ok() {
                             println!("✓ {} ({}b)", url, bytes.len());
                             success.fetch_add(1, Ordering::Relaxed);
                             return;
@@ -426,14 +440,21 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let cache_path = dir.path().join("page.html");
 
-        write_cached_html(&cache_path, b"hello", Some("text/html; charset=utf-8")).expect("write ok");
+        write_cached_html(
+            &cache_path,
+            b"hello",
+            Some("text/html; charset=utf-8"),
+            Some("https://example.com/page"),
+        )
+        .expect("write ok");
 
         let html = std::fs::read_to_string(&cache_path).expect("html read");
         assert_eq!(html, "hello");
 
         let meta_path = cache_path.with_extension("html.meta");
         let meta = std::fs::read_to_string(meta_path).expect("meta read");
-        assert_eq!(meta, "text/html; charset=utf-8");
+        assert!(meta.contains("content-type: text/html; charset=utf-8"));
+        assert!(meta.contains("url: https://example.com/page"));
     }
 
     #[test]
@@ -447,7 +468,7 @@ mod tests {
         std::fs::write(&cache_path, "stale").unwrap();
         std::fs::write(&meta_path, "old").unwrap();
 
-        write_cached_html(&cache_path, b"hello", None).expect("write ok");
+        write_cached_html(&cache_path, b"hello", None, None).expect("write ok");
 
         let html = std::fs::read_to_string(&cache_path).expect("html read");
         assert_eq!(html, "hello");
