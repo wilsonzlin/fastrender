@@ -9,6 +9,7 @@
 use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::{PseudoElement, TextDirection};
 use crate::css::types::{ContainerCondition, CssImportLoader, Declaration, PropertyValue, StyleRule, StyleSheet};
+use std::cell::RefCell;
 use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, DomNodeType, ElementRef};
 use crate::geometry::Size;
 use crate::style::color::Rgba;
@@ -287,6 +288,8 @@ struct RuleIndex<'a> {
     pseudo_selectors: Vec<IndexedSelector<'a>>,
     pseudo_buckets: HashMap<PseudoElement, PseudoBuckets>,
     pseudo_content: HashSet<PseudoElement>,
+    last_tag: RefCell<Option<String>>,
+    last_tag_universal: RefCell<Option<Vec<usize>>>,
 }
 
 struct MatchIndex {
@@ -329,6 +332,8 @@ struct CascadeScratch {
     candidates: Vec<usize>,
     match_index: MatchIndex,
     candidate_seen: CandidateSet,
+    last_tag: Option<String>,
+    last_tag_universal: Option<Vec<usize>>,
 }
 
 impl CascadeScratch {
@@ -337,6 +342,8 @@ impl CascadeScratch {
             candidates: Vec::new(),
             match_index: MatchIndex::new(rule_count),
             candidate_seen: CandidateSet::new(rule_count),
+            last_tag: None,
+            last_tag_universal: None,
         }
     }
 }
@@ -445,6 +452,8 @@ impl<'a> RuleIndex<'a> {
             pseudo_selectors: Vec::new(),
             pseudo_buckets: HashMap::new(),
             pseudo_content: HashSet::new(),
+            last_tag: RefCell::new(None),
+            last_tag_universal: RefCell::new(None),
         };
 
         for rule in rules {
@@ -539,16 +548,32 @@ impl<'a> RuleIndex<'a> {
 
         if !self.by_tag.is_empty() {
             if let Some(tag) = node.tag_name() {
-                if let Some(list) = self.by_tag.get(tag) {
-                    for idx in list {
-                        if seen.insert(*idx) {
-                            out.push(*idx);
+                let mut last_tag = self.last_tag.borrow_mut();
+                let mut last_universal = self.last_tag_universal.borrow_mut();
+                if last_tag.as_deref() == Some(tag) {
+                    if let Some(cache) = &*last_universal {
+                        for idx in cache {
+                            if seen.insert(*idx) {
+                                out.push(*idx);
+                            }
                         }
                     }
-                } else if let Some(list) = self.by_tag.get("*") {
-                    for idx in list {
-                        if seen.insert(*idx) {
-                            out.push(*idx);
+                } else {
+                    *last_tag = Some(tag.to_string());
+                    *last_universal = None;
+                    if let Some(list) = self.by_tag.get(tag) {
+                        for idx in list {
+                            if seen.insert(*idx) {
+                                out.push(*idx);
+                            }
+                        }
+                    }
+                    if let Some(list) = self.by_tag.get("*") {
+                        *last_universal = Some(list.clone());
+                        for idx in list {
+                            if seen.insert(*idx) {
+                                out.push(*idx);
+                            }
                         }
                     }
                 }
