@@ -69,6 +69,7 @@
 # Added gitlab.io to fetch_pages targets; fetch/render succeeded (page renders fully).
 # Added openbsd.org to fetch_pages targets; fetch/render succeeded (simple page). Collapsed border hidden vs solid regression landed upstream.
 # Added example.net to fetch_pages targets; fetch/render succeeded (basic page).
+# Rendered duckduckgo.com (fetch cached target); render succeeded without issues.
 # Attempted netsurf-browser.org; DNS lookup failed, so target not added.
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
