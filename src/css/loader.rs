@@ -104,6 +104,7 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
 
     cleaned = decode_html_entities(&cleaned);
     cleaned = unescape_js_escapes(&cleaned).into_owned();
+    cleaned = normalize_scheme_slashes(&cleaned);
     if cleaned.contains('\\') {
         cleaned = cleaned.replace('\\', "");
     }
@@ -476,6 +477,23 @@ fn decode_html_entities(input: &str) -> String {
             out.push_str(&entity);
         }
     }
+    normalize_scheme_slashes(&out)
+}
+
+fn normalize_scheme_slashes(s: &str) -> String {
+    let mut out = s.to_string();
+    if let Some(pos) = out.find("://") {
+        let (scheme, rest) = out.split_at(pos + 3);
+        let mut trimmed = rest.trim_start_matches('/').to_string();
+        while trimmed.contains("//") {
+            trimmed = trimmed.replace("//", "/");
+        }
+        return format!("{}{}", scheme, trimmed);
+    }
+
+    while out.contains("//") {
+        out = out.replace("//", "/");
+    }
     out
 }
 
@@ -503,6 +521,7 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
                     }
                 }
                 if let Some(href) = extract_attr_value(link_tag, "href") {
+                    let href = normalize_scheme_slashes(&href);
                     if let Some(full_url) = resolve_href(base_url, &href) {
                         css_urls.push(full_url);
                     }
@@ -852,13 +871,15 @@ mod tests {
         let html = r#"
             <link rel="stylesheet" href="https://&#47;&#47;cdn.example.com&#47;main.css">
             <link rel="stylesheet" href="https://&/#47;&#47;cdn.example.com&#47;other.css">
+            <link rel="stylesheet" href="https:////cdn.example.com////more.css">
         "#;
         let urls = extract_css_links(html, "https://example.com/");
         assert_eq!(
             urls,
             vec![
                 "https://cdn.example.com/main.css".to_string(),
-                "https://cdn.example.com/other.css".to_string()
+                "https://cdn.example.com/other.css".to_string(),
+                "https://cdn.example.com/more.css".to_string(),
             ]
         );
     }
@@ -893,10 +914,17 @@ mod tests {
         let html = r#"
             <script>
                 const css = "https://&/#47;&#47;cdn.example.com&#47;main.css";
+                const other = "https:////cdn.example.com////more.css";
             </script>
         "#;
         let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert_eq!(urls, vec!["https://cdn.example.com/main.css".to_string()]);
+        assert_eq!(
+            urls,
+            vec![
+                "https://cdn.example.com/main.css".to_string(),
+                "https://cdn.example.com/more.css".to_string()
+            ]
+        );
     }
 
     #[test]
