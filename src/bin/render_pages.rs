@@ -36,7 +36,7 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--timings]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
@@ -51,6 +51,7 @@ fn usage() {
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
     println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
     println!("  --accept-language LANG  Override the Accept-Language header (default: en-US,en;q=0.9)");
+    println!("  --css-limit N     Maximum number of external stylesheets to fetch (default: unlimited)");
     println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
 }
 
@@ -142,6 +143,7 @@ fn main() {
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
     let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
     let mut enable_timings = false;
+    let mut css_limit: Option<usize> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -249,6 +251,13 @@ fn main() {
                 if let Some(val) = args.next() {
                     if !val.trim().is_empty() {
                         accept_language = val;
+                    }
+                }
+            }
+            "--css-limit" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<usize>() {
+                        css_limit = Some(parsed);
                     }
                 }
             }
@@ -443,6 +452,11 @@ fn main() {
                 }
 
                 let mut css_links = extract_css_links(&html, &resource_base);
+                if let Some(limit) = css_limit {
+                    if css_links.len() > limit {
+                        css_links.truncate(limit);
+                    }
+                }
                 let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
                 for extra in extract_embedded_css_urls(&html, &resource_base) {
                     if seen_links.insert(extra.clone()) {

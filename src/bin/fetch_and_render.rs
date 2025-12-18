@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -19,6 +19,7 @@
 //!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
 //!   --user-agent UA     Override the User-Agent header (default: Chrome-like)
 //!   --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)
+//!   --css-limit         Maximum number of external stylesheets to fetch (default: unlimited)
 //!   --timings           Enable FASTR_RENDER_TIMINGS for per-stage logs
 
 #![allow(clippy::io_other_error)]
@@ -898,6 +899,11 @@ fn render_once(
 
     println!("Extracting CSS links...");
     let mut css_links = extract_css_links(&html, &resource_base);
+    if let Some(limit) = css_limit {
+        if css_links.len() > limit {
+            css_links.truncate(limit);
+        }
+    }
 
     // Fallback: also scan inline content for CSS URLs that are not linked.
     let mut seen = HashSet::new();
