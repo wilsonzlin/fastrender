@@ -20,6 +20,7 @@
 # Outside markers baseline: layout regression `outside_marker_baseline_aligns_with_text` ensures outside bullets share the text baseline with inline content.
 # List-style-position switch: layout regression `marker_switches_position_inside_vs_outside` verifies inside markers occupy inline space while outside markers sit before the text at the line origin.
 # Marker position helper cleaned: reused get_or_insert for replaced markers in position switch test.
+# Marker ellipsis regression: `marker_overflow_ellipsis` ensures outside markers stay at the origin while ellipses appear in the content area under overflow.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Added legend shrink-to-fit regression: a legend with auto width should shrink to its text instead of spanning the fieldset width.
