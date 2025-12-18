@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -16,6 +16,7 @@
 //!                        User media preference for reduced data (overrides env)
 //!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
 //!   --user-agent UA     Override the User-Agent header (default: Chrome-like)
+//!   --timings           Enable FASTR_RENDER_TIMINGS for per-stage logs
 
 #![allow(clippy::io_other_error)]
 #![allow(clippy::redundant_closure)]
@@ -278,7 +279,7 @@ mod tests {
 
 fn usage(program: &str) {
     eprintln!(
-        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
+        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
     );
     eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
@@ -289,6 +290,7 @@ fn usage(program: &str) {
     eprintln!("  prefers-reduced-data: reduce|no-preference|true|false (overrides env)");
     eprintln!("  full-page: expand render target to full content size (or set FASTR_FULL_PAGE)");
     eprintln!("  user-agent: override the User-Agent header (default: Chrome-like)");
+    eprintln!("  timings: set FASTR_RENDER_TIMINGS to print per-stage timings");
     eprintln!("  scroll_x: horizontal scroll offset (default: 0)");
     eprintln!("  scroll_y: vertical scroll offset (default: 0)");
 }
@@ -431,6 +433,7 @@ fn main() -> Result<()> {
     let mut positional: Vec<String> = Vec::new();
     let mut full_page = false;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
+    let mut enable_timings = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -476,6 +479,9 @@ fn main() -> Result<()> {
                     }
                 }
             }
+            "--timings" => {
+                enable_timings = true;
+            }
             _ => positional.push(arg),
         }
     }
@@ -518,6 +524,10 @@ fn main() -> Result<()> {
 
     if full_page {
         std::env::set_var("FASTR_FULL_PAGE", "1");
+    }
+
+    if enable_timings {
+        std::env::set_var("FASTR_RENDER_TIMINGS", "1");
     }
 
     eprintln!(
