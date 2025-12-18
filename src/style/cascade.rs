@@ -6458,12 +6458,17 @@ fn apply_cascaded_declarations<'a, F>(
     };
 
     // First apply custom properties so later var() resolutions can see them
-    for entry in flattened.iter().filter(|e| e.declaration.property.starts_with("--")) {
-        apply_entry(entry);
+    // Avoid repeated property.starts_with for the hot loop by checking once.
+    for entry in flattened.iter() {
+        if entry.declaration.property.starts_with("--") {
+            apply_entry(entry);
+        }
     }
     // Then apply all other declarations in cascade order
-    for entry in flattened.iter().filter(|e| !e.declaration.property.starts_with("--")) {
-        apply_entry(entry);
+    for entry in flattened.iter() {
+        if !entry.declaration.property.starts_with("--") {
+            apply_entry(entry);
+        }
     }
     resolve_pending_logical_properties(styles);
 

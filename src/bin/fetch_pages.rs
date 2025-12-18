@@ -33,24 +33,20 @@ const CACHE_DIR: &str = "fetches/html";
 
 // Target pages for testing
 const PAGES: &[&str] = &[
-    // Tier 1: Simple
     "https://example.com",
     "https://example.org",
     "https://example.net",
-    // Tier 2: Text-heavy
     "https://news.ycombinator.com",
     "https://lobste.rs",
     "https://lite.cnn.com",
     "https://text.npr.org",
     "https://iana.org",
     "https://slashdot.org",
-    // Tier 3: Modern
     "https://google.com",
     "https://duckduckgo.com",
     "https://wikipedia.org",
     "https://www.w3.org",
     "https://bing.com",
-    // Tier 4: Complex
     "https://github.com",
     "https://gitlab.com",
     "https://stackoverflow.com",
@@ -102,7 +98,6 @@ const PAGES: &[&str] = &[
     "https://etsy.com",
     "https://ebay.com",
     "https://walmart.com",
-    "https://slashdot.org",
     "https://phoronix.com",
     "https://usatoday.com",
     "https://airbnb.com",
