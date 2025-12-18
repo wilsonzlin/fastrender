@@ -152,6 +152,7 @@ const PAGES: &[&str] = &[
     "https://nginx.org",
     "https://go.dev",
     "https://docs.rs",
+    "https://doc.rust-lang.org",
 ];
 
 fn url_to_filename(url: &str) -> String {
