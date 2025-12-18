@@ -308,10 +308,11 @@ fn fetch_page(
         .with_timeout(timeout)
         .with_user_agent(user_agent.to_string())
         .with_accept_language(accept_language.to_string());
-    fetcher
-        .fetch(url)
-        .map(|res| (res.bytes, res.content_type))
-        .map_err(|e| e.to_string())
+    let res = fetcher.fetch(url).map_err(|e| e.to_string())?;
+    if res.bytes.is_empty() {
+        return Err("empty response body".to_string());
+    }
+    Ok((res.bytes, res.content_type))
 }
 
 fn main() {
@@ -492,6 +493,28 @@ mod tests {
         let html = std::fs::read_to_string(&cache_path).expect("html read");
         assert_eq!(html, "hello");
         assert!(!meta_path.exists(), "meta should be removed when content type absent");
+    }
+
+    #[test]
+    fn fetch_page_rejects_empty_body() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            if let Some(stream) = listener.incoming().next() {
+                let mut stream = stream.unwrap();
+                let headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(headers);
+            }
+        });
+
+        let url = format!("http://{}", addr);
+        let result = fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE);
+        assert!(result.is_err(), "empty bodies should be treated as failures");
+        handle.join().unwrap();
     }
 
     #[test]

@@ -48,6 +48,7 @@ openbsd.org fetch/render now passes (PNG bbox approx 20..1199 x 15..734 at 1200x
 fetch_and_render now accepts --timings to enable FASTR_RENDER_TIMINGS for per-stage logging when fetching a single page.
 fetch_pages now accepts --timings to print per-page fetch durations (including cached/timeouts), plus timing output for cache hits/writes/errors.
 booking.com fetch returns an empty body (0 bytes) even with Chrome UA; cached html cleared and refetch still empty—likely bot-blocked.
+fetch_pages now treats empty HTTP bodies as errors (does not cache zero-byte responses) with a regression covering empty responses via a local test server.
 
 - Rendered additional pages and found `openbsd.org` PNG was completely blank. Root cause: block layout dropped absolutely positioned children when the parent block was laid out via `layout_block_child` (positioned_children from `layout_children` were ignored). Added absolute-position handling to that path so out-of-flow children are laid out against the block's padding box.
 - `openbsd.org` now renders with visible sidebar/content; `render_pages --pages openbsd.org` succeeds (PNG unique colors ~32k).
