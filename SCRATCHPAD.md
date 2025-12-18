@@ -62,6 +62,8 @@ inspect_frag now accepts --user-agent/--accept-language and uses them when fetch
 fetch_pages run populated cache for 85+ pages; render_pages rerun succeeded for all cached pages (86/86 pass) after split_at UTF-8 guard; latimes now renders (~106KB PNG).
 Rowspan height distribution adjusted to favor auto rows while sharing spans; vertical text-overflow ellipsis tests now passing. Rowspan regressions (`calculate_row_heights_*`, `baseline_height_computation_skips_rowspanning_cells`) fixed.
 
+- Grid layout now reuses measured fragments when converting from Taffy: grid items treated as leaves (e.g., nested grids) reuse the fragment produced during measurement so their children are preserved. This fixes missing scroll-snap targets on horizontal/inline grid flows (scroll snap tests now pass).
+
 - Meta refresh redirects are now followed once in fetch_and_render/render_pages (e.g., duckduckgo.com noscript redirect to html.duckduckgo.com), restoring content for pages that hide the body when scripting is disabled.
 - Simple JS location redirects are also followed once in the CLIs (window.location[.href]/location.replace with literal URL), to catch noscript/script-only handoffs before rendering.
 - HttpFetcher now errors on empty HTTP bodies (UnexpectedEof) to avoid caching blank responses; regression added. fetch_and_render already treats empty bodies as errors.
