@@ -7,6 +7,8 @@ CNN: render still slow (~82s) and shows only the top ~275px strip; likely JS-dri
 CNN profiling notes: cascade ~4s after selector dedup (720k candidates); layout dominates (~78s). Flex profiling shows product-zone__inner and vertical-shelf carousels repeatedly laid out; cache histogram shows heavy reuse of a few keys. Flex cache tolerances relaxed (min epsilon 1px) and cache key now includes debug selector to merge identical components; flex measure cache quantizes definite available sizes.
 CNN carousels: container_vertical-shelf-carousel markup is present in HTML (lazy class, cards/links/media wrappers). Need to reduce repeated layouts (e.g., cache reuse/skip offscreen) for these containers.
 
+Added nationalgeographic.com to fetch_pages targets. Render succeeds (bbox fills frame) in ~17s at 1200x800; fetch ~0.6MB HTML.
+
 msnbc.com: render at 1200x800 (~18s, ~4,138 boxes) produces an all-white PNG (single color, full bbox); page has many scripts/styles (53 scripts incl. 35 external src, 28 style tags; 12 media queries; 33 calc; 734 var(); display:none=4; z-index=13; no noscript/meta refresh), so likely JS-dependent content.
 
 Working tree clean, up to date (targets added: vox.com, nationalgeographic.com, hbr.org). Idle/available for new assignment.
@@ -31,6 +33,7 @@ CSS link extraction now decodes HTML entities (including odd forms like &/#47;) 
 Entity-decoded CSS URLs now collapse surplus slashes after schemes (e.g., https:////host////path → https://host/path); regressions cover link and embedded CSS cases. figma.com still blank (JS app) but entity-escaped hrefs now normalize correctly.
 Stylesheet discovery now falls back to loading print-only styles when no screen/all stylesheets are present (e.g., pages that only ship a print stylesheet statically); regression added. theguardian.com still renders sparse content (JS-driven), but print styles can help other minimalist pages.
 newsweek.com: fetch ok (~1.1MB HTML, 20 stylesheet links ~578KB inlined, 113 scripts, no inline <style>), cascade ~3s, box_tree ~0.3s, but layout hangs (no profile/box-tree output) even with tiny viewport, css-limit=0, and short timeouts (5–120s). Investigation ongoing.
+nationalgeographic.com: fetch ok (~0.6MB HTML) and render succeeds in ~17s at 1200x800 (full-frame bbox).
 
 Added fast.com to fetch_pages targets; fetch succeeds (~25KB HTML) and renders in ~0.3s at 1200×800 (PNG ~35KB, bbox roughly centered speed UI).
 Added blog.rust-lang.org to fetch_pages targets. Fetch succeeds (~87KB HTML) and renders in ~1.5s at 1200×800 (PNG ~106KB; full content visible).
