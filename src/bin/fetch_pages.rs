@@ -160,6 +160,7 @@ const PAGES: &[&str] = &[
     "https://go.dev",
     "https://docs.rs",
     "https://doc.rust-lang.org",
+    "https://blog.rust-lang.org",
     "https://docs.python.org",
     "https://kotlinlang.org",
 ];
