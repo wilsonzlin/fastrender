@@ -138,7 +138,6 @@ const PAGES: &[&str] = &[
     "https://npmjs.com",
     "https://latimes.com",
     "https://cloudflare.com",
-    "https://docs.rs",
     "https://aliexpress.com",
     "https://apnews.com",
     "https://aljazeera.com",
@@ -150,7 +149,6 @@ const PAGES: &[&str] = &[
     "https://sqlite.org",
     "https://nginx.org",
     "https://go.dev",
-    "https://docs.rs",
 ];
 
 fn url_to_filename(url: &str) -> String {
