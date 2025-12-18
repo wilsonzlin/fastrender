@@ -1540,6 +1540,7 @@ Actionable borrowings:
 - Inline bidi: added layout regression `bidi_isolate_positions_between_surrounding_runs` to ensure a unicode-bidi:isolate RTL run stays contiguous and is positioned between surrounding LTR text in visual order.
 - Text overflow: added regression `text_overflow_does_not_emit_ellipsis_when_content_fits` to ensure ellipses are only emitted when inline content actually overflows.
 - Display-list outlines bypass clip masks like CSS outlines; regression `outline_ignores_clip_region` ensures outlines extend outside clipped regions.
+- Wired.com blank render remains unresolved: content is laid out far offscreen and only visible when scrolling deep; no fix yet.
 # Added painter background image-rendering coverage: pixelated backgrounds now have a regression ensuring nearest-neighbor sampling/snap-upscale is applied (`cargo test background_image_rendering_pixelated_uses_nearest_sampling --quiet`).
 - Media queries: `any-pointer` now matches only the available pointer capability (fine/coarse/none) instead of treating fine pointers as coarse; added regression `test_evaluate_any_pointer` covering desktop/mobile/print contexts.
 - Media queries: `any-pointer` now tracks coarse/fine availability separately; hybrid devices can satisfy both coarse and fine, and regression `test_evaluate_any_pointer_hybrid` covers the combined case.
