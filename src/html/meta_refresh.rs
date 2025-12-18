@@ -211,6 +211,15 @@ mod tests {
     }
 
     #[test]
+    fn extracts_quoted_and_entity_decoded_url() {
+        let html = r#"<meta http-equiv="refresh" content="0;URL='https://example.com/?a=1&amp;b=2'">"#;
+        assert_eq!(
+            extract_meta_refresh_url(html),
+            Some("https://example.com/?a=1&b=2".to_string())
+        );
+    }
+
+    #[test]
     fn ignores_non_refresh_meta() {
         let html = "<meta charset=\"utf-8\"><meta name='viewport' content='width=device-width'>";
         assert_eq!(extract_meta_refresh_url(html), None);
