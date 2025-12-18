@@ -214,3 +214,4 @@ width:100% appears ~259 times.
 min-width appears ~250 times; max-width ~358 times.
 height:100% appears ~64 times.
 opacity appears ~137 times.
+letter-spacing appears ~223 times.
