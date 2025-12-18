@@ -19,7 +19,7 @@ Added yahoo.com and nasa.gov to fetch_pages targets (cargo check --bin fetch_pag
 Replaced elements: skip intrinsic image fetch when both width and height are specified (per CSS replaced sizing), dramatically reducing box_tree time on image-heavy pages (nasa.gov now renders in ~8s: box_tree ~0.26s, layout ~0.3s, paint ~5.7s).
 Added display-list renderer regressions for mix-blend-mode (non-isolated multiply vs isolated source-over).
 render_pages/fetch_and_render support --timings to enable FASTR_RENDER_TIMINGS per-page logging; fetch_pages supports --timings for per-page fetch durations (including cache hits/errors).
-booking.com fetch returns empty body even with Chrome UA; fetch_pages now treats empty bodies as errors and avoids caching them.
+booking.com (and m.booking.com) return HTTP 202 with empty body (CloudFront WAF challenge) even with Chrome UA/Accept-Language; fetch_pages treats empty bodies as errors and avoids caching them.
 fetch_pages run populated cache for 85+ pages; render_pages rerun succeeded for all cached pages (86/86 pass) after split_at UTF-8 guard; latimes now renders (~106KB PNG).
 Rowspan height distribution adjusted to favor auto rows while sharing spans; vertical text-overflow ellipsis tests now passing. Rowspan regressions (`calculate_row_heights_*`, `baseline_height_computation_skips_rowspanning_cells`) fixed.
 
