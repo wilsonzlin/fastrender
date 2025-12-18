@@ -117,6 +117,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "flex-grow",
     "flex-shrink",
     "flex-wrap",
+    "order",
     "float",
     "font",
     "font-family",

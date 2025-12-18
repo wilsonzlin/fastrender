@@ -2354,6 +2354,23 @@ mod tests {
     }
 
     #[test]
+    fn order_accepts_calc_integer() {
+        let dom = element_with_style("display: flex; order: calc(2 + 3);");
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.order, 5);
+    }
+
+    #[test]
+    fn order_rejects_non_integer_calc() {
+        let dom = element_with_style("display: flex; order: calc(2.5);");
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        // order should remain the initial 0 when calc produces a non-integer
+        assert_eq!(styled.styles.order, 0);
+    }
+
+    #[test]
     fn ad_slot_classes_do_not_collapse_without_css_rules() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
