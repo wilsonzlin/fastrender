@@ -1265,15 +1265,63 @@ impl FormattingContext for GridFormattingContext {
             )
             .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
 
-<<<<<<< ours
-        // Convert back to FragmentNode tree
-        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
-            self.font_context.clone(),
-            self.viewport_size,
-            self.nearest_positioned_cb,
+        let root_layout = taffy
+            .layout(root_id)
+            .map_err(|e| LayoutError::MissingContext(format!("Taffy root layout error: {:?}", e)))?;
+
+        let mut children_fragments = Vec::new();
+        for child_id in child_ids {
+            let child_box = node_map.get(&child_id).copied().unwrap();
+            let layout = taffy
+                .layout(child_id)
+                .map_err(|e| LayoutError::MissingContext(format!("Taffy child layout error: {:?}", e)))?;
+
+            let mut constraints = LayoutConstraints::new(
+                CrateAvailableSpace::Definite(layout.size.width),
+                if layout.size.height > 0.0 {
+                    CrateAvailableSpace::Definite(layout.size.height)
+                } else {
+                    CrateAvailableSpace::Indefinite
+                },
+            );
+            constraints.inline_percentage_base = Some(layout.size.width);
+            let fc_type = child_box.formatting_context().unwrap_or(FormattingContextType::Block);
+            let fc = factory.create(fc_type);
+            let mut child_fragment = match measured_fragments.remove(&child_id) {
+                Some(frag)
+                    if (frag.bounds.width() - layout.size.width).abs() < 0.5
+                        && (frag.bounds.height() - layout.size.height).abs() < 0.5 =>
+                {
+                    frag
+                }
+                _ => fc.layout(child_box, &constraints)?,
+            };
+            child_fragment.bounds = crate::geometry::Rect::new(
+                crate::geometry::Point::new(layout.location.x, layout.location.y),
+                crate::geometry::Size::new(layout.size.width, layout.size.height),
+            );
+            children_fragments.push(child_fragment);
+        }
+
+        let mut fragment = FragmentNode::new_block_styled(
+            Rect::new(
+                crate::geometry::Point::new(root_layout.location.x, root_layout.location.y),
+                crate::geometry::Size::new(root_layout.size.width, root_layout.size.height),
+            ),
+            children_fragments,
+            box_node.style.clone(),
         );
-        let fallback_width = constraints.width().unwrap_or(self.viewport_size.width);
-        let mut fragment = self.convert_to_fragments(&taffy, root_id, &node_map, &factory, fallback_width)?;
+
+        if let Some(key) = self.layout_cache_key(constraints) {
+            let cache = GRID_LAYOUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            if let Ok(mut map) = cache.lock() {
+                let cache_id = box_node.styled_node_id.unwrap_or(box_node.id);
+                let entry = map
+                    .entry((cache_id, key))
+                    .or_insert_with(|| Arc::new(fragment.clone()));
+                fragment = (**entry).clone();
+            }
+        }
 
         // Position out-of-flow children against the appropriate containing block.
         if !positioned_children.is_empty() {
