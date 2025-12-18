@@ -49,6 +49,7 @@ const PAGES: &[&str] = &[
     "https://wikipedia.org",
     "https://www.w3.org",
     "https://bing.com",
+    "https://nbcnews.com",
     // Tier 4: Complex
     "https://github.com",
     "https://gitlab.com",
