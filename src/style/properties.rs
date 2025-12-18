@@ -6566,6 +6566,7 @@ pub fn extract_length(value: &PropertyValue) -> Option<Length> {
         PropertyValue::Length(len) => Some(*len),
         PropertyValue::Number(n) if *n == 0.0 => Some(Length::px(0.0)),
         PropertyValue::Keyword(kw) if kw == "auto" => None,
+        PropertyValue::Keyword(kw) => parse_length(kw),
         _ => None,
     }
 }
@@ -10090,6 +10091,7 @@ pub fn extract_margin_values(value: &PropertyValue) -> Option<Vec<Option<Length>
         PropertyValue::Length(len) => Some(vec![Some(*len)]),
         PropertyValue::Number(n) if *n == 0.0 => Some(vec![Some(Length::px(0.0))]),
         PropertyValue::Keyword(kw) if kw == "auto" => Some(vec![None]), // auto margins
+        PropertyValue::Keyword(kw) => parse_length(kw).map(|len| vec![Some(len)]),
         PropertyValue::Multiple(values) => {
             let lengths: Vec<Option<Length>> = values.iter().map(extract_length).collect();
             if lengths.is_empty() {
@@ -15951,6 +15953,31 @@ mod tests {
         apply_declaration(&mut style, &invalid, &ComputedStyle::default(), 16.0, 16.0);
         // Calculated angle (110deg) is out of range, so the declaration is ignored.
         assert!(matches!(style.font_style, FontStyle::Oblique(Some(a)) if (a - 10.0).abs() < 0.01));
+    }
+
+    #[test]
+    fn calc_zero_accepted_for_margin_and_inset() {
+        let lengths = extract_margin_values(&PropertyValue::Keyword("calc(0)".into()))
+            .expect("calc(0) should parse as zero length");
+        assert_eq!(lengths, vec![Some(Length::px(0.0))]);
+
+        let mut style = ComputedStyle::default();
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "inset".to_string(),
+                value: PropertyValue::Keyword("calc(0)".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.top, Some(Length::px(0.0)));
+        assert_eq!(style.right, Some(Length::px(0.0)));
+        assert_eq!(style.bottom, Some(Length::px(0.0)));
+        assert_eq!(style.left, Some(Length::px(0.0)));
     }
 
     #[test]

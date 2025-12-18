@@ -2107,6 +2107,9 @@ pub fn parse_length(s: &str) -> Option<Length> {
         if let Some(len) = parse_function_length(s) {
             return Some(len);
         }
+        if lower == "calc(0)" {
+            return Some(Length::px(0.0));
+        }
     }
 
     for (suffix, unit) in [
