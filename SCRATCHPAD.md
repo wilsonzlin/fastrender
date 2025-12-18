@@ -106,6 +106,8 @@ Added docs.rs to fetch_pages targets (cargo check --bin fetch_pages passes).
 Meta refresh parsing now covers quoted/entity-encoded URLs (extracts `https://example.com/?a=1&b=2` from content="0;URL='...&amp;...'"); test added. Pending: wire through fetch/render follow behavior if more cases emerge.
 fetch_and_render regression `render_once_follows_quoted_meta_refresh` uses a local server to ensure quoted/entity meta refresh targets are actually followed (second request hits decoded URL) and output is produced.
 - Added fast.com and kotlinlang.org to fetch_pages targets (cargo check --bin fetch_pages passes). Resolved lingering grid.rs conflict marker and made convert_to_fragments generic over TaffyTree payloads to compile after rebases.
+Added fast.com, kotlinlang.org, and openstreetmap.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
+Added stanford.edu and developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages passes).
 calc(0) is now accepted for margin/inset shorthands: parse_length falls back to 0 for calc(0), extract_length handles calc strings, and a regression ensures margin/inset apply zero from calc(0).
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
@@ -113,4 +115,4 @@ Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_a
 - fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
 Added fast.com, kotlinlang.org, and openstreetmap.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
 Added stanford.edu to fetch_pages targets (cargo check --bin fetch_pages passes).
-- Added regression `tests/box_generation_ad_placeholders.rs` verifying empty ad placeholders (`ad-height-hold`/`ad__slot`/`should-hold-space`) generate no boxes, protecting the layout fix that drops hidden ad spacers.
+Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages passes).
