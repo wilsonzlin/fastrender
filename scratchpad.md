@@ -1572,3 +1572,4 @@ Actionable borrowings:
 - Root rem base now honors the HTML root font-size: the cascade treats the `<html>` element as the root for root_font_size resolution (instead of the document node), so `rem`/percent font sizes resolve after author root sizing. Added regression `root_font_size_percentage_uses_initial_value` covering 62.5% root font-size → 10px rem, and wikipedia.org now renders at full scale (content spans the viewport instead of a 238×64 block).
 - Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 - Rendered https://w3.org at 1200×800: content clustered to the left/top (bbox ~0,188–659,799); likely responsive/min-content behavior or missing resources. Logged for future investigation.
+- Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199,799); no obvious issues. Logged for reference.
