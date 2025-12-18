@@ -33,20 +33,23 @@ const CACHE_DIR: &str = "fetches/html";
 
 // Target pages for testing
 const PAGES: &[&str] = &[
+    // Tier 1: Simple
     "https://example.com",
     "https://example.org",
     "https://example.net",
+    // Tier 2: Text-heavy
     "https://news.ycombinator.com",
     "https://lobste.rs",
     "https://lite.cnn.com",
     "https://text.npr.org",
     "https://iana.org",
-    "https://slashdot.org",
+    // Tier 3: Modern
     "https://google.com",
     "https://duckduckgo.com",
     "https://wikipedia.org",
     "https://www.w3.org",
     "https://bing.com",
+    // Tier 4: Complex
     "https://github.com",
     "https://gitlab.com",
     "https://stackoverflow.com",
@@ -54,13 +57,14 @@ const PAGES: &[&str] = &[
     "https://twitter.com",
     "https://weibo.cn",
     "https://alibaba.com",
-    "https://hbr.org",
+    "https://arxiv.org",
     "https://amazon.com",
     "https://youtube.com",
     "https://facebook.com",
     "https://linkedin.com",
     "https://microsoft.com",
     "https://apple.com",
+    "https://developer.apple.com",
     "https://openai.com",
     "https://icloud.com",
     "https://nytimes.com",
@@ -76,6 +80,7 @@ const PAGES: &[&str] = &[
     "https://apache.org",
     "https://python.org",
     "https://cnn.com",
+    "https://fast.com",
     "https://theguardian.com",
     "https://nyu.edu",
     "https://openbsd.org",
@@ -118,14 +123,13 @@ const PAGES: &[&str] = &[
     "https://engadget.com",
     "https://figma.com",
     "https://ft.com",
-    "https://fast.com",
-    "https://cnet.com",
+    "https://phoronix.com",
     "https://nationalgeographic.com",
+    "https://cnet.com",
     "https://developer.mozilla.org",
     "https://howtogeek.com",
     "https://macrumors.com",
     "https://washingtonpost.com",
-    "https://vox.com",
     "https://w3.org",
     "https://abcnews.go.com",
     "https://washington.edu",
@@ -139,38 +143,30 @@ const PAGES: &[&str] = &[
     "https://nasa.gov",
     "https://stackexchange.com",
     "https://rust-lang.org",
+    "https://blog.rust-lang.org",
     "https://rfc-editor.org",
-    "https://openstreetmap.org",
-    "https://www.haskell.org",
     "https://tesco.com",
+    "https://bing.com",
     "https://discord.com",
     "https://weather.com",
     "https://bbc.co.uk",
     "https://npmjs.com",
     "https://latimes.com",
     "https://cloudflare.com",
-    "https://stanford.edu",
     "https://aliexpress.com",
     "https://apnews.com",
     "https://aljazeera.com",
-    "https://github.blog",
     "https://tripadvisor.com",
     "https://vogue.com",
-    "https://nationalgeographic.com",
     "https://theatlantic.com",
-    "https://theonion.com",
     "https://economist.com",
     "https://newyorker.com",
-    "https://hbr.org",
     "https://sqlite.org",
     "https://nginx.org",
     "https://go.dev",
     "https://docs.rs",
     "https://doc.rust-lang.org",
-    "https://blog.rust-lang.org",
     "https://www.openstreetmap.org",
-    "https://phoronix.com",
-    "https://nationalgeographic.com",
     "https://docs.python.org",
     "https://kotlinlang.org",
 ];
@@ -367,9 +363,7 @@ fn fetch_page(
                         current_url = next.to_string();
                         html = decode_html_bytes(&res.0, res.1.as_deref());
                     }
-                    Err(e) => {
-                        eprintln!("Warning: meta refresh fetch failed: {}", e);
-                    }
+                    Err(e) => eprintln!("Warning: meta refresh fetch failed: {} (keeping original)", e),
                 }
             }
         }
@@ -384,9 +378,7 @@ fn fetch_page(
                         res = next_res;
                         current_url = next.to_string();
                     }
-                    Err(e) => {
-                        eprintln!("Warning: js redirect fetch failed: {}", e);
-                    }
+                    Err(e) => eprintln!("Warning: js redirect fetch failed: {} (keeping original)", e),
                 }
             }
         }
@@ -720,13 +712,9 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) = fetch_page(
-            &url,
-            Duration::from_secs(5),
-            DEFAULT_USER_AGENT,
-            DEFAULT_ACCEPT_LANGUAGE,
-        )
-        .expect("fetch succeeds");
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"refreshed");
@@ -777,17 +765,66 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) = fetch_page(
-            &url,
-            Duration::from_secs(5),
-            DEFAULT_USER_AGENT,
-            DEFAULT_ACCEPT_LANGUAGE,
-        )
-        .expect("fetch succeeds");
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"redirected");
         assert_eq!(content_type.as_deref(), Some("text/plain"));
         assert_eq!(final_url, format!("http://{}/js", addr));
+    }
+
+    #[test]
+    fn fetch_page_keeps_original_when_js_redirect_fails() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            let mut iter = listener.incoming();
+
+            // First response: JS redirect to /missing
+            if let Some(stream) = iter.next() {
+                let mut stream = stream.unwrap();
+                let _ = stream.read(&mut [0u8; 1024]);
+                let body = b"<script>window.location.href='/missing'</script>";
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+
+            // Second response: 404 for /missing
+            if let Some(stream) = iter.next() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf);
+                assert!(req.starts_with("GET /missing"), "unexpected path: {req}");
+
+                let body = b"not found";
+                let headers = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let url = format!("http://{}/", addr);
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
+        handle.join().unwrap();
+
+        assert_eq!(bytes, b"<script>window.location.href='/missing'</script>");
+        assert_eq!(content_type.as_deref(), Some("text/html"));
+        assert_eq!(final_url, url);
     }
 }
