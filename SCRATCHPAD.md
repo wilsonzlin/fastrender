@@ -72,3 +72,4 @@ Apple.com already present in fetch_pages PAGES list; no changes needed.
 Added docs.rs to fetch_pages targets (cargo check --bin fetch_pages passes).
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
+- Added mozilla.org to fetch_pages targets for broader coverage.
