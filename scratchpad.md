@@ -1588,6 +1588,7 @@ Actionable borrowings:
 - Render bug hunt: bbc.com rendered at 1200×800 with CSS fetched; output non-blank (light gray/white page). No obvious layout defects noted from quick bbox/color scan.
 - Render bug hunt: ietf.org rendered at 1200×800 with 2 CSS assets; output non-blank (light gray layout). No obvious defects spotted in quick bbox/color scan.
 - Render bug hunt: npr.org rendered at 1200×800 with multiple CSS assets; output non-blank (light gray/white with content). No obvious layout defects on quick scan.
+- Render bug hunt: cloudflare.com rendered at 1200×800 with 3 CSS assets; output non-blank (orange/white theme). No obvious layout defects on quick scan.
 - Rendered wikipedia.org at 1200×800: output PNG is entirely white despite successful fetch; likely styles/overlays hiding content or JS dependency. Needs investigation.
 - Table rowspans: spanning height distribution now shares evenly when uncapped; regression `baseline_height_computation_skips_rowspanning_cells` ensures a tall rowspan cell doesn’t overinflate the preceding row.
 - CSS custom properties: fallback resolution now marks declarations invalid when the fallback still contains unresolved var() references; regression `unresolved_fallback_var_marks_declaration_invalid` added.
