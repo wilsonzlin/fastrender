@@ -190,7 +190,7 @@ z-index appears ~87 times.
 
 <<<<<<< HEAD
 
-BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over 1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout). Inline CSS contains 74 display:grid rules and 49 grid-template-columns rules; about 254 elements use those grid classes in the DOM.
+BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over 1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout). Inline CSS contains 74 display:grid rules and 49 grid-template-columns rules; about 254 elements use those grid classes in the DOM. Engine-level grid optimization still needed; CSS hacks (removing grid-template or injected overrides) didn’t reduce layout time.
 Inline CSS stats: 74 display:grid rules and 49 grid-template-columns rules in the main inline block (~70KB).
 
 
