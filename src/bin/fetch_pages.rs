@@ -77,6 +77,7 @@ const PAGES: &[&str] = &[
     "https://apache.org",
     "https://python.org",
     "https://cnn.com",
+    "https://fast.com",
     "https://theguardian.com",
     "https://nyu.edu",
     "https://openbsd.org",
@@ -114,6 +115,7 @@ const PAGES: &[&str] = &[
     "https://techcrunch.com",
     "https://theverge.com",
     "https://wired.com",
+    "https://fast.com",
     "https://arstechnica.com",
     "https://engadget.com",
     "https://figma.com",
@@ -121,7 +123,6 @@ const PAGES: &[&str] = &[
     "https://fast.com",
     "https://cnet.com",
     "https://developer.mozilla.org",
-    "https://doc.rust-lang.org",
     "https://howtogeek.com",
     "https://macrumors.com",
     "https://washingtonpost.com",
@@ -131,7 +132,6 @@ const PAGES: &[&str] = &[
     "https://berkeley.edu",
     "https://xkcd.com",
     "https://fandom.com",
-    "https://openstreetmap.org",
     "https://ikea.com",
     "https://elpais.com",
     "https://ndtv.com",
@@ -139,6 +139,7 @@ const PAGES: &[&str] = &[
     "https://nasa.gov",
     "https://stackexchange.com",
     "https://rust-lang.org",
+    "https://blog.rust-lang.org",
     "https://rfc-editor.org",
     "https://tesco.com",
     "https://bing.com",
@@ -149,9 +150,6 @@ const PAGES: &[&str] = &[
     "https://latimes.com",
     "https://cloudflare.com",
     "https://fast.com",
-    "https://kotlinlang.org",
-    "https://openstreetmap.org",
-    "https://stanford.edu",
     "https://aliexpress.com",
     "https://apnews.com",
     "https://aljazeera.com",
@@ -166,6 +164,7 @@ const PAGES: &[&str] = &[
     "https://docs.rs",
     "https://doc.rust-lang.org",
     "https://blog.rust-lang.org",
+    "https://www.openstreetmap.org",
     "https://docs.python.org",
     "https://kotlinlang.org",
 ];
@@ -362,9 +361,7 @@ fn fetch_page(
                         current_url = next.to_string();
                         html = decode_html_bytes(&res.0, res.1.as_deref());
                     }
-                    Err(e) => {
-                        eprintln!("Warning: meta refresh fetch failed: {}", e);
-                    }
+                    Err(e) => eprintln!("Warning: meta refresh fetch failed: {} (keeping original)", e),
                 }
             }
         }
@@ -379,9 +376,7 @@ fn fetch_page(
                         res = next_res;
                         current_url = next.to_string();
                     }
-                    Err(e) => {
-                        eprintln!("Warning: js redirect fetch failed: {}", e);
-                    }
+                    Err(e) => eprintln!("Warning: js redirect fetch failed: {} (keeping original)", e),
                 }
             }
         }
