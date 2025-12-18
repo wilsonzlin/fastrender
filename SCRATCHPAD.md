@@ -166,3 +166,4 @@ cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (~1.
 CNN CSS complexity: ~1933 unique classes, ~190 unique IDs; ~1381 unique properties; ~5302 :not() usages; ~1063 selectors with ≥4 combinators. HTML uses ~762 unique classes across ~4.8k class tokens and ~36 inline style attrs (~528 hrefs). Cascade still ~7–8s.
 Universal tag bucket cache and candidate dedup reduce selector candidates slightly (~5.24M, avg 1706/node) but cnn.com cascade remains ~7.5s (find ~1.0s, decl ~0.9s, pseudo ~3.1s) with render timing out at 30s. Further optimization needed.
 CNN inline CSS includes ~199 media queries.
+Inline CSS stats: ~5,532 rules, ~16,740 declarations, ~3,868 attribute selectors.
