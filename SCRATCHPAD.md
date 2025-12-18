@@ -1,10 +1,16 @@
-No progress this iteration; still idle/available. Marker baseline/list-style-position/ellipsis regressions landed upstream.
-cloudflare.com fetch/render timed out at 60s; no changes made
-latimes.com fetch/render timed out at 60s; no changes made
-latimes.com fetch/render timed out at 60s; no changes made (duplicate notes removed)
-w3.org grid render fixed: grid layout now falls back to stacking children when Taffy reports zero-width grid items, forcing containers to fill the available width; added env logging FASTR_LOG_GRID_ROOT/FASTR_LOG_GRID_CHILDREN. Added w3.org to fetch_pages targets.
-Added regression `grid_children_are_laid_out_even_when_taffy_reports_zero_width` to ensure grid items are laid out via their own formatting contexts (text visible) even when Taffy returns zero widths. Local patches were pushed; also cached at /tmp/w3-grid-patches.
-booking.com fetch blocked: CloudFront WAF returns HTTP 202 with x-amzn-waf-action: challenge and empty body, so page cannot be cached/rendered via fetch_pages.
-w3.org grid render fixed: grid layout now falls back to stacking children when Taffy reports zero-width grid items, forcing containers to fill the available width; added env logging FASTR_LOG_GRID_ROOT/FASTR_LOG_GRID_CHILDREN. Added w3.org to fetch_pages targets.
-Added regression `grid_children_are_laid_out_even_when_taffy_reports_zero_width` to ensure grid items are laid out via their own formatting contexts (text visible) even when Taffy returns zero widths.
-Local patches for the grid fix/regression: /tmp/w3-grid-patches/0001-Handle-zero-width-grid-grids.patch and 0002-Add-regression-for-grid-items-laid-out-when-Taffy-wi.patch (pushing blocked by GitHub SSH timeouts).
+w3.org grid render fixed: grid layout now falls back to stacking children when Taffy reports zero-width grid items (FASTR_LOG_GRID_ROOT/FASTR_LOG_GRID_CHILDREN envs). Added w3.org to fetch_pages and regression `grid_children_are_laid_out_even_when_taffy_reports_zero_width`.
+
+Render pipeline charset sniffing: fetch_pages writes .html.meta Content-Type sidecars; render_pages/fetch_and_render decode via shared html::encoding (BOM/header/meta/WIN-1252 default).
+Cloudflare perf: web fonts filtered to used codepoints, HTTP timeout 10s; FASTR_RENDER_TIMINGS logs css_parse/style_prepare/style_apply. cloudflare.com renders ~12s @1200×800.
+Inline split guard: TextItem::split_at clamps mid-codepoint offsets to the previous char boundary and reshapes as needed; regressions cover mid-emoji splits and `previous_char_boundary_in_text` (multibyte clamps; past-end clamps). Marker baseline/list-style-position/ellipsis regressions landed upstream.
+
+HTTP fetcher: follows redirects (shared UA), sends Accept-Language default en-US,en;q=0.9 (exported DEFAULT_ACCEPT_LANGUAGE), retries bad Content-Encoding by falling back to identity (`fetch_http_retries_on_bad_gzip`). fetch_pages supports --accept-language, treats empty bodies as errors (regression added), reports failed URLs in the summary, and supports --timings for per-page durations. render_pages/fetch_and_render/inspect_frag accept --prefers-reduced-data/--prefers-reduced-motion; render_pages/fetch_and_render accept --timings.
+
+Caching: fetch_pages centralized .html.meta writes; fetch_and_render reads sidecars for file:// caches and seeds base_url (`fetch_bytes_uses_base_url_from_meta` regression). fetch_pages rejects zero-byte bodies and logs failed URLs.
+
+Text/layout fixes: hyphenation drops non-char-boundary offsets; run splitting validates UTF-8; shaping clusters clamp to char boundaries. No-wrap text-overflow with outside markers fixed (start-side ellipsis/image marker regressions). Unitless zero parsing fixed; calc/min/max/clamp now feed numeric properties (opacity/z-index/order) with regressions; match-parent text-align propagates to text-align-last. Container queries respect inline-size without block dimension (FASTR_LOG_CONTAINER_QUERY). Rowspan height distribution adjusted toward auto rows; vertical text-overflow ellipsis tests passing. Order property added to KNOWN_PROPERTIES; non-integer calc orders ignored per spec.
+
+Page-specific: latimes.com UTF-8 split panic fixed; renders succeed (~53–72s @1200×800). wikipedia.org portal fixed (no-js→js-enabled, jsl10n-visible on html/body, meta base_url); PNG ~121KB. openbsd.org blank render fixed by laying out positioned children gathered via layout_block_child (regression `absolute_children_inside_block_descendants_are_laid_out`). yahoo.com and nasa.gov added to fetch_pages; yahoo now fetches/renders (~14s, ~29KB PNG); nasa remains heavy. booking.com returns empty body; fetch_pages treats empty bodies as errors.
+
+Mix-blend-mode: regressions ensure non-isolated multiply darkens backdrop and isolated uses source-over.
+CNN render with split_at guard now completes: render_pages --pages cnn.com --timeout 60 ~44s (cascade ~7s, box_tree ~4.6s, layout ~42s, paint ~0.5s).
