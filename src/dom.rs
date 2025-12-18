@@ -117,9 +117,10 @@ pub fn parse_html(html: &str) -> Result<DomNode> {
 }
 
 /// Some documents bootstrap by marking the root with `no-js` and replacing it with a
-/// `js-enabled` class once scripts execute. Since we do not run author scripts, mirror
-/// that initialization so content that relies on the class flip (e.g., initial opacity)
-/// is visible in static renders.
+/// `js-enabled` class once scripts execute. Others toggle visibility gates like
+/// `jsl10n-visible` after client-side localization. Since we do not run author scripts,
+/// mirror those initializations so content that relies on the class flip (e.g., initial
+/// opacity) is visible in static renders.
 fn toggle_no_js_class(node: &mut DomNode) {
     if let DomNodeType::Element {
         tag_name, attributes, ..
@@ -131,11 +132,21 @@ fn toggle_no_js_class(node: &mut DomNode) {
                 .find(|(k, _)| k.eq_ignore_ascii_case("class"))
                 .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
                 .unwrap_or_default();
+            let mut changed = false;
             if classes.iter().any(|c| c == "no-js") {
                 classes.retain(|c| c != "no-js");
                 if !classes.iter().any(|c| c == "js-enabled") {
                     classes.push("js-enabled".to_string());
                 }
+                changed = true;
+            }
+
+            if !classes.iter().any(|c| c == "jsl10n-visible") {
+                classes.push("jsl10n-visible".to_string());
+                changed = true;
+            }
+
+            if changed {
                 let class_value = classes.join(" ");
                 if let Some((_, value)) = attributes.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("class")) {
                     *value = class_value;
@@ -3175,5 +3186,25 @@ mod tests {
         assert!(!classes.iter().any(|c| *c == "no-js"));
         assert!(classes.iter().any(|c| *c == "js-enabled"));
         assert!(classes.iter().any(|c| *c == "foo"));
+        assert!(classes.iter().any(|c| *c == "jsl10n-visible"));
+    }
+
+    #[test]
+    fn parse_html_adds_jsl10n_visible_when_missing() {
+        let dom = parse_html("<html><body></body></html>").expect("parse");
+        let html = dom
+            .children
+            .iter()
+            .find(|c| matches!(c.node_type, DomNodeType::Element { .. }))
+            .expect("html child");
+        let classes = match &html.node_type {
+            DomNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+                .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>())
+                .unwrap_or_default(),
+            _ => panic!("expected html element"),
+        };
+        assert!(classes.iter().any(|c| *c == "jsl10n-visible"));
     }
 }
