@@ -7,6 +7,8 @@ CNN: render still slow (~82s) and shows only the top ~275px strip; likely JS-dri
 CNN profiling notes: cascade ~4s after selector dedup (720k candidates); layout dominates (~78s). Flex profiling shows product-zone__inner and vertical-shelf carousels repeatedly laid out; cache histogram shows heavy reuse of a few keys. Flex cache tolerances relaxed (min epsilon 1px) and cache key now includes debug selector to merge identical components; flex measure cache quantizes definite available sizes.
 CNN carousels: container_vertical-shelf-carousel markup is present in HTML (lazy class, cards/links/media wrappers). Need to reduce repeated layouts (e.g., cache reuse/skip offscreen) for these containers.
 
+msnbc.com: render at 1200x800 (~18s, ~4,138 boxes) produces an all-white PNG (single color, full bbox); page has many scripts/styles (53/28) so likely JS-dependent content.
+
 Working tree clean, up to date (targets added: vox.com, nationalgeographic.com, hbr.org). Idle/available for new assignment.
 Repo still clean and up to date; idle/available for new assignment.
 
