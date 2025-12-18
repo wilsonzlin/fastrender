@@ -3424,6 +3424,21 @@ impl FlexFormattingContext {
                 for child in &mut children {
                     child.bounds = Rect::new(Point::new(child.bounds.x() - dx, child.bounds.y()), child.bounds.size);
                 }
+            } else if min_x.is_finite()
+                && max_x.is_finite()
+                && rect.width().is_finite()
+                && min_x > rect.width() * 0.5
+                && (max_x - min_x) <= rect.width() * 1.5
+            {
+                // Children sit noticeably to the right but still span roughly the container width.
+                // Re-center them within the container to avoid an empty viewport.
+                let span = max_x - min_x;
+                let target_min = ((rect.width() - span).max(0.0)) / 2.0;
+                let dx = min_x - target_min;
+                for child in &mut children {
+                    child.bounds =
+                        Rect::new(Point::new(child.bounds.x() - dx, child.bounds.y()), child.bounds.size);
+                }
             }
         }
 
