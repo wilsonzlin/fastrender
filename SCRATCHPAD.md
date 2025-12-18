@@ -192,3 +192,4 @@ mask-image appears ~12 times in inline CSS.
 @supports appears ~5 times.
 display:flex appears ~327 times.
 display:block appears ~351 times.
+transform appears ~204 times.
