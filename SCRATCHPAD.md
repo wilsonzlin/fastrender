@@ -35,6 +35,8 @@ Rendered theguardian.com; output is essentially blank (only a narrow strip of no
 Added bing.com to fetch_pages targets; fetch/render succeed (bbox fills 1200x800 viewport, ~696 colors). No issues observed.
 Added phoronix.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~4.9k colors). No issues observed.
 Added nationalgeographic.com to fetch_pages targets; fetch/render succeed (bbox ~7..474 x 33..799, ~75 colors). Mostly left-column content due to heavy JS; no static fix added.
+openstreetmap.org: JS redirect parsing now ignores identifier-only targets and data-* attributes (e.g., data-location), preventing bogus redirects from data-location JSON. Added regression to ignore data-location attributes. Target added; fetch succeeds (~34KB), render completes (~60KB PNG, header/nav visible).
+cNN.com: fetch succeeds (~5.2MB HTML) but render still times out at 40s (cascade ~6.3s, box_tree ~3.3s before timeout). Performance work remains.
 Added vox.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~13 colors). Looks minimal/static but non-blank; no issues noted.
 Cloudflare render perf fixed: web font loading filters to the page’s codepoints (skipping unused @font-face ranges) and web font HTTP timeout is 10s; FASTR_RENDER_TIMINGS now reports css_parse/style_prepare/style_apply. cloudflare.com renders in ~12s at 1200×800 instead of 70s+.
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
