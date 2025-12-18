@@ -16,6 +16,7 @@ fetch_pages now accepts --accept-language to override the header and passes it t
 HttpFetcher now retries misreported Content-Encoding by falling back to identity encoding when decompression fails; regression `fetch_http_retries_on_bad_gzip` covers invalid gzip bodies.
 latimes.com fetch/render timed out at 60s; no changes made
 HTML parsing now disables scripting so <noscript> fallbacks are parsed/renderable; regression added for noscript content.
+Logging: fetch_and_render prints UA/viewport/scroll/output parameters; render_pages per-page logs include the UA used. Note: push intermittently timing out; local formatting-only commit (unitless zero test) may remain pending until connectivity stabilizes.
 Added DOM regression to ensure <noscript> content in <head> is preserved (e.g., fallback styles inside noscript remain in the tree).
 CLI support: fetch_and_render, render_pages, and inspect_frag now accept --prefers-reduced-data to override FASTR_PREFERS_REDUCED_DATA (matching reduced-transparency flag), and parsing helpers/tests were added.
 CLI support: render_pages, fetch_and_render, and inspect_frag also accept --prefers-reduced-motion (sets FASTR_PREFERS_REDUCED_MOTION) with parsing helpers/tests; usage text updated for parity.
