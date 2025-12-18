@@ -138,6 +138,7 @@ const PAGES: &[&str] = &[
     "https://nasa.gov",
     "https://stackexchange.com",
     "https://rust-lang.org",
+    "https://www.haskell.org",
     "https://rfc-editor.org",
     "https://openstreetmap.org",
     "https://www.haskell.org",
