@@ -44,13 +44,15 @@ CNN render with split_at char-boundary guard now finishes: render_pages --pages 
 
 Wired.com blank render investigation (Mar 2025): max-height:max-content is now parsed/propagated (flag on ComputedStyle/PositionedStyle), percentage heights resolve only when the parent height is definite, and the stacking tree skips visibility:hidden fragments. Render still blank (PNG nonwhite bbox 0,172–1200,173). inspect_frag shows overlays hidden but a nav drawer container (`OneNavRowGrid` under `FocusTrapContainer`) still lays out at (0,439,1200,800) keeping `main` at y≈1239, and carousel row content begins at x≈1080 even though the container flex-wrap=wrap/justify=center. Need to debug why the hidden nav/drawer occupies normal flow and why flex items are offset right (possibly wrap not honored or min_x anchored by earlier items).
 
+<<<<<<< HEAD
 ---
-Agent7: Added CLI parity for media preferences: `fetch_and_render` now accepts `--prefers-contrast` and `--prefers-color-scheme`, setting FASTR_PREFERS_* before rendering; parser tests added. github.com blank render now resolves after upstream positioned-children fix; inspect_frag shows nav/hero text near y≈35..210. `render_pages --pages github.com --viewport 1200x800 --timeout 60` completes in ~7s with visible content.
-- Preserved original computed styles on out-of-flow positioned fragments across block/flex/grid/inline/table layout so painting/stacking see `position` (fixed creates its own stacking context again).
-- Added regression `positioned_fragments_keep_computed_style_for_stacking` under layout/test_positioned.rs to ensure fixed fragments retain style and build a stacking context.
+Agent7: github.com blank render now resolves after upstream positioned-children fix; inspect_frag shows nav/hero text near y≈35..210. `render_pages --pages github.com --viewport 1200x800 --timeout 60` completes in ~7s with visible content. Preserved original computed styles on out-of-flow positioned fragments across block/flex/grid/inline/table layout so painting/stacking see `position` (fixed creates its own stacking context again). Added regression `positioned_fragments_keep_computed_style_for_stacking` under layout/test_positioned.rs to ensure fixed fragments retain style and build a stacking context. Added CLI parity for media preferences: `fetch_and_render` now accepts `--prefers-contrast` and `--prefers-color-scheme`, setting FASTR_PREFERS_* before rendering; parser tests added.
 Profiling latimes.com (60s timeout, --timings, jobs=1, dev build): parse 0.25s, css_parse 0.10s, style_prepare 2.77s, style_apply 17.96s (cascade total 21.09s), box_tree 6.57s (12,699 boxes), layout 29.13s, layout_document_total 56.8s, paint not reached before timeout (~57s total before 60s timeout). Needs cascade/layout perf work to fit under 60s.
-
 Fixed merge conflicts in the CLI binaries: render_pages/fetch_and_render now compile with both Accept-Language overrides and --timings enabled; fetch_bytes continues returning base_url from cached meta. Re-ran render_pages --pages latimes.com --jobs 1 --timeout 90 --timings (release, FASTR_LAYOUT_PROFILE=1); render completes in ~25.9s (parse 42ms, css_parse 10ms, cascade 4.2s, layout 4.0s, paint 16.2s, PNG ~103KB).
-
 Merged CLI flag streams: fetch_and_render/render_pages accept both --accept-language and --timings again after resolving conflict markers.
 Grid layout now measures grid items with their own formatting contexts and reuses those fragments, so grid children with inline text still lay out even when Taffy would otherwise report zero widths (test_grid_margins coverage passes).
+Added newyorker.com to fetch_pages (fetch/renders succeed ~17s, ~158KB PNG).
+Added economist.com to fetch_pages (fetch/renders succeed ~12s, ~36KB PNG).
+
+Mix-blend-mode: regressions ensure non-isolated multiply darkens backdrop and isolated uses source-over.
+CNN render with split_at guard now completes: render_pages --pages cnn.com --timeout 60 ~44s (cascade ~7s, box_tree ~4.6s, layout ~42s, paint ~0.5s).
