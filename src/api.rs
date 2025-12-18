@@ -3265,6 +3265,29 @@ fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point
         bounds.max_y = bounds.max_y.max(max_target_y + viewport.height);
     }
 
+    let min_target_x = targets_x
+        .iter()
+        .map(|(p, _)| *p)
+        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap_or(0.0);
+    let min_target_y = targets_y
+        .iter()
+        .map(|(p, _)| *p)
+        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap_or(0.0);
+    if min_target_x > 0.0 {
+        for (p, _) in &mut targets_x {
+            *p -= min_target_x;
+        }
+        bounds.max_x = (bounds.max_x - min_target_x).max(0.0);
+    }
+    if min_target_y > 0.0 {
+        for (p, _) in &mut targets_y {
+            *p -= min_target_y;
+        }
+        bounds.max_y = (bounds.max_y - min_target_y).max(0.0);
+    }
+
     // Ensure the container itself contributes to the scrollable area
     let container_rect = Rect::from_xywh(
         container.bounds.x() + container_offset.x,
@@ -3278,12 +3301,12 @@ fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point
     let max_scroll_y = (bounds.max_y - viewport.height).max(0.0);
     let strictness = style.scroll_snap_type.strictness;
     let snapped_x = if snap_x {
-        pick_snap_target(scroll.x, max_scroll_x, strictness, viewport.width * 0.5, &targets_x)
+        pick_snap_target(scroll.x - min_target_x, max_scroll_x, strictness, viewport.width * 0.5, &targets_x)
     } else {
         scroll.x
     };
     let snapped_y = if snap_y {
-        pick_snap_target(scroll.y, max_scroll_y, strictness, viewport.height * 0.5, &targets_y)
+        pick_snap_target(scroll.y - min_target_y, max_scroll_y, strictness, viewport.height * 0.5, &targets_y)
     } else {
         scroll.y
     };
@@ -4495,7 +4518,7 @@ mod tests {
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
 
         let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 120.0));
-        assert!((snapped.y - 208.0).abs() < 0.1, "expected snap to the second section");
+        assert!((snapped.y - 200.0).abs() < 0.1, "expected snap to the second section");
         assert!(snapped.x.abs() < 0.1);
     }
 
