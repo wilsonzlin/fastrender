@@ -1,6 +1,6 @@
 //! Render all cached pages in parallel
 //!
-//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--user-agent UA]
+//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-data <value>]
 //!
 //! Renders all HTML files in fetches/html/ to fetches/renders/
 //! Logs per-page to fetches/renders/{name}.log
@@ -32,19 +32,34 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--user-agent UA]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-data <value>] [--user-agent UA]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
     println!("  --pages a,b,c     Render only the listed cached pages (use cache stems like cnn.com)");
     println!("  --dpr FLOAT       Device pixel ratio for media queries/srcset (default: 1.0)");
     println!("  --prefers-reduced-transparency reduce|no-preference|true|false (overrides env)");
+    println!("  --prefers-reduced-data        reduce|no-preference|true|false (overrides env)");
     println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
     println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
+    let v = val.trim().to_ascii_lowercase();
+    if matches!(
+        v.as_str(),
+        "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+    ) {
+        return Some(true);
+    }
+    if matches!(v.as_str(), "0" | "false" | "no" | "off" | "none" | "no-preference") {
+        return Some(false);
+    }
+    None
+}
+
+fn parse_prefers_reduced_data(val: &str) -> Option<bool> {
     let v = val.trim().to_ascii_lowercase();
     if matches!(
         v.as_str(),
@@ -79,6 +94,7 @@ fn main() {
     let mut viewport: Option<(u32, u32)> = None;
     let mut device_pixel_ratio: f32 = 1.0;
     let mut prefers_reduced_transparency: Option<bool> = None;
+    let mut prefers_reduced_data: Option<bool> = None;
     let mut scroll_x: f32 = 0.0;
     let mut scroll_y: f32 = 0.0;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
@@ -126,6 +142,11 @@ fn main() {
                     prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
                 }
             }
+            "--prefers-reduced-data" => {
+                if let Some(val) = args.next() {
+                    prefers_reduced_data = parse_prefers_reduced_data(&val);
+                }
+            }
             "--pages" => {
                 if let Some(val) = args.next() {
                     let mut filter = page_filter.take().unwrap_or_default();
@@ -170,6 +191,13 @@ fn main() {
     if let Some(reduce) = prefers_reduced_transparency {
         std::env::set_var(
             "FASTR_PREFERS_REDUCED_TRANSPARENCY",
+            if reduce { "reduce" } else { "no-preference" },
+        );
+    }
+
+    if let Some(reduce) = prefers_reduced_data {
+        std::env::set_var(
+            "FASTR_PREFERS_REDUCED_DATA",
             if reduce { "reduce" } else { "no-preference" },
         );
     }
@@ -232,7 +260,6 @@ fn main() {
             let results = &results;
             let path = entry.path();
             let fetcher = Arc::clone(&fetcher);
-            let user_agent = user_agent.clone();
 
             s.spawn(move |_| {
                 let name = path.file_stem().unwrap().to_string_lossy().to_string();
@@ -246,7 +273,6 @@ fn main() {
                 log.push_str(&format!("=== {} ===\n", name));
                 log.push_str(&format!("Source: {}\n", path.display()));
                 log.push_str(&format!("Output: {}\n\n", output_path.display()));
-                log.push_str(&format!("User-Agent: {}\n", user_agent));
 
                 // Read HTML first (before catch_unwind)
                 let html_bytes = match fs::read(&path) {

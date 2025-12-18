@@ -26,16 +26,31 @@ use url::Url;
 
 fn usage() {
     eprintln!(
-        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] <file.html | file://url>"
+        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-data <value>] <file.html | file://url>"
     );
     eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
     eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
     eprintln!("  --scroll-x PX    Horizontal scroll offset in CSS px (default 0)");
     eprintln!("  --scroll-y PX    Vertical scroll offset in CSS px (default 0)");
     eprintln!("  --prefers-reduced-transparency reduce|no-preference|true|false (overrides env)");
+    eprintln!("  --prefers-reduced-data        reduce|no-preference|true|false (overrides env)");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
+    let v = val.trim().to_ascii_lowercase();
+    if matches!(
+        v.as_str(),
+        "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+    ) {
+        return Some(true);
+    }
+    if matches!(v.as_str(), "0" | "false" | "no" | "off" | "none" | "no-preference") {
+        return Some(false);
+    }
+    None
+}
+
+fn parse_prefers_reduced_data(val: &str) -> Option<bool> {
     let v = val.trim().to_ascii_lowercase();
     if matches!(
         v.as_str(),
@@ -72,6 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut scroll_x = 0.0f32;
     let mut scroll_y = 0.0f32;
     let mut prefers_reduced_transparency: Option<bool> = None;
+    let mut prefers_reduced_data: Option<bool> = None;
     let mut raw_path: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -101,6 +117,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--prefers-reduced-transparency" => {
                 if let Some(val) = args.next() {
                     prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
+                }
+            }
+            "--prefers-reduced-data" => {
+                if let Some(val) = args.next() {
+                    prefers_reduced_data = parse_prefers_reduced_data(&val);
                 }
             }
             "--scroll-x" => {
@@ -169,6 +190,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(reduce) = prefers_reduced_transparency {
         env::set_var(
             "FASTR_PREFERS_REDUCED_TRANSPARENCY",
+            if reduce { "reduce" } else { "no-preference" },
+        );
+    }
+
+    if let Some(reduce) = prefers_reduced_data {
+        env::set_var(
+            "FASTR_PREFERS_REDUCED_DATA",
             if reduce { "reduce" } else { "no-preference" },
         );
     }
