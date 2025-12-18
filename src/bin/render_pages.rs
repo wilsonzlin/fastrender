@@ -44,12 +44,8 @@ fn usage() {
     println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
     println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
-<<<<<<< HEAD
-    println!("  --accept-language LANG Override the Accept-Language header (default: en-US,en;q=0.9)");
-    println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
-=======
     println!("  --accept-language LANG  Override the Accept-Language header (default: en-US,en;q=0.9)");
->>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
+    println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
