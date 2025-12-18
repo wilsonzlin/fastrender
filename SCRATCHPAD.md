@@ -4,11 +4,7 @@ Added regression coverage for meta refresh/JS redirects in fetch_and_render: quo
 Cleaned stray merge marker in grid.rs and aligned grid TaffyTree usage to the <*const BoxNode> variant used at call sites (build was failing during tests); no behavior change intended.
 JS redirect parsing now unescapes HTML entities and escaped slashes/hex/unicode (location.assign/replace/href), so entity-escaped or backslash-escaped targets are resolved correctly.
 
-cnn.com cascade profiling: FASTR_CASCADE_PROFILE shows style_prepare ~2.3s and style_apply ~5.5s (cascade ~7.9s) before a 30s timeout. HTML is inline-CSS only (3 <style> blocks, largest ~1.49MB, total ~1.7MB); ~4321 tags (~3073 styled nodes), ~5.3M selector candidates (~1.7k/node), ~31k matches. Pseudo matching dominates (~3.0s). No fixes yet; cache at fetches/html/cnn.com.html.
-Attempted pseudo fast-path: skip ::before/::after/::marker matching when no rules set non-none/normal content for that pseudo. Added rule index flagging content declarations, but cnn.com still has content rules so pseudo matching time unchanged (~2.9–3.0s).
-Selector candidate gathering now dedups via a reusable candidate set instead of sort/dedup per node; cnn.com timings unchanged (cascade ~7.6s) but reduces per-element overhead modestly.
-
-cnn.com selector stats: ~1933 unique classes, ~190 unique IDs in CSS; HTML nodes use ~762 unique classes (4.8k class tokens). ~5759 selectors total; distribution of selector sequence lengths (combinators) is skewed toward 2–3 combinators (2:2305, 3:1296, 1:1095).
+cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (3 <style> blocks, total ~1.7MB). Cascade ~7–8s (FASTR_CASCADE_PROFILE: ~5.3M selector candidates, ~31k matches, ~3s pseudo), box_tree ~2.4s; render still times out at 40s. Pseudo fast-path/candidate dedup attempts unchanged timing; further selector/cascade optimization needed.
 >>>>>>> c79017e (Skip pseudo matching when no content rules present)
 Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
 Added figma.com to fetch_pages targets. Fetch succeeds (~1.25MB HTML); render_pages finishes in ~5s but current PNG is blank (bbox None) due to JS redirect to /redirect_home and missing CSS (bogus encoded webpack-artifacts URL); needs follow-up if we want visible content.
@@ -16,7 +12,6 @@ Figma follow-up: fetch_pages caches https://figma.com/redirect_home (JS redirect
 JS redirect parsing now ignores identifier-only targets and data-* attributes (e.g., data-location), preventing bogus redirects like openstreetmap.org's data-location JSON from being treated as a JS redirect. Added a regression to ignore data-location attributes.
 If a JS redirect fetch fails, fetch_page now keeps the original response (local regression covers 404 target); prevents cache failures when redirects point to missing pages (e.g., cnn.com).
 Added openstreetmap.org to fetch_pages targets; fetch succeeds (~34KB) and render completes (~60KB PNG, mostly white page with header/nav visible).
-Added lobste.rs to fetch_pages targets; fetch ~62KB and render completes in ~10s (PNG ~227KB), content visible.
 Scroll snapping: mandatory inline-axis snapping now preserves snap target offsets when the smallest target is positive; horizontal snapping to centered items works (regression added). Mandatory snaps no longer discard the minimum target offset.
 cnn.com fetch now succeeds (JS redirect 404 kept original HTML), but render_pages times out at 60s (cascade ~8.2s, box_tree ~2.6s, no paint). Needs cascade/layout perf follow-up.
 CSS link extraction now decodes HTML entities (including odd forms like &/#47;) and embedded CSS URL scans decode entities too; covers cases like figma.com emitting entity-escaped stylesheet URLs. Grid context conflict marker removed and convert_to_fragments now accepts generic Taffy trees (TaffyTree<*const BoxNode> caller compiles).
@@ -129,13 +124,14 @@ Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_a
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
 - Added mozilla.org to fetch_pages targets for broader coverage. Fetch/render mozilla.org (1200x800, 60s) succeeds (~79KB PNG, visible content).
 - fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
-- Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background). Fetch/render at 1200x800 completes quickly (~0.5s render, PNG ~243KB).
-- Added www.openstreetmap.org to fetch_pages targets; JS redirect follow is now non-fatal (warns), fetch succeeds (~0.24s) and render completes (~1.4s, PNG ~60KB) at 1200x800.
-- Added fast.com and kotlinlang.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
-- Added stanford.edu to fetch_pages targets (cargo check --bin fetch_pages passes).
-- Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages passes).
+Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background). Fetch/render at 1200x800 completes quickly (~0.5s render, PNG ~243KB).
+Added docs.python.org (dark theme) and kotlinlang.org (colorful hero) to fetch_pages targets; fetch/render succeed. Tried adding developer.android.com but fetch_pages hit a redirect loop (>10 redirects), so it was removed.
+Added www.openstreetmap.org to fetch_pages targets; JS redirect follow is now non-fatal (warns), fetch succeeds (~0.24s) and render completes (~1.4s, PNG ~60KB) at 1200x800.
+Added fast.com to fetch_pages (fetch ~0.1s, render ~0.4s PNG ~35KB at 1200x800).
+Added stanford.edu to fetch_pages targets (cargo check --bin fetch_pages passes).
+Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages passes).
+
 - Positioned flex containers that fill their containing block now relayout their contents with the resolved size (e.g., fixed top/left/right/bottom overlays), so justify-content/align-items center works. Regression added to ensure inset fixed flex overlays center children; Pinterest noscript message now centers vertically (bbox ~463..663 x 338..402 instead of hugging the top).
-- fetch_and_render now accepts --viewport WxH and --scroll-x/--scroll-y flags (with parsing tests), while retaining css-limit support.
 - Guardian.com render attempt: fetched/rendered with fetch_and_render 1200x800; PNG almost blank (nonwhite bbox ~x=79..231,y=39..799, 1616 nonwhite px, 29 colors). Without CSS (stripped <style>/<link>), render shows lots of text up to x≈480, so CSS collapses/hides content. HTML is heavy SSR with many gu-island blocks and emotion CSS; only external CSS link is print.css (media=print, skipped). Layout with CSS took ~44s (layout stage), 4101 boxes. inspect_frag run timed out at 180s. Likely grid/flex/css variables heavy; need to inspect why layout collapses to narrow column (maybe custom elements inline wrappers or grid sizing). Rendered guardian.html from curl into /tmp/guardian.html for debugging.
 - Fixed CSS extraction to ignore print-only stylesheets even when embedded URL scanning sees them (print.css was being picked up by extract_embedded_css_urls). Added FASTR_LOG_CSS_LINKS debugging and regression `tests/extract_print.rs`. theguardian.com now renders with visible content (bbox ~0..1173 x 19..799) when print.css is ignored.
 - Added regressions:
@@ -144,3 +140,5 @@ Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_a
 - Added lobste.rs to fetch_pages targets (cargo check --bin fetch_pages passes); fetch/render not run in this workspace yet.
 - Ran fetch_pages/render_pages for lobste.rs (viewport 1200x800, timeout 60): fetch OK (HTML ~62KB), render OK in ~10s, PNG ~227KB with nonwhite bbox covering full frame (unique colors ~2.3k). No errors in log.
 - Added slashdot.org to fetch_pages targets; fetch succeeds (~39KB HTML, content-type text/plain UTF-8). render_pages --pages slashdot.org 1200x800 completes in ~0.1s; PNG ~110KB with bbox x=0..1199, y≈30..338 and ~4.1k unique colors (content visible near top). Log at fetches/renders/slashdot.org.log.
+
+cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (~1.7MB, 3 <style> blocks). Cascade ~7–8s (FASTR_CASCADE_PROFILE: ~5.3M selector candidates, ~31k matches, ~3s pseudo), box_tree ~2.4s; render still times out at 40s. Pseudo fast-path/candidate dedup attempts didn't reduce timing; further selector/cascade optimizations needed.
