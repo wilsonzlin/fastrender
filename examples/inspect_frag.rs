@@ -22,11 +22,12 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::time::Duration;
 use url::Url;
 
 fn usage() {
     eprintln!(
-        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] <file.html | file://url>"
+        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--timeout SECONDS] <file.html | file://url>"
     );
     eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
     eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
@@ -39,6 +40,7 @@ fn usage() {
     eprintln!("  --prefers-color-scheme         light|dark|no-preference (overrides env)");
     eprintln!("  --user-agent                   Override the User-Agent header (default: Chrome-like)");
     eprintln!("  --accept-language              Override Accept-Language header (default: en-US,en;q=0.9)");
+    eprintln!("  --timeout SECONDS              Abort after this many seconds (no timeout by default)");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
@@ -129,6 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
     let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
     let mut raw_path: Option<String> = None;
+    let mut timeout_secs: Option<u64> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -193,6 +196,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            "--timeout" => {
+                if let Some(val) = args.next() {
+                    if let Ok(parsed) = val.parse::<u64>() {
+                        if parsed > 0 {
+                            timeout_secs = Some(parsed);
+                        }
+                    }
+                }
+            }
             "--scroll-x" => {
                 if let Some(val) = args.next() {
                     if let Ok(parsed) = val.parse::<f32>() {
@@ -230,6 +242,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
+
+    if let Some(sec) = timeout_secs {
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(sec));
+            eprintln!("inspect_frag: timed out after {}s", sec);
+            std::process::exit(1);
+        });
+    }
 
     let (path, input_url) = if let Ok(url) = Url::parse(&raw_path) {
         if url.scheme() == "file" {
