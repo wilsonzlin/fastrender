@@ -167,3 +167,4 @@ CNN CSS complexity: ~1933 unique classes, ~190 unique IDs; ~1381 unique properti
 Universal tag bucket cache and candidate dedup reduce selector candidates slightly (~5.24M, avg 1706/node) but cnn.com cascade remains ~7.5s (find ~1.0s, decl ~0.9s, pseudo ~3.1s) with render timing out at 30s. Further optimization needed.
 CNN inline CSS includes ~199 media queries.
 Inline CSS stats: ~5,532 rules, ~16,740 declarations, ~3,868 attribute selectors.
+Common CSS classes: kiln-edit-mode (~4.1k occurrences), layout-homepage-mobile (~1.5k), ad-slot (~1.5k), layout-homepage-mobile-app (~1.5k), adSlotLoaded (~1.4k), container__video-duration (~0.9k).
