@@ -252,7 +252,7 @@ impl TextItem {
         style: Arc<ComputedStyle>,
         base_direction: Direction,
     ) -> Self {
-        let cluster_advances = Self::compute_cluster_advances(&runs, text.len(), style.font_size);
+        let cluster_advances = Self::compute_cluster_advances(&runs, text.as_str(), style.font_size);
         let aligned_breaks = Self::align_breaks_to_clusters(break_opportunities, &cluster_advances, text.len());
         let advance: f32 = cluster_advances
             .last()
@@ -306,7 +306,7 @@ impl TextItem {
     }
 
     pub fn recompute_cluster_advances(&mut self) {
-        self.cluster_advances = Self::compute_cluster_advances(&self.runs, self.text.len(), self.font_size);
+        self.cluster_advances = Self::compute_cluster_advances(&self.runs, &self.text, self.font_size);
     }
 
     /// Derive baseline metrics from shaped runs and CSS line-height
@@ -363,16 +363,17 @@ impl TextItem {
         const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
 
         let text_len = self.text.len();
-        let bounded_offset = byte_offset.min(text_len);
-        if !self.text.is_char_boundary(bounded_offset) {
-            return None;
+        let mut target_offset = byte_offset.min(text_len);
+        if !self.text.is_char_boundary(target_offset) {
+            target_offset = self.previous_char_boundary(target_offset);
         }
+
         let mut split_offset = self
-            .cluster_boundary_at_or_before(bounded_offset)
+            .cluster_boundary_at_or_before(target_offset)
             .map(|b| b.byte_offset)
-            .unwrap_or(bounded_offset);
-        if split_offset < bounded_offset {
-            split_offset = bounded_offset;
+            .unwrap_or(target_offset);
+        if split_offset < target_offset && target_offset <= text_len {
+            split_offset = target_offset;
         }
 
         if split_offset == 0 || split_offset >= text_len || !self.text.is_char_boundary(split_offset) {
@@ -710,7 +711,8 @@ impl TextItem {
         self.cluster_advances.get(idx).cloned()
     }
 
-    fn compute_cluster_advances(runs: &[ShapedRun], text_len: usize, fallback_font_size: f32) -> Vec<ClusterBoundary> {
+    fn compute_cluster_advances(runs: &[ShapedRun], text: &str, fallback_font_size: f32) -> Vec<ClusterBoundary> {
+        let text_len = text.len();
         if runs.is_empty() || text_len == 0 {
             return Vec::new();
         }
@@ -724,18 +726,23 @@ impl TextItem {
         for run in sorted_runs {
             let mut cluster_widths: BTreeMap<usize, f32> = BTreeMap::new();
             for glyph in &run.glyphs {
-                let offset = run.start + glyph.cluster as usize;
+                let raw_offset = run.start + glyph.cluster as usize;
+                let offset = Self::previous_char_boundary_in_text(text, raw_offset);
                 *cluster_widths.entry(offset).or_default() += glyph.x_advance;
             }
 
             if cluster_widths.is_empty() {
                 // If shaping produced no glyphs, fall back to treating the entire run as a single cluster
-                cluster_widths.insert(run.start, run.advance.max(0.0));
+                cluster_widths.insert(
+                    Self::previous_char_boundary_in_text(text, run.start),
+                    run.advance.max(0.0),
+                );
             }
 
             let last_offset = *cluster_widths.keys().next_back().unwrap_or(&run.end);
-            if last_offset < run.end {
-                cluster_widths.entry(run.end).or_insert(0.0);
+            let run_end = Self::previous_char_boundary_in_text(text, run.end);
+            if last_offset < run_end {
+                cluster_widths.entry(run_end).or_insert(0.0);
             }
 
             for (offset, width) in cluster_widths {
@@ -776,6 +783,25 @@ impl TextItem {
         }
 
         deduped
+    }
+
+    fn previous_char_boundary_in_text(text: &str, offset: usize) -> usize {
+        if offset >= text.len() {
+            return text.len();
+        }
+        if text.is_char_boundary(offset) {
+            return offset;
+        }
+
+        text.char_indices()
+            .take_while(|(idx, _)| *idx < offset)
+            .map(|(idx, _)| idx)
+            .last()
+            .unwrap_or(0)
+    }
+
+    fn previous_char_boundary(&self, offset: usize) -> usize {
+        Self::previous_char_boundary_in_text(&self.text, offset)
     }
 
     fn align_breaks_to_clusters(
@@ -2580,6 +2606,45 @@ mod tests {
             is_marker: false,
             paint_offset: 0.0,
             cluster_advances,
+        }
+    }
+
+    #[test]
+    fn break_opportunities_stay_on_char_boundaries() {
+        let text = "‘bruises and blood’ in ‘Christy’ fights";
+
+        let style = Arc::new(ComputedStyle::default());
+        let shaper = ShapingPipeline::new();
+        let font_context = FontContext::new();
+        let mut runs = shaper.shape(text, &style, &font_context).unwrap();
+        TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+        let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
+
+        let item = TextItem::new(
+            runs,
+            text.to_string(),
+            metrics,
+            find_break_opportunities(text),
+            Vec::new(),
+            style,
+            Direction::Ltr,
+        );
+
+        for brk in &item.break_opportunities {
+            assert!(
+                item.text.is_char_boundary(brk.byte_offset),
+                "Break at {} is not a char boundary",
+                brk.byte_offset
+            );
+            if brk.byte_offset == 0 || brk.byte_offset >= item.text.len() {
+                continue;
+            }
+
+            assert!(
+                item.split_at(brk.byte_offset, false, &shaper, &font_context).is_some(),
+                "Split failed at {}",
+                brk.byte_offset
+            );
         }
     }
 

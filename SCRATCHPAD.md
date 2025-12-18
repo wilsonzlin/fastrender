@@ -20,7 +20,6 @@ Vertical text-overflow coverage fixed: inline IFC now derives inline available s
 Current task (Agent 6): investigating wikipedia.org blank/white render. Fetched `wikipedia.org` (cache under fetches/html/). Rendered via `cargo run --bin render_pages -- --pages wikipedia.org --timeout 120` producing fetches/renders/wikipedia.org.png. Added DOM parse tweak: HTML root now also gains `jsl10n-visible` (and still flips `no-js` → `js-enabled`) to bypass portals hiding content behind JS localization opacity gates. Added tests `parse_html_flips_no_js_class` and `parse_html_adds_jsl10n_visible_when_missing` to cover the class injection. Render after change still mostly white visually (non-white pixels limited, mostly lower-right/overlay area); overlay fundraiser markup is fixed-position and visible by default. Next steps: inspect fragment positions/styles to ensure central-featured content becomes visible and consider handling the overlay visibility defaults.
 Fixed nowrap text-overflow + outside markers: avoid breaking overflowing unbreakable text onto a new line when wrapping is disabled, keeping ellipsis in the content region. Added regression test in inline context tests.
 Unitless zero parsing fixed: CSS numbers are parsed before lengths so `opacity:0`/`z-index:0` no longer get dropped as lengths (wired overlay now hides instead of a gray veil). Added cascade regressions for opacity/z-index accepting unitless zero.
-<<<<<<< HEAD
 Added image-marker coverage for the same nowrap text-overflow scenario to ensure ellipsis stays in content while outside list images remain at inline-start.
 
 Agent18:
@@ -30,7 +29,7 @@ Agent18:
 - UA defaults now apply link state styles via data-fastr flags (visited/active/hover/focus) and iframe max-width check asserts 100% length.
 - Match-parent text-align now propagates to text-align-last (resolution runs before text-align) so match-parent sets last-line alignment as expected.
 - Remaining failing tests (vertical text-overflow ellipsis, table rowspans) untouched.
+
 Container queries respect inline-size without requiring a block dimension: media length resolution no longer demands finite viewport height when the query lacks viewport-relative units, so inline-size containers evaluate size queries correctly while block-size queries still fail for inline-only containers. Added optional logging for container sizes (FASTR_LOG_CONTAINER_QUERY).
-=======
-Container queries respect inline-size without requiring a block dimension: media length resolution no longer demands finite viewport height when the query lacks viewport-relative units, so inline-size containers evaluate size queries correctly while block-size queries still fail for inline-only containers. Added optional logging for container sizes (FASTR_LOG_CONTAINER_QUERY).
->>>>>>> 270fafc (Fix container query inline-size resolution)
+
+latimes.com UTF-8 boundary panic fixed: text splits now clamp requested offsets to prior char boundaries, run splitting validates local boundaries and falls back to reshaping when misaligned. latimes.com renders successfully (≈72s at 1200×800).
