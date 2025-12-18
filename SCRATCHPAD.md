@@ -79,8 +79,8 @@ Added github.blog to fetch_pages targets; fetch succeeds (~278KB) but render is 
 Added dev.to to fetch_pages targets; fetch succeeds (~298KB) and render completes (~12.9s, PNG ~48KB) with visible content.
 Added nbcnews.com to fetch_pages targets; fetch succeeds (~1.17MB) and render completes (~27.9s, PNG ~40KB, content visible).
 Added vox.com to fetch_pages targets; fetch succeeds (~938KB) and render completes (~15.6s, PNG ~21KB) at 1200x800 with visible content.
-Added foxnews.com to fetch_pages targets; fetch succeeds and render shows content (timings similar to other news sites).
-Added foxnews.com to fetch_pages targets; fetch succeeds and render shows content (timings similar to other news sites).
+bbc.com profiling (release, 1200x800): render ~28.3s (cascade ~0.6s, box_tree ~3.9s, layout ~14.5s, paint ~9.2s). Grid dominates layout (~36.7s inclusive, 1561 calls). Further grid perf work needed.
+babc.com profiling (release, 1200x800): render ~28.3s (cascade ~0.6s, box_tree ~3.9s, layout ~14.5s, paint ~9.2s). Grid dominates layout (~36.7s inclusive, 1561 calls). Further grid perf work needed.
 bbc.com profiling (release, 1200x800): render succeeds in ~28.3s (cascade ~0.6s, box_tree ~3.9s, layout ~14.5s, paint ~9.2s). Grid dominates layout (grid ~36.7s inclusive, 1561 calls, avg ~23.5ms). Grid cost is the main bottleneck.
 bbc.com profiling (release, 1200x800): render succeeds in ~28.3s (cascade ~0.6s, box_tree ~3.9s, layout ~14.5s, paint ~9.2s). Grid dominates layout (grid ~36.7s inclusive, 1561 calls, avg ~23.5ms). Grid cost is the main bottleneck.
 Replaced elements: skip intrinsic image fetch when both width and height are specified (per CSS replaced sizing), dramatically reducing box_tree time on image-heavy pages (nasa.gov now renders in ~8s: box_tree ~0.26s, layout ~0.3s, paint ~5.7s).
@@ -206,14 +206,3 @@ linear-gradient appears ~24 times.
 z-index appears ~87 times.
 overflow:hidden appears ~39 times.
 transition appears ~144 times.
-<<<<<<< HEAD
-=======
-animation appears ~35 times.
-position:fixed appears ~12 times.
-width:100% appears ~259 times.
-min-width appears ~250 times; max-width ~358 times.
-height:100% appears ~64 times.
-opacity appears ~137 times.
-letter-spacing appears ~223 times.
-font-size appears ~1303 times.
-padding appears ~822 times.
