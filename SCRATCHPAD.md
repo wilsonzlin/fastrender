@@ -42,6 +42,8 @@ Added yahoo.com and nasa.gov to fetch_pages targets (cargo check --bin fetch_pag
 Added display-list renderer regressions for mix-blend-mode: non-isolated multiply darkens the backdrop, while isolation forces source-over compositing (blue over red).
 Fetch/render notes: yahoo.com and nasa.gov fetch successfully but render timed out at 60s (large pages/heavy CSS).
 render_pages now supports --timings to set FASTR_RENDER_TIMINGS for per-page stage timing logs.
+yahoo.com renders in ~113s with timings enabled (cascade ~46s, layout ~59s) under a 120s timeout; still heavy but completes.
+openbsd.org fetch/render now passes (PNG bbox approx 20..1199 x 15..734 at 1200x800).
 
 - Rendered additional pages and found `openbsd.org` PNG was completely blank. Root cause: block layout dropped absolutely positioned children when the parent block was laid out via `layout_block_child` (positioned_children from `layout_children` were ignored). Added absolute-position handling to that path so out-of-flow children are laid out against the block's padding box.
 - `openbsd.org` now renders with visible sidebar/content; `render_pages --pages openbsd.org` succeeds (PNG unique colors ~32k).
