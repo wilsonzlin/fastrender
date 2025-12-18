@@ -3221,4 +3221,46 @@ mod tests {
         assert_eq!(child_frag.bounds.width(), 50.0);
         assert_eq!(child_frag.bounds.height(), 20.0);
     }
+
+    #[test]
+    fn absolute_children_inside_block_descendants_are_laid_out() {
+        // Regression: positioned children collected during block child layout were dropped.
+        let mut root_style = ComputedStyle::default();
+        root_style.display = Display::Block;
+        root_style.width = Some(Length::px(400.0));
+
+        let mut middle_style = ComputedStyle::default();
+        middle_style.display = Display::Block;
+        middle_style.width = Some(Length::px(200.0));
+        middle_style.padding_left = Length::px(10.0);
+        middle_style.padding_top = Length::px(10.0);
+        middle_style.height = Some(Length::px(80.0));
+
+        let mut abs_style = ComputedStyle::default();
+        abs_style.display = Display::Block;
+        abs_style.position = Position::Absolute;
+        abs_style.left = Some(Length::px(5.0));
+        abs_style.top = Some(Length::px(7.0));
+        abs_style.width = Some(Length::px(30.0));
+        abs_style.height = Some(Length::px(12.0));
+
+        let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+        let middle = BoxNode::new_block(Arc::new(middle_style), FormattingContextType::Block, vec![abs_child]);
+        let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![middle]);
+
+        let fc = BlockFormattingContext::new();
+        let constraints = LayoutConstraints::definite(500.0, 500.0);
+        let fragment = fc.layout(&root, &constraints).unwrap();
+
+        assert_eq!(fragment.children.len(), 1);
+        let middle_frag = &fragment.children[0];
+        assert_eq!(middle_frag.children.len(), 1, "positioned child should be laid out");
+        let abs_frag = &middle_frag.children[0];
+        // Positioned child should still be included; coordinates are resolved relative to the
+        // containing block origin (padding box in our implementation).
+        assert_eq!(abs_frag.bounds.x(), 5.0);
+        assert_eq!(abs_frag.bounds.y(), 7.0);
+        assert_eq!(abs_frag.bounds.width(), 30.0);
+        assert_eq!(abs_frag.bounds.height(), 12.0);
+    }
 }
