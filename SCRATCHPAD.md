@@ -149,26 +149,13 @@ Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages 
 - Added regressions:
   - `tests/box_generation_ad_placeholders.rs` ensures empty ad placeholders (`ad-height-hold`/`ad__slot`/`should-hold-space`) are dropped while non-empty ones remain.
   - `tests/box_generation_onenav.rs` ensures hidden OneNav overlays (visibility hidden/opacity 0) skip both the overlay and the following FocusTrapContainer drawer, while visible overlays retain the drawer/content.
-- Added phoronix.com to fetch_pages targets; fetch/render succeeds (~13s render, nonblank PNG).
+- Added phoronix.com to fetch_pages targets; fetch OK (~60KB HTML). render_pages --pages phoronix.com 1200x800 completes in ~13s; PNG ~198KB with full-frame bbox (0..1199,0..799) and ~4.9k unique colors. Log at fetches/renders/phoronix.com.log.
 - Added nationalgeographic.com to fetch_pages targets; fetch/render succeeds (~4.9s render, nonblank PNG with multiple content bands).
 - Added lobste.rs to fetch_pages targets (cargo check --bin fetch_pages passes); fetch/render not run in this workspace yet.
 - Ran fetch_pages/render_pages for lobste.rs (viewport 1200x800, timeout 60): fetch OK (HTML ~62KB), render OK in ~10s, PNG ~227KB with nonwhite bbox covering full frame (unique colors ~2.3k). No errors in log.
 - Added slashdot.org to fetch_pages targets; fetch succeeds (~39KB HTML, content-type text/plain UTF-8). render_pages --pages slashdot.org 1200x800 completes in ~0.1s; PNG ~110KB with bbox x=0..1199, y≈30..338 and ~4.1k unique colors (content visible near top). Log at fetches/renders/slashdot.org.log.
 
-- Added phoronix.com to fetch_pages targets; fetch OK (~60KB HTML). render_pages --pages phoronix.com 1200x800 completes in ~13s; PNG ~198KB with full-frame bbox (0..1199,0..799) and ~4.9k unique colors. Log at fetches/renders/phoronix.com.log.
 - Added theonion.com to fetch_pages targets; fetch succeeds (~448KB HTML). render_pages --pages theonion.com 1200x800 completes in ~12s; PNG ~423KB with bbox x≈32..1199, y≈47..799 and ~18.7k unique colors. Numerous plugin CSS URLs 404 (logged), but page still renders with visible content.
 - Embedded CSS URL extraction now strips `sourceURL=` prefixes (seen in inline CSS/JS), and regression `strips_sourceurl_prefix_in_embedded_css_urls` covers the normalization.
-
 - Added hbr.org to fetch_pages targets; fetch succeeds (~322KB HTML). render_pages --pages hbr.org 1200x800 completes in ~4.4s; PNG ~40KB with bbox x≈29..1150, y≈227..616 (~104 colors). Visible content appears mid-frame.
-- Added vox.com to fetch_pages targets; fetch succeeds (~938KB HTML). render_pages --pages vox.com 1200x800 completes in ~23.7s; PNG ~110KB with bbox x=0..1199, y≈26..799 and ~724 unique colors (content spans most of the frame).
-
-- Added phoronix.com to fetch_pages targets; fetch OK (~60KB HTML). render_pages --pages phoronix.com 1200x800 completes in ~13s; PNG ~198KB with full-frame bbox (0..1199,0..799) and ~4.9k unique colors. Log at fetches/renders/phoronix.com.log.
-- Added theonion.com to fetch_pages targets; fetch succeeds (~448KB HTML). render_pages --pages theonion.com 1200x800 completes in ~12s; PNG ~423KB with bbox x≈32..1199, y≈47..799 and ~18.7k unique colors. Numerous plugin CSS URLs 404 (logged), but page still renders with visible content.
-
-cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (~1.7MB, 3 <style> blocks). Cascade ~7–8s (FASTR_CASCADE_PROFILE: ~5.3M selector candidates, ~31k matches, ~3s pseudo), box_tree ~2.4s; render still times out at 40s. Pseudo fast-path/candidate dedup attempts didn't reduce timing; further selector/cascade optimizations needed.
-CNN CSS complexity: ~1933 unique classes, ~190 unique IDs; ~1381 unique properties; ~5302 :not() usages; ~1063 selectors with ≥4 combinators. HTML uses ~762 unique classes across ~4.8k class tokens and ~36 inline style attrs (~528 hrefs). Cascade still ~7–8s.
-Universal tag bucket cache and candidate dedup reduce selector candidates slightly (~5.24M, avg 1706/node) but cnn.com cascade remains ~7.5s (find ~1.0s, decl ~0.9s, pseudo ~3.1s) with render timing out at 30s. Further optimization needed.
-CNN inline CSS includes ~199 media queries.
-Inline CSS stats: ~5,532 rules, ~16,740 declarations, ~3,868 attribute selectors.
-Common CSS classes: kiln-edit-mode (~4.1k occurrences), layout-homepage-mobile (~1.5k), ad-slot (~1.5k), layout-homepage-mobile-app (~1.5k), adSlotLoaded (~1.4k), container__video-duration (~0.9k).
-Most class occurrences are on hidden/ad elements; consider stripping rules for kiln-edit-mode/ad-slot/adSlotLoaded when profiling to reduce selector space.
+- Added vox.com to fetch_pages targets; fetch succeeds (~938KB HTML). render_pages --pages vox.com 1200x800 completes in ~15.6s; PNG ~110KB with bbox filling the frame (content spans most of the frame). Log at fetches/renders/vox.com.log.
