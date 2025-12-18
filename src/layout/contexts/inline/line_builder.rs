@@ -4304,4 +4304,26 @@ mod tests {
 
         assert!(euro_item.split_at(1, false, &pipeline, &font_ctx).is_none());
     }
+
+    #[test]
+    fn previous_char_boundary_handles_multibyte_offsets() {
+        let text = "a😊b";
+        // Offsets that land in the middle of a multibyte codepoint should step back to its start.
+        assert_eq!(TextItem::previous_char_boundary_in_text(text, 2), 1);
+        assert_eq!(TextItem::previous_char_boundary_in_text(text, 4), 1);
+
+        // Offsets at boundaries remain unchanged.
+        assert_eq!(TextItem::previous_char_boundary_in_text(text, 0), 0);
+        assert_eq!(TextItem::previous_char_boundary_in_text(text, 1), 1);
+        assert_eq!(TextItem::previous_char_boundary_in_text(text, 5), 5);
+    }
+
+    #[test]
+    fn previous_char_boundary_clamps_past_end() {
+        let text = "éclair";
+        assert_eq!(
+            TextItem::previous_char_boundary_in_text(text, text.len() + 10),
+            text.len()
+        );
+    }
 }
