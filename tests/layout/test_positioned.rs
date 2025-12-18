@@ -9,16 +9,18 @@
 //! - CSS Position Module Level 3: Sticky positioning
 
 use fastrender::geometry::{EdgeOffsets, Point, Rect, Size};
+use fastrender::layout::contexts::block::BlockFormattingContext;
+use fastrender::layout::contexts::flex::FlexFormattingContext;
+use fastrender::layout::contexts::inline::InlineFormattingContext;
+use fastrender::paint::stacking::{build_stacking_tree_from_fragment_tree, StackingContextReason};
+use fastrender::style::display::FormattingContextType;
 use fastrender::style::types::FontSizeAdjust;
 use fastrender::text::font_loader::FontContext;
 use fastrender::FragmentNode;
-use fastrender::{ContainingBlock, PositionedLayout, StickyConstraints};
-use fastrender::{Length, LengthOrAuto, LengthUnit, Position, PositionedStyle};
 use fastrender::{BoxNode, ComputedStyle, LayoutConstraints};
-use fastrender::layout::contexts::flex::FlexFormattingContext;
-use fastrender::layout::contexts::inline::InlineFormattingContext;
-use fastrender::style::display::FormattingContextType;
+use fastrender::{ContainingBlock, PositionedLayout, StickyConstraints};
 use fastrender::{Display, FormattingContext};
+use fastrender::{Length, LengthOrAuto, LengthUnit, Position, PositionedStyle};
 use std::sync::Arc;
 
 // ============================================================================
@@ -864,4 +866,34 @@ fn test_fragment_preserves_size_on_relative_position() {
     // Size should be preserved
     assert_eq!(result.bounds.width(), 200.0);
     assert_eq!(result.bounds.height(), 150.0);
+}
+
+#[test]
+fn positioned_fragments_keep_computed_style_for_stacking() {
+    let mut fixed_style = ComputedStyle::default();
+    fixed_style.position = Position::Fixed;
+    fixed_style.width = Some(Length::px(20.0));
+    fixed_style.height = Some(Length::px(20.0));
+
+    let fixed = BoxNode::new_block(Arc::new(fixed_style), FormattingContextType::Block, vec![]);
+    let root = BoxNode::new_block(
+        Arc::new(ComputedStyle::default()),
+        FormattingContextType::Block,
+        vec![fixed],
+    );
+
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+    let fc = BlockFormattingContext::new();
+    let fragment = fc.layout(&root, &constraints).expect("block layout");
+
+    assert_eq!(fragment.children.len(), 1, "fixed fragment should be present");
+    let fixed_fragment = &fragment.children[0];
+    let style = fixed_fragment.style.as_ref().expect("fragment should carry style");
+    assert_eq!(style.position, Position::Fixed);
+
+    let stacking = build_stacking_tree_from_fragment_tree(&fragment);
+    assert!(stacking
+        .children
+        .iter()
+        .any(|ctx| matches!(ctx.reason, StackingContextReason::FixedPositioning)));
 }

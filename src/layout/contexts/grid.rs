@@ -1086,6 +1086,7 @@ impl FormattingContext for GridFormattingContext {
 
             let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(self.font_context.clone());
             for child in positioned_children {
+                let original_style = child.style.clone();
                 // Layout child as static for intrinsic size.
                 let mut layout_child = child.clone();
                 let mut style = (*layout_child.style).clone();
@@ -1147,6 +1148,7 @@ impl FormattingContext for GridFormattingContext {
                 input.preferred_block_size = preferred_block;
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = crate::geometry::Rect::new(result.position, result.size);
+                child_fragment.style = Some(original_style);
                 fragment.children.push(child_fragment);
             }
         }

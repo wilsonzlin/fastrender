@@ -622,6 +622,7 @@ impl BlockFormattingContext {
                 static_position,
             } in positioned_children
             {
+                let original_style = pos_child.style.clone();
                 let cb = match source {
                     ContainingBlockSource::ParentPadding => parent_padding_cb,
                     ContainingBlockSource::Explicit(cb) => cb,
@@ -689,6 +690,7 @@ impl BlockFormattingContext {
 
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragment.style = Some(original_style);
                 child_fragments.push(child_fragment);
             }
         }
@@ -2200,6 +2202,7 @@ impl FormattingContext for BlockFormattingContext {
                 static_position,
             } in positioned_children
             {
+                let original_style = child.style.clone();
                 let cb = match source {
                     ContainingBlockSource::ParentPadding => parent_padding_cb,
                     ContainingBlockSource::Explicit(cb) => cb,
@@ -2267,6 +2270,7 @@ impl FormattingContext for BlockFormattingContext {
 
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragment.style = Some(original_style);
                 child_fragments.push(child_fragment);
             }
         }

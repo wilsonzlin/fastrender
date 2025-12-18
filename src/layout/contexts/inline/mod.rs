@@ -5536,6 +5536,7 @@ impl InlineFormattingContext {
 
             let abs = AbsoluteLayout::with_font_context(self.font_context.clone());
             for child in positioned_children {
+                let original_style = child.style.clone();
                 let mut layout_child = child.clone();
                 let mut child_style = (*layout_child.style).clone();
                 child_style.position = crate::style::position::Position::Relative;
@@ -5582,6 +5583,7 @@ impl InlineFormattingContext {
                 input.preferred_block_size = preferred_block;
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragment.style = Some(original_style);
                 merged_children.push(child_fragment);
             }
         }

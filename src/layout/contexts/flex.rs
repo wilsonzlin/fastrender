@@ -1612,6 +1612,7 @@ impl FormattingContext for FlexFormattingContext {
             );
 
             for child in positioned_children {
+                let original_style = child.style.clone();
                 // Layout child as static to obtain intrinsic size.
                 let mut layout_child = child.clone();
                 let mut style = (*layout_child.style).clone();
@@ -1659,6 +1660,7 @@ impl FormattingContext for FlexFormattingContext {
                 input.preferred_block_size = preferred_block;
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragment.style = Some(original_style);
                 fragment.children.push(child_fragment);
             }
         }

@@ -1,9 +1,8 @@
 Render pipeline now decodes cached HTML with proper charset sniffing: fetch_pages stores the response Content-Type alongside each cached HTML (.html.meta), render_pages decodes bytes via the shared html::encoding helper (BOM/header/meta/default Windows-1252), and fetch_and_render reuses the shared decoder instead of its local copy. cloudflare.com and latimes.com timeouts still outstanding from earlier notes.
 Cloudflare render perf fixed: web font loading filters to the page’s codepoints (skipping unused @font-face ranges) and web font HTTP timeout is 10s; FASTR_RENDER_TIMINGS now reports css_parse/style_prepare/style_apply. cloudflare.com renders in ~12s at 1200×800 instead of 70s+.
-Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Marker baseline/list-style-position/ellipsis regressions landed upstream.
+Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
 fetch_and_render now reads .meta sidecars for file:// HTML inputs (e.g., cached pages) and passes the cached Content-Type through decode_html_bytes; added a regression ensuring Shift-JIS HTML decodes via the meta charset.
-<<<<<<< HEAD
 Aligned fetcher user-agents: exported DEFAULT_USER_AGENT in resource.rs, fetch_and_render now sends it on HTTP requests, and fetch_pages uses the same Chrome-like UA instead of the old compatible string. Trimmed an unused MixBlendMode import in display_list_renderer_test.
 Deduplicated DEFAULT_USER_AGENT in resource.rs after rebase to avoid duplicate const definitions.
 Hyphenation breaks now filter out non-char-boundary offsets before use, and a regression covers dropping a break inside a multibyte emoji.
@@ -20,7 +19,9 @@ Added DOM regression to ensure <noscript> content in <head> is preserved (e.g., 
 CLI support: fetch_and_render, render_pages, and inspect_frag now accept --prefers-reduced-data to override FASTR_PREFERS_REDUCED_DATA (matching reduced-transparency flag), and parsing helpers/tests were added.
 CLI support: render_pages, fetch_and_render, and inspect_frag also accept --prefers-reduced-motion (sets FASTR_PREFERS_REDUCED_MOTION) with parsing helpers/tests; usage text updated for parity.
 Vertical text-overflow coverage fixed: inline IFC now derives inline available space from the vertical inline axis (constraints.height for vertical writing) and logs that base; vertical overflow tests set overflow-y:hidden to trigger ellipsis. text-overflow ellipsis now clamps line fragments to inline height in vertical writing.
-Wikipedia.org task complete: base_url/meta handling + jsl10n-visible on html/body produce a centered portal with assets loaded (PNG ~121KB). Added regression `fetch_bytes_uses_base_url_from_meta` to verify cached file renders pick up base_url from .html.meta.
+Current task (Agent 6): investigating wikipedia.org render. DOM parse flips `no-js`→`js-enabled` and injects `jsl10n-visible` on HTML+BODY. Cached meta now stores `content-type` + `url`; render_pages/fetch_and_render parse it (legacy-safe) to seed base_url for cached renders. After refetch/render, wikipedia.org assets load (PNG ~121KB) with central featured links visible; next steps: confirm portal centering and clean up any off-page hidden text/opacity artifacts.
+Added unit test `fetch_bytes_uses_base_url_from_meta` to ensure file:// HTML caches supply base_url from meta sidecars.
+Wikipedia.org render now complete: base_url/meta fixes + jsl10n-visible injection produce centered portal with assets loaded (PNG ~121KB). Task closed; ready for next.
 Fixed nowrap text-overflow + outside markers: avoid breaking overflowing unbreakable text onto a new line when wrapping is disabled, keeping ellipsis in the content region. Added regression test in inline context tests.
 Unitless zero parsing fixed: CSS numbers are parsed before lengths so `opacity:0`/`z-index:0` no longer get dropped as lengths (wired overlay now hides instead of a gray veil). Added cascade regressions for opacity/z-index accepting unitless zero.
 Calc numbers now parse for numeric properties: calc/min/max/clamp expressions with unitless results are parsed as numbers (so `opacity: calc(1 - .25)` and `z-index: calc(2+3)` work). Added cascade tests for opacity/z-index with calc().
@@ -33,28 +34,26 @@ Agent18:
 - UA defaults now apply link state styles via data-fastr flags (visited/active/hover/focus) and iframe max-width check asserts 100% length.
 - Match-parent text-align now propagates to text-align-last (resolution runs before text-align) so match-parent sets last-line alignment as expected.
 - Remaining failing tests (vertical text-overflow ellipsis, table rowspans) untouched.
-=======
-Aligned fetcher user-agents: exported DEFAULT_USER_AGENT in resource.rs, fetch_and_render now sends it on HTTP requests, and fetch_pages uses the same Chrome-like UA instead of the old compatible string. Deduplicated DEFAULT_USER_AGENT after rebase.
-Hyphenation breaks now filter out non-char-boundary offsets before use; itemized run splitting validates UTF-8 boundaries; shaping clusters clamp to UTF-8 boundaries with regression coverage.
-HttpFetcher now follows redirects (up to 10) with the shared User-Agent; sends Accept-Language by default; retries misreported Content-Encoding by falling back to identity (`fetch_http_retries_on_bad_gzip`).
-fetch_pages accepts --accept-language to override the header; treats empty HTTP bodies as errors (regression added) and reports failed URLs in the summary output.
-latimes.com fetch/render previously timed out at 60s; rerendered successfully in ~27s (HTML cached under fetches/html/latimes.com.html). latimes.com UTF-8 boundary panic fixed via text split clamping (renders ≈72s at 1200×800 after fixes).
-HTML parsing now disables scripting so <noscript> fallbacks are parsed/renderable; regressions ensure <noscript> content in <head> is preserved. fetch_and_render/render_pages/inspect_frag accept --prefers-reduced-data and --prefers-reduced-motion flags.
-Bug hunt: github.com render appears dark but matches dark landing design (hero text/buttons visible near y≈200 in inspect_frag); likely no layout issue.
-Vertical text-overflow coverage fixed for vertical writing; line fragments clamp to inline height.
-Wikipedia portal: base_url/meta fixes + jsl10n-visible injection for html/body produce centered portal with assets loaded (PNG ~121KB). Unit test `fetch_bytes_uses_base_url_from_meta` added.
-Fixed nowrap text-overflow + outside markers; added regressions for outside markers, start-side ellipsis, and image markers.
-Unitless zero parsing fixed; calc/min/max/clamp parsing supports numeric properties (opacity/z-index/order) with regressions. Order property added to KNOWN_PROPERTIES; non-integer calc orders are ignored per spec.
-Container queries respect inline-size without requiring a block dimension; optional logging via FASTR_LOG_CONTAINER_QUERY.
-Added yahoo.com and nasa.gov to fetch_pages targets (cargo check --bin fetch_pages passes). Fetch/render notes: yahoo/nasa fetch succeed; yahoo now renders in ~14s (timings: cascade ~2.3s, layout ~5.9s) at 1200×800; nasa renders in ~23s (timings: cascade ~1.0s, box_tree ~14.8s, layout ~0.3s, paint ~6s).
-Added display-list renderer regressions for mix-blend-mode (non-isolated multiply vs isolated source-over).
-render_pages/fetch_and_render support --timings to enable FASTR_RENDER_TIMINGS per-page logging; fetch_pages supports --timings for per-page fetch durations (including cache hits/errors).
-booking.com fetch returns empty body even with Chrome UA; fetch_pages now treats empty bodies as errors and avoids caching them.
-fetch_pages run populated cache for 85+ pages; render_pages rerun succeeded for all cached pages (86/86 pass) after split_at UTF-8 guard; latimes now renders (~106KB PNG).
-Rowspan height distribution adjusted to favor auto rows while sharing spans; vertical text-overflow ellipsis tests now passing. Rowspan regressions (`calculate_row_heights_*`, `baseline_height_computation_skips_rowspanning_cells`) fixed.
+
+Container queries respect inline-size without requiring a block dimension: media length resolution no longer demands finite viewport height when the query lacks viewport-relative units, so inline-size containers evaluate size queries correctly while block-size queries still fail for inline-only containers. Added optional logging for container sizes (FASTR_LOG_CONTAINER_QUERY).
+
+latimes.com UTF-8 boundary panic fixed: text splits now clamp requested offsets to prior char boundaries, run splitting validates local boundaries and falls back to reshaping when misaligned. latimes.com renders successfully (≈72s at 1200×800).
+Added regression ensuring mid-codepoint split requests clamp to the previous char boundary (no panics, split_at aligns to codepoint start).
+Added yahoo.com and nasa.gov to fetch_pages targets (cargo check --bin fetch_pages passes).
+Added display-list renderer regressions for mix-blend-mode: non-isolated multiply darkens the backdrop, while isolation forces source-over compositing (blue over red).
+Fetch/render notes: yahoo.com and nasa.gov fetch successfully but render timed out at 60s (large pages/heavy CSS).
+render_pages now supports --timings to set FASTR_RENDER_TIMINGS for per-page stage timing logs.
+yahoo.com renders in ~113s with timings enabled (cascade ~46s, layout ~59s) under a 120s timeout; still heavy but completes.
+openbsd.org fetch/render now passes (PNG bbox approx 20..1199 x 15..734 at 1200x800).
+fetch_and_render now accepts --timings to enable FASTR_RENDER_TIMINGS for per-stage logging when fetching a single page.
+fetch_pages now accepts --timings to print per-page fetch durations (including cached/timeouts), plus timing output for cache hits/writes/errors.
+booking.com fetch returns an empty body (0 bytes) even with Chrome UA; cached html cleared and refetch still empty—likely bot-blocked.
+fetch_pages now treats empty HTTP bodies as errors (does not cache zero-byte responses) with a regression covering empty responses via a local test server.
+fetch_pages now reports failed URLs in the summary output (prints a comma-separated list when any fetches fail).
 
 - Rendered additional pages and found `openbsd.org` PNG was completely blank. Root cause: block layout dropped absolutely positioned children when the parent block was laid out via `layout_block_child` (positioned_children from `layout_children` were ignored). Added absolute-position handling to that path so out-of-flow children are laid out against the block's padding box.
 - `openbsd.org` now renders with visible sidebar/content; `render_pages --pages openbsd.org` succeeds (PNG unique colors ~32k).
+- Added regression `absolute_children_inside_block_descendants_are_laid_out` covering positioned children under nested blocks to guard the fix.
 - Previous notes: marker baseline/list-style-position/ellipsis regressions landed upstream. Cloudflare/latimes fetch/render had timed out at 60s; no changes made.
 CNN render with split_at char-boundary guard now finishes: render_pages --pages cnn.com --timeout 60 succeeded (~44s, ~196KB PNG); fetch_and_render timings ~7s cascade, ~4.6s box_tree, ~42s layout, ~0.5s paint.
 
@@ -63,3 +62,8 @@ CNN render with split_at char-boundary guard now finishes: render_pages --pages 
 - Reran render_pages for all cached pages; 86/86 pass, latimes.com now renders (PNG ~106KB). Summary in fetches/renders/_summary.log.
 
 Wired.com blank render investigation (Mar 2025): max-height:max-content is now parsed/propagated (flag on ComputedStyle/PositionedStyle), percentage heights resolve only when the parent height is definite, and the stacking tree skips visibility:hidden fragments. Render still blank (PNG nonwhite bbox 0,172–1200,173). inspect_frag shows overlays hidden but a nav drawer container (`OneNavRowGrid` under `FocusTrapContainer`) still lays out at (0,439,1200,800) keeping `main` at y≈1239, and carousel row content begins at x≈1080 even though the container flex-wrap=wrap/justify=center. Need to debug why the hidden nav/drawer occupies normal flow and why flex items are offset right (possibly wrap not honored or min_x anchored by earlier items).
+
+---
+Agent7: github.com blank render now resolves after upstream positioned-children fix; inspect_frag shows nav/hero text near y≈35..210. `render_pages --pages github.com --viewport 1200x800 --timeout 60` completes in ~7s with visible content.
+- Preserved original computed styles on out-of-flow positioned fragments across block/flex/grid/inline/table layout so painting/stacking see `position` (fixed creates its own stacking context again).
+- Added regression `positioned_fragments_keep_computed_style_for_stacking` under layout/test_positioned.rs to ensure fixed fragments retain style and build a stacking context.

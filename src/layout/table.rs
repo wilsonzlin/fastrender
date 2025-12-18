@@ -3722,6 +3722,7 @@ impl FormattingContext for TableFormattingContext {
             }
             let abs = AbsoluteLayout::with_font_context(self.factory.font_context().clone());
             for child in &positioned_children {
+                let original_style = child.style.clone();
                 let mut layout_child = child.clone();
                 let mut style = (*layout_child.style).clone();
                 style.position = crate::style::position::Position::Relative;
@@ -3765,6 +3766,7 @@ impl FormattingContext for TableFormattingContext {
                 input.preferred_block_size = preferred_block;
                 let result = abs.layout_absolute(&input, &cb)?;
                 child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragment.style = Some(original_style);
                 fragment.children.push(child_fragment);
             }
             Ok(())
