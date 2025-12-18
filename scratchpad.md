@@ -74,6 +74,7 @@
 # Added openbsd.org to fetch_pages targets; fetch/render succeeded (simple page). Collapsed border hidden vs solid regression landed upstream.
 # Added example.net to fetch_pages targets; fetch/render succeeded (basic page).
 # Added debian.org to fetch_pages targets; fetch/render succeeded (content visible).
+# Added gentoo.org to fetch_pages targets; fetch/render succeeded (full content).
 # Rendered duckduckgo.com (fetch cached target); render succeeded without issues.
 # Attempted netsurf-browser.org; DNS lookup failed, so target not added.
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
