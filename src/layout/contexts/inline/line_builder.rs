@@ -363,16 +363,26 @@ impl TextItem {
         const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
 
         let text_len = self.text.len();
-        if byte_offset == 0 || byte_offset >= text_len || !self.text.is_char_boundary(byte_offset) {
+        if byte_offset == 0 || byte_offset >= text_len {
+            return None;
+        }
+
+        let target_offset = if self.text.is_char_boundary(byte_offset) {
+            byte_offset
+        } else {
+            Self::previous_char_boundary_in_text(&self.text, byte_offset)
+        };
+
+        if target_offset == 0 || target_offset >= text_len {
             return None;
         }
 
         let mut split_offset = self
-            .cluster_boundary_at_or_before(byte_offset)
+            .cluster_boundary_at_or_before(target_offset)
             .map(|b| b.byte_offset)
-            .unwrap_or(byte_offset);
-        if split_offset < byte_offset {
-            split_offset = byte_offset;
+            .unwrap_or(target_offset);
+        if split_offset < target_offset {
+            split_offset = target_offset;
         }
 
         if split_offset == 0 || split_offset >= text_len || !self.text.is_char_boundary(split_offset) {
