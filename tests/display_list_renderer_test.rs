@@ -902,6 +902,25 @@ fn opacity_filter_modulates_alpha() {
 }
 
 #[test]
+fn zero_opacity_fragments_render_nothing() {
+    let mut style = ComputedStyle::default();
+    style.background_color = Rgba::RED;
+    style.opacity = 0.0;
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), vec![], Arc::new(style));
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("render");
+
+    // All pixels should remain the white background since the fragment is fully transparent.
+    for y in 0..4 {
+        for x in 0..4 {
+            assert_eq!(pixel(&pixmap, x, y), (255, 255, 255, 255));
+        }
+    }
+}
+
+#[test]
 fn backdrop_filters_modify_backdrop_region() {
     let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
     let mut list = DisplayList::new();
