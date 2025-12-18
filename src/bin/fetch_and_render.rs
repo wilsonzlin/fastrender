@@ -37,7 +37,16 @@ fn fetch_bytes(url: &str, timeout: Option<Duration>) -> Result<(Vec<u8>, Option<
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
         let bytes = std::fs::read(path).map_err(Error::Io)?;
-        return Ok((bytes, None));
+
+        let mut meta_path = std::path::PathBuf::from(path);
+        if let Some(ext) = meta_path.extension().and_then(|e| e.to_str()) {
+            meta_path.set_extension(format!("{ext}.meta"));
+        } else {
+            meta_path.set_extension("meta");
+        }
+        let content_type = std::fs::read_to_string(&meta_path).ok().map(|s| s.trim().to_string());
+
+        return Ok((bytes, content_type));
     }
 
     // Configure agent with timeout for ureq 3.x
@@ -199,6 +208,27 @@ mod tests {
         let bytes = vec![0xA3]; // U+00A3 in Windows-1252
         let decoded = decode_html_bytes(&bytes, None);
         assert_eq!(decoded, "£");
+    }
+
+    #[test]
+    fn fetch_bytes_reads_local_meta_content_type() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let html_path = dir.path().join("page.html");
+        let meta_path = dir.path().join("page.html.meta");
+
+        // Write Shift-JIS encoded body and matching meta
+        let encoded = encoding_rs::SHIFT_JIS
+            .encode("<html><body>デ</body></html>")
+            .0
+            .to_vec();
+        std::fs::write(&html_path, &encoded).unwrap();
+        std::fs::write(&meta_path, "text/html; charset=shift_jis").unwrap();
+
+        let url = format!("file://{}", html_path.display());
+        let (bytes, ct) = fetch_bytes(&url, None).expect("fetch bytes");
+        assert_eq!(ct.as_deref(), Some("text/html; charset=shift_jis"));
+        let decoded = decode_html_bytes(&bytes, ct.as_deref());
+        assert!(decoded.contains('デ'), "decoded html should respect meta charset: {}", decoded);
     }
 
     #[test]
