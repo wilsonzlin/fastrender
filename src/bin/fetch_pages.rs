@@ -1,6 +1,6 @@
 //! Fetch and cache HTML pages for testing
 //!
-//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c]
+//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA]
 //!
 //! Fetches all target pages in parallel and caches to fetches/html/
 
@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_USER_AGENT};
 use rayon::ThreadPoolBuilder;
 
 struct Config {
@@ -20,6 +21,7 @@ struct Config {
     jobs: usize,
     timeout: Duration,
     page_filter: Option<HashSet<String>>, // normalized via url_to_filename
+    user_agent: String,
 }
 
 const CACHE_DIR: &str = "fetches/html";
@@ -168,6 +170,7 @@ fn parse_args() -> Config {
     let mut timeout_secs: u64 = 30;
     let mut filter: HashSet<String> = HashSet::new();
     let mut has_filter = false;
+    let mut user_agent = DEFAULT_USER_AGENT.to_string();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -179,6 +182,7 @@ fn parse_args() -> Config {
                 println!("  --jobs N            Number of parallel fetches (default: num_cpus)");
                 println!("  --timeout SECONDS   Per-request timeout (default: 30)");
                 println!("  --pages a,b,c       Fetch only the listed pages (use url_to_filename stems)");
+                println!("  --user-agent UA     Override the User-Agent header (default: Chrome-like)");
                 std::process::exit(0);
             }
             "--refresh" => refresh = true,
@@ -208,6 +212,13 @@ fn parse_args() -> Config {
                     }
                 }
             }
+            "--user-agent" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        user_agent = val;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -217,6 +228,7 @@ fn parse_args() -> Config {
         jobs,
         timeout: Duration::from_secs(timeout_secs),
         page_filter: if has_filter { Some(filter) } else { None },
+        user_agent,
     }
 }
 
@@ -231,27 +243,14 @@ fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
         .collect()
 }
 
-fn fetch_page(url: &str, timeout: Duration) -> Result<(Vec<u8>, Option<String>), String> {
-    let config = ureq::Agent::config_builder().timeout_global(Some(timeout)).build();
-    let agent: ureq::Agent = config.into();
-
-    let mut response = agent
-        .get(url)
-        .header("User-Agent", "Mozilla/5.0 (compatible; fastrender/0.1)")
-        .call()
-        .map_err(|e| e.to_string())?;
-
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-
-    response
-        .body_mut()
-        .read_to_vec()
+fn fetch_page(url: &str, timeout: Duration, user_agent: &str) -> Result<(Vec<u8>, Option<String>), String> {
+    let fetcher = HttpFetcher::default()
+        .with_timeout(timeout)
+        .with_user_agent(user_agent.to_string());
+    fetcher
+        .fetch(url)
+        .map(|res| (res.bytes, res.content_type))
         .map_err(|e| e.to_string())
-        .map(|bytes| (bytes, content_type))
 }
 
 fn main() {
@@ -287,6 +286,7 @@ fn main() {
         config.jobs,
         config.timeout.as_secs()
     );
+    println!("User-Agent: {}", config.user_agent);
     if config.refresh {
         println!("--refresh: re-fetching all");
     }
@@ -308,6 +308,7 @@ fn main() {
             let skipped = Arc::clone(&skipped);
             let refresh = config.refresh;
             let timeout = config.timeout;
+            let user_agent = config.user_agent.clone();
 
             s.spawn(move |_| {
                 let filename = url_to_filename(url);
@@ -320,7 +321,7 @@ fn main() {
                     return;
                 }
 
-                match fetch_page(url, timeout) {
+                match fetch_page(url, timeout, &user_agent) {
                     Ok((bytes, content_type)) => {
                         if let Ok(mut f) = fs::File::create(&cache_path) {
                             if f.write_all(&bytes).is_ok() {

@@ -25,6 +25,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Default User-Agent string used by HTTP fetchers
+pub const DEFAULT_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 fastrender/0.1";
+
 // ============================================================================
 // Core types
 // ============================================================================
@@ -209,7 +213,7 @@ impl Default for HttpFetcher {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(30),
-            user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 fastrender/0.1".to_string(),
+            user_agent: DEFAULT_USER_AGENT.to_string(),
             max_size: 50 * 1024 * 1024, // 50MB default limit
         }
     }
