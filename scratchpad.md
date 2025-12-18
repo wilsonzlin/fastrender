@@ -31,6 +31,7 @@
 # Marker counter font: regression `marker_inherits_counter_font` asserts list-style markers inherit the list item’s font family and weight.
 # Marker shadow order: regression `marker_shadow_paints_after_background` ensures shadows emit after marker backgrounds.
 # Marker text shadow vertical: regression `marker_text_shadow_in_vertical_writing` ensures shadows offset correctly in vertical writing.
+# Marker font weight: regression `marker_inherits_font_weight_from_list_item` confirms markers retain the list item’s font weight.
 # List-style-image marker: regression `list_style_image_produces_image_marker` asserts image list markers emit replaced fragments during layout.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
