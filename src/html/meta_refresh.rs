@@ -106,9 +106,9 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
                     i += 1;
                 }
                 if i > start {
-                    let candidate = html[start..i].trim();
+                    let candidate = decoded[start..i].trim();
                     if !candidate.is_empty() {
-                        return Some(candidate.to_string());
+                        return Some(unescape_js_literal(candidate));
                     }
                 }
             }
@@ -147,6 +147,8 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
 
 fn unescape_js_literal(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    let mut s = s.replace("\\\\/", "/");
+    s = s.replace("\\/", "/");
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
