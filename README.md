@@ -120,7 +120,7 @@ Accepted values:
 - Contrast: `more`/`high`, `less`/`low`, `custom`/`forced`, or `no-preference` (default).
 - Color scheme: `light`, `dark`, or `no-preference` (default).
 
-Flags are available on `render_pages`, `fetch_and_render`, and `inspect_frag`.
+Flags are available on `render_pages`, `fetch_and_render`, and `inspect_frag`. When `inspect_frag` inlines linked stylesheets it also honors `--user-agent` and `--accept-language` (or their defaults) via an HttpFetcher configured with those headers.
 
 Environment variables are also supported when invoking the API directly:
 
