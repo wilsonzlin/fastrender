@@ -821,21 +821,20 @@ impl TextShaper {
             return Vec::new();
         }
 
-        let text_bytes = text.as_bytes();
         let mut clusters = Vec::new();
-        let mut current_cluster_start_byte = glyphs[0].cluster as usize;
+        let mut current_cluster_start_byte = self.clamp_to_prev_boundary(text, glyphs[0].cluster as usize);
         let mut current_glyph_start = 0;
         let mut current_advance = 0.0f32;
 
         for (glyph_idx, glyph) in glyphs.iter().enumerate() {
-            let cluster_byte = glyph.cluster as usize;
+            let cluster_byte = self.clamp_to_prev_boundary(text, glyph.cluster as usize);
 
             if cluster_byte != current_cluster_start_byte {
                 // New cluster - finish the current one
-                let text_len = self.cluster_text_len(text_bytes, current_cluster_start_byte, cluster_byte);
+                let (start, len) = self.cluster_text_span(text, current_cluster_start_byte, cluster_byte);
                 clusters.push(GlyphCluster::new(
-                    current_cluster_start_byte,
-                    text_len,
+                    start,
+                    len,
                     current_glyph_start,
                     glyph_idx - current_glyph_start,
                     current_advance,
@@ -850,10 +849,10 @@ impl TextShaper {
         }
 
         // Add the last cluster
-        let text_len = text.len().saturating_sub(current_cluster_start_byte);
+        let (start, len) = self.cluster_text_span(text, current_cluster_start_byte, text.len());
         clusters.push(GlyphCluster::new(
-            current_cluster_start_byte,
-            text_len,
+            start,
+            len,
             current_glyph_start,
             glyphs.len() - current_glyph_start,
             current_advance,
@@ -862,10 +861,52 @@ impl TextShaper {
         clusters
     }
 
-    /// Calculate text length for a cluster
-    fn cluster_text_len(&self, _text_bytes: &[u8], start: usize, end: usize) -> usize {
-        // Use abs_diff for RTL text where clusters may be in reverse order
-        end.abs_diff(start)
+    /// Calculate text span for a cluster, clamping to UTF-8 boundaries.
+    fn cluster_text_span(&self, text: &str, start: usize, end: usize) -> (usize, usize) {
+        let text_len = text.len();
+        let start_clamped = self.clamp_to_prev_boundary(text, start.min(text_len));
+        let end_clamped = self.clamp_to_next_boundary(text, end.min(text_len));
+        let (low, high) = if start_clamped <= end_clamped {
+            (start_clamped, end_clamped)
+        } else {
+            (end_clamped, start_clamped)
+        };
+        (low, high.saturating_sub(low))
+    }
+
+    fn clamp_to_prev_boundary(&self, text: &str, idx: usize) -> usize {
+        if idx >= text.len() {
+            return text.len();
+        }
+        if text.is_char_boundary(idx) {
+            return idx;
+        }
+        let mut i = idx;
+        while i > 0 {
+            i -= 1;
+            if text.is_char_boundary(i) {
+                return i;
+            }
+        }
+        0
+    }
+
+    fn clamp_to_next_boundary(&self, text: &str, idx: usize) -> usize {
+        if idx >= text.len() {
+            return text.len();
+        }
+        let mut i = idx;
+        if text.is_char_boundary(i) {
+            return i;
+        }
+        i += 1;
+        while i < text.len() {
+            if text.is_char_boundary(i) {
+                return i;
+            }
+            i += 1;
+        }
+        text.len()
     }
 
     /// Measure text width without full shaping
@@ -1149,5 +1190,25 @@ mod tests {
     fn test_text_shaper_default() {
         let shaper = TextShaper;
         assert_eq!(std::mem::size_of_val(&shaper), 0);
+    }
+
+    #[test]
+    fn build_clusters_clamps_to_char_boundaries() {
+        let shaper = TextShaper::new();
+        let text = "a😊b";
+        let glyphs = vec![
+            GlyphPosition::with_metrics(1, 0, 5.0, 0.0, 0.0, 0.0),
+            // Intentional mid-codepoint cluster; should be clamped to boundaries.
+            GlyphPosition::with_metrics(2, 2, 5.0, 0.0, 0.0, 0.0),
+            GlyphPosition::with_metrics(3, 5, 5.0, 0.0, 0.0, 0.0),
+        ];
+
+        let clusters = shaper.build_clusters(text, &glyphs);
+        assert_eq!(clusters.len(), 3);
+        for cluster in &clusters {
+            assert!(text.is_char_boundary(cluster.text_start));
+            assert!(text.is_char_boundary(cluster.text_start + cluster.text_len));
+            assert!(cluster.text_len > 0);
+        }
     }
 }
