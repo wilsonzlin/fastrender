@@ -126,13 +126,14 @@ fn toggle_no_js_class(node: &mut DomNode) {
         tag_name, attributes, ..
     } = &mut node.node_type
     {
+        let mut classes: Vec<String> = attributes
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+            .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
+            .unwrap_or_default();
+        let mut changed = false;
+
         if tag_name.eq_ignore_ascii_case("html") {
-            let mut classes: Vec<String> = attributes
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case("class"))
-                .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
-                .unwrap_or_default();
-            let mut changed = false;
             if classes.iter().any(|c| c == "no-js") {
                 classes.retain(|c| c != "no-js");
                 if !classes.iter().any(|c| c == "js-enabled") {
@@ -140,19 +141,21 @@ fn toggle_no_js_class(node: &mut DomNode) {
                 }
                 changed = true;
             }
+        }
 
+        if tag_name.eq_ignore_ascii_case("html") || tag_name.eq_ignore_ascii_case("body") {
             if !classes.iter().any(|c| c == "jsl10n-visible") {
                 classes.push("jsl10n-visible".to_string());
                 changed = true;
             }
+        }
 
-            if changed {
-                let class_value = classes.join(" ");
-                if let Some((_, value)) = attributes.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("class")) {
-                    *value = class_value;
-                } else {
-                    attributes.push(("class".to_string(), class_value));
-                }
+        if changed {
+            let class_value = classes.join(" ");
+            if let Some((_, value)) = attributes.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case("class")) {
+                *value = class_value;
+            } else {
+                attributes.push(("class".to_string(), class_value));
             }
         }
     }
@@ -3205,6 +3208,38 @@ mod tests {
                 .unwrap_or_default(),
             _ => panic!("expected html element"),
         };
+        assert!(classes.iter().any(|c| *c == "jsl10n-visible"));
+    }
+
+    #[test]
+    fn parse_html_marks_body_jsl10n_visible() {
+        let dom = parse_html("<html><body class='portal'></body></html>").expect("parse");
+        let html = dom
+            .children
+            .iter()
+            .find(|c| matches!(c.node_type, DomNodeType::Element { .. }))
+            .expect("html child");
+        let body = html
+            .children
+            .iter()
+            .find(|c| {
+                if let DomNodeType::Element { tag_name, .. } = &c.node_type {
+                    tag_name.eq_ignore_ascii_case("body")
+                } else {
+                    false
+                }
+            })
+            .expect("body child");
+
+        let classes = match &body.node_type {
+            DomNodeType::Element { attributes, .. } => attributes
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+                .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>())
+                .unwrap_or_default(),
+            _ => panic!("expected body element"),
+        };
+        assert!(classes.iter().any(|c| *c == "portal"));
         assert!(classes.iter().any(|c| *c == "jsl10n-visible"));
     }
 }
