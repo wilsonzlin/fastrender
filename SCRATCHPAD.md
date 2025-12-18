@@ -194,3 +194,4 @@ display:flex appears ~327 times.
 display:block appears ~351 times.
 transform appears ~204 times.
 box-shadow appears ~56 times.
+border-radius appears ~143 times.
