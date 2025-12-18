@@ -61,7 +61,7 @@ fetch_pages now reports failed URLs in the summary output (prints a comma-separa
 - Added regression `absolute_children_inside_block_descendants_are_laid_out` covering positioned children under nested blocks to guard the fix.
 - Previous notes: marker baseline/list-style-position/ellipsis regressions landed upstream. Cloudflare/latimes fetch/render had timed out at 60s; no changes made.
 CNN render with split_at char-boundary guard now finishes: render_pages --pages cnn.com --timeout 60 succeeded (~44s, ~196KB PNG); fetch_and_render timings ~7s cascade, ~4.6s box_tree, ~42s layout, ~0.5s paint.
-
+ 
 - Fetched full page set (fetch_pages). Several 403/401s remain expected; cache populated for 85+ pages.
 - render_pages was crashing on latimes.com due to splitting text at non-UTF-8 boundaries. TextItem::split_at now clamps to char boundaries and split_runs_preserving_shaping bails out when the run offset isn't a boundary, falling back to reshaping; added regression test split_at_handles_non_char_boundary_offsets.
 - Reran render_pages for all cached pages; 86/86 pass, latimes.com now renders (PNG ~106KB). Summary in fetches/renders/_summary.log.
