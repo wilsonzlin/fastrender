@@ -16,13 +16,26 @@ fn contains_class(node: &BoxNode, class: &str) -> bool {
 
 #[test]
 fn empty_ad_placeholders_are_dropped() {
-    let dom: DomNode = dom::parse_html(r#"<div class=\"ad-height-hold\"></div>"#).unwrap();
+    for class in ["ad-height-hold", "ad__slot", "should-hold-space"] {
+        let html = format!("<div class=\"{}\"></div>", class);
+        let dom: DomNode = dom::parse_html(&html).unwrap();
+        let stylesheet = parse_stylesheet("").unwrap();
+        let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+        let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
+        assert!(
+            !contains_class(&box_tree.root, class),
+            "empty ad placeholder {class} should not generate boxes"
+        );
+    }
+}
+
+#[test]
+fn non_empty_ad_placeholders_are_kept() {
+    let dom: DomNode = dom::parse_html(r#"<div class=\"ad-height-hold\"><span>ad content</span></div>"#).unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
     let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
-    assert!(
-        !contains_class(&box_tree.root, "ad-height-hold"),
-        "empty ad placeholders should not generate boxes"
-    );
+    assert!(contains_class(&box_tree.root, "ad-height-hold"));
 }
