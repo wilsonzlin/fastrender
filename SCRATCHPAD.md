@@ -107,3 +107,4 @@ Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_a
 - Added mozilla.org to fetch_pages targets for broader coverage. Fetch/render mozilla.org (1200x800, 60s) succeeds (~79KB PNG, visible content).
 - fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
 Added fast.com, kotlinlang.org, and openstreetmap.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
+Added stanford.edu to fetch_pages targets (cargo check --bin fetch_pages passes).
