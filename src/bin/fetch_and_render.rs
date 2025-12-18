@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--full-page] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -10,6 +10,7 @@
 //!   --dpr FLOAT         Device pixel ratio for media queries/srcset (default: 1.0)
 //!   --prefers-reduced-transparency reduce|no-preference|true|false
 //!                        User media preference for reduced transparency (overrides env)
+//!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
 
 #![allow(clippy::io_other_error)]
 #![allow(clippy::redundant_closure)]
@@ -363,12 +364,13 @@ mod tests {
 }
 
 fn usage(program: &str) {
-    eprintln!("Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] <url> [output.png] [width] [height] [scroll_x] [scroll_y]");
+    eprintln!("Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--full-page] <url> [output.png] [width] [height] [scroll_x] [scroll_y]");
     eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
     eprintln!("  height: viewport height (default: 800)");
     eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
     eprintln!("  prefers-reduced-transparency: reduce|no-preference|true|false (overrides env)");
+    eprintln!("  full-page: expand render target to full content size (or set FASTR_FULL_PAGE)");
     eprintln!("  scroll_x: horizontal scroll offset (default: 0)");
     eprintln!("  scroll_y: vertical scroll offset (default: 0)");
 }
@@ -474,6 +476,7 @@ fn main() -> Result<()> {
     let mut dpr: f32 = 1.0;
     let mut prefers_reduced_transparency: Option<bool> = None;
     let mut positional: Vec<String> = Vec::new();
+    let mut full_page = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -499,6 +502,9 @@ fn main() -> Result<()> {
                     prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
                 }
             }
+            "--full-page" => {
+                full_page = true;
+            }
             _ => positional.push(arg),
         }
     }
@@ -523,6 +529,10 @@ fn main() -> Result<()> {
             "FASTR_PREFERS_REDUCED_TRANSPARENCY",
             if reduce { "reduce" } else { "no-preference" },
         );
+    }
+
+    if full_page {
+        std::env::set_var("FASTR_FULL_PAGE", "1");
     }
 
     let (tx, rx) = channel();
