@@ -421,18 +421,20 @@ fn main() {
                     }
                 }
 
-                if let Some(js_redirect) = extract_js_location_redirect(&html) {
-                    if let Some(target) = resolve_href(&resource_base, &js_redirect) {
-                        log.push_str(&format!("JS redirect to: {}\n", target));
-                        match fetcher.fetch(&target) {
-                            Ok(res) => {
-                                html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
-                                input_url = target.clone();
-                                resource_base = infer_base_url(&html, &input_url).into_owned();
-                                log.push_str(&format!("Followed JS redirect; new base: {}\n", resource_base));
-                            }
-                            Err(e) => {
-                                log.push_str(&format!("Failed to follow JS redirect: {}\n", e));
+                if html.to_ascii_lowercase().contains("<noscript") {
+                    if let Some(js_redirect) = extract_js_location_redirect(&html) {
+                        if let Some(target) = resolve_href(&resource_base, &js_redirect) {
+                            log.push_str(&format!("JS redirect to: {}\n", target));
+                            match fetcher.fetch(&target) {
+                                Ok(res) => {
+                                    html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
+                                    input_url = target.clone();
+                                    resource_base = infer_base_url(&html, &input_url).into_owned();
+                                    log.push_str(&format!("Followed JS redirect; new base: {}\n", resource_base));
+                                }
+                                Err(e) => {
+                                    log.push_str(&format!("Failed to follow JS redirect: {}\n", e));
+                                }
                             }
                         }
                     }

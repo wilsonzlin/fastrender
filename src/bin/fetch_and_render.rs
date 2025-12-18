@@ -875,17 +875,19 @@ fn render_once(
         }
     }
 
-    if let Some(js_redirect) = extract_js_location_redirect(&html) {
-        if let Some(target) = resolve_href(&resource_base, &js_redirect) {
-            println!("Following JS location redirect to: {}", target);
-            match fetch_bytes(&target, timeout, user_agent, accept_language) {
-                Ok((bytes, content_type, final_url)) => {
-                    html = decode_html_bytes(&bytes, content_type.as_deref());
-                    base_hint = final_url.unwrap_or(target);
-                    resource_base = infer_base_url(&html, &base_hint).into_owned();
-                }
-                Err(e) => {
-                    eprintln!("Warning: failed to follow JS redirect {}: {}", target, e);
+    if html.to_ascii_lowercase().contains("<noscript") {
+        if let Some(js_redirect) = extract_js_location_redirect(&html) {
+            if let Some(target) = resolve_href(&resource_base, &js_redirect) {
+                println!("Following JS location redirect to: {}", target);
+                match fetch_bytes(&target, timeout, user_agent, accept_language) {
+                    Ok((bytes, content_type, final_url)) => {
+                        html = decode_html_bytes(&bytes, content_type.as_deref());
+                        base_hint = final_url.unwrap_or(target);
+                        resource_base = infer_base_url(&html, &base_hint).into_owned();
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: failed to follow JS redirect {}: {}", target, e);
+                    }
                 }
             }
         }
