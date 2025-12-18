@@ -63,4 +63,5 @@ Added economist.com to fetch_pages (fetch/renders succeed ~12s, ~36KB PNG).
 Mix-blend-mode: regressions ensure non-isolated multiply darkens backdrop and isolated uses source-over.
 CNN render with split_at guard now completes: render_pages --pages cnn.com --timeout 60 ~44s (cascade ~7s, box_tree ~4.6s, layout ~42s, paint ~0.5s).
 apple.com render repro: fetch_and_render --timeout 60 1200x800 succeeds (PNG ~86KB, nonwhite bbox full frame). One font CSS endpoint 404s (wss/fonts?), but page still renders; no blank/gray issue observed.
+Apple.com already present in fetch_pages PAGES list; no changes needed.
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
