@@ -332,8 +332,6 @@ struct CascadeScratch {
     candidates: Vec<usize>,
     match_index: MatchIndex,
     candidate_seen: CandidateSet,
-    last_tag: Option<String>,
-    last_tag_universal: Option<Vec<usize>>,
 }
 
 impl CascadeScratch {
@@ -342,8 +340,6 @@ impl CascadeScratch {
             candidates: Vec::new(),
             match_index: MatchIndex::new(rule_count),
             candidate_seen: CandidateSet::new(rule_count),
-            last_tag: None,
-            last_tag_universal: None,
         }
     }
 }
