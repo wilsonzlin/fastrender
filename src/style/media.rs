@@ -541,6 +541,27 @@ struct ResolutionKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct MediaContextFingerprint {
+    media_type: MediaType,
+    viewport_width_bits: u32,
+    viewport_height_bits: u32,
+    device_width_bits: u32,
+    device_height_bits: u32,
+    device_pixel_ratio_bits: u32,
+    prefers_reduced_motion: bool,
+    prefers_reduced_transparency: bool,
+    prefers_reduced_data: bool,
+    prefers_contrast: ContrastPreference,
+    prefers_color_scheme: Option<ColorScheme>,
+    color_gamut: ColorGamut,
+    inverted_colors: bool,
+    forced_colors: bool,
+    color_depth: u32,
+    color_index: u32,
+    monochrome_depth: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RangeValueKey {
     Length(LengthKey),
     AspectRatio(u32, u32),
@@ -551,6 +572,7 @@ enum RangeValueKey {
 pub struct MediaQueryCache {
     results: HashMap<MediaQueryKey, bool>,
     key_cache: HashMap<usize, MediaQueryKey>,
+    context: Option<MediaContextFingerprint>,
 }
 
 impl MediaQueryCache {
@@ -573,6 +595,14 @@ impl MediaQueryCache {
 
     pub fn is_empty(&self) -> bool {
         self.results.is_empty()
+    }
+
+    fn ensure_context(&mut self, fingerprint: MediaContextFingerprint) {
+        if self.context.as_ref() != Some(&fingerprint) {
+            self.results.clear();
+            self.key_cache.clear();
+            self.context = Some(fingerprint);
+        }
     }
 }
 
@@ -1568,6 +1598,28 @@ pub struct MediaContext {
 }
 
 impl MediaContext {
+    fn fingerprint(&self) -> MediaContextFingerprint {
+        MediaContextFingerprint {
+            media_type: self.media_type,
+            viewport_width_bits: self.viewport_width.to_bits(),
+            viewport_height_bits: self.viewport_height.to_bits(),
+            device_width_bits: self.device_width.to_bits(),
+            device_height_bits: self.device_height.to_bits(),
+            device_pixel_ratio_bits: self.device_pixel_ratio.to_bits(),
+            prefers_reduced_motion: self.prefers_reduced_motion,
+            prefers_reduced_transparency: self.prefers_reduced_transparency,
+            prefers_reduced_data: self.prefers_reduced_data,
+            prefers_contrast: self.prefers_contrast,
+            prefers_color_scheme: self.prefers_color_scheme,
+            color_gamut: self.color_gamut,
+            inverted_colors: matches!(self.inverted_colors, InvertedColors::Inverted),
+            forced_colors: self.forced_colors,
+            color_depth: self.color_depth,
+            color_index: self.color_index,
+            monochrome_depth: self.monochrome_depth,
+        }
+    }
+
     /// Creates a default screen context with given dimensions
     ///
     /// Sets reasonable defaults for a desktop browser environment:
@@ -1961,6 +2013,7 @@ impl MediaContext {
     /// Evaluates a single media query with optional caching.
     pub fn evaluate_with_cache(&self, query: &MediaQuery, cache: Option<&mut MediaQueryCache>) -> bool {
         if let Some(cache) = cache {
+            cache.ensure_context(self.fingerprint());
             let key = cache.key_for(query).clone();
             if let Some(hit) = cache.get(&key) {
                 return hit;

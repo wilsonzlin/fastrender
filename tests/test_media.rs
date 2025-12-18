@@ -592,6 +592,21 @@ fn env_override_prefers_reduced_transparency() {
 }
 
 #[test]
+fn media_query_with_reduced_transparency_env_overrides_cache() {
+    let guard = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("reduce"));
+    let query = MediaQuery::parse("(prefers-reduced-transparency: reduce)").unwrap();
+    let mut cache = MediaQueryCache::default();
+
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(ctx.evaluate_with_cache(&query, Some(&mut cache)));
+    drop(guard);
+
+    // Without the env override the same cached key should not incorrectly match; rebuild context.
+    let ctx_no_override = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(!ctx_no_override.evaluate_with_cache(&query, Some(&mut cache)));
+}
+
+#[test]
 fn media_query_cache_reuses_existing_entry() {
     let query = MediaQuery::parse("(min-width: 10px)").unwrap();
     let ctx = MediaContext::screen(100.0, 100.0);
