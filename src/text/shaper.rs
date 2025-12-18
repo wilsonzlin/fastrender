@@ -50,6 +50,8 @@ use crate::error::{Result, TextError};
 use crate::text::bidi::Direction as BidiDirection;
 use crate::text::font_db::LoadedFont;
 use rustybuzz::{Face, UnicodeBuffer};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 // ============================================================================
 // Direction
@@ -541,6 +543,16 @@ pub struct ShapedGlyphs {
     pub font_size: f32,
 }
 
+#[derive(Hash, PartialEq, Eq)]
+struct ShapeCacheKey {
+    font_ptr: usize,
+    font_index: u32,
+    font_size_bits: u32,
+    script: Script,
+    direction: TextDirection,
+    text: String,
+}
+
 impl ShapedGlyphs {
     /// Creates an empty ShapedGlyphs instance
     pub fn empty() -> Self {
@@ -669,6 +681,11 @@ impl ShapedGlyphs {
 pub struct TextShaper;
 
 impl TextShaper {
+    fn cache() -> &'static Mutex<HashMap<ShapeCacheKey, ShapedGlyphs>> {
+        static CACHE: OnceLock<Mutex<HashMap<ShapeCacheKey, ShapedGlyphs>>> = OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
     /// Creates a new text shaper
     pub fn new() -> Self {
         Self
@@ -727,6 +744,20 @@ impl TextShaper {
             });
         }
 
+        let cache_key = ShapeCacheKey {
+            font_ptr: Arc::as_ptr(&font.data) as usize,
+            font_index: font.index,
+            font_size_bits: font_size.to_bits(),
+            script,
+            direction,
+            text: text.to_string(),
+        };
+        if let Ok(cache) = Self::cache().lock() {
+            if let Some(entry) = cache.get(&cache_key) {
+                return Ok(entry.clone());
+            }
+        }
+
         // Create rustybuzz face from font data
         let rb_face = Face::from_slice(&font.data, font.index).ok_or_else(|| TextError::ShapingFailed {
             text: text.chars().take(50).collect(),
@@ -780,7 +811,7 @@ impl TextShaper {
         // Build cluster information
         let clusters = self.build_clusters(text, &glyphs);
 
-        Ok(ShapedGlyphs {
+        let shaped = ShapedGlyphs {
             text: text.to_string(),
             glyphs,
             clusters,
@@ -789,7 +820,17 @@ impl TextShaper {
             direction,
             script,
             font_size,
-        })
+        };
+
+        if let Ok(mut cache) = Self::cache().lock() {
+            const MAX_ENTRIES: usize = 4096;
+            if cache.len() >= MAX_ENTRIES {
+                cache.clear();
+            }
+            cache.insert(cache_key, shaped.clone());
+        }
+
+        Ok(shaped)
     }
 
     /// Shape text with automatic script detection
