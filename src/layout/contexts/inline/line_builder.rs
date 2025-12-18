@@ -4266,15 +4266,7 @@ mod tests {
             .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
             .expect("shape");
         let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
-        let item = TextItem::new(
-            runs,
-            text.to_string(),
-            metrics,
-            Vec::new(),
-            Vec::new(),
-            style.clone(),
-            Direction::Ltr,
-        );
+        let item = TextItem::new(runs, text.to_string(), metrics, Vec::new(), Vec::new(), style.clone(), Direction::Ltr);
 
         // Offset 2 lands inside the multi-byte emoji; split_at should clamp to the previous
         // boundary rather than panicking.
@@ -4325,5 +4317,32 @@ mod tests {
             TextItem::previous_char_boundary_in_text(text, text.len() + 10),
             text.len()
         );
+    }
+
+    #[test]
+    fn split_at_handles_non_char_boundary_offsets() {
+        let font_ctx = FontContext::new();
+        let pipeline = ShapingPipeline::new();
+        let style = Arc::new(ComputedStyle::default());
+        let text = "‘bruises and blood’ in ‘Christy’ fights";
+
+        let runs = pipeline
+            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
+            .expect("shape");
+        let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+        let item = TextItem::new(
+            runs,
+            text.to_string(),
+            metrics,
+            Vec::new(),
+            Vec::new(),
+            style,
+            Direction::Ltr,
+        );
+
+        let (before, after) = item.split_at(22, false, &pipeline, &font_ctx).expect("split succeeds");
+
+        assert_eq!(format!("{}{}", before.text, after.text), text);
+        assert!(after.text.starts_with('’'));
     }
 }
