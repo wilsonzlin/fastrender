@@ -861,12 +861,20 @@ impl FastRender {
     /// println!("Viewport: {:?}", fragment_tree.viewport_size());
     /// ```
     pub fn layout_document(&mut self, dom: &DomNode, width: u32, height: u32) -> Result<FragmentTree> {
-        // Extract CSS from style tags
-        let stylesheet = extract_css(dom)?;
-
         let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
-        let mut stage_start = timings_enabled.then(Instant::now);
-        let overall_start = stage_start.clone();
+        let overall_start = timings_enabled.then(Instant::now);
+
+        // Extract CSS from style tags
+        let css_parse_start = timings_enabled.then(Instant::now);
+        let stylesheet = extract_css(dom)?;
+        if let Some(start) = css_parse_start {
+            eprintln!("timing:css_parse {:?}", start.elapsed());
+        }
+
+        // Collect codepoints used in text nodes to avoid fetching unused web font subsets.
+        let used_codepoints = dom::collect_text_codepoints(dom);
+
+        let mut stage_start = overall_start.clone();
 
         // Apply styles to create styled tree
         let target_fragment = self.current_target_fragment();
@@ -875,6 +883,7 @@ impl FastRender {
             .with_env_overrides();
         let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
         let mut media_query_cache = MediaQueryCache::default();
+        let style_load_start = timings_enabled.then(Instant::now);
         let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
             &import_loader,
             self.base_url.as_deref(),
@@ -886,7 +895,13 @@ impl FastRender {
         let font_faces =
             resolved_stylesheet.collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
         // Best-effort loading; rendering should continue even if a web font fails.
-        let _ = self.font_context.load_web_fonts(&font_faces, self.base_url.as_deref());
+        let _ = self
+            .font_context
+            .load_web_fonts(&font_faces, self.base_url.as_deref(), Some(&used_codepoints));
+        if let Some(start) = style_load_start {
+            eprintln!("timing:style_prepare {:?}", start.elapsed());
+        }
+        let style_apply_start = timings_enabled.then(Instant::now);
         let styled_tree = apply_styles_with_media_target_and_imports_cached(
             dom,
             &resolved_stylesheet,
@@ -899,6 +914,9 @@ impl FastRender {
             None,
             Some(&mut media_query_cache),
         );
+        if let Some(start) = style_apply_start {
+            eprintln!("timing:style_apply {:?}", start.elapsed());
+        }
         let first_style_fingerprints = has_container_queries.then(|| styled_fingerprint_map(&styled_tree));
 
         if let Some(start) = stage_start.as_mut() {

@@ -3845,6 +3845,7 @@ impl Painter {
             return None;
         }
         let dom = dom::parse_html(html).ok()?;
+        let used_codepoints = dom::collect_text_codepoints(&dom);
         let stylesheet = css::parser::extract_css(&dom).ok()?;
         let media_ctx = MediaContext::screen(content_rect.width(), content_rect.height())
             .with_device_pixel_ratio(self.scale)
@@ -3867,9 +3868,11 @@ impl Painter {
             .map(String::from);
         let font_faces =
             resolved_stylesheet.collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
-        let _ = self
-            .font_ctx
-            .load_web_fonts(&font_faces, self.image_cache.base_url().as_deref());
+        let _ = self.font_ctx.load_web_fonts(
+            &font_faces,
+            self.image_cache.base_url().as_deref(),
+            Some(&used_codepoints),
+        );
         let styled_tree = style::cascade::apply_styles_with_media_target_and_imports_cached(
             &dom,
             &resolved_stylesheet,

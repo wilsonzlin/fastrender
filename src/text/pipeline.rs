@@ -3260,7 +3260,7 @@ mod tests {
             sources: vec![FontFaceSource::Url(web_url.to_string())],
             ..Default::default()
         };
-        ctx.load_web_fonts(&[face], None).expect("load web font");
+        ctx.load_web_fonts(&[face], None, None).expect("load web font");
 
         let web_runs = match pipeline.shape("mmmm", &style, &ctx) {
             Ok(runs) => runs,
@@ -3385,7 +3385,7 @@ mod tests {
 
         let db = FontDatabase::empty();
         let ctx = FontContext::with_database(Arc::new(db));
-        ctx.load_web_fonts(&[face], None).expect("load web math");
+        ctx.load_web_fonts(&[face], None, None).expect("load web math");
 
         let mut style = ComputedStyle::default();
         style.font_family = vec!["math".to_string()];
@@ -3434,7 +3434,7 @@ mod tests {
         };
 
         let ctx = FontContext::new();
-        ctx.load_web_fonts(&[face], None).expect("load web font");
+        ctx.load_web_fonts(&[face], None, None).expect("load web font");
 
         let families = vec![
             FamilyEntry::Named("RangeFace".to_string()),

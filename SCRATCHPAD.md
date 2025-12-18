@@ -1,4 +1,5 @@
 Render pipeline now decodes cached HTML with proper charset sniffing: fetch_pages stores the response Content-Type alongside each cached HTML (.html.meta), render_pages decodes bytes via the shared html::encoding helper (BOM/header/meta/default Windows-1252), and fetch_and_render reuses the shared decoder instead of its local copy. cloudflare.com and latimes.com timeouts still outstanding from earlier notes.
+Cloudflare render perf fixed: web font loading filters to the page’s codepoints (skipping unused @font-face ranges) and web font HTTP timeout is 10s; FASTR_RENDER_TIMINGS now reports css_parse/style_prepare/style_apply. cloudflare.com renders in ~12s at 1200×800 instead of 70s+.
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
 fetch_and_render now reads .meta sidecars for file:// HTML inputs (e.g., cached pages) and passes the cached Content-Type through decode_html_bytes; added a regression ensuring Shift-JIS HTML decodes via the meta charset.
@@ -12,9 +13,7 @@ HttpFetcher now sends an Accept-Language header by default (en-US,en;q=0.9); reg
 Accept-Language default is exported as DEFAULT_ACCEPT_LANGUAGE so callers can share the header value; fetch_and_render already uses HttpFetcher so it inherits the default.
 fetch_pages now accepts --accept-language to override the header and passes it through HttpFetcher; a local TCP regression asserts the override is sent when fetching.
 HttpFetcher now retries misreported Content-Encoding by falling back to identity encoding when decompression fails; regression `fetch_http_retries_on_bad_gzip` covers invalid gzip bodies.
-cloudflare.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made
-latimes.com fetch/render timed out at 60s; no changes made (duplicate notes removed)
 HTML parsing now disables scripting so <noscript> fallbacks are parsed/renderable; regression added for noscript content.
 Added DOM regression to ensure <noscript> content in <head> is preserved (e.g., fallback styles inside noscript remain in the tree).
 CLI support: fetch_and_render, render_pages, and inspect_frag now accept --prefers-reduced-data to override FASTR_PREFERS_REDUCED_DATA (matching reduced-transparency flag), and parsing helpers/tests were added.

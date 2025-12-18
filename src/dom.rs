@@ -12,6 +12,7 @@ use selectors::{
 };
 use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::ptr;
 use std::thread_local;
 use unicode_bidi::bidi_class;
@@ -90,6 +91,42 @@ pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
         }
     }
     None
+}
+
+/// Collects the set of Unicode codepoints present in text nodes.
+///
+/// Script and style contents are skipped to avoid counting non-visible text.
+pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
+    let mut stack = vec![node];
+    let mut seen: HashSet<u32> = HashSet::new();
+
+    while let Some(current) = stack.pop() {
+        match &current.node_type {
+            DomNodeType::Text { content } => {
+                for ch in content.chars() {
+                    seen.insert(ch as u32);
+                }
+            }
+            DomNodeType::Element { tag_name, .. } => {
+                let skip = tag_name.eq_ignore_ascii_case("script") || tag_name.eq_ignore_ascii_case("style");
+                if skip {
+                    continue;
+                }
+                for child in &current.children {
+                    stack.push(child);
+                }
+            }
+            DomNodeType::Document => {
+                for child in &current.children {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+
+    let mut codepoints: Vec<u32> = seen.into_iter().collect();
+    codepoints.sort_unstable();
+    codepoints
 }
 
 pub fn parse_html(html: &str) -> Result<DomNode> {

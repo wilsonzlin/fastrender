@@ -400,14 +400,29 @@ impl FontContext {
     /// Loads web fonts defined by @font-face rules into the context.
     ///
     /// Relative URLs are resolved against `base_url` when provided.
-    pub fn load_web_fonts(&self, faces: &[FontFaceRule], base_url: Option<&str>) -> Result<()> {
+    pub fn load_web_fonts(
+        &self,
+        faces: &[FontFaceRule],
+        base_url: Option<&str>,
+        used_codepoints: Option<&[u32]>,
+    ) -> Result<()> {
         let mut modified = false;
+        let filter_by_codepoints = used_codepoints.is_some();
+        let used_codepoints = used_codepoints.unwrap_or(&[]);
         for (order, face) in faces.iter().enumerate() {
             let family = match &face.family {
                 Some(f) => f.clone(),
                 None => continue,
             };
             self.declare_web_family(&family);
+
+            if filter_by_codepoints
+                && (used_codepoints.is_empty()
+                    || (!face.unicode_ranges.is_empty()
+                        && !Self::unicode_range_intersects_used(&face.unicode_ranges, used_codepoints)))
+            {
+                continue;
+            }
 
             for source in &face.sources {
                 let loaded = match source {
@@ -426,6 +441,17 @@ impl FontContext {
             self.bump_generation();
         }
         Ok(())
+    }
+
+    #[inline]
+    fn range_matches_used(range: (u32, u32), used: &[u32]) -> bool {
+        let idx = used.partition_point(|cp| *cp < range.0);
+        used.get(idx).map_or(false, |cp| *cp <= range.1)
+    }
+
+    #[inline]
+    fn unicode_range_intersects_used(ranges: &[(u32, u32)], used: &[u32]) -> bool {
+        ranges.iter().any(|range| Self::range_matches_used(*range, used))
     }
 
     fn load_local_face(&self, family: &str, local_name: &str, face: &FontFaceRule, order: usize) -> Result<()> {
@@ -1076,7 +1102,7 @@ fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
 
     if url.starts_with("http://") || url.starts_with("https://") {
         let agent: Agent = Agent::config_builder()
-            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .timeout_global(Some(std::time::Duration::from_secs(10)))
             .build()
             .into();
         let mut response = agent.get(url).call().map_err(|e| {
@@ -1244,7 +1270,7 @@ mod tests {
         let faces = sheet.collect_font_face_rules(&media_ctx);
 
         let ctx = FontContext::empty();
-        assert!(ctx.load_web_fonts(&faces, None).is_ok());
+        assert!(ctx.load_web_fonts(&faces, None, None).is_ok());
         let families = vec!["WebFont".to_string()];
         let loaded = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
         assert!(loaded.is_some());
@@ -1263,7 +1289,7 @@ mod tests {
             sources: vec![FontFaceSource::Url("file:///no/such/font.woff".to_string())],
             ..Default::default()
         };
-        ctx.load_web_fonts(&[face], None).expect("load declared face");
+        ctx.load_web_fonts(&[face], None, None).expect("load declared face");
 
         assert!(ctx.is_web_family_declared("Roboto"));
         assert!(!ctx.has_web_faces("Roboto"));
@@ -1277,6 +1303,41 @@ mod tests {
     }
 
     #[test]
+    fn web_fonts_filter_to_used_codepoints() {
+        let font_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/STIXTwoMath-Regular.otf");
+        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+
+        let matching = FontFaceRule {
+            family: Some("Match".to_string()),
+            sources: vec![FontFaceSource::Url(font_url.to_string())],
+            unicode_ranges: vec![(0x0041, 0x005A)],
+            ..Default::default()
+        };
+        let skipped = FontFaceRule {
+            family: Some("Skip".to_string()),
+            sources: vec![FontFaceSource::Url(font_url.to_string())],
+            unicode_ranges: vec![(0x4E00, 0x4E10)],
+            ..Default::default()
+        };
+
+        let ctx = FontContext::new();
+        let used = vec![0x0041];
+        ctx.load_web_fonts(&[matching, skipped], None, Some(&used))
+            .expect("load filtered fonts");
+
+        assert!(ctx.is_web_family_declared("Match"));
+        assert!(ctx.is_web_family_declared("Skip"));
+
+        let match_font = ctx.match_web_font_for_char("Match", 400, FontStyle::Normal, FontStretch::Normal, None, 'A');
+        assert!(match_font.is_some(), "matching range should load");
+
+        let skipped_font =
+            ctx.match_web_font_for_char("Skip", 400, FontStyle::Normal, FontStretch::Normal, None, '\u{4E00}');
+        assert!(skipped_font.is_none(), "non-intersecting range should be skipped");
+    }
+
+    #[test]
     fn caseless_family_matching_handles_unicode() {
         let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
         let font_url = url::Url::from_file_path(&font_path).expect("file url");
@@ -1287,7 +1348,7 @@ mod tests {
         };
 
         let ctx = FontContext::empty();
-        ctx.load_web_fonts(&[face], None).expect("load face");
+        ctx.load_web_fonts(&[face], None, None).expect("load face");
 
         let families = vec!["STRASSE".to_string()];
         let font = ctx
@@ -1331,7 +1392,7 @@ mod tests {
         ];
 
         let ctx = FontContext::empty();
-        ctx.load_web_fonts(&faces, None).expect("load faces");
+        ctx.load_web_fonts(&faces, None, None).expect("load faces");
 
         let chosen = ctx
             .match_web_font_for_char(&family, 400, FontStyle::Oblique, FontStretch::Normal, Some(25.0), 'A')
@@ -1369,7 +1430,7 @@ mod tests {
         ];
 
         let ctx = FontContext::empty();
-        ctx.load_web_fonts(&faces, None).expect("load faces");
+        ctx.load_web_fonts(&faces, None, None).expect("load faces");
 
         let chosen = ctx
             .match_web_font_for_char(&family, 400, FontStyle::Normal, FontStretch::Normal, None, 'A')
@@ -1407,7 +1468,7 @@ mod tests {
         ];
 
         let ctx = FontContext::empty();
-        ctx.load_web_fonts(&faces, None).expect("load faces");
+        ctx.load_web_fonts(&faces, None, None).expect("load faces");
 
         let chosen = ctx
             .match_web_font_for_char(&family, 400, FontStyle::Italic, FontStretch::Normal, None, 'A')
