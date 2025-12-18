@@ -159,6 +159,8 @@ Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages 
 - Added slashdot.org to fetch_pages targets; fetch succeeds (~39KB HTML, content-type text/plain UTF-8). render_pages --pages slashdot.org 1200x800 completes in ~0.1s; PNG ~110KB with bbox x=0..1199, y≈30..338 and ~4.1k unique colors (content visible near top). Log at fetches/renders/slashdot.org.log.
 
 - Added theonion.com to fetch_pages targets; fetch succeeds (~448KB HTML). render_pages --pages theonion.com 1200x800 completes in ~12s; PNG ~423KB with bbox x≈32..1199, y≈47..799 and ~18.7k unique colors. Numerous plugin CSS URLs 404 (logged), but page still renders with visible content.
+
+Web font loads now capped via `FASTR_MAX_WEB_FONTS` (default 8, 0 disables) to avoid hangs from massive @font-face sets. With the cap, cached bbc.com renders in ~26s at 800x600 (layout ~13s, paint ~8s); previous short timeouts (10–20s) were due to heavy inline styles + grids rather than a hang. Stripping inline styles renders quickly; further BBC perf work would need deeper grid optimization.
 - Embedded CSS URL extraction now strips `sourceURL=` prefixes (seen in inline CSS/JS), and regression `strips_sourceurl_prefix_in_embedded_css_urls` covers the normalization.
 - Added hbr.org to fetch_pages targets; fetch succeeds (~322KB HTML). render_pages --pages hbr.org 1200x800 completes in ~4.4s; PNG ~40KB with bbox x≈29..1150, y≈227..616 (~104 colors). Visible content appears mid-frame.
 - Added vox.com to fetch_pages targets; fetch succeeds (~938KB HTML). render_pages --pages vox.com 1200x800 completes in ~15.6s; PNG ~110KB with bbox filling the frame (content spans most of the frame). Log at fetches/renders/vox.com.log.
