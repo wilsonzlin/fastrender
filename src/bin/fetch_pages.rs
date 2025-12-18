@@ -176,6 +176,7 @@ const PAGES: &[&str] = &[
     "https://www.openstreetmap.org",
     "https://docs.python.org",
     "https://kotlinlang.org",
+    "https://slashdot.org",
 ];
 
 fn url_to_filename(url: &str) -> String {
