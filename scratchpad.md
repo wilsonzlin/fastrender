@@ -34,6 +34,7 @@
 # Marker font weight: regression `marker_inherits_font_weight_from_list_item` confirms markers retain the list item’s font weight.
 # List-style-image marker: regression `list_style_image_produces_image_marker` asserts image list markers emit replaced fragments during layout.
 # Marker shadow opacity: regression `marker_shadow_respects_opacity` ensures marker text shadows honor element opacity.
+# Marker background overlap: regression `marker_background_does_not_overlap_text` ensures marker backgrounds with padding don't encroach on text start.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Added legend shrink-to-fit regression: a legend with auto width should shrink to its text instead of spanning the fieldset width.
