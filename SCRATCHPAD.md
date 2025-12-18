@@ -10,6 +10,7 @@ CNN carousels: container_vertical-shelf-carousel markup is present in HTML (lazy
 msnbc.com: render at 1200x800 (~18s, ~4,138 boxes) produces an all-white PNG (single color, full bbox); page has many scripts/styles (53 scripts incl. 35 external src, 28 style tags; 12 media queries; 33 calc; 734 var(); display:none=4; z-index=13; no noscript/meta refresh), so likely JS-dependent content.
 
 Working tree clean, up to date (targets added: vox.com, nationalgeographic.com, hbr.org). Idle/available for new assignment.
+Repo clean and synced to origin/main (latest: add msn.com target). Idle/available.
 Repo still clean and up to date; idle/available for new assignment.
 
 <<<<<<< HEAD
