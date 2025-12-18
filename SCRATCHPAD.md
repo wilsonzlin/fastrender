@@ -36,6 +36,8 @@ Added bing.com to fetch_pages targets; fetch/render succeed (bbox fills 1200x800
 Added phoronix.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~4.9k colors). No issues observed.
 Added nationalgeographic.com to fetch_pages targets; fetch/render succeed (bbox ~7..474 x 33..799, ~75 colors). Mostly left-column content due to heavy JS; no static fix added.
 Added vox.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~13 colors). Looks minimal/static but non-blank; no issues noted.
+Added hbr.org to fetch_pages targets; fetch/render succeed (bbox ~0..799 x 227..799, ~150 colors). Renders header/footer; main content likely JS-driven. No fixes applied.
+Added vox.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~13 colors). No issues noted.
 Cloudflare render perf fixed: web font loading filters to the page’s codepoints (skipping unused @font-face ranges) and web font HTTP timeout is 10s; FASTR_RENDER_TIMINGS now reports css_parse/style_prepare/style_apply. cloudflare.com renders in ~12s at 1200×800 instead of 70s+.
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
@@ -71,6 +73,7 @@ Removed duplicate mozilla.org entry from fetch_pages targets to avoid redundant 
 Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background). Fetch/render at 1200x800 completes quickly (~0.5s render, PNG ~243KB).
 Added docs.python.org (dark theme) and kotlinlang.org (colorful hero) to fetch_pages targets; fetch/render succeed. Tried adding developer.android.com but fetch_pages hit a redirect loop (>10 redirects), so it was removed.
 Added openstreetmap.org to fetch_pages targets (JS redirect follow is non-fatal); fetch succeeds (~0.24s/34KB) and render completes (~1.9s, PNG ~60KB, header/nav visible, bbox 0..1198 x 0..274). stanford.edu target added (fetch/render pending verification).
+Added phoronix.com, nationalgeographic.com, and vox.com to fetch_pages targets; fetch_pages builds pass (renders pending verification).
 Added phoronix.com to fetch_pages targets; fetch succeeds (~60KB) and render completes (~13s, PNG ~198KB) at 1200x800 with visible content.
 Added github.blog to fetch_pages targets; fetch succeeds (~278KB) but render is mostly blank (PNG ~25KB, mostly white) since page is JS-driven; sourceURL CSS comments are now ignored in embedded CSS scan to avoid bogus fetches.
 Added dev.to to fetch_pages targets; fetch succeeds (~298KB) and render completes (~12.9s, PNG ~48KB) with visible content.
@@ -151,7 +154,7 @@ Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages 
 - Added regressions:
   - `tests/box_generation_ad_placeholders.rs` ensures empty ad placeholders (`ad-height-hold`/`ad__slot`/`should-hold-space`) are dropped while non-empty ones remain.
   - `tests/box_generation_onenav.rs` ensures hidden OneNav overlays (visibility hidden/opacity 0) skip both the overlay and the following FocusTrapContainer drawer, while visible overlays retain the drawer/content.
-- Added phoronix.com to fetch_pages targets; fetch OK (~60KB HTML). render_pages --pages phoronix.com 1200x800 completes in ~13–25s; PNG ~198KB with full-frame bbox (0..1199,0..799) and ~4.9k unique colors. Log at fetches/renders/phoronix.com.log.
+- Added phoronix.com to fetch_pages targets; fetch OK (~60KB HTML). render_pages --pages phoronix.com 1200x800 completes in ~13s; PNG ~198KB with full-frame bbox (0..1199,0..799) and ~4.9k unique colors. Log at fetches/renders/phoronix.com.log.
 - Added nationalgeographic.com to fetch_pages targets; fetch/render succeeds (~4.9s render, nonblank PNG with multiple content bands).
 - Added lobste.rs to fetch_pages targets (cargo check --bin fetch_pages passes); fetch/render not run in this workspace yet.
 - Ran fetch_pages/render_pages for lobste.rs (viewport 1200x800, timeout 60): fetch OK (HTML ~62KB), render OK in ~10s, PNG ~227KB with nonwhite bbox covering full frame (unique colors ~2.3k). No errors in log.
@@ -160,10 +163,9 @@ Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages 
 - Added theonion.com to fetch_pages targets; fetch succeeds (~448KB HTML). render_pages --pages theonion.com 1200x800 completes in ~12s; PNG ~423KB with bbox x≈32..1199, y≈47..799 and ~18.7k unique colors. Numerous plugin CSS URLs 404 (logged), but page still renders with visible content.
 - Embedded CSS URL extraction now strips `sourceURL=` prefixes (seen in inline CSS/JS), and regression `strips_sourceurl_prefix_in_embedded_css_urls` covers the normalization.
 - Added hbr.org to fetch_pages targets; fetch succeeds (~322KB HTML). render_pages --pages hbr.org 1200x800 completes in ~4.4s; PNG ~40KB with bbox x≈29..1150, y≈227..616 (~104 colors). Visible content appears mid-frame.
-- Added vox.com to fetch_pages targets; fetch succeeds (~938KB HTML). render_pages --pages vox.com 1200x800 completes in ~15–24s; PNG ~110KB with bbox filling the frame (content spans most of the frame). Log at fetches/renders/vox.com.log.
-- Added nbcnews.com to fetch_pages targets; fetch succeeds (~1.17MB HTML). render_pages --pages nbcnews.com 1200x800 completes in ~27s; PNG ~40KB with full-frame nonwhite content.
+- Added vox.com to fetch_pages targets; fetch succeeds (~938KB HTML). render_pages --pages vox.com 1200x800 completes in ~15.6s; PNG ~110KB with bbox filling the frame (content spans most of the frame). Log at fetches/renders/vox.com.log.
 <<<<<<< HEAD
-=======
+- Added nbcnews.com to fetch_pages targets; fetch succeeds (~1.17MB HTML). render_pages --pages nbcnews.com 1200x800 completes in ~27s; PNG ~40KB with full-frame nonwhite content.
 =======
 =======
 - Added vox.com to fetch_pages targets; fetch succeeds (~938KB HTML). render_pages --pages vox.com 1200x800 completes in ~23.7s; PNG ~110KB with bbox x=0..1199, y≈26..799 and ~724 unique colors (content spans most of the frame).
@@ -186,12 +188,3 @@ Latest profiling (45s timeout): cascade ~6.7s (find ~0.8s, decl ~0.9s, pseudo ~2
 display:grid appears ~11 times in inline CSS.
 calc() appears ~93 times in inline CSS.
 mask-image appears ~12 times in inline CSS.
-@supports appears ~5 times.
-display:flex appears ~327 times.
-display:block appears ~351 times.
-transform appears ~204 times.
-box-shadow appears ~56 times.
-border-radius appears ~143 times.
-filter appears ~10 times.
-linear-gradient appears ~24 times.
-z-index appears ~87 times.
