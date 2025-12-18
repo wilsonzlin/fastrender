@@ -109,19 +109,17 @@ pub fn log_layout_profile(total: Duration) {
     let total_ms = total.as_secs_f64() * 1000.0;
     eprintln!("layout profile: total_ms={:.2}", total_ms);
     let mut parts = Vec::new();
-    for kind_idx in 0..KIND_COUNT {
+    for (kind_idx, kind) in [
+        (0, LayoutKind::Block),
+        (1, LayoutKind::Inline),
+        (2, LayoutKind::Flex),
+        (3, LayoutKind::Grid),
+        (4, LayoutKind::Table),
+        (5, LayoutKind::Absolute),
+    ] {
         let time = TIME_NS[kind_idx].load(Ordering::Relaxed) as f64 / 1_000_000.0;
         let calls = CALLS[kind_idx].load(Ordering::Relaxed);
         if time > 0.0 || calls > 0 {
-            let kind = match kind_idx {
-                0 => LayoutKind::Block,
-                1 => LayoutKind::Inline,
-                2 => LayoutKind::Flex,
-                3 => LayoutKind::Grid,
-                4 => LayoutKind::Table,
-                5 => LayoutKind::Absolute,
-                _ => continue,
-            };
             parts.push(format!(
                 "{}_ms={:.2} {}_calls={} {}_avg_ms={:.3}",
                 kind.name(),
