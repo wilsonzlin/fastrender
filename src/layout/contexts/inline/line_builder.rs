@@ -4272,12 +4272,36 @@ mod tests {
             metrics,
             Vec::new(),
             Vec::new(),
+            style.clone(),
+            Direction::Ltr,
+        );
+
+        // Offset 2 lands inside the multi-byte emoji; split_at should clamp to the previous
+        // boundary rather than panicking.
+        assert!(!text.is_char_boundary(2));
+        let (before, after) = item
+            .split_at(2, false, &pipeline, &font_ctx)
+            .expect("clamps to prior boundary");
+        assert_eq!(before.text, "a");
+        assert_eq!(after.text, "😊b");
+
+        // Explicit break offsets should also be rejected when they land mid-codepoint.
+        let euro_text = "€uro";
+        let euro_runs = pipeline
+            .shape_with_direction(euro_text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
+            .expect("shape");
+        let euro_metrics = TextItem::metrics_from_runs(&euro_runs, 16.0, style.font_size);
+        let breaks = vec![BreakOpportunity::new(1, BreakType::Allowed)];
+        let euro_item = TextItem::new(
+            euro_runs,
+            euro_text.to_string(),
+            euro_metrics,
+            breaks,
+            Vec::new(),
             style,
             Direction::Ltr,
         );
 
-        // Offset 2 lands inside the multi-byte emoji
-        assert!(!text.is_char_boundary(2));
-        assert!(item.split_at(2, false, &pipeline, &font_ctx).is_none());
+        assert!(euro_item.split_at(1, false, &pipeline, &font_ctx).is_none());
     }
 }
