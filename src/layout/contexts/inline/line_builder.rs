@@ -362,15 +362,20 @@ impl TextItem {
     ) -> Option<(TextItem, TextItem)> {
         const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
 
+        let text_len = self.text.len();
+        let bounded_offset = byte_offset.min(text_len);
+        if !self.text.is_char_boundary(bounded_offset) {
+            return None;
+        }
         let mut split_offset = self
-            .cluster_boundary_at_or_before(byte_offset)
+            .cluster_boundary_at_or_before(bounded_offset)
             .map(|b| b.byte_offset)
-            .unwrap_or(byte_offset);
-        if split_offset < byte_offset && byte_offset <= self.text.len() {
-            split_offset = byte_offset;
+            .unwrap_or(bounded_offset);
+        if split_offset < bounded_offset {
+            split_offset = bounded_offset;
         }
 
-        if split_offset == 0 || split_offset >= self.text.len() {
+        if split_offset == 0 || split_offset >= text_len || !self.text.is_char_boundary(split_offset) {
             return None;
         }
 
@@ -836,7 +841,7 @@ impl TextItem {
             let local = split_offset - run.start;
 
             // Guard against invalid UTF-8 boundaries
-            if local > run.text.len() {
+            if local > run.text.len() || !run.text.is_char_boundary(local) {
                 return None;
             }
 
@@ -4154,5 +4159,31 @@ mod tests {
 
         assert_eq!(before.text, format!("a{}", '\u{2010}'));
         assert_eq!(after.text, "bc");
+    }
+
+    #[test]
+    fn split_at_rejects_non_char_boundary_offsets() {
+        let font_ctx = FontContext::new();
+        let pipeline = ShapingPipeline::new();
+        let style = Arc::new(ComputedStyle::default());
+
+        let text = "a😊b";
+        let runs = pipeline
+            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
+            .expect("shape");
+        let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+        let item = TextItem::new(
+            runs,
+            text.to_string(),
+            metrics,
+            Vec::new(),
+            Vec::new(),
+            style,
+            Direction::Ltr,
+        );
+
+        // Offset 2 lands inside the multi-byte emoji
+        assert!(!text.is_char_boundary(2));
+        assert!(item.split_at(2, false, &pipeline, &font_ctx).is_none());
     }
 }

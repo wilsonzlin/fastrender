@@ -12,17 +12,17 @@ use fastrender::style::color::Color;
 use fastrender::style::types::{
     BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundPositionComponent, BackgroundRepeat,
     BackgroundRepeatKeyword, BackgroundSize, BackgroundSizeComponent, BasicShape, BorderImage, BorderImageSlice,
-    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ImageRendering, MixBlendMode,
-    ShapeRadius, TextDecorationStyle,
+    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ImageRendering, ShapeRadius,
+    TextDecorationStyle,
 };
-use fastrender::ComputedStyle;
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::fragment_tree::FragmentNode;
+use fastrender::ComputedStyle;
 use fastrender::Rgba;
-use tiny_skia::Pixmap;
 use image::{codecs::png::PngEncoder, ExtendedColorType, ImageEncoder, RgbaImage};
 use std::sync::Arc;
+use tiny_skia::Pixmap;
 
 fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
     let r = r as f32 / 255.0;
@@ -496,8 +496,7 @@ fn marker_text_shadow_is_rendered_in_display_list() {
         .render(&list)
         .expect("render");
 
-    let glyph_bbox = bbox_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32)
-        .expect("marker glyph");
+    let glyph_bbox = bbox_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("marker glyph");
     let shadow_bbox = bbox_for_color(&pixmap, |(r, g, b, _)| {
         let (r, g, b) = (r as u16, g as u16, b as u16);
         r > g + 20 && r > b + 20
@@ -1228,7 +1227,9 @@ fn clip_path_masks_after_filters() {
         center: fastrender::geometry::Point::new(5.0, 5.0),
         radius: 4.0,
     };
-    list.push(DisplayItem::PushClip(ClipItem { shape: ClipShape::Path { path: circle } }));
+    list.push(DisplayItem::PushClip(ClipItem {
+        shape: ClipShape::Path { path: circle },
+    }));
     list.push(DisplayItem::FillRect(FillRectItem {
         rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
         color: Rgba::RED,
