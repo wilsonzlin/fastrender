@@ -36,7 +36,7 @@ use rustybuzz::{Direction, Face, Feature, UnicodeBuffer};
 use std::collections::HashSet;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use ureq::Agent;
 use url::Url;
 use wuff::{decompress_woff1, decompress_woff2};
@@ -406,15 +406,27 @@ impl FontContext {
         base_url: Option<&str>,
         used_codepoints: Option<&[u32]>,
     ) -> Result<()> {
+        static MAX_FONTS: OnceLock<usize> = OnceLock::new();
+        let max_fonts = *MAX_FONTS
+            .get_or_init(|| std::env::var("FASTR_MAX_WEB_FONTS").ok().and_then(|v| v.parse().ok()).unwrap_or(8));
+        if max_fonts == 0 {
+            return Ok(());
+        }
+
         let mut modified = false;
         let filter_by_codepoints = used_codepoints.is_some();
         let used_codepoints = used_codepoints.unwrap_or(&[]);
+        let mut loaded_count = 0usize;
         for (order, face) in faces.iter().enumerate() {
             let family = match &face.family {
                 Some(f) => f.clone(),
                 None => continue,
             };
             self.declare_web_family(&family);
+
+            if loaded_count >= max_fonts {
+                break;
+            }
 
             if filter_by_codepoints
                 && (used_codepoints.is_empty()
@@ -432,6 +444,10 @@ impl FontContext {
 
                 if loaded.is_ok() {
                     modified = true;
+                    loaded_count += 1;
+                    if loaded_count >= max_fonts {
+                        break;
+                    }
                     break;
                 }
             }
