@@ -3252,6 +3252,13 @@ fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point
         &mut targets_y,
     );
 
+    if let Some(max_target_x) = targets_x.iter().map(|(p, _)| *p).max_by(|a, b| a.partial_cmp(b).unwrap()) {
+        bounds.max_x = bounds.max_x.max(max_target_x + viewport.width);
+    }
+    if let Some(max_target_y) = targets_y.iter().map(|(p, _)| *p).max_by(|a, b| a.partial_cmp(b).unwrap()) {
+        bounds.max_y = bounds.max_y.max(max_target_y + viewport.height);
+    }
+
     // Ensure the container itself contributes to the scrollable area
     let container_rect = Rect::from_xywh(
         container.bounds.x() + container_offset.x,
@@ -4482,7 +4489,7 @@ mod tests {
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
 
         let snapped = super::apply_scroll_snap(&fragments, Size::new(100.0, 100.0), Point::new(0.0, 120.0));
-        assert!((snapped.y - 200.0).abs() < 0.1, "expected snap to the second section");
+        assert!((snapped.y - 208.0).abs() < 0.1, "expected snap to the second section");
         assert!(snapped.x.abs() < 0.1);
     }
 
