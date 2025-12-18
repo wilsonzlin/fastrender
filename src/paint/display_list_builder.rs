@@ -239,6 +239,9 @@ impl DisplayListBuilder {
         }
 
         let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
+        if opacity <= f32::EPSILON {
+            return;
+        }
         let push_opacity = opacity < 1.0 - f32::EPSILON;
         if push_opacity {
             self.push_opacity(opacity);
@@ -3615,6 +3618,7 @@ mod tests {
     use image::codecs::png::PngEncoder;
     use image::ColorType;
     use image::ImageEncoder;
+    use std::sync::Arc;
     use std::path::PathBuf;
 
     fn create_block_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
@@ -4268,6 +4272,17 @@ mod tests {
         assert!(matches!(list.items()[0], DisplayItem::PushOpacity(_)));
         assert!(matches!(list.items()[1], DisplayItem::FillRect(_)));
         assert!(matches!(list.items()[2], DisplayItem::PopOpacity));
+    }
+
+    #[test]
+    fn fragments_with_zero_opacity_emit_nothing() {
+        let mut frag = create_block_fragment(0.0, 0.0, 50.0, 50.0);
+        let mut style = ComputedStyle::default();
+        style.opacity = 0.0;
+        frag.style = Some(Arc::new(style));
+
+        let list = DisplayListBuilder::new().build(&frag);
+        assert!(list.is_empty(), "zero-opacity fragments should be skipped");
     }
 
     #[test]
