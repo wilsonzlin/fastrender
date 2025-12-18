@@ -1612,3 +1612,4 @@ Actionable borrowings:
 Rendered developer.apple.com at 1200×800: content filled most of the viewport (bbox 12,44–1187,799). No issues noted.
 Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199,799); no obvious issues. Logged for reference.
 - fetch_pages now reuses HttpFetcher with the Chrome-like default UA (50MB cap) and exposes a --user-agent override, so cached HTML matches the runtime fetcher and avoids 403/alt content from the old generic UA.
+- Added new fetch targets: sqlite.org (table-heavy), nginx.org (simple static), and go.dev (modern) to broaden coverage.
