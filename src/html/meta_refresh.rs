@@ -68,6 +68,23 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
 
     for pat in patterns.iter() {
         if let Some(idx) = lower.find(pat) {
+            // Require the match to start on a non-identifier boundary to avoid
+            // picking up attributes like data-location="...".
+            if idx > 0 {
+                let prev = lower.as_bytes()[idx - 1];
+                if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'-' {
+                    continue;
+                }
+            }
+
+            let after = idx + pat.len();
+            if after < lower.len() {
+                let next = lower.as_bytes()[after];
+                if next.is_ascii_alphanumeric() || next == b'_' {
+                    continue;
+                }
+            }
+
             let mut i = idx + pat.len();
             while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
                 i += 1;
@@ -107,12 +124,18 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
                 }
                 if i > start {
                     let candidate = decoded[start..i].trim();
-                    if !candidate.is_empty() {
+                    if !candidate.is_empty()
+                        && (candidate.starts_with("http")
+                            || candidate.starts_with("//")
+                            || candidate.starts_with('/')
+                            || candidate.starts_with("www."))
+                    {
                         return Some(unescape_js_literal(candidate));
                     }
                 }
             }
         }
+    }
     }
 
     // Fallback: look for a variable assignment that captures a URL literal
@@ -517,5 +540,12 @@ mod tests {
             extract_js_location_redirect(html),
             Some("https://example.com/next".to_string())
         );
+    }
+
+    #[test]
+    fn ignores_data_location_attributes() {
+        // data-location attribute should not be mistaken for a JS redirect target.
+        let html = r#"<head data-location="{\"minlon\":1}"></head>"#;
+        assert_eq!(extract_js_location_redirect(html), None);
     }
 }

@@ -129,6 +129,7 @@ const PAGES: &[&str] = &[
     "https://washington.edu",
     "https://berkeley.edu",
     "https://fandom.com",
+    "https://openstreetmap.org",
     "https://ikea.com",
     "https://elpais.com",
     "https://ndtv.com",
