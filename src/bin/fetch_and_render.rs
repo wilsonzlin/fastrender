@@ -23,13 +23,14 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_USER_AGENT};
+use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
 use std::env;
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
+use url::Url;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
@@ -50,13 +51,50 @@ fn fetch_bytes(url: &str, timeout: Option<Duration>, user_agent: &str) -> Result
         return Ok((bytes, content_type));
     }
 
-    let mut fetcher = HttpFetcher::new().with_user_agent(user_agent.to_string());
-    if let Some(t) = timeout {
-        fetcher = fetcher.with_timeout(t);
+    // Configure agent with timeout for ureq 3.x
+    let config = ureq::Agent::config_builder().timeout_global(timeout).build();
+    let agent: ureq::Agent = config.into();
+
+    let mut current = url.to_string();
+    for _ in 0..10 {
+        let mut response = agent
+            .get(&current)
+            .header("User-Agent", user_agent)
+            .call()
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+        let status = response.status();
+        if (300..400).contains(&status.as_u16()) {
+            if let Some(loc) = response.headers().get("location").and_then(|h| h.to_str().ok()) {
+                if let Ok(base) = Url::parse(&current) {
+                    if let Ok(next) = base.join(loc) {
+                        current = next.to_string();
+                        continue;
+                    }
+                }
+                current = loc.to_string();
+                continue;
+            }
+        }
+
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+
+        let bytes = response
+            .body_mut()
+            .read_to_vec()
+            .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
+
+        return Ok((bytes, content_type));
     }
 
-    let resource = fetcher.fetch(url)?;
-    Ok((resource.bytes, resource.content_type))
+    Err(Error::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "Too many redirects",
+    )))
 }
 
 /// Best-effort extraction of CSS URLs that appear inside inline scripts or attributes.
@@ -391,7 +429,10 @@ fn main() -> Result<()> {
         std::env::set_var("FASTR_FULL_PAGE", "1");
     }
 
-    println!("User-Agent: {}", user_agent);
+    eprintln!(
+        "User-Agent: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",
+        user_agent, width, height, dpr, scroll_x, scroll_y, output
+    );
 
     let (tx, rx) = channel();
     let url_clone = url.clone();
