@@ -26,7 +26,7 @@ use url::Url;
 
 fn usage() {
     eprintln!(
-        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] <file.html | file://url>"
+        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] <file.html | file://url>"
     );
     eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
     eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
@@ -35,6 +35,8 @@ fn usage() {
     eprintln!("  --prefers-reduced-transparency reduce|no-preference|true|false (overrides env)");
     eprintln!("  --prefers-reduced-motion       reduce|no-preference|true|false (overrides env)");
     eprintln!("  --prefers-reduced-data        reduce|no-preference|true|false (overrides env)");
+    eprintln!("  --prefers-contrast             more|high|less|low|custom|forced|no-preference (overrides env)");
+    eprintln!("  --prefers-color-scheme         light|dark|no-preference (overrides env)");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
@@ -79,6 +81,22 @@ fn parse_prefers_reduced_data(val: &str) -> Option<bool> {
     None
 }
 
+fn parse_prefers_contrast(val: &str) -> Option<String> {
+    let v = val.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Some(v),
+        _ => None,
+    }
+}
+
+fn parse_prefers_color_scheme(val: &str) -> Option<String> {
+    let v = val.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "light" | "dark" | "no-preference" => Some(v),
+        _ => None,
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Avoid panicking on SIGPIPE/BrokenPipe when piped through tools like `head`.
     let default_hook = std::panic::take_hook();
@@ -104,6 +122,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut prefers_reduced_transparency: Option<bool> = None;
     let mut prefers_reduced_motion: Option<bool> = None;
     let mut prefers_reduced_data: Option<bool> = None;
+    let mut prefers_contrast: Option<String> = None;
+    let mut prefers_color_scheme: Option<String> = None;
     let mut raw_path: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -143,6 +163,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--prefers-reduced-data" => {
                 if let Some(val) = args.next() {
                     prefers_reduced_data = parse_prefers_reduced_data(&val);
+                }
+            }
+            "--prefers-contrast" => {
+                if let Some(val) = args.next() {
+                    prefers_contrast = parse_prefers_contrast(&val);
+                }
+            }
+            "--prefers-color-scheme" => {
+                if let Some(val) = args.next() {
+                    prefers_color_scheme = parse_prefers_color_scheme(&val);
                 }
             }
             "--scroll-x" => {
@@ -227,6 +257,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "FASTR_PREFERS_REDUCED_DATA",
             if reduce { "reduce" } else { "no-preference" },
         );
+    }
+
+    if let Some(contrast) = prefers_contrast {
+        env::set_var("FASTR_PREFERS_CONTRAST", contrast);
+    }
+
+    if let Some(color_scheme) = prefers_color_scheme {
+        env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
     }
 
     if scroll_x != 0.0 || scroll_y != 0.0 {

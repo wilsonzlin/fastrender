@@ -1,6 +1,6 @@
 //! Render all cached pages in parallel
 //!
-//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>]
+//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>]
 //!
 //! Renders all HTML files in fetches/html/ to fetches/renders/
 //! Logs per-page to fetches/renders/{name}.log
@@ -15,7 +15,9 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::resource::{parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
+use fastrender::resource::{
+    parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+};
 use fastrender::FastRender;
 use std::collections::HashSet;
 use std::fs;
@@ -32,7 +34,7 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--user-agent UA] [--accept-language LANG] [--timings]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--timings]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
@@ -41,6 +43,8 @@ fn usage() {
     println!("  --prefers-reduced-transparency reduce|no-preference|true|false (overrides env)");
     println!("  --prefers-reduced-motion       reduce|no-preference|true|false (overrides env)");
     println!("  --prefers-reduced-data        reduce|no-preference|true|false (overrides env)");
+    println!("  --prefers-contrast            more|high|less|low|custom|forced|no-preference (overrides env)");
+    println!("  --prefers-color-scheme        light|dark|no-preference (overrides env)");
     println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
     println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
@@ -74,6 +78,22 @@ fn parse_prefers_reduced_motion(val: &str) -> Option<bool> {
         return Some(false);
     }
     None
+}
+
+fn parse_prefers_contrast(val: &str) -> Option<String> {
+    let v = val.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Some(v),
+        _ => None,
+    }
+}
+
+fn parse_prefers_color_scheme(val: &str) -> Option<String> {
+    let v = val.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "light" | "dark" | "no-preference" => Some(v),
+        _ => None,
+    }
 }
 
 fn parse_prefers_reduced_data(val: &str) -> Option<bool> {
@@ -113,6 +133,8 @@ fn main() {
     let mut prefers_reduced_transparency: Option<bool> = None;
     let mut prefers_reduced_motion: Option<bool> = None;
     let mut prefers_reduced_data: Option<bool> = None;
+    let mut prefers_contrast: Option<String> = None;
+    let mut prefers_color_scheme: Option<String> = None;
     let mut scroll_x: f32 = 0.0;
     let mut scroll_y: f32 = 0.0;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
@@ -173,6 +195,16 @@ fn main() {
             "--prefers-reduced-data" => {
                 if let Some(val) = args.next() {
                     prefers_reduced_data = parse_prefers_reduced_data(&val);
+                }
+            }
+            "--prefers-contrast" => {
+                if let Some(val) = args.next() {
+                    prefers_contrast = parse_prefers_contrast(&val);
+                }
+            }
+            "--prefers-color-scheme" => {
+                if let Some(val) = args.next() {
+                    prefers_color_scheme = parse_prefers_color_scheme(&val);
                 }
             }
             "--pages" => {
@@ -252,6 +284,14 @@ fn main() {
             "FASTR_PREFERS_REDUCED_DATA",
             if reduce { "reduce" } else { "no-preference" },
         );
+    }
+
+    if let Some(contrast) = prefers_contrast {
+        std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
+    }
+
+    if let Some(color_scheme) = prefers_color_scheme {
+        std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
     }
 
     // Create directories
