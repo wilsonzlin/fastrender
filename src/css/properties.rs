@@ -882,6 +882,14 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
 
     // Tokenize respecting commas (for background layering) and spaces.
     let tokens: Vec<String> = tokenize_property_value(value_str, allow_commas);
+
+    // Unitless zero should parse as a number for numeric-only properties (opacity, z-index, etc.).
+    // Our tokenize helper produces "0" so ensure we don't fall through to length parsing for those.
+    if tokens.len() == 1 && tokens[0] == "0" {
+        if matches!(property, "opacity" | "z-index") {
+            return Some(PropertyValue::Number(0.0));
+        }
+    }
     if tokens.len() > 1
         && matches!(
             property,
