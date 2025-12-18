@@ -72,6 +72,7 @@ apple.com render repro: fetch_and_render --timeout 60 1200x800 succeeds (PNG ~86
 Apple.com already present in fetch_pages PAGES list; no changes needed.
 Added docs.rs to fetch_pages targets (cargo check --bin fetch_pages passes).
 Meta refresh parsing now covers quoted/entity-encoded URLs (extracts `https://example.com/?a=1&b=2` from content="0;URL='...&amp;...'"); test added. Pending: wire through fetch/render follow behavior if more cases emerge.
+fetch_and_render regression `render_once_follows_quoted_meta_refresh` uses a local server to ensure quoted/entity meta refresh targets are actually followed (second request hits decoded URL) and output is produced.
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
 - Added mozilla.org to fetch_pages targets for broader coverage.
