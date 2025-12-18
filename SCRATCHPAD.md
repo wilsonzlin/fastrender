@@ -173,3 +173,4 @@ CNN inline CSS includes ~199 media queries.
 Inline CSS stats: ~5,532 rules, ~16,740 declarations, ~3,868 attribute selectors.
 Common CSS classes: kiln-edit-mode (~4.1k occurrences), layout-homepage-mobile (~1.5k), ad-slot (~1.5k), layout-homepage-mobile-app (~1.5k), adSlotLoaded (~1.4k), container__video-duration (~0.9k).
 Most class occurrences are on hidden/ad elements; consider stripping rules for kiln-edit-mode/ad-slot/adSlotLoaded when profiling to reduce selector space.
+Selectors include heavy :has usage (~526 occurrences), further stressing matching.
