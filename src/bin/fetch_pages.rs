@@ -49,7 +49,6 @@ const PAGES: &[&str] = &[
     "https://wikipedia.org",
     "https://www.w3.org",
     "https://bing.com",
-    "https://nbcnews.com",
     // Tier 4: Complex
     "https://github.com",
     "https://gitlab.com",
@@ -66,7 +65,6 @@ const PAGES: &[&str] = &[
     "https://microsoft.com",
     "https://apple.com",
     "https://developer.apple.com",
-    "https://www.openstreetmap.org",
     "https://openai.com",
     "https://icloud.com",
     "https://nytimes.com",
@@ -109,7 +107,6 @@ const PAGES: &[&str] = &[
     "https://walmart.com",
     "https://usatoday.com",
     "https://newsweek.com",
-    "https://vox.com",
     "https://airbnb.com",
     "https://booking.com",
     "https://yelp.com",
@@ -125,9 +122,11 @@ const PAGES: &[&str] = &[
     "https://wired.com",
     "https://arstechnica.com",
     "https://engadget.com",
+    "https://nbcnews.com",
     "https://figma.com",
     "https://ft.com",
     "https://phoronix.com",
+    "https://nationalgeographic.com",
     "https://cnet.com",
     "https://developer.mozilla.org",
     "https://howtogeek.com",
@@ -149,6 +148,7 @@ const PAGES: &[&str] = &[
     "https://blog.rust-lang.org",
     "https://rfc-editor.org",
     "https://tesco.com",
+    "https://bing.com",
     "https://discord.com",
     "https://weather.com",
     "https://bbc.co.uk",
@@ -163,12 +163,14 @@ const PAGES: &[&str] = &[
     "https://theatlantic.com",
     "https://economist.com",
     "https://newyorker.com",
+    "https://vox.com",
+    "https://hbr.org",
     "https://sqlite.org",
     "https://nginx.org",
     "https://go.dev",
     "https://docs.rs",
     "https://doc.rust-lang.org",
-    "https://dev.to",
+    "https://www.openstreetmap.org",
     "https://docs.python.org",
     "https://kotlinlang.org",
 ];
@@ -714,13 +716,9 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) = fetch_page(
-            &url,
-            Duration::from_secs(5),
-            DEFAULT_USER_AGENT,
-            DEFAULT_ACCEPT_LANGUAGE,
-        )
-        .expect("fetch succeeds");
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"refreshed");
@@ -771,13 +769,9 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) = fetch_page(
-            &url,
-            Duration::from_secs(5),
-            DEFAULT_USER_AGENT,
-            DEFAULT_ACCEPT_LANGUAGE,
-        )
-        .expect("fetch succeeds");
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"redirected");
@@ -828,13 +822,9 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) = fetch_page(
-            &url,
-            Duration::from_secs(5),
-            DEFAULT_USER_AGENT,
-            DEFAULT_ACCEPT_LANGUAGE,
-        )
-        .expect("fetch succeeds");
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"<script>window.location.href='/missing'</script>");
