@@ -77,6 +77,7 @@
 # Added debian.org to fetch_pages targets; fetch/render succeeded (content visible).
 # Added gentoo.org to fetch_pages targets; fetch/render succeeded (full content).
 # Added archlinux.org to fetch_pages targets; fetch/render succeeded (full content).
+# Added manjaro.org to fetch_pages targets; fetch/render succeeded (full content).
 # Attempted slackware.com; connection refused (not added).
 # Rendered duckduckgo.com (fetch cached target); render succeeded without issues.
 # Attempted netsurf-browser.org; DNS lookup failed, so target not added.
