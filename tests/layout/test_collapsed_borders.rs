@@ -45,6 +45,33 @@ fn collapsed_borders_prefer_hidden_over_style() {
 }
 
 #[test]
+fn collapsed_borders_hidden_beats_solid_on_cell() {
+    let mut cell_style = ComputedStyle::default();
+    cell_style.display = Display::TableCell;
+    cell_style.border_right_style = BorderStyle::Hidden;
+    cell_style.border_right_width = Length::px(1.0);
+    let cell_left = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
+
+    let mut right_style = ComputedStyle::default();
+    right_style.display = Display::TableCell;
+    right_style.border_left_style = BorderStyle::Solid;
+    right_style.border_left_width = Length::px(10.0);
+    let cell_right = BoxNode::new_block(Arc::new(right_style), FormattingContextType::Block, vec![]);
+
+    let mut row_style = ComputedStyle::default();
+    row_style.display = Display::TableRow;
+    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![cell_left, cell_right]);
+    let table = build_table_with_row(row);
+
+    let structure = TableStructure::from_box_tree(&table);
+    let borders = compute_collapsed_borders_for_test(&table, &structure);
+
+    let middle = borders.vertical[1][0];
+    assert_eq!(middle.style, BorderStyle::None, "hidden should override solid in collapse");
+    assert!((middle.width - 0.0).abs() < f32::EPSILON);
+}
+
+#[test]
 fn collapsed_borders_prefer_wider_when_style_equal() {
     let mut left = ComputedStyle::default();
     left.display = Display::TableCell;
@@ -100,4 +127,3 @@ fn collapsed_borders_tie_on_style_and_width_prefers_cell() {
     // Cell should win the tie over the row border.
     assert_eq!(middle.width, 4.0);
 }
-
