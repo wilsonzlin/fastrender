@@ -258,7 +258,15 @@ impl HttpFetcher {
                 .map_err(|e| e.into_io());
 
             match body_result {
-                Ok(bytes) => return Ok(FetchedResource::new(bytes, content_type)),
+                Ok(bytes) => {
+                    if bytes.is_empty() {
+                        return Err(Error::Io(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "Empty HTTP response body",
+                        )));
+                    }
+                    return Ok(FetchedResource::new(bytes, content_type));
+                }
                 Err(err) if accept_encoding.is_none() && is_decompression_error(&err) => {
                     return self.fetch_http_with_accept(&current, Some("identity"));
                 }
@@ -692,6 +700,30 @@ mod tests {
         let url = format!("http://{}", addr);
         let resource = fetcher.fetch(&url).unwrap();
         assert_eq!(resource.bytes, b"hello world");
+
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_http_errors_on_empty_body() {
+        use std::io::Write;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            if let Some(stream) = listener.incoming().next() {
+                let mut stream = stream.unwrap();
+                let headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(headers);
+            }
+        });
+
+        let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+        let url = format!("http://{}", addr);
+        let res = fetcher.fetch(&url);
+        assert!(res.is_err(), "expected empty response to error: {res:?}");
 
         handle.join().unwrap();
     }
