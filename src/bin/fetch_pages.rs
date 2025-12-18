@@ -171,7 +171,10 @@ fn normalize_page_name(raw: &str) -> Option<String> {
     if trimmed.is_empty() {
         None
     } else {
-        Some(url_to_filename(trimmed))
+        // Accept full URLs and common "www." variants when filtering.
+        let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
+        let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
+        Some(url_to_filename(without_www))
     }
 }
 
@@ -194,7 +197,7 @@ fn parse_args() -> Config {
                 println!("  --refresh           Re-fetch all pages even if cached");
                 println!("  --jobs N            Number of parallel fetches (default: num_cpus)");
                 println!("  --timeout SECONDS   Per-request timeout (default: 30)");
-                println!("  --pages a,b,c       Fetch only the listed pages (use url_to_filename stems)");
+                println!("  --pages a,b,c       Fetch only the listed pages (full URLs or stems ok)");
                 println!("  --user-agent UA     Override the User-Agent header (default: Chrome-like)");
                 println!("  --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)");
                 println!("  --timings           Print per-page fetch durations");
@@ -262,7 +265,11 @@ fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
         .iter()
         .copied()
         .filter(|url| match filter {
-            Some(names) => names.contains(&url_to_filename(url)),
+            Some(names) => {
+                let fname = url_to_filename(url);
+                let no_www = fname.strip_prefix("www.");
+                names.contains(&fname) || no_www.map(|n| names.contains(n)).unwrap_or(false)
+            }
             None => true,
         })
         .collect()
@@ -335,7 +342,17 @@ fn main() {
     }
 
     if let Some(filter) = &config.page_filter {
-        let matched: HashSet<_> = selected.iter().map(|u| url_to_filename(u)).collect();
+        let matched: HashSet<_> = selected
+            .iter()
+            .flat_map(|u| {
+                let fname = url_to_filename(u);
+                let mut names = vec![fname.clone()];
+                if let Some(no_www) = fname.strip_prefix("www.") {
+                    names.push(no_www.to_string());
+                }
+                names
+            })
+            .collect();
         let missing: Vec<_> = filter
             .iter()
             .filter(|name| !matched.contains(name.as_str()))
@@ -466,6 +483,14 @@ mod tests {
     fn selected_pages_none_returns_all() {
         let all = selected_pages(None);
         assert_eq!(all.len(), PAGES.len());
+    }
+
+    #[test]
+    fn filter_accepts_full_urls_and_www() {
+        let mut filter = HashSet::new();
+        filter.insert(normalize_page_name("https://www.w3.org").unwrap());
+        let selected = selected_pages(Some(&filter));
+        assert!(selected.contains(&"https://w3.org"));
     }
 
     #[test]
