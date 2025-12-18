@@ -523,15 +523,13 @@ impl<'a> RuleIndex<'a> {
             }
         }
 
-        if !self.by_class.is_empty() {
-            if let Some(class_attr) = node.get_attribute("class") {
-                for cls in class_attr.split_whitespace() {
-                    if !cls.is_empty() {
-                        if let Some(list) = self.by_class.get(cls) {
-                            for idx in list {
-                                if seen.insert(*idx) {
-                                    out.push(*idx);
-                                }
+        if let Some(class_attr) = node.get_attribute("class") {
+            for cls in class_attr.split_whitespace() {
+                if !cls.is_empty() {
+                    if let Some(list) = self.by_class.get(cls) {
+                        for idx in list {
+                            if seen.insert(*idx) {
+                                out.push(*idx);
                             }
                         }
                     }
