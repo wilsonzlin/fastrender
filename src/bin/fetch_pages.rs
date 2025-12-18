@@ -103,6 +103,7 @@ const PAGES: &[&str] = &[
     "https://ebay.com",
     "https://walmart.com",
     "https://slashdot.org",
+    "https://phoronix.com",
     "https://usatoday.com",
     "https://airbnb.com",
     "https://booking.com",

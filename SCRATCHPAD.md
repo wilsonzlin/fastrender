@@ -24,6 +24,7 @@ Added xkcd.com to fetch_pages targets. Fetch succeeds (~7KB HTML) and renders in
 Added arxiv.org to fetch_pages targets. Fetch succeeds (~43KB HTML) and renders in ~2s at 1200×800 (PNG ~97KB; content visible across full width/top).
 Added www.haskell.org to fetch_pages targets. Fetch succeeds (~65KB HTML) and renders in ~12s at 1200×800 (PNG ~59KB; content visible starting near y≈100).
 Added slashdot.org to fetch_pages targets; cache hit renders quickly (~0.04s) at 1200×800 (PNG ~110KB, bbox x=0..1199 y≈30..338).
+Added phoronix.com to fetch_pages targets. Fetch succeeds (~60KB HTML) and renders in ~25s at 1200×800 (PNG ~198KB; full-page content visible).
 
 Render pipeline now decodes cached HTML with proper charset sniffing: fetch_pages stores the response Content-Type alongside each cached HTML (.html.meta), render_pages decodes bytes via the shared html::encoding helper (BOM/header/meta/default Windows-1252), and fetch_and_render reuses the shared decoder instead of its local copy. cloudflare.com and latimes.com timeouts still outstanding from earlier notes.
 Absolute/fixed elements with both left/right insets and width:auto now use the constraint equation instead of shrink-to-fit, so inset overlays fill the containing block; regressions `fixed_positioned_inset_auto_width_fills_viewport` and `absolute_inset_auto_width_fills_parent` cover fixed and absolute bars spanning their containing blocks.
