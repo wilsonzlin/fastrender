@@ -10,15 +10,11 @@
 # Wikipedia portal render: root `no-js` class now auto-flips to `js-enabled` during HTML parse to mimic JS bootstrap; default fetcher UA now uses a Chrome-like string. Rendering still shows a tiny centered block (likely CSS-driven); further layout investigation pending.
 # Render bug hunt: stackoverflow.com (1200×800) looked normal; no regression added. Economist.com fetch blocked with 403.
 # Color-scheme dark palette now recolors UA form controls (backgrounds/borders/outlines) when dark is selected, with regressions for palette and overrides. Pushes completed.
+# fetch_pages targets expanded with berkeley.edu added; cargo check --bin fetch_pages passes.
 # RTL markers anchor to inline-start: RTL lines now keep marker fragments at the front so ::marker content stays on the inline-start side. Regression `marker_outside_positions_inline_start_in_horizontal_rtl` covers horizontal RTL outside markers.
 # Marker justification exclusion: inter-character/distribute justification now skips ::marker items so outside markers don't get gaps injected; added regression `marker_outside_is_not_justified_apart`.
 # Marker inter-character justification: outside markers are ignored for inter-character justify spacing; regression `marker_outside_skips_intercharacter_justify` ensures text stays anchored while markers remain outside.
 # Marker/text baseline: regression `marker_and_text_share_baseline` asserts marker text shares the same baseline as inline content.
-# Marker ignores vertical-align: cascade regression `marker_ignores_vertical_align` locks vertical-align being filtered, keeping baseline alignment intact.
-# Outside markers wrap correctly: regression `marker_outside_wraps_without_extra_indent` ensures wrapped text aligns with the first line even when markers are outside.
-# Marker images align to text baseline: regression `marker_image_baseline_aligns_with_text` asserts image markers share the text baseline, keeping bullets and text aligned.
-# Outside markers baseline: layout regression `outside_marker_baseline_aligns_with_text` ensures outside bullets share the text baseline with inline content.
-# List-style-position switch: layout regression `marker_switches_position_inside_vs_outside` verifies inside markers occupy inline space while outside markers sit before the text at the line origin.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Added legend shrink-to-fit regression: a legend with auto width should shrink to its text instead of spanning the fieldset width.
@@ -44,15 +40,12 @@
 # Added python.org to fetch_pages targets; cargo check --bin fetch_pages passes.
 # Painter/renderer: added display-list renderer regression to verify opacity filter halves alpha (premultiplies color and alpha).
 # Media queries: added regression ensuring unknown media types fail to parse (e.g., `foo`, `foo and (min-width:10px)`).
-# Added iana.org to fetch_pages targets; fetch/render succeed. Added theatlantic.com to fetch_pages targets; `cargo check --bin fetch_pages --quiet` passes.
-# Table border-collapse: added regression where a hidden border beats a solid neighbor when collapsing (`collapsed_borders_hidden_beats_solid_on_cell`).
+# Added iana.org to fetch_pages targets; fetch/render succeed.
 # Added rfc-editor.org to fetch_pages targets; fetch/render succeed.
 # Added apache.org to fetch_pages targets; fetch/render succeed.
 # Attempted mit.edu fetch target; render timed out due to CSS fetch timeouts, so left target removed. Added aria-hidden layout regression upstream.
 # Added nyu.edu to fetch_pages targets; fetch/render succeeded (with some CSS 403s leaving mostly white page).
-# Added neverssl.com to fetch_pages targets; fetch/render succeeded (tiny simple page). Added media cache perf tweaks upstream.
-# Added htmldog.com to fetch_pages targets; fetch/render succeeded (simple page, no obvious issues). Media cache perf tweaks landed upstream.
-# Added ietf.org to fetch_pages targets; fetch/render succeeded (full content visible).
+# Added neverssl.com to fetch_pages targets; fetch/render succeeded (tiny simple page).
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.
@@ -1546,7 +1539,6 @@ Actionable borrowings:
 - Inline bidi: added layout regression `bidi_isolate_positions_between_surrounding_runs` to ensure a unicode-bidi:isolate RTL run stays contiguous and is positioned between surrounding LTR text in visual order.
 - Text overflow: added regression `text_overflow_does_not_emit_ellipsis_when_content_fits` to ensure ellipses are only emitted when inline content actually overflows.
 - Display-list outlines bypass clip masks like CSS outlines; regression `outline_ignores_clip_region` ensures outlines extend outside clipped regions.
-- Wired.com blank render remains unresolved: content is laid out far offscreen and only visible when scrolling deep; no fix yet.
 # Added painter background image-rendering coverage: pixelated backgrounds now have a regression ensuring nearest-neighbor sampling/snap-upscale is applied (`cargo test background_image_rendering_pixelated_uses_nearest_sampling --quiet`).
 - Media queries: `any-pointer` now matches only the available pointer capability (fine/coarse/none) instead of treating fine pointers as coarse; added regression `test_evaluate_any_pointer` covering desktop/mobile/print contexts.
 - Media queries: `any-pointer` now tracks coarse/fine availability separately; hybrid devices can satisfy both coarse and fine, and regression `test_evaluate_any_pointer_hybrid` covers the combined case.
@@ -1572,10 +1564,7 @@ Actionable borrowings:
 - Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text. Re-rendered and PNG remains all-white.
 - Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text. Re-rendered and PNG remains all-white; cached HTML contains multiple inline styles (overlays) with display:none/visibility hidden.
 - Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text. Re-rendered and PNG remains all-white; cached HTML contains multiple inline styles (overlays) with display:none/visibility hidden, but no display:none on html/body/main detected yet. (Still pending deeper CSS/JS inspection.)
- - Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text. Re-rendered and PNG remains all-white; cached HTML contains multiple inline styles (overlays) with display:none/visibility hidden, but no display:none on html/body/main detected yet. (Still pending deeper CSS/JS inspection.)
 - Wikipedia render (1200×800) still all-white after fetch; likely hidden content/overlay or JS dependency. Needs investigation into CSS visibility/positioning. Next step: inspect cached HTML/CSS for display:none on body/content or dark-mode overrides hiding text. Re-rendered and PNG remains all-white; cached HTML contains multiple inline styles (overlays) with display:none/visibility hidden, but no display:none on html/body/main detected yet. (Still pending deeper CSS/JS inspection.)
 - Rendered example.org at 1200×800 (fresh fetch); output is normal (non-white).
 - Root rem base now honors the HTML root font-size: the cascade treats the `<html>` element as the root for root_font_size resolution (instead of the document node), so `rem`/percent font sizes resolve after author root sizing. Added regression `root_font_size_percentage_uses_initial_value` covering 62.5% root font-size → 10px rem, and wikipedia.org now renders at full scale (content spans the viewport instead of a 238×64 block).
-- Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
-- Rendered https://w3.org at 1200×800: content clustered to the left/top (bbox ~0,188–659,799); likely responsive/min-content behavior or missing resources. Logged for future investigation.
-- Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199,799); no obvious issues. Logged for reference.
+- Added npmjs.com, developer.mozilla.org, and berkeley.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
