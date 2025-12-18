@@ -964,9 +964,9 @@ impl GridFormattingContext {
 
     /// Converts Taffy layout results to FragmentNode tree
     #[allow(dead_code)]
-    fn convert_to_fragments<T>(
+    fn convert_to_fragments<C>(
         &self,
-        taffy: &TaffyTree<T>,
+        taffy: &TaffyTree<C>,
         node_id: TaffyNodeId,
         node_map: &HashMap<TaffyNodeId, &BoxNode>,
         factory: &FormattingContextFactory,

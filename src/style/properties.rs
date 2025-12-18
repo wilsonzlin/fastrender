@@ -12954,6 +12954,64 @@ mod tests {
     }
 
     #[test]
+    fn gap_shorthands_accept_calc_zero() {
+        let mut style = ComputedStyle {
+            grid_gap: Length::px(5.0),
+            grid_row_gap: Length::px(6.0),
+            grid_column_gap: Length::px(7.0),
+            ..ComputedStyle::default()
+        };
+
+        let gap_value = parse_property_value("gap", "calc(0)").expect("gap calc(0)");
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "gap".to_string(),
+                value: gap_value,
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.grid_gap, Length::px(0.0));
+        assert_eq!(style.grid_row_gap, Length::px(0.0));
+        assert_eq!(style.grid_column_gap, Length::px(0.0));
+
+        let row_gap_value = parse_property_value("row-gap", "calc(0)").expect("row-gap calc(0)");
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "row-gap".to_string(),
+                value: row_gap_value,
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.grid_row_gap, Length::px(0.0));
+
+        let column_gap_value = parse_property_value("column-gap", "calc(0)").expect("column-gap calc(0)");
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "column-gap".to_string(),
+                value: column_gap_value,
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.grid_column_gap, Length::px(0.0));
+    }
+
+    #[test]
     fn parses_object_position_keywords() {
         let mut style = ComputedStyle::default();
         let decl = Declaration {
