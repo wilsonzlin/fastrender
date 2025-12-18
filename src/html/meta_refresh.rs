@@ -296,7 +296,22 @@ fn parse_attributes(tag: &str) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_js_location_redirect, extract_meta_refresh_url};
+    use super::*;
+
+    #[test]
+    fn parses_quoted_refresh_with_entities() {
+        let html = r#"<meta http-equiv="refresh" content="0; url=&quot;https://html.duckduckgo.com/html&quot;">"#;
+        assert_eq!(
+            extract_meta_refresh_url(html),
+            Some("https://html.duckduckgo.com/html".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_refresh_with_single_quotes_and_delay() {
+        let html = "<meta http-equiv='Refresh' content='5;URL=/next'>";
+        assert_eq!(extract_meta_refresh_url(html), Some("/next".to_string()));
+    }
 
     #[test]
     fn extracts_meta_refresh_url() {
@@ -361,6 +376,21 @@ mod tests {
         assert_eq!(
             extract_js_location_redirect(html),
             Some("https://example.com/next".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_js_location_redirect_patterns() {
+        let html = "<script>window.location.href = 'https://example.com/next?x=1';</script>";
+        assert_eq!(
+            extract_js_location_redirect(html),
+            Some("https://example.com/next?x=1".to_string())
+        );
+
+        let html = "<script>location.replace('/other');</script>";
+        assert_eq!(
+            extract_js_location_redirect(html),
+            Some("/other".to_string())
         );
     }
 

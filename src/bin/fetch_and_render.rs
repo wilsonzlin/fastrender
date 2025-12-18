@@ -136,6 +136,31 @@ mod tests {
     use super::*;
     use fastrender::css::loader::resolve_href;
 
+    fn accept_request(
+        listener: &std::net::TcpListener,
+        timeout: std::time::Duration,
+    ) -> Option<std::net::TcpStream> {
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let start = std::time::Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    let _ = stream.set_nonblocking(false);
+                    return Some(stream);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if start.elapsed() >= timeout {
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => panic!("accept failed: {e}"),
+            }
+        }
+    }
+
     #[test]
     fn resolves_relative_http_links() {
         let base = "https://example.com/a/b/page.html";
@@ -369,17 +394,17 @@ mod tests {
     fn render_once_follows_quoted_meta_refresh() {
         use std::io::{BufRead, BufReader, Write};
         use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
         use std::thread;
+        use std::time::Duration;
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
         let addr = listener.local_addr().unwrap();
-        let requests: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let requests_clone = std::sync::Arc::clone(&requests);
+        let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let requests_clone = Arc::clone(&requests);
 
         let handle = thread::spawn(move || {
-            for i in 0..2 {
-                let (mut stream, _) = listener.accept().expect("accept request");
+            if let Some(mut stream) = accept_request(&listener, Duration::from_secs(2)) {
                 let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
                 let mut buf = String::new();
                 while reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false) {
@@ -388,24 +413,32 @@ mod tests {
                     }
                 }
                 requests_clone.lock().unwrap().push(buf.clone());
-                if i == 0 {
-                    let html = format!(
-                        "<html><head><meta http-equiv=\"refresh\" content=\"0;URL='http://{}/next?foo=1&amp;bar=2'\"></head><body>Redirecting</body></html>",
-                        addr
-                    );
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                        html.len(), html
-                    );
-                    let _ = stream.write_all(response.as_bytes());
-                } else {
-                    let html = "<html><body>OK</body></html>";
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                        html.len(), html
-                    );
-                    let _ = stream.write_all(response.as_bytes());
+                let html = format!(
+                    "<html><head><meta http-equiv=\"refresh\" content=\"0;URL='http://{}/next?foo=1&amp;bar=2'\"></head><body>Redirecting</body></html>",
+                    addr
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                    html.len(), html
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+
+            if let Some(mut stream) = accept_request(&listener, Duration::from_secs(2)) {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut buf = String::new();
+                while reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false) {
+                    if buf.ends_with("\r\n\r\n") || buf == "\r\n" {
+                        break;
+                    }
                 }
+                requests_clone.lock().unwrap().push(buf.clone());
+                let html = "<html><body>OK</body></html>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                    html.len(), html
+                );
+                let _ = stream.write_all(response.as_bytes());
             }
         });
 
@@ -435,6 +468,184 @@ mod tests {
             captured
         );
         assert!(output.exists(), "output image should be written");
+    }
+
+    #[test]
+    fn render_once_follows_meta_refresh_redirect() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().unwrap();
+        let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let requests_clone = Arc::clone(&requests);
+
+        let handle = thread::spawn(move || {
+            if let Some(mut stream) = accept_request(&listener, Duration::from_secs(2)) {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut buf = String::new();
+                while reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false) {
+                    if buf.ends_with("\r\n\r\n") || buf == "\r\n" {
+                        break;
+                    }
+                }
+                requests_clone.lock().unwrap().push(buf.clone());
+                let html = format!(
+                    "<!doctype html><html><head><noscript><meta http-equiv=\"refresh\" content=\"0; url=&quot;http://{}/next&quot;\"><style>body {{ display: none; }}</style></noscript></head><body>old</body></html>",
+                    addr
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                    html.len(), html
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+
+            if let Some(mut stream) = accept_request(&listener, Duration::from_secs(2)) {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut buf = String::new();
+                while reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false) {
+                    if buf.ends_with("\r\n\r\n") || buf == "\r\n" {
+                        break;
+                    }
+                }
+                requests_clone.lock().unwrap().push(buf.clone());
+                let html =
+                    "<html><body><div style=\"width:100px;height:40px;background:rgb(0, 200, 0);\"></div></body></html>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                    html.len(), html
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let url = format!("http://{}/", addr);
+        let tmp = tempfile::tempdir().unwrap();
+        let output = tmp.path().join("refresh.png");
+        render_once(
+            &url,
+            output.to_str().unwrap(),
+            200,
+            150,
+            0,
+            0,
+            1.0,
+            Some(5),
+            "TestAgent/1.0",
+            DEFAULT_ACCEPT_LANGUAGE,
+        )
+        .expect("render_once should succeed");
+
+        handle.join().expect("server thread");
+        let requests = requests.lock().unwrap();
+        assert!(
+            requests.iter().any(|r| r.contains("GET /next")),
+            "expected follow-up /next request, got:\n{}",
+            requests.join("\n---\n")
+        );
+
+        let image = image::ImageReader::open(&output)
+            .expect("open output")
+            .decode()
+            .expect("decode png")
+            .to_rgba8();
+        let has_non_white = image
+            .pixels()
+            .any(|p| p.0[0] != 255 || p.0[1] != 255 || p.0[2] != 255);
+        assert!(has_non_white, "render should include content after meta refresh");
+    }
+
+    #[test]
+    fn render_once_follows_js_location_redirect() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().unwrap();
+        let requests: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let requests_clone = Arc::clone(&requests);
+
+        let handle = thread::spawn(move || {
+            if let Some(mut stream) = accept_request(&listener, Duration::from_secs(2)) {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut buf = String::new();
+                while reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false) {
+                    if buf.ends_with("\r\n\r\n") || buf == "\r\n" {
+                        break;
+                    }
+                }
+                requests_clone.lock().unwrap().push(buf.clone());
+                let html = format!(
+                    "<!doctype html><html><head><style>body {{ display: none; }}</style><script>window.location.href = \"http://{}/target\";</script></head><body>old</body></html>",
+                    addr
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                    html.len(), html
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+
+            if let Some(mut stream) = accept_request(&listener, Duration::from_secs(2)) {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut buf = String::new();
+                while reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false) {
+                    if buf.ends_with("\r\n\r\n") || buf == "\r\n" {
+                        break;
+                    }
+                }
+                requests_clone.lock().unwrap().push(buf.clone());
+                let html =
+                    "<html><body><div style=\"width:120px;height:50px;background:rgb(200, 0, 0);\"></div></body></html>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+                    html.len(), html
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let url = format!("http://{}/", addr);
+        let tmp = tempfile::tempdir().unwrap();
+        let output = tmp.path().join("js-redirect.png");
+        render_once(
+            &url,
+            output.to_str().unwrap(),
+            220,
+            160,
+            0,
+            0,
+            1.0,
+            Some(5),
+            "TestAgent/1.0",
+            DEFAULT_ACCEPT_LANGUAGE,
+        )
+        .expect("render_once should succeed");
+
+        handle.join().expect("server thread");
+        let requests = requests.lock().unwrap();
+        assert!(
+            requests.iter().any(|r| r.contains("GET /target")),
+            "expected follow-up /target request, got:\n{}",
+            requests.join("\n---\n")
+        );
+
+        let image = image::ImageReader::open(&output)
+            .expect("open output")
+            .decode()
+            .expect("decode png")
+            .to_rgba8();
+        let has_non_white = image
+            .pixels()
+            .any(|p| p.0[0] != 255 || p.0[1] != 255 || p.0[2] != 255);
+        assert!(has_non_white, "render should include content after JS redirect");
     }
 
     #[test]
