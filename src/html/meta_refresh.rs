@@ -95,6 +95,32 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
         }
     }
 
+    // Fallback: look for a variable assignment that captures a URL literal
+    if let Some(mut idx) = lower.find("var url") {
+        if let Some(eq) = lower[idx..].find('=') {
+            idx += eq + 1;
+            while idx < lower.len() && lower.as_bytes()[idx].is_ascii_whitespace() {
+                idx += 1;
+            }
+            if idx < lower.len() && (lower.as_bytes()[idx] == b'"' || lower.as_bytes()[idx] == b'\'') {
+                let quote = lower.as_bytes()[idx];
+                idx += 1;
+                let start = idx;
+                while idx < lower.len() && lower.as_bytes()[idx] != quote {
+                    idx += 1;
+                }
+                let end = idx.min(html.len());
+                let mut candidate = html[start..end].trim().to_string();
+                if candidate.starts_with("//") {
+                    candidate = format!("https:{}", candidate);
+                }
+                if !candidate.is_empty() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -253,5 +279,14 @@ mod tests {
     fn extracts_js_location_replace() {
         let html = "<script>location.replace(\"/foo\");</script>";
         assert_eq!(extract_js_location_redirect(html), Some("/foo".to_string()));
+    }
+
+    #[test]
+    fn extracts_url_from_var_assignment() {
+        let html = "<script>var url = \"//example.com/next\"; window.location.replace(url);</script>";
+        assert_eq!(
+            extract_js_location_redirect(html),
+            Some("https://example.com/next".to_string())
+        );
     }
 }
