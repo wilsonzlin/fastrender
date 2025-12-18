@@ -1618,3 +1618,5 @@ Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199
 - fetch_and_render now uses HttpFetcher for network fetches (UA override honored), and render_pages logs the UA per-page to match runtime fetcher behavior.
 - Unitless zero values now parse as numbers for opacity/z-index, avoiding bogus length parsing that could block overlays (e.g., wired.com); regression added.
 - Push of the above scratchpad note pending; git push timing out (commit 363dbfd queued). Patch saved at local_patches/363dbfd-note-unitless-zero.patch for sharing.
+- Numeric calc/min/max/clamp now parse for opacity/z-index: property parser accepts calc()/min()/max()/clamp() as numbers for numeric properties, with regression tests in css_numeric_functions.rs.
+- Pushes currently timing out; latest numeric calc support saved as patch local_patches/5a7b075-calc-numeric.patch (commit 5a7b075 queued).
