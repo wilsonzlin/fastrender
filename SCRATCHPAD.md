@@ -81,6 +81,7 @@ Added nbcnews.com to fetch_pages targets; fetch succeeds (~1.17MB) and render co
 Added vox.com to fetch_pages targets; fetch succeeds (~938KB) and render completes (~15.6s, PNG ~21KB) at 1200x800 with visible content.
 Added foxnews.com to fetch_pages targets; fetch succeeds and render shows content (timings similar to other news sites).
 CNN perf profiling: cascade ~6–7s with selector dedup (candidates ~720k), but layout still dominates (~78s at 1200x800; product-zone/vertical shelf carousels/flex layouts dominate). Flex cache reuse improved slightly; further layout perf work needed.
+Pending/perf: newsweek.com render times out despite 21 CSS links loading; no inline styles. Investigate cascade/layout bottleneck when picked up. bbc.com grid perf still slow (~24s); cnn.com layout perf still unresolved (mostly blank render).
 Added cnn.com profiling notes: cascade ~6–7s, layout remains the bottleneck (~78s at 1200x800; product-zone/vertical shelf carousels dominate flex layouts). Flex cache reuse improved slightly; further layout perf work needed.
 Added foxnews.com to fetch_pages targets; fetch succeeds and render shows content (timings similar to other news sites).
 Added foxnews.com to fetch_pages targets; fetch succeeds and render shows content (timings similar to other news sites).
