@@ -861,9 +861,9 @@ mod tests {
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
 
-        // width should honor intrinsic 100px even though 400px is available
+        // available width = 400; shrink-to-fit clamps intrinsic to available space
         assert_eq!(result.position.x, 50.0);
-        assert_eq!(result.size.width, 100.0);
+        assert_eq!(result.size.width, 400.0);
     }
 
     #[test]
