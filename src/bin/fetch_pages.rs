@@ -7,13 +7,13 @@
 use std::collections::HashSet;
 
 use std::fs;
-use std::path::PathBuf;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_USER_AGENT};
+use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use rayon::ThreadPoolBuilder;
 
 struct Config {
@@ -22,6 +22,7 @@ struct Config {
     timeout: Duration,
     page_filter: Option<HashSet<String>>, // normalized via url_to_filename
     user_agent: String,
+    accept_language: String,
 }
 
 const CACHE_DIR: &str = "fetches/html";
@@ -174,6 +175,7 @@ fn parse_args() -> Config {
     let mut filter: HashSet<String> = HashSet::new();
     let mut has_filter = false;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
+    let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -186,6 +188,7 @@ fn parse_args() -> Config {
                 println!("  --timeout SECONDS   Per-request timeout (default: 30)");
                 println!("  --pages a,b,c       Fetch only the listed pages (use url_to_filename stems)");
                 println!("  --user-agent UA     Override the User-Agent header (default: Chrome-like)");
+                println!("  --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)");
                 std::process::exit(0);
             }
             "--refresh" => refresh = true,
@@ -222,6 +225,13 @@ fn parse_args() -> Config {
                     }
                 }
             }
+            "--accept-language" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        accept_language = val;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -232,6 +242,7 @@ fn parse_args() -> Config {
         timeout: Duration::from_secs(timeout_secs),
         page_filter: if has_filter { Some(filter) } else { None },
         user_agent,
+        accept_language,
     }
 }
 
@@ -266,10 +277,16 @@ fn write_cached_html(cache_path: &Path, bytes: &[u8], content_type: Option<&str>
     Ok(())
 }
 
-fn fetch_page(url: &str, timeout: Duration, user_agent: &str) -> Result<(Vec<u8>, Option<String>), String> {
+fn fetch_page(
+    url: &str,
+    timeout: Duration,
+    user_agent: &str,
+    accept_language: &str,
+) -> Result<(Vec<u8>, Option<String>), String> {
     let fetcher = HttpFetcher::default()
         .with_timeout(timeout)
-        .with_user_agent(user_agent.to_string());
+        .with_user_agent(user_agent.to_string())
+        .with_accept_language(accept_language.to_string());
     fetcher
         .fetch(url)
         .map(|res| (res.bytes, res.content_type))
@@ -310,6 +327,7 @@ fn main() {
         config.timeout.as_secs()
     );
     println!("User-Agent: {}", config.user_agent);
+    println!("Accept-Language: {}", config.accept_language);
     if config.refresh {
         println!("--refresh: re-fetching all");
     }
@@ -332,6 +350,7 @@ fn main() {
             let refresh = config.refresh;
             let timeout = config.timeout;
             let user_agent = config.user_agent.clone();
+            let accept_language = config.accept_language.clone();
 
             s.spawn(move |_| {
                 let filename = url_to_filename(url);
@@ -343,7 +362,7 @@ fn main() {
                     return;
                 }
 
-                match fetch_page(url, timeout, &user_agent) {
+                match fetch_page(url, timeout, &user_agent, &accept_language) {
                     Ok((bytes, content_type)) => {
                         if write_cached_html(&cache_path, &bytes, content_type.as_deref()).is_ok() {
                             println!("✓ {} ({}b)", url, bytes.len());
@@ -431,5 +450,39 @@ mod tests {
         let html = std::fs::read_to_string(&cache_path).expect("html read");
         assert_eq!(html, "hello");
         assert!(!meta_path.exists(), "meta should be removed when content type absent");
+    }
+
+    #[test]
+    fn fetch_page_sets_accept_language_header() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            if let Some(stream) = listener.incoming().next() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf).to_lowercase();
+                assert!(req.contains("accept-language: es-mx,es;q=0.8"));
+
+                let body = b"ok";
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let url = format!("http://{}/", addr);
+        let res =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, "es-MX,es;q=0.8").expect("fetch succeeds");
+        handle.join().unwrap();
+
+        assert_eq!(res.0, b"ok");
     }
 }

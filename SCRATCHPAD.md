@@ -9,6 +9,7 @@ Itemized run splitting now validates UTF-8 boundaries: paragraph splits skip inv
 HttpFetcher now follows redirects (up to 10) with the shared User-Agent, and a local TCP server regression verifies redirected fetches return the final content/type.
 HttpFetcher now sends an Accept-Language header by default (en-US,en;q=0.9); regression inspects an HTTP request to ensure the header is present.
 Accept-Language default is exported as DEFAULT_ACCEPT_LANGUAGE so callers can share the header value; fetch_and_render already uses HttpFetcher so it inherits the default.
+fetch_pages now accepts --accept-language to override the header and passes it through HttpFetcher; a local TCP regression asserts the override is sent when fetching.
 cloudflare.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made (duplicate notes removed)

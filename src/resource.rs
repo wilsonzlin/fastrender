@@ -189,11 +189,7 @@ impl HttpFetcher {
 
             let status = response.status();
             if (300..400).contains(&status.as_u16()) {
-                if let Some(loc) = response
-                    .headers()
-                    .get("location")
-                    .and_then(|h| h.to_str().ok())
-                {
+                if let Some(loc) = response.headers().get("location").and_then(|h| h.to_str().ok()) {
                     let next = Url::parse(&current)
                         .ok()
                         .and_then(|base| base.join(loc).ok())
@@ -220,10 +216,7 @@ impl HttpFetcher {
             return Ok(FetchedResource::new(bytes, content_type));
         }
 
-        Err(Error::Io(io::Error::new(
-            io::ErrorKind::Other,
-            "too many redirects",
-        )))
+        Err(Error::Io(io::Error::new(io::ErrorKind::Other, "too many redirects")))
     }
 
     /// Fetch from a file:// URL
@@ -524,7 +517,11 @@ mod tests {
 
         assert_eq!(res.bytes, b"hi");
         let req = captured.lock().unwrap().to_lowercase();
-        assert!(req.contains("accept-language: en-us,en;q=0.9"), "missing header: {}", req);
+        assert!(
+            req.contains("accept-language: en-us,en;q=0.9"),
+            "missing header: {}",
+            req
+        );
     }
 
     #[test]
