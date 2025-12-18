@@ -875,8 +875,9 @@ fn render_once(
         }
     }
 
-    if html.to_ascii_lowercase().contains("<noscript") {
-        if let Some(js_redirect) = extract_js_location_redirect(&html) {
+    if let Some(js_redirect) = extract_js_location_redirect(&html) {
+        // Avoid following absurdly long inline redirects that will almost certainly 414 or pollute cache.
+        if js_redirect.len() <= 2048 {
             if let Some(target) = resolve_href(&resource_base, &js_redirect) {
                 println!("Following JS location redirect to: {}", target);
                 match fetch_bytes(&target, timeout, user_agent, accept_language) {
@@ -890,6 +891,8 @@ fn render_once(
                     }
                 }
             }
+        } else {
+            eprintln!("Warning: skipping JS redirect of length {}", js_redirect.len());
         }
     }
 
