@@ -10413,12 +10413,12 @@ mod tests {
         let fragment = ifc.layout(&root, &constraints).expect("layout");
         assert!(fragment.children.len() >= 2, "justify should create multiple lines");
         let line = &fragment.children[0];
-        assert!(line.children.len() >= 2, "first line should have two fragments");
-        let a = &line.children[0];
-        let b = &line.children[1];
-
-        let gap = b.bounds.x() - (a.bounds.x() + a.bounds.width());
-        assert!(gap > 3.0, "gap too small for justify: {}", gap);
+        let gaps: Vec<f32> = line
+            .children
+            .windows(2)
+            .map(|pair| pair[1].bounds.x() - (pair[0].bounds.x() + pair[0].bounds.width()))
+            .collect();
+        assert!(gaps.iter().all(|g| *g > 3.0), "gaps too small for justify: {:?}", gaps);
     }
 
     #[test]
