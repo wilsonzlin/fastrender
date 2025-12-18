@@ -61,7 +61,6 @@ const PAGES: &[&str] = &[
     "https://apple.com",
     "https://openai.com",
     "https://icloud.com",
-    "https://mozilla.org",
     "https://nytimes.com",
     "http://neverssl.com",
     "https://htmldog.com",
@@ -548,6 +547,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn url_to_filename_replaces_scheme_and_slashes() {
@@ -571,6 +571,18 @@ mod tests {
     fn selected_pages_none_returns_all() {
         let all = selected_pages(None);
         assert_eq!(all.len(), PAGES.len());
+    }
+
+    #[test]
+    fn pages_are_unique() {
+        let mut seen = HashSet::new();
+        let mut dupes = Vec::new();
+        for &url in PAGES {
+            if !seen.insert(url) {
+                dupes.push(url);
+            }
+        }
+        assert!(dupes.is_empty(), "Duplicate entries in PAGES: {:?}", dupes);
     }
 
     #[test]
