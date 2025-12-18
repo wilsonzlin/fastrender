@@ -98,6 +98,10 @@ You can drive media queries that depend on user preferences via CLI flags or env
   --prefers-contrast high \
   https://example.com
 
+# Override fetch headers (applies to linked assets, too)
+./target/release/fetch_and_render --user-agent "MyBot/1.0" --accept-language "fr-FR,fr;q=0.9" https://example.com
+./target/release/render_pages --user-agent "MyBot/1.0" --accept-language "fr-FR,fr;q=0.9"
+
 # Apply the same preferences when rendering cached pages
 ./target/release/render_pages --prefers-reduced-transparency reduce --prefers-contrast high
 
