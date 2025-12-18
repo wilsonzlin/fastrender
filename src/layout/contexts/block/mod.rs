@@ -448,7 +448,7 @@ impl BlockFormattingContext {
             }
         }
 
-        let (child_fragments, content_height, _) = if let Some(fc_type) = fc_type {
+        let (mut child_fragments, content_height, positioned_children) = if let Some(fc_type) = fc_type {
             if fc_type != FormattingContextType::Block {
                 // Child establishes a non-block FC - use the appropriate FC
                 let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
@@ -584,6 +584,107 @@ impl BlockFormattingContext {
         // Create the fragment
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
         let box_width = computed_width.border_box_width();
+
+        // Layout out-of-flow positioned children against this block's padding box.
+        if !positioned_children.is_empty() {
+            let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(self.font_context.clone());
+            let cb_block_base = if specified_height.is_some() {
+                Some(height + padding_top + padding_bottom)
+            } else {
+                None
+            };
+            let padding_origin = Point::new(
+                computed_width.border_left + computed_width.padding_left,
+                border_top + padding_top,
+            );
+            let padding_size = Size::new(
+                computed_width.content_width + computed_width.padding_left + computed_width.padding_right,
+                height + padding_top + padding_bottom,
+            );
+            let padding_rect = Rect::new(padding_origin, padding_size);
+            let parent_padding_cb = ContainingBlock::with_viewport_and_bases(
+                padding_rect,
+                self.viewport_size,
+                Some(padding_size.width),
+                cb_block_base,
+            );
+
+            for PositionedCandidate {
+                node: pos_child,
+                source,
+                static_position,
+            } in positioned_children
+            {
+                let cb = match source {
+                    ContainingBlockSource::ParentPadding => parent_padding_cb,
+                    ContainingBlockSource::Explicit(cb) => cb,
+                };
+                let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+                    self.font_context.clone(),
+                    self.viewport_size,
+                    cb,
+                );
+                // Layout the child as if it were in normal flow to obtain its intrinsic size.
+                let mut layout_child = pos_child.clone();
+                let mut style = (*layout_child.style).clone();
+                style.position = Position::Relative;
+                style.top = None;
+                style.right = None;
+                style.bottom = None;
+                style.left = None;
+                layout_child.style = Arc::new(style);
+
+                let fc_type = layout_child
+                    .formatting_context()
+                    .unwrap_or(FormattingContextType::Block);
+                let fc = factory.create(fc_type);
+                let child_height_space = cb_block_base
+                    .map(AvailableSpace::Definite)
+                    .unwrap_or(AvailableSpace::Indefinite);
+                let child_constraints =
+                    LayoutConstraints::new(AvailableSpace::Definite(padding_size.width), child_height_space);
+                let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
+
+                // Resolve positioned style against the containing block.
+                let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
+                    &pos_child.style,
+                    &cb,
+                    self.viewport_size,
+                    &self.font_context,
+                );
+
+                // Static position starts at the containing block origin; AbsoluteLayout will add
+                // padding/border offsets, so use the content origin when no flow position was
+                // recorded.
+                let static_pos = static_position.unwrap_or(Point::ZERO);
+                let preferred_min_inline = fc
+                    .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    .ok();
+                let preferred_inline = fc
+                    .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    .ok();
+                let preferred_min_block = fc
+                    .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MinContent)
+                    .ok();
+                let preferred_block = fc
+                    .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
+                    .ok();
+
+                let mut input = crate::layout::absolute_positioning::AbsoluteLayoutInput::new(
+                    positioned_style,
+                    child_fragment.bounds.size,
+                    static_pos,
+                );
+                input.preferred_min_inline_size = preferred_min_inline;
+                input.preferred_inline_size = preferred_inline;
+                input.preferred_min_block_size = preferred_min_block;
+                input.preferred_block_size = preferred_block;
+
+                let result = abs.layout_absolute(&input, &cb)?;
+                child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragments.push(child_fragment);
+            }
+        }
 
         let bounds = Rect::from_xywh(computed_width.margin_left, box_y, box_width, box_height);
 
