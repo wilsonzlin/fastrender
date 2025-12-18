@@ -204,3 +204,14 @@ linear-gradient appears ~24 times.
 z-index appears ~87 times.
 overflow:hidden appears ~39 times.
 transition appears ~144 times.
+<<<<<<< HEAD
+=======
+animation appears ~35 times.
+position:fixed appears ~12 times.
+width:100% appears ~259 times.
+min-width appears ~250 times; max-width ~358 times.
+height:100% appears ~64 times.
+opacity appears ~137 times.
+letter-spacing appears ~223 times.
+font-size appears ~1303 times.
+padding appears ~822 times.
