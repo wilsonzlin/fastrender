@@ -95,6 +95,14 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
         return None;
     }
 
+    // Strip common sourceURL markers that get inlined with CSS text (e.g.,
+    // "sourceURL=https://example.com/style.css").
+    if cleaned.to_ascii_lowercase().starts_with("sourceurl=") {
+        if let Some(rest) = cleaned.splitn(2, '=').nth(1) {
+            cleaned = rest.to_string();
+        }
+    }
+
     if let Some(pos) = cleaned.to_ascii_lowercase().rfind(".css") {
         let trailing = &cleaned[pos + 4..];
         if trailing.chars().all(|c| c == '/') {
@@ -998,6 +1006,17 @@ mod tests {
                 "https://cdn.example.com/more.css".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn strips_sourceurl_prefix_in_embedded_css_urls() {
+        let html = r#"
+            <script>
+                /* sourceURL=https://example.com/assets/style.css */
+            </script>
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert_eq!(urls, vec!["https://example.com/assets/style.css".to_string()]);
     }
 
     #[test]
