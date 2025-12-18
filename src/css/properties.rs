@@ -1944,6 +1944,9 @@ mod tests {
             .expect("resolve viewport mix");
         assert!((resolved_viewport - 1210.0).abs() < 1e-3);
 
+        let zero = parse_length("calc(0)").expect("calc zero");
+        assert_eq!(zero, Length::px(0.0));
+
         assert!(parse_length("calc(10px * 5px)").is_none());
         assert!(parse_length("calc(10px / 0px)").is_none());
     }
@@ -2194,7 +2197,13 @@ pub(crate) fn parse_calc_function_length<'i, 't>(
 
 fn calc_component_to_length(component: CalcComponent) -> Option<Length> {
     match component {
-        CalcComponent::Number(_) => None,
+        CalcComponent::Number(n) => {
+            if n == 0.0 {
+                Some(Length::px(0.0))
+            } else {
+                None
+            }
+        }
         CalcComponent::Length(calc) => {
             if let Some(term) = calc.single_term() {
                 Some(Length::new(term.value, term.unit))

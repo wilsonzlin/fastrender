@@ -1,3 +1,4 @@
+use fastrender::css::properties::parse_length;
 use fastrender::css::types::{Declaration, PropertyValue};
 use fastrender::style::color::{Color, Rgba};
 use fastrender::style::properties::{apply_declaration, resolve_pending_logical_properties};
@@ -65,6 +66,35 @@ fn logical_border_respects_cascade_order() {
     apply_declaration(&mut style, &decl("margin-left", PropertyValue::Length(Length::px(1.5))), &ComputedStyle::default(), 16.0, 16.0);
     resolve_pending_logical_properties(&mut style);
     assert_eq!(style.margin_left, Some(Length::px(1.5)));
+}
+
+#[test]
+fn margin_and_inset_accept_calc_zero() {
+    let mut style = ComputedStyle::default();
+    let zero = parse_length("calc(0)").expect("calc zero");
+    apply_declaration(
+        &mut style,
+        &decl("margin", PropertyValue::Multiple(vec![PropertyValue::Length(zero.clone())])),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    assert_eq!(style.margin_top, Some(Length::px(0.0)));
+    assert_eq!(style.margin_right, Some(Length::px(0.0)));
+    assert_eq!(style.margin_bottom, Some(Length::px(0.0)));
+    assert_eq!(style.margin_left, Some(Length::px(0.0)));
+
+    apply_declaration(
+        &mut style,
+        &decl("inset", PropertyValue::Multiple(vec![PropertyValue::Length(zero)])),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    assert_eq!(style.top, Some(Length::px(0.0)));
+    assert_eq!(style.right, Some(Length::px(0.0)));
+    assert_eq!(style.bottom, Some(Length::px(0.0)));
+    assert_eq!(style.left, Some(Length::px(0.0)));
 }
 
 #[test]
