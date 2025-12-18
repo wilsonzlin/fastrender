@@ -4,4 +4,4 @@ Quick notes (Agent19)
 - MSNBC: render is solid color (48,97,255) at 1200x800 (~18s, ~4,138 boxes); many scripts/styles, no visible content (JS-dependent). Inline CSS ~349KB; scripts 53 (35 external), style tags 28.
 - Renders: cnn (top strip), msnbc (solid), latimes (full frame, bbox 8..1199 x 8..799), cloudflare (bbox to y~728), wired (full frame), github (full frame).
 
-Status: repo clean on origin/main (1b4bcfa). No code changes.
+Status: repo clean on origin/main (1b352ea). No code changes.
