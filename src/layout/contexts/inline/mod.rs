@@ -6405,6 +6405,7 @@ mod tests {
         TextCombineUpright, TextJustify, TextOverflow, TextOverflowSide, TextTransform, TextWrap, WhiteSpace,
         WordBreak, WritingMode,
     };
+    use crate::tree::box_tree::{self};
     use crate::style::values::{Length, LengthUnit};
     use crate::style::ComputedStyle;
     use crate::text::font_loader::FontContext;
@@ -6473,18 +6474,25 @@ mod tests {
         let mut text_base = None;
         let mut stack = vec![fragment];
         while let Some(node) = stack.pop() {
-            if let FragmentContent::Text {
-                is_marker,
-                baseline_offset,
-                ..
-            } = node.content
-            {
-                let baseline = node.bounds.y() + baseline_offset;
-                if is_marker && marker_base.is_none() {
-                    marker_base = Some(baseline);
-                } else if !is_marker && text_base.is_none() {
-                    text_base = Some(baseline);
+            match node.content {
+                FragmentContent::Text {
+                    is_marker,
+                    baseline_offset,
+                    ..
+                } => {
+                    let baseline = node.bounds.y() + baseline_offset;
+                    if is_marker && marker_base.is_none() {
+                        marker_base = Some(baseline);
+                    } else if !is_marker && text_base.is_none() {
+                        text_base = Some(baseline);
+                    }
                 }
+                FragmentContent::Replaced { .. } => {
+                    if marker_base.is_none() {
+                        marker_base = Some(node.bounds.y() + node.bounds.height());
+                    }
+                }
+                _ => {}
             }
             for child in &node.children {
                 stack.push(child);
@@ -6833,6 +6841,41 @@ mod tests {
             "wrapped line should align with first line start; first={} second={}",
             first_line_text_x,
             second_line_text_x
+        );
+    }
+
+    #[test]
+    fn marker_image_baseline_aligns_with_text() {
+        let ifc = InlineFormattingContext::new();
+
+        let marker = BoxNode::new_marker(
+            Arc::new(ComputedStyle::default()),
+            MarkerContent::Image(box_tree::ReplacedBox {
+                replaced_type: box_tree::ReplacedType::Image {
+                    src: String::new(),
+                    alt: None,
+                    sizes: None,
+                    srcset: Vec::new(),
+                },
+                intrinsic_size: Some(Size::new(10.0, 10.0)),
+                aspect_ratio: Some(1.0),
+            }),
+        );
+        let text = BoxNode::new_text(Arc::new(ComputedStyle::default()), "content".to_string());
+
+        let root = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_base, text_base) = marker_and_text_baselines(line);
+        let marker_base = marker_base.expect("marker baseline");
+        let text_base = text_base.expect("text baseline");
+
+        assert!(
+            (marker_base - text_base).abs() < 0.5,
+            "image marker baseline should align with text baseline; marker={} text={}",
+            marker_base,
+            text_base
         );
     }
 

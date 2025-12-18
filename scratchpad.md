@@ -16,6 +16,7 @@
 # Marker/text baseline: regression `marker_and_text_share_baseline` asserts marker text shares the same baseline as inline content.
 # Marker ignores vertical-align: cascade regression `marker_ignores_vertical_align` locks vertical-align being filtered, keeping baseline alignment intact.
 # Outside markers wrap correctly: regression `marker_outside_wraps_without_extra_indent` ensures wrapped text aligns with the first line even when markers are outside.
+# Marker images align to text baseline: regression `marker_image_baseline_aligns_with_text` asserts image markers share the text baseline, keeping bullets and text aligned.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Added legend shrink-to-fit regression: a legend with auto width should shrink to its text instead of spanning the fieldset width.
