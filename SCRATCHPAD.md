@@ -93,13 +93,11 @@ fetch_and_render regression `render_once_follows_quoted_meta_refresh` uses a loc
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
 - Added mozilla.org to fetch_pages targets for broader coverage. Fetch/render mozilla.org (1200x800, 60s) succeeds (~79KB PNG, visible content).
-<<<<<<< HEAD
 - fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
-Added fast.com and kotlinlang.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
-
-- Positioned flex containers that fill their containing block now relayout their contents with the resolved size (e.g., fixed top/left/right/bottom overlays), so justify-content/align-items center works. Regression added to ensure inset fixed flex overlays center children; Pinterest noscript message now centers vertically (bbox ~463..663 x 338..402 instead of hugging the top).
-=======
 - Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background). Fetch/render at 1200x800 completes quickly (~0.5s render, PNG ~243KB).
-- fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
 - Added www.openstreetmap.org to fetch_pages targets; JS redirect follow is now non-fatal (warns), fetch succeeds (~0.24s) and render completes (~1.4s, PNG ~60KB) at 1200x800.
->>>>>>> 3f73d79 (Make meta/js redirect fetch non-fatal; fetch/render openstreetmap.org)
+- Added fast.com and kotlinlang.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
+- Added stanford.edu to fetch_pages targets (cargo check --bin fetch_pages passes).
+- Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages passes).
+- Positioned flex containers that fill their containing block now relayout their contents with the resolved size (e.g., fixed top/left/right/bottom overlays), so justify-content/align-items center works. Regression added to ensure inset fixed flex overlays center children; Pinterest noscript message now centers vertically (bbox ~463..663 x 338..402 instead of hugging the top).
+- Guardian.com render attempt: fetched/rendered with fetch_and_render 1200x800; PNG almost blank (nonwhite bbox ~x=79..231,y=39..799, 1616 nonwhite px, 29 colors). Without CSS (stripped <style>/<link>), render shows lots of text up to x≈480, so CSS collapses/hides content. HTML is heavy SSR with many gu-island blocks and emotion CSS; only external CSS link is print.css (media=print, skipped). Layout with CSS took ~44s (layout stage), 4101 boxes. inspect_frag run timed out at 180s. Likely grid/flex/css variables heavy; need to inspect why layout collapses to narrow column (maybe custom elements inline wrappers or grid sizing). Rendered guardian.html from curl into /tmp/guardian.html for debugging.
