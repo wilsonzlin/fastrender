@@ -474,6 +474,8 @@ impl<'a> RuleIndex<'a> {
             if let Some(tag) = node.tag_name() {
                 if let Some(list) = self.by_tag.get(tag) {
                     out.extend(list.iter().copied());
+                } else if let Some(list) = self.by_tag.get("*") {
+                    out.extend(list.iter().copied());
                 }
             }
         }
