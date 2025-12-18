@@ -220,6 +220,8 @@ fn unescape_js_literal(s: &str) -> String {
             out.push(ch);
         }
     }
+    let mut out = out.replace("\\/", "/");
+    out = out.replace("\\\\", "\\");
     out
 }
 
