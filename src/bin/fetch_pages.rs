@@ -54,6 +54,7 @@ const PAGES: &[&str] = &[
     "https://twitter.com",
     "https://weibo.cn",
     "https://alibaba.com",
+    "https://hbr.org",
     "https://amazon.com",
     "https://youtube.com",
     "https://facebook.com",
