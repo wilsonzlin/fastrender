@@ -445,10 +445,9 @@ impl AbsoluteLayout {
                 (x, w)
             }
 
-            // Case 4: left and right specified, width is auto (shrink-to-fit)
+            // Case 4: left and right specified, width is auto (solve constraint)
             (Some(l), None, Some(r)) => {
-                let available = cb_width - l - r - margin_left - margin_right - total_horizontal_spacing;
-                let width = shrink(available);
+                let width = (cb_width - l - r - margin_left - margin_right - total_horizontal_spacing).max(0.0);
                 let x = l + margin_left + border_left + padding_left;
                 (x, width)
             }
