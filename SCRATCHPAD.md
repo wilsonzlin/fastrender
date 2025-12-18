@@ -38,7 +38,7 @@ Attempted to add crates.io, but HTTP fetch returns 403 (CloudFront/Heroku); left
 Removed duplicate mozilla.org entry from fetch_pages targets to avoid redundant fetches.
 Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background). Fetch/render at 1200x800 completes quickly (~0.5s render, PNG ~243KB).
 Added docs.python.org (dark theme) and kotlinlang.org (colorful hero) to fetch_pages targets; fetch/render succeed. Tried adding developer.android.com but fetch_pages hit a redirect loop (>10 redirects), so it was removed.
-Added www.openstreetmap.org to fetch_pages targets; JS redirect follow is now non-fatal (warns), fetch succeeds (~0.24s) and render completes (~1.4s, PNG ~60KB) at 1200x800.
+Added openstreetmap.org to fetch_pages targets (JS redirect follow is non-fatal); fetch succeeds (~0.24s/34KB) and render completes (~1.9s, PNG ~60KB, header/nav visible, bbox 0..1198 x 0..274). stanford.edu target added (fetch/render pending verification).
 Replaced elements: skip intrinsic image fetch when both width and height are specified (per CSS replaced sizing), dramatically reducing box_tree time on image-heavy pages (nasa.gov now renders in ~8s: box_tree ~0.26s, layout ~0.3s, paint ~5.7s).
 Added display-list renderer regressions for mix-blend-mode (non-isolated multiply vs isolated source-over).
 render_pages/fetch_and_render support --timings to enable FASTR_RENDER_TIMINGS per-page logging; fetch_pages supports --timings for per-page fetch durations (including cache hits/errors).
