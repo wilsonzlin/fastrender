@@ -500,6 +500,7 @@ fn normalize_scheme_slashes(s: &str) -> String {
 /// Extract `<link rel="stylesheet">` URLs from an HTML document.
 pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
     let mut css_urls = Vec::new();
+    let mut print_only_urls = Vec::new();
 
     let lower = html.to_lowercase();
     let mut pos = 0;
@@ -511,19 +512,23 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
             let link_tag_lower = link_tag.to_lowercase();
 
             if link_tag_lower.contains("stylesheet") {
+                let mut is_print_only = false;
                 if let Some(media) = extract_attr_value(link_tag, "media") {
                     let media_lower = media.to_ascii_lowercase();
                     let has_screen = media_lower.contains("screen") || media_lower.contains("all");
                     let has_print = media_lower.contains("print");
                     if has_print && !has_screen {
-                        pos = abs_start + link_end + 1;
-                        continue;
+                        is_print_only = true;
                     }
                 }
                 if let Some(href) = extract_attr_value(link_tag, "href") {
                     let href = normalize_scheme_slashes(&href);
                     if let Some(full_url) = resolve_href(base_url, &href) {
-                        css_urls.push(full_url);
+                        if is_print_only {
+                            print_only_urls.push(full_url);
+                        } else {
+                            css_urls.push(full_url);
+                        }
                     }
                 }
             }
@@ -532,6 +537,10 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
         } else {
             break;
         }
+    }
+
+    if css_urls.is_empty() && !print_only_urls.is_empty() {
+        css_urls = print_only_urls;
     }
 
     dedupe_links_preserving_order(css_urls)
@@ -984,6 +993,15 @@ mod tests {
         "#;
         let urls = extract_embedded_css_urls(html, "https://example.com/");
         assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn falls_back_to_print_styles_when_no_screen_stylesheets() {
+        let html = r#"
+            <link rel="stylesheet" media="print" href="/print.css">
+        "#;
+        let urls = extract_css_links(html, "https://example.com/");
+        assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
     }
 
     #[test]

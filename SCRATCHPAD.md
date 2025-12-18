@@ -17,6 +17,7 @@ Scroll snapping: mandatory inline-axis snapping now preserves snap target offset
 cnn.com fetch now succeeds (JS redirect 404 kept original HTML), but render_pages times out at 60s (cascade ~8.2s, box_tree ~2.6s, no paint). Needs cascade/layout perf follow-up.
 CSS link extraction now decodes HTML entities (including odd forms like &/#47;) and embedded CSS URL scans decode entities too; covers cases like figma.com emitting entity-escaped stylesheet URLs. Grid context conflict marker removed and convert_to_fragments now accepts generic Taffy trees (TaffyTree<*const BoxNode> caller compiles).
 Entity-decoded CSS URLs now collapse surplus slashes after schemes (e.g., https:////host////path → https://host/path); regressions cover link and embedded CSS cases. figma.com still blank (JS app) but entity-escaped hrefs now normalize correctly.
+Stylesheet discovery now falls back to loading print-only styles when no screen/all stylesheets are present (e.g., pages that only ship a print stylesheet statically); regression added. theguardian.com still renders sparse content (JS-driven), but print styles can help other minimalist pages.
 
 Added fast.com to fetch_pages targets; fetch succeeds (~25KB HTML) and renders in ~0.3s at 1200×800 (PNG ~35KB, bbox roughly centered speed UI).
 Added blog.rust-lang.org to fetch_pages targets. Fetch succeeds (~87KB HTML) and renders in ~1.5s at 1200×800 (PNG ~106KB; full content visible).
