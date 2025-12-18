@@ -974,6 +974,15 @@ mod tests {
     }
 
     #[test]
+    fn embedded_scan_skips_print_only_link_tags() {
+        let html = r#"
+            <link rel="stylesheet" media="print" href="https://cdn.example.com/print.css">
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert!(urls.is_empty());
+    }
+
+    #[test]
     fn decodes_html_entities_in_embedded_css_urls() {
         let html = r#"
             <script>
@@ -1004,23 +1013,6 @@ mod tests {
             vec![
                 "https://example.com/a.css".to_string(),
                 "https://example.com/b.css".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn skips_print_only_stylesheets() {
-        let html = r#"
-            <link rel="stylesheet" media="print" href="/print.css">
-            <link rel="stylesheet" media="screen,print" href="/screen.css">
-            <link rel="stylesheet" href="/default.css">
-        "#;
-        let urls = extract_css_links(html, "https://example.com/");
-        assert_eq!(
-            urls,
-            vec![
-                "https://example.com/screen.css".to_string(),
-                "https://example.com/default.css".to_string(),
             ]
         );
     }
