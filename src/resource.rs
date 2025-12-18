@@ -138,10 +138,6 @@ pub struct HttpFetcher {
     max_size: usize,
 }
 
-/// Default User-Agent string used for outbound HTTP requests.
-pub const DEFAULT_USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 fastrender/0.1";
-
 impl HttpFetcher {
     /// Create a new HttpFetcher with default settings
     pub fn new() -> Self {
