@@ -184,3 +184,33 @@ var() usage is heavy (~2.8k occurrences) in inline CSS.
 Latest profiling (45s timeout): cascade ~6.7s (find ~0.8s, decl ~0.9s, pseudo ~2.9s), box_tree ~2.45s; render still times out (30–45s). Candidates still ~5.3M; pruning kilned/ad rules remains a potential experiment.
 ~126 !important declarations in inline CSS (small impact versus overall size).
 display:grid appears ~11 times in inline CSS.
+<<<<<<< HEAD
+=======
+calc() appears ~93 times in inline CSS.
+mask-image appears ~12 times in inline CSS.
+@supports appears ~5 times.
+display:flex appears ~327 times.
+display:block appears ~351 times.
+transform appears ~204 times.
+box-shadow appears ~56 times.
+border-radius appears ~143 times.
+filter appears ~10 times.
+linear-gradient appears ~24 times.
+z-index appears ~87 times.
+
+
+BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown.
+
+
+<<<<<<< HEAD
+=======
+BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown.
+=======
+overflow:hidden appears ~39 times.
+transition appears ~144 times.
+animation appears ~35 times.
+position:fixed appears ~12 times.
+width:100% appears ~259 times.
+min-width appears ~250 times; max-width ~358 times.
+height:100% appears ~64 times.
+opacity appears ~137 times.
