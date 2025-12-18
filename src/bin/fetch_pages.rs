@@ -1,6 +1,6 @@
 //! Fetch and cache HTML pages for testing
 //!
-//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA]
+//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--timings]
 //!
 //! Fetches all target pages in parallel and caches to fetches/html/
 
@@ -23,6 +23,7 @@ struct Config {
     page_filter: Option<HashSet<String>>, // normalized via url_to_filename
     user_agent: String,
     accept_language: String,
+    timings: bool,
 }
 
 const CACHE_DIR: &str = "fetches/html";
@@ -178,6 +179,7 @@ fn parse_args() -> Config {
     let mut has_filter = false;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
     let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
+    let mut timings = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -191,6 +193,7 @@ fn parse_args() -> Config {
                 println!("  --pages a,b,c       Fetch only the listed pages (use url_to_filename stems)");
                 println!("  --user-agent UA     Override the User-Agent header (default: Chrome-like)");
                 println!("  --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)");
+                println!("  --timings           Print per-page fetch durations");
                 std::process::exit(0);
             }
             "--refresh" => refresh = true,
@@ -234,6 +237,7 @@ fn parse_args() -> Config {
                     }
                 }
             }
+            "--timings" => timings = true,
             _ => {}
         }
     }
@@ -245,6 +249,7 @@ fn parse_args() -> Config {
         page_filter: if has_filter { Some(filter) } else { None },
         user_agent,
         accept_language,
+        timings,
     }
 }
 
@@ -367,6 +372,7 @@ fn main() {
             let timeout = config.timeout;
             let user_agent = config.user_agent.clone();
             let accept_language = config.accept_language.clone();
+            let timings = config.timings;
 
             s.spawn(move |_| {
                 let filename = url_to_filename(url);
@@ -378,18 +384,31 @@ fn main() {
                     return;
                 }
 
+                let start = if timings { Some(std::time::Instant::now()) } else { None };
                 match fetch_page(url, timeout, &user_agent, &accept_language) {
                     Ok((bytes, content_type)) => {
                         if write_cached_html(&cache_path, &bytes, content_type.as_deref(), Some(url)).is_ok() {
-                            println!("✓ {} ({}b)", url, bytes.len());
+                            if let Some(start) = start {
+                                println!("✓ {} ({}b, {}ms)", url, bytes.len(), start.elapsed().as_millis());
+                            } else {
+                                println!("✓ {} ({}b)", url, bytes.len());
+                            }
                             success.fetch_add(1, Ordering::Relaxed);
                             return;
                         }
-                        println!("✗ {} (write failed)", url);
+                        if let Some(start) = start {
+                            println!("✗ {} (write failed, {}ms)", url, start.elapsed().as_millis());
+                        } else {
+                            println!("✗ {} (write failed)", url);
+                        }
                         failed.fetch_add(1, Ordering::Relaxed);
                     }
                     Err(e) => {
-                        println!("✗ {} ({})", url, e);
+                        if let Some(start) = start {
+                            println!("✗ {} ({}, {}ms)", url, e, start.elapsed().as_millis());
+                        } else {
+                            println!("✗ {} ({})", url, e);
+                        }
                         failed.fetch_add(1, Ordering::Relaxed);
                     }
                 }
