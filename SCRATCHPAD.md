@@ -50,6 +50,7 @@ Rowspan height distribution adjusted to favor auto rows while sharing spans; ver
 - Meta refresh redirects are now followed once in fetch_and_render/render_pages (e.g., duckduckgo.com noscript redirect to html.duckduckgo.com), restoring content for pages that hide the body when scripting is disabled.
 - Simple JS location redirects are also followed once in the CLIs (window.location[.href]/location.replace with literal URL), to catch noscript/script-only handoffs before rendering.
 - HttpFetcher now errors on empty HTTP bodies (UnexpectedEof) to avoid caching blank responses; regression added. fetch_and_render already treats empty bodies as errors.
+- Meta refresh parsing now decodes common HTML entity quotes (quot/apos/&#39;/&#x27;) and keeps semicolons inside quoted URLs, so encoded or quoted refresh targets are extracted correctly; regressions added.
 
 - Rendered additional pages and found `openbsd.org` PNG was completely blank. Root cause: block layout dropped absolutely positioned children when the parent block was laid out via `layout_block_child` (positioned_children from `layout_children` were ignored). Added absolute-position handling to that path so out-of-flow children are laid out against the block's padding box, and regression `absolute_position_body_with_insets_renders_content` covers the scenario.
 - `openbsd.org` now renders with visible sidebar/content; `render_pages --pages openbsd.org` succeeds (PNG unique colors ~32k).
