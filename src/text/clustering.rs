@@ -499,6 +499,29 @@ mod tests {
         assert_eq!(x_to_byte_offset(&clusters, 100.0), 3);
     }
 
+    #[test]
+    fn test_x_byte_offset_with_multibyte_cluster() {
+        // a😊b where the emoji is 4 bytes (byte boundaries: 0,1,5,6)
+        let clusters = vec![
+            cluster(0, 1, 0, 1, 10.0),
+            cluster(1, 4, 1, 1, 10.0),
+            cluster(5, 1, 2, 1, 10.0),
+        ];
+
+        // Midpoint of first cluster snaps to its end boundary
+        assert_eq!(x_to_byte_offset(&clusters, 5.0), 1);
+        // Midpoint of emoji cluster should return its start byte
+        assert_eq!(x_to_byte_offset(&clusters, 12.0), 1);
+        // Past midpoint of emoji cluster should return its end byte boundary
+        assert_eq!(x_to_byte_offset(&clusters, 17.0), 5);
+
+        // Verify byte_to_x uses cluster lengths correctly
+        assert_eq!(byte_offset_to_x(&clusters, 0), 0.0);
+        assert_eq!(byte_offset_to_x(&clusters, 1), 10.0);
+        assert_eq!(byte_offset_to_x(&clusters, 5), 20.0);
+        assert_eq!(byte_offset_to_x(&clusters, 6), 30.0);
+    }
+
     // ========================================================================
     // Selection Tests
     // ========================================================================
