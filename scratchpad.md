@@ -1555,6 +1555,7 @@ Actionable borrowings:
 - Wired.com blank render remains unresolved: content is laid out far offscreen and only visible when scrolling deep; no fix yet.
 - Added `--full-page` flag to `fetch_and_render` to set `FASTR_FULL_PAGE` for expanded rendering; full-page render of cached wired.html now shows content (2016×2714 PNG, non-white bbox 0..2015 x 172..2713). Default 1200×800 render still blank (only 1px row) even after flex recenter tweak.
 - Flex: added a safeguard to recenter row children when all items are shifted right but still span roughly the container width (min_x>0.5*width and span<=1.5*width), to avoid empty viewports when flex layouts drift horizontally. Tests not yet run beyond compile.
+- Wired.com: default 1200×800 render still blank after recentering; full-page shows content. Remaining issue is offscreen positioning/huge empty top space.
 # Added painter background image-rendering coverage: pixelated backgrounds now have a regression ensuring nearest-neighbor sampling/snap-upscale is applied (`cargo test background_image_rendering_pixelated_uses_nearest_sampling --quiet`).
 - Media queries: `any-pointer` now matches only the available pointer capability (fine/coarse/none) instead of treating fine pointers as coarse; added regression `test_evaluate_any_pointer` covering desktop/mobile/print contexts.
 - Media queries: `any-pointer` now tracks coarse/fine availability separately; hybrid devices can satisfy both coarse and fine, and regression `test_evaluate_any_pointer_hybrid` covers the combined case.
