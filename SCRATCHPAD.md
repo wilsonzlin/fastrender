@@ -71,6 +71,7 @@ fetch_pages run populated cache for 85+ pages; render_pages rerun succeeded for 
 Rowspan height distribution adjusted to favor auto rows while sharing spans; vertical text-overflow ellipsis tests now passing. Rowspan regressions (`calculate_row_heights_*`, `baseline_height_computation_skips_rowspanning_cells`) fixed.
 
 - Grid layout now reuses measured fragments when converting from Taffy: grid items treated as leaves (e.g., nested grids) reuse the fragment produced during measurement so their children are preserved. This fixes missing scroll-snap targets on horizontal/inline grid flows (scroll snap tests now pass).
+- Added regression `nested_grid_items_preserve_measured_children` to ensure nested grid items reuse their measured fragments (children retained) instead of producing empty fragments.
 
 - Meta refresh redirects are now followed once in fetch_and_render/render_pages (e.g., duckduckgo.com noscript redirect to html.duckduckgo.com), restoring content for pages that hide the body when scripting is disabled.
 - Simple JS location redirects are also followed once in the CLIs (window.location[.href]/location.replace with literal URL), to catch noscript/script-only handoffs before rendering.

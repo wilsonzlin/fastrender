@@ -125,3 +125,42 @@ fn grid_children_are_laid_out_even_when_taffy_reports_zero_width() {
     assert!(child_frag.bounds.width() > 0.0);
     assert!(count_text_fragments(child_frag) > 0, "expected text fragments inside grid child");
 }
+
+#[test]
+fn nested_grid_items_preserve_measured_children() {
+    // Grid items are treated as leaves in the Taffy tree; ensure that when a grid item itself
+    // establishes a grid formatting context, its measured fragment (with children) is reused
+    // instead of producing an empty fragment tree.
+    let mut outer_style = ComputedStyle::default();
+    outer_style.display = Display::Grid;
+    outer_style.grid_auto_flow = fastrender::style::types::GridAutoFlow::Column;
+    outer_style.grid_auto_columns = vec![GridTrack::Fr(1.0)];
+
+    let mut inner_style = ComputedStyle::default();
+    inner_style.display = Display::Grid;
+    inner_style.grid_auto_flow = fastrender::style::types::GridAutoFlow::Row;
+    inner_style.grid_auto_rows = vec![GridTrack::Fr(1.0)];
+
+    let text_style = Arc::new(ComputedStyle::default());
+    let text = BoxNode::new_text(text_style, "Nested grid child".to_string());
+    let inner_block = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![text]);
+    let inner_grid = BoxNode::new_block(Arc::new(inner_style), FormattingContextType::Grid, vec![inner_block]);
+    let outer_grid = BoxNode::new_block(Arc::new(outer_style), FormattingContextType::Grid, vec![inner_grid]);
+
+    let fc = GridFormattingContext::new();
+    let fragment = fc
+        .layout(&outer_grid, &LayoutConstraints::definite(400.0, 200.0))
+        .expect("layout succeeds");
+
+    assert_eq!(fragment.children.len(), 1, "outer grid should have one item fragment");
+    let inner_fragment = &fragment.children[0];
+
+    assert!(
+        inner_fragment.children.len() > 0,
+        "nested grid fragment should preserve its laid-out children"
+    );
+    assert!(
+        count_text_fragments(inner_fragment) > 0,
+        "expected text content inside nested grid fragment"
+    );
+}
