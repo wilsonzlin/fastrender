@@ -28,9 +28,10 @@
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::{
     absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url, inject_css_into_html,
-    inline_imports,
+    inline_imports, resolve_href,
 };
 use fastrender::html::encoding::decode_html_bytes;
+use fastrender::html::meta_refresh::extract_meta_refresh_url;
 use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
@@ -496,9 +497,25 @@ fn render_once(
     println!("Fetching HTML from: {}", url);
     let timeout = timeout_secs.map(Duration::from_secs);
     let (html_bytes, html_content_type, source_url) = fetch_bytes(url, timeout, user_agent, accept_language)?;
-    let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
-    let base_hint = source_url.as_deref().unwrap_or(url);
-    let resource_base = infer_base_url(&html, base_hint).into_owned();
+    let mut html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
+    let mut base_hint = source_url.as_deref().unwrap_or(url).to_string();
+    let mut resource_base = infer_base_url(&html, &base_hint).into_owned();
+
+    if let Some(refresh) = extract_meta_refresh_url(&html) {
+        if let Some(target) = resolve_href(&resource_base, &refresh) {
+            println!("Following meta refresh to: {}", target);
+            match fetch_bytes(&target, timeout, user_agent, accept_language) {
+                Ok((bytes, content_type, final_url)) => {
+                    html = decode_html_bytes(&bytes, content_type.as_deref());
+                    base_hint = final_url.unwrap_or(target);
+                    resource_base = infer_base_url(&html, &base_hint).into_owned();
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to follow meta refresh {}: {}", target, e);
+                }
+            }
+        }
+    }
 
     println!("Extracting CSS links...");
     let mut css_links = extract_css_links(&html, &resource_base);

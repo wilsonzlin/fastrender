@@ -10,11 +10,13 @@ mod caching_fetcher;
 
 use caching_fetcher::CachingFetcher;
 use fastrender::css::encoding::decode_css_bytes;
+use fastrender::css::loader::resolve_href;
 use fastrender::css::loader::{
     absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url, inject_css_into_html,
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
+use fastrender::html::meta_refresh::extract_meta_refresh_url;
 use fastrender::resource::{
     parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
@@ -389,7 +391,7 @@ fn main() {
                     .map(parse_cached_html_meta)
                     .unwrap_or((None, None));
 
-                let html = decode_html_bytes(&html_bytes, content_type.as_deref());
+                let mut html = decode_html_bytes(&html_bytes, content_type.as_deref());
                 log.push_str(&format!("HTML bytes: {}\n", html_bytes.len()));
                 if let Some(ct) = &content_type {
                     log.push_str(&format!("Content-Type: {}\n", ct));
@@ -398,9 +400,26 @@ fn main() {
                 log.push_str(&format!("Scroll-X: {}px\n", scroll_x));
                 log.push_str(&format!("Scroll-Y: {}px\n", scroll_y));
 
-                let input_url = source_url.unwrap_or_else(|| format!("file://{}", path.display()));
-                let resource_base = infer_base_url(&html, &input_url).into_owned();
+                let mut input_url = source_url.unwrap_or_else(|| format!("file://{}", path.display()));
+                let mut resource_base = infer_base_url(&html, &input_url).into_owned();
                 log.push_str(&format!("Resource base: {}\n", resource_base));
+
+                if let Some(refresh) = extract_meta_refresh_url(&html) {
+                    if let Some(target) = resolve_href(&resource_base, &refresh) {
+                        log.push_str(&format!("Meta refresh to: {}\n", target));
+                        match fetcher.fetch(&target) {
+                            Ok(res) => {
+                                html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
+                                input_url = target.clone();
+                                resource_base = infer_base_url(&html, &input_url).into_owned();
+                                log.push_str(&format!("Followed meta refresh; new base: {}\n", resource_base));
+                            }
+                            Err(e) => {
+                                log.push_str(&format!("Failed to follow meta refresh: {}\n", e));
+                            }
+                        }
+                    }
+                }
 
                 let mut css_links = extract_css_links(&html, &resource_base);
                 let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
