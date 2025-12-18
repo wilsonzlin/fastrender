@@ -4,6 +4,8 @@ Added regression coverage for meta refresh/JS redirects in fetch_and_render: quo
 Cleaned stray merge marker in grid.rs and aligned grid TaffyTree usage to the <*const BoxNode> variant used at call sites (build was failing during tests); no behavior change intended.
 JS redirect parsing now unescapes HTML entities and escaped slashes/hex/unicode (location.assign/replace/href), so entity-escaped or backslash-escaped targets are resolved correctly.
 
+cnn.com cascade profiling (release, 1200x800, 45s timeout): inline CSS only (~1.7MB). Cascade ~6.5–6.7s (find ~0.8–0.9s, decl ~0.9s, pseudo ~2.9s), box_tree ~2.4s; render still times out at 30–45s. ~5.3M selector candidates (~1.7k/node), ~31k matches; 3 <style> blocks (~1.7MB total), ~5.5k rules, ~16.7k declarations; heavy :has (~526), var() (~2.8k), ~199 media queries.
+
 cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (3 <style> blocks, total ~1.7MB). Cascade ~7–8s (FASTR_CASCADE_PROFILE: ~5.3M selector candidates, ~31k matches, ~3s pseudo), box_tree ~2.4s; render still times out at 40s. Pseudo fast-path/candidate dedup attempts unchanged timing; further selector/cascade optimization needed.
 Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
 Added figma.com to fetch_pages targets. Fetch succeeds (~1.25MB HTML); render_pages finishes in ~5s but current PNG is blank (bbox None) due to JS redirect to /redirect_home and missing CSS (bogus encoded webpack-artifacts URL); needs follow-up if we want visible content.
