@@ -10130,6 +10130,7 @@ pub fn extract_scroll_padding_values(value: &PropertyValue) -> Option<Vec<Length
 pub fn extract_box_values(value: &PropertyValue) -> Option<Vec<Length>> {
     match value {
         PropertyValue::Length(len) => Some(vec![*len]),
+        PropertyValue::Number(n) if *n == 0.0 => Some(vec![Length::px(0.0)]),
         PropertyValue::Multiple(values) => {
             let lengths: Vec<Length> = values.iter().filter_map(extract_length).collect();
             if lengths.is_empty() {
@@ -12890,6 +12891,66 @@ mod tests {
         assert_eq!(style.margin_right, Some(Length::px(0.0)));
         assert_eq!(style.margin_bottom, Some(Length::px(0.0)));
         assert_eq!(style.margin_left, Some(Length::px(0.0)));
+    }
+
+    #[test]
+    fn padding_shorthand_accepts_calc_zero() {
+        let mut style = ComputedStyle {
+            padding_top: Length::px(3.0),
+            padding_right: Length::px(4.0),
+            padding_bottom: Length::px(5.0),
+            padding_left: Length::px(6.0),
+            ..ComputedStyle::default()
+        };
+
+        let value = parse_property_value("padding", "calc(0)").expect("padding calc(0)");
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "padding".to_string(),
+                value,
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.padding_top, Length::px(0.0));
+        assert_eq!(style.padding_right, Length::px(0.0));
+        assert_eq!(style.padding_bottom, Length::px(0.0));
+        assert_eq!(style.padding_left, Length::px(0.0));
+    }
+
+    #[test]
+    fn scroll_margin_shorthand_accepts_calc_zero() {
+        let mut style = ComputedStyle {
+            scroll_margin_top: Length::px(1.0),
+            scroll_margin_right: Length::px(2.0),
+            scroll_margin_bottom: Length::px(3.0),
+            scroll_margin_left: Length::px(4.0),
+            ..ComputedStyle::default()
+        };
+
+        let value = parse_property_value("scroll-margin", "calc(0)").expect("scroll-margin calc(0)");
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "scroll-margin".to_string(),
+                value,
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.scroll_margin_top, Length::px(0.0));
+        assert_eq!(style.scroll_margin_right, Length::px(0.0));
+        assert_eq!(style.scroll_margin_bottom, Length::px(0.0));
+        assert_eq!(style.scroll_margin_left, Length::px(0.0));
     }
 
     #[test]
