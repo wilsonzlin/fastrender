@@ -71,6 +71,7 @@ Removed duplicate mozilla.org entry from fetch_pages targets to avoid redundant 
 Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background). Fetch/render at 1200x800 completes quickly (~0.5s render, PNG ~243KB).
 Added docs.python.org (dark theme) and kotlinlang.org (colorful hero) to fetch_pages targets; fetch/render succeed. Tried adding developer.android.com but fetch_pages hit a redirect loop (>10 redirects), so it was removed.
 Added openstreetmap.org to fetch_pages targets (JS redirect follow is non-fatal); fetch succeeds (~0.24s/34KB) and render completes (~1.9s, PNG ~60KB, header/nav visible, bbox 0..1198 x 0..274). stanford.edu target added (fetch/render pending verification).
+Added phoronix.com, nationalgeographic.com, and vox.com to fetch_pages targets; fetch_pages builds pass (renders pending verification).
 Added phoronix.com to fetch_pages targets; fetch succeeds (~60KB) and render completes (~13s, PNG ~198KB) at 1200x800 with visible content.
 Added github.blog to fetch_pages targets; fetch succeeds (~278KB) but render is mostly blank (PNG ~25KB, mostly white) since page is JS-driven; sourceURL CSS comments are now ignored in embedded CSS scan to avoid bogus fetches.
 Added dev.to to fetch_pages targets; fetch succeeds (~298KB) and render completes (~12.9s, PNG ~48KB) with visible content.
