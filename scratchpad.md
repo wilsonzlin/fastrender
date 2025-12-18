@@ -57,6 +57,7 @@
 # Added iana.org to fetch_pages targets; fetch/render succeed. Added theatlantic.com to fetch_pages targets; `cargo check --bin fetch_pages --quiet` passes.
 # Table border-collapse: added regression where a hidden border beats a solid neighbor when collapsing (`collapsed_borders_hidden_beats_solid_on_cell`).
 # Display list: added regression ensuring clip-path remains effective after applying filters (`clip_path_masks_after_filters`).
+# Collapsed borders: conflict resolution now prefers hidden over solid across cell/cell borders; display-list/painter unaffected.
 # Added rfc-editor.org to fetch_pages targets; fetch/render succeed.
 # Added apache.org to fetch_pages targets; fetch/render succeed.
 # Attempted mit.edu fetch target; render timed out due to CSS fetch timeouts, so left target removed. Added aria-hidden layout regression upstream.
