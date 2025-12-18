@@ -21,18 +21,6 @@
 # List-style-position switch: layout regression `marker_switches_position_inside_vs_outside` verifies inside markers occupy inline space while outside markers sit before the text at the line origin.
 # Marker position helper cleaned: reused get_or_insert for replaced markers in position switch test.
 # Marker ellipsis regression: `marker_overflow_ellipsis` ensures outside markers stay at the origin while ellipses appear in the content area under overflow.
-# Vertical marker image baseline: regression `marker_image_vertical_baseline_aligns_with_text` asserts image markers align with text baselines in vertical writing modes.
-# Marker inline spacing: regression `marker_inline_spacing_respects_gap` locks that text starts after marker gap/margins when markers are inside.
-# RTL outside markers stay inline-start: regression `marker_rtl_outside_marker_stays_inline_start` ensures RTL markers sit on the inline-start (right) while text follows.
-# Marker visual order in RTL: regression `marker_appears_before_text_in_visual_order` asserts markers render before text in RTL lines.
-# Mixed-direction RTL: regression `marker_remains_at_visual_start_with_mixed_bidi` locks markers staying first when RTL content contains LTR text.
-# Marker image paint: regression `marker_image_paints_shadow` ensures marker fragments paint text-shadow even when the marker content is an image.
-# Marker paint order: regression `marker_paints_after_background` ensures marker text paints over its background in the display list.
-# Marker counter font: regression `marker_inherits_counter_font` asserts list-style markers inherit the list item’s font family and weight.
-# Marker shadow order: regression `marker_shadow_paints_after_background` ensures shadows emit after marker backgrounds.
-# Marker text shadow vertical: regression `marker_text_shadow_in_vertical_writing` ensures shadows offset correctly in vertical writing.
-# Marker font weight: regression `marker_inherits_font_weight_from_list_item` confirms markers retain the list item’s font weight.
-# List-style-image marker: regression `list_style_image_produces_image_marker` asserts image list markers emit replaced fragments during layout.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Added legend shrink-to-fit regression: a legend with auto width should shrink to its text instead of spanning the fieldset width.
@@ -60,8 +48,6 @@
 # Media queries: added regression ensuring unknown media types fail to parse (e.g., `foo`, `foo and (min-width:10px)`).
 # Added iana.org to fetch_pages targets; fetch/render succeed. Added theatlantic.com to fetch_pages targets; `cargo check --bin fetch_pages --quiet` passes.
 # Table border-collapse: added regression where a hidden border beats a solid neighbor when collapsing (`collapsed_borders_hidden_beats_solid_on_cell`).
-# Display list: added regression ensuring clip-path remains effective after applying filters (`clip_path_masks_after_filters`).
-# Collapsed borders: conflict resolution now prefers hidden over solid across cell/cell borders; display-list/painter unaffected. Added regression `clip_path_masks_after_filters` to ensure clip-path still clips after filters in display list renderer.
 # Added rfc-editor.org to fetch_pages targets; fetch/render succeed.
 # Added apache.org to fetch_pages targets; fetch/render succeed.
 # Attempted mit.edu fetch target; render timed out due to CSS fetch timeouts, so left target removed. Added aria-hidden layout regression upstream.
@@ -70,13 +56,6 @@
 # Added htmldog.com to fetch_pages targets; fetch/render succeeded (simple page, no obvious issues). Media cache perf tweaks landed upstream.
 # Added ietf.org to fetch_pages targets; fetch/render succeeded (full content visible).
 # Attempted openai.com fetch target; blocked with 403 so not added.
-# Added gitlab.io to fetch_pages targets; fetch/render succeeded (page renders fully).
-# Added openbsd.org to fetch_pages targets; fetch/render succeeded (simple page). Collapsed border hidden vs solid regression landed upstream.
-# Added example.net to fetch_pages targets; fetch/render succeeded (basic page).
-# Added debian.org to fetch_pages targets; fetch/render succeeded (content visible).
-# Added gentoo.org to fetch_pages targets; fetch/render succeeded (full content).
-# Rendered duckduckgo.com (fetch cached target); render succeeded without issues.
-# Attempted netsurf-browser.org; DNS lookup failed, so target not added.
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.
@@ -1571,9 +1550,6 @@ Actionable borrowings:
 - Text overflow: added regression `text_overflow_does_not_emit_ellipsis_when_content_fits` to ensure ellipses are only emitted when inline content actually overflows.
 - Display-list outlines bypass clip masks like CSS outlines; regression `outline_ignores_clip_region` ensures outlines extend outside clipped regions.
 - Wired.com blank render remains unresolved: content is laid out far offscreen and only visible when scrolling deep; no fix yet.
-- Added `--full-page` flag to `fetch_and_render` to set `FASTR_FULL_PAGE` for expanded rendering; full-page render of cached wired.html now shows content (2016×2714 PNG, non-white bbox 0..2015 x 172..2713). Default 1200×800 render still blank (only 1px row) even after flex recenter tweak.
-- Flex: added a safeguard to recenter row children when all items are shifted right but still span roughly the container width (min_x>0.5*width and span<=1.5*width), to avoid empty viewports when flex layouts drift horizontally. Tests not yet run beyond compile.
-- Wired.com: default 1200×800 render still blank after recentering; full-page shows content. Remaining issue is offscreen positioning/huge empty top space.
 # Added painter background image-rendering coverage: pixelated backgrounds now have a regression ensuring nearest-neighbor sampling/snap-upscale is applied (`cargo test background_image_rendering_pixelated_uses_nearest_sampling --quiet`).
 - Media queries: `any-pointer` now matches only the available pointer capability (fine/coarse/none) instead of treating fine pointers as coarse; added regression `test_evaluate_any_pointer` covering desktop/mobile/print contexts.
 - Media queries: `any-pointer` now tracks coarse/fine availability separately; hybrid devices can satisfy both coarse and fine, and regression `test_evaluate_any_pointer_hybrid` covers the combined case.
@@ -1589,9 +1565,7 @@ Actionable borrowings:
 - Render bug hunt: columbia.edu fetch returned 403; no render produced.
 - Render bug hunt: bbc.com rendered at 1200×800 with CSS fetched; output non-blank (light gray/white page). No obvious layout defects noted from quick bbox/color scan.
 - Render bug hunt: ietf.org rendered at 1200×800 with 2 CSS assets; output non-blank (light gray layout). No obvious defects spotted in quick bbox/color scan.
-- Render bug hunt: npr.org rendered at 1200×800 with multiple CSS assets; output non-blank (light gray/white with content). No obvious layout defects on quick scan.
-- Render bug hunt: cloudflare.com rendered at 1200×800 with 3 CSS assets; output non-blank (orange/white theme). No obvious layout defects on quick scan.
-- Rendered wikipedia.org at 1200×800: output PNG is entirely white despite successful fetch; likely styles/overlays hiding content or JS dependency. Needs investigation.
+- Rendered wikipedia.org at 1200×800: output PNG is entirely white despite successful fetch; likely styles/overlays hiding content or JS dependency. Needs investigation (overlays with display:none present, none on html/body/main; deeper CSS/JS inspection pending).
 - Table rowspans: spanning height distribution now shares evenly when uncapped; regression `baseline_height_computation_skips_rowspanning_cells` ensures a tall rowspan cell doesn’t overinflate the preceding row.
 - CSS custom properties: fallback resolution now marks declarations invalid when the fallback still contains unresolved var() references; regression `unresolved_fallback_var_marks_declaration_invalid` added.
 - Bug hunt: rendered https://httpbin.org/html (looks OK) and https://wikipedia.org at 1200×800. Wikipedia render came out as a tiny compressed block (~238×64px of content in the center) due to rem sizing ignoring the html 62.5% root font size (fixed below).
@@ -1604,5 +1578,3 @@ Actionable borrowings:
 - Added npmjs.com and developer.mozilla.org to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 - Rendered https://w3.org at 1200×800: content clustered to the left/top (bbox ~0,188–659,799); likely responsive/min-content behavior or missing resources. Logged for future investigation.
 - Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199,799); no obvious issues. Logged for reference.
-Rendered developer.apple.com at 1200×800: content filled most of the viewport (bbox 12,44–1187,799). No issues noted.
-Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199,799); no obvious issues. Logged for reference.
