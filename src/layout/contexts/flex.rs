@@ -1797,29 +1797,6 @@ fn measure_cache_key(
     viewport: Size,
     drop_available_height: bool,
 ) -> (Option<u32>, Option<u32>) {
-    fn normalize_available(space: AvailableSpace) -> AvailableSpace {
-        match space {
-            AvailableSpace::Definite(w) if w <= 1.0 => AvailableSpace::MaxContent,
-            other => other,
-        }
-    }
-
-    let mut known = known.clone();
-    let avail = taffy::geometry::Size {
-        width: normalize_available(avail.width),
-        height: normalize_available(avail.height),
-    };
-    if let Some(w) = known.width {
-        if w <= 1.0 && matches!(avail.width, AvailableSpace::MaxContent) {
-            known.width = None;
-        }
-    }
-    if let Some(h) = known.height {
-        if h <= 1.0 && matches!(avail.height, AvailableSpace::MaxContent) {
-            known.height = None;
-        }
-    }
-
     fn quantize(val: f32) -> f32 {
         // Quantize measure keys to merge near-duplicate probes without visibly affecting layout.
         // Use progressively coarser steps as sizes grow to curb key cardinality on large pages
@@ -1840,6 +1817,30 @@ fn measure_cache_key(
             2.0
         };
         (val / step).round() * step
+    }
+
+    fn normalize_available(space: AvailableSpace) -> AvailableSpace {
+        match space {
+            AvailableSpace::Definite(w) if w <= 1.0 => AvailableSpace::MaxContent,
+            AvailableSpace::Definite(w) => AvailableSpace::Definite(quantize(w)),
+            other => other,
+        }
+    }
+
+    let mut known = known.clone();
+    let avail = taffy::geometry::Size {
+        width: normalize_available(avail.width),
+        height: normalize_available(avail.height),
+    };
+    if let Some(w) = known.width {
+        if w <= 1.0 && matches!(avail.width, AvailableSpace::MaxContent) {
+            known.width = None;
+        }
+    }
+    if let Some(h) = known.height {
+        if h <= 1.0 && matches!(avail.height, AvailableSpace::MaxContent) {
+            known.height = None;
+        }
     }
 
     let width_is_intrinsic =
@@ -4218,6 +4219,40 @@ mod tests {
         );
 
         assert_eq!(tiny_key.0, max_key.0);
+    }
+
+    #[test]
+    fn measure_cache_quantizes_definite_available_sizes() {
+        use crate::geometry::Size as GeoSize;
+        use taffy::style::AvailableSpace;
+
+        let viewport = GeoSize::new(1200.0, 800.0);
+        let known = taffy::geometry::Size {
+            width: None,
+            height: None,
+        };
+
+        let key_a = super::measure_cache_key(
+            &known,
+            &taffy::geometry::Size {
+                width: AvailableSpace::Definite(300.3),
+                height: AvailableSpace::Definite(150.7),
+            },
+            viewport,
+            false,
+        );
+
+        let key_b = super::measure_cache_key(
+            &known,
+            &taffy::geometry::Size {
+                width: AvailableSpace::Definite(300.6),
+                height: AvailableSpace::Definite(150.4),
+            },
+            viewport,
+            false,
+        );
+
+        assert_eq!(key_a, key_b, "quantized definite availables should reuse the same cache key");
     }
 
     #[test]
