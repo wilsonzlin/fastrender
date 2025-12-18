@@ -33,6 +33,7 @@ Added display-list renderer regressions for mix-blend-mode (non-isolated multipl
 render_pages/fetch_and_render support --timings to enable FASTR_RENDER_TIMINGS per-page logging; fetch_pages supports --timings for per-page fetch durations (including cache hits/errors).
 booking.com (and m.booking.com) return HTTP 202 with empty body (CloudFront WAF challenge) even with Chrome UA/Accept-Language; fetch_pages treats empty bodies as errors and avoids caching them.
 Added engadget.com to fetch_pages targets; fetch (~0.48s) and render complete (~5s, PNG ~37KB) at 1200x800.
+apple.com: initial render timed out at 60s in debug build (layout dominated ~44s). In release with FASTR_LAYOUT_PROFILE=1 and 80s timeout, render completes in ~10.4s (PNG ~86KB; cascade ~1.0s, layout ~2.0s, paint ~0.29s). CSS font URL 404 logged; otherwise content visible. No code changes needed.
 fetch_pages run populated cache for 85+ pages; render_pages rerun succeeded for all cached pages (86/86 pass) after split_at UTF-8 guard; latimes now renders (~106KB PNG).
 Rowspan height distribution adjusted to favor auto rows while sharing spans; vertical text-overflow ellipsis tests now passing. Rowspan regressions (`calculate_row_heights_*`, `baseline_height_computation_skips_rowspanning_cells`) fixed.
 
