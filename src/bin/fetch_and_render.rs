@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--full-page] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--full-page] [--user-agent UA] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -11,6 +11,7 @@
 //!   --prefers-reduced-transparency reduce|no-preference|true|false
 //!                        User media preference for reduced transparency (overrides env)
 //!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
+//!   --user-agent UA     Override the User-Agent header (default: Chrome-like)
 
 #![allow(clippy::io_other_error)]
 #![allow(clippy::redundant_closure)]
@@ -22,6 +23,7 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
+use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
 use std::env;
@@ -32,7 +34,7 @@ use url::Url;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
-fn fetch_bytes(url: &str, timeout: Option<Duration>) -> Result<(Vec<u8>, Option<String>)> {
+fn fetch_bytes(url: &str, timeout: Option<Duration>, user_agent: &str) -> Result<(Vec<u8>, Option<String>)> {
     // Handle file:// URLs
     if url.starts_with("file://") {
         let path = url.strip_prefix("file://").unwrap();
@@ -57,7 +59,7 @@ fn fetch_bytes(url: &str, timeout: Option<Duration>) -> Result<(Vec<u8>, Option<
     for _ in 0..10 {
         let mut response = agent
             .get(&current)
-            .header("User-Agent", fastrender::resource::DEFAULT_USER_AGENT)
+            .header("User-Agent", user_agent)
             .call()
             .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
@@ -218,18 +220,19 @@ mod tests {
         let meta_path = dir.path().join("page.html.meta");
 
         // Write Shift-JIS encoded body and matching meta
-        let encoded = encoding_rs::SHIFT_JIS
-            .encode("<html><body>デ</body></html>")
-            .0
-            .to_vec();
+        let encoded = encoding_rs::SHIFT_JIS.encode("<html><body>デ</body></html>").0.to_vec();
         std::fs::write(&html_path, &encoded).unwrap();
         std::fs::write(&meta_path, "text/html; charset=shift_jis").unwrap();
 
         let url = format!("file://{}", html_path.display());
-        let (bytes, ct) = fetch_bytes(&url, None).expect("fetch bytes");
+        let (bytes, ct) = fetch_bytes(&url, None, DEFAULT_USER_AGENT).expect("fetch bytes");
         assert_eq!(ct.as_deref(), Some("text/html; charset=shift_jis"));
         let decoded = decode_html_bytes(&bytes, ct.as_deref());
-        assert!(decoded.contains('デ'), "decoded html should respect meta charset: {}", decoded);
+        assert!(
+            decoded.contains('デ'),
+            "decoded html should respect meta charset: {}",
+            decoded
+        );
     }
 
     #[test]
@@ -243,13 +246,16 @@ mod tests {
 }
 
 fn usage(program: &str) {
-    eprintln!("Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--full-page] <url> [output.png] [width] [height] [scroll_x] [scroll_y]");
+    eprintln!(
+        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--full-page] [--user-agent UA] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
+    );
     eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
     eprintln!("  height: viewport height (default: 800)");
     eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
     eprintln!("  prefers-reduced-transparency: reduce|no-preference|true|false (overrides env)");
     eprintln!("  full-page: expand render target to full content size (or set FASTR_FULL_PAGE)");
+    eprintln!("  user-agent: override the User-Agent header (default: Chrome-like)");
     eprintln!("  scroll_x: horizontal scroll offset (default: 0)");
     eprintln!("  scroll_y: vertical scroll offset (default: 0)");
 }
@@ -277,10 +283,11 @@ fn render_once(
     scroll_y: u32,
     dpr: f32,
     timeout_secs: Option<u64>,
+    user_agent: &str,
 ) -> Result<()> {
     println!("Fetching HTML from: {}", url);
     let timeout = timeout_secs.map(Duration::from_secs);
-    let (html_bytes, html_content_type) = fetch_bytes(url, timeout)?;
+    let (html_bytes, html_content_type) = fetch_bytes(url, timeout, user_agent)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
     let resource_base = infer_base_url(&html, url).into_owned();
 
@@ -305,14 +312,14 @@ fn render_once(
     for css_url in css_links {
         println!("Fetching CSS from: {}", css_url);
         seen_imports.insert(css_url.clone());
-        match fetch_bytes(&css_url, timeout) {
+        match fetch_bytes(&css_url, timeout, user_agent) {
             Ok((bytes, content_type)) => {
                 let css_text = decode_css_bytes(&bytes, content_type.as_deref());
                 let rewritten = absolutize_css_urls(&css_text, &css_url);
                 let inlined = inline_imports(
                     &rewritten,
                     &css_url,
-                    &|u| fetch_bytes(u, timeout).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref())),
+                    &|u| fetch_bytes(u, timeout, user_agent).map(|(b, ct)| decode_css_bytes(&b, ct.as_deref())),
                     &mut seen_imports,
                 );
                 combined_css.push_str(&inlined);
@@ -356,6 +363,7 @@ fn main() -> Result<()> {
     let mut prefers_reduced_transparency: Option<bool> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut full_page = false;
+    let mut user_agent = DEFAULT_USER_AGENT.to_string();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -383,6 +391,13 @@ fn main() -> Result<()> {
             }
             "--full-page" => {
                 full_page = true;
+            }
+            "--user-agent" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        user_agent = val;
+                    }
+                }
             }
             _ => positional.push(arg),
         }
@@ -430,6 +445,7 @@ fn main() -> Result<()> {
                 scroll_y,
                 dpr,
                 timeout_secs,
+                &user_agent,
             ));
         })
         .expect("spawn render worker");

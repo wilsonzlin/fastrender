@@ -15,8 +15,7 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::resource::HttpFetcher;
-use fastrender::resource::ResourceFetcher;
+use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_USER_AGENT};
 use fastrender::FastRender;
 use std::collections::HashSet;
 use std::fs;
@@ -33,7 +32,7 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--user-agent UA]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
@@ -42,6 +41,7 @@ fn usage() {
     println!("  --prefers-reduced-transparency reduce|no-preference|true|false (overrides env)");
     println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
+    println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
@@ -81,6 +81,7 @@ fn main() {
     let mut prefers_reduced_transparency: Option<bool> = None;
     let mut scroll_x: f32 = 0.0;
     let mut scroll_y: f32 = 0.0;
+    let mut user_agent = DEFAULT_USER_AGENT.to_string();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -155,6 +156,13 @@ fn main() {
                     }
                 }
             }
+            "--user-agent" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        user_agent = val;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -201,9 +209,13 @@ fn main() {
     }
 
     // Create shared caching fetcher
-    let fetcher = Arc::new(CachingFetcher::new(HttpFetcher::new(), ASSET_DIR));
+    let fetcher = Arc::new(CachingFetcher::new(
+        HttpFetcher::new().with_user_agent(user_agent.clone()),
+        ASSET_DIR,
+    ));
 
     println!("Rendering {} pages ({} parallel)...", entries.len(), jobs);
+    println!("User-Agent: {}", user_agent);
     println!();
 
     let start = Instant::now();
