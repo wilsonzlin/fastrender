@@ -12,8 +12,8 @@ use fastrender::style::color::Color;
 use fastrender::style::types::{
     BackgroundImage, BackgroundLayer, BackgroundPosition, BackgroundPositionComponent, BackgroundRepeat,
     BackgroundRepeatKeyword, BackgroundSize, BackgroundSizeComponent, BasicShape, BorderImage, BorderImageSlice,
-    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ImageRendering, ShapeRadius,
-    TextDecorationStyle,
+    BorderImageSliceValue, BorderImageSource, BorderStyle, ClipPath, FillRule, ImageRendering, MixBlendMode,
+    ShapeRadius, TextDecorationStyle,
 };
 use fastrender::ComputedStyle;
 use fastrender::style::values::Length;
@@ -1219,6 +1219,39 @@ fn filter_blur_zero_has_no_effect() {
     // No blur: red stays confined to its rect and does not leak to neighbors.
     assert_eq!(pixel(&pixmap, 1, 0), (255, 0, 0, 255));
     assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+}
+
+#[test]
+fn clip_path_masks_after_filters() {
+    let mut list = DisplayList::new();
+    let circle = fastrender::paint::clip_path::ResolvedClipPath::Circle {
+        center: fastrender::geometry::Point::new(5.0, 5.0),
+        radius: 4.0,
+    };
+    list.push(DisplayItem::PushClip(ClipItem { shape: ClipShape::Path { path: circle } }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+        rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopClip);
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+        mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+        is_isolated: true,
+        transform: None,
+        filters: vec![ResolvedFilter::Blur(2.0)],
+        backdrop_filters: Vec::new(),
+        radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let renderer = DisplayListRenderer::new(12, 12, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).expect("rendered");
+    assert_eq!(pixel(&pixmap, 6, 6), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+    assert_eq!(pixel(&pixmap, 11, 11), (255, 255, 255, 255));
 }
 
 #[test]
