@@ -51,6 +51,8 @@ pub fn extract_meta_refresh_url(html: &str) -> Option<String> {
 pub fn extract_js_location_redirect(html: &str) -> Option<String> {
     let decoded = decode_refresh_entities(html);
     let lower = decoded.to_ascii_lowercase();
+    // Restrict to explicit navigations (replace/assign/href) to avoid false positives from
+    // innocuous property reads like `location.pathname`.
     let patterns = [
         "location.replace",
         "window.location.replace",
@@ -61,9 +63,6 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
         "location.href",
         "window.location.href",
         "document.location.href",
-        "window.location",
-        "document.location",
-        "location",
     ];
 
     for pat in patterns.iter() {
