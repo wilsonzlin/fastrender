@@ -139,10 +139,7 @@ fn main() {
     let mut scroll_y: f32 = 0.0;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
     let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
-<<<<<<< HEAD
     let mut enable_timings = false;
-=======
->>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -251,12 +248,9 @@ fn main() {
                     }
                 }
             }
-<<<<<<< HEAD
             "--timings" => {
                 enable_timings = true;
             }
-=======
->>>>>>> 64dab5a (Expose Accept-Language override in render/fetch CLI)
             _ => {}
         }
     }
