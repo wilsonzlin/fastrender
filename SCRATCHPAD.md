@@ -194,6 +194,7 @@ border-radius appears ~143 times.
 filter appears ~10 times.
 linear-gradient appears ~24 times.
 z-index appears ~87 times.
+<<<<<<< HEAD
 
 
 BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown.
@@ -201,3 +202,8 @@ BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing i
 BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown.
 
 BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown.
+=======
+overflow:hidden appears ~39 times.
+transition appears ~144 times.
+animation appears ~35 times.
+position:fixed appears ~12 times.
