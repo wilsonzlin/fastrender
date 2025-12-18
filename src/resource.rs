@@ -136,6 +136,7 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
 pub struct HttpFetcher {
     timeout: Duration,
     user_agent: String,
+    accept_language: String,
     max_size: usize,
 }
 
@@ -157,6 +158,12 @@ impl HttpFetcher {
         self
     }
 
+    /// Set the Accept-Language header
+    pub fn with_accept_language(mut self, accept_language: impl Into<String>) -> Self {
+        self.accept_language = accept_language.into();
+        self
+    }
+
     /// Set the maximum response size in bytes
     pub fn with_max_size(mut self, max_size: usize) -> Self {
         self.max_size = max_size;
@@ -173,6 +180,7 @@ impl HttpFetcher {
             let mut response = agent
                 .get(&current)
                 .header("User-Agent", &self.user_agent)
+                .header("Accept-Language", &self.accept_language)
                 .call()
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
@@ -240,6 +248,7 @@ impl Default for HttpFetcher {
         Self {
             timeout: Duration::from_secs(30),
             user_agent: DEFAULT_USER_AGENT.to_string(),
+            accept_language: "en-US,en;q=0.9".to_string(),
             max_size: 50 * 1024 * 1024, // 50MB default limit
         }
     }
@@ -381,6 +390,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     #[test]
@@ -476,6 +486,42 @@ mod tests {
 
         assert_eq!(res.bytes, b"ok");
         assert_eq!(res.content_type, Some("text/plain".to_string()));
+    }
+
+    #[test]
+    fn http_fetcher_sets_accept_language() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind lang server");
+        let addr = listener.local_addr().unwrap();
+        let captured = Arc::new(Mutex::new(String::new()));
+        let captured_req = Arc::clone(&captured);
+        let handle = thread::spawn(move || {
+            if let Some(stream) = listener.incoming().next() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf);
+                if let Ok(mut slot) = captured_req.lock() {
+                    *slot = req.to_string();
+                }
+
+                let body = b"hi";
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let fetcher = HttpFetcher::new();
+        let url = format!("http://{}/", addr);
+        let res = fetcher.fetch(&url).expect("fetch lang");
+        handle.join().unwrap();
+
+        assert_eq!(res.bytes, b"hi");
+        let req = captured.lock().unwrap().to_lowercase();
+        assert!(req.contains("accept-language: en-us,en;q=0.9"), "missing header: {}", req);
     }
 
     #[test]
