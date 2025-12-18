@@ -36,6 +36,7 @@ Added yahoo.com and nasa.gov to fetch_pages targets (cargo check --bin fetch_pag
 Added docs.rs to fetch_pages targets (cargo check --bin fetch_pages passes); render of cached docs.rs completes (mostly white page with header/nav text visible).
 Attempted to add crates.io, but HTTP fetch returns 403 (CloudFront/Heroku); left target out to avoid fetch failures.
 Removed duplicate mozilla.org entry from fetch_pages targets to avoid redundant fetches.
+Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background).
 Replaced elements: skip intrinsic image fetch when both width and height are specified (per CSS replaced sizing), dramatically reducing box_tree time on image-heavy pages (nasa.gov now renders in ~8s: box_tree ~0.26s, layout ~0.3s, paint ~5.7s).
 Added display-list renderer regressions for mix-blend-mode (non-isolated multiply vs isolated source-over).
 render_pages/fetch_and_render support --timings to enable FASTR_RENDER_TIMINGS per-page logging; fetch_pages supports --timings for per-page fetch durations (including cache hits/errors).
