@@ -155,7 +155,47 @@ fn unescape_js_literal(s: &str) -> String {
                             out.push(l);
                         }
                     }
+                    'u' => {
+                        let mut code = String::new();
+                        for _ in 0..4 {
+                            if let Some(d) = chars.next() {
+                                code.push(d);
+                            }
+                        }
+                        if code.len() == 4 {
+                            if let Ok(val) = u16::from_str_radix(&code, 16) {
+                                if let Some(c) = char::from_u32(val as u32) {
+                                    out.push(c);
+                                    continue;
+                                }
+                            }
+                        }
+                        out.push_str("\\u");
+                        out.push_str(&code);
+                    }
                     _ => out.push(next),
+                }
+            }
+        } else if ch == '%' {
+            let a = chars.next();
+            let b = chars.next();
+            if let (Some(a), Some(b)) = (a, b) {
+                if let (Some(hi), Some(lo)) = (a.to_digit(16), b.to_digit(16)) {
+                    if let Some(c) = char::from_u32((hi * 16 + lo) as u32) {
+                        out.push(c);
+                        continue;
+                    }
+                }
+                out.push('%');
+                out.push(a);
+                out.push(b);
+            } else {
+                out.push('%');
+                if let Some(a) = a {
+                    out.push(a);
+                }
+                if let Some(b) = b {
+                    out.push(b);
                 }
             }
         } else {
@@ -426,6 +466,11 @@ mod tests {
             "https://example.com/next"
         );
         assert_eq!(super::unescape_js_literal("/path\\x2fwith"), "/path/with");
+        assert_eq!(
+            super::unescape_js_literal("https:\\/\\/example.com\\/unicode\\u002fpath"),
+            "https://example.com/unicode/path"
+        );
+        assert_eq!(super::unescape_js_literal("/encoded%2Fpath%20with"), "/encoded/path with");
     }
 
     #[test]
