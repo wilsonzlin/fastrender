@@ -35,8 +35,9 @@ Rendered theguardian.com; output is essentially blank (only a narrow strip of no
 Added bing.com to fetch_pages targets; fetch/render succeed (bbox fills 1200x800 viewport, ~696 colors). No issues observed.
 Added phoronix.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~4.9k colors). No issues observed.
 Added nationalgeographic.com to fetch_pages targets; fetch/render succeed (bbox ~7..474 x 33..799, ~75 colors). Mostly left-column content due to heavy JS; no static fix added.
-- Added openstreetmap.org to fetch_pages targets; fetch succeeds (~34KB) and render completes (~60KB PNG, mostly white page with header/nav visible).
-- Added vox.com to fetch_pages targets; fetch succeeds (~0.94MB). Render completes with unlimited timeout but is very slow (cascade ~5.7s, layout ~62s, paint ~11.5s, total ~74s at 1200x800). PNG (/tmp/vox.png) is full-frame nonblank (bbox 0..1199 x 0..799, nonwhite px ~960k) but 60s timeout still trips; perf improvement needed.
+Added vox.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~13 colors). Looks minimal/static but non-blank; no issues noted.
+Added hbr.org to fetch_pages targets; fetch/render succeed (bbox ~0..799 x 227..799, ~150 colors). Renders header/footer; main content likely JS-driven. No fixes applied.
+Added vox.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~13 colors). No issues noted.
 Cloudflare render perf fixed: web font loading filters to the page’s codepoints (skipping unused @font-face ranges) and web font HTTP timeout is 10s; FASTR_RENDER_TIMINGS now reports css_parse/style_prepare/style_apply. cloudflare.com renders in ~12s at 1200×800 instead of 70s+.
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
@@ -76,6 +77,10 @@ Added phoronix.com, nationalgeographic.com, and vox.com to fetch_pages targets; 
 Added phoronix.com to fetch_pages targets; fetch succeeds (~60KB) and render completes (~13s, PNG ~198KB) at 1200x800 with visible content.
 Added github.blog to fetch_pages targets; fetch succeeds (~278KB) but render is mostly blank (PNG ~25KB, mostly white) since page is JS-driven; sourceURL CSS comments are now ignored in embedded CSS scan to avoid bogus fetches.
 Added dev.to to fetch_pages targets; fetch succeeds (~298KB) and render completes (~12.9s, PNG ~48KB) with visible content.
+Added nbcnews.com to fetch_pages targets; fetch succeeds (~1.17MB) and render completes (~27.9s, PNG ~40KB, content visible).
+Added vox.com to fetch_pages targets; fetch succeeds (~938KB) and render completes (~15.6s, PNG ~21KB) at 1200x800 with visible content.
+bbc.com profiling (release, 1200x800): render succeeds in ~28.3s (cascade ~0.6s, box_tree ~3.9s, layout ~14.5s, paint ~9.2s). Grid dominates layout (grid ~36.7s inclusive, 1561 calls, avg ~23.5ms). Grid cost is the main bottleneck.
+bbc.com profiling (release, 1200x800): render succeeds in ~28.3s (cascade ~0.6s, box_tree ~3.9s, layout ~14.5s, paint ~9.2s). Grid dominates layout (grid ~36.7s inclusive, 1561 calls, avg ~23.5ms). Grid cost is the main bottleneck.
 Replaced elements: skip intrinsic image fetch when both width and height are specified (per CSS replaced sizing), dramatically reducing box_tree time on image-heavy pages (nasa.gov now renders in ~8s: box_tree ~0.26s, layout ~0.3s, paint ~5.7s).
 Added display-list renderer regressions for mix-blend-mode (non-isolated multiply vs isolated source-over).
 render_pages/fetch_and_render support --timings to enable FASTR_RENDER_TIMINGS per-page logging; fetch_pages supports --timings for per-page fetch durations (including cache hits/errors).
@@ -184,10 +189,10 @@ var() usage is heavy (~2.8k occurrences) in inline CSS.
 Latest profiling (45s timeout): cascade ~6.7s (find ~0.8s, decl ~0.9s, pseudo ~2.9s), box_tree ~2.45s; render still times out (30–45s). Candidates still ~5.3M; pruning kilned/ad rules remains a potential experiment.
 ~126 !important declarations in inline CSS (small impact versus overall size).
 display:grid appears ~11 times in inline CSS.
-<<<<<<< HEAD
-=======
 calc() appears ~93 times in inline CSS.
 mask-image appears ~12 times in inline CSS.
+<<<<<<< HEAD
+=======
 @supports appears ~5 times.
 display:flex appears ~327 times.
 display:block appears ~351 times.
@@ -197,22 +202,5 @@ border-radius appears ~143 times.
 filter appears ~10 times.
 linear-gradient appears ~24 times.
 z-index appears ~87 times.
-
-
-BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown.
-
-
-<<<<<<< HEAD
-=======
-BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown.
-=======
 overflow:hidden appears ~39 times.
 transition appears ~144 times.
-animation appears ~35 times.
-position:fixed appears ~12 times.
-width:100% appears ~259 times.
-min-width appears ~250 times; max-width ~358 times.
-height:100% appears ~64 times.
-opacity appears ~137 times.
-letter-spacing appears ~223 times.
-font-size appears ~1303 times.
