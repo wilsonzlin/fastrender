@@ -65,13 +65,12 @@ Profiling latimes.com (60s timeout, --timings, jobs=1, dev build): parse 0.25s, 
 Fixed merge conflicts in the CLI binaries: render_pages/fetch_and_render now compile with both Accept-Language overrides and --timings enabled; fetch_bytes continues returning base_url from cached meta. Re-ran render_pages --pages latimes.com --jobs 1 --timeout 90 --timings (release, FASTR_LAYOUT_PROFILE=1); render completes in ~25.9s (parse 42ms, css_parse 10ms, cascade 4.2s, layout 4.0s, paint 16.2s, PNG ~103KB).
 
 Merged CLI flag streams: fetch_and_render/render_pages accept both --accept-language and --timings again after resolving conflict markers. fetch_and_render now wires a configured HttpFetcher (UA/Accept-Language/timeout) into FastRender so asset fetches honor CLI overrides instead of default headers.
-Grid layout now measures grid items with their own formatting contexts and reuses those fragments, so grid children with inline text still lay out even when Taffy would otherwise report zero widths (test_grid_margins coverage passes).
+Grid layout now measures grid items with their own formatting contexts and reuses those fragments, so grid children with inline text still lay out even when Taffy would otherwise report zero widths (test_grid_margins coverage passes). Grid layout results are cached per styled node/constraint to avoid repeated relayouts during flex/grid measurement.
 Added newyorker.com to fetch_pages (fetch/renders succeed ~17s, ~158KB PNG).
 Added economist.com to fetch_pages (fetch/renders succeed ~12s, ~36KB PNG).
 
 Flex measure caching now treats tiny definite available sizes (≤1px) as max-content and clears matching known dimensions, reducing pathological skinny flex probes (e.g., wired.com nav/CTA loops). Added a regression ensuring measure cache keys normalize tiny definites to max-content.
 fetch_pages filtering now accepts full URLs and strips leading www when matching --pages; e.g., --pages https://www.w3.org works. Help text updated and regression added.
-Flex measure caching now treats tiny definite available sizes (≤1px) as max-content and clears matching known dimensions, reducing pathological skinny flex probes (e.g., wired.com nav/CTA loops). Added a regression ensuring measure cache keys normalize tiny definites to max-content.
 
 Mix-blend-mode: regressions ensure non-isolated multiply darkens backdrop and isolated uses source-over.
 CNN render with split_at guard now completes: render_pages --pages cnn.com --timeout 60 ~44s (cascade ~7s, box_tree ~4.6s, layout ~42s, paint ~0.5s).

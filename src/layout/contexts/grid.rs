@@ -29,6 +29,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use taffy::geometry::Line;
 use taffy::prelude::{TaffyFitContent, TaffyMaxContent, TaffyMinContent};
@@ -90,6 +92,9 @@ pub struct GridFormattingContext {
     nearest_positioned_cb: crate::layout::contexts::positioned::ContainingBlock,
 }
 
+type GridLayoutCache = std::collections::HashMap<(usize, (Option<u32>, Option<u32>, Option<u32>)), std::sync::Arc<FragmentNode>>;
+static GRID_LAYOUT_CACHE: OnceLock<Mutex<GridLayoutCache>> = OnceLock::new();
+
 impl GridFormattingContext {
     /// Creates a new GridFormattingContext
     pub fn new() -> Self {
@@ -142,6 +147,45 @@ impl GridFormattingContext {
             viewport_size,
             font_context,
             nearest_positioned_cb,
+        }
+    }
+
+    fn layout_cache_key(&self, constraints: &LayoutConstraints) -> Option<(Option<u32>, Option<u32>, Option<u32>)> {
+        fn quantize(val: f32) -> f32 {
+            let abs = val.abs();
+            let step = if abs > 4096.0 {
+                64.0
+            } else if abs > 2048.0 {
+                32.0
+            } else if abs > 1024.0 {
+                16.0
+            } else if abs > 512.0 {
+                8.0
+            } else if abs > 256.0 {
+                4.0
+            } else {
+                2.0
+            };
+            (val / step).round() * step
+        }
+
+        let width = match constraints.available_width {
+            CrateAvailableSpace::Definite(w) => Some(quantize(w)),
+            CrateAvailableSpace::MinContent => Some(quantize(-self.viewport_size.width.max(0.0) - 1.0)),
+            CrateAvailableSpace::MaxContent => Some(quantize(-self.viewport_size.width.max(0.0) - 2.0)),
+            CrateAvailableSpace::Indefinite => None,
+        };
+        let height = match constraints.available_height {
+            CrateAvailableSpace::Definite(h) => Some(quantize(h)),
+            CrateAvailableSpace::MinContent => Some(quantize(-self.viewport_size.height.max(0.0) - 1.0)),
+            CrateAvailableSpace::MaxContent => Some(quantize(-self.viewport_size.height.max(0.0) - 2.0)),
+            CrateAvailableSpace::Indefinite => None,
+        };
+        let base = constraints.inline_percentage_base.map(quantize);
+        if width.is_none() && height.is_none() && base.is_none() {
+            None
+        } else {
+            Some((width.map(f32::to_bits), height.map(f32::to_bits), base.map(f32::to_bits)))
         }
     }
 
@@ -1068,6 +1112,15 @@ impl Default for GridFormattingContext {
 impl FormattingContext for GridFormattingContext {
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let _profile = layout_timer(LayoutKind::Grid);
+
+        if let Some(key) = self.layout_cache_key(constraints) {
+            let cache = GRID_LAYOUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            if let Ok(map) = cache.lock() {
+                if let Some(frag) = map.get(&(box_node.styled_node_id.unwrap_or(box_node.id), key)).cloned() {
+                    return Ok((*frag).clone());
+                }
+            }
+        }
         // Create fresh Taffy tree for this layout
         let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
 
@@ -1227,6 +1280,17 @@ impl FormattingContext for GridFormattingContext {
             children_fragments,
             box_node.style.clone(),
         );
+
+        if let Some(key) = self.layout_cache_key(constraints) {
+            let cache = GRID_LAYOUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+            if let Ok(mut map) = cache.lock() {
+                let cache_id = box_node.styled_node_id.unwrap_or(box_node.id);
+                let entry = map
+                    .entry((cache_id, key))
+                    .or_insert_with(|| Arc::new(fragment.clone()));
+                fragment = (**entry).clone();
+            }
+        }
 
         // Position out-of-flow children against the appropriate containing block.
         if !positioned_children.is_empty() {
