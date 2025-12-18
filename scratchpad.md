@@ -23,6 +23,7 @@
 # Marker ellipsis regression: `marker_overflow_ellipsis` ensures outside markers stay at the origin while ellipses appear in the content area under overflow.
 # Vertical marker image baseline: regression `marker_image_vertical_baseline_aligns_with_text` asserts image markers align with text baselines in vertical writing modes.
 # Marker inline spacing: regression `marker_inline_spacing_respects_gap` locks that text starts after marker gap/margins when markers are inside.
+# RTL outside markers stay inline-start: regression `marker_rtl_outside_marker_stays_inline_start` ensures RTL markers sit on the inline-start (right) while text follows.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Added legend shrink-to-fit regression: a legend with auto width should shrink to its text instead of spanning the fieldset width.
