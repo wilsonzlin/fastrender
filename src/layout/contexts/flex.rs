@@ -1970,6 +1970,12 @@ fn flex_cache_key(box_node: &BoxNode) -> u64 {
     box_node.styled_node_id.hash(&mut h);
     let fingerprint = flex_style_fingerprint(&*box_node.style);
     fingerprint.hash(&mut h);
+    // Incorporate a simplified key for common carousel templates to merge otherwise identical
+    // repeated items. Using debug_info selector avoids deep tree hashing while keeping keys
+    // distinct across component types.
+    if let Some(sel) = box_node.debug_info.as_ref().map(|d| d.to_selector()) {
+        sel.hash(&mut h);
+    }
     h.finish()
 }
 
