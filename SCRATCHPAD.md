@@ -145,6 +145,7 @@ Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages 
   - `tests/box_generation_ad_placeholders.rs` ensures empty ad placeholders (`ad-height-hold`/`ad__slot`/`should-hold-space`) are dropped while non-empty ones remain.
   - `tests/box_generation_onenav.rs` ensures hidden OneNav overlays (visibility hidden/opacity 0) skip both the overlay and the following FocusTrapContainer drawer, while visible overlays retain the drawer/content.
 - Added phoronix.com to fetch_pages targets; fetch/render succeeds (~13s render, nonblank PNG).
+- Added nationalgeographic.com to fetch_pages targets; fetch/render succeeds (~4.9s render, nonblank PNG with multiple content bands).
 - Added lobste.rs to fetch_pages targets (cargo check --bin fetch_pages passes); fetch/render not run in this workspace yet.
 - Ran fetch_pages/render_pages for lobste.rs (viewport 1200x800, timeout 60): fetch OK (HTML ~62KB), render OK in ~10s, PNG ~227KB with nonwhite bbox covering full frame (unique colors ~2.3k). No errors in log.
 - Added slashdot.org to fetch_pages targets; fetch succeeds (~39KB HTML, content-type text/plain UTF-8). render_pages --pages slashdot.org 1200x800 completes in ~0.1s; PNG ~110KB with bbox x=0..1199, y≈30..338 and ~4.1k unique colors (content visible near top). Log at fetches/renders/slashdot.org.log.

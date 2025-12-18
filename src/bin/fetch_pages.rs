@@ -118,6 +118,7 @@ const PAGES: &[&str] = &[
     "https://ft.com",
     "https://fast.com",
     "https://cnet.com",
+    "https://nationalgeographic.com",
     "https://developer.mozilla.org",
     "https://howtogeek.com",
     "https://macrumors.com",
@@ -712,9 +713,13 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) =
-            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-                .expect("fetch succeeds");
+        let (bytes, content_type, final_url) = fetch_page(
+            &url,
+            Duration::from_secs(5),
+            DEFAULT_USER_AGENT,
+            DEFAULT_ACCEPT_LANGUAGE,
+        )
+        .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"refreshed");
@@ -765,9 +770,13 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) =
-            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-                .expect("fetch succeeds");
+        let (bytes, content_type, final_url) = fetch_page(
+            &url,
+            Duration::from_secs(5),
+            DEFAULT_USER_AGENT,
+            DEFAULT_ACCEPT_LANGUAGE,
+        )
+        .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"redirected");
