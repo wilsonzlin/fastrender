@@ -181,3 +181,4 @@ Selectors include heavy :has usage (~526 occurrences), further stressing matchin
 Other css bits: ~10 @keyframes blocks.
 var() usage is heavy (~2.8k occurrences) in inline CSS.
 Latest profiling (45s timeout): cascade ~6.7s (find ~0.8s, decl ~0.9s, pseudo ~2.9s), box_tree ~2.45s; render still times out (30–45s). Candidates still ~5.3M; pruning kilned/ad rules remains a potential experiment.
+~126 !important declarations in inline CSS (small impact versus overall size).
