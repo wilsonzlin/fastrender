@@ -66,6 +66,9 @@ Cache a set of common pages for debugging and profiling:
 
 # Fetch only specific pages with custom parallelism/timeout
 ./target/release/fetch_pages --pages cnn.com,wikipedia.org --jobs 8 --timeout 20
+
+# Override the User-Agent sent while fetching (defaults to a Chrome-like UA)
+./target/release/fetch_pages --user-agent "MyBot/1.0"
 ```
 
 Render all cached pages to `fetches/renders/` (PNG + per-page logs):
@@ -76,6 +79,9 @@ Render all cached pages to `fetches/renders/` (PNG + per-page logs):
 # Render only specific cached pages with a custom viewport/timeout
 ./target/release/render_pages --pages cnn.com,wikipedia.org --viewport 1366x768 --timeout 60
 
+# Render with a custom User-Agent for resource fetches
+./target/release/render_pages --user-agent "MyBot/1.0"
+
 # Media preferences
 
 You can drive media queries that depend on user preferences via CLI flags or environment variables:
@@ -83,6 +89,9 @@ You can drive media queries that depend on user preferences via CLI flags or env
 ```bash
 # Reduce transparency for a single render
 ./target/release/fetch_and_render --prefers-reduced-transparency reduce https://example.com
+
+# Fetch and render a live URL with a custom User-Agent
+./target/release/fetch_and_render --user-agent "MyBot/1.0" https://example.com
 
 # Apply the same preference when rendering cached pages
 ./target/release/render_pages --prefers-reduced-transparency reduce

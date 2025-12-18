@@ -1,6 +1,6 @@
 //! Render all cached pages in parallel
 //!
-//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>]
+//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--user-agent UA]
 //!
 //! Renders all HTML files in fetches/html/ to fetches/renders/
 //! Logs per-page to fetches/renders/{name}.log
