@@ -2021,9 +2021,13 @@ fn cache_tolerances(target_size: Size) -> (f32, f32) {
         }
     };
 
+    // Ensure we never accept exact zero tolerances (which would disable reuse) and clamp to a
+    // small minimum for small probes to still allow merging nearly identical sizes.
+    let min_eps = 1.0;
+
     // Bias tolerance slightly toward the larger axis so extremely wide/tall probes coalesce more.
-    let eps_w = f32::max(band(target_size.width), band(target_size.height) * 0.75);
-    let eps_h = f32::max(band(target_size.height), band(target_size.width) * 0.5);
+    let eps_w = f32::max(f32::max(band(target_size.width), band(target_size.height) * 0.75), min_eps);
+    let eps_h = f32::max(f32::max(band(target_size.height), band(target_size.width) * 0.5), min_eps);
 
     (eps_w, eps_h)
 }
@@ -4253,6 +4257,18 @@ mod tests {
         );
 
         assert_eq!(key_a, key_b, "quantized definite availables should reuse the same cache key");
+
+        // Also ensure a tiny tolerance exists so very similar targets can merge.
+        let key_c = super::measure_cache_key(
+            &known,
+            &taffy::geometry::Size {
+                width: AvailableSpace::Definite(300.0),
+                height: AvailableSpace::Definite(151.0),
+            },
+            viewport,
+            false,
+        );
+        assert_eq!(key_a.0, key_c.0);
     }
 
     #[test]
