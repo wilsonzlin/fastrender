@@ -35,3 +35,4 @@ Container queries respect inline-size without requiring a block dimension: media
 
 latimes.com UTF-8 boundary panic fixed: text splits now clamp requested offsets to prior char boundaries, run splitting validates local boundaries and falls back to reshaping when misaligned. latimes.com renders successfully (≈72s at 1200×800).
 Added regression ensuring mid-codepoint split requests clamp to the previous char boundary (no panics, split_at aligns to codepoint start).
+Added yahoo.com and nasa.gov to fetch_pages targets (cargo check --bin fetch_pages passes).
