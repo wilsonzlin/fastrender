@@ -197,8 +197,7 @@ filter appears ~10 times.
 linear-gradient appears ~24 times.
 z-index appears ~87 times.
 
-BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over 1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout).
-Inline CSS stats: 74 display:grid rules and 49 grid-template-columns rules in the main inline block (~70KB).
+BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over 1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout). Inline CSS stats: 74 display:grid rules and 49 grid-template-columns rules in the main inline block (~70KB). A fast path that treats trivial single-child grids as block landed, but BBC still ~24.8s total (layout ~13.1s), so BBC grids don’t hit the trivial path; engine-level grid perf improvements still needed.
 
 Added msnbc.com to fetch_pages; fetch succeeds (~328KB HTML) and render_pages completes in ~19s at 1200x800 (cascade ~1.3s, box_tree ~9.3s, layout ~2.2s, paint ~1.8s; PNG ~21KB, full-frame bbox).
 Added foxnews.com to fetch_pages; fetch ~0.17s (~0.80MB HTML). render_pages finishes in ~57s at 1200x800 (cascade ~0.8s, box_tree ~1.3s, layout ~52.6s, paint ~2.1s; PNG ~363KB, full-frame bbox).
