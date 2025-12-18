@@ -9,7 +9,6 @@
 use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::{PseudoElement, TextDirection};
 use crate::css::types::{ContainerCondition, CssImportLoader, Declaration, PropertyValue, StyleRule, StyleSheet};
-use std::cell::RefCell;
 use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, DomNodeType, ElementRef};
 use crate::geometry::Size;
 use crate::style::color::Rgba;
