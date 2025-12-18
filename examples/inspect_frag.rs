@@ -7,7 +7,7 @@ use fastrender::css::loader::{
 use fastrender::css::parser::extract_css;
 use fastrender::dom::{self, DomNodeType};
 use fastrender::layout::engine::{LayoutConfig, LayoutEngine};
-use fastrender::resource::{HttpFetcher, ResourceFetcher};
+use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use fastrender::style::cascade::apply_styles_with_media_and_target;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::computed::Visibility;
@@ -26,7 +26,7 @@ use url::Url;
 
 fn usage() {
     eprintln!(
-        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] <file.html | file://url>"
+        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] <file.html | file://url>"
     );
     eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
     eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
@@ -37,6 +37,8 @@ fn usage() {
     eprintln!("  --prefers-reduced-data        reduce|no-preference|true|false (overrides env)");
     eprintln!("  --prefers-contrast             more|high|less|low|custom|forced|no-preference (overrides env)");
     eprintln!("  --prefers-color-scheme         light|dark|no-preference (overrides env)");
+    eprintln!("  --user-agent                   Override the User-Agent header (default: Chrome-like)");
+    eprintln!("  --accept-language              Override Accept-Language header (default: en-US,en;q=0.9)");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
@@ -124,6 +126,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut prefers_reduced_data: Option<bool> = None;
     let mut prefers_contrast: Option<String> = None;
     let mut prefers_color_scheme: Option<String> = None;
+    let mut user_agent = DEFAULT_USER_AGENT.to_string();
+    let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
     let mut raw_path: Option<String> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -173,6 +177,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--prefers-color-scheme" => {
                 if let Some(val) = args.next() {
                     prefers_color_scheme = parse_prefers_color_scheme(&val);
+                }
+            }
+            "--user-agent" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        user_agent = val;
+                    }
+                }
+            }
+            "--accept-language" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        accept_language = val;
+                    }
                 }
             }
             "--scroll-x" => {
@@ -291,7 +309,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if !css_links.is_empty() {
-            let fetcher = HttpFetcher::new();
+            let fetcher = HttpFetcher::new()
+                .with_user_agent(user_agent.clone())
+                .with_accept_language(accept_language.clone());
             let mut combined_css = String::new();
             let mut seen_imports = HashSet::new();
             for link in css_links {
