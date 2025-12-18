@@ -55,6 +55,9 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
         "location.replace",
         "window.location.replace",
         "document.location.replace",
+        "location.assign",
+        "window.location.assign",
+        "document.location.assign",
         "location.href",
         "window.location.href",
         "document.location.href",
@@ -92,6 +95,21 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
                 let candidate = decoded[start..end].trim();
                 if !candidate.is_empty() {
                     return Some(unescape_js_literal(candidate));
+                }
+            } else {
+                let start = i;
+                while i < lower.len() {
+                    let b = lower.as_bytes()[i];
+                    if b.is_ascii_whitespace() || b == b';' {
+                        break;
+                    }
+                    i += 1;
+                }
+                if i > start {
+                    let candidate = html[start..i].trim();
+                    if !candidate.is_empty() {
+                        return Some(candidate.to_string());
+                    }
                 }
             }
         }
@@ -457,6 +475,15 @@ mod tests {
             extract_js_location_redirect(html),
             Some("https://example.com/next".to_string())
         );
+
+        let html = "<script>window.location.assign('https://example.com/assign');</script>";
+        assert_eq!(
+            extract_js_location_redirect(html),
+            Some("https://example.com/assign".to_string())
+        );
+
+        let html = "<script>document.location.assign('/plain');</script>";
+        assert_eq!(extract_js_location_redirect(html), Some("/plain".to_string()));
     }
 
     #[test]

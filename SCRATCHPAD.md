@@ -1,5 +1,8 @@
 Base URL inference now keeps the document URL for HTTP/HTTPS inputs (ignoring canonical/og:url hints); canonical/og fallbacks remain only for file:// HTML. Added coverage for quoted meta refresh URLs (duckduckgo noscript) and ensured the CLIs still parse them. Meta refresh follow now keeps the target origin as the resource base (duckduckgo.com refresh → html.duckduckgo.com base).
 
+Added regression coverage for meta refresh/JS redirects in fetch_and_render: quoted/entity meta refresh, noscript meta refresh with hidden body (renders non-blank), and JS location redirects now have local-server tests. meta_refresh parser tests cover quoted/entity URLs. duckduckgo.com now renders with visible content (non-white bbox to y≈243 at 1200×800) after following the refresh to html.duckduckgo.com.
+Cleaned stray merge marker in grid.rs and aligned grid TaffyTree usage to the <*const BoxNode> variant used at call sites (build was failing during tests); no behavior change intended.
+
 Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
 Added figma.com to fetch_pages targets. Fetch succeeds (~1.25MB HTML); render_pages finishes in ~5s but current PNG is blank (bbox None) due to JS redirect to /redirect_home and missing CSS (bogus encoded webpack-artifacts URL); needs follow-up if we want visible content.
 CSS link extraction now decodes HTML entities (including odd forms like &/#47;) and embedded CSS URL scans decode entities too; covers cases like figma.com emitting entity-escaped stylesheet URLs. Grid context conflict marker removed and convert_to_fragments now accepts generic Taffy trees (TaffyTree<*const BoxNode> caller compiles).
