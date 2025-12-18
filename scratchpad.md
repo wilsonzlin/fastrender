@@ -26,6 +26,7 @@
 # RTL outside markers stay inline-start: regression `marker_rtl_outside_marker_stays_inline_start` ensures RTL markers sit on the inline-start (right) while text follows.
 # Marker visual order in RTL: regression `marker_appears_before_text_in_visual_order` asserts markers render before text in RTL lines.
 # Mixed-direction RTL: regression `marker_remains_at_visual_start_with_mixed_bidi` locks markers staying first when RTL content contains LTR text.
+# Marker image paint: regression `marker_image_paints_shadow` ensures marker fragments paint text-shadow even when the marker content is an image.
 # Rendered example.com at 1200×800 during a random render check; output looked normal (no visible issues observed).
 # Rendered example.com again after fetch/rerender; output still clean, no regressions observed.
 # Added legend shrink-to-fit regression: a legend with auto width should shrink to its text instead of spanning the fieldset width.
