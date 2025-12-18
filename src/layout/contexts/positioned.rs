@@ -698,9 +698,10 @@ mod tests {
 
         let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
-        // Shrink-to-fit favors the intrinsic width when available.
+        // When left/right are both set and width is auto, the available space is
+        // width = cb.width - left - right = 300. Shrink-to-fit clamps intrinsic to available.
         assert_eq!(pos.x, 50.0);
-        assert_eq!(size.width, 100.0);
+        assert_eq!(size.width, 300.0);
     }
 
     #[test]
