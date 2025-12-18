@@ -31,10 +31,11 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::resource::{DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
+use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
 use std::env;
+use std::sync::Arc;
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
@@ -553,7 +554,17 @@ fn render_once(
         "Rendering to image ({}x{} viewport, scroll_x={}, scroll_y={})...",
         width, height, scroll_x, scroll_y
     );
-    let mut renderer = FastRender::builder().device_pixel_ratio(dpr).build()?;
+    let mut http_fetcher = HttpFetcher::new()
+        .with_user_agent(user_agent.to_string())
+        .with_accept_language(accept_language.to_string());
+    if let Some(secs) = timeout_secs {
+        http_fetcher = http_fetcher.with_timeout(Duration::from_secs(secs));
+    }
+
+    let mut renderer = FastRender::builder()
+        .device_pixel_ratio(dpr)
+        .fetcher(Arc::new(http_fetcher) as Arc<dyn ResourceFetcher>)
+        .build()?;
     renderer.set_base_url(resource_base.clone());
     let png_data =
         renderer.render_to_png_with_scroll(&html_with_css, width, height, scroll_x as f32, scroll_y as f32)?;
