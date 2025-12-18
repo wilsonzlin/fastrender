@@ -1,6 +1,19 @@
 Base URL inference now keeps the document URL for HTTP/HTTPS inputs (ignoring canonical/og:url hints); canonical/og fallbacks remain only for file:// HTML. Added coverage for quoted meta refresh URLs (duckduckgo noscript) and ensured the CLIs still parse them. Meta refresh follow now keeps the target origin as the resource base (duckduckgo.com refresh → html.duckduckgo.com base).
 
 Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
+Added figma.com to fetch_pages targets. Fetch succeeds (~1.25MB HTML); render_pages finishes in ~5s but current PNG is blank (bbox None) due to JS redirect to /redirect_home and missing CSS (bogus encoded webpack-artifacts URL); needs follow-up if we want visible content.
+Figma follow-up: fetch_pages caches https://figma.com/redirect_home (JS redirect not followed), while render_pages now follows the JS redirect to https://figma.com/unsupported_browser and renders the unsupported modal (gray overlay, nonwhite bbox).
+JS redirect parsing now ignores identifier-only targets and data-* attributes (e.g., data-location), preventing bogus redirects like openstreetmap.org's data-location JSON from being treated as a JS redirect. Added a regression to ignore data-location attributes.
+If a JS redirect fetch fails, fetch_page now keeps the original response (local regression covers 404 target); prevents cache failures when redirects point to missing pages (e.g., cnn.com).
+Added openstreetmap.org to fetch_pages targets; fetch succeeds (~34KB) and render completes (~60KB PNG, mostly white page with header/nav visible).
+Scroll snapping: mandatory inline-axis snapping now preserves snap target offsets when the smallest target is positive; horizontal snapping to centered items works (regression added). Mandatory snaps no longer discard the minimum target offset.
+CSS link extraction now decodes HTML entities (including odd forms like &/#47;) and embedded CSS URL scans decode entities too; covers cases like figma.com emitting entity-escaped stylesheet URLs. Grid context conflict marker removed and convert_to_fragments now accepts generic Taffy trees (TaffyTree<*const BoxNode> caller compiles).
+Entity-decoded CSS URLs now collapse surplus slashes after schemes (e.g., https:////host////path → https://host/path); regressions cover link and embedded CSS cases. figma.com still blank (JS app) but entity-escaped hrefs now normalize correctly.
+
+Added fast.com to fetch_pages targets; fetch succeeds (~25KB HTML) and renders in ~0.3s at 1200×800 (PNG ~35KB, bbox roughly centered speed UI).
+Added blog.rust-lang.org to fetch_pages targets. Fetch succeeds (~87KB HTML) and renders in ~1.5s at 1200×800 (PNG ~106KB; full content visible).
+Added xkcd.com to fetch_pages targets. Fetch succeeds (~7KB HTML) and renders in ~0.9s at 1200×800 (PNG ~186KB; comic visible).
+Added arxiv.org to fetch_pages targets. Fetch succeeds (~43KB HTML) and renders in ~2s at 1200×800 (PNG ~97KB; content visible across full width/top).
 
 Render pipeline now decodes cached HTML with proper charset sniffing: fetch_pages stores the response Content-Type alongside each cached HTML (.html.meta), render_pages decodes bytes via the shared html::encoding helper (BOM/header/meta/default Windows-1252), and fetch_and_render reuses the shared decoder instead of its local copy. cloudflare.com and latimes.com timeouts still outstanding from earlier notes.
 Absolute/fixed elements with both left/right insets and width:auto now use the constraint equation instead of shrink-to-fit, so inset overlays fill the containing block; regressions `fixed_positioned_inset_auto_width_fills_viewport` and `absolute_inset_auto_width_fills_parent` cover fixed and absolute bars spanning their containing blocks.
