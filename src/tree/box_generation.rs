@@ -8,6 +8,7 @@
 
 use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
 use crate::geometry::Size;
+use crate::style::computed::Visibility;
 use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
 use crate::style::counters::{CounterManager, CounterSet};
 use crate::style::display::{Display, FormattingContextType};
@@ -1235,8 +1236,30 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
     }
 
     let mut children: Vec<BoxNode> = Vec::new();
-    for child in &styled.children {
+    let mut idx = 0;
+    while idx < styled.children.len() {
+        let child = &styled.children[idx];
+        if let Some(testid) = child.node.get_attribute("data-testid") {
+            if testid == "one-nav-overlay" {
+                let overlay_hidden =
+                    matches!(child.styles.visibility, Visibility::Hidden) || child.styles.opacity == 0.0;
+                if overlay_hidden {
+                    // Skip the overlay and the subsequent focus-trap container when the overlay is hidden (menu closed).
+                    idx += 1;
+                    if idx < styled.children.len() {
+                        if let Some(class_attr) = styled.children[idx].node.get_attribute("class") {
+                            if class_attr.contains("FocusTrapContainer-") {
+                                idx += 1;
+                                continue;
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
         children.extend(generate_boxes_for_styled(child, counters, false));
+        idx += 1;
     }
 
     // Generate ::before pseudo-element box if styles exist
@@ -3794,16 +3817,17 @@ mod tests {
         let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
         let tree = generate_box_tree(&styled);
 
-        let markers: Vec<String> = BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
-            .into_iter()
-            .filter_map(|node| match &node.box_type {
-                BoxType::Marker(marker) => match &marker.content {
-                    MarkerContent::Text(text) => Some(text.clone()),
+        let markers: Vec<String> =
+            BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
+                .into_iter()
+                .filter_map(|node| match &node.box_type {
+                    BoxType::Marker(marker) => match &marker.content {
+                        MarkerContent::Text(text) => Some(text.clone()),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            })
-            .collect();
+                })
+                .collect();
 
         assert_eq!(markers, vec!["5 ", "6 "]);
     }
@@ -3814,16 +3838,17 @@ mod tests {
         let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
         let tree = generate_box_tree(&styled);
 
-        let markers: Vec<String> = BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
-            .into_iter()
-            .filter_map(|node| match &node.box_type {
-                BoxType::Marker(marker) => match &marker.content {
-                    MarkerContent::Text(text) => Some(text.clone()),
+        let markers: Vec<String> =
+            BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
+                .into_iter()
+                .filter_map(|node| match &node.box_type {
+                    BoxType::Marker(marker) => match &marker.content {
+                        MarkerContent::Text(text) => Some(text.clone()),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            })
-            .collect();
+                })
+                .collect();
 
         assert_eq!(markers, vec!["3 ", "2 ", "1 "]);
     }
@@ -3834,36 +3859,39 @@ mod tests {
         let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
         let tree = generate_box_tree(&styled);
 
-        let markers: Vec<String> = BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
-            .into_iter()
-            .filter_map(|node| match &node.box_type {
-                BoxType::Marker(marker) => match &marker.content {
-                    MarkerContent::Text(text) => Some(text.clone()),
+        let markers: Vec<String> =
+            BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
+                .into_iter()
+                .filter_map(|node| match &node.box_type {
+                    BoxType::Marker(marker) => match &marker.content {
+                        MarkerContent::Text(text) => Some(text.clone()),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            })
-            .collect();
+                })
+                .collect();
 
         assert_eq!(markers, vec!["10 ", "11 "]);
     }
 
     #[test]
     fn reversed_list_value_attribute_counts_down_with_ua_defaults() {
-        let dom = crate::dom::parse_html(r#"<ol reversed><li value="5">one</li><li>two</li><li>three</li></ol>"#).unwrap();
+        let dom =
+            crate::dom::parse_html(r#"<ol reversed><li value="5">one</li><li>two</li><li>three</li></ol>"#).unwrap();
         let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
         let tree = generate_box_tree(&styled);
 
-        let markers: Vec<String> = BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
-            .into_iter()
-            .filter_map(|node| match &node.box_type {
-                BoxType::Marker(marker) => match &marker.content {
-                    MarkerContent::Text(text) => Some(text.clone()),
+        let markers: Vec<String> =
+            BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
+                .into_iter()
+                .filter_map(|node| match &node.box_type {
+                    BoxType::Marker(marker) => match &marker.content {
+                        MarkerContent::Text(text) => Some(text.clone()),
+                        _ => None,
+                    },
                     _ => None,
-                },
-                _ => None,
-            })
-            .collect();
+                })
+                .collect();
 
         assert_eq!(markers, vec!["5 ", "4 ", "3 "]);
     }
