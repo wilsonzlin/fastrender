@@ -207,3 +207,4 @@ overflow:hidden appears ~39 times.
 transition appears ~144 times.
 animation appears ~35 times.
 position:fixed appears ~12 times.
+width:100% appears ~259 times.
