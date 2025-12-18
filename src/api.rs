@@ -2898,6 +2898,18 @@ fn build_container_query_context(
             ContainerType::Size | ContainerType::InlineSize => {
                 if let Some((inline, block)) = sizes.get(&box_id) {
                     let (content_inline, content_block) = content_box_sizes(node, *inline, *block);
+                    if std::env::var("FASTR_LOG_CONTAINER_QUERY").is_ok() {
+                        eprintln!(
+                            "[cq] box_id={} styled_id={} type={:?} inline={:.2} block={:.2} content_inline={:.2} content_block={:.2}",
+                            box_id,
+                            styled_id,
+                            node.style.container_type,
+                            inline,
+                            block,
+                            content_inline,
+                            content_block
+                        );
+                    }
                     containers
                         .entry(styled_id)
                         .and_modify(|entry| {

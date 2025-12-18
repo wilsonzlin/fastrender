@@ -2283,28 +2283,38 @@ impl MediaContext {
             .then_some(self.base_font_size)
             .filter(|v| *v > 0.0)
             .unwrap_or(16.0);
+        let vw = self.viewport_width.is_finite().then_some(self.viewport_width);
+        let vh = self.viewport_height.is_finite().then_some(self.viewport_height);
+        let inline = inline_base.is_finite().then_some(inline_base);
+        let _block = block_base.is_finite().then_some(block_base);
 
-        let vw = self.viewport_width.is_finite().then_some(self.viewport_width)?;
-        let vh = self.viewport_height.is_finite().then_some(self.viewport_height)?;
-        let inline = inline_base.is_finite().then_some(inline_base)?;
-        let _block = block_base.is_finite().then_some(block_base)?;
-
-        if length.unit == LengthUnit::Calc {
-            return length.resolve_with_context(Some(inline), vw, vh, base_font, base_font);
+        if let Some(calc) = length.calc {
+            let percentage_base = if calc.has_percentage() { inline } else { Some(0.0) };
+            let needs_viewport = calc.has_viewport_relative();
+            let vw = if needs_viewport { vw? } else { vw.unwrap_or(0.0) };
+            let vh = if needs_viewport { vh? } else { vh.unwrap_or(0.0) };
+            return calc.resolve(percentage_base, vw, vh, base_font, base_font);
         }
+
         match length.unit {
             LengthUnit::Px => Some(length.value),
             LengthUnit::Em => Some(length.value * base_font),
             LengthUnit::Rem => Some(length.value * base_font),
-            LengthUnit::Percent => Some(length.value / 100.0 * inline),
-            LengthUnit::Vw => Some(length.value / 100.0 * vw),
-            LengthUnit::Vh => Some(length.value / 100.0 * vh),
+            LengthUnit::Percent => Some(length.value / 100.0 * inline?),
+            LengthUnit::Vw => Some(length.value / 100.0 * vw?),
+            LengthUnit::Vh => Some(length.value / 100.0 * vh?),
             LengthUnit::Vmin => {
-                let min_dimension = vw.min(vh);
+                let min_dimension = match (vw, vh) {
+                    (Some(w), Some(h)) => w.min(h),
+                    _ => return None,
+                };
                 Some(length.value / 100.0 * min_dimension)
             }
             LengthUnit::Vmax => {
-                let max_dimension = vw.max(vh);
+                let max_dimension = match (vw, vh) {
+                    (Some(w), Some(h)) => w.max(h),
+                    _ => return None,
+                };
                 Some(length.value / 100.0 * max_dimension)
             }
             LengthUnit::Pt => Some(length.value * 96.0 / 72.0),
