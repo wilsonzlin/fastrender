@@ -996,7 +996,11 @@ fn main() -> Result<()> {
             }
             "--timeout" => {
                 if let Some(val) = args.next() {
-                    timeout_secs = val.parse().ok();
+                    match val.parse::<u64>() {
+                        Ok(0) => timeout_secs = None,
+                        Ok(secs) => timeout_secs = Some(secs),
+                        Err(_) => {}
+                    }
                 }
             }
             "--dpr" => {
