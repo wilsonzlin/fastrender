@@ -10322,6 +10322,7 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::values::{CalcLength, LengthUnit};
     use crate::css::properties::parse_property_value;
     use crate::geometry::Size;
     use crate::style::types::{
@@ -10334,6 +10335,20 @@ mod tests {
         TextWrap, TransformBox, WordBreak, WritingMode,
     };
     use cssparser::{Parser, ParserInput};
+
+    #[test]
+    fn extract_margin_values_accepts_zero_number_and_calc_zero() {
+        let num_zero = PropertyValue::Number(0.0);
+        let out = extract_margin_values(&num_zero).expect("number zero should be accepted");
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0], Some(Length::px(0.0)));
+
+        let calc_zero = CalcLength::single(LengthUnit::Px, 0.0);
+        let calc_len = PropertyValue::Length(Length::calc(calc_zero));
+        let out = extract_margin_values(&calc_len).expect("calc(0) should be accepted");
+        assert_eq!(out.len(), 1);
+        assert!(out[0].unwrap().is_zero());
+    }
 
     #[test]
     fn parses_object_fit_keyword() {
