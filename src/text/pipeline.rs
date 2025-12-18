@@ -677,18 +677,27 @@ fn split_itemized_runs_by_paragraph(runs: Vec<ItemizedRun>, paragraphs: &[Paragr
 
             // Split the run at the paragraph boundary.
             let split_point = para_end;
-            let split_offset = split_point - run.start;
-            let (left, right) = split_run_at(&run, split_offset);
-            out.push(left);
-            run = right;
-            para_iter.next();
+            let split_offset = split_point.saturating_sub(run.start);
+            if let Some((left, right)) = split_run_at(&run, split_offset) {
+                out.push(left);
+                run = right;
+                para_iter.next();
+            } else {
+                // If the boundary isn't a valid UTF-8 split, keep the remainder intact.
+                out.push(run);
+                break;
+            }
         }
     }
 
     out
 }
 
-fn split_run_at(run: &ItemizedRun, split_offset: usize) -> (ItemizedRun, ItemizedRun) {
+fn split_run_at(run: &ItemizedRun, split_offset: usize) -> Option<(ItemizedRun, ItemizedRun)> {
+    if split_offset == 0 || split_offset >= run.text.len() || !run.text.is_char_boundary(split_offset) {
+        return None;
+    }
+
     let left_text = run.text[..split_offset].to_string();
     let right_text = run.text[split_offset..].to_string();
     let left = ItemizedRun {
@@ -707,7 +716,7 @@ fn split_run_at(run: &ItemizedRun, split_offset: usize) -> (ItemizedRun, Itemize
         direction: run.direction,
         level: run.level,
     };
-    (left, right)
+    Some((left, right))
 }
 
 // ============================================================================
@@ -2987,6 +2996,29 @@ mod tests {
         assert_eq!(runs[0].end, paras[0].end_byte);
         assert_eq!(runs[1].start, paras[1].start_byte);
         assert_eq!(runs[1].end, paras[1].end_byte);
+    }
+
+    #[test]
+    fn split_run_at_rejects_non_char_boundary_offsets() {
+        let run = ItemizedRun {
+            start: 0,
+            end: "a😊b".len(),
+            text: "a😊b".to_string(),
+            script: Script::Latin,
+            direction: Direction::LeftToRight,
+            level: 0,
+        };
+
+        assert!(
+            split_run_at(&run, 2).is_none(),
+            "should not split inside a multibyte codepoint"
+        );
+
+        let (left, right) = split_run_at(&run, 1).expect("valid split at char boundary");
+        assert_eq!(left.text, "a");
+        assert_eq!(right.text, "😊b");
+        assert_eq!(left.end, 1);
+        assert_eq!(right.start, 1);
     }
 
     #[test]
