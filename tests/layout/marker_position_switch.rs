@@ -22,9 +22,7 @@ fn marker_and_text_positions(fragment: &fastrender::tree::fragment_tree::Fragmen
                 }
             }
             FragmentContent::Replaced { .. } => {
-                if marker_x.is_none() {
-                    marker_x = Some(node.bounds.x());
-                }
+                marker_x.get_or_insert(node.bounds.x());
             }
             _ => {}
         }
@@ -76,4 +74,3 @@ fn marker_switches_position_inside_vs_outside() {
     assert!(outside_marker_x < -5.0, "outside marker should be placed before text");
     assert!(outside_text_x.abs() < 0.5, "outside text should start near line origin");
 }
-
