@@ -259,6 +259,21 @@ mod tests {
     }
 
     #[test]
+    fn fetch_bytes_uses_base_url_from_meta() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let html_path = dir.path().join("page.html");
+        let meta_path = dir.path().join("page.html.meta");
+
+        std::fs::write(&html_path, "<html><body>Hi</body></html>").unwrap();
+        std::fs::write(&meta_path, "content-type: text/html\nurl: https://example.com/\n").unwrap();
+
+        let url = format!("file://{}", html_path.display());
+        let (_bytes, ct, base_url) = fetch_bytes(&url, None, DEFAULT_USER_AGENT).expect("fetch bytes");
+        assert_eq!(ct.as_deref(), Some("text/html"));
+        assert_eq!(base_url.as_deref(), Some("https://example.com/"));
+    }
+
+    #[test]
     fn parse_prefers_reduced_data_values() {
         assert_eq!(parse_prefers_reduced_data("reduce"), Some(true));
         assert_eq!(parse_prefers_reduced_data("no-preference"), Some(false));
