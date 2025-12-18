@@ -45,6 +45,59 @@ pub fn extract_meta_refresh_url(html: &str) -> Option<String> {
     None
 }
 
+/// Extracts a literal URL from simple JavaScript redirects such as
+/// `window.location.href = "https://example.com"` or `location.replace('/next')`.
+pub fn extract_js_location_redirect(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let patterns = [
+        "location.replace",
+        "window.location.replace",
+        "document.location.replace",
+        "location.href",
+        "window.location.href",
+        "document.location.href",
+        "window.location",
+        "document.location",
+        "location",
+    ];
+
+    for pat in patterns.iter() {
+        if let Some(idx) = lower.find(pat) {
+            let mut i = idx + pat.len();
+            while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < lower.len() && lower.as_bytes()[i] == b'=' {
+                i += 1;
+                while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+            }
+            if i < lower.len() && lower.as_bytes()[i] == b'(' {
+                i += 1;
+                while i < lower.len() && lower.as_bytes()[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+            }
+            if i < lower.len() && (lower.as_bytes()[i] == b'"' || lower.as_bytes()[i] == b'\'') {
+                let quote = lower.as_bytes()[i];
+                i += 1;
+                let start = i;
+                while i < lower.len() && lower.as_bytes()[i] != quote {
+                    i += 1;
+                }
+                let end = i.min(html.len());
+                let candidate = html[start..end].trim();
+                if !candidate.is_empty() {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn parse_refresh_content(content: &str) -> Option<String> {
     let decoded = content
         .replace("&quot;", "\"")
@@ -149,7 +202,7 @@ fn parse_attributes(tag: &str) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::extract_meta_refresh_url;
+    use super::{extract_js_location_redirect, extract_meta_refresh_url};
 
     #[test]
     fn extracts_meta_refresh_url() {
@@ -161,5 +214,20 @@ mod tests {
     fn ignores_non_refresh_meta() {
         let html = "<meta charset=\"utf-8\"><meta name='viewport' content='width=device-width'>";
         assert_eq!(extract_meta_refresh_url(html), None);
+    }
+
+    #[test]
+    fn extracts_js_location_href() {
+        let html = "<script>window.location.href = 'https://example.com/next';</script>";
+        assert_eq!(
+            extract_js_location_redirect(html),
+            Some("https://example.com/next".to_string())
+        );
+    }
+
+    #[test]
+    fn extracts_js_location_replace() {
+        let html = "<script>location.replace(\"/foo\");</script>";
+        assert_eq!(extract_js_location_redirect(html), Some("/foo".to_string()));
     }
 }

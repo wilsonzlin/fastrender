@@ -31,13 +31,13 @@ use fastrender::css::loader::{
     inline_imports, resolve_href,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::html::meta_refresh::extract_meta_refresh_url;
+use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
 use std::env;
-use std::sync::Arc;
 use std::sync::mpsc::{channel, RecvTimeoutError};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use url::Url;
@@ -391,13 +391,11 @@ mod tests {
                 }
                 requests_clone.lock().unwrap().push(buf.clone());
                 if i == 0 {
-                    let html = format!(
-                        "<html><body><img src=\"http://{}/img.png\"></body></html>",
-                        addr
-                    );
+                    let html = format!("<html><body><img src=\"http://{}/img.png\"></body></html>", addr);
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                        html.len(), html
+                        html.len(),
+                        html
                     );
                     let _ = stream.write_all(response.as_bytes());
                 } else {
@@ -429,11 +427,7 @@ mod tests {
         .expect("render_once should succeed");
 
         handle.join().expect("server thread");
-        let combined = requests
-            .lock()
-            .unwrap()
-            .join("\n")
-            .to_ascii_lowercase();
+        let combined = requests.lock().unwrap().join("\n").to_ascii_lowercase();
         assert!(
             combined.contains("accept-language: fr-ca,fr;q=0.7"),
             "asset requests should include Accept-Language: {}",
@@ -593,6 +587,22 @@ fn render_once(
                 }
                 Err(e) => {
                     eprintln!("Warning: failed to follow meta refresh {}: {}", target, e);
+                }
+            }
+        }
+    }
+
+    if let Some(js_redirect) = extract_js_location_redirect(&html) {
+        if let Some(target) = resolve_href(&resource_base, &js_redirect) {
+            println!("Following JS location redirect to: {}", target);
+            match fetch_bytes(&target, timeout, user_agent, accept_language) {
+                Ok((bytes, content_type, final_url)) => {
+                    html = decode_html_bytes(&bytes, content_type.as_deref());
+                    base_hint = final_url.unwrap_or(target);
+                    resource_base = infer_base_url(&html, &base_hint).into_owned();
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to follow JS redirect {}: {}", target, e);
                 }
             }
         }

@@ -16,7 +16,7 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::html::meta_refresh::extract_meta_refresh_url;
+use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
     parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
@@ -416,6 +416,23 @@ fn main() {
                             }
                             Err(e) => {
                                 log.push_str(&format!("Failed to follow meta refresh: {}\n", e));
+                            }
+                        }
+                    }
+                }
+
+                if let Some(js_redirect) = extract_js_location_redirect(&html) {
+                    if let Some(target) = resolve_href(&resource_base, &js_redirect) {
+                        log.push_str(&format!("JS redirect to: {}\n", target));
+                        match fetcher.fetch(&target) {
+                            Ok(res) => {
+                                html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
+                                input_url = target.clone();
+                                resource_base = infer_base_url(&html, &input_url).into_owned();
+                                log.push_str(&format!("Followed JS redirect; new base: {}\n", resource_base));
+                            }
+                            Err(e) => {
+                                log.push_str(&format!("Failed to follow JS redirect: {}\n", e));
                             }
                         }
                     }
