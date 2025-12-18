@@ -14,6 +14,7 @@ use fastrender::css::loader::{
     absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url, inject_css_into_html,
     inline_imports,
 };
+use fastrender::html::encoding::decode_html_bytes;
 use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::FastRender;
@@ -234,8 +235,8 @@ fn main() {
                 log.push_str(&format!("Output: {}\n\n", output_path.display()));
 
                 // Read HTML first (before catch_unwind)
-                let html = match fs::read_to_string(&path) {
-                    Ok(h) => h,
+                let html_bytes = match fs::read(&path) {
+                    Ok(bytes) => bytes,
                     Err(e) => {
                         log.push_str(&format!("Read error: {}\n", e));
                         let _ = fs::write(&log_path, &log);
@@ -248,7 +249,19 @@ fn main() {
                         return;
                     }
                 };
-                log.push_str(&format!("HTML size: {} bytes\n", html.len()));
+
+                let mut meta_path = path.clone();
+                meta_path.set_extension("html.meta");
+                let content_type = fs::read_to_string(meta_path)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+
+                let html = decode_html_bytes(&html_bytes, content_type.as_deref());
+                log.push_str(&format!("HTML bytes: {}\n", html_bytes.len()));
+                if let Some(ct) = &content_type {
+                    log.push_str(&format!("Content-Type: {}\n", ct));
+                }
                 log.push_str(&format!("Viewport: {}x{}\n", viewport_w, viewport_h));
                 log.push_str(&format!("Scroll-X: {}px\n", scroll_x));
                 log.push_str(&format!("Scroll-Y: {}px\n", scroll_y));

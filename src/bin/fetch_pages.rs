@@ -231,7 +231,7 @@ fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
         .collect()
 }
 
-fn fetch_page(url: &str, timeout: Duration) -> Result<Vec<u8>, String> {
+fn fetch_page(url: &str, timeout: Duration) -> Result<(Vec<u8>, Option<String>), String> {
     let config = ureq::Agent::config_builder().timeout_global(Some(timeout)).build();
     let agent: ureq::Agent = config.into();
 
@@ -241,7 +241,17 @@ fn fetch_page(url: &str, timeout: Duration) -> Result<Vec<u8>, String> {
         .call()
         .map_err(|e| e.to_string())?;
 
-    response.body_mut().read_to_vec().map_err(|e| e.to_string())
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+
+    response
+        .body_mut()
+        .read_to_vec()
+        .map_err(|e| e.to_string())
+        .map(|bytes| (bytes, content_type))
 }
 
 fn main() {
@@ -302,6 +312,7 @@ fn main() {
             s.spawn(move |_| {
                 let filename = url_to_filename(url);
                 let cache_path = PathBuf::from(CACHE_DIR).join(format!("{}.html", filename));
+                let meta_path = cache_path.with_extension("html.meta");
 
                 // Skip if cached and not refreshing
                 if !refresh && cache_path.exists() {
@@ -310,9 +321,14 @@ fn main() {
                 }
 
                 match fetch_page(url, timeout) {
-                    Ok(bytes) => {
+                    Ok((bytes, content_type)) => {
                         if let Ok(mut f) = fs::File::create(&cache_path) {
                             if f.write_all(&bytes).is_ok() {
+                                if let Some(ct) = content_type.as_ref() {
+                                    let _ = fs::write(&meta_path, ct);
+                                } else {
+                                    let _ = fs::remove_file(&meta_path);
+                                }
                                 println!("✓ {} ({}b)", url, bytes.len());
                                 success.fetch_add(1, Ordering::Relaxed);
                                 return;
