@@ -3300,13 +3300,18 @@ fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point
     let max_scroll_x = (bounds.max_x - viewport.width).max(0.0);
     let max_scroll_y = (bounds.max_y - viewport.height).max(0.0);
     let strictness = style.scroll_snap_type.strictness;
+    let shift_x = if min_target_x > 0.0 { min_target_x } else { 0.0 };
+    let shift_y = if min_target_y > 0.0 { min_target_y } else { 0.0 };
+
     let snapped_x = if snap_x {
-        pick_snap_target(scroll.x - min_target_x, max_scroll_x, strictness, viewport.width * 0.5, &targets_x)
+        pick_snap_target(scroll.x - shift_x, max_scroll_x, strictness, viewport.width * 0.5, &targets_x)
+            + shift_x
     } else {
         scroll.x
     };
     let snapped_y = if snap_y {
-        pick_snap_target(scroll.y - min_target_y, max_scroll_y, strictness, viewport.height * 0.5, &targets_y)
+        pick_snap_target(scroll.y - shift_y, max_scroll_y, strictness, viewport.height * 0.5, &targets_y)
+            + shift_y
     } else {
         scroll.y
     };
@@ -4568,6 +4573,40 @@ mod tests {
             (far.y - 260.0).abs() < 0.1,
             "far offset should remain unchanged for proximity snapping"
         );
+    }
+
+    #[test]
+    fn scroll_snap_inline_axis_centers_items() {
+        // Manually construct a scroll snap container with a single wide item centered along the x-axis.
+        let mut container_style = ComputedStyle::default();
+        container_style.scroll_snap_type.axis = ScrollSnapAxis::X;
+        container_style.scroll_snap_type.strictness = ScrollSnapStrictness::Mandatory;
+
+        let mut item_style = ComputedStyle::default();
+        item_style.scroll_snap_align.inline = ScrollSnapAlign::Center;
+
+        let mut container = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 300.0, 100.0),
+            vec![],
+            Arc::new(container_style),
+        );
+        let child = FragmentNode::new_block_styled(
+            Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
+            vec![],
+            Arc::new(item_style),
+        );
+        container.children.push(child);
+
+        let tree = FragmentTree::with_viewport(container, Size::new(100.0, 100.0));
+
+        // Scrolling partway into the item should snap to its center at x=50 (200/2 - 100/2).
+        let snapped = super::apply_scroll_snap(&tree, Size::new(100.0, 100.0), Point::new(60.0, 0.0));
+        assert!(
+            (snapped.x - 50.0).abs() < 0.1,
+            "expected snap to the centered first item, got {}",
+            snapped.x
+        );
+        assert!(snapped.y.abs() < 0.1);
     }
 
     #[test]
