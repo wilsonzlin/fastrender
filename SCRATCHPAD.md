@@ -193,3 +193,4 @@ mask-image appears ~12 times in inline CSS.
 display:flex appears ~327 times.
 display:block appears ~351 times.
 transform appears ~204 times.
+box-shadow appears ~56 times.
