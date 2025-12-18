@@ -43,6 +43,7 @@
 # Painter/renderer: added display-list renderer regression to verify opacity filter halves alpha (premultiplies color and alpha).
 # Media queries: added regression ensuring unknown media types fail to parse (e.g., `foo`, `foo and (min-width:10px)`).
 # Added iana.org to fetch_pages targets; fetch/render succeed. Added theatlantic.com to fetch_pages targets; `cargo check --bin fetch_pages --quiet` passes.
+# Table border-collapse: added regression where a hidden border beats a solid neighbor when collapsing (`collapsed_borders_hidden_beats_solid_on_cell`).
 # Added rfc-editor.org to fetch_pages targets; fetch/render succeed.
 # Added apache.org to fetch_pages targets; fetch/render succeed.
 # Attempted mit.edu fetch target; render timed out due to CSS fetch timeouts, so left target removed. Added aria-hidden layout regression upstream.
