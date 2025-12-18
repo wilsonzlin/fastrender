@@ -585,23 +585,23 @@ impl BlockFormattingContext {
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
         let box_width = computed_width.border_box_width();
 
-        let padding_origin = Point::new(
-            computed_width.border_left + computed_width.padding_left,
-            border_top + padding_top,
-        );
-        let padding_size = Size::new(
-            computed_width.content_width + computed_width.padding_left + computed_width.padding_right,
-            height + padding_top + padding_bottom,
-        );
-        let padding_rect = Rect::new(padding_origin, padding_size);
-
+        // Layout out-of-flow positioned children against this block's padding box.
         if !positioned_children.is_empty() {
             let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(self.font_context.clone());
             let cb_block_base = if specified_height.is_some() {
-                Some(padding_size.height)
+                Some(height + padding_top + padding_bottom)
             } else {
                 None
             };
+            let padding_origin = Point::new(
+                computed_width.border_left + computed_width.padding_left,
+                border_top + padding_top,
+            );
+            let padding_size = Size::new(
+                computed_width.content_width + computed_width.padding_left + computed_width.padding_right,
+                height + padding_top + padding_bottom,
+            );
+            let padding_rect = Rect::new(padding_origin, padding_size);
             let parent_padding_cb = ContainingBlock::with_viewport_and_bases(
                 padding_rect,
                 self.viewport_size,
@@ -615,7 +615,17 @@ impl BlockFormattingContext {
                 static_position,
             } in positioned_children
             {
-                let original_style = pos_child.style.clone();
+                if trace_positioned_ids().contains(&pos_child.id) {
+                    eprintln!(
+                        "[block-positioned-layout] parent_id={} child_id={} padding_rect=({:.1},{:.1},{:.1},{:.1})",
+                        parent.id,
+                        pos_child.id,
+                        padding_rect.x(),
+                        padding_rect.y(),
+                        padding_rect.width(),
+                        padding_rect.height()
+                    );
+                }
                 let cb = match source {
                     ContainingBlockSource::ParentPadding => parent_padding_cb,
                     ContainingBlockSource::Explicit(cb) => cb,
@@ -625,7 +635,7 @@ impl BlockFormattingContext {
                     self.viewport_size,
                     cb,
                 );
-
+                // Layout the child as if it were in normal flow to obtain its intrinsic size.
                 let mut layout_child = pos_child.clone();
                 let mut style = (*layout_child.style).clone();
                 style.position = Position::Relative;
@@ -639,15 +649,14 @@ impl BlockFormattingContext {
                     .formatting_context()
                     .unwrap_or(FormattingContextType::Block);
                 let fc = factory.create(fc_type);
-                let child_height_space = cb
-                    .block_percentage_base()
-                    .or(cb_block_base)
+                let child_height_space = cb_block_base
                     .map(AvailableSpace::Definite)
                     .unwrap_or(AvailableSpace::Indefinite);
                 let child_constraints =
                     LayoutConstraints::new(AvailableSpace::Definite(padding_size.width), child_height_space);
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
 
+                // Resolve positioned style against the containing block.
                 let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
                     &pos_child.style,
                     &cb,
@@ -655,6 +664,9 @@ impl BlockFormattingContext {
                     &self.font_context,
                 );
 
+                // Static position starts at the containing block origin; AbsoluteLayout will add
+                // padding/border offsets, so use the content origin when no flow position was
+                // recorded.
                 let static_pos = static_position.unwrap_or(Point::ZERO);
                 let preferred_min_inline = fc
                     .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
@@ -680,23 +692,23 @@ impl BlockFormattingContext {
                 input.preferred_block_size = preferred_block;
 
                 let result = abs.layout_absolute(&input, &cb)?;
-
-                if result.size.width.is_finite() && result.size.height.is_finite() {
-                    let mut relayout_child = layout_child.clone();
-                    let mut relayout_style = (*relayout_child.style).clone();
-                    relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
-                    relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
-                    relayout_child.style = Arc::new(relayout_style);
-
-                    let mut relayout_constraints = LayoutConstraints::new(
-                        AvailableSpace::Definite(result.size.width),
-                        AvailableSpace::Definite(result.size.height),
-                    );
-                    relayout_constraints.inline_percentage_base = Some(result.size.width);
-                    child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
-                }
                 child_fragment.bounds = Rect::new(result.position, result.size);
-                child_fragment.style = Some(original_style);
+                if trace_positioned_ids().contains(&pos_child.id) {
+                    let (text_count, total) = count_text_fragments(&child_fragment);
+                    let mut snippets = Vec::new();
+                    collect_first_texts(&child_fragment, &mut snippets, 3);
+                    eprintln!(
+                        "[block-positioned-placed] child_id={} pos=({:.1},{:.1}) size=({:.1},{:.1}) texts={}/{} first_texts={:?}",
+                        pos_child.id,
+                        result.position.x,
+                        result.position.y,
+                        result.size.width,
+                        result.size.height,
+                        text_count,
+                        total,
+                        snippets
+                    );
+                }
                 child_fragments.push(child_fragment);
             }
         }
@@ -1213,12 +1225,42 @@ impl BlockFormattingContext {
                         crate::style::types::WhiteSpace::Pre | crate::style::types::WhiteSpace::PreWrap
                     )
                 {
+                    if trace_positioned_ids().contains(&child.id) || trace_block_text_ids().contains(&child.id) {
+                        eprintln!(
+                            "[block-text-skip] id={} selector={:?} raw={:?}",
+                            child.id,
+                            child.debug_info.as_ref().map(|d| d.to_selector()),
+                            text_box.text
+                        );
+                    }
                     continue;
+                }
+                if trace_block_text_ids().contains(&child.id) {
+                    eprintln!(
+                        "[block-text] id={} selector={:?} text={:?} white_space={:?}",
+                        child.id,
+                        child.debug_info.as_ref().map(|d| d.to_selector()),
+                        text_box.text,
+                        child.style.white_space
+                    );
                 }
             }
 
             // Skip out-of-flow positioned boxes (absolute/fixed)
             if is_out_of_flow(child) {
+                if trace_positioned_ids().contains(&child.id) {
+                    eprintln!(
+                        "[block-positioned] parent_id={} child_id={} selector={} pos={:?}",
+                        parent.id,
+                        child.id,
+                        child
+                            .debug_info
+                            .as_ref()
+                            .map(|d| d.to_selector())
+                            .unwrap_or_else(|| "<anon>".into()),
+                        child.style.position
+                    );
+                }
                 let pending_margin = margin_ctx.pending_margin();
                 // Hypothetical box for static position: use normal block width resolution to include auto margins.
                 let hypo_width = compute_block_width(&child.style, containing_width, self.viewport_size);
@@ -2202,7 +2244,6 @@ impl FormattingContext for BlockFormattingContext {
                 static_position,
             } in positioned_children
             {
-                let original_style = child.style.clone();
                 let cb = match source {
                     ContainingBlockSource::ParentPadding => parent_padding_cb,
                     ContainingBlockSource::Explicit(cb) => cb,
@@ -2226,9 +2267,7 @@ impl FormattingContext for BlockFormattingContext {
                     .formatting_context()
                     .unwrap_or(FormattingContextType::Block);
                 let fc = factory.create(fc_type);
-                let child_height_space = cb
-                    .block_percentage_base()
-                    .or(cb_block_base)
+                let child_height_space = cb_block_base
                     .map(AvailableSpace::Definite)
                     .unwrap_or(AvailableSpace::Indefinite);
                 let child_constraints =
@@ -2271,22 +2310,20 @@ impl FormattingContext for BlockFormattingContext {
                 input.preferred_block_size = preferred_block;
 
                 let result = abs.layout_absolute(&input, &cb)?;
-                if result.size.width.is_finite() && result.size.height.is_finite() {
-                    let mut relayout_child = layout_child.clone();
-                    let mut relayout_style = (*relayout_child.style).clone();
-                    relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
-                    relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
-                    relayout_child.style = Arc::new(relayout_style);
-
-                    let mut relayout_constraints = LayoutConstraints::new(
-                        AvailableSpace::Definite(result.size.width),
-                        AvailableSpace::Definite(result.size.height),
-                    );
-                    relayout_constraints.inline_percentage_base = Some(result.size.width);
-                    child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
-                }
                 child_fragment.bounds = Rect::new(result.position, result.size);
-                child_fragment.style = Some(original_style);
+                if trace_positioned_ids().contains(&child.id) {
+                    let (text_count, total) = count_text_fragments(&child_fragment);
+                    eprintln!(
+                        "[block-positioned-placed] child_id={} pos=({:.1},{:.1}) size=({:.1},{:.1}) texts={}/{}",
+                        child.id,
+                        result.position.x,
+                        result.position.y,
+                        result.size.width,
+                        result.size.height,
+                        text_count,
+                        total
+                    );
+                }
                 child_fragments.push(child_fragment);
             }
         }
@@ -2539,6 +2576,73 @@ impl FormattingContext for BlockFormattingContext {
 fn is_out_of_flow(box_node: &BoxNode) -> bool {
     let position = box_node.style.position;
     matches!(position, Position::Absolute | Position::Fixed)
+}
+
+fn count_text_fragments(fragment: &FragmentNode) -> (usize, usize) {
+    fn walk(node: &FragmentNode, text: &mut usize, total: &mut usize) {
+        *total += 1;
+        if matches!(node.content, FragmentContent::Text { .. }) {
+            *text += 1;
+        }
+        for child in &node.children {
+            walk(child, text, total);
+        }
+    }
+
+    let mut text = 0;
+    let mut total = 0;
+    walk(fragment, &mut text, &mut total);
+    (text, total)
+}
+
+fn collect_first_texts(fragment: &FragmentNode, out: &mut Vec<String>, limit: usize) {
+    fn walk(node: &FragmentNode, out: &mut Vec<String>, limit: usize) {
+        if out.len() >= limit {
+            return;
+        }
+        if let FragmentContent::Text { text, .. } = &node.content {
+            out.push(text.clone());
+            if out.len() >= limit {
+                return;
+            }
+        }
+        for child in &node.children {
+            walk(child, out, limit);
+            if out.len() >= limit {
+                return;
+            }
+        }
+    }
+
+    walk(fragment, out, limit);
+}
+
+fn trace_positioned_ids() -> &'static Vec<usize> {
+    static IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| {
+        std::env::var("FASTR_TRACE_POSITIONED")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|tok| tok.trim().parse::<usize>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    })
+}
+
+fn trace_block_text_ids() -> &'static Vec<usize> {
+    static IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
+    IDS.get_or_init(|| {
+        std::env::var("FASTR_TRACE_BLOCK_TEXT")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|tok| tok.trim().parse::<usize>().ok())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    })
 }
 
 fn resolve_length_for_width(
@@ -3253,5 +3357,47 @@ mod tests {
         assert_eq!(child_frag.bounds.y(), 7.0);
         assert_eq!(child_frag.bounds.width(), 50.0);
         assert_eq!(child_frag.bounds.height(), 20.0);
+    }
+
+    #[test]
+    fn absolute_children_inside_block_descendants_are_laid_out() {
+        // Regression: positioned children collected during block child layout were dropped.
+        let mut root_style = ComputedStyle::default();
+        root_style.display = Display::Block;
+        root_style.width = Some(Length::px(400.0));
+
+        let mut middle_style = ComputedStyle::default();
+        middle_style.display = Display::Block;
+        middle_style.width = Some(Length::px(200.0));
+        middle_style.padding_left = Length::px(10.0);
+        middle_style.padding_top = Length::px(10.0);
+        middle_style.height = Some(Length::px(80.0));
+
+        let mut abs_style = ComputedStyle::default();
+        abs_style.display = Display::Block;
+        abs_style.position = Position::Absolute;
+        abs_style.left = Some(Length::px(5.0));
+        abs_style.top = Some(Length::px(7.0));
+        abs_style.width = Some(Length::px(30.0));
+        abs_style.height = Some(Length::px(12.0));
+
+        let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+        let middle = BoxNode::new_block(Arc::new(middle_style), FormattingContextType::Block, vec![abs_child]);
+        let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![middle]);
+
+        let fc = BlockFormattingContext::new();
+        let constraints = LayoutConstraints::definite(500.0, 500.0);
+        let fragment = fc.layout(&root, &constraints).unwrap();
+
+        assert_eq!(fragment.children.len(), 1);
+        let middle_frag = &fragment.children[0];
+        assert_eq!(middle_frag.children.len(), 1, "positioned child should be laid out");
+        let abs_frag = &middle_frag.children[0];
+        // Positioned child should still be included; coordinates are resolved relative to the
+        // containing block origin (padding box in our implementation).
+        assert_eq!(abs_frag.bounds.x(), 5.0);
+        assert_eq!(abs_frag.bounds.y(), 7.0);
+        assert_eq!(abs_frag.bounds.width(), 30.0);
+        assert_eq!(abs_frag.bounds.height(), 12.0);
     }
 }

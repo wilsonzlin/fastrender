@@ -78,6 +78,20 @@ fn normalize_fragment_origin(fragment: &FragmentNode) -> FragmentNode {
     normalized
 }
 
+fn trace_flex_text_ids() -> &'static Vec<usize> {
+    static IDS: OnceLock<Vec<usize>> = OnceLock::new();
+    IDS.get_or_init(|| {
+        std::env::var("FASTR_TRACE_FLEX_TEXT")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .filter_map(|tok| tok.trim().parse::<usize>().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    })
+}
+
 #[derive(Clone, Copy)]
 enum Axis {
     Horizontal,
@@ -202,8 +216,16 @@ impl FormattingContext for FlexFormattingContext {
         // Reuse full layout fragments when the same flex container is laid out repeatedly with
         // identical available sizes (common on carousel-heavy pages). This is scoped per layout
         // run via the factory cache reset.
-        let layout_cache_entry =
-            layout_cache_key(&constraints, self.viewport_size).map(|k| (flex_cache_key(box_node), k));
+        let disable_cache = std::env::var("FASTR_DISABLE_FLEX_CACHE")
+            .map(|v| v != "0")
+            .unwrap_or(false);
+        let layout_cache_entry = if disable_cache {
+            None
+        } else {
+            layout_cache_key(&constraints, self.viewport_size).map(|k| (flex_cache_key(box_node), k))
+        };
+
+        let _trace_text_ids = trace_flex_text_ids();
         if let Some((cache_key, key)) = layout_cache_entry {
             if let Ok(mut cache) = self.layout_fragments.lock() {
                 if let Some((_, fragment)) = cache.get(&cache_key).and_then(|m| m.get(&key)).cloned() {
@@ -1560,19 +1582,21 @@ impl FormattingContext for FlexFormattingContext {
         }
         flex_profile::record_convert_time(convert_timer);
 
-        if let Some((cache_key, key)) = layout_cache_entry {
-            if let Ok(mut cache) = self.layout_fragments.lock() {
-                let entry = cache.entry(cache_key).or_default();
-                if entry.len() >= MAX_LAYOUT_CACHE_PER_NODE {
-                    if let Some(first_key) = entry.keys().next().cloned() {
-                        entry.remove(&first_key);
+        if !disable_cache {
+            if let Some((cache_key, key)) = layout_cache_entry {
+                if let Ok(mut cache) = self.layout_fragments.lock() {
+                    let entry = cache.entry(cache_key).or_default();
+                    if entry.len() >= MAX_LAYOUT_CACHE_PER_NODE {
+                        if let Some(first_key) = entry.keys().next().cloned() {
+                            entry.remove(&first_key);
+                        }
                     }
+                    let size = fragment.bounds.size;
+                    entry
+                        .entry(key)
+                        .or_insert_with(|| (size, std::sync::Arc::new(fragment.clone())));
+                    flex_profile::record_layout_cache_store();
                 }
-                let size = fragment.bounds.size;
-                entry
-                    .entry(key)
-                    .or_insert_with(|| (size, std::sync::Arc::new(fragment.clone())));
-                flex_profile::record_layout_cache_store();
             }
         }
 
@@ -2807,6 +2831,32 @@ impl FlexFormattingContext {
                     let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
                     flex_profile::record_node_layout(child_box.id, selector_for_profile.as_deref(), node_timer);
                     let intrinsic_size = fragment_subtree_size(&child_fragment);
+
+                    if !trace_flex_text_ids().is_empty() && trace_flex_text_ids().contains(&child_box.id) {
+                        let mut text_count = 0;
+                        fn walk(node: &FragmentNode, count: &mut usize) {
+                            if matches!(node.content, FragmentContent::Text { .. }) {
+                                *count += 1;
+                            }
+                            for child in &node.children {
+                                walk(child, count);
+                            }
+                        }
+                        walk(&child_fragment, &mut text_count);
+                        let selector = child_box
+                            .debug_info
+                            .as_ref()
+                            .map(|d| d.to_selector())
+                            .unwrap_or_else(|| "<anon>".to_string());
+                        eprintln!(
+                            "[flex-child-text] id={} selector={} text_fragments={} size=({:.1},{:.1})",
+                            child_box.id,
+                            selector,
+                            text_count,
+                            child_fragment.bounds.width(),
+                            child_fragment.bounds.height()
+                        );
+                    }
 
                     // If Taffy produced ~0 main-size, remeasure with max-content and use that result.
                     if (main_axis_is_row && layout_width <= eps) || (!main_axis_is_row && layout_height <= eps) {

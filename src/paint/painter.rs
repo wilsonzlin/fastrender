@@ -1010,7 +1010,7 @@ impl Painter {
         items: &mut Vec<DisplayCommand>,
     ) {
         let debug_fragments = dump_fragments_enabled();
-        let is_root_fragment = parent_style.is_none() && is_root_context;
+        let is_root_fragment = parent_style.is_none();
         if let Some(style) = fragment.style.as_deref() {
             if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
                 return;
@@ -1422,12 +1422,13 @@ impl Painter {
 
         let has_background = Self::has_paintable_background(&style);
         if has_background {
+            let mut background_rect = abs_bounds;
+            if is_root_fragment {
+                let viewport_rect = Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height);
+                background_rect = background_rect.union(viewport_rect);
+            }
             items.push(DisplayCommand::Background {
-                rect: if is_root_fragment && abs_bounds.x() == 0.0 && abs_bounds.y() == 0.0 {
-                    Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
-                } else {
-                    abs_bounds
-                },
+                rect: background_rect,
                 style: style.clone(),
             });
         }
@@ -1473,17 +1474,17 @@ impl Painter {
             if Self::has_paintable_background(style) {
                 return own_style;
             }
-            if let Some(html) = fragment.children.get(0) {
-                if let Some(style) = html.style.clone() {
+        }
+        if let Some(html) = fragment.children.get(0) {
+            if let Some(style) = html.style.clone() {
+                if Self::has_paintable_background(&style) {
+                    return Some(style);
+                }
+            }
+            if let Some(body) = html.children.first() {
+                if let Some(style) = body.style.clone() {
                     if Self::has_paintable_background(&style) {
                         return Some(style);
-                    }
-                }
-                if let Some(body) = html.children.first() {
-                    if let Some(style) = body.style.clone() {
-                        if Self::has_paintable_background(&style) {
-                            return Some(style);
-                        }
                     }
                 }
             }
@@ -5634,8 +5635,18 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
         ts = ts.pre_concat(next);
     }
 
-    let origin_x = resolve_transform_length(&style.transform_origin.x, style.font_size, style.root_font_size, percentage_width);
-    let origin_y = resolve_transform_length(&style.transform_origin.y, style.font_size, style.root_font_size, percentage_height);
+    let origin_x = resolve_transform_length(
+        &style.transform_origin.x,
+        style.font_size,
+        style.root_font_size,
+        percentage_width,
+    );
+    let origin_y = resolve_transform_length(
+        &style.transform_origin.y,
+        style.font_size,
+        style.root_font_size,
+        percentage_height,
+    );
     let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
     // Apply transform around the resolved origin.
@@ -5647,13 +5658,13 @@ fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transf
 }
 
 fn resolve_transform_length(len: &Length, font_size: f32, root_font_size: f32, percentage_base: f32) -> f32 {
-    let needs_viewport = len.unit.is_viewport_relative()
-        || len
-            .calc
-            .as_ref()
-            .map(|c| c.has_viewport_relative())
-            .unwrap_or(false);
-    let (vw, vh) = if needs_viewport { (f32::NAN, f32::NAN) } else { (0.0, 0.0) };
+    let needs_viewport =
+        len.unit.is_viewport_relative() || len.calc.as_ref().map(|c| c.has_viewport_relative()).unwrap_or(false);
+    let (vw, vh) = if needs_viewport {
+        (f32::NAN, f32::NAN)
+    } else {
+        (0.0, 0.0)
+    };
 
     len.resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
         .unwrap_or(len.value)
@@ -8052,8 +8063,8 @@ mod tests {
 
         let pixmap = paint_tree(&tree, 60, 40, Rgba::WHITE).expect("paint");
 
-        let glyph_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32)
-            .expect("marker glyph");
+        let glyph_bbox =
+            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("marker glyph");
         let shadow_bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| {
             let (r, g, b) = (r as u16, g as u16, b as u16);
             r > g + 20 && r > b + 20

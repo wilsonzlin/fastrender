@@ -1197,6 +1197,17 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
     if let Some(text) = styled.node.text_content() {
         if !text.is_empty() {
             let style = Arc::new(styled.styles.clone());
+            if let Ok(needle) = std::env::var("FASTR_FIND_BOX_TEXT") {
+                if text.contains(&needle) {
+                    eprintln!(
+                        "[box-gen-text] styled_node_id={} tag={} display={:?} text={:?}",
+                        styled.node_id,
+                        styled.node.tag_name().unwrap_or("#text"),
+                        styled.styles.display,
+                        text
+                    );
+                }
+            }
             return vec![attach_styled_id(BoxNode::new_text(style, text.to_string()), styled)];
         }
     }

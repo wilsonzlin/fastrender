@@ -419,6 +419,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     println!("styled text nodes: {} (visible: {})", styled_text, styled_text_visible);
+
+    if let Some(needle) = env::var("FASTR_FIND_TEXT").ok() {
+        fn walk(node: &StyledNode, needle: &str, stack: &mut Vec<String>, found: &mut bool) {
+            stack.push(format!(
+                "{}({:?})",
+                node.node.tag_name().unwrap_or("text"),
+                node.styles.display
+            ));
+            if let dom::DomNodeType::Text { content } = &node.node.node_type {
+                if content.contains(needle) {
+                    *found = true;
+                    eprintln!(
+                        "styled text node containing {:?}: display={:?} visibility={:?} opacity={} stack={}",
+                        needle,
+                        node.styles.display,
+                        node.styles.visibility,
+                        node.styles.opacity,
+                        stack.join(" -> ")
+                    );
+                }
+            }
+            for child in &node.children {
+                walk(child, needle, stack, found);
+            }
+            stack.pop();
+        }
+
+        let mut stack = Vec::new();
+        let mut found = false;
+        walk(&styled, &needle, &mut stack, &mut found);
+        if !found {
+            eprintln!("styled text node containing {:?} not found", needle);
+        }
+    }
     if let Some(style) = first_pagetop.as_ref() {
         println!(
             "first span.pagetop display={:?} margin=({:?},{:?},{:?},{:?}) padding=({},{},{},{}) line_height={:?} font_size={}",
@@ -454,6 +488,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     walk_boxes(&box_tree.root, &mut path, &mut |node, ancestors| {
         if matches!(node.box_type, fastrender::tree::box_tree::BoxType::Text(_)) {
             text_boxes += 1;
+        }
+        if let Some(needle) = env::var("FASTR_FIND_BOX_TEXT").ok() {
+            if let fastrender::tree::box_tree::BoxType::Text(text) = &node.box_type {
+                if text.text.contains(&needle) {
+                    println!(
+                        "found box text {:?} display={:?} visibility={:?} position={:?} color={:?} id={} ancestors={}",
+                        text.text,
+                        node.style.display,
+                        node.style.visibility,
+                        node.style.position,
+                        node.style.color,
+                        node.id,
+                        ancestors.join(" -> ")
+                    );
+                }
+            }
         }
         if let fastrender::tree::box_tree::BoxType::Text(text) = &node.box_type {
             if text.text.contains("New photos") {
@@ -1084,6 +1134,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             trace_ids.push(id);
         }
     }
+    if let Ok(info_ids) = env::var("FASTR_TRACE_BOX_INFO") {
+        for id in info_ids.split(',').filter_map(|tok| tok.trim().parse::<usize>().ok()) {
+            if let Some(node) = find_box_by_id(&box_tree.root, id) {
+                println!(
+                    "box {} info: display={:?} position={:?} visibility={:?} opacity={} width={:?} height={:?} order={} selector={:?}",
+                    id,
+                    node.style.display,
+                    node.style.position,
+                    node.style.visibility,
+                    node.style.opacity,
+                    node.style.width,
+                    node.style.height,
+                    node.style.order,
+                    node.debug_info.as_ref().map(|d| d.to_selector())
+                );
+            }
+        }
+    }
+    if let Some(dump_id) = env::var("FASTR_DUMP_FRAGMENT")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        if let Some(fragment) = find_fragment_node(&fragment_tree.root, scroll_offset, dump_id) {
+            println!(
+                "fragment subtree for box_id {}: text_fragments={}",
+                dump_id,
+                count_text_fragments(fragment)
+            );
+            print_fragment_tree(fragment, 0, 80);
+        } else {
+            println!("no fragment found for box_id {}", dump_id);
+        }
+    }
     for target_id in trace_ids {
         if let Some(path) = find_fragment_by_box_id(&fragment_tree.root, scroll_offset, target_id, &box_debug) {
             println!("path to box_id {target_id}:");
@@ -1188,6 +1271,84 @@ fn collect_tag_ids(node: &BoxNode, tag: &str, out: &mut Vec<usize>) {
     }
 }
 
+fn find_fragment_node<'a>(node: &'a FragmentNode, offset: Point, target: usize) -> Option<&'a FragmentNode> {
+    let abs = Rect::from_xywh(
+        node.bounds.x() + offset.x,
+        node.bounds.y() + offset.y,
+        node.bounds.width(),
+        node.bounds.height(),
+    );
+    let mut matches = false;
+    match &node.content {
+        FragmentContent::Block { box_id }
+        | FragmentContent::Inline { box_id, .. }
+        | FragmentContent::Replaced { box_id, .. } => {
+            if box_id == &Some(target) {
+                matches = true;
+            }
+        }
+        _ => {}
+    }
+    if matches {
+        return Some(node);
+    }
+    let next_offset = Point::new(abs.x(), abs.y());
+    for child in &node.children {
+        if let Some(found) = find_fragment_node(child, next_offset, target) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn count_text_fragments(fragment: &FragmentNode) -> usize {
+    fn walk(node: &FragmentNode, total: &mut usize) {
+        if matches!(node.content, FragmentContent::Text { .. }) {
+            *total += 1;
+        }
+        for child in &node.children {
+            walk(child, total);
+        }
+    }
+
+    let mut total = 0;
+    walk(fragment, &mut total);
+    total
+}
+
+fn print_fragment_tree(node: &FragmentNode, indent: usize, max_lines: usize) {
+    fn fmt_content(node: &FragmentNode) -> String {
+        match &node.content {
+            FragmentContent::Block { box_id } => format!("block box_id={:?}", box_id),
+            FragmentContent::Inline { box_id, .. } => format!("inline box_id={:?}", box_id),
+            FragmentContent::Line { .. } => "line".into(),
+            FragmentContent::Text { text, .. } => format!("text {:?}", text),
+            FragmentContent::Replaced { box_id, .. } => format!("replaced box_id={:?}", box_id),
+        }
+    }
+
+    fn walk(node: &FragmentNode, indent: usize, remaining: &mut usize) {
+        if *remaining == 0 {
+            return;
+        }
+        *remaining -= 1;
+        println!(
+            "{space}{desc}",
+            space = " ".repeat(indent * 2),
+            desc = fmt_content(node)
+        );
+        for child in &node.children {
+            walk(child, indent + 1, remaining);
+            if *remaining == 0 {
+                break;
+            }
+        }
+    }
+
+    let mut remaining = max_lines;
+    walk(node, indent, &mut remaining);
+}
+
 fn find_box_by_id<'a>(node: &'a BoxNode, target: usize) -> Option<&'a BoxNode> {
     if node.id == target {
         return Some(node);
@@ -1254,7 +1415,7 @@ fn walk_boxes<F: FnMut(&BoxNode, &[String])>(node: &BoxNode, path: &mut Vec<Stri
             println!("  ancestors {:?}", path);
         }
     }
-    path.push(format!("{:?}", node.box_type));
+    path.push(format!("#{} {:?}", node.id, node.box_type));
     for child in &node.children {
         walk_boxes(child, path, f);
     }
