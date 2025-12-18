@@ -175,15 +175,25 @@ impl HttpFetcher {
 
     /// Fetch from an HTTP/HTTPS URL
     fn fetch_http(&self, url: &str) -> Result<FetchedResource> {
+        self.fetch_http_with_accept(url, None)
+    }
+
+    fn fetch_http_with_accept(&self, url: &str, accept_encoding: Option<&str>) -> Result<FetchedResource> {
         let config = ureq::Agent::config_builder().timeout_global(Some(self.timeout)).build();
         let agent: ureq::Agent = config.into();
 
         let mut current = url.to_string();
         for _ in 0..10 {
-            let mut response = agent
+            let mut request = agent
                 .get(&current)
                 .header("User-Agent", &self.user_agent)
-                .header("Accept-Language", &self.accept_language)
+                .header("Accept-Language", &self.accept_language);
+
+            if let Some(enc) = accept_encoding {
+                request = request.header("Accept-Encoding", enc);
+            }
+
+            let mut response = request
                 .call()
                 .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
@@ -206,17 +216,26 @@ impl HttpFetcher {
                 .and_then(|h| h.to_str().ok())
                 .map(|s| s.to_string());
 
-            let bytes = response
+            let body_result = response
                 .body_mut()
                 .with_config()
                 .limit(self.max_size as u64)
                 .read_to_vec()
-                .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+                .map_err(|e| e.into_io());
 
-            return Ok(FetchedResource::new(bytes, content_type));
+            match body_result {
+                Ok(bytes) => return Ok(FetchedResource::new(bytes, content_type)),
+                Err(err) if accept_encoding.is_none() && is_decompression_error(&err) => {
+                    return self.fetch_http_with_accept(&current, Some("identity"));
+                }
+                Err(err) => return Err(Error::Io(err)),
+            }
         }
 
-        Err(Error::Io(io::Error::new(io::ErrorKind::Other, "too many redirects")))
+        Err(Error::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "too many redirects",
+        )))
     }
 
     /// Fetch from a file:// URL
@@ -263,6 +282,16 @@ impl ResourceFetcher for HttpFetcher {
             self.fetch_file(&format!("file://{}", url))
         }
     }
+}
+
+fn is_decompression_error(err: &io::Error) -> bool {
+    if let Some(inner) = err.get_ref() {
+        if let Some(ureq_err) = inner.downcast_ref::<ureq::Error>() {
+            return matches!(ureq_err, ureq::Error::Decompress(_, _));
+        }
+    }
+
+    err.to_string().contains("decompression failed")
 }
 
 // ============================================================================
@@ -548,5 +577,73 @@ mod tests {
         let fetcher = HttpFetcher::new();
         let resource = fetcher.fetch("data:text/plain,test").unwrap();
         assert_eq!(resource.bytes, b"test");
+    }
+
+    #[test]
+    fn fetch_http_retries_on_bad_gzip() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        listener.set_nonblocking(true).unwrap();
+
+        let handle = thread::spawn(move || {
+            let mut handled = 0;
+            let start = Instant::now();
+            while handled < 2 && start.elapsed() < Duration::from_secs(5) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let mut buf = [0u8; 1024];
+                        let mut req = Vec::new();
+                        loop {
+                            match stream.read(&mut buf) {
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    req.extend_from_slice(&buf[..n]);
+                                    if req.windows(4).any(|w| w == b"\r\n\r\n") {
+                                        break;
+                                    }
+                                }
+                                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                                    thread::sleep(Duration::from_millis(10));
+                                    continue;
+                                }
+                                Err(_) => break,
+                            }
+                        }
+
+                        let req_str = String::from_utf8_lossy(&req).to_lowercase();
+                        let body = b"hello world";
+                        let encoding_header = if req_str.contains("accept-encoding: identity") {
+                            ""
+                        } else {
+                            "Content-Encoding: gzip\r\n"
+                        };
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\n{}Content-Length: {}\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
+                            encoding_header,
+                            body.len()
+                        );
+                        stream.write_all(response.as_bytes()).unwrap();
+                        stream.write_all(body).unwrap();
+                        handled += 1;
+                    }
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(2));
+        let url = format!("http://{}", addr);
+        let resource = fetcher.fetch(&url).unwrap();
+        assert_eq!(resource.bytes, b"hello world");
+
+        handle.join().unwrap();
     }
 }

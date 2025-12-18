@@ -10,6 +10,7 @@ HttpFetcher now follows redirects (up to 10) with the shared User-Agent, and a l
 HttpFetcher now sends an Accept-Language header by default (en-US,en;q=0.9); regression inspects an HTTP request to ensure the header is present.
 Accept-Language default is exported as DEFAULT_ACCEPT_LANGUAGE so callers can share the header value; fetch_and_render already uses HttpFetcher so it inherits the default.
 fetch_pages now accepts --accept-language to override the header and passes it through HttpFetcher; a local TCP regression asserts the override is sent when fetching.
+HttpFetcher now retries misreported Content-Encoding by falling back to identity encoding when decompression fails; regression `fetch_http_retries_on_bad_gzip` covers invalid gzip bodies.
 cloudflare.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made (duplicate notes removed)
