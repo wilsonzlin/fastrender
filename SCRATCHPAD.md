@@ -39,6 +39,9 @@ Cloudflare render perf fixed: web font loading filters to the page’s codepoint
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
 fetch_and_render now reads .meta sidecars for file:// HTML inputs (e.g., cached pages) and passes the cached Content-Type through decode_html_bytes; added a regression ensuring Shift-JIS HTML decodes via the meta charset.
+
+Cascade: RuleIndex now deduplicates identical selectors within a rule to avoid redundant matching work; added test `rule_index_deduplicates_identical_selectors_in_rule`.
+Wired.com: release render (1200x800) finishes in ~16s with full-frame bbox; debug fetch_and_render/file:// times out at 60s (debug too slow for this page).
 Agent18:
 - Fixed embedded CSS URL scan to ignore assignment targets like `window.css = ...`, preventing bogus fetches; regression `unescapes_json_style_embedded_urls` now passes.
 - Absolute-position helper uses AbsoluteLayout shrink-to-fit behavior; updated test expects width derived from intrinsic when both left/right are set.
