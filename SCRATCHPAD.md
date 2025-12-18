@@ -1,5 +1,3 @@
 Render pipeline now decodes cached HTML with proper charset sniffing: fetch_pages stores the response Content-Type alongside each cached HTML (.html.meta), render_pages decodes bytes via the shared html::encoding helper (BOM/header/meta/default Windows-1252), and fetch_and_render reuses the shared decoder instead of its local copy. cloudflare.com and latimes.com timeouts still outstanding from earlier notes.
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode test import. Marker baseline/list-style-position/ellipsis regressions landed upstream.
-cloudflare.com fetch/render timed out at 60s; no changes made
-latimes.com fetch/render timed out at 60s; no changes made
-latimes.com fetch/render timed out at 60s; no changes made (duplicate notes removed)
+fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.

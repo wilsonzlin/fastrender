@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -243,6 +243,26 @@ fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
         .collect()
 }
 
+fn write_cached_html(cache_path: &Path, bytes: &[u8], content_type: Option<&str>) -> std::io::Result<()> {
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(cache_path, bytes)?;
+
+    let meta_path = cache_path.with_extension("html.meta");
+    match content_type {
+        Some(ct) if !ct.is_empty() => {
+            let _ = std::fs::write(meta_path, ct);
+        }
+        _ => {
+            let _ = std::fs::remove_file(meta_path);
+        }
+    }
+
+    Ok(())
+}
+
 fn fetch_page(url: &str, timeout: Duration, user_agent: &str) -> Result<(Vec<u8>, Option<String>), String> {
     let fetcher = HttpFetcher::default()
         .with_timeout(timeout)
@@ -313,7 +333,6 @@ fn main() {
             s.spawn(move |_| {
                 let filename = url_to_filename(url);
                 let cache_path = PathBuf::from(CACHE_DIR).join(format!("{}.html", filename));
-                let meta_path = cache_path.with_extension("html.meta");
 
                 // Skip if cached and not refreshing
                 if !refresh && cache_path.exists() {
@@ -323,17 +342,10 @@ fn main() {
 
                 match fetch_page(url, timeout, &user_agent) {
                     Ok((bytes, content_type)) => {
-                        if let Ok(mut f) = fs::File::create(&cache_path) {
-                            if f.write_all(&bytes).is_ok() {
-                                if let Some(ct) = content_type.as_ref() {
-                                    let _ = fs::write(&meta_path, ct);
-                                } else {
-                                    let _ = fs::remove_file(&meta_path);
-                                }
-                                println!("✓ {} ({}b)", url, bytes.len());
-                                success.fetch_add(1, Ordering::Relaxed);
-                                return;
-                            }
+                        if write_cached_html(&cache_path, &bytes, content_type.as_deref()).is_ok() {
+                            println!("✓ {} ({}b)", url, bytes.len());
+                            success.fetch_add(1, Ordering::Relaxed);
+                            return;
                         }
                         println!("✗ {} (write failed)", url);
                         failed.fetch_add(1, Ordering::Relaxed);
@@ -383,5 +395,38 @@ mod tests {
     fn selected_pages_none_returns_all() {
         let all = selected_pages(None);
         assert_eq!(all.len(), PAGES.len());
+    }
+
+    #[test]
+    fn write_cached_html_persists_meta_when_present() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cache_path = dir.path().join("page.html");
+
+        write_cached_html(&cache_path, b"hello", Some("text/html; charset=utf-8")).expect("write ok");
+
+        let html = std::fs::read_to_string(&cache_path).expect("html read");
+        assert_eq!(html, "hello");
+
+        let meta_path = cache_path.with_extension("html.meta");
+        let meta = std::fs::read_to_string(meta_path).expect("meta read");
+        assert_eq!(meta, "text/html; charset=utf-8");
+    }
+
+    #[test]
+    fn write_cached_html_removes_meta_when_absent() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cache_path = dir.path().join("page.html");
+        let meta_path = cache_path.with_extension("html.meta");
+
+        // Pre-populate a meta file to ensure it gets removed.
+        std::fs::create_dir_all(dir.path()).unwrap();
+        std::fs::write(&cache_path, "stale").unwrap();
+        std::fs::write(&meta_path, "old").unwrap();
+
+        write_cached_html(&cache_path, b"hello", None).expect("write ok");
+
+        let html = std::fs::read_to_string(&cache_path).expect("html read");
+        assert_eq!(html, "hello");
+        assert!(!meta_path.exists(), "meta should be removed when content type absent");
     }
 }
