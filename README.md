@@ -65,6 +65,7 @@ Cache a set of common pages for debugging and profiling:
 ./target/release/fetch_pages
 
 # Fetch only specific pages with custom parallelism/timeout
+# (--pages accepts full URLs or stems; scheme/www are ignored when matching)
 ./target/release/fetch_pages --pages cnn.com,wikipedia.org --jobs 8 --timeout 20
 
 # Override the User-Agent sent while fetching (defaults to a Chrome-like UA)
