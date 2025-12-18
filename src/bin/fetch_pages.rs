@@ -160,6 +160,7 @@ const PAGES: &[&str] = &[
     "https://theatlantic.com",
     "https://economist.com",
     "https://newyorker.com",
+    "https://phoronix.com",
     "https://sqlite.org",
     "https://nginx.org",
     "https://go.dev",
