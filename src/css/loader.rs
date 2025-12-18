@@ -514,6 +514,7 @@ fn normalize_scheme_slashes(s: &str) -> String {
 /// Extract `<link rel="stylesheet">` URLs from an HTML document.
 pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
     let mut css_urls = Vec::new();
+    let mut print_only_urls = Vec::new();
     let debug = std::env::var("FASTR_LOG_CSS_LINKS").is_ok();
 
     let lower = html.to_lowercase();
@@ -537,8 +538,11 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
                         eprintln!("[css] media attr: {} (print={}, screen={})", media, has_print, has_screen);
                     }
                     if has_print && !has_screen {
-                        if debug {
-                            eprintln!("[css] skipping print-only stylesheet");
+                        if let Some(href) = extract_attr_value(link_tag, "href") {
+                            let href = normalize_scheme_slashes(&href);
+                            if let Some(full_url) = resolve_href(base_url, &href) {
+                                print_only_urls.push(full_url);
+                            }
                         }
                         pos = abs_start + link_end + 1;
                         continue;
@@ -553,8 +557,11 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
                         );
                     }
                     if has_print && !has_screen {
-                        if debug {
-                            eprintln!("[css] skipping print-only stylesheet (fallback)");
+                        if let Some(href) = extract_attr_value(link_tag, "href") {
+                            let href = normalize_scheme_slashes(&href);
+                            if let Some(full_url) = resolve_href(base_url, &href) {
+                                print_only_urls.push(full_url);
+                            }
                         }
                         pos = abs_start + link_end + 1;
                         continue;
@@ -574,6 +581,9 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
         }
     }
 
+    if css_urls.is_empty() && !print_only_urls.is_empty() {
+        css_urls.extend(print_only_urls);
+    }
     dedupe_links_preserving_order(css_urls)
 }
 
@@ -660,6 +670,10 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
                     }
 
                     let cleaned_lower = cleaned.to_ascii_lowercase();
+                    if cleaned_lower.contains("sourceurl=") {
+                        idx = end;
+                        continue;
+                    }
                     let css_pos = cleaned_lower.find(".css");
                     if let Some(pos) = css_pos {
                         let after = cleaned_lower.as_bytes().get(pos + 4).copied();
@@ -983,6 +997,18 @@ mod tests {
         "#;
         let urls = extract_embedded_css_urls(html, "https://example.com/");
         assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
+    }
+
+    #[test]
+    fn ignores_sourceurl_comments_in_embedded_css_scan() {
+        let html = r#"
+            <style>
+            /*# sourceURL=https://example.com/wp-includes/blocks/button/style.min.css */
+            body { color: black; }
+            </style>
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert!(urls.is_empty());
     }
 
     #[test]
