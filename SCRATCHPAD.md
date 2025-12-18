@@ -6,6 +6,7 @@ JS redirect parsing now unescapes HTML entities and escaped slashes/hex/unicode 
 
 cnn.com cascade profiling: FASTR_CASCADE_PROFILE shows style_prepare ~2.3s and style_apply ~5.5s (cascade ~7.9s) before a 30s timeout. HTML is inline-CSS only (3 <style> blocks, largest ~1.49MB, total ~1.7MB); ~4321 tags (~3073 styled nodes), ~5.3M selector candidates (~1.7k/node), ~31k matches. Pseudo matching dominates (~3.0s). No fixes yet; cache at fetches/html/cnn.com.html.
 Attempted pseudo fast-path: skip ::before/::after/::marker matching when no rules set non-none/normal content for that pseudo. Added rule index flagging content declarations, but cnn.com still has content rules so pseudo matching time unchanged (~2.9–3.0s).
+Selector candidate gathering now dedups via a reusable candidate set instead of sort/dedup per node; cnn.com timings unchanged (cascade ~7.6s) but reduces per-element overhead modestly.
 >>>>>>> c79017e (Skip pseudo matching when no content rules present)
 Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
 Added figma.com to fetch_pages targets. Fetch succeeds (~1.25MB HTML); render_pages finishes in ~5s but current PNG is blank (bbox None) due to JS redirect to /redirect_home and missing CSS (bogus encoded webpack-artifacts URL); needs follow-up if we want visible content.

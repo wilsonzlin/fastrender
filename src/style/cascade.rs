@@ -328,6 +328,7 @@ impl MatchIndex {
 struct CascadeScratch {
     candidates: Vec<usize>,
     match_index: MatchIndex,
+    candidate_seen: CandidateSet,
 }
 
 impl CascadeScratch {
@@ -335,6 +336,41 @@ impl CascadeScratch {
         Self {
             candidates: Vec::new(),
             match_index: MatchIndex::new(rule_count),
+            candidate_seen: CandidateSet::new(rule_count),
+        }
+    }
+}
+
+struct CandidateSet {
+    seen: Vec<bool>,
+    touched: Vec<usize>,
+}
+
+impl CandidateSet {
+    fn new(rule_count: usize) -> Self {
+        Self {
+            seen: vec![false; rule_count],
+            touched: Vec::new(),
+        }
+    }
+
+    fn insert(&mut self, idx: usize) -> bool {
+        if self.seen.get(idx).copied().unwrap_or(false) {
+            return false;
+        }
+        if idx >= self.seen.len() {
+            self.seen.resize(idx + 1, false);
+        }
+        self.seen[idx] = true;
+        self.touched.push(idx);
+        true
+    }
+
+    fn reset(&mut self) {
+        for idx in self.touched.drain(..) {
+            if let Some(slot) = self.seen.get_mut(idx) {
+                *slot = false;
+            }
         }
     }
 }
@@ -468,8 +504,9 @@ impl<'a> RuleIndex<'a> {
         self.pseudo_buckets.contains_key(pseudo)
     }
 
-    fn selector_candidates(&self, node: &DomNode, out: &mut Vec<usize>) {
+    fn selector_candidates(&self, node: &DomNode, out: &mut Vec<usize>, seen: &mut CandidateSet) {
         out.clear();
+        seen.reset();
         if !node.is_element() {
             return;
         }
@@ -477,7 +514,11 @@ impl<'a> RuleIndex<'a> {
         if !self.by_id.is_empty() {
             if let Some(id) = node.get_attribute("id") {
                 if let Some(list) = self.by_id.get(&id) {
-                    out.extend(list.iter().copied());
+                    for idx in list {
+                        if seen.insert(*idx) {
+                            out.push(*idx);
+                        }
+                    }
                 }
             }
         }
@@ -487,7 +528,11 @@ impl<'a> RuleIndex<'a> {
                 for cls in class_attr.split_whitespace() {
                     if !cls.is_empty() {
                         if let Some(list) = self.by_class.get(cls) {
-                            out.extend(list.iter().copied());
+                            for idx in list {
+                                if seen.insert(*idx) {
+                                    out.push(*idx);
+                                }
+                            }
                         }
                     }
                 }
@@ -497,9 +542,17 @@ impl<'a> RuleIndex<'a> {
         if !self.by_tag.is_empty() {
             if let Some(tag) = node.tag_name() {
                 if let Some(list) = self.by_tag.get(tag) {
-                    out.extend(list.iter().copied());
+                    for idx in list {
+                        if seen.insert(*idx) {
+                            out.push(*idx);
+                        }
+                    }
                 } else if let Some(list) = self.by_tag.get("*") {
-                    out.extend(list.iter().copied());
+                    for idx in list {
+                        if seen.insert(*idx) {
+                            out.push(*idx);
+                        }
+                    }
                 }
             }
         }
@@ -508,20 +561,25 @@ impl<'a> RuleIndex<'a> {
             for (name, _) in node.attributes_iter() {
                 let key = name.to_ascii_lowercase();
                 if let Some(list) = self.by_attr.get(&key) {
-                    out.extend(list.iter().copied());
+                    for idx in list {
+                        if seen.insert(*idx) {
+                            out.push(*idx);
+                        }
+                    }
                 }
             }
         }
 
-        out.extend(self.universal.iter().copied());
-        if out.len() > 1 {
-            out.sort_unstable();
-            out.dedup();
+        for idx in &self.universal {
+            if seen.insert(*idx) {
+                out.push(*idx);
+            }
         }
     }
 
-    fn pseudo_candidates(&self, node: &DomNode, pseudo: &PseudoElement, out: &mut Vec<usize>) {
+    fn pseudo_candidates(&self, node: &DomNode, pseudo: &PseudoElement, out: &mut Vec<usize>, seen: &mut CandidateSet) {
         out.clear();
+        seen.reset();
         if !node.is_element() {
             return;
         }
@@ -533,7 +591,11 @@ impl<'a> RuleIndex<'a> {
         if !bucket.by_id.is_empty() {
             if let Some(id) = node.get_attribute("id") {
                 if let Some(list) = bucket.by_id.get(&id) {
-                    out.extend(list.iter().copied());
+                    for idx in list {
+                        if seen.insert(*idx) {
+                            out.push(*idx);
+                        }
+                    }
                 }
             }
         }
@@ -543,7 +605,11 @@ impl<'a> RuleIndex<'a> {
                 for cls in class_attr.split_whitespace() {
                     if !cls.is_empty() {
                         if let Some(list) = bucket.by_class.get(cls) {
-                            out.extend(list.iter().copied());
+                            for idx in list {
+                                if seen.insert(*idx) {
+                                    out.push(*idx);
+                                }
+                            }
                         }
                     }
                 }
@@ -553,7 +619,11 @@ impl<'a> RuleIndex<'a> {
         if !bucket.by_tag.is_empty() {
             if let Some(tag) = node.tag_name() {
                 if let Some(list) = bucket.by_tag.get(tag) {
-                    out.extend(list.iter().copied());
+                    for idx in list {
+                        if seen.insert(*idx) {
+                            out.push(*idx);
+                        }
+                    }
                 }
             }
         }
@@ -562,15 +632,19 @@ impl<'a> RuleIndex<'a> {
             for (name, _) in node.attributes_iter() {
                 let key = name.to_ascii_lowercase();
                 if let Some(list) = bucket.by_attr.get(&key) {
-                    out.extend(list.iter().copied());
+                    for idx in list {
+                        if seen.insert(*idx) {
+                            out.push(*idx);
+                        }
+                    }
                 }
             }
         }
 
-        out.extend(bucket.universal.iter().copied());
-        if out.len() > 1 {
-            out.sort_unstable();
-            out.dedup();
+        for idx in &bucket.universal {
+            if seen.insert(*idx) {
+                out.push(*idx);
+            }
         }
     }
 }
@@ -6129,7 +6203,7 @@ fn find_matching_rules<'a>(
     let start = profiling.then(|| Instant::now());
     let candidates = &mut scratch.candidates;
     candidates.clear();
-    rules.selector_candidates(node, candidates);
+    rules.selector_candidates(node, candidates, &mut scratch.candidate_seen);
     if candidates.is_empty() {
         scratch.match_index.reset();
         return Vec::new();
@@ -6208,7 +6282,7 @@ fn find_pseudo_element_rules<'a>(
     let start = profiling.then(|| Instant::now());
     let candidates = &mut scratch.candidates;
     candidates.clear();
-    rules.pseudo_candidates(node, pseudo, candidates);
+    rules.pseudo_candidates(node, pseudo, candidates, &mut scratch.candidate_seen);
     if candidates.is_empty() {
         scratch.match_index.reset();
         return Vec::new();
