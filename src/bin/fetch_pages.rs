@@ -776,4 +776,57 @@ mod tests {
         assert_eq!(content_type.as_deref(), Some("text/plain"));
         assert_eq!(final_url, format!("http://{}/js", addr));
     }
+
+    #[test]
+    fn fetch_page_keeps_original_when_js_redirect_fails() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            let mut iter = listener.incoming();
+
+            // First response: JS redirect to /missing
+            if let Some(stream) = iter.next() {
+                let mut stream = stream.unwrap();
+                let _ = stream.read(&mut [0u8; 1024]);
+                let body = b"<script>window.location.href='/missing'</script>";
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+
+            // Second response: 404 for /missing
+            if let Some(stream) = iter.next() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf);
+                assert!(req.starts_with("GET /missing"), "unexpected path: {req}");
+
+                let body = b"not found";
+                let headers = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let url = format!("http://{}/", addr);
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
+        handle.join().unwrap();
+
+        assert_eq!(bytes, b"<script>window.location.href='/missing'</script>");
+        assert_eq!(content_type.as_deref(), Some("text/html"));
+        assert_eq!(final_url, url);
+    }
 }
