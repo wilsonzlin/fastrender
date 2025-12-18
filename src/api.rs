@@ -1465,6 +1465,12 @@ impl FastRender {
             ReplacedType::Image {
                 src, alt: stored_alt, ..
             } => {
+                // If both width and height are specified (non-auto), intrinsic data is unused per
+                // replaced element sizing. Avoid network fetches in that case to speed up heavy pages.
+                if style.width.is_some() && style.height.is_some() {
+                    return;
+                }
+
                 let mut have_resource_dimensions = false;
 
                 let selected = if !src.is_empty() {
