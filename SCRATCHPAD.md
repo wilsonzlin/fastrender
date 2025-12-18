@@ -176,3 +176,4 @@ Common CSS classes: kiln-edit-mode (~4.1k occurrences), layout-homepage-mobile (
 Most class occurrences are on hidden/ad elements; consider stripping rules for kiln-edit-mode/ad-slot/adSlotLoaded when profiling to reduce selector space.
 Selectors include heavy :has usage (~526 occurrences), further stressing matching.
 Other css bits: ~10 @keyframes blocks.
+var() usage is heavy (~2.8k occurrences) in inline CSS.
