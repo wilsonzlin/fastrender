@@ -6,3 +6,4 @@ Aligned fetcher user-agents: exported DEFAULT_USER_AGENT in resource.rs, fetch_a
 cloudflare.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made (duplicate notes removed)
+HTML parsing now disables scripting so <noscript> fallbacks are parsed/renderable; regression added for noscript content.

@@ -3,6 +3,8 @@ use crate::css::types::CssString;
 use crate::error::{Error, ParseError, Result};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
+use html5ever::tree_builder::TreeBuilderOpts;
+use html5ever::ParseOpts;
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use selectors::{
     attr::{AttrSelectorOperation, CaseSensitivity},
@@ -91,7 +93,15 @@ pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
 }
 
 pub fn parse_html(html: &str) -> Result<DomNode> {
-    let dom = parse_document(RcDom::default(), Default::default())
+    let opts = ParseOpts {
+        tree_builder: TreeBuilderOpts {
+            scripting_enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let dom = parse_document(RcDom::default(), opts)
         .from_utf8()
         .read_from(&mut html.as_bytes())
         .map_err(|e| {
@@ -1570,6 +1580,23 @@ mod tests {
             },
             children: vec![],
         }
+    }
+
+    fn find_element_by_id<'a>(node: &'a DomNode, id: &str) -> Option<&'a DomNode> {
+        if let DomNodeType::Element { attributes, .. } = &node.node_type {
+            if attributes
+                .iter()
+                .any(|(name, value)| name.eq_ignore_ascii_case("id") && value == id)
+            {
+                return Some(node);
+            }
+        }
+        for child in &node.children {
+            if let Some(found) = find_element_by_id(child, id) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     fn matches(node: &DomNode, ancestors: &[&DomNode], pseudo: &PseudoClass) -> bool {
@@ -3073,6 +3100,22 @@ mod tests {
         }
         assert!(contains_text(&dom, "Example Domain"));
         assert!(contains_text(&dom, "documentation examples"));
+    }
+
+    #[test]
+    fn parse_html_keeps_noscript_content_without_scripting() {
+        let html = "<!doctype html><html><head><noscript><style>.fallback{color:red;}</style></noscript></head><body><noscript><div id='fallback'>hello</div></noscript></body></html>";
+        let dom = parse_html(html).expect("parse");
+
+        let fallback = find_element_by_id(&dom, "fallback").expect("noscript content parsed into DOM");
+        let has_text_child = fallback.children.iter().any(|child| {
+            if let DomNodeType::Text { content } = &child.node_type {
+                content.contains("hello")
+            } else {
+                false
+            }
+        });
+        assert!(has_text_child, "noscript children should be parsed as normal content");
     }
 
     #[test]
