@@ -8,7 +8,7 @@
 
 use crate::css::parser::{parse_declarations, parse_stylesheet};
 use crate::css::selectors::{PseudoElement, TextDirection};
-use crate::css::types::{ContainerCondition, CssImportLoader, Declaration, StyleRule, StyleSheet};
+use crate::css::types::{ContainerCondition, CssImportLoader, Declaration, PropertyValue, StyleRule, StyleSheet};
 use crate::dom::{resolve_first_strong_direction, with_target_fragment, DomNode, DomNodeType, ElementRef};
 use crate::geometry::Size;
 use crate::style::color::Rgba;
@@ -125,6 +125,21 @@ fn select_color_scheme(pref: &ColorSchemePreference, user: ColorScheme) -> Optio
             schemes.first().cloned()
         }
     }
+}
+
+fn selector_has_nonempty_content(decls: &[Declaration]) -> bool {
+    for decl in decls {
+        if decl.property.eq_ignore_ascii_case("content") {
+            // Treat any value other than 'none' or 'normal' as generating content (including empty strings)
+            if let PropertyValue::Keyword(kw) = &decl.value {
+                if kw.eq_ignore_ascii_case("none") || kw.eq_ignore_ascii_case("normal") {
+                    continue;
+                }
+            }
+            return true;
+        }
+    }
+    false
 }
 
 fn apply_color_scheme_palette(
@@ -271,6 +286,7 @@ struct RuleIndex<'a> {
     universal: Vec<usize>,
     pseudo_selectors: Vec<IndexedSelector<'a>>,
     pseudo_buckets: HashMap<PseudoElement, PseudoBuckets>,
+    pseudo_content: HashSet<PseudoElement>,
 }
 
 struct MatchIndex {
@@ -392,6 +408,7 @@ impl<'a> RuleIndex<'a> {
             universal: Vec::new(),
             pseudo_selectors: Vec::new(),
             pseudo_buckets: HashMap::new(),
+            pseudo_content: HashSet::new(),
         };
 
         for rule in rules {
@@ -405,6 +422,9 @@ impl<'a> RuleIndex<'a> {
                         .pseudo_buckets
                         .entry(pe.clone())
                         .or_insert_with(PseudoBuckets::new);
+                    if selector_has_nonempty_content(&stored_rule.rule.declarations) {
+                        index.pseudo_content.insert(pe.clone());
+                    }
                     let selector_idx = index.pseudo_selectors.len();
                     index.pseudo_selectors.push(IndexedSelector {
                         rule_idx,
@@ -438,6 +458,10 @@ impl<'a> RuleIndex<'a> {
         }
 
         index
+    }
+
+    fn has_pseudo_content(&self, pseudo: &PseudoElement) -> bool {
+        self.pseudo_content.contains(pseudo)
     }
 
     fn has_pseudo_rules(&self, pseudo: &PseudoElement) -> bool {
@@ -1303,7 +1327,7 @@ fn apply_styles_internal(
 
     // Compute pseudo-element styles
     let pseudo_start = prof.then(|| Instant::now());
-    let before_styles = if rules.has_pseudo_rules(&PseudoElement::Before) {
+    let before_styles = if rules.has_pseudo_content(&PseudoElement::Before) {
         compute_pseudo_element_styles(
             node,
             rules,
@@ -1320,7 +1344,7 @@ fn apply_styles_internal(
     } else {
         None
     };
-    let after_styles = if rules.has_pseudo_rules(&PseudoElement::After) {
+    let after_styles = if rules.has_pseudo_content(&PseudoElement::After) {
         compute_pseudo_element_styles(
             node,
             rules,
@@ -6928,7 +6952,7 @@ fn compute_marker_styles(
         return None;
     }
 
-    let matching_rules = if rules.has_pseudo_rules(&PseudoElement::Marker) {
+    let matching_rules = if rules.has_pseudo_content(&PseudoElement::Marker) {
         find_pseudo_element_rules(node, rules, selector_caches, scratch, ancestors, &PseudoElement::Marker)
     } else {
         Vec::new()
