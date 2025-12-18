@@ -11,6 +11,7 @@ CSS link extraction now decodes HTML entities (including odd forms like &/#47;) 
 Entity-decoded CSS URLs now collapse surplus slashes after schemes (e.g., https:////host////path → https://host/path); regressions cover link and embedded CSS cases. figma.com still blank (JS app) but entity-escaped hrefs now normalize correctly.
 
 Added fast.com to fetch_pages targets; fetch succeeds (~25KB HTML) and renders in ~0.3s at 1200×800 (PNG ~35KB, bbox roughly centered speed UI).
+Added blog.rust-lang.org to fetch_pages targets. Fetch succeeds (~87KB HTML) and renders in ~1.5s at 1200×800 (PNG ~106KB; full content visible).
 
 Render pipeline now decodes cached HTML with proper charset sniffing: fetch_pages stores the response Content-Type alongside each cached HTML (.html.meta), render_pages decodes bytes via the shared html::encoding helper (BOM/header/meta/default Windows-1252), and fetch_and_render reuses the shared decoder instead of its local copy. cloudflare.com and latimes.com timeouts still outstanding from earlier notes.
 Absolute/fixed elements with both left/right insets and width:auto now use the constraint equation instead of shrink-to-fit, so inset overlays fill the containing block; regressions `fixed_positioned_inset_auto_width_fills_viewport` and `absolute_inset_auto_width_fills_parent` cover fixed and absolute bars spanning their containing blocks.
