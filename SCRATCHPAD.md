@@ -200,3 +200,4 @@ filter appears ~10 times.
 linear-gradient appears ~24 times.
 z-index appears ~87 times.
 overflow:hidden appears ~39 times.
+transition appears ~144 times.
