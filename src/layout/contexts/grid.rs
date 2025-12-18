@@ -964,9 +964,9 @@ impl GridFormattingContext {
 
     /// Converts Taffy layout results to FragmentNode tree
     #[allow(dead_code)]
-    fn convert_to_fragments(
+    fn convert_to_fragments<T>(
         &self,
-        taffy: &TaffyTree<*const BoxNode>,
+        taffy: &TaffyTree<T>,
         node_id: TaffyNodeId,
         node_map: &HashMap<TaffyNodeId, &BoxNode>,
         factory: &FormattingContextFactory,
@@ -1214,9 +1214,6 @@ impl FormattingContext for GridFormattingContext {
         );
 
         // Run Taffy layout with measurement to size grid items using their own formatting contexts.
-        static LOG_CHILD_MEASURE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let log_child = *LOG_CHILD_MEASURE
-            .get_or_init(|| std::env::var("FASTR_LOG_GRID_CHILDREN").map(|v| v != "0").unwrap_or(false));
         taffy
             .compute_layout_with_measure(
                 root_id,
@@ -1250,17 +1247,6 @@ impl FormattingContext for GridFormattingContext {
                                     width: fragment.bounds.width(),
                                     height: fragment.bounds.height(),
                                 };
-                                if log_child {
-                                    eprintln!(
-                                        "[grid-child-measure] id={} display={:?} constraints=({:?},{:?}) -> size=({:.1},{:.1})",
-                                        box_node.id,
-                                        box_node.style.display,
-                                        constraints.available_width,
-                                        constraints.available_height,
-                                        size.width,
-                                        size.height,
-                                    );
-                                }
                                 measured_fragments.insert(node_id, fragment);
                                 size
                             }
@@ -1287,17 +1273,6 @@ impl FormattingContext for GridFormattingContext {
         );
         let fallback_width = constraints.width().unwrap_or(self.viewport_size.width);
         let mut fragment = self.convert_to_fragments(&taffy, root_id, &node_map, &factory, fallback_width)?;
-
-        if let Some(key) = self.layout_cache_key(constraints) {
-            let cache = GRID_LAYOUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-            if let Ok(mut map) = cache.lock() {
-                let cache_id = box_node.styled_node_id.unwrap_or(box_node.id);
-                let entry = map
-                    .entry((cache_id, key))
-                    .or_insert_with(|| Arc::new(fragment.clone()));
-                fragment = (**entry).clone();
-            }
-        }
 
         // Position out-of-flow children against the appropriate containing block.
         if !positioned_children.is_empty() {

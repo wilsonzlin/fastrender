@@ -102,6 +102,7 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
         }
     }
 
+    cleaned = decode_html_entities(&cleaned);
     cleaned = unescape_js_escapes(&cleaned).into_owned();
     if cleaned.contains('\\') {
         cleaned = cleaned.replace('\\', "");
@@ -413,11 +414,69 @@ fn extract_attr_value(tag_source: &str, attr: &str) -> Option<String> {
             let quote = attr_slice.chars().nth(qpos).unwrap();
             let after = &attr_slice[qpos + 1..];
             if let Some(end) = after.find(quote) {
-                return Some(after[..end].to_string());
+                return Some(decode_html_entities(&after[..end]));
             }
         }
     }
     None
+}
+
+fn decode_html_entities(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '&' {
+            out.push(c);
+            continue;
+        }
+
+        let mut entity = String::new();
+        while let Some(&next) = chars.peek() {
+            entity.push(next);
+            chars.next();
+            if next == ';' {
+                break;
+            }
+        }
+
+        if entity.is_empty() {
+            out.push('&');
+            continue;
+        }
+
+        let mut ent = entity.as_str();
+        if let Some(stripped) = ent.strip_prefix('/') {
+            ent = stripped;
+        }
+
+        let decoded = match ent {
+            "amp;" => Some('&'),
+            "quot;" => Some('"'),
+            "apos;" => Some('\''),
+            "lt;" => Some('<'),
+            "gt;" => Some('>'),
+            _ => {
+                if let Some(num) = ent.strip_prefix('#') {
+                    let trimmed = num.trim_end_matches(';');
+                    if let Some(hex) = trimmed.strip_prefix(['x', 'X']) {
+                        u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+                    } else {
+                        trimmed.parse::<u32>().ok().and_then(char::from_u32)
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(ch) = decoded {
+            out.push(ch);
+        } else {
+            out.push('&');
+            out.push_str(&entity);
+        }
+    }
+    out
 }
 
 /// Extract `<link rel="stylesheet">` URLs from an HTML document.
@@ -443,17 +502,9 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
                         continue;
                     }
                 }
-                if let Some(href_start) = link_tag_lower.find("href") {
-                    let href_section = &link_tag[href_start..];
-                    if let Some(quote_start) = href_section.find('"').or_else(|| href_section.find('\'')) {
-                        let quote_char = href_section.chars().nth(quote_start).unwrap();
-                        let after_quote = &href_section[quote_start + 1..];
-                        if let Some(quote_end) = after_quote.find(quote_char) {
-                            let href = &after_quote[..quote_end];
-                            if let Some(full_url) = resolve_href(base_url, href) {
-                                css_urls.push(full_url);
-                            }
-                        }
+                if let Some(href) = extract_attr_value(link_tag, "href") {
+                    if let Some(full_url) = resolve_href(base_url, &href) {
+                        css_urls.push(full_url);
                     }
                 }
             }
@@ -797,6 +848,22 @@ mod tests {
     }
 
     #[test]
+    fn decodes_html_entities_in_stylesheet_hrefs() {
+        let html = r#"
+            <link rel="stylesheet" href="https://&#47;&#47;cdn.example.com&#47;main.css">
+            <link rel="stylesheet" href="https://&/#47;&#47;cdn.example.com&#47;other.css">
+        "#;
+        let urls = extract_css_links(html, "https://example.com/");
+        assert_eq!(
+            urls,
+            vec![
+                "https://cdn.example.com/main.css".to_string(),
+                "https://cdn.example.com/other.css".to_string()
+            ]
+        );
+    }
+
+    #[test]
     fn unescapes_json_style_embedded_urls() {
         let html = r#"
             <script>
@@ -819,6 +886,17 @@ mod tests {
             urls,
             vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]
         );
+    }
+
+    #[test]
+    fn decodes_html_entities_in_embedded_css_urls() {
+        let html = r#"
+            <script>
+                const css = "https://&/#47;&#47;cdn.example.com&#47;main.css";
+            </script>
+        "#;
+        let urls = extract_embedded_css_urls(html, "https://example.com/");
+        assert_eq!(urls, vec!["https://cdn.example.com/main.css".to_string()]);
     }
 
     #[test]
