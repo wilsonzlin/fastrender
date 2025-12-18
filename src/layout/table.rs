@@ -2849,32 +2849,154 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
             let span_height = (cell.min_height - spacing).max(0.0);
 
             let targets: Vec<usize> = (span_start..span_end).collect();
-            if !targets.is_empty() {
-                let percent_base = content_available;
-                let mut mins: Vec<f32> = structure.rows.iter().map(|r| r.min_height).collect();
-                let row_floor_fn = |idx: usize, current: f32| -> f32 {
-                    let mut floor = row_floor(&structure.rows[idx]);
-                    floor = floor.max(current);
-                    floor
-                };
-                let non_target_sum: f32 = (span_start..span_end)
-                    .filter(|idx| !targets.contains(idx))
-                    .map(|idx| row_floor_fn(idx, *mins.get(idx).unwrap_or(&0.0)))
-                    .sum();
-                let remaining = (span_height - non_target_sum).max(0.0);
-                distribute_rowspan_targets(
-                    &targets,
-                    &mut mins,
-                    &structure.rows,
-                    remaining,
-                    percent_base,
-                    &row_floor_fn,
-                    &|current, share| current.max(share),
-                );
-                for (idx, val) in mins.into_iter().enumerate() {
-                    if let Some(row) = structure.rows.get_mut(idx) {
-                        row.min_height = row.min_height.max(val);
+            if targets.is_empty() {
+                continue;
+            }
+
+            // Establish floors (min/spec heights) and caps for each target row.
+            let percent_base = content_available;
+            let mut floors: Vec<f32> = Vec::with_capacity(targets.len());
+            let mut caps: Vec<Option<f32>> = Vec::with_capacity(targets.len());
+            let mut current_sum = 0.0;
+            for &idx in &targets {
+                let row = &structure.rows[idx];
+                let (min_cap, max_cap) = resolve_row_min_max(row, percent_base);
+                let floor = row_floor(row).max(row.min_height).max(min_cap.unwrap_or(0.0));
+                floors.push(floor);
+                caps.push(max_cap);
+                current_sum += floor;
+            }
+
+            let mut current = floors.clone();
+            let mut remaining = (span_height - current_sum).max(0.0);
+            let specified_indices: Vec<usize> = targets
+                .iter()
+                .enumerate()
+                .filter(|(_, &idx)| matches!(structure.rows[idx].specified_height, Some(SpecifiedHeight::Fixed(_)) | Some(SpecifiedHeight::Percent(_))))
+                .map(|(local_idx, _)| local_idx)
+                .collect();
+            let auto_indices: Vec<usize> = targets
+                .iter()
+                .enumerate()
+                .filter(|(_, &idx)| !matches!(structure.rows[idx].specified_height, Some(SpecifiedHeight::Fixed(_)) | Some(SpecifiedHeight::Percent(_))))
+                .map(|(local_idx, _)| local_idx)
+                .collect();
+
+            if remaining > 0.0 {
+                if specified_indices.is_empty() {
+                    // No specified rows: distribute proportional to existing floors, but
+                    // fall back to equal shares when any row has no floor contribution.
+                    let weights: Vec<f32> = current.iter().cloned().collect();
+                    if weights.iter().any(|w| *w <= 0.0) {
+                        let per = remaining / current.len() as f32;
+                        for c in &mut current {
+                            *c += per;
+                        }
+                        let zero_indices: Vec<usize> = weights
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, w)| **w <= 0.0)
+                            .map(|(i, _)| i)
+                            .collect();
+                        if !zero_indices.is_empty() && zero_indices.len() < current.len() {
+                            let donors: Vec<usize> = weights
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, w)| **w > 0.0)
+                                .map(|(i, _)| i)
+                                .collect();
+                            let bonus = per * 0.01;
+                            let total_bonus = bonus * zero_indices.len() as f32;
+                            if !donors.is_empty() && bonus.is_finite() && bonus > 0.0 {
+                                let per_donor = total_bonus / donors.len() as f32;
+                                for idx in zero_indices {
+                                    current[idx] += bonus;
+                                }
+                                for idx in donors {
+                                    current[idx] = (current[idx] - per_donor).max(0.0);
+                                }
+                            }
+                        }
+                    } else {
+                        let total_weight: f32 = weights.iter().sum();
+                        if total_weight > 0.0 {
+                            for (idx, weight) in weights.iter().enumerate() {
+                                let share = remaining * (*weight / total_weight);
+                                current[idx] += share;
+                            }
+                        }
                     }
+                } else {
+                    let equal_share = span_height / targets.len() as f32;
+
+                    // First, raise auto rows toward the equal share baseline.
+                    for &idx in &auto_indices {
+                        if remaining <= 0.0 {
+                            break;
+                        }
+                        let need = (equal_share - current[idx]).max(0.0);
+                        let take = need.min(remaining);
+                        current[idx] += take;
+                        remaining -= take;
+                    }
+
+                    if remaining > 0.0 {
+                        if !auto_indices.is_empty() {
+                            let per_auto = remaining / auto_indices.len() as f32;
+                            let overshoot_ratio = if equal_share > 0.0 {
+                                per_auto / equal_share
+                            } else {
+                                0.0
+                            };
+                            if overshoot_ratio > 0.25 && !specified_indices.is_empty() {
+                                let per_spec = remaining / specified_indices.len() as f32;
+                                for &idx in &specified_indices {
+                                    current[idx] += per_spec;
+                                }
+                            } else {
+                                for &idx in &auto_indices {
+                                    current[idx] += per_auto;
+                                }
+                            }
+                        } else {
+                            // All rows are specified; spread the remainder evenly.
+                            let per_spec = remaining / specified_indices.len() as f32;
+                            for &idx in &specified_indices {
+                                current[idx] += per_spec;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Apply max caps and redirect any surplus to uncapped rows.
+            let mut surplus = 0.0;
+            for (idx, cap) in caps.iter().enumerate() {
+                if let Some(max_h) = cap {
+                    if current[idx] > *max_h {
+                        surplus += current[idx] - *max_h;
+                        current[idx] = *max_h;
+                    }
+                }
+            }
+            if surplus > 0.0 {
+                let flex: Vec<usize> = caps
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, cap)| cap.is_none() || current[*i] + f32::EPSILON < (*cap).unwrap_or(f32::INFINITY))
+                    .map(|(i, _)| i)
+                    .collect();
+                if !flex.is_empty() {
+                    let per = surplus / flex.len() as f32;
+                    for idx in flex {
+                        current[idx] += per;
+                    }
+                }
+            }
+
+            for (local_idx, &row_idx) in targets.iter().enumerate() {
+                if let Some(row) = structure.rows.get_mut(row_idx) {
+                    row.min_height = row.min_height.max(current[local_idx]);
                 }
             }
         }

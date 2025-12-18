@@ -44,13 +44,15 @@ Agent18:
 - Replaced element sizing test adjusted to expect content-box width from border-box width (360px -> 330px content) per box-sizing.
 - UA defaults now apply link state styles via data-fastr flags (visited/active/hover/focus) and iframe max-width check asserts 100% length.
 - Match-parent text-align now propagates to text-align-last (resolution runs before text-align) so match-parent sets last-line alignment as expected.
-- Remaining failing tests (vertical text-overflow ellipsis, table rowspans) untouched.
+- Rowspan height distribution now favors auto rows while still spreading large spans: spanning cell heights prime rows with their floors, bias extra toward auto rows up to equal-share, and cap/redistribute with headroom so proportional and baseline tests (`calculate_row_heights_*`, `baseline_height_computation_skips_rowspanning_cells`) pass.
+- Vertical text-overflow ellipsis tests now passing (no changes required after rebase/tests rerun).
 
 Container queries respect inline-size without requiring a block dimension: media length resolution no longer demands finite viewport height when the query lacks viewport-relative units, so inline-size containers evaluate size queries correctly while block-size queries still fail for inline-only containers. Added optional logging for container sizes (FASTR_LOG_CONTAINER_QUERY).
 
 latimes.com UTF-8 boundary panic fixed: text splits now clamp requested offsets to prior char boundaries, run splitting validates local boundaries and falls back to reshaping when misaligned. latimes.com renders successfully (≈72s at 1200×800).
 Added regression ensuring mid-codepoint split requests clamp to the previous char boundary (no panics, split_at aligns to codepoint start).
 Added yahoo.com and nasa.gov to fetch_pages targets (cargo check --bin fetch_pages passes).
+<<<<<<< HEAD
 Added display-list renderer regressions for mix-blend-mode: non-isolated multiply darkens the backdrop, while isolation forces source-over compositing (blue over red).
 Fetch/render notes: yahoo.com and nasa.gov fetch successfully but render timed out at 60s (large pages/heavy CSS).
 render_pages now supports --timings to set FASTR_RENDER_TIMINGS for per-page stage timing logs.
@@ -71,3 +73,6 @@ CNN render with split_at char-boundary guard now finishes: render_pages --pages 
 - Fetched full page set (fetch_pages). Several 403/401s remain expected; cache populated for 85+ pages.
 - render_pages was crashing on latimes.com due to splitting text at non-UTF-8 boundaries. TextItem::split_at now clamps to char boundaries and split_runs_preserving_shaping bails out when the run offset isn't a boundary, falling back to reshaping; added regression test split_at_handles_non_char_boundary_offsets.
 - Reran render_pages for all cached pages; 86/86 pass, latimes.com now renders (PNG ~106KB). Summary in fetches/renders/_summary.log.
+=======
+Push of commit bd102ae (rowspan distribution + scratchpad updates) was blocked by SSH timeouts; rebased onto origin/main but push still pending.
+>>>>>>> bd102ae (Adjust rowspan height distribution for mixed specified/auto rows)
