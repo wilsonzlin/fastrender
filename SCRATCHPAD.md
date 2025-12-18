@@ -54,6 +54,7 @@ Rowspan height distribution adjusted to favor auto rows while sharing spans; ver
 - Simple JS location redirects are also followed once in the CLIs (window.location[.href]/location.replace with literal URL), to catch noscript/script-only handoffs before rendering.
 - HttpFetcher now errors on empty HTTP bodies (UnexpectedEof) to avoid caching blank responses; regression added. fetch_and_render already treats empty bodies as errors.
 - Meta refresh parsing now decodes common HTML entity quotes (quot/apos/&#39;/&#x27;) and keeps semicolons inside quoted URLs, so encoded or quoted refresh targets are extracted correctly; regressions added.
+- fetch_pages now shares the meta refresh/JS redirect handling used by the render CLIs: it follows one meta refresh or simple JS location redirect, caches the final URL in .html.meta, and regressions cover both redirect types during fetching.
 
 - Rendered additional pages and found `openbsd.org` PNG was completely blank. Root cause: block layout dropped absolutely positioned children when the parent block was laid out via `layout_block_child` (positioned_children from `layout_children` were ignored). Added absolute-position handling to that path so out-of-flow children are laid out against the block's padding box, and regression `absolute_position_body_with_insets_renders_content` covers the scenario.
 - `openbsd.org` now renders with visible sidebar/content; `render_pages --pages openbsd.org` succeeds (PNG unique colors ~32k).
@@ -88,4 +89,3 @@ fetch_and_render regression `render_once_follows_quoted_meta_refresh` uses a loc
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
 - Added mozilla.org to fetch_pages targets for broader coverage. Fetch/render mozilla.org (1200x800, 60s) succeeds (~79KB PNG, visible content).
-- fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.

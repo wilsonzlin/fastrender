@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fastrender::html::encoding::decode_html_bytes;
+use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use rayon::ThreadPoolBuilder;
 use url::Url;
@@ -314,87 +315,62 @@ fn write_cached_html(
     Ok(())
 }
 
-fn extract_attr_value(tag_source: &str, attr: &str) -> Option<String> {
-    let lower = tag_source.to_ascii_lowercase();
-    let attr_lower = attr.to_ascii_lowercase();
-    let mut pos = 0;
-    while let Some(idx) = lower[pos..].find(&attr_lower) {
-        let abs = pos + idx;
-        // Ensure preceding char is whitespace or <
-        if abs > 0 {
-            let prev = lower.as_bytes()[abs - 1] as char;
-            if !prev.is_whitespace() && prev != '<' {
-                pos = abs + attr_lower.len();
-                continue;
-            }
-        }
-        let rest = &tag_source[abs + attr_lower.len()..];
-        let rest_trim = rest.trim_start();
-        if let Some(rest_idx) = rest_trim.find('=') {
-            let after_eq = rest_trim[rest_idx + 1..].trim_start();
-            if after_eq.starts_with('"') {
-                if let Some(end) = after_eq[1..].find('"') {
-                    return Some(after_eq[1..1 + end].to_string());
-                }
-            } else if after_eq.starts_with('\'') {
-                if let Some(end) = after_eq[1..].find('\'') {
-                    return Some(after_eq[1..1 + end].to_string());
-                }
-            } else {
-                // Unquoted
-                let end = after_eq
-                    .find(|c: char| c.is_whitespace() || c == '>')
-                    .unwrap_or(after_eq.len());
-                return Some(after_eq[..end].to_string());
-            }
-        }
-        pos = abs + attr_lower.len();
-    }
-    None
-}
-
-fn parse_meta_refresh_url(html: &str) -> Option<String> {
-    let lower = html.to_ascii_lowercase();
-    let mut pos = 0;
-    while let Some(idx) = lower[pos..].find("<meta") {
-        let abs = pos + idx;
-        let end = lower[abs..].find('>')?;
-        let tag_slice = &html[abs..abs + end + 1];
-        if let Some(http_equiv) = extract_attr_value(tag_slice, "http-equiv") {
-            if http_equiv.to_ascii_lowercase() == "refresh" {
-                if let Some(content) = extract_attr_value(tag_slice, "content") {
-                    let parts: Vec<_> = content.split(';').collect();
-                    for part in parts {
-                        if let Some(url_idx) = part.to_ascii_lowercase().find("url=") {
-                            let url = part[url_idx + 4..].trim().trim_matches('"').trim_matches('\'');
-                            if !url.is_empty() {
-                                return Some(url.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        pos = abs + end + 1;
-    }
-    None
-}
-
 fn fetch_page(
     url: &str,
     timeout: Duration,
     user_agent: &str,
     accept_language: &str,
-) -> Result<(Vec<u8>, Option<String>), String> {
+) -> Result<(Vec<u8>, Option<String>, String), String> {
     let fetcher = HttpFetcher::default()
         .with_timeout(timeout)
         .with_user_agent(user_agent.to_string())
         .with_accept_language(accept_language.to_string());
-    let res = fetcher.fetch(url).map_err(|e| e.to_string())?;
-    if res.bytes.is_empty() {
-        return Err("empty response body".to_string());
+
+    let mut current_url = url.to_string();
+
+    let fetch = |target: &str| -> Result<(Vec<u8>, Option<String>, String), String> {
+        let res = fetcher.fetch(target).map_err(|e| e.to_string())?;
+        if res.bytes.is_empty() {
+            return Err("empty response body".to_string());
+        }
+        Ok((res.bytes, res.content_type, target.to_string()))
+    };
+
+    let mut res = fetch(url)?;
+
+    // Follow a single meta refresh (common for noscript fallbacks)
+    let mut html = decode_html_bytes(&res.0, res.1.as_deref());
+    if let Some(refresh) = extract_meta_refresh_url(&html) {
+        if let Ok(base) = Url::parse(&current_url) {
+            if let Ok(next) = base.join(&refresh) {
+                match fetch(next.as_str()) {
+                    Ok(next_res) => {
+                        res = next_res;
+                        current_url = next.to_string();
+                        html = decode_html_bytes(&res.0, res.1.as_deref());
+                    }
+                    Err(e) => return Err(format!("meta refresh fetch failed: {}", e)),
+                }
+            }
+        }
     }
-    Ok((res.bytes, res.content_type))
+
+    // Follow a simple JS location redirect once (common in script-only handoffs)
+    if let Some(js_redirect) = extract_js_location_redirect(&html) {
+        if let Ok(base) = Url::parse(&current_url) {
+            if let Ok(next) = base.join(&js_redirect) {
+                match fetch(next.as_str()) {
+                    Ok(next_res) => {
+                        res = next_res;
+                        current_url = next.to_string();
+                    }
+                    Err(e) => return Err(format!("js redirect fetch failed: {}", e)),
+                }
+            }
+        }
+    }
+
+    Ok((res.0, res.1, current_url))
 }
 
 fn main() {
@@ -481,26 +457,8 @@ fn main() {
 
                 let start = if timings { Some(std::time::Instant::now()) } else { None };
                 match fetch_page(url, timeout, &user_agent, &accept_language) {
-                    Ok((mut bytes, mut content_type)) => {
-                        // Follow meta refresh if present (e.g., noscript fallbacks)
-                        let html_text = decode_html_bytes(&bytes, content_type.as_deref());
-                        if let Some(refresh) = parse_meta_refresh_url(&html_text) {
-                            if let Ok(base) = Url::parse(url) {
-                                if let Ok(next) = base.join(&refresh) {
-                                    match fetch_page(next.as_str(), timeout, &user_agent, &accept_language) {
-                                        Ok((b, ct)) => {
-                                            bytes = b;
-                                            content_type = ct;
-                                        }
-                                        Err(e) => {
-                                            println!("✗ {} (meta refresh fetch failed: {})", next, e);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if write_cached_html(&cache_path, &bytes, content_type.as_deref(), Some(url)).is_ok() {
+                    Ok((bytes, content_type, source_url)) => {
+                        if write_cached_html(&cache_path, &bytes, content_type.as_deref(), Some(&source_url)).is_ok() {
                             if let Some(start) = start {
                                 println!("✓ {} ({}b, {}ms)", url, bytes.len(), start.elapsed().as_millis());
                             } else {
@@ -689,10 +647,117 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let res =
+        let (bytes, _ct, final_url) =
             fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, "es-MX,es;q=0.8").expect("fetch succeeds");
         handle.join().unwrap();
 
-        assert_eq!(res.0, b"ok");
+        assert_eq!(bytes, b"ok");
+        assert_eq!(final_url, url);
+    }
+
+    #[test]
+    fn fetch_page_follows_meta_refresh() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            let mut iter = listener.incoming();
+
+            // First response: meta refresh to /next
+            if let Some(stream) = iter.next() {
+                let mut stream = stream.unwrap();
+                let _ = stream.read(&mut [0u8; 1024]);
+                let body = b"<meta http-equiv=\"refresh\" content=\"0;url=/next\">";
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+
+            // Second response: final content
+            if let Some(stream) = iter.next() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf);
+                assert!(req.starts_with("GET /next"), "unexpected redirect path: {req}");
+
+                let body = b"refreshed";
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let url = format!("http://{}/", addr);
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
+        handle.join().unwrap();
+
+        assert_eq!(bytes, b"refreshed");
+        assert_eq!(content_type.as_deref(), Some("text/plain"));
+        assert_eq!(final_url, format!("http://{}/next", addr));
+    }
+
+    #[test]
+    fn fetch_page_follows_js_redirect() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let addr = listener.local_addr().unwrap();
+
+        let handle = std::thread::spawn(move || {
+            let mut iter = listener.incoming();
+
+            // First response: JS redirect to /js
+            if let Some(stream) = iter.next() {
+                let mut stream = stream.unwrap();
+                let _ = stream.read(&mut [0u8; 1024]);
+                let body = b"<script>window.location.href='/js'</script>";
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+
+            // Second response: final content
+            if let Some(stream) = iter.next() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let req = String::from_utf8_lossy(&buf);
+                assert!(req.starts_with("GET /js"), "unexpected redirect path: {req}");
+
+                let body = b"redirected";
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+            }
+        });
+
+        let url = format!("http://{}/", addr);
+        let (bytes, content_type, final_url) =
+            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+                .expect("fetch succeeds");
+        handle.join().unwrap();
+
+        assert_eq!(bytes, b"redirected");
+        assert_eq!(content_type.as_deref(), Some("text/plain"));
+        assert_eq!(final_url, format!("http://{}/js", addr));
     }
 }
