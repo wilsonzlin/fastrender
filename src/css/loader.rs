@@ -500,7 +500,7 @@ fn normalize_scheme_slashes(s: &str) -> String {
 /// Extract `<link rel="stylesheet">` URLs from an HTML document.
 pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
     let mut css_urls = Vec::new();
-    let mut print_only_urls = Vec::new();
+    let debug = std::env::var("FASTR_LOG_CSS_LINKS").is_ok();
 
     let lower = html.to_lowercase();
     let mut pos = 0;
@@ -512,23 +512,44 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
             let link_tag_lower = link_tag.to_lowercase();
 
             if link_tag_lower.contains("stylesheet") {
-                let mut is_print_only = false;
+                if debug {
+                    eprintln!("[css] found <link>: {}", link_tag);
+                }
                 if let Some(media) = extract_attr_value(link_tag, "media") {
                     let media_lower = media.to_ascii_lowercase();
                     let has_screen = media_lower.contains("screen") || media_lower.contains("all");
                     let has_print = media_lower.contains("print");
+                    if debug {
+                        eprintln!("[css] media attr: {} (print={}, screen={})", media, has_print, has_screen);
+                    }
                     if has_print && !has_screen {
-                        is_print_only = true;
+                        if debug {
+                            eprintln!("[css] skipping print-only stylesheet");
+                        }
+                        pos = abs_start + link_end + 1;
+                        continue;
+                    }
+                } else if link_tag_lower.contains("media") {
+                    let has_screen = link_tag_lower.contains("screen") || link_tag_lower.contains("all");
+                    let has_print = link_tag_lower.contains("print");
+                    if debug {
+                        eprintln!(
+                            "[css] media substring in tag (no attr parsed), print={}, screen={}",
+                            has_print, has_screen
+                        );
+                    }
+                    if has_print && !has_screen {
+                        if debug {
+                            eprintln!("[css] skipping print-only stylesheet (fallback)");
+                        }
+                        pos = abs_start + link_end + 1;
+                        continue;
                     }
                 }
                 if let Some(href) = extract_attr_value(link_tag, "href") {
                     let href = normalize_scheme_slashes(&href);
                     if let Some(full_url) = resolve_href(base_url, &href) {
-                        if is_print_only {
-                            print_only_urls.push(full_url);
-                        } else {
-                            css_urls.push(full_url);
-                        }
+                        css_urls.push(full_url);
                     }
                 }
             }
@@ -537,10 +558,6 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
         } else {
             break;
         }
-    }
-
-    if css_urls.is_empty() && !print_only_urls.is_empty() {
-        css_urls = print_only_urls;
     }
 
     dedupe_links_preserving_order(css_urls)
@@ -578,6 +595,27 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
                 break;
             }
             end += 1;
+        }
+
+        // If this candidate appears inside a <link> tag that is print-only, skip it.
+        if abs_pos > 0 {
+            let tag_start = bytes[..abs_pos].iter().rposition(|&b| b == b'<');
+            let tag_end = bytes[abs_pos..].iter().position(|&b| b == b'>');
+            if let (Some(ts), Some(te_rel)) = (tag_start, tag_end) {
+                let te = abs_pos + te_rel;
+                if te > ts {
+                    let tag = &html[ts..=te];
+                    let tag_lower = tag.to_ascii_lowercase();
+                    if tag_lower.contains("<link") && tag_lower.contains("media") {
+                        let has_screen = tag_lower.contains("screen") || tag_lower.contains("all");
+                        let has_print = tag_lower.contains("print");
+                        if has_print && !has_screen {
+                            idx = end;
+                            continue;
+                        }
+                    }
+                }
+            }
         }
 
         // Skip identifiers like `window.css = ...` where the token is an assignment target
@@ -889,6 +927,23 @@ mod tests {
                 "https://cdn.example.com/main.css".to_string(),
                 "https://cdn.example.com/other.css".to_string(),
                 "https://cdn.example.com/more.css".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_print_only_stylesheets() {
+        let html = r#"
+            <link rel="stylesheet" media="print" href="https://cdn.example.com/print.css">
+            <link rel="stylesheet" media="print, screen" href="https://cdn.example.com/both.css">
+            <link rel="stylesheet" media="screen" href="https://cdn.example.com/screen.css">
+        "#;
+        let urls = extract_css_links(html, "https://example.com/");
+        assert_eq!(
+            urls,
+            vec![
+                "https://cdn.example.com/both.css".to_string(),
+                "https://cdn.example.com/screen.css".to_string(),
             ]
         );
     }
