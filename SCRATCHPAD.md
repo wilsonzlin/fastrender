@@ -190,6 +190,8 @@ Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages 
 
 cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (~1.7MB, 3 <style> blocks). Cascade ~7–8s (FASTR_CASCADE_PROFILE: ~5.3M selector candidates, ~31k matches, ~3s pseudo), box_tree ~2.4s; render still times out at 40s. Pseudo fast-path/candidate dedup attempts didn't reduce timing; further selector/cascade optimizations needed.
 CNN CSS complexity: ~1933 unique classes, ~190 unique IDs; ~1381 unique properties; ~5302 :not() usages; ~1063 selectors with ≥4 combinators. HTML uses ~762 unique classes across ~4.8k class tokens and ~36 inline style attrs (~528 hrefs). Cascade still ~7–8s.
+
+nationalgeographic.com: fetch ok (~0.6MB HTML) and render succeeds in ~17s at 1200x800 (full-frame bbox).
 Universal tag bucket cache and candidate dedup reduce selector candidates slightly (~5.24M, avg 1706/node) but cnn.com cascade remains ~7.5s (find ~1.0s, decl ~0.9s, pseudo ~3.1s) with render timing out at 30s. Further optimization needed.
 CNN inline CSS includes ~199 media queries.
 Inline CSS stats: ~5,532 rules, ~16,740 declarations, ~3,868 attribute selectors.
