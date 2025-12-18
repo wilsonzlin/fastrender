@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--full-page] [--user-agent UA] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -14,12 +14,9 @@
 //!                        User media preference for reduced motion (overrides env)
 //!   --prefers-reduced-data reduce|no-preference|true|false
 //!                        User media preference for reduced data (overrides env)
-//!   --prefers-contrast more|high|less|low|custom|forced|no-preference
-//!                        User media preference for contrast (overrides env)
-//!   --prefers-color-scheme light|dark|no-preference
-//!                        User color scheme preference (overrides env)
 //!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
 //!   --user-agent UA     Override the User-Agent header (default: Chrome-like)
+//!   --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)
 //!   --timings           Enable FASTR_RENDER_TIMINGS for per-stage logs
 
 #![allow(clippy::io_other_error)]
@@ -32,7 +29,7 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::resource::DEFAULT_USER_AGENT;
+use fastrender::resource::{DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
 use std::env;
@@ -47,6 +44,7 @@ fn fetch_bytes(
     url: &str,
     timeout: Option<Duration>,
     user_agent: &str,
+    accept_language: &str,
 ) -> Result<(Vec<u8>, Option<String>, Option<String>)> {
     // Handle file:// URLs
     if url.starts_with("file://") {
@@ -77,6 +75,7 @@ fn fetch_bytes(
         let mut response = agent
             .get(&current)
             .header("User-Agent", user_agent)
+            .header("Accept-Language", accept_language)
             .call()
             .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
@@ -105,7 +104,7 @@ fn fetch_bytes(
             .read_to_vec()
             .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
-        return Ok((bytes, content_type, None));
+        return Ok((bytes, content_type, Some(current)));
     }
 
     Err(Error::Io(std::io::Error::new(
@@ -242,7 +241,8 @@ mod tests {
         std::fs::write(&meta_path, "text/html; charset=shift_jis").unwrap();
 
         let url = format!("file://{}", html_path.display());
-        let (bytes, ct, base_url) = fetch_bytes(&url, None, DEFAULT_USER_AGENT).expect("fetch bytes");
+        let (bytes, ct, base_url) =
+            fetch_bytes(&url, None, DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE).expect("fetch bytes");
         assert_eq!(ct.as_deref(), Some("text/html; charset=shift_jis"));
         assert!(base_url.is_none(), "legacy meta should not include a url");
         let decoded = decode_html_bytes(&bytes, ct.as_deref());
@@ -272,7 +272,8 @@ mod tests {
         std::fs::write(&meta_path, "content-type: text/html\nurl: https://example.com/\n").unwrap();
 
         let url = format!("file://{}", html_path.display());
-        let (_bytes, ct, base_url) = fetch_bytes(&url, None, DEFAULT_USER_AGENT).expect("fetch bytes");
+        let (_bytes, ct, base_url) =
+            fetch_bytes(&url, None, DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE).expect("fetch bytes");
         assert_eq!(ct.as_deref(), Some("text/html"));
         assert_eq!(base_url.as_deref(), Some("https://example.com/"));
     }
@@ -294,35 +295,11 @@ mod tests {
         assert_eq!(parse_prefers_reduced_motion("off"), Some(false));
         assert_eq!(parse_prefers_reduced_motion("maybe"), None);
     }
-
-    #[test]
-    fn parse_prefers_contrast_values() {
-        assert_eq!(parse_prefers_contrast("high"), Some("high".to_string()));
-        assert_eq!(parse_prefers_contrast("low"), Some("low".to_string()));
-        assert_eq!(parse_prefers_contrast("custom"), Some("custom".to_string()));
-        assert_eq!(parse_prefers_contrast("forced"), Some("forced".to_string()));
-        assert_eq!(
-            parse_prefers_contrast("no-preference"),
-            Some("no-preference".to_string())
-        );
-        assert_eq!(parse_prefers_contrast("maybe"), None);
-    }
-
-    #[test]
-    fn parse_prefers_color_scheme_values() {
-        assert_eq!(parse_prefers_color_scheme("light"), Some("light".to_string()));
-        assert_eq!(parse_prefers_color_scheme("dark"), Some("dark".to_string()));
-        assert_eq!(
-            parse_prefers_color_scheme("no-preference"),
-            Some("no-preference".to_string())
-        );
-        assert_eq!(parse_prefers_color_scheme("unknown"), None);
-    }
 }
 
 fn usage(program: &str) {
     eprintln!(
-        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--full-page] [--user-agent UA] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
+        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
     );
     eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
@@ -331,10 +308,9 @@ fn usage(program: &str) {
     eprintln!("  prefers-reduced-transparency: reduce|no-preference|true|false (overrides env)");
     eprintln!("  prefers-reduced-motion: reduce|no-preference|true|false (overrides env)");
     eprintln!("  prefers-reduced-data: reduce|no-preference|true|false (overrides env)");
-    eprintln!("  prefers-contrast: more|high|less|low|custom|forced|no-preference (overrides env)");
-    eprintln!("  prefers-color-scheme: light|dark|no-preference (overrides env)");
     eprintln!("  full-page: expand render target to full content size (or set FASTR_FULL_PAGE)");
     eprintln!("  user-agent: override the User-Agent header (default: Chrome-like)");
+    eprintln!("  accept-language: override Accept-Language header (default: en-US,en;q=0.9)");
     eprintln!("  timings: set FASTR_RENDER_TIMINGS to print per-stage timings");
     eprintln!("  scroll_x: horizontal scroll offset (default: 0)");
     eprintln!("  scroll_y: vertical scroll offset (default: 0)");
@@ -382,22 +358,6 @@ fn parse_prefers_reduced_motion(val: &str) -> Option<bool> {
     None
 }
 
-fn parse_prefers_contrast(val: &str) -> Option<String> {
-    let v = val.trim().to_ascii_lowercase();
-    match v.as_str() {
-        "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Some(v),
-        _ => None,
-    }
-}
-
-fn parse_prefers_color_scheme(val: &str) -> Option<String> {
-    let v = val.trim().to_ascii_lowercase();
-    match v.as_str() {
-        "light" | "dark" | "no-preference" => Some(v),
-        _ => None,
-    }
-}
-
 fn render_once(
     url: &str,
     output: &str,
@@ -408,10 +368,12 @@ fn render_once(
     dpr: f32,
     timeout_secs: Option<u64>,
     user_agent: &str,
+    accept_language: &str,
 ) -> Result<()> {
     println!("Fetching HTML from: {}", url);
     let timeout = timeout_secs.map(Duration::from_secs);
-    let (html_bytes, html_content_type, source_url) = fetch_bytes(url, timeout, user_agent)?;
+    let (html_bytes, html_content_type, source_url) =
+        fetch_bytes(url, timeout, user_agent, accept_language)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
     let base_hint = source_url.as_deref().unwrap_or(url);
     let resource_base = infer_base_url(&html, base_hint).into_owned();
@@ -437,14 +399,17 @@ fn render_once(
     for css_url in css_links {
         println!("Fetching CSS from: {}", css_url);
         seen_imports.insert(css_url.clone());
-        match fetch_bytes(&css_url, timeout, user_agent) {
+        match fetch_bytes(&css_url, timeout, user_agent, accept_language) {
             Ok((bytes, content_type, _)) => {
                 let css_text = decode_css_bytes(&bytes, content_type.as_deref());
                 let rewritten = absolutize_css_urls(&css_text, &css_url);
                 let inlined = inline_imports(
                     &rewritten,
                     &css_url,
-                    &|u| fetch_bytes(u, timeout, user_agent).map(|(b, ct, _)| decode_css_bytes(&b, ct.as_deref())),
+                    &|u| {
+                        fetch_bytes(u, timeout, user_agent, accept_language)
+                            .map(|(b, ct, _)| decode_css_bytes(&b, ct.as_deref()))
+                    },
                     &mut seen_imports,
                 );
                 combined_css.push_str(&inlined);
@@ -488,11 +453,10 @@ fn main() -> Result<()> {
     let mut prefers_reduced_transparency: Option<bool> = None;
     let mut prefers_reduced_motion: Option<bool> = None;
     let mut prefers_reduced_data: Option<bool> = None;
-    let mut prefers_contrast: Option<String> = None;
-    let mut prefers_color_scheme: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut full_page = false;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
+    let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
     let mut enable_timings = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -529,16 +493,6 @@ fn main() -> Result<()> {
                     prefers_reduced_data = parse_prefers_reduced_data(&val);
                 }
             }
-            "--prefers-contrast" => {
-                if let Some(val) = args.next() {
-                    prefers_contrast = parse_prefers_contrast(&val);
-                }
-            }
-            "--prefers-color-scheme" => {
-                if let Some(val) = args.next() {
-                    prefers_color_scheme = parse_prefers_color_scheme(&val);
-                }
-            }
             "--full-page" => {
                 full_page = true;
             }
@@ -546,6 +500,13 @@ fn main() -> Result<()> {
                 if let Some(val) = args.next() {
                     if !val.trim().is_empty() {
                         user_agent = val;
+                    }
+                }
+            }
+            "--accept-language" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        accept_language = val;
                     }
                 }
             }
@@ -592,14 +553,6 @@ fn main() -> Result<()> {
         );
     }
 
-    if let Some(contrast) = prefers_contrast {
-        std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
-    }
-
-    if let Some(color_scheme) = prefers_color_scheme {
-        std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
-    }
-
     if full_page {
         std::env::set_var("FASTR_FULL_PAGE", "1");
     }
@@ -609,13 +562,14 @@ fn main() -> Result<()> {
     }
 
     eprintln!(
-        "User-Agent: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",
-        user_agent, width, height, dpr, scroll_x, scroll_y, output
+        "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",
+        user_agent, accept_language, width, height, dpr, scroll_x, scroll_y, output
     );
 
     let (tx, rx) = channel();
     let url_clone = url.clone();
     let output_clone = output.clone();
+    let accept_language_clone = accept_language.clone();
     thread::Builder::new()
         .name("fetch_and_render-worker".to_string())
         .stack_size(STACK_SIZE)
@@ -630,6 +584,7 @@ fn main() -> Result<()> {
                 dpr,
                 timeout_secs,
                 &user_agent,
+                &accept_language_clone,
             ));
         })
         .expect("spawn render worker");

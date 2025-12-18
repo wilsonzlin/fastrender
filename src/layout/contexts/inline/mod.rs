@@ -10400,7 +10400,7 @@ mod tests {
         root_style.text_align = TextAlign::Justify;
         let mut text_style = ComputedStyle::default();
         text_style.font_size = 16.0;
-        text_style.white_space = WhiteSpace::Pre;
+        text_style.white_space = WhiteSpace::PreWrap;
         let word = |text: &str| BoxNode::new_text(Arc::new(text_style.clone()), text.to_string());
         let root = BoxNode::new_block(
             Arc::new(root_style),
