@@ -489,6 +489,12 @@ fn decode_html_entities(input: &str) -> String {
 }
 
 fn normalize_scheme_slashes(s: &str) -> String {
+    if s.starts_with("//") {
+        // Preserve scheme-relative URLs as-is so they can be resolved against the base
+        // scheme rather than collapsing the host into a path segment.
+        return s.to_string();
+    }
+
     let mut out = s.to_string();
     if let Some(pos) = out.find("://") {
         let (scheme, rest) = out.split_at(pos + 3);
@@ -937,6 +943,18 @@ mod tests {
                 "https://cdn.example.com/more.css".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn resolves_scheme_relative_urls() {
+        let html = r#"
+            <link rel="stylesheet" href="//cdn.example.com/app.css">
+        "#;
+        let urls = extract_css_links(html, "https://example.com/page");
+        assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
+
+        let resolved = resolve_href("https://example.com/page", "//cdn.example.com/app.css");
+        assert_eq!(resolved, Some("https://cdn.example.com/app.css".to_string()));
     }
 
     #[test]
