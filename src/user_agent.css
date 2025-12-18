@@ -382,8 +382,8 @@ details:not([open]) > :not(summary) {
 }
 
 /* Hidden elements - these should not be rendered */
-head, style, script, meta, link, title, noscript, template {
-    display: none;
+head, style, script, meta, link, title, template {
+  display: none;
 }
 
 /* Horizontal rule */

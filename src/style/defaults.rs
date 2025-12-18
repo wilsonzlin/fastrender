@@ -57,7 +57,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
             "img" | "video" | "audio" | "canvas" | "svg" => Display::Inline,
 
             // Hidden elements (display: none - not rendered)
-            "head" | "style" | "script" | "meta" | "link" | "title" | "noscript" | "template" => Display::None,
+            "head" | "style" | "script" | "meta" | "link" | "title" | "template" => Display::None,
 
             // Everything else defaults to inline
             _ => Display::Inline,
