@@ -66,6 +66,7 @@ const PAGES: &[&str] = &[
     "https://microsoft.com",
     "https://apple.com",
     "https://developer.apple.com",
+    "https://www.openstreetmap.org",
     "https://openai.com",
     "https://icloud.com",
     "https://nytimes.com",
@@ -713,9 +714,13 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) =
-            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-                .expect("fetch succeeds");
+        let (bytes, content_type, final_url) = fetch_page(
+            &url,
+            Duration::from_secs(5),
+            DEFAULT_USER_AGENT,
+            DEFAULT_ACCEPT_LANGUAGE,
+        )
+        .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"refreshed");
@@ -766,9 +771,13 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) =
-            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-                .expect("fetch succeeds");
+        let (bytes, content_type, final_url) = fetch_page(
+            &url,
+            Duration::from_secs(5),
+            DEFAULT_USER_AGENT,
+            DEFAULT_ACCEPT_LANGUAGE,
+        )
+        .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"redirected");
@@ -819,9 +828,13 @@ mod tests {
         });
 
         let url = format!("http://{}/", addr);
-        let (bytes, content_type, final_url) =
-            fetch_page(&url, Duration::from_secs(5), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
-                .expect("fetch succeeds");
+        let (bytes, content_type, final_url) = fetch_page(
+            &url,
+            Duration::from_secs(5),
+            DEFAULT_USER_AGENT,
+            DEFAULT_ACCEPT_LANGUAGE,
+        )
+        .expect("fetch succeeds");
         handle.join().unwrap();
 
         assert_eq!(bytes, b"<script>window.location.href='/missing'</script>");
