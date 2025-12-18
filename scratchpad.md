@@ -54,6 +54,7 @@
 # Added neverssl.com to fetch_pages targets; fetch/render succeeded (tiny simple page). Added media cache perf tweaks upstream.
 # Added htmldog.com to fetch_pages targets; fetch/render succeeded (simple page, no obvious issues). Media cache perf tweaks landed upstream.
 # Added ietf.org to fetch_pages targets; fetch/render succeeded (full content visible).
+# Attempted openai.com fetch target; blocked with 403 so not added.
 # Added washington.edu to fetch_pages targets; `cargo check --bin fetch_pages` passes.
 # ::marker pseudo text-transform is preserved when authored: marker box generation now keeps ::marker text_transform values (while still resetting fallback list-item markers), and a regression covers the preserved transform.
 # Marker paint regression: painter test ensures ::marker text fragments honor authored text-shadow, verifying marker styling is painted.
