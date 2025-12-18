@@ -2684,6 +2684,14 @@ mod tests {
     }
 
     #[test]
+    fn split_at_is_safe_on_non_char_boundaries() {
+        let item = make_text_item("â€œenhancedâ€", 20.0);
+        let pipeline = ShapingPipeline::new();
+        let font_ctx = FontContext::new();
+        assert!(item.split_at(1, false, &pipeline, &font_ctx).is_none());
+    }
+
+    #[test]
     fn test_line_builder_single_item_fits() {
         let mut builder = make_builder(100.0);
 

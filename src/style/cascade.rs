@@ -2027,6 +2027,7 @@ mod tests {
     use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
     use crate::style::color::Rgba;
     use crate::style::computed::Visibility;
+    use crate::style::content::ContentValue;
     use crate::style::display::Display;
     use crate::style::float::Float;
     use crate::style::properties::apply_declaration;
@@ -2085,6 +2086,25 @@ mod tests {
             },
             children: vec![],
         }
+    }
+
+    #[test]
+    fn before_without_content_is_not_generated() {
+        let dom = element_with_style("");
+        let stylesheet = parse_stylesheet("div::before { color: red; }").expect("stylesheet");
+        let styled = apply_styles(&dom, &stylesheet);
+        assert!(styled.before_styles.is_none());
+    }
+
+    #[test]
+    fn before_content_enables_other_rules() {
+        let dom = element_with_style("");
+        let stylesheet = parse_stylesheet("div::before { content: 'x'; }\n div::before { color: rgb(1, 2, 3); }")
+            .expect("stylesheet");
+        let styled = apply_styles(&dom, &stylesheet);
+        let before = styled.before_styles.expect("generated ::before");
+        assert_eq!(before.color, Rgba::rgb(1, 2, 3));
+        assert_eq!(before.content_value, ContentValue::from_string("x"));
     }
 
     #[test]
