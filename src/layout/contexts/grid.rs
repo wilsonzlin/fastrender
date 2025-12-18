@@ -248,10 +248,15 @@ impl GridFormattingContext {
         containing_grid: Option<&'a ComputedStyle>,
         root_children: Option<&[&'a BoxNode]>,
     ) -> Result<TaffyNodeId, LayoutError> {
-        // Convert children first
-        let children_iter: Vec<&BoxNode> = root_children
-            .map(|c| c.to_vec())
-            .unwrap_or_else(|| box_node.children.iter().collect());
+        // For items inside a grid, treat them as leaves in the Taffy tree; their contents will be
+        // laid out separately once Taffy assigns their grid area.
+        let children_iter: Vec<&BoxNode> = if containing_grid.is_some() {
+            Vec::new()
+        } else {
+            root_children
+                .map(|c| c.to_vec())
+                .unwrap_or_else(|| box_node.children.iter().collect())
+        };
         let child_ids: Vec<TaffyNodeId> = children_iter
             .iter()
             .map(|child| {
@@ -960,13 +965,27 @@ impl GridFormattingContext {
     /// Converts Taffy layout results to FragmentNode tree
     #[allow(dead_code)]
     fn convert_to_fragments(
+        &self,
         taffy: &TaffyTree<()>,
         node_id: TaffyNodeId,
         node_map: &HashMap<TaffyNodeId, &BoxNode>,
+        factory: &FormattingContextFactory,
+        inline_base: f32,
     ) -> Result<FragmentNode, LayoutError> {
         let layout = taffy
             .layout(node_id)
             .map_err(|e| LayoutError::MissingContext(format!("Taffy layout error: {:?}", e)))?;
+
+        let resolved_width = if layout.size.width.is_finite() && layout.size.width > 0.0 {
+            layout.size.width
+        } else {
+            inline_base
+        };
+        let resolved_height = if layout.size.height.is_finite() && layout.size.height > 0.0 {
+            layout.size.height
+        } else {
+            layout.size.height
+        };
 
         // Convert children recursively
         let children = taffy
@@ -975,24 +994,36 @@ impl GridFormattingContext {
 
         let child_fragments: Vec<FragmentNode> = children
             .iter()
-            .map(|&child_id| Self::convert_to_fragments(taffy, child_id, node_map))
+            .map(|&child_id| self.convert_to_fragments(taffy, child_id, node_map, factory, resolved_width))
             .collect::<Result<_, _>>()?;
 
         // Create fragment bounds from Taffy layout
-        let bounds = Rect::from_xywh(
-            layout.location.x,
-            layout.location.y,
-            layout.size.width,
-            layout.size.height,
-        );
+        let bounds = Rect::from_xywh(layout.location.x, layout.location.y, resolved_width, resolved_height);
 
-        // Get style from node_map if available
         if let Some(box_node) = node_map.get(&node_id) {
-            Ok(FragmentNode::new_block_styled(
-                bounds,
-                child_fragments,
-                box_node.style.clone(),
-            ))
+            if matches!(box_node.style.display, CssDisplay::Grid | CssDisplay::InlineGrid) {
+                return Ok(FragmentNode::new_block_styled(bounds, child_fragments, box_node.style.clone()));
+            }
+
+            let fc_type = box_node
+                .formatting_context()
+                .unwrap_or(crate::style::display::FormattingContextType::Block);
+            let fc = factory.create(fc_type);
+            let mut fragment = fc.layout(
+                box_node,
+                &LayoutConstraints {
+                    available_width: CrateAvailableSpace::Definite(resolved_width),
+                    available_height: if resolved_height.is_finite() && resolved_height > 0.0 {
+                        CrateAvailableSpace::Definite(resolved_height)
+                    } else {
+                        CrateAvailableSpace::Indefinite
+                    },
+                    inline_percentage_base: Some(resolved_width),
+                },
+            )?;
+            fragment = fragment.translate(crate::geometry::Point::new(layout.location.x, layout.location.y));
+            fragment.bounds.size = crate::geometry::Size::new(resolved_width, resolved_height.max(fragment.bounds.height()));
+            Ok(fragment)
         } else {
             Ok(FragmentNode::new_block(bounds, child_fragments))
         }
@@ -1234,63 +1265,15 @@ impl FormattingContext for GridFormattingContext {
             )
             .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
 
-        let root_layout = taffy
-            .layout(root_id)
-            .map_err(|e| LayoutError::MissingContext(format!("Taffy layout error: {:?}", e)))?;
-
-        let mut children_fragments = Vec::new();
-        for child_id in child_ids {
-            let child_box = node_map.get(&child_id).copied().unwrap();
-            let layout = taffy
-                .layout(child_id)
-                .map_err(|e| LayoutError::MissingContext(format!("Taffy child layout error: {:?}", e)))?;
-
-            let mut constraints = LayoutConstraints::new(
-                CrateAvailableSpace::Definite(layout.size.width),
-                if layout.size.height > 0.0 {
-                    CrateAvailableSpace::Definite(layout.size.height)
-                } else {
-                    CrateAvailableSpace::Indefinite
-                },
-            );
-            constraints.inline_percentage_base = Some(layout.size.width);
-            let fc_type = child_box.formatting_context().unwrap_or(FormattingContextType::Block);
-            let fc = factory.create(fc_type);
-            let mut child_fragment = match measured_fragments.remove(&child_id) {
-                Some(frag)
-                    if (frag.bounds.width() - layout.size.width).abs() < 0.5
-                        && (frag.bounds.height() - layout.size.height).abs() < 0.5 =>
-                {
-                    frag
-                }
-                _ => fc.layout(child_box, &constraints)?,
-            };
-            child_fragment.bounds = crate::geometry::Rect::new(
-                crate::geometry::Point::new(layout.location.x, layout.location.y),
-                crate::geometry::Size::new(layout.size.width, layout.size.height),
-            );
-            children_fragments.push(child_fragment);
-        }
-
-        let mut fragment = FragmentNode::new_block_styled(
-            Rect::new(
-                crate::geometry::Point::new(root_layout.location.x, root_layout.location.y),
-                crate::geometry::Size::new(root_layout.size.width, root_layout.size.height),
-            ),
-            children_fragments,
-            box_node.style.clone(),
+<<<<<<< ours
+        // Convert back to FragmentNode tree
+        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            self.nearest_positioned_cb,
         );
-
-        if let Some(key) = self.layout_cache_key(constraints) {
-            let cache = GRID_LAYOUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-            if let Ok(mut map) = cache.lock() {
-                let cache_id = box_node.styled_node_id.unwrap_or(box_node.id);
-                let entry = map
-                    .entry((cache_id, key))
-                    .or_insert_with(|| Arc::new(fragment.clone()));
-                fragment = (**entry).clone();
-            }
-        }
+        let fallback_width = constraints.width().unwrap_or(self.viewport_size.width);
+        let mut fragment = self.convert_to_fragments(&taffy, root_id, &node_map, &factory, fallback_width)?;
 
         // Position out-of-flow children against the appropriate containing block.
         if !positioned_children.is_empty() {
