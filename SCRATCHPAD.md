@@ -44,6 +44,8 @@ Cascade: RuleIndex now deduplicates identical selectors within a rule to avoid r
 Wired.com: release render (1200x800) finishes in ~16s with full-frame bbox; debug fetch_and_render/file:// times out at 60s (debug too slow for this page).
 
 CNN cascade after selector dedup (release, 1200x800, FASTR_CASCADE_PROFILE=1, 60s timeout): cascade 3.93s (candidates ~720,503 across 3,094 nodes; matches 25,649; avg 233 candidates/node), style_apply 3.17s, box_tree 2.40s; render still times out at 60s before layout/paint completes. Much lower cascade candidate count vs ~5.3M before; layout still dominates.
+
+CNN rerun (release, 1200x800, FASTR_LAYOUT_PROFILE=1, timeout 90s): render completes in ~81s. Cascade ~3.98s (style_apply 3.23s, box_tree 2.46s); layout dominates at ~78.7s (layout ms: block 192,841 over 77,934 calls, flex 157,478 over 8,999 calls, grid 5,614 over 36 calls). PNG mostly blank except top ~275px (2 colors). Layout perf is now the bottleneck; cascade candidate count ~720k.
 Agent18:
 - Fixed embedded CSS URL scan to ignore assignment targets like `window.css = ...`, preventing bogus fetches; regression `unescapes_json_style_embedded_urls` now passes.
 - Absolute-position helper uses AbsoluteLayout shrink-to-fit behavior; updated test expects width derived from intrinsic when both left/right are set.
