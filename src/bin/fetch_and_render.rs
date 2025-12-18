@@ -279,6 +279,44 @@ mod tests {
     }
 
     #[test]
+    fn fetch_bytes_sends_accept_language_header() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let addr = listener.local_addr().unwrap();
+
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut buf = String::new();
+            // Read request headers until the blank line.
+            while reader.read_line(&mut buf).map(|n| n > 0).unwrap_or(false) {
+                if buf.ends_with("\r\n\r\n") || buf == "\r\n" {
+                    break;
+                }
+            }
+            let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n";
+            let _ = stream.write_all(response);
+            buf
+        });
+
+        let url = format!("http://{}/", addr);
+        let _ = fetch_bytes(&url, Some(Duration::from_secs(5)), DEFAULT_USER_AGENT, DEFAULT_ACCEPT_LANGUAGE)
+            .expect("fetch bytes");
+
+        let request = handle.join().expect("request captured");
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("accept-language: en-us,en;q=0.9"),
+            "missing Accept-Language in request: {request}"
+        );
+    }
+
+    #[test]
     fn parse_prefers_reduced_data_values() {
         assert_eq!(parse_prefers_reduced_data("reduce"), Some(true));
         assert_eq!(parse_prefers_reduced_data("no-preference"), Some(false));
