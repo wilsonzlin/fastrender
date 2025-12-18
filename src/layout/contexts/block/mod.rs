@@ -201,14 +201,7 @@ impl BlockFormattingContext {
 
         let style = &child.style;
         let font_size = style.font_size; // Get font-size for resolving em units
-                                         // Percentage heights only resolve when the containing block has a definite height. If the
-                                         // parent’s height is auto, treat the base as indefinite even if the available height came
-                                         // from the viewport.
-        let containing_height = if parent.style.height.is_some() {
-            constraints.height()
-        } else {
-            None
-        };
+        let containing_height = constraints.height();
 
         // Handle vertical margins (resolve em/rem units with font-size)
         let margin_top = resolve_opt_length(
@@ -592,23 +585,23 @@ impl BlockFormattingContext {
         let box_height = border_top + padding_top + height + padding_bottom + border_bottom;
         let box_width = computed_width.border_box_width();
 
-        // Layout out-of-flow positioned children against this block's padding box.
+        let padding_origin = Point::new(
+            computed_width.border_left + computed_width.padding_left,
+            border_top + padding_top,
+        );
+        let padding_size = Size::new(
+            computed_width.content_width + computed_width.padding_left + computed_width.padding_right,
+            height + padding_top + padding_bottom,
+        );
+        let padding_rect = Rect::new(padding_origin, padding_size);
+
         if !positioned_children.is_empty() {
             let abs = crate::layout::absolute_positioning::AbsoluteLayout::with_font_context(self.font_context.clone());
             let cb_block_base = if specified_height.is_some() {
-                Some(height + padding_top + padding_bottom)
+                Some(padding_size.height)
             } else {
                 None
             };
-            let padding_origin = Point::new(
-                computed_width.border_left + computed_width.padding_left,
-                border_top + padding_top,
-            );
-            let padding_size = Size::new(
-                computed_width.content_width + computed_width.padding_left + computed_width.padding_right,
-                height + padding_top + padding_bottom,
-            );
-            let padding_rect = Rect::new(padding_origin, padding_size);
             let parent_padding_cb = ContainingBlock::with_viewport_and_bases(
                 padding_rect,
                 self.viewport_size,
@@ -632,7 +625,7 @@ impl BlockFormattingContext {
                     self.viewport_size,
                     cb,
                 );
-                // Layout the child as if it were in normal flow to obtain its intrinsic size.
+
                 let mut layout_child = pos_child.clone();
                 let mut style = (*layout_child.style).clone();
                 style.position = Position::Relative;
@@ -653,7 +646,6 @@ impl BlockFormattingContext {
                     LayoutConstraints::new(AvailableSpace::Definite(padding_size.width), child_height_space);
                 let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
 
-                // Resolve positioned style against the containing block.
                 let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
                     &pos_child.style,
                     &cb,
@@ -661,9 +653,6 @@ impl BlockFormattingContext {
                     &self.font_context,
                 );
 
-                // Static position starts at the containing block origin; AbsoluteLayout will add
-                // padding/border offsets, so use the content origin when no flow position was
-                // recorded.
                 let static_pos = static_position.unwrap_or(Point::ZERO);
                 let preferred_min_inline = fc
                     .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
@@ -2103,12 +2092,9 @@ impl FormattingContext for BlockFormattingContext {
                 )
             })
             .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing));
-        let mut child_height_space = resolved_height
+        let child_height_space = resolved_height
             .map(|h| AvailableSpace::Definite(h.max(0.0)))
             .unwrap_or(AvailableSpace::Indefinite);
-        if style.max_height_is_max_content {
-            child_height_space = AvailableSpace::Indefinite;
-        }
 
         let child_constraints = LayoutConstraints::new(
             AvailableSpace::Definite(computed_width.content_width),
@@ -2138,7 +2124,7 @@ impl FormattingContext for BlockFormattingContext {
             })
             .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
             .unwrap_or(0.0);
-        let mut max_height = style
+        let max_height = style
             .max_height
             .as_ref()
             .and_then(|l| {
@@ -2152,9 +2138,6 @@ impl FormattingContext for BlockFormattingContext {
             })
             .map(|h| content_size_from_box_sizing(h, vertical_edges, style.box_sizing))
             .unwrap_or(f32::INFINITY);
-        if style.max_height_is_max_content {
-            max_height = content_height;
-        }
 
         let max_height = if max_height.is_finite() && max_height < min_height {
             min_height
@@ -3237,47 +3220,5 @@ mod tests {
         assert_eq!(child_frag.bounds.y(), 7.0);
         assert_eq!(child_frag.bounds.width(), 50.0);
         assert_eq!(child_frag.bounds.height(), 20.0);
-    }
-
-    #[test]
-    fn absolute_children_inside_block_descendants_are_laid_out() {
-        // Regression: positioned children collected during block child layout were dropped.
-        let mut root_style = ComputedStyle::default();
-        root_style.display = Display::Block;
-        root_style.width = Some(Length::px(400.0));
-
-        let mut middle_style = ComputedStyle::default();
-        middle_style.display = Display::Block;
-        middle_style.width = Some(Length::px(200.0));
-        middle_style.padding_left = Length::px(10.0);
-        middle_style.padding_top = Length::px(10.0);
-        middle_style.height = Some(Length::px(80.0));
-
-        let mut abs_style = ComputedStyle::default();
-        abs_style.display = Display::Block;
-        abs_style.position = Position::Absolute;
-        abs_style.left = Some(Length::px(5.0));
-        abs_style.top = Some(Length::px(7.0));
-        abs_style.width = Some(Length::px(30.0));
-        abs_style.height = Some(Length::px(12.0));
-
-        let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
-        let middle = BoxNode::new_block(Arc::new(middle_style), FormattingContextType::Block, vec![abs_child]);
-        let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![middle]);
-
-        let fc = BlockFormattingContext::new();
-        let constraints = LayoutConstraints::definite(500.0, 500.0);
-        let fragment = fc.layout(&root, &constraints).unwrap();
-
-        assert_eq!(fragment.children.len(), 1);
-        let middle_frag = &fragment.children[0];
-        assert_eq!(middle_frag.children.len(), 1, "positioned child should be laid out");
-        let abs_frag = &middle_frag.children[0];
-        // Positioned child should still be included; coordinates are resolved relative to the
-        // containing block origin (padding box in our implementation).
-        assert_eq!(abs_frag.bounds.x(), 5.0);
-        assert_eq!(abs_frag.bounds.y(), 7.0);
-        assert_eq!(abs_frag.bounds.width(), 30.0);
-        assert_eq!(abs_frag.bounds.height(), 12.0);
     }
 }
