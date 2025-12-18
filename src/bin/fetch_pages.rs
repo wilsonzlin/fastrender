@@ -369,12 +369,9 @@ fn fetch_page(
     if let Some(js_redirect) = extract_js_location_redirect(&html) {
         if let Ok(base) = Url::parse(&current_url) {
             if let Ok(next) = base.join(&js_redirect) {
-                match fetch(next.as_str()) {
-                    Ok(next_res) => {
-                        res = next_res;
-                        current_url = next.to_string();
-                    }
-                    Err(e) => return Err(format!("js redirect fetch failed: {}", e)),
+                if let Ok(next_res) = fetch(next.as_str()) {
+                    res = next_res;
+                    current_url = next.to_string();
                 }
             }
         }

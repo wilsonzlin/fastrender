@@ -136,7 +136,6 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
             }
         }
     }
-    }
 
     // Fallback: look for a variable assignment that captures a URL literal
     if let Some(mut idx) = lower.find("var url") {
