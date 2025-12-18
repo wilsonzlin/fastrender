@@ -966,7 +966,7 @@ impl GridFormattingContext {
     #[allow(dead_code)]
     fn convert_to_fragments(
         &self,
-        taffy: &TaffyTree<()>,
+        taffy: &TaffyTree<*const BoxNode>,
         node_id: TaffyNodeId,
         node_map: &HashMap<TaffyNodeId, &BoxNode>,
         factory: &FormattingContextFactory,
@@ -1214,6 +1214,9 @@ impl FormattingContext for GridFormattingContext {
         );
 
         // Run Taffy layout with measurement to size grid items using their own formatting contexts.
+        static LOG_CHILD_MEASURE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let log_child = *LOG_CHILD_MEASURE
+            .get_or_init(|| std::env::var("FASTR_LOG_GRID_CHILDREN").map(|v| v != "0").unwrap_or(false));
         taffy
             .compute_layout_with_measure(
                 root_id,
@@ -1247,6 +1250,17 @@ impl FormattingContext for GridFormattingContext {
                                     width: fragment.bounds.width(),
                                     height: fragment.bounds.height(),
                                 };
+                                if log_child {
+                                    eprintln!(
+                                        "[grid-child-measure] id={} display={:?} constraints=({:?},{:?}) -> size=({:.1},{:.1})",
+                                        box_node.id,
+                                        box_node.style.display,
+                                        constraints.available_width,
+                                        constraints.available_height,
+                                        size.width,
+                                        size.height,
+                                    );
+                                }
                                 measured_fragments.insert(node_id, fragment);
                                 size
                             }
@@ -1265,52 +1279,14 @@ impl FormattingContext for GridFormattingContext {
             )
             .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
 
-        let root_layout = taffy
-            .layout(root_id)
-            .map_err(|e| LayoutError::MissingContext(format!("Taffy root layout error: {:?}", e)))?;
-
-        let mut children_fragments = Vec::new();
-        for child_id in child_ids {
-            let child_box = node_map.get(&child_id).copied().unwrap();
-            let layout = taffy
-                .layout(child_id)
-                .map_err(|e| LayoutError::MissingContext(format!("Taffy child layout error: {:?}", e)))?;
-
-            let mut constraints = LayoutConstraints::new(
-                CrateAvailableSpace::Definite(layout.size.width),
-                if layout.size.height > 0.0 {
-                    CrateAvailableSpace::Definite(layout.size.height)
-                } else {
-                    CrateAvailableSpace::Indefinite
-                },
-            );
-            constraints.inline_percentage_base = Some(layout.size.width);
-            let fc_type = child_box.formatting_context().unwrap_or(FormattingContextType::Block);
-            let fc = factory.create(fc_type);
-            let mut child_fragment = match measured_fragments.remove(&child_id) {
-                Some(frag)
-                    if (frag.bounds.width() - layout.size.width).abs() < 0.5
-                        && (frag.bounds.height() - layout.size.height).abs() < 0.5 =>
-                {
-                    frag
-                }
-                _ => fc.layout(child_box, &constraints)?,
-            };
-            child_fragment.bounds = crate::geometry::Rect::new(
-                crate::geometry::Point::new(layout.location.x, layout.location.y),
-                crate::geometry::Size::new(layout.size.width, layout.size.height),
-            );
-            children_fragments.push(child_fragment);
-        }
-
-        let mut fragment = FragmentNode::new_block_styled(
-            Rect::new(
-                crate::geometry::Point::new(root_layout.location.x, root_layout.location.y),
-                crate::geometry::Size::new(root_layout.size.width, root_layout.size.height),
-            ),
-            children_fragments,
-            box_node.style.clone(),
+        // Convert back to FragmentNode tree
+        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+            self.font_context.clone(),
+            self.viewport_size,
+            self.nearest_positioned_cb,
         );
+        let fallback_width = constraints.width().unwrap_or(self.viewport_size.width);
+        let mut fragment = self.convert_to_fragments(&taffy, root_id, &node_map, &factory, fallback_width)?;
 
         if let Some(key) = self.layout_cache_key(constraints) {
             let cache = GRID_LAYOUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
