@@ -24,6 +24,7 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use url::Url;
 
 /// Default User-Agent string used by HTTP fetchers
 pub const DEFAULT_USER_AGENT: &str =
@@ -167,26 +168,51 @@ impl HttpFetcher {
         let config = ureq::Agent::config_builder().timeout_global(Some(self.timeout)).build();
         let agent: ureq::Agent = config.into();
 
-        let mut response = agent
-            .get(url)
-            .header("User-Agent", &self.user_agent)
-            .call()
-            .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+        let mut current = url.to_string();
+        for _ in 0..10 {
+            let mut response = agent
+                .get(&current)
+                .header("User-Agent", &self.user_agent)
+                .call()
+                .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
-        let content_type = response
-            .headers()
-            .get("content-type")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string());
+            let status = response.status();
+            if (300..400).contains(&status.as_u16()) {
+                if let Some(loc) = response
+                    .headers()
+                    .get("location")
+                    .and_then(|h| h.to_str().ok())
+                {
+                    let next = Url::parse(&current)
+                        .ok()
+                        .and_then(|base| base.join(loc).ok())
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|| loc.to_string());
+                    current = next;
+                    continue;
+                }
+            }
 
-        let bytes = response
-            .body_mut()
-            .with_config()
-            .limit(self.max_size as u64)
-            .read_to_vec()
-            .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.to_string());
 
-        Ok(FetchedResource::new(bytes, content_type))
+            let bytes = response
+                .body_mut()
+                .with_config()
+                .limit(self.max_size as u64)
+                .read_to_vec()
+                .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+
+            return Ok(FetchedResource::new(bytes, content_type));
+        }
+
+        Err(Error::Io(io::Error::new(
+            io::ErrorKind::Other,
+            "too many redirects",
+        )))
     }
 
     /// Fetch from a file:// URL
@@ -353,6 +379,9 @@ fn percent_decode(input: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn test_fetched_resource_is_image() {
@@ -407,6 +436,46 @@ mod tests {
         let resource = decode_data_url(url).unwrap();
         assert_eq!(resource.bytes, b"hello");
         assert_eq!(resource.content_type, None);
+    }
+
+    #[test]
+    fn http_fetcher_follows_redirects() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind redirect server");
+        let addr = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let mut conn_count = 0;
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                conn_count += 1;
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+
+                if conn_count == 1 {
+                    let resp = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: http://{}\r\nContent-Length: 0\r\n\r\n",
+                        addr
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                } else {
+                    let body = b"ok";
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(headers.as_bytes());
+                    let _ = stream.write_all(body);
+                    break;
+                }
+            }
+        });
+
+        let fetcher = HttpFetcher::new().with_timeout(Duration::from_secs(5));
+        let url = format!("http://{}/", addr);
+        let res = fetcher.fetch(&url).expect("fetch redirect");
+        handle.join().unwrap();
+
+        assert_eq!(res.bytes, b"ok");
+        assert_eq!(res.content_type, Some("text/plain".to_string()));
     }
 
     #[test]

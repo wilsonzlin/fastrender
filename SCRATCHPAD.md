@@ -5,6 +5,7 @@ fetch_and_render now reads .meta sidecars for file:// HTML inputs (e.g., cached 
 Aligned fetcher user-agents: exported DEFAULT_USER_AGENT in resource.rs, fetch_and_render now sends it on HTTP requests, and fetch_pages uses the same Chrome-like UA instead of the old compatible string. Trimmed an unused MixBlendMode import in display_list_renderer_test.
 Deduplicated DEFAULT_USER_AGENT in resource.rs after rebase to avoid duplicate const definitions.
 Hyphenation breaks now filter out non-char-boundary offsets before use, and a regression covers dropping a break inside a multibyte emoji.
+HttpFetcher now follows redirects (up to 10) with the shared User-Agent, and a local TCP server regression verifies redirected fetches return the final content/type.
 cloudflare.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made (duplicate notes removed)
