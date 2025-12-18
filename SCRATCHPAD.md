@@ -78,6 +78,7 @@ Added phoronix.com to fetch_pages targets; fetch succeeds (~60KB) and render com
 Added github.blog to fetch_pages targets; fetch succeeds (~278KB) but render is mostly blank (PNG ~25KB, mostly white) since page is JS-driven; sourceURL CSS comments are now ignored in embedded CSS scan to avoid bogus fetches.
 Added dev.to to fetch_pages targets; fetch succeeds (~298KB) and render completes (~12.9s, PNG ~48KB) with visible content.
 Added nbcnews.com to fetch_pages targets; fetch succeeds (~1.17MB) and render completes (~27.9s, PNG ~40KB, content visible).
+Added vox.com to fetch_pages targets; fetch succeeds (~938KB) and render completes (~15.6s, PNG ~21KB) at 1200x800 with visible content.
 Replaced elements: skip intrinsic image fetch when both width and height are specified (per CSS replaced sizing), dramatically reducing box_tree time on image-heavy pages (nasa.gov now renders in ~8s: box_tree ~0.26s, layout ~0.3s, paint ~5.7s).
 Added display-list renderer regressions for mix-blend-mode (non-isolated multiply vs isolated source-over).
 render_pages/fetch_and_render support --timings to enable FASTR_RENDER_TIMINGS per-page logging; fetch_pages supports --timings for per-page fetch durations (including cache hits/errors).
