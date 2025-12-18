@@ -57,6 +57,7 @@ fn fetch_bytes(url: &str, timeout: Option<Duration>) -> Result<(Vec<u8>, Option<
     for _ in 0..10 {
         let mut response = agent
             .get(&current)
+            .header("User-Agent", fastrender::resource::DEFAULT_USER_AGENT)
             .call()
             .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))?;
 
