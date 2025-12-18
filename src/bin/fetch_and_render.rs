@@ -1,6 +1,6 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
+//! Usage: fetch_and_render [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
 //!
 //! Examples:
 //!   fetch_and_render --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
@@ -14,6 +14,8 @@
 //!                        User media preference for reduced motion (overrides env)
 //!   --prefers-reduced-data reduce|no-preference|true|false
 //!                        User media preference for reduced data (overrides env)
+//!   --prefers-contrast   more|high|less|low|custom|forced|no-preference (overrides env)
+//!   --prefers-color-scheme light|dark|no-preference (overrides env)
 //!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
 //!   --user-agent UA     Override the User-Agent header (default: Chrome-like)
 //!   --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)
@@ -333,11 +335,30 @@ mod tests {
         assert_eq!(parse_prefers_reduced_motion("off"), Some(false));
         assert_eq!(parse_prefers_reduced_motion("maybe"), None);
     }
+
+    #[test]
+    fn parse_prefers_contrast_values() {
+        assert_eq!(parse_prefers_contrast("more"), Some("more".to_string()));
+        assert_eq!(parse_prefers_contrast("HIGH"), Some("high".to_string()));
+        assert_eq!(parse_prefers_contrast("forced"), Some("forced".to_string()));
+        assert_eq!(parse_prefers_contrast("maybe"), None);
+    }
+
+    #[test]
+    fn parse_prefers_color_scheme_values() {
+        assert_eq!(parse_prefers_color_scheme("dark"), Some("dark".to_string()));
+        assert_eq!(parse_prefers_color_scheme("LIGHT"), Some("light".to_string()));
+        assert_eq!(
+            parse_prefers_color_scheme("no-preference"),
+            Some("no-preference".to_string())
+        );
+        assert_eq!(parse_prefers_color_scheme("pink"), None);
+    }
 }
 
 fn usage(program: &str) {
     eprintln!(
-        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
+        "Usage: {program} [--timeout SECONDS] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
     );
     eprintln!("Example: {program} --timeout 120 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
     eprintln!("  width: viewport width (default: 1200)");
@@ -346,6 +367,8 @@ fn usage(program: &str) {
     eprintln!("  prefers-reduced-transparency: reduce|no-preference|true|false (overrides env)");
     eprintln!("  prefers-reduced-motion: reduce|no-preference|true|false (overrides env)");
     eprintln!("  prefers-reduced-data: reduce|no-preference|true|false (overrides env)");
+    eprintln!("  prefers-contrast: more|high|less|low|custom|forced|no-preference (overrides env)");
+    eprintln!("  prefers-color-scheme: light|dark|no-preference (overrides env)");
     eprintln!("  full-page: expand render target to full content size (or set FASTR_FULL_PAGE)");
     eprintln!("  user-agent: override the User-Agent header (default: Chrome-like)");
     eprintln!("  accept-language: override Accept-Language header (default: en-US,en;q=0.9)");
@@ -396,6 +419,22 @@ fn parse_prefers_reduced_motion(val: &str) -> Option<bool> {
     None
 }
 
+fn parse_prefers_contrast(val: &str) -> Option<String> {
+    let v = val.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Some(v),
+        _ => None,
+    }
+}
+
+fn parse_prefers_color_scheme(val: &str) -> Option<String> {
+    let v = val.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "light" | "dark" | "no-preference" => Some(v),
+        _ => None,
+    }
+}
+
 fn render_once(
     url: &str,
     output: &str,
@@ -410,8 +449,7 @@ fn render_once(
 ) -> Result<()> {
     println!("Fetching HTML from: {}", url);
     let timeout = timeout_secs.map(Duration::from_secs);
-    let (html_bytes, html_content_type, source_url) =
-        fetch_bytes(url, timeout, user_agent, accept_language)?;
+    let (html_bytes, html_content_type, source_url) = fetch_bytes(url, timeout, user_agent, accept_language)?;
     let html = decode_html_bytes(&html_bytes, html_content_type.as_deref());
     let base_hint = source_url.as_deref().unwrap_or(url);
     let resource_base = infer_base_url(&html, base_hint).into_owned();
@@ -491,6 +529,8 @@ fn main() -> Result<()> {
     let mut prefers_reduced_transparency: Option<bool> = None;
     let mut prefers_reduced_motion: Option<bool> = None;
     let mut prefers_reduced_data: Option<bool> = None;
+    let mut prefers_contrast: Option<String> = None;
+    let mut prefers_color_scheme: Option<String> = None;
     let mut positional: Vec<String> = Vec::new();
     let mut full_page = false;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
@@ -529,6 +569,16 @@ fn main() -> Result<()> {
             "--prefers-reduced-data" => {
                 if let Some(val) = args.next() {
                     prefers_reduced_data = parse_prefers_reduced_data(&val);
+                }
+            }
+            "--prefers-contrast" => {
+                if let Some(val) = args.next() {
+                    prefers_contrast = parse_prefers_contrast(&val);
+                }
+            }
+            "--prefers-color-scheme" => {
+                if let Some(val) = args.next() {
+                    prefers_color_scheme = parse_prefers_color_scheme(&val);
                 }
             }
             "--full-page" => {
@@ -589,6 +639,14 @@ fn main() -> Result<()> {
             "FASTR_PREFERS_REDUCED_DATA",
             if reduce { "reduce" } else { "no-preference" },
         );
+    }
+
+    if let Some(contrast) = prefers_contrast {
+        std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
+    }
+
+    if let Some(color_scheme) = prefers_color_scheme {
+        std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
     }
 
     if full_page {
