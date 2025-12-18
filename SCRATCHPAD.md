@@ -91,13 +91,7 @@ fetch_and_render regression `render_once_follows_quoted_meta_refresh` uses a loc
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
 - Added mozilla.org to fetch_pages targets for broader coverage. Fetch/render mozilla.org (1200x800, 60s) succeeds (~79KB PNG, visible content).
-<<<<<<< HEAD
-- fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
-Added fast.com and kotlinlang.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
-
-- Positioned flex containers that fill their containing block now relayout their contents with the resolved size (e.g., fixed top/left/right/bottom overlays), so justify-content/align-items center works. Regression added to ensure inset fixed flex overlays center children; Pinterest noscript message now centers vertically (bbox ~463..663 x 338..402 instead of hugging the top).
-=======
 - Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background). Fetch/render at 1200x800 completes quickly (~0.5s render, PNG ~243KB).
-- fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
-- Added www.openstreetmap.org to fetch_pages targets; JS redirect follow is now non-fatal (warns), fetch succeeds (~0.24s) and render completes (~1.4s, PNG ~60KB) at 1200x800.
->>>>>>> 3f73d79 (Make meta/js redirect fetch non-fatal; fetch/render openstreetmap.org)
+- fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present. JS redirect follow during fetch is non-fatal (warns) so we still cache the initial HTML.
+- Added www.openstreetmap.org to fetch_pages targets; fetch succeeds (~0.24s) and render completes (~1.4s, PNG ~60KB) at 1200x800.
+- Positioned flex containers that fill their containing block now relayout their contents with the resolved size (e.g., fixed top/left/right/bottom overlays), so justify-content/align-items center works. Regression added to ensure inset fixed flex overlays center children; Pinterest noscript message now centers vertically (bbox ~463..663 x 338..402 instead of hugging the top).
