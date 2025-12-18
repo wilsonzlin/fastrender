@@ -15,7 +15,7 @@ use fastrender::css::loader::{
     inline_imports,
 };
 use fastrender::html::encoding::decode_html_bytes;
-use fastrender::resource::{parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_USER_AGENT};
+use fastrender::resource::{parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use fastrender::FastRender;
 use std::collections::HashSet;
 use std::fs;
@@ -32,7 +32,7 @@ const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--user-agent UA] [--timings]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--user-agent UA] [--accept-language LANG] [--timings]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
@@ -44,6 +44,7 @@ fn usage() {
     println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
     println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
     println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
+    println!("  --accept-language LANG Override the Accept-Language header (default: en-US,en;q=0.9)");
     println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
 }
 
@@ -115,6 +116,7 @@ fn main() {
     let mut scroll_x: f32 = 0.0;
     let mut scroll_y: f32 = 0.0;
     let mut user_agent = DEFAULT_USER_AGENT.to_string();
+    let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
     let mut enable_timings = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -207,6 +209,13 @@ fn main() {
                     }
                 }
             }
+            "--accept-language" => {
+                if let Some(val) = args.next() {
+                    if !val.trim().is_empty() {
+                        accept_language = val;
+                    }
+                }
+            }
             "--timings" => {
                 enable_timings = true;
             }
@@ -275,12 +284,15 @@ fn main() {
 
     // Create shared caching fetcher
     let fetcher = Arc::new(CachingFetcher::new(
-        HttpFetcher::new().with_user_agent(user_agent.clone()),
+        HttpFetcher::new()
+            .with_user_agent(user_agent.clone())
+            .with_accept_language(accept_language.clone()),
         ASSET_DIR,
     ));
 
     println!("Rendering {} pages ({} parallel)...", entries.len(), jobs);
     println!("User-Agent: {}", user_agent);
+    println!("Accept-Language: {}", accept_language);
     println!();
 
     let start = Instant::now();
