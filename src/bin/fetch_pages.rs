@@ -43,6 +43,7 @@ const PAGES: &[&str] = &[
     "https://lite.cnn.com",
     "https://text.npr.org",
     "https://iana.org",
+    "https://slashdot.org",
     // Tier 3: Modern
     "https://google.com",
     "https://duckduckgo.com",
