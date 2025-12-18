@@ -8,3 +8,7 @@ Notes (Agent19)
 Working tree clean, up to date (targets added: vox.com, nationalgeographic.com, hbr.org). Idle/available for new assignment.
 
 Status: synced to origin/main; workspace clean.
+
+CNN note: no external CSS links; three large inline <style> blocks (~1.7MB) drive layout. PNG shows only header strip; likely runtime-driven content hidden without JS.
+
+Status: synced to origin/main; workspace clean.
