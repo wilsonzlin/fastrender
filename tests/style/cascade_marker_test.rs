@@ -112,3 +112,20 @@ fn marker_ignores_opacity_and_transform() {
     assert_eq!(marker_style.opacity, 1.0, "marker opacity should remain at the default");
     assert!(marker_style.transform.is_empty(), "marker transform should be cleared");
 }
+
+#[test]
+fn marker_ignores_vertical_align() {
+    let mut ctx = CascadeContext::default();
+    let mut li_style = ComputedStyle::default();
+    li_style.display = Display::ListItem;
+
+    let rules = "li::marker { vertical-align: middle; }";
+    ctx.add_author_stylesheet(rules).unwrap();
+
+    let li = build_list_item();
+    let viewport = Size::new(800.0, 600.0);
+    let (_style, marker) = ctx.compute_styles_for_node(&li, viewport);
+    let marker_style = marker.expect("marker styles");
+
+    assert!(matches!(marker_style.vertical_align, fastrender::style::types::VerticalAlign::Baseline));
+}
