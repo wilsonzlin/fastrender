@@ -200,4 +200,3 @@ BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing i
 
 
 
-BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over ~1454 calls in original; display:block rewrite removes grid cost (~0.5s layout).
