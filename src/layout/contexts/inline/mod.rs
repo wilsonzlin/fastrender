@@ -4889,9 +4889,15 @@ impl InlineFormattingContext {
         }
         let style = &box_node.style;
         let inline_vertical = is_vertical_writing_mode(style.writing_mode);
-        let mut available_inline = match constraints.available_width {
+        let inline_space = if inline_vertical {
+            constraints.available_height
+        } else {
+            constraints.available_width
+        };
+        let inline_percent_base = inline_space.to_option().or(constraints.inline_percentage_base);
+        let mut available_inline = match inline_space {
             AvailableSpace::Definite(w) => w,
-            _ => constraints.inline_percentage_base.unwrap_or_else(|| {
+            _ => inline_percent_base.unwrap_or_else(|| {
                 if inline_vertical {
                     self.viewport_size.height
                 } else {
@@ -4910,10 +4916,15 @@ impl InlineFormattingContext {
         if crate::layout::contexts::inline::line_builder::log_line_width_enabled() {
             eprintln!(
                 "[ifc-width] box_id={} available_inline={:.2} avail_variant={:?} percent_base={:?}",
-                box_node.id, available_inline, constraints.available_width, constraints.inline_percentage_base
+                box_node.id, available_inline, inline_space, inline_percent_base
             );
         }
-        let available_block = match constraints.available_height {
+        let block_space = if inline_vertical {
+            constraints.available_width
+        } else {
+            constraints.available_height
+        };
+        let available_block = match block_space {
             AvailableSpace::Definite(h) => h,
             _ => constraints.inline_percentage_base.unwrap_or_else(|| {
                 if inline_vertical {
@@ -8888,6 +8899,7 @@ mod tests {
         container_style.white_space = WhiteSpace::Nowrap;
         container_style.writing_mode = WritingMode::VerticalRl;
         container_style.overflow_x = Overflow::Hidden;
+        container_style.overflow_y = Overflow::Hidden;
         container_style.text_overflow = TextOverflow {
             inline_start: TextOverflowSide::Clip,
             inline_end: TextOverflowSide::Ellipsis,
@@ -8935,6 +8947,7 @@ mod tests {
         container_style.white_space = WhiteSpace::Nowrap;
         container_style.writing_mode = WritingMode::VerticalRl;
         container_style.overflow_x = Overflow::Hidden;
+        container_style.overflow_y = Overflow::Hidden;
         container_style.text_overflow = TextOverflow {
             inline_start: TextOverflowSide::Ellipsis,
             inline_end: TextOverflowSide::Clip,

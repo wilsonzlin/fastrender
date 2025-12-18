@@ -9,3 +9,4 @@ cloudflare.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made
 latimes.com fetch/render timed out at 60s; no changes made (duplicate notes removed)
 HTML parsing now disables scripting so <noscript> fallbacks are parsed/renderable; regression added for noscript content.
+Vertical text-overflow coverage fixed: inline IFC now derives inline available space from the vertical inline axis (constraints.height for vertical writing) and logs that base; vertical overflow tests set overflow-y:hidden to trigger ellipsis. text-overflow ellipsis now clamps line fragments to inline height in vertical writing.
