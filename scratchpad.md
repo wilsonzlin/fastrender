@@ -1615,3 +1615,5 @@ Rendered getbootstrap.com at 1200×800: content fills viewport (bbox 0,12–1199
 - Added new fetch targets: sqlite.org (table-heavy), nginx.org (simple static), and go.dev (modern) to broaden coverage.
 - Added --user-agent overrides to render_pages and fetch_and_render so batch/one-off renders can use the Chrome-like UA or a caller-specified string (HttpFetcher default remains unchanged).
 - fetch_and_render now uses HttpFetcher for network fetches (UA override honored), and render_pages logs the UA per-page to match runtime fetcher behavior.
+- Unitless zero values now parse as numbers for opacity/z-index, avoiding bogus length parsing that could block overlays (e.g., wired.com); regression added.
+- Push of the above scratchpad note pending; git push timing out (commit f3b10ff queued).
