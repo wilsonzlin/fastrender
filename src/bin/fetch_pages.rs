@@ -72,6 +72,7 @@ const PAGES: &[&str] = &[
     "https://openbsd.org",
     "https://debian.org",
     "https://gentoo.org",
+    "https://archlinux.org",
     "https://sina.com.cn",
     "https://espn.com",
     "https://imdb.com",
