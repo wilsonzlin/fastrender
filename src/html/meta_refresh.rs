@@ -49,7 +49,8 @@ pub fn extract_meta_refresh_url(html: &str) -> Option<String> {
 /// Extracts a literal URL from simple JavaScript redirects such as
 /// `window.location.href = "https://example.com"` or `location.replace('/next')`.
 pub fn extract_js_location_redirect(html: &str) -> Option<String> {
-    let lower = html.to_ascii_lowercase();
+    let decoded = decode_refresh_entities(html);
+    let lower = decoded.to_ascii_lowercase();
     let patterns = [
         "location.replace",
         "window.location.replace",
@@ -87,10 +88,10 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
                 while i < lower.len() && lower.as_bytes()[i] != quote {
                     i += 1;
                 }
-                let end = i.min(html.len());
-                let candidate = html[start..end].trim();
+                let end = i.min(decoded.len());
+                let candidate = decoded[start..end].trim();
                 if !candidate.is_empty() {
-                    return Some(candidate.to_string());
+                    return Some(unescape_js_literal(candidate));
                 }
             }
         }
@@ -111,19 +112,57 @@ pub fn extract_js_location_redirect(html: &str) -> Option<String> {
                 while idx < lower.len() && lower.as_bytes()[idx] != quote {
                     idx += 1;
                 }
-                let end = idx.min(html.len());
-                let mut candidate = html[start..end].trim().to_string();
+                let end = idx.min(decoded.len());
+                let mut candidate = decoded[start..end].trim().to_string();
                 if candidate.starts_with("//") {
                     candidate = format!("https:{}", candidate);
                 }
                 if !candidate.is_empty() {
-                    return Some(candidate);
+                    return Some(unescape_js_literal(&candidate));
                 }
             }
         }
     }
 
     None
+}
+
+fn unescape_js_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.next() {
+                match next {
+                    '\\' | '"' | '\'' => out.push(next),
+                    '/' => out.push('/'),
+                    'x' => {
+                        let hi = chars.next();
+                        let lo = chars.next();
+                        if let (Some(hi), Some(lo)) = (hi, lo) {
+                            if let (Some(hi_v), Some(lo_v)) = (hi.to_digit(16), lo.to_digit(16)) {
+                                if let Some(c) = char::from_u32((hi_v * 16 + lo_v) as u32) {
+                                    out.push(c);
+                                    continue;
+                                }
+                            }
+                        }
+                        out.push_str("\\x");
+                        if let Some(h) = hi {
+                            out.push(h);
+                        }
+                        if let Some(l) = lo {
+                            out.push(l);
+                        }
+                    }
+                    _ => out.push(next),
+                }
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 fn normalize_attr_value(value: &str) -> String {
@@ -297,22 +336,7 @@ fn parse_attributes(tag: &str) -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_quoted_refresh_with_entities() {
-        let html = r#"<meta http-equiv="refresh" content="0; url=&quot;https://html.duckduckgo.com/html&quot;">"#;
-        assert_eq!(
-            extract_meta_refresh_url(html),
-            Some("https://html.duckduckgo.com/html".to_string())
-        );
-    }
-
-    #[test]
-    fn parses_refresh_with_single_quotes_and_delay() {
-        let html = "<meta http-equiv='Refresh' content='5;URL=/next'>";
-        assert_eq!(extract_meta_refresh_url(html), Some("/next".to_string()));
-    }
+    use super::{extract_js_location_redirect, extract_meta_refresh_url};
 
     #[test]
     fn extracts_meta_refresh_url() {
@@ -381,18 +405,27 @@ mod tests {
     }
 
     #[test]
-    fn parses_js_location_redirect_patterns() {
-        let html = "<script>window.location.href = 'https://example.com/next?x=1';</script>";
-        assert_eq!(
-            extract_js_location_redirect(html),
-            Some("https://example.com/next?x=1".to_string())
-        );
+    fn extracts_js_location_href_with_entities() {
+        let html = "<script>window.location.href=&quot;/entity/path&quot;;</script>";
+        assert_eq!(extract_js_location_redirect(html), Some("/entity/path".to_string()));
+    }
 
-        let html = "<script>location.replace('/other');</script>";
+    #[test]
+    fn extracts_js_location_href_with_escaped_slashes() {
+        let html = r#"<script>location.href = "https:\\/\\/example.com\\/next";</script>"#;
         assert_eq!(
             extract_js_location_redirect(html),
-            Some("/other".to_string())
+            Some("https://example.com/next".to_string())
         );
+    }
+
+    #[test]
+    fn unescapes_js_literal_sequences() {
+        assert_eq!(
+            super::unescape_js_literal("https:\\/\\/example.com\\/next"),
+            "https://example.com/next"
+        );
+        assert_eq!(super::unescape_js_literal("/path\\x2fwith"), "/path/with");
     }
 
     #[test]
