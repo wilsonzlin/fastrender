@@ -621,13 +621,15 @@ pub fn inject_css_into_html(html: &str, css: &str) -> String {
 
 /// Infer a reasonable base URL for the document.
 ///
-/// Prefers `<base href>`, `<link rel="canonical">`, or `<meta property="og:url">`
-/// when present. When rendering cached `file://.../*.html` inputs without those
-/// hints, falls back to an `https://{filename}/` origin so relative resources
-/// resolve against the original site instead of the local filesystem.
+/// Prefers an explicit `<base href>` when present, otherwise uses the document
+/// URL itself. For `file://` inputs without a `<base>` hint, falls back to
+/// `<link rel="canonical">`/`<meta property="og:url">` if present and, as a last
+/// resort, an `https://{filename}/` origin so relative resources resolve against
+/// the original site instead of the local filesystem.
 pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
     // Canonicalize file:// inputs so relative cached paths become absolute.
     let mut input = Cow::Borrowed(input_url);
+    let mut is_file_input = false;
     if input_url.starts_with("file://") && !input_url.starts_with("file:///") {
         // file://relative/path.html
         let rel = &input_url["file://".len()..];
@@ -644,12 +646,19 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
         }
     }
 
+    if let Ok(url) = Url::parse(&input) {
+        is_file_input = url.scheme() == "file";
+    }
+
     let lower = html.to_lowercase();
-    for (needle, attr, filter) in [
-        ("<base", "href", None),
-        ("<link", "href", Some("rel=\"canonical\"")),
-        ("<meta", "content", Some("property=\"og:url\"")),
+    for (needle, attr, filter, allow_for_http_inputs) in [
+        ("<base", "href", None, true),
+        ("<link", "href", Some("rel=\"canonical\""), false),
+        ("<meta", "content", Some("property=\"og:url\""), false),
     ] {
+        if !allow_for_http_inputs && !is_file_input {
+            continue;
+        }
         let mut pos = 0;
         while let Some(idx) = lower[pos..].find(needle) {
             let abs = pos + idx;
@@ -901,5 +910,26 @@ mod tests {
         assert!(abs.exists());
 
         std::env::set_current_dir(prev_cwd).unwrap();
+    }
+
+    #[test]
+    fn prefers_document_url_over_canonical_for_http_inputs() {
+        let html = r#"
+            <link rel="canonical" href="https://example.com/">
+        "#;
+        let base = infer_base_url(html, "https://example.com/path/page.html");
+        assert_eq!(base, "https://example.com/path/page.html");
+
+        let resolved = resolve_href(&base, "../styles/app.css").expect("resolved");
+        assert_eq!(resolved, "https://example.com/styles/app.css");
+    }
+
+    #[test]
+    fn uses_canonical_hint_for_file_inputs() {
+        let html = r#"
+            <link rel="canonical" href="https://example.net/app/">
+        "#;
+        let base = infer_base_url(html, "file:///tmp/cache/example.net.html");
+        assert_eq!(base, "https://example.net/app/");
     }
 }

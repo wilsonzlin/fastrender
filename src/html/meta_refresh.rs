@@ -217,6 +217,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_quoted_meta_refresh_url() {
+        let html = r#"
+            <html><head>
+            <noscript>
+                <meta http-equiv=\"refresh\" content=\"0; url=&quot;https://html.duckduckgo.com/html&quot;\">
+            </noscript>
+            </head><body></body></html>
+        "#;
+        assert_eq!(
+            extract_meta_refresh_url(html),
+            Some("https://html.duckduckgo.com/html".to_string())
+        );
+    }
+
+    #[test]
     fn extracts_js_location_href() {
         let html = "<script>window.location.href = 'https://example.com/next';</script>";
         assert_eq!(
