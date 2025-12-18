@@ -38,6 +38,7 @@ Added nationalgeographic.com to fetch_pages targets; fetch/render succeed (bbox 
 Added vox.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~13 colors). Looks minimal/static but non-blank; no issues noted.
 Added hbr.org to fetch_pages targets; fetch/render succeed (bbox ~0..799 x 227..799, ~150 colors). Renders header/footer; main content likely JS-driven. No fixes applied.
 Added vox.com to fetch_pages targets; fetch/render succeed (bbox fills viewport, ~13 colors). No issues noted.
+Working tree clean; ready for next assignment.
 Cloudflare render perf fixed: web font loading filters to the page’s codepoints (skipping unused @font-face ranges) and web font HTTP timeout is 10s; FASTR_RENDER_TIMINGS now reports css_parse/style_prepare/style_apply. cloudflare.com renders in ~12s at 1200×800 instead of 70s+.
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
