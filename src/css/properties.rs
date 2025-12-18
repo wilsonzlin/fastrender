@@ -865,6 +865,10 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         }
     }
 
+    if let Some(num) = parse_function_number(value_str) {
+        return Some(PropertyValue::Number(num));
+    }
+
     // Gradients
     if let Some(gradient) = parse_gradient(value_str) {
         return Some(gradient);
@@ -1067,6 +1071,9 @@ fn parse_shadow_color(token: &str) -> Option<Option<Rgba>> {
 }
 
 fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
+    if let Some(num) = parse_function_number(value_str) {
+        return Some(PropertyValue::Number(num));
+    }
     if let Some(length) = parse_length(value_str) {
         return Some(PropertyValue::Length(length));
     }
@@ -2153,6 +2160,27 @@ fn parse_function_length(input: &str) -> Option<Length> {
     result.ok().and_then(calc_component_to_length)
 }
 
+fn parse_function_number(input: &str) -> Option<f32> {
+    let mut parser_input = ParserInput::new(input);
+    let mut parser = Parser::new(&mut parser_input);
+    let result = parser.parse_entirely(|p| match p.next()? {
+        Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => p.parse_nested_block(parse_calc_sum),
+        Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
+            p.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
+            p.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => p.parse_nested_block(parse_clamp),
+        _ => Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Custom(()),
+            location: p.current_source_location(),
+        }),
+    });
+
+    result.ok().and_then(calc_component_to_number)
+}
+
 pub(crate) fn parse_calc_function_length<'i, 't>(
     input: &mut Parser<'i, 't>,
 ) -> Result<Length, cssparser::ParseError<'i, ()>> {
@@ -2173,6 +2201,13 @@ fn calc_component_to_length(component: CalcComponent) -> Option<Length> {
                 Some(Length::calc(calc))
             }
         }
+    }
+}
+
+fn calc_component_to_number(component: CalcComponent) -> Option<f32> {
+    match component {
+        CalcComponent::Number(n) => Some(n),
+        CalcComponent::Length(_) => None,
     }
 }
 

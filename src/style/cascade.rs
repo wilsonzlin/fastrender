@@ -2338,6 +2338,22 @@ mod tests {
     }
 
     #[test]
+    fn opacity_accepts_calc_number() {
+        let dom = element_with_style("opacity: calc(1 - 0.25);");
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert!((styled.styles.opacity - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn z_index_accepts_calc_number() {
+        let dom = element_with_style("position: relative; z-index: calc(2 + 3);");
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        assert_eq!(styled.styles.z_index, Some(5));
+    }
+
+    #[test]
     fn ad_slot_classes_do_not_collapse_without_css_rules() {
         let dom = DomNode {
             node_type: DomNodeType::Element {
