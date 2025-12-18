@@ -6468,6 +6468,31 @@ mod tests {
         (marker_x, text_x)
     }
 
+    fn marker_and_text_baselines(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {
+        let mut marker_base = None;
+        let mut text_base = None;
+        let mut stack = vec![fragment];
+        while let Some(node) = stack.pop() {
+            if let FragmentContent::Text {
+                is_marker,
+                baseline_offset,
+                ..
+            } = node.content
+            {
+                let baseline = node.bounds.y() + baseline_offset;
+                if is_marker && marker_base.is_none() {
+                    marker_base = Some(baseline);
+                } else if !is_marker && text_base.is_none() {
+                    text_base = Some(baseline);
+                }
+            }
+            for child in &node.children {
+                stack.push(child);
+            }
+        }
+        (marker_base, text_base)
+    }
+
     fn marker_and_text_positions_vertical(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {
         let mut marker_y = None;
         let mut text_y = None;
@@ -6736,6 +6761,35 @@ mod tests {
 
         assert!(text_x < 1.0, "intercharacter justify should not shift text; text_x={}", text_x);
         assert!(marker_x < -5.0, "marker should stay outside; marker_x={}", marker_x);
+    }
+
+    #[test]
+    fn marker_and_text_share_baseline() {
+        let ifc = InlineFormattingContext::new();
+
+        let mut marker_style = ComputedStyle::default();
+        marker_style.list_style_position = ListStylePosition::Inside;
+        let marker_style = Arc::new(marker_style);
+
+        let text_style = Arc::new(ComputedStyle::default());
+
+        let marker = BoxNode::new_marker(marker_style, MarkerContent::Text("•".to_string()));
+        let text = BoxNode::new_text(text_style, "content".to_string());
+        let root = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![marker, text]);
+        let constraints = LayoutConstraints::definite_width(200.0);
+
+        let fragment = ifc.layout(&root, &constraints).unwrap();
+        let line = fragment.children.first().expect("line fragment");
+        let (marker_base, text_base) = marker_and_text_baselines(line);
+        let marker_base = marker_base.expect("marker baseline");
+        let text_base = text_base.expect("text baseline");
+
+        assert!(
+            (marker_base - text_base).abs() < 0.5,
+            "marker baseline should align with text: marker_base={} text_base={}",
+            marker_base,
+            text_base
+        );
     }
 
     #[test]
