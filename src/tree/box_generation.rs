@@ -1204,6 +1204,18 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
     counters.enter_scope();
     apply_counter_properties_from_style(styled, counters);
 
+    // Common ad placeholders that hold space even when empty: drop when they have no children/content.
+    if let Some(class_attr) = styled.node.get_attribute("class") {
+        if styled.children.is_empty()
+            && (class_attr.contains("ad-height-hold")
+                || class_attr.contains("ad__slot")
+                || class_attr.contains("should-hold-space"))
+        {
+            counters.leave_scope();
+            return Vec::new();
+        }
+    }
+
     // display:none suppresses box generation entirely.
     if styled.styles.display == Display::None {
         counters.leave_scope();
