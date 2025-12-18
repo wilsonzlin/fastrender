@@ -970,6 +970,7 @@ impl GridFormattingContext {
         node_id: TaffyNodeId,
         node_map: &HashMap<TaffyNodeId, &BoxNode>,
         factory: &FormattingContextFactory,
+        measured_fragments: &HashMap<TaffyNodeId, FragmentNode>,
         inline_base: f32,
     ) -> Result<FragmentNode, LayoutError> {
         let layout = taffy
@@ -987,6 +988,18 @@ impl GridFormattingContext {
             layout.size.height
         };
 
+        // Grid items inside another grid are treated as leaves in the Taffy tree; reuse the
+        // fragment measured during `compute_layout_with_measure` so their contents are preserved.
+        if let Some(measured) = measured_fragments.get(&node_id) {
+            let mut fragment = measured.clone();
+            fragment = fragment.translate(crate::geometry::Point::new(layout.location.x, layout.location.y));
+            fragment.bounds.size = crate::geometry::Size::new(
+                resolved_width,
+                resolved_height.max(fragment.bounds.height()),
+            );
+            return Ok(fragment);
+        }
+
         // Convert children recursively
         let children = taffy
             .children(node_id)
@@ -994,7 +1007,9 @@ impl GridFormattingContext {
 
         let child_fragments: Vec<FragmentNode> = children
             .iter()
-            .map(|&child_id| self.convert_to_fragments(taffy, child_id, node_map, factory, resolved_width))
+            .map(|&child_id| {
+                self.convert_to_fragments(taffy, child_id, node_map, factory, measured_fragments, resolved_width)
+            })
             .collect::<Result<_, _>>()?;
 
         // Create fragment bounds from Taffy layout
@@ -1272,7 +1287,8 @@ impl FormattingContext for GridFormattingContext {
             self.nearest_positioned_cb,
         );
         let fallback_width = constraints.width().unwrap_or(self.viewport_size.width);
-        let mut fragment = self.convert_to_fragments(&taffy, root_id, &node_map, &factory, fallback_width)?;
+        let mut fragment =
+            self.convert_to_fragments(&taffy, root_id, &node_map, &factory, &measured_fragments, fallback_width)?;
 
         // Position out-of-flow children against the appropriate containing block.
         if !positioned_children.is_empty() {
