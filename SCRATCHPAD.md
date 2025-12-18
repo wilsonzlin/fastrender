@@ -33,3 +33,6 @@ CNN render with split_at char-boundary guard now finishes: render_pages --pages 
 - Reran render_pages for all cached pages; 86/86 pass, latimes.com now renders (PNG ~106KB). Summary in fetches/renders/_summary.log.
 
 Wired.com blank render investigation (Mar 2025): max-height:max-content is now parsed/propagated (flag on ComputedStyle/PositionedStyle), percentage heights resolve only when the parent height is definite, and the stacking tree skips visibility:hidden fragments. Render still blank (PNG nonwhite bbox 0,172–1200,173). inspect_frag shows overlays hidden but a nav drawer container (`OneNavRowGrid` under `FocusTrapContainer`) still lays out at (0,439,1200,800) keeping `main` at y≈1239, and carousel row content begins at x≈1080 even though the container flex-wrap=wrap/justify=center. Need to debug why the hidden nav/drawer occupies normal flow and why flex items are offset right (possibly wrap not honored or min_x anchored by earlier items).
+
+---
+Agent7: Added CLI parity for media preferences: `fetch_and_render` now accepts `--prefers-contrast` and `--prefers-color-scheme`, setting FASTR_PREFERS_* before rendering; parser tests added. Positioned-fragment style retention and github.com render fix already landed.
