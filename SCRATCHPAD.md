@@ -30,6 +30,7 @@ Vertical text-overflow coverage fixed for vertical writing; line fragments clamp
 Wikipedia portal: base_url/meta fixes + jsl10n-visible injection for html/body produce centered portal with assets loaded (PNG ~121KB). Unit test `fetch_bytes_uses_base_url_from_meta` added.
 Fixed nowrap text-overflow + outside markers; added regressions for outside markers, start-side ellipsis, and image markers.
 Unitless zero parsing fixed; calc/min/max/clamp parsing supports numeric properties (opacity/z-index/order) with regressions. Order property added to KNOWN_PROPERTIES; non-integer calc orders are ignored per spec.
+Inset/margin shorthands now accept calc(0)/unitless zero numbers: extract_margin_values maps zero numbers to 0px so inset/margin=calc(0) applies; regressions cover inset/margin calc(0).
 Container queries respect inline-size without requiring a block dimension; optional logging via FASTR_LOG_CONTAINER_QUERY.
 Added yahoo.com and nasa.gov to fetch_pages targets (cargo check --bin fetch_pages passes). Fetch/render notes: yahoo/nasa fetch succeed; yahoo now renders in ~14s (timings: cascade ~2.3s, layout ~5.9s) at 1200×800; nasa renders in ~23s (timings: cascade ~1.0s, box_tree ~14.8s, layout ~0.3s, paint ~6s).
 Added docs.rs to fetch_pages targets (cargo check --bin fetch_pages passes); render of cached docs.rs completes (mostly white page with header/nav text visible).

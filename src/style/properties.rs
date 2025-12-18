@@ -10088,6 +10088,7 @@ fn counter_value_to_string(value: &PropertyValue) -> Option<String> {
 pub fn extract_margin_values(value: &PropertyValue) -> Option<Vec<Option<Length>>> {
     match value {
         PropertyValue::Length(len) => Some(vec![Some(*len)]),
+        PropertyValue::Number(n) if *n == 0.0 => Some(vec![Some(Length::px(0.0))]),
         PropertyValue::Keyword(kw) if kw == "auto" => Some(vec![None]), // auto margins
         PropertyValue::Multiple(values) => {
             let lengths: Vec<Option<Length>> = values.iter().map(extract_length).collect();
@@ -12812,6 +12813,66 @@ mod tests {
             16.0,
         );
         assert_eq!(style.writing_mode, WritingMode::SidewaysLr);
+    }
+
+    #[test]
+    fn inset_shorthand_accepts_calc_zero() {
+        let mut style = ComputedStyle {
+            top: Some(Length::px(5.0)),
+            right: Some(Length::px(6.0)),
+            bottom: Some(Length::px(7.0)),
+            left: Some(Length::px(8.0)),
+            ..ComputedStyle::default()
+        };
+
+        let value = parse_property_value("inset", "calc(0)").expect("inset calc(0)");
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "inset".to_string(),
+                value,
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.top, Some(Length::px(0.0)));
+        assert_eq!(style.right, Some(Length::px(0.0)));
+        assert_eq!(style.bottom, Some(Length::px(0.0)));
+        assert_eq!(style.left, Some(Length::px(0.0)));
+    }
+
+    #[test]
+    fn margin_shorthand_accepts_calc_zero() {
+        let mut style = ComputedStyle {
+            margin_top: Some(Length::px(9.0)),
+            margin_right: Some(Length::px(10.0)),
+            margin_bottom: Some(Length::px(11.0)),
+            margin_left: Some(Length::px(12.0)),
+            ..ComputedStyle::default()
+        };
+
+        let value = parse_property_value("margin", "calc(0)").expect("margin calc(0)");
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "margin".to_string(),
+                value,
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        assert_eq!(style.margin_top, Some(Length::px(0.0)));
+        assert_eq!(style.margin_right, Some(Length::px(0.0)));
+        assert_eq!(style.margin_bottom, Some(Length::px(0.0)));
+        assert_eq!(style.margin_left, Some(Length::px(0.0)));
     }
 
     #[test]
