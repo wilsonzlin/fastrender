@@ -1,9 +1,24 @@
 Base URL inference now keeps the document URL for HTTP/HTTPS inputs (ignoring canonical/og:url hints); canonical/og fallbacks remain only for file:// HTML. Added coverage for quoted meta refresh URLs (duckduckgo noscript) and ensured the CLIs still parse them. Meta refresh follow now keeps the target origin as the resource base (duckduckgo.com refresh → html.duckduckgo.com base).
 
+<<<<<<< HEAD
 Added regression coverage for meta refresh/JS redirects in fetch_and_render: quoted/entity meta refresh, noscript meta refresh with hidden body (renders non-blank), and JS location redirects now have local-server tests. meta_refresh parser tests cover quoted/entity URLs. duckduckgo.com now renders with visible content (non-white bbox to y≈243 at 1200×800) after following the refresh to html.duckduckgo.com.
 Cleaned stray merge marker in grid.rs and aligned grid TaffyTree usage to the <*const BoxNode> variant used at call sites (build was failing during tests); no behavior change intended.
 JS redirect parsing now unescapes HTML entities and escaped slashes/hex/unicode (location.assign/replace/href), so entity-escaped or backslash-escaped targets are resolved correctly.
 
+=======
+<<<<<<< HEAD
+CNN note: no external CSS links; three large inline <style> blocks (~1.7MB) drive layout. PNG shows only header strip; likely runtime-driven content hidden without JS.
+
+=======
+<<<<<<< HEAD
+>>>>>>> 6701562 (Note cnn line-height usage)
+Status: synced to origin/main; workspace clean.
+=======
+Added regression coverage for meta refresh/JS redirects in fetch_and_render: quoted/entity meta refresh, noscript meta refresh with hidden body (renders non-blank), and JS location redirects now have local-server tests. meta_refresh parser tests cover quoted/entity URLs. duckduckgo.com now renders with visible content (non-white bbox to y≈243 at 1200×800) after following the refresh to html.duckduckgo.com.
+Cleaned stray merge marker in grid.rs and aligned grid TaffyTree usage to the <*const BoxNode> variant used at call sites (build was failing during tests); no behavior change intended.
+JS redirect parsing now unescapes HTML entities and escaped slashes/hex/unicode (location.assign/replace/href), so entity-escaped or backslash-escaped targets are resolved correctly.
+
+>>>>>>> d70fae3 (Note cnn line-height usage)
 cnn.com cascade profiling (release, 1200x800, 40s timeout): inline CSS only (3 <style> blocks, total ~1.7MB). Cascade ~7–8s (FASTR_CASCADE_PROFILE: ~5.3M selector candidates, ~31k matches, ~3s pseudo), box_tree ~2.4s; render still times out at 40s. Pseudo fast-path/candidate dedup attempts unchanged timing; further selector/cascade optimization needed.
 >>>>>>> c79017e (Skip pseudo matching when no content rules present)
 Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
@@ -13,7 +28,11 @@ JS redirect parsing now ignores identifier-only targets and data-* attributes (e
 If a JS redirect fetch fails, fetch_page now keeps the original response (local regression covers 404 target); prevents cache failures when redirects point to missing pages (e.g., cnn.com).
 Added openstreetmap.org to fetch_pages targets; fetch succeeds (~34KB) and render completes (~60KB PNG, mostly white page with header/nav visible).
 Scroll snapping: mandatory inline-axis snapping now preserves snap target offsets when the smallest target is positive; horizontal snapping to centered items works (regression added). Mandatory snaps no longer discard the minimum target offset.
+<<<<<<< HEAD
  cnn.com fetch now succeeds (JS redirect 404 kept original HTML), but render_pages still times out (cascade ~6–8s, box_tree ~2.4–2.6s, no paint). Needs cascade/layout perf follow-up.
+=======
+cnn.com fetch now succeeds (JS redirect 404 kept original HTML), but render_pages times out at 60s (cascade ~8.2s, box_tree ~2.6s, no paint). Needs cascade/layout perf follow-up.
+>>>>>>> d70fae3 (Note cnn line-height usage)
 CSS link extraction now decodes HTML entities (including odd forms like &/#47;) and embedded CSS URL scans decode entities too; covers cases like figma.com emitting entity-escaped stylesheet URLs. Grid context conflict marker removed and convert_to_fragments now accepts generic Taffy trees (TaffyTree<*const BoxNode> caller compiles).
 Entity-decoded CSS URLs now collapse surplus slashes after schemes (e.g., https:////host////path → https://host/path); regressions cover link and embedded CSS cases. figma.com still blank (JS app) but entity-escaped hrefs now normalize correctly.
 Stylesheet discovery now falls back to loading print-only styles when no screen/all stylesheets are present (e.g., pages that only ship a print stylesheet statically); regression added. theguardian.com still renders sparse content (JS-driven), but print styles can help other minimalist pages.
@@ -188,15 +207,25 @@ filter appears ~10 times.
 linear-gradient appears ~24 times.
 z-index appears ~87 times.
 
-<<<<<<< HEAD
-
 BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over 1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout). Inline CSS contains 74 display:grid rules and 49 grid-template-columns rules; about 254 elements use those grid classes in the DOM. Engine-level grid optimization still needed; CSS hacks (removing grid-template or injected overrides) didn’t reduce layout time.
 Inline CSS stats: 74 display:grid rules and 49 grid-template-columns rules in the main inline block (~70KB).
 
 
-=======
-BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown.
->>>>>>> 46cb229 (Add huffpost.com to fetch_pages; render succeeds)
-
-
 BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over 1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout). Inline CSS contains 74 display:grid rules and 49 grid-template-columns rules; about 254 elements use those grid classes in the DOM.
+=======
+BBC inline CSS perf: inline media removal -> ~11s layout/~23s total; replacing inline display:grid with block -> ~0.5s layout/~9s total. Inline styles drive slowdown. Grid profiling shows grid_ms ~31.5s over 1454 calls in original; display:block rewrite removes grid cost (~0.5s total layout). Inline CSS stats: 74 display:grid rules and 49 grid-template-columns rules in the main inline block (~70KB).
+
+overflow:hidden appears ~39 times.
+transition appears ~144 times.
+animation appears ~35 times.
+position:fixed appears ~12 times.
+width:100% appears ~259 times.
+min-width appears ~250 times; max-width ~358 times.
+height:100% appears ~64 times.
+opacity appears ~137 times.
+letter-spacing appears ~223 times.
+font-size appears ~1303 times.
+padding appears ~822 times.
+margin appears ~1609 times.
+line-height appears ~1166 times.
+>>>>>>> d70fae3 (Note cnn line-height usage)
