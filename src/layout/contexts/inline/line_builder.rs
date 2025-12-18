@@ -2649,6 +2649,35 @@ mod tests {
     }
 
     #[test]
+    fn split_at_mid_codepoint_aligns_to_char_boundary() {
+        let text = "a😊b";
+
+        let style = Arc::new(ComputedStyle::default());
+        let shaper = ShapingPipeline::new();
+        let font_context = FontContext::new();
+        let mut runs = shaper.shape(text, &style, &font_context).unwrap();
+        TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+        let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
+
+        let item = TextItem::new(
+            runs,
+            text.to_string(),
+            metrics,
+            find_break_opportunities(text),
+            Vec::new(),
+            style,
+            Direction::Ltr,
+        );
+
+        // Byte offset 2 is inside the emoji; split_at should clamp to the previous char boundary.
+        let (before, after) = item
+            .split_at(2, false, &shaper, &font_context)
+            .expect("split_at should succeed even at mid-codepoint offsets");
+        assert_eq!(before.text, "a");
+        assert_eq!(after.text, "😊b");
+    }
+
+    #[test]
     fn test_line_builder_single_item_fits() {
         let mut builder = make_builder(100.0);
 
