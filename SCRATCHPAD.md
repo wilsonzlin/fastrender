@@ -2,19 +2,22 @@ Base URL inference now keeps the document URL for HTTP/HTTPS inputs (ignoring ca
 
 Added regression coverage for meta refresh/JS redirects in fetch_and_render: quoted/entity meta refresh, noscript meta refresh with hidden body (renders non-blank), and JS location redirects now have local-server tests. meta_refresh parser tests cover quoted/entity URLs. duckduckgo.com now renders with visible content (non-white bbox to y≈243 at 1200×800) after following the refresh to html.duckduckgo.com.
 Cleaned stray merge marker in grid.rs and aligned grid TaffyTree usage to the <*const BoxNode> variant used at call sites (build was failing during tests); no behavior change intended.
-
-Added fast.com to fetch_pages targets. Fetch succeeds (~4KB HTML); render_pages produces a mostly blank PNG (only tiny header text visible, bbox ~8..202 x 30..63). fast.com likely JS-driven; note for future JS/redirect handling.
+JS redirect parsing now unescapes HTML entities and escaped slashes/hex/unicode (location.assign/replace/href), so entity-escaped or backslash-escaped targets are resolved correctly.
 
 Added openai.com to fetch_pages targets; fetch succeeds (~0.37MB HTML) and render_pages completes in ~22s at 1200×800 (PNG ~49KB, bbox roughly full-page).
 Added figma.com to fetch_pages targets. Fetch succeeds (~1.25MB HTML); render_pages finishes in ~5s but current PNG is blank (bbox None) due to JS redirect to /redirect_home and missing CSS (bogus encoded webpack-artifacts URL); needs follow-up if we want visible content.
 Figma follow-up: fetch_pages caches https://figma.com/redirect_home (JS redirect not followed), while render_pages now follows the JS redirect to https://figma.com/unsupported_browser and renders the unsupported modal (gray overlay, nonwhite bbox).
-JS redirect parsing now ignores identifier-only targets and data-* attributes (e.g., data-location), preventing bogus redirects like openstreetmap.org's data-location JSON from being treated as a JS redirect. Added a regression to ignore data-location attributes.
-Added openstreetmap.org to fetch_pages targets; fetch succeeds (~34KB) and render completes (~60KB PNG, mostly white page with header/nav visible).
 CSS link extraction now decodes HTML entities (including odd forms like &/#47;) and embedded CSS URL scans decode entities too; covers cases like figma.com emitting entity-escaped stylesheet URLs. Grid context conflict marker removed and convert_to_fragments now accepts generic Taffy trees (TaffyTree<*const BoxNode> caller compiles).
+Entity-decoded CSS URLs now collapse surplus slashes after schemes (e.g., https:////host////path → https://host/path); regressions cover link and embedded CSS cases. figma.com still blank (JS app) but entity-escaped hrefs now normalize correctly.
+
+Added fast.com to fetch_pages targets; fetch succeeds (~25KB HTML) and renders in ~0.3s at 1200×800 (PNG ~35KB, bbox roughly centered speed UI).
+Added blog.rust-lang.org to fetch_pages targets. Fetch succeeds (~87KB HTML) and renders in ~1.5s at 1200×800 (PNG ~106KB; full content visible).
+Added xkcd.com to fetch_pages targets. Fetch succeeds (~7KB HTML) and renders in ~0.9s at 1200×800 (PNG ~186KB; comic visible).
 
 Render pipeline now decodes cached HTML with proper charset sniffing: fetch_pages stores the response Content-Type alongside each cached HTML (.html.meta), render_pages decodes bytes via the shared html::encoding helper (BOM/header/meta/default Windows-1252), and fetch_and_render reuses the shared decoder instead of its local copy. cloudflare.com and latimes.com timeouts still outstanding from earlier notes.
 Absolute/fixed elements with both left/right insets and width:auto now use the constraint equation instead of shrink-to-fit, so inset overlays fill the containing block; regressions `fixed_positioned_inset_auto_width_fills_viewport` and `absolute_inset_auto_width_fills_parent` cover fixed and absolute bars spanning their containing blocks.
 Investigating w3.org: cached fetches/html/w3.org.html (+ .meta). render_pages --pages w3.org was mostly white (bbox x=0..667, y=184..799; only white/#f8f8fb/blue) because grid items measured to zero and were never laid out. Grid FC now lays out item contents even when Taffy returns zero sizes: grid items are treated as leaves in the Taffy tree, then laid out via their own formatting contexts with a viewport-width fallback when Taffy reports 0 width. Grid measurement now feeds Taffy via compute_layout_with_measure and rebuilds fragments using the measured sizes, falling back to viewport width when needed. W3.org now renders visible content at the top of the viewport (bbox 0..1173 x 10..699, ~88 colors) without scrolling. Added FASTR_LOG_GRID_CHILDREN to trace grid item measurements. Added w3.org to fetch_pages targets now that above-the-fold content renders correctly.
+Added fast.com to fetch_pages targets; fetch/render succeed (bbox ~386..1187 x 16..777, non-blank). No fixes needed.
 Cloudflare render perf fixed: web font loading filters to the page’s codepoints (skipping unused @font-face ranges) and web font HTTP timeout is 10s; FASTR_RENDER_TIMINGS now reports css_parse/style_prepare/style_apply. cloudflare.com renders in ~12s at 1200×800 instead of 70s+.
 Inline split guard: TextItem::split_at now bails out on non-char-boundary offsets (avoiding UTF-8 slice panics) and a regression covers mid-emoji splits; cleaned an unused MixBlendMode import. Added unit coverage for `previous_char_boundary_in_text` (multibyte offsets clamp to start; past-end clamps to len). Marker baseline/list-style-position/ellipsis regressions landed upstream.
 fetch_pages cache writes are now centralized: HTML caching writes optional .html.meta sidecars via a helper, and tests cover meta persistence/removal; charset sniffing coverage unaffected.
@@ -50,8 +53,7 @@ Added docs.rs to fetch_pages targets (cargo check --bin fetch_pages passes); ren
 Attempted to add crates.io, but HTTP fetch returns 403 (CloudFront/Heroku); left target out to avoid fetch failures.
 Removed duplicate mozilla.org entry from fetch_pages targets to avoid redundant fetches.
 Added doc.rust-lang.org to fetch_pages targets; fetch succeeds and renders (content concentrated mid-page on a white background).
-Added docs.python.org (dark theme) and kotlinlang.org (colorful hero) to fetch_pages targets; fetch/render succeed. Added openstreetmap.org to fetch_pages targets (build pending render verification).
-Added openstreetmap.org target and pushed (cargo check --bin fetch_pages passes; fetch/run pending render verification due to build timeout at runtime).
+Added docs.python.org (dark theme) and kotlinlang.org (colorful hero) to fetch_pages targets; fetch/render succeed.
 Tried adding developer.android.com to fetch_pages targets but fetch_pages hits a redirect loop (>10 redirects), so the target was removed.
 Replaced elements: skip intrinsic image fetch when both width and height are specified (per CSS replaced sizing), dramatically reducing box_tree time on image-heavy pages (nasa.gov now renders in ~8s: box_tree ~0.26s, layout ~0.3s, paint ~5.7s).
 Added display-list renderer regressions for mix-blend-mode (non-isolated multiply vs isolated source-over).
@@ -107,13 +109,12 @@ Added docs.rs to fetch_pages targets (cargo check --bin fetch_pages passes).
 Meta refresh parsing now covers quoted/entity-encoded URLs (extracts `https://example.com/?a=1&b=2` from content="0;URL='...&amp;...'"); test added. Pending: wire through fetch/render follow behavior if more cases emerge.
 fetch_and_render regression `render_once_follows_quoted_meta_refresh` uses a local server to ensure quoted/entity meta refresh targets are actually followed (second request hits decoded URL) and output is produced.
 - Added fast.com and kotlinlang.org to fetch_pages targets (cargo check --bin fetch_pages passes). Resolved lingering grid.rs conflict marker and made convert_to_fragments generic over TaffyTree payloads to compile after rebases.
-Added fast.com, kotlinlang.org, and openstreetmap.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
-Added stanford.edu and developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages passes).
 calc(0) is now accepted for margin/inset shorthands: parse_length falls back to 0 for calc(0), extract_length handles calc strings, and a regression ensures margin/inset apply zero from calc(0).
 Added regression `render_once_fetches_assets_with_cli_headers` to ensure fetch_and_render passes User-Agent/Accept-Language/timeout via HttpFetcher to downstream asset requests (e.g., images).
 - Added background-layer summaries to `examples/inspect_frag` when tracing boxes to show resolved image URLs/gradients; apple.com now renders with visible text/colors (~655 unique colors) after rerender.
 - Added mozilla.org to fetch_pages targets for broader coverage. Fetch/render mozilla.org (1200x800, 60s) succeeds (~79KB PNG, visible content).
+<<<<<<< HEAD
+=======
 - fetch_pages now follows a single `<meta http-equiv="refresh" ...>` after the initial fetch (resolving relative URLs) before caching, to pick up noscript fallbacks when present.
-Added fast.com, kotlinlang.org, and openstreetmap.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
-Added stanford.edu to fetch_pages targets (cargo check --bin fetch_pages passes).
-Added developer.apple.com to fetch_pages targets (cargo check --bin fetch_pages passes).
+Added fast.com and kotlinlang.org to fetch_pages targets; fetch_and_render fast.com (1200x800, timeout 90s) succeeds (~35KB PNG, bbox roughly 386..1187 x 16..777).
+>>>>>>> be0c12a (Note fast.com target render success)
