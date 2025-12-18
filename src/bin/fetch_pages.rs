@@ -146,6 +146,7 @@ const PAGES: &[&str] = &[
     "https://npmjs.com",
     "https://latimes.com",
     "https://cloudflare.com",
+    "https://fast.com",
     "https://aliexpress.com",
     "https://apnews.com",
     "https://aljazeera.com",
