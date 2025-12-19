@@ -70,6 +70,7 @@ cargo build --release
 #   unknown flags, missing cache, or unmatched filters.
 # - file:// URLs are supported (trailing slashes tolerated) and default to a URL-derived
 #   output filename when not explicitly provided.
+# - JavaScript-escaped URLs are unescaped via `unescape_js_escapes` when resolving links.
 ```
 
 ### Running tests
