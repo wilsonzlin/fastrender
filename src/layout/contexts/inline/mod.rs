@@ -4815,7 +4815,7 @@ impl InlineFormattingContext {
                 VerticalAlign::Bottom => {
                     let metrics = positioned.item.baseline_metrics();
                     positioned.baseline_offset =
-                        line.height - metrics.height - (line.baseline - metrics.baseline_offset);
+                        line.height - metrics.height - line.baseline + metrics.baseline_offset;
                 }
                 _ => {}
             }

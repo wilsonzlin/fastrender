@@ -1495,7 +1495,6 @@ impl BlockFormattingContext {
                     Rect::from_xywh(fx + margin_left, fy + margin_top, box_width, fragment.bounds.height());
                 float_ctx.add_float_at(side, fx, fy, margin_left + box_width + margin_right, float_height);
                 content_height = content_height.max(fy + float_height);
-                let mut fragment = fragment;
                 if child.style.position.is_relative() {
                     let positioned_style = crate::layout::absolute_positioning::resolve_positioned_style(
                         &child.style,
