@@ -86,6 +86,7 @@ fn usage() {
     println!("  --accept-language LANG  Override the Accept-Language header (default: en-US,en;q=0.9)");
     println!("  --css-limit N     Maximum number of external stylesheets to fetch (default: unlimited)");
     println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
+    println!("  Logs: fetches/renders/<page>.log per page and fetches/renders/_summary.log");
     println!("  page ...          Positional page filters (cache stems); unknown options exit with status 1");
 }
 
