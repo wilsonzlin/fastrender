@@ -53,7 +53,7 @@ docs/tasks/
 ├── TASK_TEMPLATE.md             # Template for creating new tasks
 │
 ├── wave-1/                      # 13 tasks (no dependencies)
-│   ├── W1.T01-geometry-types.md
+│   ├── W1.T01-notes.md          # Geometry types (completed; see notes)
 │   ├── W1.R01-css-visual-formatting.md
 │   └── ...
 │
@@ -467,7 +467,7 @@ Based on example tasks:
 
 1. **Receive task assignment**: "Execute W1.T01"
 
-2. **Read task file**: `wave-1/W1.T01-geometry-types.md`
+2. **Read task file**: `wave-1/W1.T01-notes.md` (completed reference)
 
 3. **Read context**:
    - `docs/core/type-system.md` (if referenced)

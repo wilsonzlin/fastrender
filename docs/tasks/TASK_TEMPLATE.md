@@ -7,7 +7,7 @@ This is the template for creating new task files. Each task is a completely self
 `wave-{N}/{task_id}-{slug}.md`
 
 Examples:
-- `wave-1/W1.T01-geometry-types.md`
+- `wave-1/W1.T01-notes.md`
 - `wave-3/W3.T04-block-layout.md`
 
 ## Template Structure
@@ -483,7 +483,7 @@ Remember: You're working in isolation. Your notes file is how you communicate wi
 ## Example Tasks
 
 See these example task files:
-- `wave-1/W1.T01-geometry-types.md` - Simple type implementation
+- `wave-1/W1.T01-notes.md` - Simple type implementation (completed reference)
 - `wave-3/W3.T04-block-layout.md` - Complex algorithm implementation
 - `wave-6/W6.T04-wpt-runner.md` - Testing infrastructure
 
