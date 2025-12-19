@@ -3851,7 +3851,7 @@ impl Painter {
     }
 
     fn render_iframe_srcdoc(
-        &mut self,
+        &self,
         html: &str,
         content_rect: Rect,
         style: Option<&ComputedStyle>,
