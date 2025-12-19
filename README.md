@@ -98,6 +98,8 @@ Cache a set of common pages for debugging and profiling:
 
 # Override the User-Agent sent while fetching (defaults to a Chrome-like UA)
 ./target/release/fetch_pages --user-agent "MyBot/1.0"
+# Override Accept-Language for fetches
+./target/release/fetch_pages --accept-language "es-MX,es;q=0.8"
 ```
 
 Render all cached pages to `fetches/renders/` (PNG + per-page logs):
