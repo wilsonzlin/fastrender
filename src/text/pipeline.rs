@@ -411,11 +411,12 @@ impl BidiAnalysis {
             Direction::LeftToRight => Level::ltr(),
             Direction::RightToLeft => Level::rtl(),
         };
-        let mut override_all = false;
-        if let Some(ctx) = explicit {
+        let override_all = if let Some(ctx) = explicit {
             base_level = ctx.level;
-            override_all = ctx.override_all;
-        }
+            ctx.override_all
+        } else {
+            false
+        };
 
         // Handle empty text
         if text.is_empty() {
@@ -993,7 +994,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
         let mut iter = run.text.char_indices().peekable();
 
         while let Some((byte_idx, ch)) = iter.next() {
-            let next_peek = iter.peek().cloned();
+            let next_peek = iter.peek().copied();
             let next_idx = next_peek.map(|(i, _)| i).unwrap_or_else(|| run.text.len());
             if (emoji::is_variation_selector(ch) || emoji::is_zwj(ch)) && current.is_some() {
                 if iter.peek().is_none() {

@@ -1725,7 +1725,7 @@ fn apply_counter_properties_from_style(styled: &StyledNode, counters: &mut Count
             if reversed {
                 // reversed lists count down; default start is the number of list items
                 let item_count = list_item_count(styled) as i32;
-                start.unwrap_or(item_count.max(0))
+                start.unwrap_or_else(|| item_count.max(0))
             } else {
                 start.unwrap_or(1)
             }
