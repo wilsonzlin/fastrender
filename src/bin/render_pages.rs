@@ -19,8 +19,8 @@ use fastrender::css::loader::{
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
-    normalize_page_name, parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
-    DEFAULT_USER_AGENT,
+    normalize_page_name, normalize_user_agent_for_log, parse_cached_html_meta, HttpFetcher, ResourceFetcher,
+    DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 use fastrender::FastRender;
 use std::collections::HashSet;
@@ -37,16 +37,10 @@ const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
-fn normalize_user_agent_for_log(ua: &str) -> &str {
-    ua.strip_prefix("User-Agent:")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(ua)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{normalize_page_name, normalize_user_agent_for_log};
+    use super::normalize_page_name;
+    use fastrender::resource::normalize_user_agent_for_log;
 
     #[test]
     fn normalize_page_name_strips_scheme_and_www() {

@@ -16,7 +16,8 @@ use std::time::Duration;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
-    normalize_page_name, url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    normalize_page_name, normalize_user_agent_for_log, url_to_filename, HttpFetcher, ResourceFetcher,
+    DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 use rayon::ThreadPoolBuilder;
 use url::Url;
@@ -32,13 +33,6 @@ struct Config {
 }
 
 const CACHE_DIR: &str = "fetches/html";
-
-fn normalize_user_agent_for_log(ua: &str) -> &str {
-    ua.strip_prefix("User-Agent:")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(ua)
-}
 
 fn usage() {
     println!("Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--accept-language LANG] [--timings]");

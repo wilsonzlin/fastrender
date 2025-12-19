@@ -37,7 +37,8 @@ use fastrender::css::loader::{
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
-    url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    normalize_user_agent_for_log, url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
+    DEFAULT_USER_AGENT,
 };
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
@@ -49,13 +50,6 @@ use std::time::Duration;
 use url::Url;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
-
-fn normalize_user_agent_for_log(ua: &str) -> &str {
-    ua.strip_prefix("User-Agent:")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(ua)
-}
 
 fn fetch_bytes(
     url: &str,

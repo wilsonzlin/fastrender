@@ -114,6 +114,15 @@ pub const DEFAULT_USER_AGENT: &str =
 /// Default Accept-Language header value
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 
+/// Strip a leading "User-Agent:" prefix so logs don't double-prefix when callers
+/// pass a full header value.
+pub fn normalize_user_agent_for_log(ua: &str) -> &str {
+    ua.strip_prefix("User-Agent:")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ua)
+}
+
 // ============================================================================
 // Core types
 // ============================================================================
@@ -902,5 +911,12 @@ mod tests {
         assert!(res.is_err(), "expected empty response to error: {res:?}");
 
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn normalize_user_agent_for_log_strips_prefix() {
+        assert_eq!(normalize_user_agent_for_log("User-Agent: Foo"), "Foo");
+        assert_eq!(normalize_user_agent_for_log("Foo"), "Foo");
+        assert_eq!(normalize_user_agent_for_log(""), "");
     }
 }
