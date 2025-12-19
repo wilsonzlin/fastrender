@@ -543,6 +543,17 @@ fn supports_value_is_valid(property: &str, value: &str) -> bool {
                 "mixed" | "upright" | "sideways" | "sideways-right"
             );
         }
+        "text-combine-upright" => {
+            let parts: Vec<_> = value_lower.split_whitespace().collect();
+            return match parts.as_slice() {
+                ["none"] | ["all"] | ["digits"] => true,
+                ["digits", n] => match n.parse::<u8>() {
+                    Ok(num) => (2..=4).contains(&num),
+                    Err(_) => false,
+                },
+                _ => false,
+            };
+        }
         "writing-mode" => {
             return matches!(
                 value_lower.as_str(),
