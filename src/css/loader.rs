@@ -1190,4 +1190,18 @@ mod tests {
         let base = infer_base_url(html, "file:///tmp/cache/example.net.html");
         assert_eq!(base, "https://example.net/app/");
     }
+
+    #[test]
+    fn unescape_js_handles_slashes_and_quotes() {
+        let input = r#"https:\/\/example.com\/path\"quoted\'"#;
+        let unescaped = unescape_js_escapes(input);
+        assert_eq!(unescaped, "https://example.com/path\"quoted\'");
+    }
+
+    #[test]
+    fn unescape_js_handles_unicode_escapes() {
+        let input = r"foo\u0026bar\U0041baz"; // & and 'A'
+        let unescaped = unescape_js_escapes(input);
+        assert_eq!(unescaped, "foo&barAbaz");
+    }
 }
