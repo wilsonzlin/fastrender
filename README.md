@@ -56,7 +56,7 @@ cargo build --release
 # Render a webpage
 ./target/release/fetch_and_render https://example.com/
 
-# Output: fetched_output.png
+# Output: https___example.com.png (default output name derived from URL)
 
 # Notes
 # - Unknown flags cause a non-zero exit with usage help (fail-fast).
