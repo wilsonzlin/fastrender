@@ -152,25 +152,21 @@ impl GridFormattingContext {
     fn inline_axis_positive(&self, style: &ComputedStyle) -> bool {
         match style.writing_mode {
             WritingMode::HorizontalTb => style.direction != Direction::Rtl,
-            WritingMode::SidewaysRl => false,
-            WritingMode::SidewaysLr => true,
-            WritingMode::VerticalRl | WritingMode::VerticalLr => true,
+            WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr => {
+                true
+            }
         }
     }
 
     fn block_axis_positive(&self, style: &ComputedStyle) -> bool {
         match style.writing_mode {
-            WritingMode::HorizontalTb | WritingMode::SidewaysRl | WritingMode::SidewaysLr => true,
-            WritingMode::VerticalRl => false,
-            WritingMode::VerticalLr => true,
+            WritingMode::VerticalRl | WritingMode::SidewaysRl => false,
+            _ => true,
         }
     }
 
     fn inline_axis_is_horizontal(&self, style: &ComputedStyle) -> bool {
-        matches!(
-            style.writing_mode,
-            WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
-        )
+        matches!(style.writing_mode, WritingMode::HorizontalTb)
     }
 
     pub fn with_viewport(viewport_size: crate::geometry::Size) -> Self {

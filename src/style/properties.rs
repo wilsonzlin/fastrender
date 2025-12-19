@@ -10325,7 +10325,6 @@ fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::values::{CalcLength, LengthUnit};
     use crate::css::properties::parse_property_value;
     use crate::geometry::Size;
     use crate::style::types::{
@@ -10337,6 +10336,7 @@ mod tests {
         TextEmphasisShape, TextEmphasisStyle, TextOrientation, TextOverflowSide, TextSizeAdjust, TextTransform,
         TextWrap, TransformBox, WordBreak, WritingMode,
     };
+    use crate::style::values::{CalcLength, LengthUnit};
     use cssparser::{Parser, ParserInput};
 
     #[test]
@@ -17226,28 +17226,26 @@ fn parse_variation_setting<'i, 't>(
 }
 
 fn inline_axis_is_horizontal(wm: WritingMode) -> bool {
-    matches!(
-        wm,
-        WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
-    )
+    matches!(wm, WritingMode::HorizontalTb)
 }
 
 fn inline_axis_positive(wm: WritingMode, dir: Direction) -> bool {
     match wm {
         WritingMode::HorizontalTb => dir != Direction::Rtl,
-        WritingMode::SidewaysRl => false,
-        WritingMode::SidewaysLr => true,
-        WritingMode::VerticalRl | WritingMode::VerticalLr => true,
+        WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr => true,
     }
 }
 
 fn block_axis_is_horizontal(wm: WritingMode) -> bool {
-    matches!(wm, WritingMode::VerticalRl | WritingMode::VerticalLr)
+    matches!(
+        wm,
+        WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+    )
 }
 
 fn block_axis_positive(wm: WritingMode) -> bool {
     match wm {
-        WritingMode::VerticalRl => false,
+        WritingMode::VerticalRl | WritingMode::SidewaysRl => false,
         _ => true,
     }
 }

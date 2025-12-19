@@ -1251,10 +1251,7 @@ impl FormattingContext for FlexFormattingContext {
         // when the child uses a different writing mode. Taffy resolves alignment in its own
         // axis space; here we remap the cross-axis position to match the parent's writing-mode.
         if matches!(box_node.style.display, Display::Flex | Display::InlineFlex) && !fragment.children.is_empty() {
-            let inline_is_horizontal = matches!(
-                box_node.style.writing_mode,
-                WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
-            );
+            let inline_is_horizontal = matches!(box_node.style.writing_mode, WritingMode::HorizontalTb);
             let block_is_horizontal = !inline_is_horizontal;
             let main_is_inline = matches!(
                 box_node.style.flex_direction,
@@ -2033,8 +2030,14 @@ fn cache_tolerances(target_size: Size) -> (f32, f32) {
     let min_eps = 1.0;
 
     // Bias tolerance slightly toward the larger axis so extremely wide/tall probes coalesce more.
-    let eps_w = f32::max(f32::max(band(target_size.width), band(target_size.height) * 0.75), min_eps);
-    let eps_h = f32::max(f32::max(band(target_size.height), band(target_size.width) * 0.5), min_eps);
+    let eps_w = f32::max(
+        f32::max(band(target_size.width), band(target_size.height) * 0.75),
+        min_eps,
+    );
+    let eps_h = f32::max(
+        f32::max(band(target_size.height), band(target_size.width) * 0.5),
+        min_eps,
+    );
 
     (eps_w, eps_h)
 }
@@ -2168,10 +2171,7 @@ impl FlexFormattingContext {
         let style = &box_node.style;
         let inline_positive_container = self.inline_axis_positive(style);
         let block_positive_container = self.block_axis_positive(style);
-        let inline_is_horizontal_container = matches!(
-            style.writing_mode,
-            WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
-        );
+        let inline_is_horizontal_container = matches!(style.writing_mode, WritingMode::HorizontalTb);
         let main_is_inline = matches!(style.flex_direction, FlexDirection::Row | FlexDirection::RowReverse);
         let cross_positive_container = if main_is_inline {
             block_positive_container
@@ -3823,10 +3823,7 @@ impl FlexFormattingContext {
         inline_forward_positive: bool,
         block_forward_positive: bool,
     ) -> taffy::style::FlexDirection {
-        let inline_is_horizontal = matches!(
-            style.writing_mode,
-            WritingMode::HorizontalTb | WritingMode::SidewaysLr | WritingMode::SidewaysRl
-        );
+        let inline_is_horizontal = matches!(style.writing_mode, WritingMode::HorizontalTb);
         let block_is_horizontal = !inline_is_horizontal;
 
         match style.flex_direction {
@@ -3896,17 +3893,16 @@ impl FlexFormattingContext {
     fn inline_axis_positive(&self, style: &ComputedStyle) -> bool {
         match style.writing_mode {
             WritingMode::HorizontalTb => style.direction != Direction::Rtl,
-            WritingMode::SidewaysRl => false,
-            WritingMode::SidewaysLr => true,
-            WritingMode::VerticalRl | WritingMode::VerticalLr => true,
+            WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr => {
+                true
+            }
         }
     }
 
     fn block_axis_positive(&self, style: &ComputedStyle) -> bool {
         match style.writing_mode {
-            WritingMode::HorizontalTb | WritingMode::SidewaysRl | WritingMode::SidewaysLr => true,
-            WritingMode::VerticalRl => false,
-            WritingMode::VerticalLr => true,
+            WritingMode::VerticalRl | WritingMode::SidewaysRl => false,
+            _ => true,
         }
     }
 
@@ -4263,7 +4259,10 @@ mod tests {
             false,
         );
 
-        assert_eq!(key_a, key_b, "quantized definite availables should reuse the same cache key");
+        assert_eq!(
+            key_a, key_b,
+            "quantized definite availables should reuse the same cache key"
+        );
 
         // Also ensure a tiny tolerance exists so very similar targets can merge.
         let key_c = super::measure_cache_key(

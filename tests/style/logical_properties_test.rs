@@ -209,11 +209,11 @@ fn logical_padding_maps_in_sideways_writing_mode() {
     );
     resolve_pending_logical_properties(&mut style);
 
-    // Sideways-rl: inline axis is horizontal but start is the right edge; block axis is vertical.
-    assert_eq!(style.padding_right, Length::px(5.0));
-    assert_eq!(style.padding_left, Length::px(7.0));
-    assert_eq!(style.padding_top, Length::px(2.0));
-    assert_eq!(style.padding_bottom, Length::px(4.0));
+    // Sideways-rl: inline axis is vertical (top → bottom), block axis is horizontal right → left.
+    assert_eq!(style.padding_top, Length::px(5.0));
+    assert_eq!(style.padding_bottom, Length::px(7.0));
+    assert_eq!(style.padding_right, Length::px(2.0));
+    assert_eq!(style.padding_left, Length::px(4.0));
 }
 
 #[test]
@@ -250,6 +250,31 @@ fn inline_and_block_sizes_map_to_physical_axes() {
     resolve_pending_logical_properties(&mut style);
     assert_eq!(style.height, Some(Length::px(25.0)));
     assert_eq!(style.width, None);
+}
+
+#[test]
+fn inline_and_block_sizes_map_in_sideways_writing_mode() {
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::SidewaysRl;
+    apply_declaration(
+        &mut style,
+        &decl("inline-size", PropertyValue::Length(Length::px(30.0))),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    apply_declaration(
+        &mut style,
+        &decl("block-size", PropertyValue::Length(Length::px(50.0))),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+
+    // Sideways modes share vertical inline axes with vertical writing: inline-size maps to height, block-size to width.
+    assert_eq!(style.height, Some(Length::px(30.0)));
+    assert_eq!(style.width, Some(Length::px(50.0)));
 }
 
 #[test]
