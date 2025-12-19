@@ -2492,13 +2492,13 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.rebuild_background_layers();
         }
         "background-position-x" => {
-            let mut xs: Vec<_> = source
-                .background_positions
-                .iter()
-                .map(|p| match p {
-                    BackgroundPosition::Position { x, .. } => x.clone(),
-                })
-                .collect();
+                let mut xs: Vec<_> = source
+                    .background_positions
+                    .iter()
+                    .map(|p| match p {
+                        BackgroundPosition::Position { x, .. } => *x,
+                    })
+                    .collect();
             if xs.is_empty() {
                 xs.push(match BackgroundLayer::default().position {
                     BackgroundPosition::Position { x, .. } => x,
@@ -2522,13 +2522,13 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.rebuild_background_layers();
         }
         "background-position-y" => {
-            let mut ys: Vec<_> = source
-                .background_positions
-                .iter()
-                .map(|p| match p {
-                    BackgroundPosition::Position { y, .. } => y.clone(),
-                })
-                .collect();
+                let mut ys: Vec<_> = source
+                    .background_positions
+                    .iter()
+                    .map(|p| match p {
+                        BackgroundPosition::Position { y, .. } => *y,
+                    })
+                    .collect();
             if ys.is_empty() {
                 ys.push(match BackgroundLayer::default().position {
                     BackgroundPosition::Position { y, .. } => y,
