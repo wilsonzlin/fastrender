@@ -663,6 +663,12 @@ mod tests {
     }
 
     #[test]
+    fn normalize_page_name_trims_trailing_punctuation() {
+        assert_eq!(normalize_page_name("https://example.com./").as_deref(), Some("example.com"));
+        assert_eq!(normalize_page_name("example.com_").as_deref(), Some("example.com"));
+    }
+
+    #[test]
     fn normalize_page_name_strips_www_case_insensitively() {
         assert_eq!(normalize_page_name("WWW.Example.com").as_deref(), Some("example.com"));
         assert_eq!(normalize_page_name("www.example.com").as_deref(), Some("example.com"));
