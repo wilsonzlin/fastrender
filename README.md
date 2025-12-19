@@ -71,6 +71,7 @@ cargo build --release
 # - file:// URLs are supported (trailing slashes tolerated) and default to a URL-derived
 #   output filename when not explicitly provided.
 # - JavaScript-escaped URLs are unescaped via `unescape_js_escapes` when resolving links.
+# - `data:` URLs linked from documents are preserved as-is during resolution.
 ```
 
 ### Running tests
