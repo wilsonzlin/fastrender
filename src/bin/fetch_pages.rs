@@ -1,6 +1,6 @@
 //! Fetch and cache HTML pages for testing
 //!
-//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--timings]
+//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--accept-language LANG] [--timings]
 //!
 //! Fetches all target pages in parallel and caches to fetches/html/
 
