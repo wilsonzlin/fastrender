@@ -1,38 +1,49 @@
 use fastrender::css::parser::parse_stylesheet;
-use fastrender::dom::{self, DomNode};
+use fastrender::dom;
 use fastrender::style::cascade::{apply_styles_with_media, StyledNode};
 use fastrender::style::media::MediaContext;
 
-fn collect_by_tag(node: &StyledNode, tag: &str, out: &mut Vec<StyledNode>) {
-    if node.node.tag_name() == Some(tag) {
-        out.push(node.clone());
+fn find_first<'a>(node: &'a StyledNode, tag: &str) -> Option<&'a StyledNode> {
+    if let Some(name) = node.node.tag_name() {
+        if name.eq_ignore_ascii_case(tag) {
+            return Some(node);
+        }
     }
     for child in &node.children {
-        collect_by_tag(child, tag, out);
+        if let Some(found) = find_first(child, tag) {
+            return Some(found);
+        }
     }
+    None
 }
 
-fn styled_children(html: &str) -> Vec<fastrender::style::cascade::StyledNode> {
-    let dom: DomNode = dom::parse_html(html).unwrap();
+fn styled_children(html: &str) -> Vec<StyledNode> {
+    let dom = dom::parse_html(html).unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
-    let mut spans = Vec::new();
-    collect_by_tag(&styled, "span", &mut spans);
-    spans
+    let container = find_first(&styled, "div").expect("div container");
+    container
+        .children
+        .iter()
+        .filter(|child| child.node.tag_name().map(|t| t.eq_ignore_ascii_case("span")).unwrap_or(false))
+        .cloned()
+        .collect()
 }
 
 #[test]
 fn flex_grow_ignores_negative_numbers() {
-    let children =
-        styled_children(r#"<div><span style="flex-grow: -1"></span><span style="flex-grow: 2"></span></div>"#);
+    let children = styled_children(
+        r#"<div style="display:flex"><span style="flex-grow: -1"></span><span style="flex-grow: 2"></span></div>"#,
+    );
     assert_eq!(children[0].styles.flex_grow, 0.0);
     assert_eq!(children[1].styles.flex_grow, 2.0);
 }
 
 #[test]
 fn flex_shrink_ignores_negative_numbers() {
-    let children =
-        styled_children(r#"<div><span style="flex-shrink: -3"></span><span style="flex-shrink: 0.5"></span></div>"#);
+    let children = styled_children(
+        r#"<div style="display:flex"><span style="flex-shrink: -3"></span><span style="flex-shrink: 0.5"></span></div>"#,
+    );
     // Initial flex-shrink is 1.0; invalid negative keeps the default.
     assert_eq!(children[0].styles.flex_shrink, 1.0);
     assert!((children[1].styles.flex_shrink - 0.5).abs() < 1e-6);
@@ -40,7 +51,7 @@ fn flex_shrink_ignores_negative_numbers() {
 
 #[test]
 fn flex_shorthand_none_and_auto_keywords() {
-    let children = styled_children(r#"<div><span style="flex: none"></span><span style="flex: auto"></span></div>"#);
+    let children = styled_children(r#"<div style="display:flex"><span style="flex: none"></span><span style="flex: auto"></span></div>"#);
     assert_eq!(children[0].styles.flex_grow, 0.0);
     assert_eq!(children[0].styles.flex_shrink, 0.0);
     assert!(matches!(
@@ -62,7 +73,7 @@ fn flex_shorthand_numbers_and_basis() {
     use fastrender::style::values::{Length, LengthUnit};
 
     let children = styled_children(
-        r#"<div>
+        r#"<div style="display:flex">
             <span style="flex: 2 3 10px"></span>
             <span style="flex: 4 5"></span>
             <span style="flex: 6"></span>

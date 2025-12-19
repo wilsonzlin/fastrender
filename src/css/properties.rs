@@ -936,6 +936,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "border-block-start"
                 | "border-block-end"
                 | "outline"
+                | "flex"
         )
     {
         let mut parts = Vec::new();

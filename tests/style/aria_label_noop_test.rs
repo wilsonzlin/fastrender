@@ -3,7 +3,6 @@ use fastrender::dom;
 use fastrender::style::cascade::{apply_styles_with_media, StyledNode};
 use fastrender::style::computed::Visibility;
 use fastrender::style::media::MediaContext;
-use fastrender::Display;
 
 #[test]
 fn aria_label_does_not_change_display() {
@@ -12,7 +11,7 @@ fn aria_label_does_not_change_display() {
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
     let node: &StyledNode = &styled.children[0];
-    assert_eq!(node.styles.display, Display::Block);
+    assert_eq!(node.styles.display.to_string(), "block");
     assert_eq!(node.styles.visibility, Visibility::Visible);
 }
 
