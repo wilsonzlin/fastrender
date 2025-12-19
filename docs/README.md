@@ -73,6 +73,7 @@ docs/
 ### CSS Loader notes
 - Link resolution (`src/css/loader.rs`) unescapes JavaScript-escaped URLs and preserves `data:` URLs when inlining or absolutizing references.
 - `file://` bases are handled for both directories (implicit trailing slash) and files (relative paths resolved against the parent directory).
+- Scheme-relative URLs (`//example.com/...`) are preserved by normalization to resolve against the base scheme.
 
 ### Guides
 - [Migration Guide](guides/migration.md) - Migrating from V1
