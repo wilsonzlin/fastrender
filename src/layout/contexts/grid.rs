@@ -698,7 +698,7 @@ impl GridFormattingContext {
     }
 
     fn resolve_length_px(&self, len: &Length, style: &ComputedStyle) -> Option<f32> {
-        use crate::style::values::LengthUnit::*;
+        use crate::style::values::LengthUnit::{Ch, Cm, Em, Ex, In, Mm, Pc, Percent, Pt, Px, Rem};
         match len.unit {
             Percent => None,
             Px | Pt | In | Cm | Mm | Pc => Some(len.to_px()),
@@ -985,7 +985,7 @@ impl GridFormattingContext {
                 CrateAvailableSpace::Definite(bounds.width()),
                 CrateAvailableSpace::Definite(bounds.height()),
             )
-            .with_inline_percentage_base(constraints.inline_percentage_base.or(Some(bounds.width())));
+            .with_inline_percentage_base(constraints.inline_percentage_base.or_else(|| Some(bounds.width())));
 
             let mut laid_out = fc.layout(&layout_child, &child_constraints)?;
             translate_fragment_tree(&mut laid_out, Point::new(bounds.x(), bounds.y()));

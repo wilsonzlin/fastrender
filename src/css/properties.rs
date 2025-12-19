@@ -1380,7 +1380,7 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
                     cx.alignment,
                     match parts[1] {
                         Part::Offset(len) => Some(len),
-                        _ => None,
+                        Part::Keyword(_, _) => None,
                     },
                 ));
                 y = component_from_single(&parts[2], AxisKind::Vertical);
@@ -1389,7 +1389,7 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
                     cy.alignment,
                     match parts[1] {
                         Part::Offset(len) => Some(len),
-                        _ => None,
+                        Part::Keyword(_, _) => None,
                     },
                 ));
                 x = component_from_single(&parts[2], AxisKind::Horizontal);
@@ -2644,7 +2644,8 @@ fn parse_calc_angle_factor<'i, 't>(
             is_angle: false,
         }),
         Token::Dimension { value, ref unit, .. } => {
-            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or(location.new_custom_error(()))
+            angle_component_from_unit(&unit.to_ascii_lowercase(), *value)
+                .ok_or_else(|| location.new_custom_error(()))
         }
         Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
             input.parse_nested_block(parse_calc_angle_sum)
