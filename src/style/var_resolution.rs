@@ -111,6 +111,7 @@ pub fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, St
 ///
 /// Passing the property name allows the resolver to parse the substituted value using the
 /// appropriate grammar (e.g., background layers with commas), rather than the generic parser.
+#[allow(clippy::implicit_hasher)]
 pub fn resolve_var_for_property(
     value: &PropertyValue,
     custom_properties: &HashMap<String, String>,
