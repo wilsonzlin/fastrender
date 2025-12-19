@@ -150,3 +150,27 @@ fn border_inline_color_maps_in_sideways_lr_writing_mode() {
     assert_eq!(style.border_top_color, fastrender::style::color::Rgba::RED);
     assert_eq!(style.border_bottom_color, fastrender::style::color::Rgba::GREEN);
 }
+
+#[test]
+fn border_inline_style_maps_in_sideways_lr_writing_mode() {
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::SidewaysLr;
+    apply_declaration(
+        &mut style,
+        &decl(
+            "border-inline-style",
+            PropertyValue::Multiple(vec![
+                PropertyValue::Keyword("dashed".into()),
+                PropertyValue::Keyword("dotted".into()),
+            ]),
+        ),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+
+    // Sideways-lr inline axis is vertical -> start is top, end is bottom.
+    assert_eq!(style.border_top_style, fastrender::style::types::BorderStyle::Dashed);
+    assert_eq!(style.border_bottom_style, fastrender::style::types::BorderStyle::Dotted);
+}
