@@ -3725,7 +3725,7 @@ impl FlexFormattingContext {
 
         let mut constraints = LayoutConstraints::new(width, height);
         if constraints.inline_percentage_base.is_none() {
-            constraints.inline_percentage_base = inline_percentage_base.or_else(|| match available.width {
+            constraints.inline_percentage_base = inline_percentage_base.or(match available.width {
                 AvailableSpace::Definite(w) => Some(w),
                 _ => None,
             });
