@@ -82,6 +82,8 @@ cargo test --quiet
 
 # Style regression harness (includes tests under tests/style/)
 cargo test --quiet --test style_tests
+# or use the Just recipe
+just style-tests
 ```
 
 ### Batch Fetch & Render
