@@ -295,41 +295,6 @@ fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{selected_pages, PAGES};
-    use crate::resource::url_to_filename;
-    use std::collections::HashSet;
-
-    #[test]
-    fn selected_pages_combines_multiple_filters_case_insensitive() {
-        let mut filter = HashSet::new();
-        filter.insert(url_to_filename("HTTPS://DEVELOPER.MOZILLA.ORG/en-US/docs/Web/CSS/text-orientation"));
-        filter.insert(url_to_filename("https://RUST-LANG.ORG"));
-
-        let selected = selected_pages(Some(&filter));
-        assert_eq!(selected.len(), 2);
-        assert!(selected.iter().any(|&url| url.ends_with("text-orientation")));
-        assert!(selected.iter().any(|&url| url.contains("rust-lang.org")));
-    }
-
-    #[test]
-    fn selected_pages_respects_leading_www() {
-        let mut filter = HashSet::new();
-        // www.openstreetmap.org is in PAGES; normalization should handle the www prefix.
-        filter.insert(url_to_filename("https://www.openstreetmap.org"));
-
-        let selected = selected_pages(Some(&filter));
-        assert_eq!(selected, vec!["https://www.openstreetmap.org"]);
-    }
-
-    #[test]
-    fn selected_pages_empty_filter_returns_all() {
-        let selected = selected_pages(None);
-        assert_eq!(selected.len(), PAGES.len());
-    }
-}
-
 fn write_cached_html(
     cache_path: &Path,
     bytes: &[u8],
@@ -591,6 +556,40 @@ mod tests {
         assert!(selected.contains(&"https://cnn.com"));
         assert!(selected.contains(&"https://example.com"));
         assert!(!selected.contains(&"https://reddit.com"));
+    }
+
+    #[test]
+    fn selected_pages_combines_multiple_filters_case_insensitive() {
+        let mut filter = HashSet::new();
+        filter.insert(url_to_filename("HTTPS://DEVELOPER.MOZILLA.ORG/en-US/docs/Web/CSS/text-orientation"));
+        filter.insert(url_to_filename("https://RUST-LANG.ORG"));
+
+        let selected = selected_pages(Some(&filter));
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().any(|&url| url.ends_with("text-orientation")));
+        assert!(selected.iter().any(|&url| url.contains("rust-lang.org")));
+    }
+
+    #[test]
+    fn selected_pages_respects_leading_www() {
+        let mut filter = HashSet::new();
+        // www.openstreetmap.org is in PAGES; normalization should handle the www prefix.
+        filter.insert(url_to_filename("https://www.openstreetmap.org"));
+
+        let selected = selected_pages(Some(&filter));
+        assert_eq!(selected, vec!["https://www.openstreetmap.org"]);
+    }
+
+    #[test]
+    fn selected_pages_deduplicates_filters() {
+        let mut filter = HashSet::new();
+        // rust-lang.org is present in PAGES.
+        let stem = url_to_filename("https://rust-lang.org");
+        filter.insert(stem.clone());
+        filter.insert(stem);
+
+        let selected = selected_pages(Some(&filter));
+        assert_eq!(selected, vec!["https://rust-lang.org"]);
     }
 
     #[test]
