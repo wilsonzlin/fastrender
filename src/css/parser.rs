@@ -17,6 +17,7 @@ use crate::error::Result;
 use crate::style::media::MediaQuery;
 use cssparser::{ParseError, Parser, ParserInput, ToCss, Token};
 use selectors::parser::{SelectorList, SelectorParseErrorKind};
+use std::fmt::Write;
 
 // ============================================================================
 // Main parsing functions
@@ -381,9 +382,15 @@ fn push_supports_token<'i, 't>(
             out.push('@');
             out.push_str(&at);
         }
-        Token::Number { value, .. } => out.push_str(&value.to_string()),
-        Token::Dimension { value, unit, .. } => out.push_str(&format!("{}{}", value, unit)),
-        Token::Percentage { unit_value, .. } => out.push_str(&format!("{}%", unit_value)),
+        Token::Number { value, .. } => {
+            let _ = write!(out, "{}", value);
+        }
+        Token::Dimension { value, unit, .. } => {
+            let _ = write!(out, "{}{}", value, unit);
+        }
+        Token::Percentage { unit_value, .. } => {
+            let _ = write!(out, "{}%", unit_value);
+        }
         Token::Colon => out.push(':'),
         Token::Delim(c) => out.push(c),
         Token::IDHash(hash) => {
