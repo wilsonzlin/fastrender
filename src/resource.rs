@@ -477,6 +477,17 @@ mod tests {
     use std::thread;
 
     #[test]
+    fn url_to_filename_normalizes_scheme_and_slashes() {
+        assert_eq!(url_to_filename("https://example.com/foo/bar"), "example.com_foo_bar");
+        assert_eq!(url_to_filename("http://example.com"), "example.com");
+    }
+
+    #[test]
+    fn url_to_filename_strips_www_and_replaces_invalid_chars() {
+        assert_eq!(url_to_filename("https://www.exa mple.com/path?x=1"), "www.exa_mple.com_path_x_1");
+    }
+
+    #[test]
     fn test_fetched_resource_is_image() {
         let resource = FetchedResource::new(vec![], Some("image/png".to_string()));
         assert!(resource.is_image());
