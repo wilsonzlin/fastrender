@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
-use fastrender::resource::{url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
+use fastrender::resource::{
+    url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+};
 use rayon::ThreadPoolBuilder;
 use url::Url;
 
@@ -192,9 +194,24 @@ fn normalize_page_name(raw: &str) -> Option<String> {
         None
     } else {
         // Accept full URLs and common "www." variants when filtering.
-        let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
-        let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
-        Some(url_to_filename(without_www))
+        let no_scheme = if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://") {
+            &trimmed[8..]
+        } else if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("http://") {
+            &trimmed[7..]
+        } else {
+            trimmed
+        };
+        let without_www = if no_scheme.len() >= 4 && no_scheme[..4].eq_ignore_ascii_case("www.") {
+            &no_scheme[4..]
+        } else {
+            no_scheme
+        };
+        let (host, rest) = match without_www.find('/') {
+            Some(idx) => (&without_www[..idx], &without_www[idx..]),
+            None => (without_www, ""),
+        };
+        let lowered = format!("{}{}", host.to_ascii_lowercase(), rest);
+        Some(url_to_filename(&lowered))
     }
 }
 
@@ -567,6 +584,24 @@ mod tests {
         let selected = selected_pages(Some(&filter));
         assert!(selected.contains(&"https://w3.org"));
         assert!(selected.contains(&"https://www.w3.org"));
+    }
+
+    #[test]
+    fn filter_is_case_insensitive_for_hostnames() {
+        assert_eq!(
+            normalize_page_name("HTTP://WWW.Example.COM").as_deref(),
+            Some("example.com")
+        );
+
+        let normalized =
+            normalize_page_name("HTTPS://WWW.Developer.Mozilla.Org/en-US/docs/Web/CSS/writing-mode").unwrap();
+        assert_eq!(normalized, "developer.mozilla.org_en-US_docs_Web_CSS_writing-mode");
+
+        let mut filter = HashSet::new();
+        filter.insert(normalized);
+
+        let selected = selected_pages(Some(&filter));
+        assert!(selected.contains(&"https://developer.mozilla.org/en-US/docs/Web/CSS/writing-mode"));
     }
 
     #[test]
