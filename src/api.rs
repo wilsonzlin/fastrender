@@ -1240,7 +1240,7 @@ impl FastRender {
                                     let base = id >> 2;
                                     let summary =
                                         summaries.get(&base).cloned().unwrap_or_else(|| "<unknown>".to_string());
-                                    let fp = second.get(id).cloned().unwrap_or(0);
+                                    let fp = second.get(id).copied().unwrap_or(0);
                                     lines.push(format!("styled_id={} kind={} {} fp={}", base, kind, summary, fp));
                                     if capture_container_fields {
                                         if let (Some(first_tree), Some(new_node)) =
@@ -1858,7 +1858,7 @@ impl CssImportFetcher {
         }
 
         Url::parse(&base_candidate)
-            .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+            .or_else(|_| Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
             .ok()
             .and_then(|base_url| base_url.join(href).ok())
             .map(|u| u.to_string())
@@ -2720,7 +2720,7 @@ fn styled_style_summary(style: &ComputedStyle) -> String {
         ContainerType::InlineSize => "inline-size",
     };
     let names = if style.container_name.is_empty() {
-        "".to_string()
+        String::new()
     } else {
         format!(" names={:?}", style.container_name)
     };
@@ -2947,7 +2947,7 @@ fn build_container_query_context(
                             entry.block_size = entry.block_size.max(content_block);
                             entry.font_size = entry.font_size.max(node.style.font_size);
                         })
-                        .or_insert(ContainerQueryInfo {
+                        .or_insert_with(|| ContainerQueryInfo {
                             inline_size: content_inline,
                             block_size: content_block,
                             container_type: node.style.container_type,
