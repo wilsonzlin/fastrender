@@ -329,3 +329,33 @@ fn background_size_logical_maps_inline_and_block_sideways_rl() {
     );
     assert_eq!(y, BackgroundSizeComponent::Length(fastrender::style::values::Length::px(25.0)));
 }
+
+#[test]
+fn background_position_x_sets_x_components() {
+    let dom = dom::parse_html(
+        r#"<div style="background-position-x: 10px"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = first_div(&styled);
+    let (x, y) = bg_pos(&node);
+    assert_component(&x, 0.0, 10.0, LengthUnit::Px);
+    assert_component(&y, 0.0, 0.0, LengthUnit::Percent);
+}
+
+#[test]
+fn background_position_y_sets_y_components() {
+    let dom = dom::parse_html(
+        r#"<div style="background-position-y: 15px"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = first_div(&styled);
+    let (x, y) = bg_pos(&node);
+    assert_component(&x, 0.0, 0.0, LengthUnit::Percent);
+    assert_component(&y, 0.0, 15.0, LengthUnit::Px);
+}
