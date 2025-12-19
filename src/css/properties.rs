@@ -1798,6 +1798,14 @@ mod tests {
     }
 
     #[test]
+    fn known_properties_are_unique() {
+        let mut props = KNOWN_PROPERTIES.to_vec();
+        props.sort_unstable();
+        props.dedup();
+        assert_eq!(props.len(), KNOWN_PROPERTIES.len(), "KNOWN_PROPERTIES contains duplicates");
+    }
+
+    #[test]
     fn parses_radial_gradient_with_size_and_position() {
         let value = "radial-gradient(circle closest-side at 25% 75%, red, blue)";
         let PropertyValue::RadialGradient {
