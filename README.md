@@ -93,6 +93,8 @@ Cache a set of common pages for debugging and profiling:
 # Notes
 # - Unknown flags cause a non-zero exit with usage help (fail-fast).
 # - An empty selection (no pages matched) also exits non-zero so automation can detect it.
+# - `--pages` may be repeated and/or comma-separated; filters are normalized case-insensitively
+#   (schemes stripped, hosts lowercased, leading www./trailing slashes/punctuation ignored).
 
 # Fetch only specific pages with custom parallelism/timeout
 # (--pages accepts full URLs or stems; scheme/www are ignored when matching)
