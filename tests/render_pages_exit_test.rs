@@ -91,3 +91,22 @@ fn render_pages_normalizes_pages_filter_host_case() {
     // The renderer should have produced a PNG in fetches/renders using the normalized stem.
     assert!(temp.path().join("fetches/renders/example.com.png").is_file());
 }
+
+#[test]
+fn render_pages_normalizes_full_url_filter() {
+    let temp = TempDir::new().expect("tempdir");
+    let html_dir = temp.path().join("fetches/html");
+    fs::create_dir_all(&html_dir).expect("create html dir");
+
+    // Cached html uses lowercase stem; filter uses a full URL with uppercase scheme/host and trailing slash.
+    fs::write(html_dir.join("example.com.html"), "<!doctype html><title>Foo</title>").expect("write html");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
+        .current_dir(temp.path())
+        .args(["--pages", "HTTPS://EXAMPLE.COM/"])
+        .status()
+        .expect("run render_pages");
+
+    assert!(status.success(), "expected render_pages to succeed");
+    assert!(temp.path().join("fetches/renders/example.com.png").is_file());
+}

@@ -2060,7 +2060,9 @@ fn hash_tab_size(tab: &crate::style::types::TabSize, hasher: &mut DefaultHasher)
 }
 
 fn hash_vertical_align(align: &crate::style::types::VerticalAlign, hasher: &mut DefaultHasher) {
-    use crate::style::types::VerticalAlign::{Baseline, Bottom, Length, Middle, Sub, Super, TextBottom, TextTop, Top};
+    use crate::style::types::VerticalAlign::{
+        Baseline, Bottom, Length, Middle, Percentage, Sub, Super, TextBottom, TextTop, Top,
+    };
     match align {
         Baseline => 0u8.hash(hasher),
         Sub => 1u8.hash(hasher),
