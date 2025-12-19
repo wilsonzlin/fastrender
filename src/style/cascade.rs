@@ -2042,8 +2042,8 @@ mod tests {
     use crate::style::properties::apply_declaration;
     use crate::style::types::{
         BorderCollapse, BorderStyle, Direction, ImageOrientation, LineBreak, ListStylePosition, ListStyleType,
-        ScrollbarColor, TextCombineUpright, TextDecorationLine, TextUnderlineOffset, TextUnderlinePosition,
-        UnicodeBidi, WhiteSpace, WillChange, WillChangeHint,
+        ScrollbarColor, TextCombineUpright, TextDecorationLine, TextOrientation, TextUnderlineOffset,
+        TextUnderlinePosition, UnicodeBidi, WhiteSpace, WillChange, WillChangeHint, WritingMode,
     };
     use crate::style::values::Length;
     use crate::style::{ComputedStyle, CursorKeyword, OutlineStyle};
@@ -5562,6 +5562,35 @@ mod tests {
         let li = styled.children.first().expect("li");
         assert!(matches!(li.styles.list_style_type, ListStyleType::Square));
         assert!(matches!(li.styles.list_style_position, ListStylePosition::Inside));
+    }
+
+    #[test]
+    fn text_orientation_inherits_from_parent() {
+        let dom = DomNode {
+            node_type: DomNodeType::Element {
+                tag_name: "div".to_string(),
+                namespace: HTML_NAMESPACE.to_string(),
+                attributes: vec![
+                    (
+                        "style".to_string(),
+                        "writing-mode: vertical-rl; text-orientation: upright;".to_string(),
+                    ),
+                ],
+            },
+            children: vec![DomNode {
+                node_type: DomNodeType::Element {
+                    tag_name: "span".to_string(),
+                    namespace: HTML_NAMESPACE.to_string(),
+                    attributes: vec![],
+                },
+                children: vec![],
+            }],
+        };
+
+        let styled = apply_styles(&dom, &StyleSheet::new());
+        let child = styled.children.first().expect("span child");
+        assert_eq!(child.styles.writing_mode, WritingMode::VerticalRl);
+        assert_eq!(child.styles.text_orientation, TextOrientation::Upright);
     }
 
     #[test]

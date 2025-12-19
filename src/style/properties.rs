@@ -1290,6 +1290,7 @@ fn is_inherited_property(name: &str) -> bool {
             | "text-emphasis-position"
             | "text-transform"
             | "text-combine-upright"
+            | "text-orientation"
             | "letter-spacing"
             | "word-spacing"
             | "white-space"
