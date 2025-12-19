@@ -64,7 +64,7 @@ cargo build --release
 # - Exits non-zero when no URL is provided or a file:// target is missing.
 # - If no output filename is given, the PNG is named after the URL (cache stem + .png).
 # - Parent directories in the output path are created automatically.
-# - `render_pages` accepts positional page filters (cache stems) in addition to `--pages` and
+# - `render_pages` accepts positional page filters (cache stems) in addition to `--pages`, and
 #   fails fast for unknown flags, missing cache, or unmatched filters.
 ```
 
