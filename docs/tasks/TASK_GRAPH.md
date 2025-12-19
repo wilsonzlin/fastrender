@@ -26,7 +26,7 @@ depends_on: []
 inputs: []
 outputs:
   - "path/to/code.rs"
-  - "docs/tasks/notes/W1.T01-notes.md"
+  - "notes/W1.T01-notes.md"
 skills_required: ["Rust", "CSS"]
 context_files: ["docs/*/relevant.md"]
 ---
