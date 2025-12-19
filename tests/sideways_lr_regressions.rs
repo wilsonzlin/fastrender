@@ -77,3 +77,27 @@ fn inline_and_block_sizes_map_in_sideways_lr_writing_mode() {
     assert_eq!(style.width, Some(Length::px(44.0)));
 }
 
+#[test]
+fn logical_inset_maps_in_sideways_lr_writing_mode() {
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::SidewaysLr;
+    apply_declaration(
+        &mut style,
+        &decl("inset-inline-start", PropertyValue::Length(Length::px(5.0))),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    apply_declaration(
+        &mut style,
+        &decl("inset-block-end", PropertyValue::Length(Length::px(7.0))),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+
+    // Sideways-lr: inline axis vertical -> start maps to top; block axis horizontal left→right -> end maps to right.
+    assert_eq!(style.top, Some(Length::px(5.0)));
+    assert_eq!(style.right, Some(Length::px(7.0)));
+}
