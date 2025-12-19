@@ -9892,6 +9892,18 @@ fn parse_text_combine_upright(value: &PropertyValue) -> Option<TextCombineUprigh
             "none" => Some(TextCombineUpright::None),
             "all" => Some(TextCombineUpright::All),
             "digits" => Some(TextCombineUpright::Digits(2)),
+            other if other.starts_with("digits") => {
+                let tail = other["digits".len()..].trim();
+                if tail.is_empty() {
+                    return Some(TextCombineUpright::Digits(2));
+                }
+                if let Ok(count) = tail.parse::<i32>() {
+                    if (2..=4).contains(&count) {
+                        return Some(TextCombineUpright::Digits(count as u8));
+                    }
+                }
+                None
+            }
             _ => None,
         },
         PropertyValue::Multiple(values) => {
@@ -9904,12 +9916,16 @@ fn parse_text_combine_upright(value: &PropertyValue) -> Option<TextCombineUprigh
                         return Some(TextCombineUpright::Digits(2));
                     }
                     if values.len() == 2 {
-                        if let PropertyValue::Number(n) = values[1] {
-                            if n.fract() == 0.0 {
-                                let count = n as i32;
-                                if (2..=4).contains(&count) {
-                                    return Some(TextCombineUpright::Digits(count as u8));
-                                }
+                        let parse_int = |v: &PropertyValue| -> Option<i32> {
+                            match v {
+                                PropertyValue::Number(n) if n.fract() == 0.0 => Some(*n as i32),
+                                PropertyValue::Keyword(kw) => kw.parse::<i32>().ok(),
+                                _ => None,
+                            }
+                        };
+                        if let Some(count) = parse_int(&values[1]) {
+                            if (2..=4).contains(&count) {
+                                return Some(TextCombineUpright::Digits(count as u8));
                             }
                         }
                         return None;
