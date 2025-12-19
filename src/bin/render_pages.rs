@@ -26,7 +26,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::process;
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -43,14 +42,8 @@ mod tests {
 
     #[test]
     fn normalize_page_name_strips_scheme_and_www() {
-        assert_eq!(
-            normalize_page_name("https://example.com/foo").as_deref(),
-            Some("example.com_foo")
-        );
-        assert_eq!(
-            normalize_page_name("http://www.example.com").as_deref(),
-            Some("example.com")
-        );
+        assert_eq!(normalize_page_name("https://example.com/foo").as_deref(), Some("example.com_foo"));
+        assert_eq!(normalize_page_name("http://www.example.com").as_deref(), Some("example.com"));
     }
 
     #[test]
@@ -292,15 +285,17 @@ fn main() {
                 enable_timings = true;
             }
             _ => {
+                // Treat unknown options as errors; positional args are page filters.
                 if arg.starts_with('-') {
+                    eprintln!("Unknown option: {}", arg);
                     usage();
-                    process::exit(1);
+                    std::process::exit(1);
                 }
-                let mut filter = page_filter.take().unwrap_or_default();
                 if let Some(normalized) = normalize_page_name(&arg) {
+                    let mut filter = page_filter.take().unwrap_or_default();
                     filter.insert(normalized);
+                    page_filter = Some(filter);
                 }
-                page_filter = Some(filter);
             }
         }
     }
@@ -361,15 +356,15 @@ fn main() {
             })
             .collect(),
         Err(_) => {
-            println!("No cached pages found in {}.", HTML_DIR);
-            println!("Run fetch_pages first.");
-            process::exit(1);
+            eprintln!("No cached pages found in {}.", HTML_DIR);
+            eprintln!("Run fetch_pages first.");
+            std::process::exit(1);
         }
     };
 
     if entries.is_empty() {
-        println!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
-        process::exit(1);
+        eprintln!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
+        std::process::exit(1);
     }
 
     // Create shared caching fetcher
