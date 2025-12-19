@@ -238,3 +238,22 @@ fn background_size_logical_maps_inline_and_block_vertical_rl() {
         BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(30.0))
     );
 }
+
+#[test]
+fn background_size_logical_maps_inline_and_block_sideways_lr() {
+    // In sideways-lr, inline maps to the physical y-axis (top→bottom) and block maps to the physical x-axis (left→right).
+    let dom = dom::parse_html(
+        r#"<div style="writing-mode: sideways-lr; background-size-inline: 40px; background-size-block: 15%"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = all_divs(&styled)[0];
+    let (x, y) = bg_size(node);
+    assert_eq!(
+        x,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(15.0))
+    );
+    assert_eq!(y, BackgroundSizeComponent::Length(fastrender::style::values::Length::px(40.0)));
+}
