@@ -602,7 +602,7 @@ fn resolve_against_base(base: &str, reference: &str) -> Option<String> {
     }
 
     let mut base_url = Url::parse(&base_candidate)
-        .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+        .or_else(|_| Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
         .ok()?;
 
     if base_url.scheme() == "file" {

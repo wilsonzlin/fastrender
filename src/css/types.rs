@@ -921,7 +921,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
                 let mut resolved_href = import.href.clone();
                 if let Some(base) = base_url {
                     if let Ok(base_url) = Url::parse(base)
-                        .or_else(|_| Url::from_file_path(base).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+                        .or_else(|_| Url::from_file_path(base).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
                     {
                         if let Ok(resolved) = base_url.join(&import.href) {
                             resolved_href = resolved.to_string();

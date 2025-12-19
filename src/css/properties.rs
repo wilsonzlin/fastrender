@@ -433,7 +433,7 @@ pub(crate) fn parse_transform_list(value: &str) -> Option<Vec<Transform>> {
                             "perspective" => parse_perspective(p),
                             _ => Err(()),
                         }
-                        .map_err(|_| p.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid))
+                        .map_err(|()| p.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid))
                     })
                     .ok()?;
                 transforms.push(parsed);
