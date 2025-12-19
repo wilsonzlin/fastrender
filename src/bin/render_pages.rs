@@ -364,14 +364,14 @@ fn main() {
             })
             .collect(),
         Err(_) => {
-            println!("No cached pages found in {}.", HTML_DIR);
-            println!("Run fetch_pages first.");
+            eprintln!("No cached pages found in {}.", HTML_DIR);
+            eprintln!("Run fetch_pages first.");
             std::process::exit(1);
         }
     };
 
     if entries.is_empty() {
-        println!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
+        eprintln!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
         std::process::exit(1);
     }
 
