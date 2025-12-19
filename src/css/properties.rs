@@ -2484,7 +2484,12 @@ fn reduce_components<'i>(
             let mut iter = values.into_iter();
             let first = match iter.next().unwrap() {
                 CalcComponent::Length(l) => l,
-                CalcComponent::Number(_) => unreachable!(),
+                CalcComponent::Number(_) => {
+                    return Err(cssparser::ParseError {
+                        kind: cssparser::ParseErrorKind::Custom(()),
+                        location: cssparser::SourceLocation { line: 0, column: 0 },
+                    })
+                }
             };
             // Only support min/max when all lengths reduce to a single shared unit.
             let first_term = first.single_term().ok_or(cssparser::ParseError {
