@@ -36,7 +36,9 @@ use fastrender::css::loader::{
 };
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
-use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
+use fastrender::resource::{
+    url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+};
 use fastrender::{Error, FastRender, Result};
 use std::collections::HashSet;
 use std::env;
@@ -140,13 +142,8 @@ mod tests {
     use super::*;
     use fastrender::css::loader::resolve_href;
 
-    fn accept_request(
-        listener: &std::net::TcpListener,
-        timeout: std::time::Duration,
-    ) -> Option<std::net::TcpStream> {
-        listener
-            .set_nonblocking(true)
-            .expect("set listener nonblocking");
+    fn accept_request(listener: &std::net::TcpListener, timeout: std::time::Duration) -> Option<std::net::TcpStream> {
+        listener.set_nonblocking(true).expect("set listener nonblocking");
         let start = std::time::Instant::now();
         loop {
             match listener.accept() {
@@ -423,7 +420,8 @@ mod tests {
                 );
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                    html.len(), html
+                    html.len(),
+                    html
                 );
                 let _ = stream.write_all(response.as_bytes());
             }
@@ -440,7 +438,8 @@ mod tests {
                 let html = "<html><body>OK</body></html>";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                    html.len(), html
+                    html.len(),
+                    html
                 );
                 let _ = stream.write_all(response.as_bytes());
             }
@@ -466,7 +465,11 @@ mod tests {
 
         handle.join().expect("server thread");
         let captured = requests.lock().unwrap().join("\n").to_ascii_lowercase();
-        assert!(captured.contains("get / "), "first request should hit root: {}", captured);
+        assert!(
+            captured.contains("get / "),
+            "first request should hit root: {}",
+            captured
+        );
         assert!(
             captured.contains("get /next?foo=1&bar=2"),
             "should follow quoted meta refresh URL: {}",
@@ -504,7 +507,8 @@ mod tests {
                 );
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                    html.len(), html
+                    html.len(),
+                    html
                 );
                 let _ = stream.write_all(response.as_bytes());
             }
@@ -522,7 +526,8 @@ mod tests {
                     "<html><body><div style=\"width:100px;height:40px;background:rgb(0, 200, 0);\"></div></body></html>";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                    html.len(), html
+                    html.len(),
+                    html
                 );
                 let _ = stream.write_all(response.as_bytes());
             }
@@ -559,9 +564,7 @@ mod tests {
             .decode()
             .expect("decode png")
             .to_rgba8();
-        let has_non_white = image
-            .pixels()
-            .any(|p| p.0[0] != 255 || p.0[1] != 255 || p.0[2] != 255);
+        let has_non_white = image.pixels().any(|p| p.0[0] != 255 || p.0[1] != 255 || p.0[2] != 255);
         assert!(has_non_white, "render should include content after meta refresh");
     }
 
@@ -594,7 +597,8 @@ mod tests {
                 );
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                    html.len(), html
+                    html.len(),
+                    html
                 );
                 let _ = stream.write_all(response.as_bytes());
             }
@@ -612,7 +616,8 @@ mod tests {
                     "<html><body><div style=\"width:120px;height:50px;background:rgb(200, 0, 0);\"></div></body></html>";
                 let response = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-                    html.len(), html
+                    html.len(),
+                    html
                 );
                 let _ = stream.write_all(response.as_bytes());
             }
@@ -649,9 +654,7 @@ mod tests {
             .decode()
             .expect("decode png")
             .to_rgba8();
-        let has_non_white = image
-            .pixels()
-            .any(|p| p.0[0] != 255 || p.0[1] != 255 || p.0[2] != 255);
+        let has_non_white = image.pixels().any(|p| p.0[0] != 255 || p.0[1] != 255 || p.0[2] != 255);
         assert!(has_non_white, "render should include content after JS redirect");
     }
 
@@ -1144,7 +1147,7 @@ fn main() -> Result<()> {
     let output = positional
         .get(1)
         .cloned()
-        .unwrap_or_else(|| "fetched_output.png".to_string());
+        .unwrap_or_else(|| format!("{}.png", url_to_filename(&url)));
     let width = viewport
         .map(|(w, _)| w)
         .or_else(|| positional.get(2).and_then(|v| v.parse::<u32>().ok()))
@@ -1161,6 +1164,13 @@ fn main() -> Result<()> {
         .map(|(_, y)| y)
         .or_else(|| positional.get(5).and_then(|v| v.parse::<u32>().ok()))
         .unwrap_or(0);
+
+    let output_path = std::path::Path::new(&output);
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
 
     if let Some(reduce) = prefers_reduced_transparency {
         std::env::set_var(
