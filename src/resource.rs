@@ -590,6 +590,14 @@ mod tests {
     }
 
     #[test]
+    fn normalize_page_name_handles_query_and_uppercase_scheme() {
+        assert_eq!(
+            normalize_page_name("HTTP://Example.com/Path?foo=1").as_deref(),
+            Some("example.com_Path_foo_1")
+        );
+    }
+
+    #[test]
     fn url_to_filename_drops_fragments() {
         assert_eq!(url_to_filename("https://example.com/path#frag"), "example.com_path");
         assert_eq!(
@@ -602,6 +610,12 @@ mod tests {
     fn url_to_filename_drops_fragments_without_scheme() {
         assert_eq!(url_to_filename("Example.Com/path#frag"), "example.com_path");
         assert_eq!(url_to_filename("Example.Com/path?q=1#frag"), "example.com_path_q_1");
+    }
+
+    #[test]
+    fn url_to_filename_strips_fragments_with_uppercase_scheme() {
+        assert_eq!(url_to_filename("HTTP://Example.com/Path#Frag"), "example.com_Path");
+        assert_eq!(url_to_filename("HTTP://Example.com/Path?q=1#Frag"), "example.com_Path_q_1");
     }
 
     #[test]
