@@ -406,7 +406,7 @@ fn push_supports_token<'i, 't>(
         }
         Token::ParenthesisBlock => {
             let inner = parser.parse_nested_block(|nested| {
-                Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(collect_supports_tokens(nested)?)
+                collect_supports_tokens(nested)
             })?;
             out.push('(');
             out.push_str(&inner);
@@ -414,7 +414,7 @@ fn push_supports_token<'i, 't>(
         }
         Token::Function(f) => {
             let inner = parser.parse_nested_block(|nested| {
-                Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(collect_supports_tokens(nested)?)
+                collect_supports_tokens(nested)
             })?;
             out.push_str(&f);
             out.push('(');
@@ -423,7 +423,7 @@ fn push_supports_token<'i, 't>(
         }
         Token::SquareBracketBlock => {
             let inner = parser.parse_nested_block(|nested| {
-                Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(collect_supports_tokens(nested)?)
+                collect_supports_tokens(nested)
             })?;
             out.push('[');
             out.push_str(&inner);

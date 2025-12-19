@@ -182,7 +182,7 @@ fn unescape_js_literal(s: &str) -> String {
                         let lo = chars.next();
                         if let (Some(hi), Some(lo)) = (hi, lo) {
                             if let (Some(hi_v), Some(lo_v)) = (hi.to_digit(16), lo.to_digit(16)) {
-                                if let Some(c) = char::from_u32((hi_v * 16 + lo_v) as u32) {
+                    if let Some(c) = char::from_u32(hi_v * 16 + lo_v) {
                                     out.push(c);
                                     continue;
                                 }
@@ -222,7 +222,7 @@ fn unescape_js_literal(s: &str) -> String {
             let b = chars.next();
             if let (Some(a), Some(b)) = (a, b) {
                 if let (Some(hi), Some(lo)) = (a.to_digit(16), b.to_digit(16)) {
-                    if let Some(c) = char::from_u32((hi * 16 + lo) as u32) {
+                    if let Some(c) = char::from_u32(hi * 16 + lo) {
                         out.push(c);
                         continue;
                     }
