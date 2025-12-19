@@ -6150,11 +6150,11 @@ pub fn apply_declaration_with_base(
                     let source = styles
                         .background_sizes
                         .get(source_idx)
-                        .cloned()
-                        .unwrap_or(default.clone());
+                        .copied()
+                        .unwrap_or_else(|| default.clone());
                     let inline_value = values
                         .get(idx)
-                        .cloned()
+                        .copied()
                         .unwrap_or_else(|| values.last().copied().unwrap());
                     let explicit = match source {
                         BackgroundSize::Explicit(mut x, mut y) => {
@@ -8273,7 +8273,7 @@ fn parse_calc_angle_factor<'i, 't>(
             is_angle: false,
         }),
         Token::Dimension { value, ref unit, .. } => {
-            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or(location.new_custom_error(()))
+            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or_else(|| location.new_custom_error(()))
         }
         Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
             input.parse_nested_block(parse_calc_angle_sum)
@@ -8725,7 +8725,7 @@ fn parse_angle_degrees<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32, csspar
     let token = input.next()?;
     let component = match token {
         Token::Dimension { value, ref unit, .. } => {
-            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or(location.new_custom_error(()))?
+            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or_else(|| location.new_custom_error(()))?
         }
         Token::Function(ref name) => {
             let func = name.as_ref().to_ascii_lowercase();
@@ -9075,8 +9075,8 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                     y = first_v;
                     x = second_h.or_else(|| Some(component_from_keyword(0.5, None)));
                 } else {
-                    x = first_h.or_else(|| second_h);
-                    y = second_v.or_else(|| first_v);
+                    x = first_h.or(second_h);
+                    y = second_v.or(first_v);
                 }
             }
             if x.is_none() {
@@ -9390,10 +9390,11 @@ fn parse_inset_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape, c
             _ => offsets.into_iter().take(4).collect(),
         };
 
-        let mut radii = None;
-        if nested.try_parse(|p| p.expect_ident_matching("round")).is_ok() {
-            radii = Some(parse_clip_radii(nested)?);
-        }
+    let radii = if nested.try_parse(|p| p.expect_ident_matching("round")).is_ok() {
+        Some(parse_clip_radii(nested)?)
+    } else {
+        None
+    };
 
         nested.expect_exhausted()?;
         Ok(BasicShape::Inset {
@@ -9421,10 +9422,11 @@ fn parse_ellipse_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape,
     input.expect_function_matching("ellipse")?;
     input.parse_nested_block(|nested| {
         let radius_x = nested.try_parse(parse_shape_radius).ok();
-        let mut radius_y = radius_x;
-        if let Ok(second) = nested.try_parse(parse_shape_radius) {
-            radius_y = Some(second);
-        }
+    let radius_y = if let Ok(second) = nested.try_parse(parse_shape_radius) {
+        Some(second)
+    } else {
+        radius_x
+    };
 
         let position = parse_clip_position(nested)?;
         nested.expect_exhausted()?;
@@ -9574,7 +9576,7 @@ fn parse_clip_radii<'i, 't>(input: &mut Parser<'i, 't>) -> Result<ClipRadii, css
     }
 
     while values.len() < 4 {
-        if let Some(last) = values.last().cloned() {
+        if let Some(last) = values.last().copied() {
             values.push(last);
         }
     }
