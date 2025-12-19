@@ -2310,7 +2310,10 @@ fn hash_font_synthesis(value: &crate::style::types::FontSynthesis, hasher: &mut 
 }
 
 fn hash_transform(transform: &crate::css::types::Transform, hasher: &mut DefaultHasher) {
-    use crate::css::types::Transform::*;
+    use crate::css::types::Transform::{
+        Matrix, Matrix3d, Perspective, Rotate, Rotate3d, RotateX, RotateY, RotateZ, Scale, Scale3d, ScaleX, ScaleY,
+        ScaleZ, Skew, SkewX, SkewY, Translate, Translate3d, TranslateX, TranslateY, TranslateZ,
+    };
     match transform {
         Translate(x, y) => {
             0u8.hash(hasher);
