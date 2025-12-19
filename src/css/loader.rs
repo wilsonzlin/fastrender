@@ -609,7 +609,7 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
         let mut start = abs_pos;
         while start > 0 {
             let c = bytes[start - 1] as char;
-            if c == '"' || c == '\'' || c == '(' || c.is_whitespace() || c == '<' {
+            if matches!(c, '"' | '\'' | '(' | '<') || c.is_whitespace() {
                 break;
             }
             start -= 1;
@@ -618,7 +618,7 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
         let mut end = abs_pos + 4;
         while end < bytes.len() {
             let c = bytes[end] as char;
-            if c == '"' || c == '\'' || c == ')' || c.is_whitespace() || c == '>' || c == '{' || c == '}' {
+            if matches!(c, '"' | '\'' | ')' | '>' | '{' | '}') || c.is_whitespace() {
                 break;
             }
             end += 1;
