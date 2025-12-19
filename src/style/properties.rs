@@ -8823,7 +8823,8 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
     }
 
     fn component_from_keyword(align: f32, offset: Option<Length>) -> BackgroundPositionComponent {
-        let mut off = offset.unwrap_or_else(|| Length::px(0.0));
+        // Percent-based zero so default offsets participate in percentage resolution where relevant.
+        let mut off = offset.unwrap_or_else(|| Length::percent(0.0));
         if (align - 1.0).abs() < 1e-6 {
             off.value = -off.value;
         }
