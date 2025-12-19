@@ -72,6 +72,7 @@ docs/
 - [Code Standards](guides/code-standards.md) - Coding conventions
 - [Reference Materials](guides/reference-materials.md) - External resources
 - [Implementation Checklist](guides/implementation-checklist.md) - Progress tracking
+- [Render Debugging](guides/render-debugging.md) - Tips for diagnosing blank/black renders
 
 ### Research
 - [Servo Layout](research/servo-layout-architecture.md) - Servo's layout architecture
