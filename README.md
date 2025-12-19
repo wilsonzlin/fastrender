@@ -56,12 +56,13 @@ cargo build --release
 # Render a webpage
 ./target/release/fetch_and_render https://example.com/
 
-# Output: https___example.com.png (default output name derived from URL)
+# Output: <url>.png (e.g., example.com_.png, derived from the URL)
 
 # Notes
 # - Unknown flags cause a non-zero exit with usage help (fail-fast).
 # - Exits non-zero when no URL is provided or a file:// target is missing.
 # - If no output filename is given, the PNG is named after the URL (cache stem + .png).
+# - Parent directories in the output path are created automatically.
 ```
 
 ### Running tests
