@@ -30,7 +30,7 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
         return Some(href.to_string());
     }
 
-    if let Ok(abs) = Url::parse(href.as_ref()) {
+    if let Ok(abs) = Url::parse(href) {
         return Some(abs.to_string());
     }
 
@@ -45,7 +45,7 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     Url::parse(&base_candidate)
         .or_else(|_| Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
         .ok()?
-        .join(href.as_ref())
+        .join(href)
         .ok()
         .map(|u| u.to_string())
 }

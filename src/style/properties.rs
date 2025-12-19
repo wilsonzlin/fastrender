@@ -7173,7 +7173,7 @@ fn parse_border_image_source(value: &PropertyValue) -> Option<BorderImageSource>
             return Some(BorderImageSource::None);
         }
     }
-    parse_background_image_value(value).map(BorderImageSource::Image)
+    parse_background_image_value(value).map(|img| BorderImageSource::Image(Box::new(img)))
 }
 
 fn parse_border_image_slice(value: &PropertyValue) -> Option<BorderImageSlice> {
@@ -8858,13 +8858,13 @@ fn parse_drop_shadow<'i, 't>(input: &mut Parser<'i, 't>) -> Result<FilterFunctio
         return Err(input.new_custom_error(()));
     }
 
-    Ok(FilterFunction::DropShadow(FilterShadow {
+    Ok(FilterFunction::DropShadow(Box::new(FilterShadow {
         offset_x: lengths[0],
         offset_y: lengths[1],
         blur_radius: blur,
         spread,
         color: color.unwrap_or(FilterColor::CurrentColor),
-    }))
+    })))
 }
 
 fn parse_filter_function_length<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Length, cssparser::ParseError<'i, ()>> {
@@ -8952,6 +8952,16 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
     enum Part {
         Keyword(AxisKind, f32),
         Offset(Length),
+    }
+
+    impl Part {
+        fn as_offset(&self) -> Option<Length> {
+            if let Part::Offset(l) = self {
+                Some(*l)
+            } else {
+                None
+            }
+        }
     }
 
     fn classify(value: &PropertyValue) -> Option<Part> {
@@ -9087,10 +9097,7 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 if let Part::Keyword(_, align) = a {
                     x = Some(component_from_keyword(
                         *align,
-                        Some(match b {
-                            Part::Offset(l) => *l,
-                            _ => unreachable!(),
-                        }),
+                        b.as_offset(),
                     ));
                 } else if let Part::Offset(_) = a {
                     // unreachable
@@ -9106,10 +9113,7 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 if let Part::Keyword(_, align) = a {
                     y = Some(component_from_keyword(
                         *align,
-                        Some(match b {
-                            Part::Offset(l) => *l,
-                            _ => unreachable!(),
-                        }),
+                        b.as_offset(),
                     ));
                 }
                 x = component_from_single(c, AxisKind::Horizontal);
@@ -9130,19 +9134,13 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 if let Part::Keyword(_, align) = a {
                     x = Some(component_from_keyword(
                         *align,
-                        Some(match b {
-                            Part::Offset(l) => *l,
-                            _ => unreachable!(),
-                        }),
+                        b.as_offset(),
                     ));
                 }
                 if let Part::Keyword(_, align) = c {
                     y = Some(component_from_keyword(
                         *align,
-                        Some(match d {
-                            Part::Offset(l) => *l,
-                            _ => unreachable!(),
-                        }),
+                        d.as_offset(),
                     ));
                 }
             } else if matches!(a, Part::Keyword(AxisKind::Vertical | AxisKind::Either, _))
@@ -9153,19 +9151,13 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 if let Part::Keyword(_, align) = a {
                     y = Some(component_from_keyword(
                         *align,
-                        Some(match b {
-                            Part::Offset(l) => *l,
-                            _ => unreachable!(),
-                        }),
+                        b.as_offset(),
                     ));
                 }
                 if let Part::Keyword(_, align) = c {
                     x = Some(component_from_keyword(
                         *align,
-                        Some(match d {
-                            Part::Offset(l) => *l,
-                            _ => unreachable!(),
-                        }),
+                        d.as_offset(),
                     ));
                 }
             }
@@ -9347,7 +9339,7 @@ fn parse_clip_path_str(input_str: &str) -> Option<ClipPath> {
     if let Ok(shape) = parser.try_parse(parse_basic_shape) {
         let reference = parser.try_parse(parse_reference_box).ok();
         parser.expect_exhausted().ok()?;
-        return Some(ClipPath::BasicShape(shape, reference));
+        return Some(ClipPath::BasicShape(Box::new(shape), reference));
     }
 
     if let Ok(reference) = parser.parse_entirely(parse_reference_box) {
@@ -9429,7 +9421,7 @@ fn parse_inset_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape, c
             right: offsets[1],
             bottom: offsets[2],
             left: offsets[3],
-            border_radius: radii,
+            border_radius: Box::new(radii),
         })
     })
 }

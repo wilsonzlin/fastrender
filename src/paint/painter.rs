@@ -2722,7 +2722,7 @@ impl Painter {
             BorderImageSource::None => return false,
         };
 
-        let (pixmap, img_w, img_h) = match bg {
+        let (pixmap, img_w, img_h) = match bg.as_ref() {
             BackgroundImage::Url(src) => {
                 let image = match self.image_cache.load(src) {
                     Ok(img) => img,
@@ -2747,7 +2747,7 @@ impl Painter {
             | BackgroundImage::RepeatingConicGradient { .. } => {
                 let img_w = outer_rect.width().max(1.0).round() as u32;
                 let img_h = outer_rect.height().max(1.0).round() as u32;
-                let Some(pixmap) = self.render_generated_image(bg, style, img_w, img_h) else {
+                let Some(pixmap) = self.render_generated_image(&*bg, style, img_w, img_h) else {
                     return false;
                 };
                 (pixmap, img_w, img_h)

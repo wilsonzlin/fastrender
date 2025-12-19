@@ -2575,7 +2575,7 @@ impl DisplayListBuilder {
 
         let border_image = match &style.border_image.source {
             BorderImageSource::Image(bg) => {
-                let source = match bg {
+                let source = match bg.as_ref() {
                     BackgroundImage::Url(src) => self
                         .decode_image(src, Some(style), true)
                         .map(BorderImageSourceItem::Raster),
@@ -2585,7 +2585,7 @@ impl DisplayListBuilder {
                     | BackgroundImage::RepeatingRadialGradient { .. }
                     | BackgroundImage::ConicGradient { .. }
                     | BackgroundImage::RepeatingConicGradient { .. } => {
-                        Some(BorderImageSourceItem::Generated(bg.clone()))
+                        Some(BorderImageSourceItem::Generated((**bg).clone()))
                     }
                     BackgroundImage::None => None,
                 };
