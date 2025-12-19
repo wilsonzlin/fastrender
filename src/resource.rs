@@ -74,10 +74,11 @@ pub fn normalize_page_name(raw: &str) -> Option<String> {
 
 /// Normalize a URL into a filename-safe stem used for caches and outputs.
 pub fn url_to_filename(url: &str) -> String {
+    let trimmed = url.trim();
     // First, try to parse the URL so we can lowercase the hostname (case-insensitive per URL
     // spec) and strip the scheme regardless of casing. If parsing fails, fall back to a best-effort
     // scheme-stripping path similar to the old behavior.
-    if let Ok(parsed) = Url::parse(url) {
+    if let Ok(parsed) = Url::parse(trimmed) {
         let mut stem = String::new();
         if let Some(host) = parsed.host_str() {
             stem.push_str(&host.to_ascii_lowercase());
@@ -88,10 +89,10 @@ pub fn url_to_filename(url: &str) -> String {
     }
 
     // Fallback: remove common schemes case-insensitively and lowercase only the hostname portion.
-    let mut trimmed = url;
+    let mut trimmed = trimmed;
     for scheme in ["https://", "http://"] {
-        if url.len() >= scheme.len() && url[..scheme.len()].eq_ignore_ascii_case(scheme) {
-            trimmed = &url[scheme.len()..];
+        if trimmed.len() >= scheme.len() && trimmed[..scheme.len()].eq_ignore_ascii_case(scheme) {
+            trimmed = &trimmed[scheme.len()..];
             break;
         }
     }
@@ -595,6 +596,14 @@ mod tests {
     fn url_to_filename_trims_trailing_slash() {
         assert_eq!(url_to_filename("https://example.com/"), "example.com");
         assert_eq!(url_to_filename("HTTP://WWW.Example.COM/"), "www.example.com");
+    }
+
+    #[test]
+    fn url_to_filename_trims_whitespace_and_fragment() {
+        assert_eq!(
+            url_to_filename("  https://Example.com/Path#Frag  "),
+            "example.com_Path"
+        );
     }
 
     #[test]
