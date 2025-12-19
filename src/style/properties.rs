@@ -308,9 +308,7 @@ fn split_image_set_candidates(inner: &str) -> Vec<String> {
                 current.push(ch);
             }
             '}' => {
-                if brace > 0 {
-                    brace -= 1;
-                }
+                brace = brace.saturating_sub(1);
                 current.push(ch);
             }
             ',' if paren == 0 && bracket == 0 && brace == 0 => {
@@ -433,7 +431,7 @@ fn tokenize_image_set_candidate(value_str: &str) -> Vec<String> {
     let mut current = String::new();
     let mut paren = 0;
     let mut bracket = 0;
-    let mut brace = 0;
+    let mut brace: usize = 0;
     let mut in_string: Option<char> = None;
     let mut chars = value_str.chars().peekable();
 
@@ -482,9 +480,7 @@ fn tokenize_image_set_candidate(value_str: &str) -> Vec<String> {
                 current.push(ch);
             }
             '}' => {
-                if brace > 0 {
-                    brace -= 1;
-                }
+                brace = brace.saturating_sub(1);
                 current.push(ch);
             }
             ch if ch.is_whitespace() && paren == 0 && bracket == 0 && brace == 0 => {
@@ -1039,13 +1035,15 @@ fn set_length_with_order(target: &mut Option<Length>, order_slot: &mut i32, valu
 }
 
 fn sanitize_min_length(value: Option<Length>) -> Option<Length> {
-    value.map(|len| {
+    if let Some(len) = value {
         if len.calc.is_none() && len.value < 0.0 {
-            Length::px(0.0)
+            Some(Length::px(0.0))
         } else {
-            len
+            Some(len)
         }
-    })
+    } else {
+        None
+    }
 }
 
 fn sanitize_max_length(value: Option<Length>) -> Option<Length> {
@@ -1780,7 +1778,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             );
         }
         "border-top-width" => {
-            set_border_width_side(styles, crate::style::PhysicalSide::Top, source.border_top_width, order)
+            set_border_width_side(styles, crate::style::PhysicalSide::Top, source.border_top_width, order);
         }
         "border-right-width" => set_border_width_side(
             styles,
@@ -1892,7 +1890,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             );
         }
         "border-top-color" => {
-            set_border_color_side(styles, crate::style::PhysicalSide::Top, source.border_top_color, order)
+            set_border_color_side(styles, crate::style::PhysicalSide::Top, source.border_top_color, order);
         }
         "border-right-color" => set_border_color_side(
             styles,
@@ -2004,7 +2002,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             );
         }
         "border-top-style" => {
-            set_border_style_side(styles, crate::style::PhysicalSide::Top, source.border_top_style, order)
+            set_border_style_side(styles, crate::style::PhysicalSide::Top, source.border_top_style, order);
         }
         "border-right-style" => set_border_style_side(
             styles,
@@ -2514,7 +2512,10 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                     .get(source_idx)
                     .copied()
                     .unwrap_or_else(|| BackgroundLayer::default().position);
-                let x_comp = xs.get(idx).copied().unwrap_or(*xs.last().unwrap());
+                let x_comp = xs
+                    .get(idx)
+                    .copied()
+                    .unwrap_or_else(|| *xs.last().unwrap());
                 let BackgroundPosition::Position { y, .. } = source_pos;
                 positions.push(BackgroundPosition::Position { x: x_comp, y });
             }
@@ -2544,7 +2545,10 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                     .get(source_idx)
                     .copied()
                     .unwrap_or_else(|| BackgroundLayer::default().position);
-                let y_comp = ys.get(idx).copied().unwrap_or(*ys.last().unwrap());
+                let y_comp = ys
+                    .get(idx)
+                    .copied()
+                    .unwrap_or_else(|| *ys.last().unwrap());
                 let BackgroundPosition::Position { x, .. } = source_pos;
                 positions.push(BackgroundPosition::Position { x, y: y_comp });
             }
