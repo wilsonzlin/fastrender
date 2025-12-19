@@ -1276,7 +1276,7 @@ fn parse_length_token(token: &str) -> Option<Length> {
     match parse_property_value("width", token)? {
         PropertyValue::Length(l) => Some(l),
         PropertyValue::Percentage(p) => Some(Length::percent(p)),
-        PropertyValue::Number(n) if n == 0.0 => Some(Length::px(0.0)),
+        PropertyValue::Number(0.0) => Some(Length::px(0.0)),
         _ => None,
     }
 }
@@ -1661,7 +1661,7 @@ fn parse_stop_position(token: &str) -> Option<f32> {
             .map(|p| (p / 100.0).clamp(0.0, 1.0))
     } else if let Some(angle) = parse_stop_angle(t) {
         Some((angle.rem_euclid(360.0)) / 360.0)
-    } else if let Some(num) = t.parse::<f32>().ok() {
+    } else if let Ok(num) = t.parse::<f32>() {
         if num > 1.0 {
             Some((num / 100.0).clamp(0.0, 1.0))
         } else {
@@ -1802,7 +1802,11 @@ mod tests {
         let mut props = KNOWN_PROPERTIES.to_vec();
         props.sort_unstable();
         props.dedup();
-        assert_eq!(props.len(), KNOWN_PROPERTIES.len(), "KNOWN_PROPERTIES contains duplicates");
+        assert_eq!(
+            props.len(),
+            KNOWN_PROPERTIES.len(),
+            "KNOWN_PROPERTIES contains duplicates"
+        );
     }
 
     #[test]
@@ -2737,8 +2741,8 @@ fn combine_sum<'i>(
                 kind: cssparser::ParseErrorKind::Custom(()),
                 location: cssparser::SourceLocation { line: 0, column: 0 },
             }),
-        (CalcComponent::Length(l), CalcComponent::Number(n)) if n == 0.0 => Ok(CalcComponent::Length(l)),
-        (CalcComponent::Number(n), CalcComponent::Length(l)) if n == 0.0 => Ok(CalcComponent::Length(l.scale(sign))),
+        (CalcComponent::Length(l), CalcComponent::Number(0.0)) => Ok(CalcComponent::Length(l)),
+        (CalcComponent::Number(0.0), CalcComponent::Length(l)) => Ok(CalcComponent::Length(l.scale(sign))),
         _ => Err(cssparser::ParseError {
             kind: cssparser::ParseErrorKind::Custom(()),
             location: cssparser::SourceLocation { line: 0, column: 0 },

@@ -357,7 +357,7 @@ fn parse_supports_rule<'i, 't>(
             Ok(Token::CurlyBracketBlock) => break,
             Ok(token) => {
                 let token = token.clone();
-                push_supports_token(token, &mut prelude, parser)?
+                push_supports_token(token, &mut prelude, parser)?;
             }
             Err(_) => return Ok(None),
         }
@@ -405,26 +405,20 @@ fn push_supports_token<'i, 't>(
             out.push(')');
         }
         Token::ParenthesisBlock => {
-            let inner = parser.parse_nested_block(|nested| {
-                collect_supports_tokens(nested)
-            })?;
+            let inner = parser.parse_nested_block(|nested| collect_supports_tokens(nested))?;
             out.push('(');
             out.push_str(&inner);
             out.push(')');
         }
         Token::Function(f) => {
-            let inner = parser.parse_nested_block(|nested| {
-                collect_supports_tokens(nested)
-            })?;
+            let inner = parser.parse_nested_block(|nested| collect_supports_tokens(nested))?;
             out.push_str(&f);
             out.push('(');
             out.push_str(&inner);
             out.push(')');
         }
         Token::SquareBracketBlock => {
-            let inner = parser.parse_nested_block(|nested| {
-                collect_supports_tokens(nested)
-            })?;
+            let inner = parser.parse_nested_block(|nested| collect_supports_tokens(nested))?;
             out.push('[');
             out.push_str(&inner);
             out.push(']');
@@ -556,7 +550,7 @@ fn is_op_boundary(s: &str, start: usize, len: usize) -> bool {
     let before = if start == 0 {
         None
     } else {
-        s[..start].chars().rev().next()
+        s[..start].chars().next_back()
     };
     let after = s[start + len..].chars().next();
     matches!(
@@ -643,11 +637,7 @@ fn parse_declaration_condition(s: &str) -> Option<(String, String)> {
     for (idx, ch) in s.char_indices() {
         match ch {
             '(' => depth += 1,
-            ')' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
-            }
+            ')' => depth = depth.saturating_sub(1),
             ':' if depth == 0 => {
                 let property = s[..idx].trim();
                 let value = s[idx + 1..].trim();
@@ -777,7 +767,7 @@ fn parse_font_face_descriptors<'i, 't>(
             full_value
                 .rsplit_once("!important")
                 .map(|(before, _)| before.trim_end_matches(';').trim())
-                .unwrap_or(full_value.trim_end_matches(';').trim())
+                .unwrap_or_else(|| full_value.trim_end_matches(';').trim())
         } else {
             full_value.trim_end_matches(';').trim()
         };
@@ -1470,7 +1460,11 @@ mod tests {
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
-        assert_eq!(rules.len(), 0, "any unsupported selector in list should disable nested rules");
+        assert_eq!(
+            rules.len(),
+            0,
+            "any unsupported selector in list should disable nested rules"
+        );
     }
 
     #[test]

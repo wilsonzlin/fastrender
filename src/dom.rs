@@ -1309,7 +1309,7 @@ impl<'a> Element for ElementRef<'a> {
     }
 
     fn has_local_name(&self, local_name: &str) -> bool {
-        self.node.tag_name().map_or(false, |tag| {
+        self.node.tag_name().is_some_and(|tag| {
             if self.is_html_element() {
                 tag.eq_ignore_ascii_case(local_name)
             } else {
