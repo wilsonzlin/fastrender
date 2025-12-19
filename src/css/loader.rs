@@ -43,6 +43,10 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
         return None;
     }
 
+    if href.starts_with('#') {
+        return None;
+    }
+
     if let Ok(abs) = Url::parse(href) {
         return Some(abs.to_string());
     }
@@ -1297,6 +1301,7 @@ mod tests {
     fn resolve_href_ignores_fragment_only_hrefs() {
         let base = "https://example.com/";
         assert_eq!(resolve_href(base, "#section"), None);
+        assert_eq!(resolve_href(base, "#"), None);
     }
 
     #[test]
