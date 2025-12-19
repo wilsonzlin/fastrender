@@ -26,6 +26,22 @@ use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
+/// Normalize a URL into a filename-safe stem used for caches and outputs.
+pub fn url_to_filename(url: &str) -> String {
+    url.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .replace('/', "_")
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// Default User-Agent string used by HTTP fetchers
 pub const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 fastrender/0.1";

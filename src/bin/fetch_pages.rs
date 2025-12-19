@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
-use fastrender::resource::{HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
+use fastrender::resource::{url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT};
 use rayon::ThreadPoolBuilder;
 use url::Url;
 
@@ -185,21 +185,6 @@ const PAGES: &[&str] = &[
     "https://kotlinlang.org",
     "https://slashdot.org",
 ];
-
-fn url_to_filename(url: &str) -> String {
-    url.trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .replace('/', "_")
-        .chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
 
 fn normalize_page_name(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
