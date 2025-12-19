@@ -116,6 +116,13 @@ You can drive media queries that depend on user preferences via CLI flags or env
 ./target/release/fetch_and_render --user-agent "MyBot/1.0" --accept-language "fr-FR,fr;q=0.9" https://example.com
 ./target/release/render_pages --user-agent "MyBot/1.0" --accept-language "fr-FR,fr;q=0.9"
 
+## Debugging renders
+
+If a render comes out blank/black or is missing content, enable the runtime paint/debug
+flags described in [docs/debugging.md](docs/debugging.md). That guide lists display-list
+dumps, pixmap stats, oversized background logging (`FASTR_LOG_LARGE_BACKGROUND(S)`), and
+other useful environment variables with example commands to narrow down rendering issues.
+
 # Apply the same preferences when rendering cached pages
 ./target/release/render_pages --prefers-reduced-transparency reduce --prefers-contrast high
 
