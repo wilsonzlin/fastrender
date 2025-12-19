@@ -66,6 +66,8 @@ cargo build --release
 # - Parent directories in the output path are created automatically.
 # - `render_pages` accepts positional page filters (cache stems) in addition to `--pages`, and
 #   fails fast for unknown flags, missing cache, or unmatched filters.
+# - file:// URLs are supported (trailing slashes tolerated) and default to a URL-derived
+#   output filename when not explicitly provided.
 ```
 
 ### Running tests
