@@ -1,10 +1,22 @@
 use fastrender::css::parser::parse_stylesheet;
+use fastrender::dom;
 use fastrender::style::cascade::{apply_styles_with_media, StyledNode};
 use fastrender::style::media::MediaContext;
-use fastrender::{dom};
 
 fn display(node: &StyledNode) -> String {
     node.styles.display.to_string()
+}
+
+fn first_div<'a>(node: &'a StyledNode) -> Option<&'a StyledNode> {
+    if node.node.tag_name() == Some("div") {
+        return Some(node);
+    }
+    for child in &node.children {
+        if let Some(found) = first_div(child) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[test]
@@ -14,7 +26,8 @@ fn supports_selector_true_for_supported_selector() {
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    assert_eq!(display(&styled.children[0]), "inline");
+    let div = first_div(&styled).expect("div");
+    assert_eq!(display(div), "inline");
 }
 
 #[test]
@@ -24,7 +37,8 @@ fn supports_selector_false_for_unsupported_selector() {
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    assert_eq!(display(&styled.children[0]), "block");
+    let div = first_div(&styled).expect("div");
+    assert_eq!(display(div), "block");
 }
 
 #[test]
@@ -34,18 +48,20 @@ fn supports_declaration_accepts_valid_text_orientation() {
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    assert_eq!(display(&styled.children[0]), "inline");
+    let div = first_div(&styled).expect("div");
+    assert_eq!(display(div), "inline");
 }
 
 #[test]
 fn supports_declaration_rejects_invalid_text_orientation() {
     let dom = dom::parse_html(r#"<div></div>"#).unwrap();
-    let css = r#"@supports (text-orientation: sideways-left) { div { display: inline; } }"#;
+    let css = r#"@supports (text-orientation: sideways-invalid) { div { display: inline; } }"#;
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
     // The invalid value should cause the @supports condition to be false, leaving display as block.
-    assert_eq!(display(&styled.children[0]), "block");
+    let div = first_div(&styled).expect("div");
+    assert_eq!(display(div), "block");
 }
 
 #[test]
@@ -55,7 +71,8 @@ fn supports_declaration_accepts_text_combine_digits() {
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    assert_eq!(display(&styled.children[0]), "inline");
+    let div = first_div(&styled).expect("div");
+    assert_eq!(display(div), "inline");
 }
 
 #[test]
@@ -65,5 +82,6 @@ fn supports_declaration_rejects_text_combine_invalid_digits() {
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    assert_eq!(display(&styled.children[0]), "block");
+    let div = first_div(&styled).expect("div");
+    assert_eq!(display(div), "block");
 }

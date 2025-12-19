@@ -7,6 +7,8 @@ fn decl(name: &str, value: PropertyValue) -> Declaration {
     Declaration {
         property: name.to_string(),
         value,
+        raw_value: String::new(),
+        important: false,
     }
 }
 

@@ -111,6 +111,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "display",
     "empty-cells",
     "filter",
+    "flex",
     "flex-basis",
     "flex-direction",
     "flex-flow",
@@ -910,6 +911,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "transform-origin"
                 | "touch-action"
                 | "list-style"
+                | "flex"
                 | "background"
                 | "background-image"
                 | "background-repeat"
