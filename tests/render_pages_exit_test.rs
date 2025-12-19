@@ -128,8 +128,12 @@ fn render_pages_filters_multiple_pages() {
         .expect("run render_pages");
 
     assert!(status.success(), "expected render_pages to succeed for matching filters");
-    assert!(temp.path().join("fetches/renders/foo.png").is_file());
-    assert!(temp.path().join("fetches/renders/bar.png").is_file());
+    let renders = temp.path().join("fetches/renders");
+    assert!(renders.join("foo.png").is_file());
+    assert!(renders.join("bar.png").is_file());
+    // Per-page logs should be written alongside outputs.
+    assert!(renders.join("foo.log").is_file());
+    assert!(renders.join("bar.log").is_file());
 }
 
 #[test]
