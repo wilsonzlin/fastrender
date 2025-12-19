@@ -9095,12 +9095,7 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
             // Horizontal pair first
             if matches!(a, Part::Keyword(AxisKind::Horizontal | AxisKind::Either, _)) && matches!(b, Part::Offset(_)) {
                 if let Part::Keyword(_, align) = a {
-                    x = Some(component_from_keyword(
-                        *align,
-                        b.as_offset(),
-                    ));
-                } else if let Part::Offset(_) = a {
-                    // unreachable
+                    x = Some(component_from_keyword(*align, b.as_offset()));
                 }
                 y = component_from_single(c, AxisKind::Vertical);
             }
@@ -9111,10 +9106,7 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 && matches!(b, Part::Offset(_))
             {
                 if let Part::Keyword(_, align) = a {
-                    y = Some(component_from_keyword(
-                        *align,
-                        b.as_offset(),
-                    ));
+                    y = Some(component_from_keyword(*align, b.as_offset()));
                 }
                 x = component_from_single(c, AxisKind::Horizontal);
             }
@@ -9132,16 +9124,10 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 && matches!(d, Part::Offset(_))
             {
                 if let Part::Keyword(_, align) = a {
-                    x = Some(component_from_keyword(
-                        *align,
-                        b.as_offset(),
-                    ));
+                    x = Some(component_from_keyword(*align, b.as_offset()));
                 }
                 if let Part::Keyword(_, align) = c {
-                    y = Some(component_from_keyword(
-                        *align,
-                        d.as_offset(),
-                    ));
+                    y = Some(component_from_keyword(*align, d.as_offset()));
                 }
             } else if matches!(a, Part::Keyword(AxisKind::Vertical | AxisKind::Either, _))
                 && matches!(b, Part::Offset(_))
@@ -9149,16 +9135,10 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 && matches!(d, Part::Offset(_))
             {
                 if let Part::Keyword(_, align) = a {
-                    y = Some(component_from_keyword(
-                        *align,
-                        b.as_offset(),
-                    ));
+                    y = Some(component_from_keyword(*align, b.as_offset()));
                 }
                 if let Part::Keyword(_, align) = c {
-                    x = Some(component_from_keyword(
-                        *align,
-                        d.as_offset(),
-                    ));
+                    x = Some(component_from_keyword(*align, d.as_offset()));
                 }
             }
         }
