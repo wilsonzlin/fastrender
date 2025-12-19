@@ -6,9 +6,12 @@ use fastrender::layout::contexts::flex::FlexFormattingContext;
 use fastrender::layout::formatting_context::FormattingContext;
 use fastrender::style::display::{Display, FormattingContextType};
 use fastrender::style::position::Position;
-use fastrender::style::ComputedStyle;
 use fastrender::style::values::Length;
+use fastrender::style::ComputedStyle;
 use fastrender::tree::box_tree::BoxNode;
+use fastrender::tree::box_tree::ReplacedType;
+use fastrender::tree::box_tree::SrcsetCandidate;
+use fastrender::Size;
 
 #[test]
 fn nested_absolute_descendant_uses_positioned_parent_padding_block_in_block_layout() {
@@ -84,5 +87,49 @@ fn nested_absolute_descendant_uses_positioned_parent_padding_block_in_flex_layou
         (grandchild.bounds.x() - 50.0).abs() < 0.1,
         "grandchild should resolve left:50% against parent's 100px padding box; got {}",
         grandchild.bounds.x()
+    );
+}
+
+#[test]
+fn replaced_absolute_with_both_insets_shrinks_to_intrinsic_in_block_layout() {
+    let mut root_style = ComputedStyle::default();
+    root_style.position = Position::Relative;
+
+    let mut img_style = ComputedStyle::default();
+    img_style.position = Position::Absolute;
+    img_style.left = Some(Length::px(10.0));
+    img_style.right = Some(Length::px(10.0));
+    img_style.top = Some(Length::px(0.0));
+
+    let img = BoxNode::new_replaced(
+        Arc::new(img_style),
+        ReplacedType::Image {
+            src: String::new(),
+            alt: None,
+            srcset: Vec::<SrcsetCandidate>::new(),
+            sizes: None,
+        },
+        Some(Size::new(50.0, 20.0)),
+        None,
+    );
+
+    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![img]);
+    let constraints = LayoutConstraints::definite(200.0, 100.0);
+    let fc = BlockFormattingContext::new();
+    let fragment = fc.layout(&root, &constraints).expect("block layout");
+
+    let image_fragment = fragment
+        .children
+        .first()
+        .expect("absolute replaced fragment should be present");
+
+    assert!(
+        (image_fragment.bounds.width() - 50.0).abs() < 0.1,
+        "replaced element should shrink-to-fit its intrinsic width when both insets are set"
+    );
+    assert!(
+        (image_fragment.bounds.x() - 10.0).abs() < 0.1,
+        "left inset should be honored when shrinking to intrinsic width (got x = {})",
+        image_fragment.bounds.x()
     );
 }
