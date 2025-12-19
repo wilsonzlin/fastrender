@@ -64,6 +64,10 @@ Cache a set of common pages for debugging and profiling:
 # Fetch cached HTML (default set, 30s timeout per page, parallelized)
 ./target/release/fetch_pages
 
+# Notes
+# - Unknown flags cause a non-zero exit with usage help (fail-fast).
+# - An empty selection (no pages matched) also exits non-zero so automation can detect it.
+
 # Fetch only specific pages with custom parallelism/timeout
 # (--pages accepts full URLs or stems; scheme/www are ignored when matching)
 ./target/release/fetch_pages --pages cnn.com,wikipedia.org --jobs 8 --timeout 20
@@ -76,6 +80,10 @@ Render all cached pages to `fetches/renders/` (PNG + per-page logs):
 
 ```bash
 ./target/release/render_pages
+
+# Notes
+# - Unknown flags cause a non-zero exit with usage help (fail-fast).
+# - Exits non-zero if no cached pages exist or a --pages filter matches nothing.
 
 # Render only specific cached pages with a custom viewport/timeout
 ./target/release/render_pages --pages cnn.com,wikipedia.org --viewport 1366x768 --timeout 60
