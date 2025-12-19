@@ -198,6 +198,23 @@ fn background_position_logical_maps_inline_and_block_vertical_rl() {
 }
 
 #[test]
+fn background_position_logical_maps_inline_and_block_vertical_lr() {
+    // In vertical-lr, inline maps to the physical y-axis (top→bottom) and block maps to the physical x-axis (left→right).
+    let dom = dom::parse_html(
+        r#"<div style="writing-mode: vertical-lr; background-position-inline: 15%; background-position-block: 10%"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = all_divs(&styled)[0];
+    let (x, y) = bg_pos(node);
+    // Block axis applies to the physical x-axis; inline axis applies to y.
+    assert_component(&x, 0.0, 10.0, LengthUnit::Percent);
+    assert_component(&y, 0.0, 15.0, LengthUnit::Percent);
+}
+
+#[test]
 fn background_size_logical_maps_inline_and_block_horizontal_tb() {
     // In horizontal-tb, inline maps to the physical x-axis and block maps to y.
     let dom =
@@ -236,6 +253,25 @@ fn background_size_logical_maps_inline_and_block_vertical_rl() {
     assert_eq!(
         y,
         BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(30.0))
+    );
+}
+
+#[test]
+fn background_size_logical_maps_inline_and_block_vertical_lr() {
+    // In vertical-lr, inline maps to the physical y-axis and block maps to the physical x-axis.
+    let dom = dom::parse_html(
+        r#"<div style="writing-mode: vertical-lr; background-size-inline: 12%; background-size-block: 7px"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = all_divs(&styled)[0];
+    let (x, y) = bg_size(node);
+    assert_eq!(x, BackgroundSizeComponent::Length(fastrender::style::values::Length::px(7.0)));
+    assert_eq!(
+        y,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(12.0))
     );
 }
 
