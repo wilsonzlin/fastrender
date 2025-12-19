@@ -72,7 +72,7 @@ docs/
 - [Render/Paint Debug Flags](debugging.md) - Environment flags and usage for diagnosing blank/black renders (display list dumps, pixmap stats, oversized background logging aliases `FASTR_LOG_LARGE_BACKGROUNDS`/`FASTR_LOG_LARGE_BACKGROUND`, etc.)
 
 ### CSS Loader notes
-- Link resolution (`src/css/loader.rs`) trims and ignores empty/whitespace-only hrefs, unescapes JavaScript-escaped URLs, and preserves `data:` URLs when inlining or absolutizing references.
+- Link resolution (`src/css/loader.rs`) trims and ignores empty/whitespace-only hrefs, rejects `javascript:`/`mailto:`/`vbscript:` schemes, unescapes JavaScript-escaped URLs, and preserves `data:` URLs when inlining or absolutizing references.
 - `file://` bases are handled for both directories (implicit trailing slash) and files (relative paths resolved against the parent directory).
 - Scheme-relative URLs (`//example.com/...`) are preserved by normalization to resolve against the base scheme.
 

@@ -30,6 +30,14 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
         return Some(href.to_string());
     }
 
+    let href_lower = href.to_ascii_lowercase();
+    if href_lower.starts_with("javascript:")
+        || href_lower.starts_with("vbscript:")
+        || href_lower.starts_with("mailto:")
+    {
+        return None;
+    }
+
     if let Ok(abs) = Url::parse(href) {
         return Some(abs.to_string());
     }
@@ -1267,6 +1275,14 @@ mod tests {
         // Base that cannot be parsed as URL or file path should yield None
         let base = "not-a-url";
         assert_eq!(resolve_href(base, "styles/app.css"), None);
+    }
+
+    #[test]
+    fn resolve_href_rejects_script_and_mailto_schemes() {
+        let base = "https://example.com/";
+        assert_eq!(resolve_href(base, "javascript:alert(1)"), None);
+        assert_eq!(resolve_href(base, "mailto:test@example.com"), None);
+        assert_eq!(resolve_href(base, "vbscript:msgbox('hi')"), None);
     }
 
     #[test]
