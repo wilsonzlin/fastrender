@@ -37,9 +37,16 @@ const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
+fn normalize_user_agent_for_log(ua: &str) -> &str {
+    ua.strip_prefix("User-Agent:")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ua)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalize_page_name;
+    use super::{normalize_page_name, normalize_user_agent_for_log};
 
     #[test]
     fn normalize_page_name_strips_scheme_and_www() {
@@ -57,6 +64,13 @@ mod tests {
     fn normalize_page_name_ignores_empty() {
         assert!(normalize_page_name("").is_none());
         assert!(normalize_page_name("   ").is_none());
+    }
+
+    #[test]
+    fn normalize_user_agent_for_log_strips_prefix() {
+        assert_eq!(normalize_user_agent_for_log("User-Agent: Foo"), "Foo");
+        assert_eq!(normalize_user_agent_for_log("Foo"), "Foo");
+        assert_eq!(normalize_user_agent_for_log(""), "");
     }
 }
 
@@ -385,7 +399,7 @@ fn main() {
     ));
 
     println!("Rendering {} pages ({} parallel)...", entries.len(), jobs);
-    println!("User-Agent: {}", user_agent);
+    println!("User-Agent: {}", normalize_user_agent_for_log(&user_agent));
     println!("Accept-Language: {}", accept_language);
     println!();
 
@@ -417,7 +431,10 @@ fn main() {
                 log.push_str(&format!("=== {} ===\n", name));
                 log.push_str(&format!("Source: {}\n", path.display()));
                 log.push_str(&format!("Output: {}\n", output_path.display()));
-                log.push_str(&format!("User-Agent: {}\n\n", user_agent));
+                log.push_str(&format!(
+                    "User-Agent: {}\n\n",
+                    normalize_user_agent_for_log(&user_agent)
+                ));
 
                 // Read HTML first (before catch_unwind)
                 let html_bytes = match fs::read(&path) {
