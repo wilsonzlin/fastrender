@@ -100,8 +100,8 @@ Cache a set of common pages for debugging and profiling:
 ./target/release/fetch_pages --user-agent "MyBot/1.0"
 # Override Accept-Language for fetches
 ./target/release/fetch_pages --accept-language "es-MX,es;q=0.8"
-# Page filters are normalized: schemes are stripped, hosts lowercased, leading www./trailing slashes removed
-# so https://EXAMPLE.com/ matches the cache/output stem "example.com" across fetch_pages/render_pages.
+# Page filters are normalized: schemes are stripped, hosts lowercased, leading www./trailing slashes/punctuation removed,
+# so https://EXAMPLE.com./ matches the cache/output stem "example.com" across fetch_pages/render_pages/fetch_and_render.
 ```
 
 Render all cached pages to `fetches/renders/` (PNG + per-page logs):
