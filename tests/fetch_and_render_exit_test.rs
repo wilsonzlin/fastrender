@@ -1,4 +1,7 @@
 use std::process::Command;
+use std::fs;
+
+use fastrender::resource::url_to_filename;
 
 #[test]
 fn fetch_and_render_exits_non_zero_when_no_args() {
@@ -40,4 +43,25 @@ fn fetch_and_render_errors_on_unknown_option() {
         "expected non-zero exit when an unknown option is provided (got {:?})",
         status.code()
     );
+}
+
+#[test]
+fn fetch_and_render_defaults_output_name_from_url() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let html_path = tmp.path().join("page.html");
+    fs::write(&html_path, "<!doctype html><title>Hello</title>").expect("write html");
+
+    let url = format!("file://{}", html_path.display());
+    let expected_png = tmp
+        .path()
+        .join(format!("{}.png", url_to_filename(&url)));
+
+    let status = Command::new(env!("CARGO_BIN_EXE_fetch_and_render"))
+        .current_dir(tmp.path())
+        .arg(&url)
+        .status()
+        .expect("run fetch_and_render");
+
+    assert!(status.success(), "expected success, got {:?}", status.code());
+    assert!(expected_png.exists(), "expected output {:?} to exist", expected_png);
 }
