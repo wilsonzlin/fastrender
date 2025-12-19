@@ -322,7 +322,13 @@ fn main() {
             "--timings" => {
                 enable_timings = true;
             }
-            _ => {}
+            _ => {
+                if arg.starts_with('-') {
+                    println!("Unknown option: {}", arg);
+                    usage();
+                    std::process::exit(1);
+                }
+            }
         }
     }
 
