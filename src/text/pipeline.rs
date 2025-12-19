@@ -775,7 +775,7 @@ fn collect_opentype_features(style: &ComputedStyle) -> Vec<Feature> {
     let push_toggle = |features: &mut Vec<Feature>, tag: [u8; 4], enabled: bool| {
         features.push(Feature {
             tag: Tag::from_bytes(&tag),
-            value: if enabled { 1 } else { 0 },
+            value: u32::from(enabled),
             start: 0,
             end: u32::MAX,
         });
@@ -1827,7 +1827,7 @@ fn push_font_run(
     if let Ok(face) = font.as_ttf_face() {
         let axes: Vec<_> = face.variation_axes().into_iter().collect();
         if !axes.is_empty() {
-            let mut set_tags: HashSet<Tag> = HashSet::from_iter(variations.iter().map(|v| v.tag));
+            let mut set_tags: HashSet<Tag> = variations.iter().map(|v| v.tag).collect();
             let wght_tag = Tag::from_bytes(b"wght");
             let wdth_tag = Tag::from_bytes(b"wdth");
             let opsz_tag = Tag::from_bytes(b"opsz");
