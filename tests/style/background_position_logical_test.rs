@@ -167,7 +167,7 @@ fn background_position_logical_maps_inline_and_block_sideways_lr() {
 
 #[test]
 fn background_position_logical_maps_inline_and_block_sideways_rl() {
-    // In sideways-rl, inline maps to the physical y-axis and block maps to the physical x-axis.
+    // In sideways-rl, inline maps to the physical y-axis (top→bottom) and block maps to the physical x-axis (left→right).
     let dom = dom::parse_html(
         r#"<div style="writing-mode: sideways-rl; background-position-inline: 7%; background-position-block: 5px"></div>"#,
     )
@@ -177,6 +177,7 @@ fn background_position_logical_maps_inline_and_block_sideways_rl() {
 
     let node = first_div(&styled);
     let (x, y) = bg_pos(&node);
+    // Block axis applies to the physical x-axis; inline axis applies to y.
     assert_component(&x, 0.0, 5.0, LengthUnit::Px);
     assert_component(&y, 0.0, 7.0, LengthUnit::Percent);
 }
