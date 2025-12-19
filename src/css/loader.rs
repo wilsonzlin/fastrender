@@ -1214,4 +1214,16 @@ mod tests {
         let unescaped = unescape_js_escapes(input);
         assert_eq!(unescaped, "foo&barAbaz");
     }
+
+    #[test]
+    fn unescape_js_borrows_when_unescaped() {
+        use std::borrow::Cow;
+
+        let input = "https://example.com/path";
+        let out = unescape_js_escapes(input);
+        match out {
+            Cow::Borrowed(s) => assert_eq!(s, input),
+            Cow::Owned(_) => panic!("expected borrowed output for unescaped input"),
+        }
+    }
 }
