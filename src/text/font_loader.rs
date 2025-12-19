@@ -247,10 +247,10 @@ impl FontContext {
                     for weight_choice in &weights {
                         let font_weight = FontWeight::new(*weight_choice);
                         if let Some(id) = self.db.resolve_family_list_full(
-                            &[family.clone()],
+                            std::slice::from_ref(family),
                             font_weight,
                             *slope,
-                            (*stretch_choice).into(),
+                            *stretch_choice,
                         ) {
                             if let Some(font) = self.db.load_font(id) {
                                 return Some(font);
@@ -313,7 +313,7 @@ impl FontContext {
                 for slope in slopes {
                     for weight_choice in &weights {
                         if let Some(id) = self.db.resolve_family_list_full(
-                            &[family.clone()],
+                            std::slice::from_ref(family),
                             FontWeight::new(*weight_choice),
                             *slope,
                             *stretch_choice,

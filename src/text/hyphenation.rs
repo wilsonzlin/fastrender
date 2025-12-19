@@ -106,15 +106,13 @@ impl HyphenationPatterns {
 
 fn cached_patterns(language: SupportedLanguage) -> Result<Arc<HyphenationPatterns>> {
     let cache = PATTERN_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(existing) = cache.lock().expect("pattern cache poisoned").get(&language).cloned() {
+    let mut guard = cache.lock().expect("pattern cache poisoned");
+    if let Some(existing) = guard.get(&language).cloned() {
         return Ok(existing);
     }
 
     let loaded = Arc::new(HyphenationPatterns::new(language)?);
-    cache
-        .lock()
-        .expect("pattern cache poisoned")
-        .insert(language, Arc::clone(&loaded));
+    guard.insert(language, Arc::clone(&loaded));
     Ok(loaded)
 }
 
