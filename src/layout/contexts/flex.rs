@@ -716,7 +716,7 @@ impl FormattingContext for FlexFormattingContext {
                         .get_or_init(|| std::env::var("FASTR_LOG_FLEX_MEASURE_FIRST_N_MS").ok().and_then(|v| v.parse().ok()));
 
                     let fallback_size = |known: Option<f32>, avail_dim: AvailableSpace| {
-                        known.unwrap_or_else(|| match avail_dim {
+                        known.unwrap_or(match avail_dim {
                             AvailableSpace::Definite(v) => v,
                             _ => 0.0,
                         })
@@ -1117,7 +1117,7 @@ impl FormattingContext for FlexFormattingContext {
                     let resolved_min_w = measure_box.style.min_width.as_ref().and_then(|l| resolve_if_base(l, percentage_base_w));
                     let resolved_max_h = measure_box.style.max_height.as_ref().and_then(|l| resolve_if_base(l, percentage_base_h));
                     let resolved_min_h = measure_box.style.min_height.as_ref().and_then(|l| resolve_if_base(l, percentage_base_h));
-                    let mut max_w_bound = resolved_max_w.unwrap_or_else(|| match avail.width {
+                    let mut max_w_bound = resolved_max_w.unwrap_or(match avail.width {
                         AvailableSpace::Definite(w) => w.min(this.viewport_size.width),
                         _ => this.viewport_size.width,
                     });
@@ -1131,7 +1131,7 @@ impl FormattingContext for FlexFormattingContext {
                         max_w_bound,
                     );
 
-                    let mut max_h_bound = resolved_max_h.unwrap_or_else(|| match avail.height {
+                    let mut max_h_bound = resolved_max_h.unwrap_or(match avail.height {
                         AvailableSpace::Definite(h) => h,
                         _ => this.viewport_size.height,
                     });
