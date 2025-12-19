@@ -1268,6 +1268,20 @@ mod tests {
     }
 
     #[test]
+    fn decode_html_entities_decodes_known_and_preserves_unknown() {
+        let input = "&amp;&lt;&gt;&quot;&apos;&#65;&#x41;&copy;";
+        let decoded = decode_html_entities(input);
+        assert_eq!(decoded, "&<>\"'AA&copy;");
+    }
+
+    #[test]
+    fn normalize_scheme_slashes_collapses_extra_slashes() {
+        let input = "https:////example.com//foo//bar";
+        let normalized = normalize_scheme_slashes(input);
+        assert_eq!(normalized, "https://example.com/foo/bar");
+    }
+
+    #[test]
     fn resolve_href_returns_none_for_empty_href() {
         let base = "https://example.com/";
         assert_eq!(resolve_href(base, ""), None);
