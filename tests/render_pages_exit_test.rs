@@ -219,3 +219,24 @@ fn render_pages_combines_pages_options_and_positionals() {
     assert!(renders.join("bar.png").is_file());
     assert!(renders.join("baz.png").is_file());
 }
+
+#[test]
+fn render_pages_combines_pages_and_positional_with_full_urls() {
+    let temp = TempDir::new().expect("tempdir");
+    let html_dir = temp.path().join("fetches/html");
+    fs::create_dir_all(&html_dir).expect("create html dir");
+
+    fs::write(html_dir.join("example.com.html"), "<!doctype html><title>Example</title>").expect("write html");
+    fs::write(html_dir.join("foo.com.html"), "<!doctype html><title>Foo</title>").expect("write foo html");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
+        .current_dir(temp.path())
+        .args(["--pages", "HTTPS://EXAMPLE.COM/", "foo.com"])
+        .status()
+        .expect("run render_pages");
+
+    assert!(status.success(), "expected render_pages to succeed for mixed filters");
+    let renders = temp.path().join("fetches/renders");
+    assert!(renders.join("example.com.png").is_file());
+    assert!(renders.join("foo.com.png").is_file());
+}
