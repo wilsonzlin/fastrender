@@ -23,8 +23,10 @@ These help confirm that paint commands are emitted and where large backgrounds/t
 
 Use these to spot runaway background rects that blanket the viewport:
 
-- `FASTR_LOG_LARGE_BACKGROUNDS[=<threshold>]` - log any background larger than `<threshold>x` the viewport (default 10x if omitted/invalid)
-- `FASTR_LOG_LARGE_BACKGROUND[=<threshold>]` - alias for the flag above (singular form)
+- `FASTR_LOG_LARGE_BACKGROUNDS[=<threshold>]` – log any background larger than `<threshold>x` the viewport (default 10× if omitted/invalid)
+- `FASTR_LOG_LARGE_BACKGROUND[=<threshold>]` – exact alias for the flag above (singular form)
+
+Both environment variables are accepted; if the value is missing or not a number the logger falls back to 10× the viewport.
 
 Example: `FASTR_LOG_LARGE_BACKGROUND=5 cargo run --release --bin render_pages -- --pages example.com`
 
