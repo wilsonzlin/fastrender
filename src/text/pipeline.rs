@@ -1043,7 +1043,7 @@ pub fn assign_fonts(runs: &[ItemizedRun], style: &ComputedStyle, font_context: &
                 synthetic_position_adjustment(style, &font_arc, used_font_size, font_context);
             let run_font_size = used_font_size * position_scale;
 
-            let same_as_current = current.as_ref().map_or(false, |(f, b, o, size, shift, _)| {
+            let same_as_current = current.as_ref().is_some_and(|(f, b, o, size, shift, _)| {
                 Arc::ptr_eq(&f.data, &font_arc.data)
                     && f.index == font_arc.index
                     && f.weight == font_arc.weight
@@ -2047,7 +2047,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
             .text
             .get(cluster..)
             .and_then(|s| s.chars().next())
-            .map_or(false, is_bidi_control_char);
+            .is_some_and(is_bidi_control_char);
 
         let x_advance = pos.x_advance as f32 * scale;
         if !is_bidi_control {

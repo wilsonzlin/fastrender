@@ -111,8 +111,10 @@ fn cached_patterns(language: SupportedLanguage) -> Result<Arc<HyphenationPattern
     }
 
     let loaded = Arc::new(HyphenationPatterns::new(language)?);
-    let mut guard = cache.lock().expect("pattern cache poisoned");
-    guard.insert(language, Arc::clone(&loaded));
+    cache
+        .lock()
+        .expect("pattern cache poisoned")
+        .insert(language, Arc::clone(&loaded));
     Ok(loaded)
 }
 
