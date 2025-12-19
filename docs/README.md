@@ -67,6 +67,9 @@ docs/
 ### Debugging renders
 - [Render/Paint Debug Flags](debugging.md) - Environment flags and usage for diagnosing blank/black renders (display list dumps, pixmap stats, oversized background logging aliases `FASTR_LOG_LARGE_BACKGROUNDS`/`FASTR_LOG_LARGE_BACKGROUND`, etc.)
 
+### CSS Loader notes
+- Link resolution (`src/css/loader.rs`) unescapes JavaScript-escaped URLs and preserves `data:` URLs when inlining or absolutizing references.
+
 ### Guides
 - [Migration Guide](guides/migration.md) - Migrating from V1
 - [API Design](guides/api-design.md) - Public API documentation
