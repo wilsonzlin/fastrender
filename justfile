@@ -37,6 +37,10 @@ test:
 test-output:
     cargo test --all-features --verbose -- --nocapture
 
+# Run style regression harness
+style-tests:
+    cargo test --quiet --test style_tests
+
 # Run a specific test
 test-one TEST:
     cargo test {{TEST}} -- --nocapture
