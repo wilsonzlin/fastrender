@@ -56,7 +56,8 @@ cargo build --release
 # Render a webpage
 ./target/release/fetch_and_render https://example.com/
 
-# Output: <url>.png (e.g., example.com_.png, derived from the URL)
+# Output defaults to a URL-derived filename (e.g., example.com.png)
+# Override by providing an explicit output path as the second argument.
 
 # Notes
 # - Unknown flags cause a non-zero exit with usage help (fail-fast).
