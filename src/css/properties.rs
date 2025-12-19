@@ -720,8 +720,8 @@ fn parse_matrix(parser: &mut Parser) -> Result<Transform, ()> {
 
 fn parse_matrix_3d(parser: &mut Parser) -> Result<Transform, ()> {
     let mut values = [0.0f32; 16];
-    for i in 0..16 {
-        values[i] = parse_number_component(parser)?;
+    for (i, slot) in values.iter_mut().enumerate() {
+        *slot = parse_number_component(parser)?;
         if i < 15 {
             parser.skip_whitespace();
             let _ = parser.try_parse(|p| p.expect_comma());
@@ -801,14 +801,9 @@ fn parse_single_font_family(parser: &mut Parser) -> Option<String> {
 
     let first = parser.expect_ident().map(|ident| ident.as_ref().to_string()).ok()?;
     let mut name = first;
-    loop {
-        match parser.try_parse(|p| p.expect_ident().map(|i| i.as_ref().to_string())) {
-            Ok(ident) => {
-                name.push(' ');
-                name.push_str(&ident);
-            }
-            Err(_) => break,
-        }
+    while let Ok(ident) = parser.try_parse(|p| p.expect_ident().map(|i| i.as_ref().to_string())) {
+        name.push(' ');
+        name.push_str(&ident);
     }
     Some(name)
 }

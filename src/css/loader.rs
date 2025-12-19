@@ -98,7 +98,7 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
     // Strip common sourceURL markers that get inlined with CSS text (e.g.,
     // "sourceURL=https://example.com/style.css").
     if cleaned.to_ascii_lowercase().starts_with("sourceurl=") {
-        if let Some(rest) = cleaned.splitn(2, '=').nth(1) {
+        if let Some((_, rest)) = cleaned.split_once('=') {
             cleaned = rest.to_string();
         }
     }
