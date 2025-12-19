@@ -694,7 +694,10 @@ fn main() {
             Status::Crash(msg) => format!("CRASH: {}", msg.chars().take(30).collect::<String>()),
             Status::Error(msg) => format!("ERROR: {}", msg.chars().take(30).collect::<String>()),
         };
-        let size_str = r.size.map(|s| format!("{}b", s)).unwrap_or("-".to_string());
+        let size_str = r
+            .size
+            .map(|s| format!("{}b", s))
+            .unwrap_or_else(|| "-".to_string());
         summary.push_str(&format!(
             "{:<40} {:>6}ms {:>10} {}\n",
             r.name, r.time_ms, size_str, status_str

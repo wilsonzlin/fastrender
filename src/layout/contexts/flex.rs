@@ -2392,7 +2392,7 @@ impl FlexFormattingContext {
             let (eps_w, eps_h) = cache_tolerances(target_size);
             // Match cached fragments within a tolerance so quantized measurements (2–8px)
             // can be reused without relayout.
-            for (_key, (size, frag)) in cache {
+            for (size, frag) in cache.values() {
                 if !size.width.is_finite() || !size.height.is_finite() {
                     continue;
                 }

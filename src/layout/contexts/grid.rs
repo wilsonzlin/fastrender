@@ -1132,7 +1132,7 @@ impl FormattingContext for GridFormattingContext {
         for child in &box_node.children {
             match child.style.position {
                 crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
-                    positioned_children.push(child.clone())
+                    positioned_children.push(child.clone());
                 }
                 _ => in_flow_children.push(child),
             }
