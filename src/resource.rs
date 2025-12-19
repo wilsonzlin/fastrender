@@ -28,8 +28,38 @@ use url::Url;
 
 /// Normalize a URL into a filename-safe stem used for caches and outputs.
 pub fn url_to_filename(url: &str) -> String {
-    url.trim_start_matches("https://")
-        .trim_start_matches("http://")
+    // First, try to parse the URL so we can lowercase the hostname (case-insensitive per URL
+    // spec) and strip the scheme regardless of casing. If parsing fails, fall back to a best-effort
+    // scheme-stripping path similar to the old behavior.
+    if let Ok(parsed) = Url::parse(url) {
+        let mut stem = String::new();
+        if let Some(host) = parsed.host_str() {
+            stem.push_str(&host.to_ascii_lowercase());
+        }
+        // Preserve path/query casing while normalizing separators later.
+        stem.push_str(&parsed[url::Position::BeforePath..url::Position::AfterQuery]);
+        return sanitize_filename(&stem);
+    }
+
+    // Fallback: remove common schemes case-insensitively and lowercase only the hostname portion.
+    let mut trimmed = url;
+    for scheme in ["https://", "http://"] {
+        if url.len() >= scheme.len() && url[..scheme.len()].eq_ignore_ascii_case(scheme) {
+            trimmed = &url[scheme.len()..];
+            break;
+        }
+    }
+
+    let (host, rest) = match trimmed.find('/') {
+        Some(idx) => (&trimmed[..idx], &trimmed[idx..]),
+        None => (trimmed, ""),
+    };
+    let lowered = format!("{}{}", host.to_ascii_lowercase(), rest);
+    sanitize_filename(&lowered)
+}
+
+fn sanitize_filename(input: &str) -> String {
+    input
         .replace('/', "_")
         .chars()
         .map(|c| {
@@ -112,9 +142,7 @@ pub fn parse_cached_html_meta(meta: &str) -> (Option<String>, Option<String>) {
         let key = parts.next().map(|s| s.trim().to_ascii_lowercase());
         let value = parts.next().map(|s| s.trim());
         match (key.as_deref(), value) {
-            (Some("content-type"), Some(v)) if !v.is_empty() => {
-                content_type = Some(v.to_string())
-            }
+            (Some("content-type"), Some(v)) if !v.is_empty() => content_type = Some(v.to_string()),
             (Some("url"), Some(v)) if !v.is_empty() => url = Some(v.to_string()),
             _ => {}
         }
@@ -290,10 +318,7 @@ impl HttpFetcher {
             }
         }
 
-        Err(Error::Io(io::Error::new(
-            io::ErrorKind::Other,
-            "too many redirects",
-        )))
+        Err(Error::Io(io::Error::new(io::ErrorKind::Other, "too many redirects")))
     }
 
     /// Fetch from a file:// URL
@@ -484,7 +509,23 @@ mod tests {
 
     #[test]
     fn url_to_filename_strips_www_and_replaces_invalid_chars() {
-        assert_eq!(url_to_filename("https://www.exa mple.com/path?x=1"), "www.exa_mple.com_path_x_1");
+        assert_eq!(
+            url_to_filename("https://www.exa mple.com/path?x=1"),
+            "www.exa_mple.com_path_x_1"
+        );
+    }
+
+    #[test]
+    fn url_to_filename_is_case_insensitive_for_scheme_and_host() {
+        assert_eq!(
+            url_to_filename("HTTP://WWW.Example.COM/Path/Up"),
+            "www.example.com_Path_Up"
+        );
+    }
+
+    #[test]
+    fn url_to_filename_parses_uppercase_scheme() {
+        assert_eq!(url_to_filename("HTTPS://Example.com/q?a=1"), "example.com_q_a_1");
     }
 
     #[test]
