@@ -196,3 +196,26 @@ fn render_pages_combines_multiple_pages_options() {
     assert!(renders.join("foo.png").is_file());
     assert!(renders.join("baz.png").is_file());
 }
+
+#[test]
+fn render_pages_combines_pages_options_and_positionals() {
+    let temp = TempDir::new().expect("tempdir");
+    let html_dir = temp.path().join("fetches/html");
+    fs::create_dir_all(&html_dir).expect("create html dir");
+
+    fs::write(html_dir.join("foo.html"), "<!doctype html><title>Foo</title>").expect("write foo html");
+    fs::write(html_dir.join("bar.html"), "<!doctype html><title>Bar</title>").expect("write bar html");
+    fs::write(html_dir.join("baz.html"), "<!doctype html><title>Baz</title>").expect("write baz html");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
+        .current_dir(temp.path())
+        .args(["--pages", "foo", "--pages", "BAR", "baz"])
+        .status()
+        .expect("run render_pages");
+
+    assert!(status.success(), "expected render_pages to succeed for combined filters");
+    let renders = temp.path().join("fetches/renders");
+    assert!(renders.join("foo.png").is_file());
+    assert!(renders.join("bar.png").is_file());
+    assert!(renders.join("baz.png").is_file());
+}
