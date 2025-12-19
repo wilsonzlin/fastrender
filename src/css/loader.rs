@@ -21,6 +21,7 @@ use url::Url;
 /// unescaped before resolution.
 pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     let href = unescape_js_escapes(href);
+    let href = href.trim();
     if href.is_empty() {
         return None;
     }
@@ -1266,6 +1267,19 @@ mod tests {
         // Base that cannot be parsed as URL or file path should yield None
         let base = "not-a-url";
         assert_eq!(resolve_href(base, "styles/app.css"), None);
+    }
+
+    #[test]
+    fn resolve_href_trims_whitespace() {
+        let base = "https://example.com/";
+        let resolved = resolve_href(base, "   ./foo.css \n").expect("resolved href");
+        assert_eq!(resolved, "https://example.com/foo.css");
+    }
+
+    #[test]
+    fn resolve_href_rejects_whitespace_only() {
+        let base = "https://example.com/";
+        assert_eq!(resolve_href(base, "   \t\n"), None);
     }
 
     #[test]
