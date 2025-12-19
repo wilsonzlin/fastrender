@@ -290,6 +290,8 @@ fn collect_rules_recursive<'a>(
     container_conditions: &[ContainerCondition],
     out: &mut Vec<CollectedRule<'a>>,
 ) {
+    // Keep the cache binding mutable so we can call as_deref_mut() repeatedly
+    // when evaluating nested @media / @container rules.
     let mut cache = cache;
     for rule in rules {
         match rule {
@@ -402,6 +404,7 @@ fn collect_font_faces_recursive(
     cache: Option<&mut MediaQueryCache>,
     out: &mut Vec<FontFaceRule>,
 ) {
+    // Mutable binding is required to reuse the cache via as_deref_mut() in nested rules.
     let mut cache = cache;
     for rule in rules {
         match rule {
@@ -856,6 +859,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
 ) {
     use url::Url;
 
+    // Keep a mutable binding so nested calls can borrow the cache mutably via as_deref_mut().
     let mut cache = cache;
 
     for rule in rules {
