@@ -10839,24 +10839,24 @@ mod tests {
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
 
         match &style.clip_path {
-            ClipPath::BasicShape(
+            ClipPath::BasicShape(basic, None) => match basic.as_ref() {
                 BasicShape::Inset {
                     top,
                     right,
                     bottom,
                     left,
                     border_radius,
-                },
-                None,
-            ) => {
-                assert_eq!(*top, Length::px(10.0));
-                assert_eq!(*bottom, Length::px(10.0));
-                assert_eq!(*right, Length::percent(20.0));
-                assert_eq!(*left, Length::percent(20.0));
-                let radii = border_radius.as_ref().expect("radii present");
-                assert_eq!(radii.top_left, Length::px(5.0));
-                assert_eq!(radii.bottom_right, Length::px(5.0));
-            }
+                } => {
+                    assert_eq!(*top, Length::px(10.0));
+                    assert_eq!(*bottom, Length::px(10.0));
+                    assert_eq!(*right, Length::percent(20.0));
+                    assert_eq!(*left, Length::percent(20.0));
+                    let radii = border_radius.as_ref().expect("radii present");
+                    assert_eq!(radii.top_left, Length::px(5.0));
+                    assert_eq!(radii.bottom_right, Length::px(5.0));
+                }
+                other => panic!("unexpected basic shape: {other:?}"),
+            },
             other => panic!("unexpected clip-path parsed: {other:?}"),
         }
     }
@@ -10873,7 +10873,11 @@ mod tests {
         apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
 
         match &style.clip_path {
-            ClipPath::BasicShape(BasicShape::Circle { radius, position }, None) => {
+            ClipPath::BasicShape(basic, None) => {
+                let (radius, position) = match basic.as_ref() {
+                    BasicShape::Circle { radius, position } => (radius, position),
+                    other => panic!("unexpected basic shape: {other:?}"),
+                };
                 match radius {
                     ShapeRadius::Length(len) => {
                         assert_eq!(len.unit, LengthUnit::Percent);

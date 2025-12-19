@@ -8239,13 +8239,13 @@ mod tests {
     fn drop_shadow_negative_spread_erodes_shadow() {
         let mut style = ComputedStyle::default();
         style.background_color = Rgba::BLACK;
-        style.filter = vec![FilterFunction::DropShadow(FilterShadow {
+        style.filter = vec![FilterFunction::DropShadow(Box::new(FilterShadow {
             offset_x: Length::px(6.0),
             offset_y: Length::px(6.0),
             blur_radius: Length::px(0.0),
             spread: Length::px(-2.0),
             color: FilterColor::Color(Rgba::from_rgba8(255, 0, 0, 255)),
-        })];
+        }))];
         let mut root = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 20.0, 10.0), Vec::new());
         root.style = Some(Arc::new(style));
 
@@ -9640,14 +9640,14 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.background_color = Rgba::RED;
         style.clip_path = crate::style::types::ClipPath::BasicShape(
-            crate::style::types::BasicShape::Polygon {
+            Box::new(crate::style::types::BasicShape::Polygon {
                 fill: crate::style::types::FillRule::NonZero,
                 points: vec![
                     (Length::px(0.0), Length::px(0.0)),
                     (Length::px(0.0), Length::px(10.0)),
                     (Length::px(10.0), Length::px(0.0)),
                 ],
-            },
+            }),
             None,
         );
         let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
@@ -9951,7 +9951,7 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.background_color = Rgba::RED;
         style.clip_path = ClipPath::BasicShape(
-            crate::style::types::BasicShape::Circle {
+            Box::new(crate::style::types::BasicShape::Circle {
                 radius: ShapeRadius::Length(Length::px(3.0)),
                 position: BackgroundPosition::Position {
                     x: BackgroundPositionComponent {
@@ -9963,7 +9963,7 @@ mod tests {
                         offset: Length::px(0.0),
                     },
                 },
-            },
+            }),
             None,
         );
 
@@ -9987,14 +9987,14 @@ mod tests {
         let mut style = ComputedStyle::default();
         style.background_color = Rgba::RED;
         style.clip_path = ClipPath::BasicShape(
-            crate::style::types::BasicShape::Polygon {
+            Box::new(crate::style::types::BasicShape::Polygon {
                 fill: crate::style::types::FillRule::NonZero,
                 points: vec![
                     (Length::px(0.0), Length::px(0.0)),
                     (Length::px(0.0), Length::px(10.0)),
                     (Length::px(10.0), Length::px(0.0)),
                 ],
-            },
+            }),
             None,
         );
 
@@ -10038,7 +10038,7 @@ mod tests {
         style.outline_width = Length::px(4.0);
         style.outline_color = OutlineColor::Color(Rgba::RED);
         style.clip_path = ClipPath::BasicShape(
-            crate::style::types::BasicShape::Circle {
+            Box::new(crate::style::types::BasicShape::Circle {
                 radius: ShapeRadius::Length(Length::px(2.0)),
                 position: BackgroundPosition::Position {
                     x: BackgroundPositionComponent {
@@ -10050,7 +10050,7 @@ mod tests {
                         offset: Length::px(0.0),
                     },
                 },
-            },
+            }),
             None,
         );
 
@@ -10185,7 +10185,7 @@ mod tests {
         style.border_bottom_width = Length::px(4.0);
         style.border_left_width = Length::px(4.0);
         style.border_image = BorderImage {
-            source: BorderImageSource::Image(BackgroundImage::Url(data_url)),
+            source: BorderImageSource::Image(Box::new(BackgroundImage::Url(data_url))),
             slice: BorderImageSlice {
                 top: BorderImageSliceValue::Number(1.0),
                 right: BorderImageSliceValue::Number(1.0),
@@ -10286,7 +10286,7 @@ mod tests {
         style.border_bottom_width = Length::px(3.0);
         style.border_left_width = Length::px(3.0);
         style.border_image = BorderImage {
-            source: BorderImageSource::Image(BackgroundImage::Url(data_url)),
+            source: BorderImageSource::Image(Box::new(BackgroundImage::Url(data_url))),
             slice: BorderImageSlice {
                 top: BorderImageSliceValue::Number(1.0),
                 right: BorderImageSliceValue::Number(1.0),
@@ -10329,7 +10329,7 @@ mod tests {
         style.border_bottom_width = Length::px(4.0);
         style.border_left_width = Length::px(4.0);
         style.border_image = BorderImage {
-            source: BorderImageSource::Image(BackgroundImage::LinearGradient {
+            source: BorderImageSource::Image(Box::new(BackgroundImage::LinearGradient {
                 angle: 180.0,
                 stops: vec![
                     ColorStop {
@@ -10341,7 +10341,7 @@ mod tests {
                         color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 255, 1.0)),
                     },
                 ],
-            }),
+            })),
             slice: BorderImageSlice {
                 top: BorderImageSliceValue::Number(1.0),
                 right: BorderImageSliceValue::Number(1.0),
