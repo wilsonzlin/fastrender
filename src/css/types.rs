@@ -540,7 +540,7 @@ fn supports_value_is_valid(property: &str, value: &str) -> bool {
         "text-orientation" => {
             return matches!(
                 value_lower.as_str(),
-                "mixed" | "upright" | "sideways" | "sideways-right"
+                "mixed" | "upright" | "sideways" | "sideways-right" | "sideways-left"
             );
         }
         "text-combine-upright" => {
@@ -662,6 +662,15 @@ mod tests {
             supported.matches(),
             "nth-child selector should be supported in selector()"
         );
+    }
+
+    #[test]
+    fn supports_declaration_accepts_sideways_left_text_orientation() {
+        let cond = SupportsCondition::Declaration {
+            property: "text-orientation".into(),
+            value: "sideways-left".into(),
+        };
+        assert!(cond.matches(), "sideways-left should be considered supported");
     }
 }
 
