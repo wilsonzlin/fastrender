@@ -60,7 +60,7 @@ mod tests {
 }
 
 fn usage() {
-    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings]");
+    println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings] [page ...]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
     println!("  --timeout SECONDS Per-page timeout (optional)");
     println!("  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)");
@@ -77,6 +77,7 @@ fn usage() {
     println!("  --accept-language LANG  Override the Accept-Language header (default: en-US,en;q=0.9)");
     println!("  --css-limit N     Maximum number of external stylesheets to fetch (default: unlimited)");
     println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
+    println!("  page ...          Positional page filters (cache stems); unknown options exit with status 1");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
