@@ -61,6 +61,16 @@ cargo build --release
 # - If no output filename is given, the PNG is named after the URL (cache stem + .png).
 ```
 
+### Running tests
+
+```bash
+# Core test suite
+cargo test --quiet
+
+# Style regression harness (includes tests under tests/style/)
+cargo test --quiet --test style_tests
+```
+
 ### Batch Fetch & Render
 
 Cache a set of common pages for debugging and profiling:
