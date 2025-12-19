@@ -50,6 +50,13 @@ use url::Url;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
+fn normalize_user_agent_for_log(ua: &str) -> &str {
+    ua.strip_prefix("User-Agent:")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ua)
+}
+
 fn fetch_bytes(
     url: &str,
     timeout: Option<Duration>,
@@ -160,6 +167,13 @@ mod tests {
                 Err(e) => panic!("accept failed: {e}"),
             }
         }
+    }
+
+    #[test]
+    fn normalize_user_agent_for_log_strips_prefix() {
+        assert_eq!(normalize_user_agent_for_log("User-Agent: Foo"), "Foo");
+        assert_eq!(normalize_user_agent_for_log("Foo"), "Foo");
+        assert_eq!(normalize_user_agent_for_log(""), "");
     }
 
     #[test]
@@ -1212,7 +1226,14 @@ fn main() -> Result<()> {
 
     eprintln!(
         "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",
-        user_agent, accept_language, width, height, dpr, scroll_x, scroll_y, output
+        normalize_user_agent_for_log(&user_agent),
+        accept_language,
+        width,
+        height,
+        dpr,
+        scroll_x,
+        scroll_y,
+        output
     );
 
     let (tx, rx) = channel();
