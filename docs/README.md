@@ -65,7 +65,7 @@ docs/
 - Style regression harness: `cargo test --quiet --test style_tests`
 
 ### Debugging renders
-- [Render/Paint Debug Flags](debugging.md) - Environment flags and usage for diagnosing blank/black renders
+- [Render/Paint Debug Flags](debugging.md) - Environment flags and usage for diagnosing blank/black renders (display list dumps, pixmap stats, oversized background logging aliases `FASTR_LOG_LARGE_BACKGROUNDS`/`FASTR_LOG_LARGE_BACKGROUND`, etc.)
 
 ### Guides
 - [Migration Guide](guides/migration.md) - Migrating from V1
