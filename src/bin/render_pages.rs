@@ -42,8 +42,14 @@ mod tests {
 
     #[test]
     fn normalize_page_name_strips_scheme_and_www() {
-        assert_eq!(normalize_page_name("https://example.com/foo").as_deref(), Some("example.com_foo"));
-        assert_eq!(normalize_page_name("http://www.example.com").as_deref(), Some("example.com"));
+        assert_eq!(
+            normalize_page_name("https://example.com/foo").as_deref(),
+            Some("example.com_foo")
+        );
+        assert_eq!(
+            normalize_page_name("http://www.example.com").as_deref(),
+            Some("example.com")
+        );
     }
 
     #[test]
