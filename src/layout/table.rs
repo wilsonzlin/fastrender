@@ -3760,6 +3760,7 @@ impl FormattingContext for TableFormattingContext {
                 // adds padding/border offsets, so use the content origin here to avoid double
                 // counting padding.
                 let mut input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, Point::ZERO);
+                input.is_replaced = child.is_replaced();
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
                 input.preferred_min_block_size = preferred_min_block;

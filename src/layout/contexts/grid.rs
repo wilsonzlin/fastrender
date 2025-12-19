@@ -958,7 +958,8 @@ impl GridFormattingContext {
 
         // Get style from node_map if available
         if let Some(box_node) = node_map.get(&node_id) {
-            let is_grid = matches!(box_node.style.display, CssDisplay::Grid | CssDisplay::InlineGrid);
+            let is_grid = matches!(box_node.style.display, CssDisplay::Grid | CssDisplay::InlineGrid)
+                || matches!(box_node.formatting_context(), Some(FormattingContextType::Grid));
             if is_grid {
                 return Ok(FragmentNode::new_with_style(
                     bounds,
@@ -1307,6 +1308,7 @@ impl FormattingContext for GridFormattingContext {
                     child_fragment.bounds.size,
                     static_pos,
                 );
+                input.is_replaced = child.is_replaced();
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
                 input.preferred_min_block_size = preferred_min_block;

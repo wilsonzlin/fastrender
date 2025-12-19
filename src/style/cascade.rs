@@ -7144,7 +7144,7 @@ fn compute_marker_styles(
         return None;
     }
 
-    let matching_rules = if rules.has_pseudo_content(&PseudoElement::Marker) {
+    let matching_rules = if rules.has_pseudo_rules(&PseudoElement::Marker) {
         find_pseudo_element_rules(node, rules, selector_caches, scratch, ancestors, &PseudoElement::Marker)
     } else {
         Vec::new()

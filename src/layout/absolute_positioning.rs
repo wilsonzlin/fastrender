@@ -179,6 +179,8 @@ pub struct AbsoluteLayoutInput {
     pub intrinsic_size: Size,
     /// The static position (where element would be in normal flow)
     pub static_position: Point,
+    /// Whether the element is replaced (images, form controls) and may shrink-to-fit for fixed insets.
+    pub is_replaced: bool,
 }
 
 impl AbsoluteLayoutInput {
@@ -192,6 +194,7 @@ impl AbsoluteLayoutInput {
             preferred_block_size: None,
             intrinsic_size,
             static_position,
+            is_replaced: false,
         }
     }
 }
@@ -285,6 +288,7 @@ impl AbsoluteLayout {
             cb_width,
             inline_base,
             viewport,
+            input.is_replaced,
             input.preferred_min_inline_size,
             input.preferred_inline_size,
             input.intrinsic_size.width,
@@ -380,6 +384,7 @@ impl AbsoluteLayout {
         cb_width: f32,
         inline_base: Option<f32>,
         viewport: Size,
+        is_replaced: bool,
         preferred_min_inline_size: Option<f32>,
         preferred_inline_size: Option<f32>,
         intrinsic_width: f32,
@@ -447,7 +452,12 @@ impl AbsoluteLayout {
 
             // Case 4: left and right specified, width is auto (solve constraint)
             (Some(l), None, Some(r)) => {
-                let width = (cb_width - l - r - margin_left - margin_right - total_horizontal_spacing).max(0.0);
+                let available = cb_width - l - r - margin_left - margin_right - total_horizontal_spacing;
+                let width = if is_replaced {
+                    shrink(available)
+                } else {
+                    available.max(0.0)
+                };
                 let x = l + margin_left + border_left + padding_left;
                 (x, width)
             }
@@ -1415,7 +1425,8 @@ mod tests {
         style.right = LengthOrAuto::px(20.0);
         style.width = LengthOrAuto::Auto;
         // intrinsic width is 150, available is 200 - shrink should keep 150
-        let input = AbsoluteLayoutInput::new(style, Size::new(150.0, 40.0), Point::ZERO);
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(150.0, 40.0), Point::ZERO);
+        input.is_replaced = true;
         let cb = create_containing_block(400.0, 200.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -1438,7 +1449,8 @@ mod tests {
         style.right = LengthOrAuto::px(30.0);
         style.width = LengthOrAuto::Auto;
         // intrinsic 300, available 300 -> keep 300; shrink-to-fit should not exceed
-        let input = AbsoluteLayoutInput::new(style, Size::new(320.0, 60.0), Point::ZERO);
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(320.0, 60.0), Point::ZERO);
+        input.is_replaced = true;
         let cb = create_containing_block(390.0, 200.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();
@@ -1486,6 +1498,7 @@ mod tests {
         style.width = LengthOrAuto::Auto;
 
         let mut input = AbsoluteLayoutInput::new(style, Size::new(10.0, 20.0), Point::ZERO);
+        input.is_replaced = true;
         input.preferred_min_inline_size = Some(30.0);
         input.preferred_inline_size = Some(70.0);
 
@@ -1511,6 +1524,7 @@ mod tests {
         style.max_width = Length::px(100.0);
 
         let mut input = AbsoluteLayoutInput::new(style, Size::new(20.0, 20.0), Point::ZERO);
+        input.is_replaced = true;
         input.preferred_min_inline_size = Some(30.0);
         input.preferred_inline_size = Some(40.0);
 
@@ -1531,6 +1545,7 @@ mod tests {
         style.max_width = Length::px(50.0);
 
         let mut input = AbsoluteLayoutInput::new(style, Size::new(20.0, 20.0), Point::ZERO);
+        input.is_replaced = true;
         input.preferred_min_inline_size = Some(30.0);
         input.preferred_inline_size = Some(80.0);
         let cb = create_containing_block(200.0, 200.0);
@@ -1747,7 +1762,8 @@ mod tests {
         style.right = LengthOrAuto::px(200.0);
         // In a 300px wide CB, this would give -100px width
 
-        let input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
+        let mut input = AbsoluteLayoutInput::new(style, Size::new(50.0, 50.0), Point::ZERO);
+        input.is_replaced = true;
         let cb = create_containing_block(300.0, 300.0);
 
         let result = layout.layout_absolute(&input, &cb).unwrap();

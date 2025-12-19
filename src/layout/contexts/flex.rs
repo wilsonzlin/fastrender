@@ -1706,6 +1706,7 @@ impl FormattingContext for FlexFormattingContext {
                     .compute_intrinsic_block_size(&layout_child, IntrinsicSizingMode::MaxContent)
                     .ok();
                 let mut input = AbsoluteLayoutInput::new(positioned_style, child_fragment.bounds.size, static_pos);
+                input.is_replaced = child.is_replaced();
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
                 input.preferred_min_block_size = preferred_min_block;

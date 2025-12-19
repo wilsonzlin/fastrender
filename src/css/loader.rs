@@ -657,6 +657,30 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
         if end > start {
             let candidate = &html[start..end];
             if candidate.len() < 512 {
+                let raw_lower = candidate.to_ascii_lowercase();
+
+                // Detect sourceURL-style sourcemap markers (/*# or //#) immediately preceding the token.
+                let mut marker_back = start;
+                while marker_back > 0 && (bytes[marker_back - 1] as char).is_whitespace() {
+                    marker_back -= 1;
+                }
+                let sourcemap_marker = if marker_back > 0 && bytes[marker_back - 1] == b'#' {
+                    if marker_back >= 3 && bytes[marker_back - 2] == b'*' && bytes[marker_back - 3] == b'/' {
+                        true
+                    } else if marker_back >= 2 && bytes[marker_back - 2] == b'/' {
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if sourcemap_marker && raw_lower.contains("sourceurl=") {
+                    idx = end;
+                    continue;
+                }
+
                 if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
                     if cleaned.contains('{') || cleaned.contains('}') {
                         idx = end;

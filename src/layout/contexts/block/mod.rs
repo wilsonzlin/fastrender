@@ -649,7 +649,8 @@ impl BlockFormattingContext {
                     .formatting_context()
                     .unwrap_or(FormattingContextType::Block);
                 let fc = factory.create(fc_type);
-                let child_height_space = cb_block_base
+                let height_available = cb.block_percentage_base().or(cb_block_base);
+                let child_height_space = height_available
                     .map(AvailableSpace::Definite)
                     .unwrap_or(AvailableSpace::Indefinite);
                 let child_constraints =
@@ -686,6 +687,7 @@ impl BlockFormattingContext {
                     child_fragment.bounds.size,
                     static_pos,
                 );
+                input.is_replaced = pos_child.is_replaced();
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
                 input.preferred_min_block_size = preferred_min_block;
@@ -2304,6 +2306,7 @@ impl FormattingContext for BlockFormattingContext {
                     child_fragment.bounds.size,
                     static_pos,
                 );
+                input.is_replaced = child.is_replaced();
                 input.preferred_min_inline_size = preferred_min_inline;
                 input.preferred_inline_size = preferred_inline;
                 input.preferred_min_block_size = preferred_min_block;
