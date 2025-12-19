@@ -55,7 +55,11 @@ pub fn url_to_filename(url: &str) -> String {
         None => (trimmed, ""),
     };
     let lowered = format!("{}{}", host.to_ascii_lowercase(), rest);
-    sanitize_filename(&lowered)
+    let no_fragment = lowered
+        .split_once('#')
+        .map(|(before, _)| before.to_string())
+        .unwrap_or(lowered);
+    sanitize_filename(&no_fragment)
 }
 
 fn sanitize_filename(input: &str) -> String {
@@ -70,17 +74,6 @@ fn sanitize_filename(input: &str) -> String {
             }
         })
         .collect()
-}
-
-/// Normalize a page identifier (full URL or hostname) to a cache stem.
-pub fn normalize_page_name(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
-    let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
-    Some(url_to_filename(without_www))
 }
 
 /// Default User-Agent string used by HTTP fetchers
@@ -540,16 +533,15 @@ mod tests {
     }
 
     #[test]
-    fn normalize_page_name_handles_urls_and_hosts() {
-        assert_eq!(normalize_page_name("https://www.w3.org").as_deref(), Some("w3.org"));
-        assert_eq!(normalize_page_name("http://example.com/foo").as_deref(), Some("example.com_foo"));
-        assert_eq!(normalize_page_name("example.com").as_deref(), Some("example.com"));
+    fn url_to_filename_drops_fragments() {
+        assert_eq!(url_to_filename("https://example.com/path#frag"), "example.com_path");
+        assert_eq!(url_to_filename("https://example.com/path?q=1#frag"), "example.com_path_q_1");
     }
 
     #[test]
-    fn normalize_page_name_rejects_empty() {
-        assert!(normalize_page_name("").is_none());
-        assert!(normalize_page_name("   ").is_none());
+    fn url_to_filename_drops_fragments_without_scheme() {
+        assert_eq!(url_to_filename("Example.Com/path#frag"), "example.com_path");
+        assert_eq!(url_to_filename("Example.Com/path?q=1#frag"), "example.com_path_q_1");
     }
 
     #[test]
