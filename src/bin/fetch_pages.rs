@@ -563,8 +563,10 @@ mod tests {
     fn filter_accepts_full_urls_and_www() {
         let mut filter = HashSet::new();
         filter.insert(normalize_page_name("https://www.w3.org").unwrap());
+        filter.insert(normalize_page_name("w3.org").unwrap());
         let selected = selected_pages(Some(&filter));
         assert!(selected.contains(&"https://w3.org"));
+        assert!(selected.contains(&"https://www.w3.org"));
     }
 
     #[test]
