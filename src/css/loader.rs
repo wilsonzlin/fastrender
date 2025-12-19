@@ -1261,6 +1261,13 @@ mod tests {
     }
 
     #[test]
+    fn resolve_href_rejects_non_parseable_base() {
+        // Base that cannot be parsed as URL or file path should yield None
+        let base = "not-a-url";
+        assert_eq!(resolve_href(base, "styles/app.css"), None);
+    }
+
+    #[test]
     fn resolve_href_returns_none_for_empty_href() {
         let base = "https://example.com/";
         assert_eq!(resolve_href(base, ""), None);
