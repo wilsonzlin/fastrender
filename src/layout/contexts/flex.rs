@@ -988,20 +988,14 @@ impl FormattingContext for FlexFormattingContext {
                     // Replaced elements don't establish a formatting context; compute their
                     // intrinsic/used size directly to avoid block layout inflating widths.
                     if let crate::tree::box_tree::BoxType::Replaced(replaced_box) = &measure_box.box_type {
-                        let avail_width = known_dimensions
-                            .width
-                            .or_else(|| match avail.width {
-                                AvailableSpace::Definite(w) => Some(w),
-                                _ => None,
-                            })
-                            .unwrap_or(this.viewport_size.width);
-                        let avail_height = known_dimensions
-                            .height
-                            .or_else(|| match avail.height {
-                                AvailableSpace::Definite(h) => Some(h),
-                                _ => None,
-                            })
-                            .unwrap_or(this.viewport_size.height);
+                        let avail_width = known_dimensions.width.or(match avail.width {
+                            AvailableSpace::Definite(w) => Some(w),
+                            _ => None,
+                        }).unwrap_or(this.viewport_size.width);
+                        let avail_height = known_dimensions.height.or(match avail.height {
+                            AvailableSpace::Definite(h) => Some(h),
+                            _ => None,
+                        }).unwrap_or(this.viewport_size.height);
                         let percentage_base = Some(Size::new(avail_width, avail_height));
                         let size = crate::layout::utils::compute_replaced_size(
                             &measure_box.style,

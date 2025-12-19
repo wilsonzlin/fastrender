@@ -2304,7 +2304,7 @@ impl ShapingPipeline {
         }
 
         // Step 1: Bidi analysis
-        let mut resolved_base_dir = base_direction.unwrap_or_else(|| match style.direction {
+        let mut resolved_base_dir = base_direction.unwrap_or(match style.direction {
             crate::style::types::Direction::Ltr => Direction::LeftToRight,
             crate::style::types::Direction::Rtl => Direction::RightToLeft,
         });

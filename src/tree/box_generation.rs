@@ -856,11 +856,12 @@ impl BoxGenerator {
             return;
         }
 
-        let mut applied_default_reset = false;
-        if let Some(reset) = &node.style.counters.counter_reset {
+        let applied_default_reset = if let Some(reset) = &node.style.counters.counter_reset {
             counters.apply_reset(reset);
-            applied_default_reset = true;
-        }
+            true
+        } else {
+            false
+        };
 
         if !applied_default_reset {
             if let Some(tag) = &node.tag_name {
