@@ -615,7 +615,16 @@ mod tests {
     #[test]
     fn url_to_filename_strips_fragments_with_uppercase_scheme() {
         assert_eq!(url_to_filename("HTTP://Example.com/Path#Frag"), "example.com_Path");
-        assert_eq!(url_to_filename("HTTP://Example.com/Path?q=1#Frag"), "example.com_Path_q_1");
+        assert_eq!(
+            url_to_filename("HTTP://Example.com/Path?q=1#Frag"),
+            "example.com_Path_q_1"
+        );
+    }
+
+    #[test]
+    fn url_to_filename_handles_data_urls() {
+        // Url::parse understands data: URLs, so the scheme is stripped and we sanitize the payload.
+        assert_eq!(url_to_filename("data:text/html,<p>hi"), "text_html__p_hi");
     }
 
     #[test]
@@ -885,5 +894,4 @@ mod tests {
 
         handle.join().unwrap();
     }
-
 }
