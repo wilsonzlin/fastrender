@@ -935,7 +935,6 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
                 | "border-block-start"
                 | "border-block-end"
                 | "outline"
-                | "flex"
                 | "text-combine-upright"
         )
     {
@@ -1785,6 +1784,17 @@ mod tests {
         assert!((position.x.alignment - 0.5).abs() < 1e-6);
         assert_eq!(stops.len(), 2);
         assert_eq!(stops[1].position, Some(0.75));
+    }
+
+    #[test]
+    fn parse_property_value_respects_known_properties_list() {
+        // Unknown properties should be rejected outright.
+        assert!(parse_property_value("not-a-property", "5").is_none());
+        // An empty property name is used for generic parsing helpers; it should still tokenize values.
+        assert!(matches!(
+            parse_property_value("", "5"),
+            Some(PropertyValue::Number(n)) if (n - 5.0).abs() < 1e-6
+        ));
     }
 
     #[test]
