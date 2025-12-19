@@ -86,8 +86,8 @@ pub fn url_to_filename(url: &str) -> String {
 
 fn sanitize_filename(input: &str) -> String {
     // Trim trailing slashes so we don’t leave a dangling underscore after replacement.
-    let trimmed = input.trim_end_matches('/');
-    let mut sanitized: String = trimmed
+    let trimmed_slash = input.trim_end_matches('/');
+    let sanitized: String = trimmed_slash
         .replace('/', "_")
         .chars()
         .map(|c| {
@@ -99,12 +99,22 @@ fn sanitize_filename(input: &str) -> String {
         })
         .collect();
 
-    // Avoid a trailing underscore when the path ends with a slash (common for canonical URLs).
-    while sanitized.ends_with('_') {
-        sanitized.pop();
+    // Trim trailing underscores/dots introduced by trailing slashes or punctuation so that
+    // "https://example.com/" normalizes to "example.com" instead of "example.com_".
+    // If trimming would produce an empty string, fall back to the sanitized value.
+    let mut result = sanitized
+        .trim_end_matches(|c| c == '_' || c == '.')
+        .to_string();
+    if result.is_empty() {
+        result = sanitized;
     }
 
-    sanitized
+    // Avoid a trailing underscore when the path ends with a slash (common for canonical URLs).
+    while result.ends_with('_') {
+        result.pop();
+    }
+
+    result
 }
 
 /// Default User-Agent string used by HTTP fetchers
@@ -557,6 +567,12 @@ mod tests {
             url_to_filename("https://www.exa mple.com/path?x=1"),
             "www.exa_mple.com_path_x_1"
         );
+    }
+
+    #[test]
+    fn url_to_filename_trims_trailing_slash() {
+        assert_eq!(url_to_filename("https://example.com/"), "example.com");
+        assert_eq!(url_to_filename("HTTP://WWW.Example.COM/"), "www.example.com");
     }
 
     #[test]
