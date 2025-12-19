@@ -10242,7 +10242,7 @@ fn counter_value_to_string(value: &PropertyValue) -> Option<String> {
                 match part {
                     PropertyValue::Keyword(kw) => tokens.push(kw.clone()),
                     PropertyValue::Number(num) if num.fract().abs() < f32::EPSILON => {
-                        tokens.push((*num as i32).to_string())
+                        tokens.push((*num as i32).to_string());
                     }
                     _ => return None,
                 }
