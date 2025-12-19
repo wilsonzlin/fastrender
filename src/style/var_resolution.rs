@@ -95,7 +95,6 @@ impl VarResolutionResult {
 /// let resolved = resolve_var(&value, &props);
 /// // resolved is now PropertyValue::Color(...)
 /// ```
-#[allow(clippy::implicit_hasher)]
 /// Resolves CSS `var()` references using the provided custom properties.
 ///
 /// This helper performs property-agnostic resolution (parses fallback/results without knowing
