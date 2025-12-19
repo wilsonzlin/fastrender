@@ -1113,7 +1113,7 @@ impl FormattingContext for FlexFormattingContext {
                     let resolved_min_w = measure_box.style.min_width.as_ref().and_then(|l| resolve_if_base(l, percentage_base_w));
                     let resolved_max_h = measure_box.style.max_height.as_ref().and_then(|l| resolve_if_base(l, percentage_base_h));
                     let resolved_min_h = measure_box.style.min_height.as_ref().and_then(|l| resolve_if_base(l, percentage_base_h));
-                    let mut max_w_bound = resolved_max_w.unwrap_or(match avail.width {
+                    let mut max_w_bound = resolved_max_w.unwrap_or_else(|| match avail.width {
                         AvailableSpace::Definite(w) => w.min(this.viewport_size.width),
                         _ => this.viewport_size.width,
                     });
@@ -1127,7 +1127,7 @@ impl FormattingContext for FlexFormattingContext {
                         max_w_bound,
                     );
 
-                    let mut max_h_bound = resolved_max_h.unwrap_or(match avail.height {
+                    let mut max_h_bound = resolved_max_h.unwrap_or_else(|| match avail.height {
                         AvailableSpace::Definite(h) => h,
                         _ => this.viewport_size.height,
                     });
@@ -1212,11 +1212,15 @@ impl FormattingContext for FlexFormattingContext {
                                 entry.remove(&first_key);
                             }
                         }
-                        let new_key = !entry.contains_key(&key);
-                        let stored_size = Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
-                        entry.insert(key, (stored_size, normalized_fragment.clone()));
-                        flex_profile::record_measure_store(new_key);
-                        record_node_measure_store(measure_box.id);
+                        if let Entry::Vacant(e) = entry.entry(key) {
+                            let stored_size =
+                                Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
+                            e.insert((stored_size, normalized_fragment.clone()));
+                            flex_profile::record_measure_store(true);
+                            record_node_measure_store(measure_box.id);
+                        } else {
+                            flex_profile::record_measure_store(false);
+                        }
                     }
                         if let Some(_ptr) = node_ptr {
                             let entry = pass_cache.entry(cache_key).or_default();
