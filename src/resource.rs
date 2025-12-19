@@ -63,7 +63,9 @@ pub fn url_to_filename(url: &str) -> String {
 }
 
 fn sanitize_filename(input: &str) -> String {
-    let mut sanitized: String = input
+    // Trim trailing slashes so we don’t leave a dangling underscore after replacement.
+    let trimmed = input.trim_end_matches('/');
+    let mut sanitized: String = trimmed
         .replace('/', "_")
         .chars()
         .map(|c| {
@@ -81,6 +83,17 @@ fn sanitize_filename(input: &str) -> String {
     }
 
     sanitized
+}
+
+/// Normalize a page identifier (full URL or hostname) to a cache stem.
+pub fn normalize_page_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
+    let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
+    Some(url_to_filename(without_www))
 }
 
 /// Default User-Agent string used by HTTP fetchers
@@ -540,9 +553,18 @@ mod tests {
     }
 
     #[test]
+    fn url_to_filename_trims_trailing_slashes() {
+        assert_eq!(url_to_filename("https://example.com/"), "example.com");
+        assert_eq!(url_to_filename("https://example.com/foo/"), "example.com_foo");
+    }
+
+    #[test]
     fn url_to_filename_drops_fragments() {
         assert_eq!(url_to_filename("https://example.com/path#frag"), "example.com_path");
-        assert_eq!(url_to_filename("https://example.com/path?q=1#frag"), "example.com_path_q_1");
+        assert_eq!(
+            url_to_filename("https://example.com/path?q=1#frag"),
+            "example.com_path_q_1"
+        );
     }
 
     #[test]
