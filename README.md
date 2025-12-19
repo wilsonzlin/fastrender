@@ -43,6 +43,9 @@ A production-grade HTML/CSS rendering engine in Rust that renders web pages to p
 git clone https://github.com/wilsonzlin/fastrender.git
 cd fastrender
 
+# Always rebase when pulling (recommended)
+git config pull.rebase true
+
 # Build release binary
 cargo build --release
 ```
