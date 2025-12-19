@@ -50,9 +50,10 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
 
 /// Best-effort unescaping for JavaScript-escaped URL strings embedded in HTML/JS.
 ///
-/// Handles `\uXXXX` Unicode escapes (common for `\u0026` encoded ampersands) and
-/// simple backslash escaping of quotes/slashes. Returns a borrowed input when no
-/// escapes are present.
+/// Handles `\uXXXX`/`\UXXXX` Unicode escapes (common for `\u0026` encoded ampersands)
+/// and simple backslash escaping of quotes or slashes. If the input contains no
+/// backslashes, it returns a borrowed slice to avoid allocations; otherwise it
+/// builds a new string with the escapes resolved.
 fn unescape_js_escapes(input: &str) -> Cow<'_, str> {
     if !input.contains('\\') {
         return Cow::Borrowed(input);
