@@ -38,8 +38,12 @@ pub fn normalize_page_name(raw: &str) -> Option<String> {
     // Remove scheme prefixes if present, case-insensitively.
     let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
 
-    // Strip a leading www. to align with cache naming expectations.
-    let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
+    // Strip a leading www. (case-insensitive) to align with cache naming expectations.
+    let without_www = if no_scheme.len() >= 4 && no_scheme[..4].eq_ignore_ascii_case("www.") {
+        &no_scheme[4..]
+    } else {
+        no_scheme
+    };
 
     Some(url_to_filename(without_www))
 }
@@ -595,6 +599,11 @@ mod tests {
             normalize_page_name("HTTP://Example.com/Path?foo=1").as_deref(),
             Some("example.com_Path_foo_1")
         );
+    }
+
+    fn normalize_page_name_strips_www_case_insensitively() {
+        assert_eq!(normalize_page_name("WWW.Example.com").as_deref(), Some("example.com"));
+        assert_eq!(normalize_page_name("www.example.com").as_deref(), Some("example.com"));
     }
 
     #[test]
