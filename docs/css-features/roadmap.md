@@ -128,10 +128,10 @@ This is a living document that will be updated as features are implemented.
 | `background-color` | P0 | ✅ | CSS 2.1 | Painting | |
 | `background-image` | P1 | ❌ | CSS 2.1 | Image loading | url() |
 | `background-repeat` | P1 | ❌ | CSS 2.1 | Painting | repeat, no-repeat, etc. |
-| `background-position` | P1 | ❌ | CSS 2.1 | Painting | |
+| `background-position` | P1 | ⚠️ Partial | CSS 2.1 | Painting | Parses/shorthand + logical inline/block mapping; image painting not implemented |
 | `background-attachment` | P2 | ❌ | CSS 2.1 | Painting | fixed, scroll |
 | `background` | P1 | ❌ | CSS 2.1 | Parsing | Shorthand |
-| `background-size` | P1 | ❌ | CSS3 Backgrounds | Painting | cover, contain, etc. |
+| `background-size` | P1 | ⚠️ Partial | CSS3 Backgrounds | Painting | Parses including logical inline/block; image painting not implemented |
 | `background-clip` | P2 | ❌ | CSS3 Backgrounds | Painting | |
 | `background-origin` | P2 | ❌ | CSS3 Backgrounds | Painting | |
 
