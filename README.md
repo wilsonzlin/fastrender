@@ -145,7 +145,7 @@ You can drive media queries that depend on user preferences via CLI flags or env
 
 If a render comes out blank/black or is missing content, enable the runtime paint/debug
 flags described in [docs/debugging.md](docs/debugging.md). That guide lists display-list
-dumps, pixmap stats, oversized background logging (`FASTR_LOG_LARGE_BACKGROUND(S)`), and
+dumps, pixmap stats, oversized background logging (`FASTR_LOG_LARGE_BACKGROUNDS` or `FASTR_LOG_LARGE_BACKGROUND`), and
 other useful environment variables with example commands to narrow down rendering issues.
 
 # Apply the same preferences when rendering cached pages
