@@ -63,9 +63,6 @@ docs/
 - [Reference Tests](testing/reference-tests.md) - Visual regression tests
 - [Benchmarking](testing/benchmarking.md) - Performance benchmarks
 
-### Debugging renders
-- [Render/Paint Debug Flags](debugging.md) - Environment flags and usage for diagnosing blank/black renders
-
 ### Guides
 - [Migration Guide](guides/migration.md) - Migrating from V1
 - [API Design](guides/api-design.md) - Public API documentation
