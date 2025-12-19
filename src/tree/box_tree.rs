@@ -857,7 +857,7 @@ impl BoxNode {
             BoxType::Text(text_box) => Some(&text_box.text),
             BoxType::Marker(marker_box) => match &marker_box.content {
                 MarkerContent::Text(text) => Some(text.as_str()),
-                _ => None,
+                MarkerContent::Image(_) => None,
             },
             _ => None,
         }
