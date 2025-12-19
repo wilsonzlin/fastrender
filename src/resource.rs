@@ -34,18 +34,42 @@ pub fn normalize_page_name(raw: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
+    // First try full URL parsing so we can normalize host casing and strip www. reliably.
+    if let Ok(parsed) = Url::parse(trimmed) {
+        let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+        let host = host.strip_prefix("www.").unwrap_or(&host);
+        let mut stem = String::from(host);
+        stem.push_str(&parsed[url::Position::BeforePath..url::Position::AfterQuery]);
+        return Some(sanitize_filename(&stem));
+    }
 
-    // Remove scheme prefixes if present, case-insensitively.
-    let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
+    // Fallback: case-insensitive scheme + www stripping for bare hosts or host+path strings.
+    let mut without_scheme = trimmed;
+    for scheme in ["https://", "http://"] {
+        if trimmed.len() >= scheme.len() && trimmed[..scheme.len()].eq_ignore_ascii_case(scheme) {
+            without_scheme = &trimmed[scheme.len()..];
+            break;
+        }
+    }
 
-    // Strip a leading www. (case-insensitive) to align with cache naming expectations.
-    let without_www = if no_scheme.len() >= 4 && no_scheme[..4].eq_ignore_ascii_case("www.") {
-        &no_scheme[4..]
+    let without_www = if without_scheme.len() >= 4 && without_scheme[..4].eq_ignore_ascii_case("www.") {
+        &without_scheme[4..]
     } else {
-        no_scheme
+        without_scheme
     };
 
-    Some(url_to_filename(without_www))
+    let (host, rest) = match without_www.find('/') {
+        Some(idx) => (&without_www[..idx], &without_www[idx..]),
+        None => (without_www, ""),
+    };
+
+    let lowered = format!("{}{}", host.to_ascii_lowercase(), rest);
+    let no_fragment = lowered
+        .split_once('#')
+        .map(|(before, _)| before.to_string())
+        .unwrap_or(lowered);
+
+    Some(sanitize_filename(&no_fragment))
 }
 
 /// Normalize a URL into a filename-safe stem used for caches and outputs.
@@ -623,6 +647,14 @@ mod tests {
         assert_eq!(
             normalize_page_name("HTTP://Example.com/Path?foo=1").as_deref(),
             Some("example.com_Path_foo_1")
+        );
+    }
+
+    #[test]
+    fn normalize_page_name_handles_uppercase_host_and_trailing_slash() {
+        assert_eq!(
+            normalize_page_name("HTTP://WWW.Example.COM/").as_deref(),
+            Some("example.com")
         );
     }
 
