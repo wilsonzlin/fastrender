@@ -41,7 +41,7 @@ pub enum DomNodeType {
 }
 
 thread_local! {
-    static TARGET_FRAGMENT: RefCell<Option<String>> = RefCell::new(None);
+    static TARGET_FRAGMENT: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 pub(crate) fn with_target_fragment<R, F: FnOnce() -> R>(target: Option<&str>, f: F) -> R {
