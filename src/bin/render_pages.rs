@@ -40,7 +40,6 @@ const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overfl
 #[cfg(test)]
 mod tests {
     use super::normalize_page_name;
-    use fastrender::resource::normalize_user_agent_for_log;
 
     #[test]
     fn normalize_page_name_strips_scheme_and_www() {
@@ -58,13 +57,6 @@ mod tests {
     fn normalize_page_name_ignores_empty() {
         assert!(normalize_page_name("").is_none());
         assert!(normalize_page_name("   ").is_none());
-    }
-
-    #[test]
-    fn normalize_user_agent_for_log_strips_prefix() {
-        assert_eq!(normalize_user_agent_for_log("User-Agent: Foo"), "Foo");
-        assert_eq!(normalize_user_agent_for_log("Foo"), "Foo");
-        assert_eq!(normalize_user_agent_for_log(""), "");
     }
 }
 

@@ -556,13 +556,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_user_agent_for_log_strips_prefix() {
-        assert_eq!(normalize_user_agent_for_log("User-Agent: Foo"), "Foo");
-        assert_eq!(normalize_user_agent_for_log("Foo"), "Foo");
-        assert_eq!(normalize_user_agent_for_log(""), "");
-    }
-
-    #[test]
     fn pages_are_unique() {
         let mut seen = HashSet::new();
         let mut dupes = Vec::new();

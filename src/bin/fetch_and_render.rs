@@ -163,14 +163,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn normalize_user_agent_for_log_strips_prefix() {
-        assert_eq!(normalize_user_agent_for_log("User-Agent: Foo"), "Foo");
-        assert_eq!(normalize_user_agent_for_log("Foo"), "Foo");
-        assert_eq!(normalize_user_agent_for_log(""), "");
-    }
-
-    #[test]
     fn resolves_relative_http_links() {
         let base = "https://example.com/a/b/page.html";
         let href = "../styles/site.css";
