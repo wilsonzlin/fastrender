@@ -556,6 +556,15 @@ mod tests {
     }
 
     #[test]
+    fn selected_pages_accepts_trailing_slash_and_case_insensitive() {
+        let mut filter = HashSet::new();
+        filter.insert(normalize_page_name("HTTPS://EXAMPLE.COM/").unwrap());
+
+        let selected = selected_pages(Some(&filter));
+        assert!(selected.contains(&"https://example.com"));
+    }
+
+    #[test]
     fn pages_are_unique() {
         let mut seen = HashSet::new();
         let mut dupes = Vec::new();
