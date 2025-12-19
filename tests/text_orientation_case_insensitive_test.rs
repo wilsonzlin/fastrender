@@ -1,17 +1,17 @@
 use fastrender::css::types::{Declaration, PropertyValue};
 use fastrender::style::properties::apply_declaration;
-use fastrender::style::types::TextCombineUpright;
+use fastrender::style::types::TextOrientation;
 use fastrender::style::ComputedStyle;
 
 #[test]
-fn text_combine_upright_keywords_are_case_insensitive() {
+fn text_orientation_keywords_are_case_insensitive() {
     let mut style = ComputedStyle::default();
 
     apply_declaration(
         &mut style,
         &Declaration {
-            property: "text-combine-upright".into(),
-            value: PropertyValue::Keyword("DIGITS".into()),
+            property: "text-orientation".into(),
+            value: PropertyValue::Keyword("UPRIGHT".into()),
             raw_value: String::new(),
             important: false,
         },
@@ -19,13 +19,13 @@ fn text_combine_upright_keywords_are_case_insensitive() {
         16.0,
         16.0,
     );
-    assert_eq!(style.text_combine_upright, TextCombineUpright::Digits(2));
+    assert_eq!(style.text_orientation, TextOrientation::Upright);
 
     apply_declaration(
         &mut style,
         &Declaration {
-            property: "text-combine-upright".into(),
-            value: PropertyValue::Keyword("ALL".into()),
+            property: "text-orientation".into(),
+            value: PropertyValue::Keyword("SIDEWAYS-LEFT".into()),
             raw_value: String::new(),
             important: false,
         },
@@ -33,5 +33,5 @@ fn text_combine_upright_keywords_are_case_insensitive() {
         16.0,
         16.0,
     );
-    assert_eq!(style.text_combine_upright, TextCombineUpright::All);
+    assert_eq!(style.text_orientation, TextOrientation::SidewaysLeft);
 }
