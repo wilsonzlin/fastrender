@@ -1244,6 +1244,12 @@ mod tests {
     }
 
     #[test]
+    fn resolve_href_returns_none_for_empty_href() {
+        let base = "https://example.com/";
+        assert_eq!(resolve_href(base, ""), None);
+    }
+
+    #[test]
     fn unescape_js_preserves_invalid_sequences() {
         let input = r"bad\u00zzescape and \q";
         let unescaped = unescape_js_escapes(input);
