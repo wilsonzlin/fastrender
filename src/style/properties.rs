@@ -21,6 +21,7 @@ use crate::style::grid::{
 use crate::style::position::Position;
 use crate::style::types::*;
 use crate::style::values::{Length, LengthUnit};
+use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal};
 use crate::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
 use crate::style::ComputedStyle;
 use cssparser::{Parser, ParserInput, Token};
@@ -17620,22 +17621,11 @@ fn parse_variation_setting<'i, 't>(
     Ok(FontVariationSetting { tag: tag_bytes, value })
 }
 
-fn inline_axis_is_horizontal(wm: WritingMode) -> bool {
-    matches!(wm, WritingMode::HorizontalTb)
-}
-
 fn inline_axis_positive(wm: WritingMode, dir: Direction) -> bool {
     match wm {
         WritingMode::HorizontalTb => dir != Direction::Rtl,
         WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr => true,
     }
-}
-
-fn block_axis_is_horizontal(wm: WritingMode) -> bool {
-    matches!(
-        wm,
-        WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
-    )
 }
 
 fn block_axis_positive(wm: WritingMode) -> bool {

@@ -106,6 +106,17 @@ pub enum LogicalAxis {
     Block,
 }
 
+pub(crate) fn inline_axis_is_horizontal(wm: WritingMode) -> bool {
+    matches!(wm, WritingMode::HorizontalTb)
+}
+
+pub(crate) fn block_axis_is_horizontal(wm: WritingMode) -> bool {
+    matches!(
+        wm,
+        WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+    )
+}
+
 /// Pending logical properties (margin/padding/border) to resolve after writing-mode is known.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalProperty {
