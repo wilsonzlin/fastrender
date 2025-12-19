@@ -2484,7 +2484,7 @@ fn reduce_components<'i>(
             let mut iter = values.into_iter();
             let first = match iter.next().unwrap() {
                 CalcComponent::Length(l) => l,
-                _ => unreachable!(),
+                CalcComponent::Number(_) => unreachable!(),
             };
             // Only support min/max when all lengths reduce to a single shared unit.
             let first_term = first.single_term().ok_or(cssparser::ParseError {
