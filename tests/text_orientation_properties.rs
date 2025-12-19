@@ -54,6 +54,16 @@ fn text_combine_upright_accepts_digits_range() {
 
     let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits 4; }"#);
     assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(4));
+
+    // Allow compact keyword form when the parser surfaces a single token.
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits3; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(3));
+
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits2; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(2));
+
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits4; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(4));
 }
 
 #[test]
@@ -62,5 +72,11 @@ fn text_combine_upright_rejects_invalid_digits() {
     assert_eq!(node.styles.text_combine_upright, TextCombineUpright::None);
 
     let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits 1; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::None);
+
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits5; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::None);
+
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits1; }"#);
     assert_eq!(node.styles.text_combine_upright, TextCombineUpright::None);
 }
