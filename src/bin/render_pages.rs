@@ -58,6 +58,14 @@ mod tests {
         assert!(normalize_page_name("").is_none());
         assert!(normalize_page_name("   ").is_none());
     }
+
+    #[test]
+    fn normalize_page_name_strips_trailing_punctuation_and_whitespace() {
+        assert_eq!(
+            normalize_page_name(" https://Example.com./path/ ").as_deref(),
+            Some("example.com_path")
+        );
+    }
 }
 
 fn usage() {
