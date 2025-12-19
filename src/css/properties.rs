@@ -1235,9 +1235,8 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
             }
         }
 
-        if !explicit_sizes.is_empty() {
-            let first = explicit_sizes[0];
-            let second = explicit_sizes.get(1).copied();
+        if let Some((&first, rest)) = explicit_sizes.split_first() {
+            let second = rest.first().copied();
             size = RadialGradientSize::Explicit { x: first, y: second };
         }
     }
