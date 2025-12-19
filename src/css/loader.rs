@@ -17,7 +17,8 @@ use url::Url;
 ///
 /// Supports protocol-relative URLs (`//example.com`), `data:` URLs (returned
 /// as-is), absolute URLs, and filesystem bases (`file://`) that may reference
-/// directory paths.
+/// directory paths. JavaScript-escaped hrefs (e.g. `https:\/\/example.com`) are
+/// unescaped before resolution.
 pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     let href = unescape_js_escapes(href);
     if href.is_empty() {
