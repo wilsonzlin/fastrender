@@ -149,9 +149,10 @@ fn background_position_shorthand_resets_positions() {
 }
 
 #[test]
-fn background_position_inline_block_is_ignored_for_now() {
+fn background_position_logical_maps_inline_and_block_sideways_lr() {
+    // In sideways-lr, inline maps to the physical y-axis (top→bottom) and block maps to the physical x-axis (left→right).
     let dom = dom::parse_html(
-        r#"<div style="writing-mode: vertical-rl; background-position-inline: 10px 20px; background-position-block: 3px 7px;"></div>"#,
+        r#"<div style="writing-mode: sideways-lr; background-position-inline: 12%; background-position-block: 4px"></div>"#,
     )
     .unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
@@ -159,10 +160,9 @@ fn background_position_inline_block_is_ignored_for_now() {
 
     let node = first_div(&styled);
     let (x, y) = bg_pos(&node);
-    // Logical background-position-* is not implemented; ensure current behavior stays at defaults
-    // until proper logical mapping is added.
-    assert_component(&x, 0.0, 0.0, LengthUnit::Percent);
-    assert_component(&y, 0.0, 0.0, LengthUnit::Percent);
+    // Block axis applies to the physical x-axis; inline axis applies to y in sideways-lr.
+    assert_component(&x, 0.0, 4.0, LengthUnit::Px);
+    assert_component(&y, 0.0, 12.0, LengthUnit::Percent);
 }
 
 #[test]
