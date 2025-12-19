@@ -166,6 +166,22 @@ fn background_position_logical_maps_inline_and_block_sideways_lr() {
 }
 
 #[test]
+fn background_position_logical_maps_inline_and_block_sideways_rl() {
+    // In sideways-rl, inline maps to the physical y-axis and block maps to the physical x-axis.
+    let dom = dom::parse_html(
+        r#"<div style="writing-mode: sideways-rl; background-position-inline: 7%; background-position-block: 5px"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = first_div(&styled);
+    let (x, y) = bg_pos(&node);
+    assert_component(&x, 0.0, 5.0, LengthUnit::Px);
+    assert_component(&y, 0.0, 7.0, LengthUnit::Percent);
+}
+
+#[test]
 fn background_position_logical_maps_inline_and_block_horizontal_tb() {
     // In horizontal-tb, inline maps to the physical x-axis and block maps to the physical y-axis.
     let dom = dom::parse_html(r#"<div style="background-position-inline: 10%; background-position-block: 20%"></div>"#)
@@ -292,4 +308,23 @@ fn background_size_logical_maps_inline_and_block_sideways_lr() {
         BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(15.0))
     );
     assert_eq!(y, BackgroundSizeComponent::Length(fastrender::style::values::Length::px(40.0)));
+}
+
+#[test]
+fn background_size_logical_maps_inline_and_block_sideways_rl() {
+    // In sideways-rl, inline maps to the physical y-axis and block maps to the physical x-axis.
+    let dom = dom::parse_html(
+        r#"<div style="writing-mode: sideways-rl; background-size-inline: 25px; background-size-block: 18%"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = all_divs(&styled)[0];
+    let (x, y) = bg_size(node);
+    assert_eq!(
+        x,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(18.0))
+    );
+    assert_eq!(y, BackgroundSizeComponent::Length(fastrender::style::values::Length::px(25.0)));
 }
