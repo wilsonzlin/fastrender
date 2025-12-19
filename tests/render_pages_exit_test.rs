@@ -1,6 +1,7 @@
 use std::fs;
 use std::process::Command;
 
+use fastrender::resource::url_to_filename;
 use tempfile::TempDir;
 
 #[test]
@@ -129,4 +130,30 @@ fn render_pages_filters_multiple_pages() {
     assert!(status.success(), "expected render_pages to succeed for matching filters");
     assert!(temp.path().join("fetches/renders/foo.png").is_file());
     assert!(temp.path().join("fetches/renders/bar.png").is_file());
+}
+
+#[test]
+fn render_pages_accepts_full_url_with_query() {
+    let temp = TempDir::new().expect("tempdir");
+    let html_dir = temp.path().join("fetches/html");
+    fs::create_dir_all(&html_dir).expect("create html dir");
+
+    let url = "https://Example.com/foo?Bar=Baz";
+    let stem = url_to_filename(url);
+    fs::write(html_dir.join(format!("{}.html", stem)), "<!doctype html><title>Foo</title>")
+        .expect("write html");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
+        .current_dir(temp.path())
+        .args(["--pages", url])
+        .status()
+        .expect("run render_pages");
+
+    assert!(status.success(), "expected render_pages to succeed for full URL filter");
+    assert!(
+        temp.path()
+            .join("fetches/renders")
+            .join(format!("{}.png", stem))
+            .is_file()
+    );
 }
