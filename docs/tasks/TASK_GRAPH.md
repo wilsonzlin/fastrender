@@ -281,7 +281,7 @@ docs/tasks/
 ├── TASK_TEMPLATE.md (template for creating tasks)
 ├── wave-1/
 │   ├── W1.R01-css-visual-formatting.md
-│   ├── W1.T01-notes.md
+│   ├── notes/W1.T01-notes.md
 │   └── ...
 ├── wave-2/
 │   ├── W2.T01-boxnode-type.md
