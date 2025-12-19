@@ -84,6 +84,12 @@ fn text_combine_upright_accepts_digits_range() {
 }
 
 #[test]
+fn text_combine_upright_digits_defaults_to_two() {
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(2));
+}
+
+#[test]
 fn text_combine_upright_keywords_are_case_insensitive() {
     let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: DIGITS 3; }"#);
     assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(3));
