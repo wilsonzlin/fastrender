@@ -39,7 +39,7 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     }
 
     Url::parse(&base_candidate)
-        .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+        .or_else(|_| Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
         .ok()?
         .join(href.as_ref())
         .ok()
