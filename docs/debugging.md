@@ -2,6 +2,8 @@
 
 When a render comes out blank/black or has missing content, enable these environment flags to narrow down where pixels disappear. All flags are read at runtime (no rebuild needed).
 
+`render_pages` writes per-page logs to `fetches/renders/<page>.log` and a summary to `fetches/renders/_summary.log`; inspect these alongside the flags below.
+
 ## Display-list dumps (progressively noisier)
 
 - `FASTR_DUMP_STACK=1` – dump the stacking context tree
