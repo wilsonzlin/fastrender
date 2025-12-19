@@ -126,3 +126,27 @@ fn logical_margins_map_in_sideways_lr_writing_mode() {
     assert_eq!(style.margin_top, Some(Length::px(12.0)));
     assert_eq!(style.margin_right, Some(Length::px(4.0)));
 }
+
+#[test]
+fn border_inline_color_maps_in_sideways_lr_writing_mode() {
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::SidewaysLr;
+    apply_declaration(
+        &mut style,
+        &decl(
+            "border-inline-color",
+            PropertyValue::Multiple(vec![
+                PropertyValue::Color(fastrender::style::color::Color::Rgba(fastrender::style::color::Rgba::RED)),
+                PropertyValue::Color(fastrender::style::color::Color::Rgba(fastrender::style::color::Rgba::GREEN)),
+            ]),
+        ),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+
+    // Sideways-lr: inline axis is vertical -> start maps to top, end maps to bottom.
+    assert_eq!(style.border_top_color, fastrender::style::color::Rgba::RED);
+    assert_eq!(style.border_bottom_color, fastrender::style::color::Rgba::GREEN);
+}
