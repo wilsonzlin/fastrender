@@ -2513,7 +2513,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                     .background_positions
                     .get(source_idx)
                     .copied()
-                    .unwrap_or(BackgroundLayer::default().position);
+                    .unwrap_or_else(|| BackgroundLayer::default().position);
                 let x_comp = xs.get(idx).copied().unwrap_or(*xs.last().unwrap());
                 let BackgroundPosition::Position { y, .. } = source_pos;
                 positions.push(BackgroundPosition::Position { x: x_comp, y });
@@ -2543,7 +2543,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                     .background_positions
                     .get(source_idx)
                     .copied()
-                    .unwrap_or(BackgroundLayer::default().position);
+                    .unwrap_or_else(|| BackgroundLayer::default().position);
                 let y_comp = ys.get(idx).copied().unwrap_or(*ys.last().unwrap());
                 let BackgroundPosition::Position { x, .. } = source_pos;
                 positions.push(BackgroundPosition::Position { x, y: y_comp });
