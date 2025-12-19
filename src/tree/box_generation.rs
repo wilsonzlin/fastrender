@@ -370,10 +370,7 @@ fn parse_sizes(attr: &str) -> Option<SizesList> {
         };
 
         let media = match media_part {
-            Some(cond) if !cond.is_empty() => match MediaQuery::parse_list(cond) {
-                Ok(list) => Some(list),
-                Err(_) => None,
-            },
+            Some(cond) if !cond.is_empty() => MediaQuery::parse_list(cond).ok(),
             _ => None,
         };
 

@@ -8,6 +8,7 @@
 use crate::error::Result;
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::fmt::Write;
 use std::path::Path;
 use url::Url;
 
@@ -199,7 +200,7 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
                             let raw = css[content_start..content_end].trim();
                             let unquoted = raw.trim_matches('"').trim_matches('\'').to_string();
                             if let Some(resolved) = resolve_href(base_url, &unquoted) {
-                                out.push_str(&format!("url(\"{}\")", resolved));
+                                let _ = write!(out, "url(\"{}\")", resolved);
                             } else {
                                 out.push_str(&css[i..=content_end]);
                             }
@@ -366,7 +367,7 @@ pub fn inline_imports(
                                         if media.is_empty() || media.eq_ignore_ascii_case("all") {
                                             out.push_str(&inlined);
                                         } else {
-                                            out.push_str(&format!("@media {} {{\n{}\n}}\n", media, inlined));
+                                            let _ = write!(out, "@media {} {{\n{}\n}}\n", media, inlined);
                                         }
                                     }
                                 }
