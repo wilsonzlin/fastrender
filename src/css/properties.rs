@@ -1070,10 +1070,10 @@ fn split_shadow_layers(value_str: &str) -> Option<Vec<Vec<String>>> {
 }
 
 fn parse_shadow_color(token: &str) -> Option<Option<Rgba>> {
-    Color::parse(token).ok().map(|color| match color {
-        Color::CurrentColor => None,
-        other => Some(other.to_rgba(Rgba::BLACK)),
-    })
+    match Color::parse(token).ok()? {
+        Color::CurrentColor => Some(None),
+        other => Some(Some(other.to_rgba(Rgba::BLACK))),
+    }
 }
 
 fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
