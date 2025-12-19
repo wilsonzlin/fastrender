@@ -102,6 +102,7 @@ Cache a set of common pages for debugging and profiling:
 ./target/release/fetch_pages --pages cnn.com,wikipedia.org --jobs 8 --timeout 20
 # You can repeat --pages; the lists are combined and normalized case-insensitively:
 # ./target/release/fetch_pages --pages cnn.com --pages WIKIPEDIA.ORG
+./target/release/fetch_pages --pages cnn.com,wikipedia.org --jobs 8 --timeout 20
 
 # Override the User-Agent sent while fetching (defaults to a Chrome-like UA)
 ./target/release/fetch_pages --user-agent "MyBot/1.0"
