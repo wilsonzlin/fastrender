@@ -802,6 +802,7 @@ fn usage(program: &str) {
     eprintln!("  accept-language: override Accept-Language header (default: en-US,en;q=0.9)");
     eprintln!("  css-limit: maximum number of external stylesheets to fetch (default: unlimited)");
     eprintln!("  timings: set FASTR_RENDER_TIMINGS to print per-stage timings");
+    eprintln!("  output: defaults to <url>.png (derived from the URL); parent directories are created");
 }
 
 fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
