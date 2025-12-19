@@ -4,10 +4,10 @@
 //! Unit tests are in the display_list module itself; these are integration tests.
 
 use fastrender::css::types::{BoxShadow, ColorStop};
+use fastrender::css::types::{Declaration, PropertyValue};
 use fastrender::geometry::{Point, Rect};
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
-use fastrender::css::types::{Declaration, PropertyValue};
 use fastrender::style::properties::{apply_declaration, with_image_set_dpr};
 use fastrender::style::types::{
     BackgroundAttachment, BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BorderStyle, Containment,
@@ -72,8 +72,7 @@ fn fragment_background_emits_fill() {
     let fragment =
         fastrender::FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 10.0), vec![], Arc::new(style));
 
-    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
-        .build_with_stacking_tree(&fragment);
+    let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build_with_stacking_tree(&fragment);
     assert!(!list.is_empty());
     match &list.items()[0] {
         DisplayItem::FillRect(item) => {
@@ -166,11 +165,7 @@ fn background_image_set_chooses_best_density_for_display_list() {
         );
     });
 
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
-        Vec::new(),
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), Vec::new(), Arc::new(style));
 
     let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
         .with_device_pixel_ratio(2.0)
@@ -530,11 +525,7 @@ fn background_repeat_space_centers_single_tile_in_display_list() {
         ..Default::default()
     }]);
 
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 40.0, 40.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 40.0, 40.0), vec![], Arc::new(style));
 
     let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
     let image = list.items().iter().find_map(|item| {
@@ -548,8 +539,14 @@ fn background_repeat_space_centers_single_tile_in_display_list() {
     let image = image.expect("background image should emit an image item");
     assert_eq!(image.dest_rect.width(), 30.0);
     assert_eq!(image.dest_rect.height(), 30.0);
-    assert!((image.dest_rect.x() - 5.0).abs() < 1e-3, "tile should be centered in 40px area");
-    assert!((image.dest_rect.y() - 5.0).abs() < 1e-3, "tile should be centered vertically");
+    assert!(
+        (image.dest_rect.x() - 5.0).abs() < 1e-3,
+        "tile should be centered in 40px area"
+    );
+    assert!(
+        (image.dest_rect.y() - 5.0).abs() < 1e-3,
+        "tile should be centered vertically"
+    );
 }
 
 #[test]
@@ -570,11 +567,7 @@ fn background_attachment_fixed_anchors_to_viewport() {
         ..Default::default()
     }]);
 
-    let fragment = FragmentNode::new_block_styled(
-        Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
-        vec![],
-        Arc::new(style),
-    );
+    let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![], Arc::new(style));
 
     let list = fastrender::paint::display_list_builder::DisplayListBuilder::new()
         .with_viewport_size(100.0, 100.0)

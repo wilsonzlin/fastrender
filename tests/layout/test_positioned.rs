@@ -463,16 +463,16 @@ fn test_absolute_position_left_right_shrink_to_fit() {
     style.position = Position::Absolute;
     style.left = LengthOrAuto::px(100.0);
     style.right = LengthOrAuto::px(100.0);
-    // width is auto - should shrink-to-fit the intrinsic size between insets
+    // width is auto - fills the available space between insets
 
     let cb = create_containing_block(500.0, 300.0);
     let intrinsic = Size::new(50.0, 50.0);
 
     let (pos, size) = layout.compute_absolute_position(&style, &cb, intrinsic).unwrap();
 
-    // Width shrink-to-fits to the intrinsic 50px
+    // Width fills the available space: 500 - 100 - 100 = 300
     assert_eq!(pos.x, 100.0);
-    assert_eq!(size.width, 50.0);
+    assert_eq!(size.width, 300.0);
 }
 
 #[test]

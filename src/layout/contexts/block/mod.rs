@@ -615,6 +615,7 @@ impl BlockFormattingContext {
                 static_position,
             } in positioned_children
             {
+                let original_style = pos_child.style.clone();
                 if trace_positioned_ids().contains(&pos_child.id) {
                     eprintln!(
                         "[block-positioned-layout] parent_id={} child_id={} padding_rect=({:.1},{:.1},{:.1},{:.1})",
@@ -694,7 +695,22 @@ impl BlockFormattingContext {
                 input.preferred_block_size = preferred_block;
 
                 let result = abs.layout_absolute(&input, &cb)?;
+                let needs_relayout = (result.size.width - child_fragment.bounds.width()).abs() > 0.01
+                    || (result.size.height - child_fragment.bounds.height()).abs() > 0.01;
+                if needs_relayout {
+                    let relayout_constraints = LayoutConstraints::new(
+                        AvailableSpace::Definite(result.size.width),
+                        AvailableSpace::Definite(result.size.height),
+                    );
+                    let mut relayout_child = layout_child.clone();
+                    let mut relayout_style = (*relayout_child.style).clone();
+                    relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
+                    relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
+                    relayout_child.style = Arc::new(relayout_style);
+                    child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+                }
                 child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragment.style = Some(original_style);
                 if trace_positioned_ids().contains(&pos_child.id) {
                     let (text_count, total) = count_text_fragments(&child_fragment);
                     let mut snippets = Vec::new();
@@ -2313,7 +2329,22 @@ impl FormattingContext for BlockFormattingContext {
                 input.preferred_block_size = preferred_block;
 
                 let result = abs.layout_absolute(&input, &cb)?;
+                let needs_relayout = (result.size.width - child_fragment.bounds.width()).abs() > 0.01
+                    || (result.size.height - child_fragment.bounds.height()).abs() > 0.01;
+                if needs_relayout {
+                    let relayout_constraints = LayoutConstraints::new(
+                        AvailableSpace::Definite(result.size.width),
+                        AvailableSpace::Definite(result.size.height),
+                    );
+                    let mut relayout_child = layout_child.clone();
+                    let mut relayout_style = (*relayout_child.style).clone();
+                    relayout_style.width = Some(crate::style::values::Length::px(result.size.width));
+                    relayout_style.height = Some(crate::style::values::Length::px(result.size.height));
+                    relayout_child.style = Arc::new(relayout_style);
+                    child_fragment = fc.layout(&relayout_child, &relayout_constraints)?;
+                }
                 child_fragment.bounds = Rect::new(result.position, result.size);
+                child_fragment.style = Some(child.style.clone());
                 if trace_positioned_ids().contains(&child.id) {
                     let (text_count, total) = count_text_fragments(&child_fragment);
                     eprintln!(

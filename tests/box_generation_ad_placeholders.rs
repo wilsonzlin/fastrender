@@ -32,7 +32,7 @@ fn empty_ad_placeholders_are_dropped() {
 
 #[test]
 fn non_empty_ad_placeholders_are_kept() {
-    let dom: DomNode = dom::parse_html(r#"<div class=\"ad-height-hold\"><span>ad content</span></div>"#).unwrap();
+    let dom: DomNode = dom::parse_html(r#"<div class="ad-height-hold"><span>ad content</span></div>"#).unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 

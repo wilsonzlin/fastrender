@@ -93,43 +93,52 @@ fn should_update_golden() -> bool {
 /// Returns true if test passes (either rendering succeeds and matches golden,
 /// or golden was updated).
 fn test_fixture(name: &str) -> Result<(), String> {
-    let html = load_fixture(name);
-    let mut renderer = FastRender::new().map_err(|e| format!("Failed to create renderer: {:?}", e))?;
+    let name_owned = name.to_string();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let name = name_owned;
+            let html = load_fixture(&name);
+            let mut renderer = FastRender::new().map_err(|e| format!("Failed to create renderer: {:?}", e))?;
 
-    // Render the fixture
-    let rendered = renderer
-        .render_to_png(&html, FIXTURE_WIDTH, FIXTURE_HEIGHT)
-        .map_err(|e| format!("Render failed for {}: {:?}", name, e))?;
+            // Render the fixture
+            let rendered = renderer
+                .render_to_png(&html, FIXTURE_WIDTH, FIXTURE_HEIGHT)
+                .map_err(|e| format!("Render failed for {}: {:?}", name, e))?;
 
-    // Handle golden image comparison/update
-    if should_update_golden() {
-        save_golden(name, &rendered);
-        eprintln!("Updated golden image for: {}", name);
-        return Ok(());
-    }
+            // Handle golden image comparison/update
+            if should_update_golden() {
+                save_golden(&name, &rendered);
+                eprintln!("Updated golden image for: {}", name);
+                return Ok(());
+            }
 
-    // If golden exists, compare
-    if let Some(_golden) = load_golden(name) {
-        // For now, just check that rendered output is valid PNG
-        // Full pixel comparison would require image comparison library
-        if !rendered.is_empty() && rendered.starts_with(&[0x89, b'P', b'N', b'G']) {
-            // Valid PNG header
-            Ok(())
-        } else {
-            Err(format!("Invalid PNG output for {}", name))
-        }
-    } else {
-        // No golden exists - just verify rendering succeeds
-        if !rendered.is_empty() && rendered.starts_with(&[0x89, b'P', b'N', b'G']) {
-            eprintln!(
-                "Warning: No golden image for {}. Run with UPDATE_GOLDEN=1 to create.",
-                name
-            );
-            Ok(())
-        } else {
-            Err(format!("Invalid PNG output for {}", name))
-        }
-    }
+            // If golden exists, compare
+            if let Some(_golden) = load_golden(&name) {
+                // For now, just check that rendered output is valid PNG
+                // Full pixel comparison would require image comparison library
+                if !rendered.is_empty() && rendered.starts_with(&[0x89, b'P', b'N', b'G']) {
+                    // Valid PNG header
+                    Ok(())
+                } else {
+                    Err(format!("Invalid PNG output for {}", name))
+                }
+            } else {
+                // No golden exists - just verify rendering succeeds
+                if !rendered.is_empty() && rendered.starts_with(&[0x89, b'P', b'N', b'G']) {
+                    eprintln!(
+                        "Warning: No golden image for {}. Run with UPDATE_GOLDEN=1 to create.",
+                        name
+                    );
+                    Ok(())
+                } else {
+                    Err(format!("Invalid PNG output for {}", name))
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap()
 }
 
 // =============================================================================

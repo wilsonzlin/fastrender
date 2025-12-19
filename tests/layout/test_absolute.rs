@@ -113,9 +113,9 @@ fn test_absolute_left_and_right_stretch_width() {
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
 
-    // Width = shrink-to-fit 100px within the 300px slot
+    // Width fills the available space between left/right insets: 400 - 50 - 50 = 300
     assert_eq!(result.position.x, 50.0);
-    assert_eq!(result.size.width, 100.0);
+    assert_eq!(result.size.width, 300.0);
 }
 
 #[test]
@@ -480,8 +480,8 @@ fn test_negative_computed_width_clamped() {
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
 
-    // Width should shrink to the intrinsic 50px rather than clamping to 0
-    assert_eq!(result.size.width, 50.0);
+    // Available space is negative; width clamps to zero per constraint equation.
+    assert_eq!(result.size.width, 0.0);
 }
 
 #[test]

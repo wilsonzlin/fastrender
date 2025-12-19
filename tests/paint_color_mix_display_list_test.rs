@@ -53,7 +53,7 @@ fn color_mix_uses_current_color() {
     style.color = Color::parse("red").unwrap().to_rgba(Rgba::BLACK);
     style.background_color = Color::parse("color-mix(in srgb, currentColor 50%, blue 50%)")
         .unwrap()
-        .to_rgba(Rgba::BLACK);
+        .to_rgba(style.color);
 
     let fragment = FragmentNode::new_block_styled(
         Rect::from_xywh(0.0, 0.0, 1.0, 1.0),

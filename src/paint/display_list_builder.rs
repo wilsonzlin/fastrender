@@ -196,7 +196,7 @@ impl DisplayListBuilder {
         if self.viewport.is_none() {
             self.viewport = Some((stacking.bounds.width(), stacking.bounds.height()));
         }
-        self.build_stacking_context(stacking, Point::ZERO);
+        self.build_stacking_context(stacking, Point::ZERO, true);
         self.list
     }
 
@@ -206,7 +206,7 @@ impl DisplayListBuilder {
             self.viewport = Some((root.bounds.width(), root.bounds.height()));
         }
         let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
-        self.build_stacking_context(&stacking, Point::ZERO);
+        self.build_stacking_context(&stacking, Point::ZERO, true);
         self.list
     }
 
@@ -346,7 +346,7 @@ impl DisplayListBuilder {
         }
     }
 
-    fn build_stacking_context(&mut self, context: &StackingContext, offset: Point) {
+    fn build_stacking_context(&mut self, context: &StackingContext, offset: Point, is_root: bool) {
         let mut children: Vec<&StackingContext> = context.children.iter().collect();
         children.sort_by(|a, b| a.z_index.cmp(&b.z_index).then_with(|| a.tree_order.cmp(&b.tree_order)));
 
@@ -486,6 +486,38 @@ impl DisplayListBuilder {
             })
         });
 
+        let has_effects = is_isolated
+            || transform.is_some()
+            || mix_blend_mode != BlendMode::Normal
+            || !filters.is_empty()
+            || !backdrop_filters.is_empty()
+            || clip_path.is_some()
+            || clip_rect.is_some()
+            || overflow_clip.is_some()
+            || paint_contained
+            || !radii.is_zero();
+
+        if is_root && !has_effects {
+            for child in neg {
+                self.build_stacking_context(child, descendant_offset, false);
+            }
+
+            self.emit_fragment_list_shallow(&context.fragments, offset);
+            self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
+            self.emit_fragment_list(&context.layer4_floats, descendant_offset);
+            self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
+            self.emit_fragment_list(&context.layer6_positioned, descendant_offset);
+
+            for child in zero {
+                self.build_stacking_context(child, descendant_offset, false);
+            }
+
+            for child in pos {
+                self.build_stacking_context(child, descendant_offset, false);
+            }
+            return;
+        }
+
         let mut pushed_clips = 0;
         if let Some(path) = clip_path {
             self.list.push(DisplayItem::PushClip(ClipItem {
@@ -542,7 +574,7 @@ impl DisplayListBuilder {
         }));
 
         for child in neg {
-            self.build_stacking_context(child, descendant_offset);
+            self.build_stacking_context(child, descendant_offset, false);
         }
 
         self.emit_fragment_list_shallow(&context.fragments, offset);
@@ -552,11 +584,11 @@ impl DisplayListBuilder {
         self.emit_fragment_list(&context.layer6_positioned, descendant_offset);
 
         for child in zero {
-            self.build_stacking_context(child, descendant_offset);
+            self.build_stacking_context(child, descendant_offset, false);
         }
 
         for child in pos {
-            self.build_stacking_context(child, descendant_offset);
+            self.build_stacking_context(child, descendant_offset, false);
         }
 
         self.list.push(DisplayItem::PopStackingContext);
@@ -1307,12 +1339,8 @@ impl DisplayListBuilder {
         percentage_base: f32,
         viewport: Option<(f32, f32)>,
     ) -> f32 {
-        let needs_viewport = len.unit.is_viewport_relative()
-            || len
-                .calc
-                .as_ref()
-                .map(|c| c.has_viewport_relative())
-                .unwrap_or(false);
+        let needs_viewport =
+            len.unit.is_viewport_relative() || len.calc.as_ref().map(|c| c.has_viewport_relative()).unwrap_or(false);
         let (vw, vh) = match viewport {
             Some(vp) => vp,
             None if needs_viewport => (f32::NAN, f32::NAN),
@@ -1428,7 +1456,8 @@ impl DisplayListBuilder {
             let next = match component {
                 crate::css::types::Transform::Translate(x, y) => {
                     let tx = Self::resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
-                    let ty = Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+                    let ty =
+                        Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                     Transform2D::translate(tx, ty)
                 }
                 crate::css::types::Transform::TranslateX(x) => {
@@ -1436,13 +1465,15 @@ impl DisplayListBuilder {
                     Transform2D::translate(tx, 0.0)
                 }
                 crate::css::types::Transform::TranslateY(y) => {
-                    let ty = Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+                    let ty =
+                        Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                     Transform2D::translate(0.0, ty)
                 }
                 crate::css::types::Transform::TranslateZ(_) => Transform2D::identity(),
                 crate::css::types::Transform::Translate3d(x, y, _) => {
                     let tx = Self::resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
-                    let ty = Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+                    let ty =
+                        Self::resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
                     Transform2D::translate(tx, ty)
                 }
                 crate::css::types::Transform::Scale(sx, sy) => Transform2D::scale(*sx, *sy),
@@ -1522,8 +1553,18 @@ impl DisplayListBuilder {
             ts = ts.multiply(&next);
         }
 
-        let origin_x = Self::resolve_transform_length(&style.transform_origin.x, style.font_size, style.root_font_size, percentage_width);
-        let origin_y = Self::resolve_transform_length(&style.transform_origin.y, style.font_size, style.root_font_size, percentage_height);
+        let origin_x = Self::resolve_transform_length(
+            &style.transform_origin.x,
+            style.font_size,
+            style.root_font_size,
+            percentage_width,
+        );
+        let origin_y = Self::resolve_transform_length(
+            &style.transform_origin.y,
+            style.font_size,
+            style.root_font_size,
+            percentage_height,
+        );
         let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
         let translate_to_origin = Transform2D::translate(origin.x, origin.y);
@@ -1532,13 +1573,13 @@ impl DisplayListBuilder {
     }
 
     fn resolve_transform_length(len: &Length, font_size: f32, root_font_size: f32, percentage_base: f32) -> f32 {
-        let needs_viewport = len.unit.is_viewport_relative()
-            || len
-                .calc
-                .as_ref()
-                .map(|c| c.has_viewport_relative())
-                .unwrap_or(false);
-        let (vw, vh) = if needs_viewport { (f32::NAN, f32::NAN) } else { (0.0, 0.0) };
+        let needs_viewport =
+            len.unit.is_viewport_relative() || len.calc.as_ref().map(|c| c.has_viewport_relative()).unwrap_or(false);
+        let (vw, vh) = if needs_viewport {
+            (f32::NAN, f32::NAN)
+        } else {
+            (0.0, 0.0)
+        };
 
         len.resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
             .unwrap_or(len.value)
@@ -3618,8 +3659,8 @@ mod tests {
     use image::codecs::png::PngEncoder;
     use image::ColorType;
     use image::ImageEncoder;
-    use std::sync::Arc;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn create_block_fragment(x: f32, y: f32, width: f32, height: f32) -> FragmentNode {
         FragmentNode::new_block(Rect::from_xywh(x, y, width, height), vec![])
@@ -4632,8 +4673,7 @@ mod tests {
             ..BackgroundLayer::default()
         }];
 
-        let fragment =
-            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
+        let fragment = FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), vec![], Arc::new(style));
 
         let list = DisplayListBuilder::new().build(&fragment);
         let image = list
@@ -4896,7 +4936,9 @@ mod tests {
         let calc = CalcLength::single(LengthUnit::Percent, 50.0)
             .add_scaled(&CalcLength::single(LengthUnit::Em, 2.0), 1.0)
             .expect("calc terms");
-        style.transform.push(Transform::Translate(Length::calc(calc), Length::percent(0.0)));
+        style
+            .transform
+            .push(Transform::Translate(Length::calc(calc), Length::percent(0.0)));
 
         let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
         let transform = DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
@@ -4920,13 +4962,21 @@ mod tests {
         };
 
         // With a 200px viewport, 10vw = 20px offset along the x-axis.
-        let (x, y) = DisplayListBuilder::resolve_background_offset(pos, 100.0, 100.0, 0.0, 0.0, 16.0, 16.0, Some((200.0, 100.0)));
+        let (x, y) = DisplayListBuilder::resolve_background_offset(
+            pos,
+            100.0,
+            100.0,
+            0.0,
+            0.0,
+            16.0,
+            16.0,
+            Some((200.0, 100.0)),
+        );
         assert!((x - 20.0).abs() < 0.01);
         assert!((y - 0.0).abs() < 0.01);
 
         // Without a viewport, viewport-relative calc stays unresolved and falls back to zero.
-        let (x, y) =
-            DisplayListBuilder::resolve_background_offset(pos, 100.0, 100.0, 0.0, 0.0, 16.0, 16.0, None);
+        let (x, y) = DisplayListBuilder::resolve_background_offset(pos, 100.0, 100.0, 0.0, 0.0, 16.0, 16.0, None);
         assert!((x - 0.0).abs() < 0.01);
         assert!((y - 0.0).abs() < 0.01);
     }

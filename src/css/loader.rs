@@ -535,7 +535,10 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
                     let has_screen = media_lower.contains("screen") || media_lower.contains("all");
                     let has_print = media_lower.contains("print");
                     if debug {
-                        eprintln!("[css] media attr: {} (print={}, screen={})", media, has_print, has_screen);
+                        eprintln!(
+                            "[css] media attr: {} (print={}, screen={})",
+                            media, has_print, has_screen
+                        );
                     }
                     if has_print && !has_screen {
                         if let Some(href) = extract_attr_value(link_tag, "href") {

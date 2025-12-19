@@ -1269,13 +1269,25 @@ fn generate_boxes_for_styled(styled: &StyledNode, counters: &mut CounterManager,
                 if overlay_hidden {
                     // Skip the overlay and the subsequent focus-trap container when the overlay is hidden (menu closed).
                     idx += 1;
-                    if idx < styled.children.len() {
-                        if let Some(class_attr) = styled.children[idx].node.get_attribute("class") {
-                            if class_attr.contains("FocusTrapContainer-") {
+                    while idx < styled.children.len() {
+                        let next = &styled.children[idx];
+                        // Skip over whitespace/text nodes between the overlay and drawer.
+                        if let crate::dom::DomNodeType::Text { content } = &next.node.node_type {
+                            if content.trim().is_empty() {
                                 idx += 1;
                                 continue;
                             }
                         }
+
+                        if let Some(class_attr) = next.node.get_attribute("class") {
+                            if class_attr.contains("FocusTrapContainer-") {
+                                for grandchild in &next.children {
+                                    children.extend(generate_boxes_for_styled(grandchild, counters, false));
+                                }
+                                idx += 1;
+                            }
+                        }
+                        break;
                     }
                     continue;
                 }

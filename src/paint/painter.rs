@@ -1010,7 +1010,7 @@ impl Painter {
         items: &mut Vec<DisplayCommand>,
     ) {
         let debug_fragments = dump_fragments_enabled();
-        let is_root_fragment = parent_style.is_none();
+        let is_root_fragment = is_root_context && parent_style.is_none();
         if let Some(style) = fragment.style.as_deref() {
             if !matches!(style.visibility, crate::style::computed::Visibility::Visible) {
                 return;
@@ -1423,9 +1423,8 @@ impl Painter {
         let has_background = Self::has_paintable_background(&style);
         if has_background {
             let mut background_rect = abs_bounds;
-            if is_root_fragment {
-                let viewport_rect = Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height);
-                background_rect = background_rect.union(viewport_rect);
+            if is_root_fragment && (abs_bounds.width() <= 0.0 || abs_bounds.height() <= 0.0) {
+                background_rect = Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height);
             }
             items.push(DisplayCommand::Background {
                 rect: background_rect,
@@ -1444,24 +1443,27 @@ impl Painter {
             });
         }
 
-        let outline_style = style.outline_style.to_border_style();
-        if outline_style != CssBorderStyle::None
-            && outline_style != CssBorderStyle::Hidden
-            && style.outline_width.to_px() > 0.0
-        {
-            let ow = style.outline_width.to_px();
-            let expand = style.outline_offset.to_px() + ow * 0.5;
-            let outline_rect = Rect::from_xywh(
-                abs_bounds.x() - expand,
-                abs_bounds.y() - expand,
-                abs_bounds.width() + 2.0 * expand,
-                abs_bounds.height() + 2.0 * expand,
-            );
+        if let Some(outline_rect) = Self::outline_bounds(abs_bounds, &style) {
             items.push(DisplayCommand::Outline {
                 rect: outline_rect,
                 style,
             });
         }
+    }
+
+    fn outline_bounds(abs_bounds: Rect, style: &ComputedStyle) -> Option<Rect> {
+        let outline_style = style.outline_style.to_border_style();
+        let width = style.outline_width.to_px();
+        if width <= 0.0 || matches!(outline_style, CssBorderStyle::None | CssBorderStyle::Hidden) {
+            return None;
+        }
+        let expand = style.outline_offset.to_px() + width * 0.5;
+        Some(Rect::from_xywh(
+            abs_bounds.x() - expand,
+            abs_bounds.y() - expand,
+            abs_bounds.width() + 2.0 * expand,
+            abs_bounds.height() + 2.0 * expand,
+        ))
     }
 
     fn has_paintable_background(style: &ComputedStyle) -> bool {
@@ -1479,13 +1481,6 @@ impl Painter {
             if let Some(style) = html.style.clone() {
                 if Self::has_paintable_background(&style) {
                     return Some(style);
-                }
-            }
-            if let Some(body) = html.children.first() {
-                if let Some(style) = body.style.clone() {
-                    if Self::has_paintable_background(&style) {
-                        return Some(style);
-                    }
                 }
             }
         }
@@ -3093,7 +3088,18 @@ impl Painter {
         style: CssBorderStyle,
         color: &Rgba,
     ) {
-        self.paint_border_edge_with_mode(edge, x1, y1, x2, y2, width, style, color, SkiaBlendMode::SourceOver);
+        self.paint_border_edge_with_mode(
+            edge,
+            x1,
+            y1,
+            x2,
+            y2,
+            width,
+            style,
+            color,
+            SkiaBlendMode::SourceOver,
+            true,
+        );
     }
 
     fn paint_border_edge_with_mode(
@@ -3107,6 +3113,7 @@ impl Painter {
         style: CssBorderStyle,
         color: &Rgba,
         blend_mode: SkiaBlendMode,
+        anti_alias: bool,
     ) {
         if width <= 0.0 || matches!(style, CssBorderStyle::None | CssBorderStyle::Hidden) {
             return;
@@ -3115,7 +3122,7 @@ impl Painter {
         let mut paint = Paint::default();
         paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
         paint.blend_mode = blend_mode;
-        paint.anti_alias = true;
+        paint.anti_alias = anti_alias;
 
         let mut stroke = Stroke::default();
         stroke.width = width;
@@ -3214,12 +3221,10 @@ impl Painter {
         if ow <= 0.0 || matches!(outline_style, CssBorderStyle::None | CssBorderStyle::Hidden) {
             return;
         }
-        let offset = style.outline_offset.to_px() * self.scale;
-        let expand = offset + ow * 0.5;
-        let outer_x = self.device_length(x) - expand;
-        let outer_y = self.device_length(y) - expand;
-        let outer_w = self.device_length(width) + 2.0 * expand;
-        let outer_h = self.device_length(height) + 2.0 * expand;
+        let outer_x = self.device_length(x);
+        let outer_y = self.device_length(y);
+        let outer_w = self.device_length(width);
+        let outer_h = self.device_length(height);
         let (color, invert) = style.outline_color.resolve(style.color);
         let blend_mode = if invert {
             SkiaBlendMode::Difference
@@ -3227,49 +3232,58 @@ impl Painter {
             SkiaBlendMode::SourceOver
         };
 
+        let top_center = outer_y + ow * 0.5;
+        let bottom_center = outer_y + outer_h - ow * 0.5;
+        let left_center = outer_x + ow * 0.5;
+        let right_center = outer_x + outer_w - ow * 0.5;
+
         self.paint_border_edge_with_mode(
             BorderEdge::Top,
-            outer_x,
-            outer_y + ow * 0.5,
-            outer_x + outer_w,
-            outer_y + ow * 0.5,
+            left_center,
+            top_center,
+            right_center,
+            top_center,
             ow,
             outline_style,
             &color,
             blend_mode,
+            false,
         );
         self.paint_border_edge_with_mode(
             BorderEdge::Bottom,
-            outer_x,
-            outer_y + outer_h - ow * 0.5,
-            outer_x + outer_w,
-            outer_y + outer_h - ow * 0.5,
+            left_center,
+            bottom_center,
+            right_center,
+            bottom_center,
             ow,
             outline_style,
             &color,
             blend_mode,
+            false,
         );
         self.paint_border_edge_with_mode(
             BorderEdge::Left,
-            outer_x + ow * 0.5,
-            outer_y,
-            outer_x + ow * 0.5,
-            outer_y + outer_h,
+            left_center,
+            top_center,
+            left_center,
+            bottom_center,
             ow,
             outline_style,
             &color,
             blend_mode,
+            false,
         );
         self.paint_border_edge_with_mode(
             BorderEdge::Right,
-            outer_x + outer_w - ow * 0.5,
-            outer_y,
-            outer_x + outer_w - ow * 0.5,
-            outer_y + outer_h,
+            right_center,
+            top_center,
+            right_center,
+            bottom_center,
             ow,
             outline_style,
             &color,
             blend_mode,
+            false,
         );
     }
 
@@ -6473,9 +6487,19 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
     let src = original.pixels();
     let dst = pixmap.pixels_mut();
 
+    let mut base_ratio = (0.0, 0.0, 0.0);
+    for px in src.iter() {
+        let alpha = px.alpha();
+        if alpha > 0 {
+            let a = alpha as f32;
+            base_ratio = (px.red() as f32 / a, px.green() as f32 / a, px.blue() as f32 / a);
+            break;
+        }
+    }
+
     for y in 0..height {
         for x in 0..width {
-            let mut agg = if expand { [0u8; 4] } else { [255u8; 4] };
+            let mut agg_alpha = if expand { 0u8 } else { 255u8 };
             for dy in -radius..=radius {
                 for dx in -radius..=radius {
                     let ny = (y + dy).clamp(0, height - 1);
@@ -6483,21 +6507,22 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
                     let idx = (ny as usize) * (width as usize) + nx as usize;
                     let px = src[idx];
                     if expand {
-                        agg[0] = agg[0].max(px.red());
-                        agg[1] = agg[1].max(px.green());
-                        agg[2] = agg[2].max(px.blue());
-                        agg[3] = agg[3].max(px.alpha());
+                        agg_alpha = agg_alpha.max(px.alpha());
                     } else {
-                        agg[0] = agg[0].min(px.red());
-                        agg[1] = agg[1].min(px.green());
-                        agg[2] = agg[2].min(px.blue());
-                        agg[3] = agg[3].min(px.alpha());
+                        agg_alpha = agg_alpha.min(px.alpha());
                     }
                 }
             }
             let idx = (y as usize) * (width as usize) + x as usize;
-            dst[idx] = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
-                .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+            if agg_alpha == 0 {
+                dst[idx] = PremultipliedColorU8::TRANSPARENT;
+                continue;
+            }
+
+            let r = (base_ratio.0 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+            let g = (base_ratio.1 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+            let b = (base_ratio.2 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
+            dst[idx] = PremultipliedColorU8::from_rgba(r, g, b, agg_alpha).unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
     }
 }
