@@ -110,7 +110,7 @@ fn supports_declaration_accepts_text_combine_compact_digits() {
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    let div = first_div(&styled).expect("div");
+    let div = find_first(&styled, "div").expect("div");
     assert_eq!(display(div), "inline");
 }
 
@@ -131,6 +131,6 @@ fn supports_declaration_rejects_text_combine_compact_invalid_digits() {
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    let div = first_div(&styled).expect("div");
+    let div = find_first(&styled, "div").expect("div");
     assert_eq!(display(div), "block");
 }
