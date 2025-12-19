@@ -190,7 +190,7 @@ impl StyleSheet {
     pub fn collect_style_rules_with_cache(
         &self,
         media_ctx: &MediaContext,
-        mut cache: Option<&mut MediaQueryCache>,
+        cache: Option<&mut MediaQueryCache>,
     ) -> Vec<CollectedRule<'_>> {
         let mut result = Vec::new();
         let mut registry = LayerRegistry::new();
@@ -207,7 +207,7 @@ impl StyleSheet {
     pub fn collect_font_face_rules_with_cache(
         &self,
         media_ctx: &MediaContext,
-        mut cache: Option<&mut MediaQueryCache>,
+        cache: Option<&mut MediaQueryCache>,
     ) -> Vec<FontFaceRule> {
         let mut result = Vec::new();
         collect_font_faces_recursive(&self.rules, media_ctx, cache, &mut result);
@@ -233,7 +233,7 @@ impl StyleSheet {
         loader: &L,
         base_url: Option<&str>,
         media_ctx: &MediaContext,
-        mut cache: Option<&mut MediaQueryCache>,
+        cache: Option<&mut MediaQueryCache>,
     ) -> Self {
         let mut resolved = Vec::new();
         let mut seen = std::collections::HashSet::new();
