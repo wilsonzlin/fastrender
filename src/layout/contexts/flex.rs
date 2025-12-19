@@ -260,7 +260,7 @@ impl FormattingContext for FlexFormattingContext {
         for (idx, child) in box_node.children.iter().enumerate() {
             match child.style.position {
                 crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
-                    positioned_children.push(child.clone())
+                    positioned_children.push(child.clone());
                 }
                 _ => in_flow_children.push((idx, child)),
             }
@@ -1208,7 +1208,7 @@ impl FormattingContext for FlexFormattingContext {
                     if let Ok(mut map) = measured_fragments.lock() {
                         let entry = map.entry(cache_key).or_default();
                         if entry.len() >= MAX_MEASURE_CACHE_PER_NODE {
-                            if let Some(first_key) = entry.keys().next().cloned() {
+                            if let Some(first_key) = entry.keys().next().copied() {
                                 entry.remove(&first_key);
                             }
                         }
@@ -1278,9 +1278,9 @@ impl FormattingContext for FlexFormattingContext {
             // If Taffy failed to shrink items enough (common with zero-availability fallbacks), redistribute
             // the deficit along the main axis using the flex-shrink weights.
             let available_main = if main_is_horizontal {
-                constraints.width().unwrap_or(fragment.bounds.width())
+                constraints.width().unwrap_or_else(|| fragment.bounds.width())
             } else {
-                constraints.height().unwrap_or(fragment.bounds.height())
+                constraints.height().unwrap_or_else(|| fragment.bounds.height())
             };
             if available_main.is_finite() {
                 let mut total_main = 0.0;
@@ -1584,7 +1584,7 @@ impl FormattingContext for FlexFormattingContext {
                 if let Ok(mut cache) = self.layout_fragments.lock() {
                     let entry = cache.entry(cache_key).or_default();
                     if entry.len() >= MAX_LAYOUT_CACHE_PER_NODE {
-                        if let Some(first_key) = entry.keys().next().cloned() {
+                        if let Some(first_key) = entry.keys().next().copied() {
                             entry.remove(&first_key);
                         }
                     }
@@ -1781,9 +1781,9 @@ impl FormattingContext for FlexFormattingContext {
 }
 
 fn height_depends_on_available_height(style: &ComputedStyle) -> bool {
-    let height_depends = style.height.as_ref().map_or(false, Length::has_percentage);
-    let min_depends = style.min_height.as_ref().map_or(false, Length::has_percentage);
-    let max_depends = style.max_height.as_ref().map_or(false, Length::has_percentage);
+    let height_depends = style.height.as_ref().is_some_and(Length::has_percentage);
+    let min_depends = style.min_height.as_ref().is_some_and(Length::has_percentage);
+    let max_depends = style.max_height.as_ref().is_some_and(Length::has_percentage);
     let flex_basis_depends = matches!(style.flex_basis, FlexBasis::Length(len) if len.has_percentage());
 
     height_depends || min_depends || max_depends || flex_basis_depends
@@ -1966,7 +1966,7 @@ fn flex_style_fingerprint(style: &ComputedStyle) -> u64 {
 fn flex_cache_key(box_node: &BoxNode) -> u64 {
     let mut h = DefaultHasher::new();
     box_node.styled_node_id.hash(&mut h);
-    let fingerprint = flex_style_fingerprint(&*box_node.style);
+    let fingerprint = flex_style_fingerprint(&box_node.style);
     fingerprint.hash(&mut h);
     // Incorporate a simplified key for common carousel templates to merge otherwise identical
     // repeated items. Using debug_info selector avoids deep tree hashing while keeping keys
@@ -2052,7 +2052,7 @@ fn find_layout_cache_fragment(
     // for very large targets (wide carousels) to merge near-identical probes that differ by
     // a handful of pixels while keeping smaller layouts precise.
     let (eps_w, eps_h) = cache_tolerances(target_size);
-    for (_key, (size, frag)) in cache {
+    for (size, frag) in cache.values() {
         if !size.width.is_finite() || !size.height.is_finite() {
             continue;
         }
