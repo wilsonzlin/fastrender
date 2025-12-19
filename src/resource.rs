@@ -148,12 +148,16 @@ pub const DEFAULT_USER_AGENT: &str =
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 
 /// Strip a leading "User-Agent:" prefix so logs don't double-prefix when callers
-/// pass a full header value. Also trims surrounding whitespace after the prefix.
+/// pass a full header value. Case-insensitive and trims surrounding whitespace after the prefix.
 pub fn normalize_user_agent_for_log(ua: &str) -> &str {
-    ua.strip_prefix("User-Agent:")
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(ua)
+    const PREFIX: &str = "user-agent:";
+    if ua.len() >= PREFIX.len() && ua[..PREFIX.len()].eq_ignore_ascii_case(PREFIX) {
+        let trimmed = ua[PREFIX.len()..].trim();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    ua
 }
 
 // ============================================================================
@@ -689,6 +693,8 @@ mod tests {
     fn normalize_user_agent_for_log_strips_prefix_and_whitespace() {
         assert_eq!(normalize_user_agent_for_log("User-Agent: Foo/1.0"), "Foo/1.0");
         assert_eq!(normalize_user_agent_for_log("User-Agent:   Foo/1.0   "), "Foo/1.0");
+        assert_eq!(normalize_user_agent_for_log("user-agent: Foo/1.0"), "Foo/1.0");
+        assert_eq!(normalize_user_agent_for_log("USER-AGENT:Foo/1.0"), "Foo/1.0");
         assert_eq!(normalize_user_agent_for_log("Mozilla/5.0"), "Mozilla/5.0");
         assert_eq!(normalize_user_agent_for_log(""), "");
     }
