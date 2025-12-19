@@ -105,6 +105,9 @@ Cache a set of common pages for debugging and profiling:
 # ./target/release/fetch_pages --pages cnn.com --pages WIKIPEDIA.ORG
 ./target/release/fetch_pages --pages cnn.com,wikipedia.org --jobs 8 --timeout 20
 
+# Mix stems and full URLs (normalization handles scheme/www/trailing punctuation)
+./target/release/fetch_pages --pages cnn.com --pages https://WIKIPEDIA.ORG./
+
 # Override the User-Agent sent while fetching (defaults to a Chrome-like UA)
 ./target/release/fetch_pages --user-agent "MyBot/1.0"
 # Override Accept-Language for fetches
