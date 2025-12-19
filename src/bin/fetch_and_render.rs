@@ -880,8 +880,10 @@ fn parse_viewport(val: &str) -> Option<(u32, u32)> {
 fn render_once(
     url: &str,
     output: &str,
-    dimensions: (u32, u32),
-    scroll: (u32, u32),
+    width: u32,
+    height: u32,
+    scroll_x: u32,
+    scroll_y: u32,
     dpr: f32,
     timeout_secs: Option<u64>,
     user_agent: &str,

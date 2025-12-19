@@ -1004,7 +1004,7 @@ fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
     let layers = split_shadow_layers(value_str)?;
     let mut shadows = Vec::new();
     for layer in layers {
-        let mut color: Option<Option<Rgba>> = None;
+        let mut color: Option<Rgba> = None;
         let mut lengths = Vec::new();
         for token in layer {
             if color.is_none() {
@@ -1035,7 +1035,7 @@ fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
             offset_x: lengths[0],
             offset_y: lengths[1],
             blur_radius: blur,
-            color: color.flatten(),
+            color,
         });
     }
 
@@ -1069,10 +1069,10 @@ fn split_shadow_layers(value_str: &str) -> Option<Vec<Vec<String>>> {
     Some(layers)
 }
 
-fn parse_shadow_color(token: &str) -> Option<Option<Rgba>> {
+fn parse_shadow_color(token: &str) -> Option<Rgba> {
     match Color::parse(token).ok()? {
-        Color::CurrentColor => Some(None),
-        other => Some(Some(other.to_rgba(Rgba::BLACK))),
+        Color::CurrentColor => None,
+        other => Some(other.to_rgba(Rgba::BLACK)),
     }
 }
 
