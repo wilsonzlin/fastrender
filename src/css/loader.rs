@@ -9,6 +9,7 @@ use crate::error::Result;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::Write;
+use std::hash::BuildHasher;
 use std::path::Path;
 use url::Url;
 
@@ -272,11 +273,11 @@ fn parse_import_target(rule: &str) -> Option<(String, String)> {
 /// All fetched stylesheets have their `url(...)` references rewritten against the
 /// stylesheet URL before inlining, so relative asset references continue to work
 /// once the CSS is embedded in the document.
-pub fn inline_imports(
+pub fn inline_imports<S: BuildHasher>(
     css: &str,
     base_url: &str,
     fetch: &dyn Fn(&str) -> Result<String>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<String, S>,
 ) -> String {
     #[derive(PartialEq)]
     enum State {
@@ -524,7 +525,7 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
     while let Some(link_start) = lower[pos..].find("<link") {
         let abs_start = pos + link_start;
         if let Some(link_end) = lower[abs_start..].find('>') {
-            let link_tag = &html[abs_start..abs_start + link_end + 1];
+            let link_tag = &html[abs_start..=abs_start + link_end];
             let link_tag_lower = link_tag.to_lowercase();
 
             if link_tag_lower.contains("stylesheet") {
@@ -831,8 +832,8 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
         while let Some(idx) = lower[pos..].find(needle) {
             let abs = pos + idx;
             if let Some(end) = lower[abs..].find('>') {
-                let tag_slice = &html[abs..abs + end + 1];
-                let tag_lower = &lower[abs..abs + end + 1];
+                let tag_slice = &html[abs..=abs + end];
+                let tag_lower = &lower[abs..=abs + end];
                 if let Some(f) = filter {
                     if !tag_lower.contains(f) {
                         pos = abs + end + 1;
