@@ -224,7 +224,7 @@ impl CalcLength {
         if value == 0.0 {
             return Ok(());
         }
-        if let Some(existing) = self.terms().iter().position(|t| t.unit == unit).map(|idx| idx as usize) {
+        if let Some(existing) = self.terms().iter().position(|t| t.unit == unit) {
             self.terms[existing].value += value;
             if self.terms[existing].value == 0.0 {
                 // Remove zeroed term
