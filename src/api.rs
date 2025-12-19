@@ -737,7 +737,12 @@ impl FastRender {
         let viewport_size = Size::new(width as f32, height as f32);
         let scroll = apply_scroll_snap(&fragment_tree, viewport_size, Point::new(scroll_x, scroll_y));
 
-        self.apply_sticky_offsets(&mut fragment_tree.root, Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height), scroll, viewport_size);
+        self.apply_sticky_offsets(
+            &mut fragment_tree.root,
+            Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
+            scroll,
+            viewport_size,
+        );
 
         let (target_width, target_height) = if expand_full_page {
             let content_bounds = fragment_tree.content_size();
@@ -1678,8 +1683,16 @@ impl FastRender {
     }
 
     fn apply_sticky_offsets(&self, fragment: &mut FragmentNode, parent_rect: Rect, scroll: Point, viewport: Size) {
-        let abs_origin = Point::new(parent_rect.x() + fragment.bounds.x(), parent_rect.y() + fragment.bounds.y());
-        let abs_rect = Rect::from_xywh(abs_origin.x, abs_origin.y, fragment.bounds.width(), fragment.bounds.height());
+        let abs_origin = Point::new(
+            parent_rect.x() + fragment.bounds.x(),
+            parent_rect.y() + fragment.bounds.y(),
+        );
+        let abs_rect = Rect::from_xywh(
+            abs_origin.x,
+            abs_origin.y,
+            fragment.bounds.width(),
+            fragment.bounds.height(),
+        );
 
         for child in fragment.children.iter_mut() {
             self.apply_sticky_offsets(child, abs_rect, scroll, viewport);
@@ -1927,7 +1940,7 @@ fn hash_overflow(overflow: &crate::style::types::Overflow, hasher: &mut DefaultH
 }
 
 fn hash_scrollbar_color(color: &crate::style::types::ScrollbarColor, hasher: &mut DefaultHasher) {
-    use crate::style::types::ScrollbarColor::*;
+    use crate::style::types::ScrollbarColor::{Auto, Colors, Dark, Light};
     match color {
         Auto => 0u8.hash(hasher),
         Dark => 1u8.hash(hasher),
@@ -1951,7 +1964,7 @@ fn hash_border_style(style: &crate::style::types::BorderStyle, hasher: &mut Defa
 }
 
 fn hash_position_component(component: &crate::style::types::PositionComponent, hasher: &mut DefaultHasher) {
-    use crate::style::types::PositionComponent::*;
+    use crate::style::types::PositionComponent::{Keyword, Length, Percentage};
     match component {
         Keyword(k) => {
             0u8.hash(hasher);
@@ -2047,7 +2060,7 @@ fn hash_tab_size(tab: &crate::style::types::TabSize, hasher: &mut DefaultHasher)
 }
 
 fn hash_vertical_align(align: &crate::style::types::VerticalAlign, hasher: &mut DefaultHasher) {
-    use crate::style::types::VerticalAlign::*;
+    use crate::style::types::VerticalAlign::{Baseline, Bottom, Length, Middle, Sub, Super, TextBottom, TextTop, Top};
     match align {
         Baseline => 0u8.hash(hasher),
         Sub => 1u8.hash(hasher),
@@ -2069,7 +2082,7 @@ fn hash_vertical_align(align: &crate::style::types::VerticalAlign, hasher: &mut 
 }
 
 fn hash_line_height(height: &crate::style::types::LineHeight, hasher: &mut DefaultHasher) {
-    use crate::style::types::LineHeight::*;
+    use crate::style::types::LineHeight::{Length, Normal, Number, Percentage};
     match height {
         Normal => 0u8.hash(hasher),
         Number(n) => {
@@ -2104,7 +2117,7 @@ fn hash_text_indent(indent: &crate::style::types::TextIndent, hasher: &mut Defau
 }
 
 fn hash_text_size_adjust(value: &crate::style::types::TextSizeAdjust, hasher: &mut DefaultHasher) {
-    use crate::style::types::TextSizeAdjust::*;
+    use crate::style::types::TextSizeAdjust::{Auto, None, Percentage};
     match value {
         Auto => 0u8.hash(hasher),
         None => 1u8.hash(hasher),
@@ -2116,7 +2129,10 @@ fn hash_text_size_adjust(value: &crate::style::types::TextSizeAdjust, hasher: &m
 }
 
 fn hash_list_style_type(value: &crate::style::types::ListStyleType, hasher: &mut DefaultHasher) {
-    use crate::style::types::ListStyleType::*;
+    use crate::style::types::ListStyleType::{
+        Armenian, Circle, Decimal, DecimalLeadingZero, Disc, DisclosureClosed, DisclosureOpen, Georgian, LowerAlpha,
+        LowerArmenian, LowerGreek, LowerRoman, None, Square, String, UpperAlpha, UpperRoman,
+    };
     match value {
         Disc => 0u8.hash(hasher),
         Circle => 1u8.hash(hasher),
@@ -2152,7 +2168,9 @@ fn hash_list_style_image(value: &crate::style::types::ListStyleImage, hasher: &m
 }
 
 fn hash_grid_track(track: &crate::style::types::GridTrack, hasher: &mut DefaultHasher) {
-    use crate::style::types::GridTrack::*;
+    use crate::style::types::GridTrack::{
+        Auto, FitContent, Fr, Length, MaxContent, MinContent, MinMax, RepeatAutoFill, RepeatAutoFit,
+    };
     match track {
         Length(l) => {
             0u8.hash(hasher);
@@ -2228,7 +2246,7 @@ fn hash_grid_template_areas(areas: &[Vec<Option<String>>], hasher: &mut DefaultH
 }
 
 fn hash_font_size_adjust(value: &crate::style::types::FontSizeAdjust, hasher: &mut DefaultHasher) {
-    use crate::style::types::FontSizeAdjust::*;
+    use crate::style::types::FontSizeAdjust::{FromFont, None, Number};
     match value {
         None => 0u8.hash(hasher),
         Number(n) => {
@@ -3264,10 +3282,18 @@ fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point
         &mut targets_y,
     );
 
-    if let Some(max_target_x) = targets_x.iter().map(|(p, _)| *p).max_by(|a, b| a.partial_cmp(b).unwrap()) {
+    if let Some(max_target_x) = targets_x
+        .iter()
+        .map(|(p, _)| *p)
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+    {
         bounds.max_x = bounds.max_x.max(max_target_x + viewport.width);
     }
-    if let Some(max_target_y) = targets_y.iter().map(|(p, _)| *p).max_by(|a, b| a.partial_cmp(b).unwrap()) {
+    if let Some(max_target_y) = targets_y
+        .iter()
+        .map(|(p, _)| *p)
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+    {
         bounds.max_y = bounds.max_y.max(max_target_y + viewport.height);
     }
 
@@ -3310,14 +3336,24 @@ fn apply_scroll_snap(fragment_tree: &FragmentTree, viewport: Size, scroll: Point
     let shift_y = if min_target_y > 0.0 { min_target_y } else { 0.0 };
 
     let snapped_x = if snap_x {
-        pick_snap_target(scroll.x - shift_x, max_scroll_x, strictness, viewport.width * 0.5, &targets_x)
-            + shift_x
+        pick_snap_target(
+            scroll.x - shift_x,
+            max_scroll_x,
+            strictness,
+            viewport.width * 0.5,
+            &targets_x,
+        ) + shift_x
     } else {
         scroll.x
     };
     let snapped_y = if snap_y {
-        pick_snap_target(scroll.y - shift_y, max_scroll_y, strictness, viewport.height * 0.5, &targets_y)
-            + shift_y
+        pick_snap_target(
+            scroll.y - shift_y,
+            max_scroll_y,
+            strictness,
+            viewport.height * 0.5,
+            &targets_y,
+        ) + shift_y
     } else {
         scroll.y
     };
@@ -3404,7 +3440,12 @@ mod tests {
         );
         root.children.push(sticky);
 
-        renderer.apply_sticky_offsets(&mut root, Rect::from_xywh(0.0, 0.0, 200.0, 200.0), Point::ZERO, Size::new(200.0, 200.0));
+        renderer.apply_sticky_offsets(
+            &mut root,
+            Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
+            Point::ZERO,
+            Size::new(200.0, 200.0),
+        );
 
         let child = &root.children[0];
         assert!((child.bounds.x() - 20.0).abs() < 0.01);
@@ -4596,11 +4637,8 @@ mod tests {
             vec![],
             Arc::new(container_style),
         );
-        let child = FragmentNode::new_block_styled(
-            Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
-            vec![],
-            Arc::new(item_style),
-        );
+        let child =
+            FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 200.0, 100.0), vec![], Arc::new(item_style));
         container.children.push(child);
 
         let tree = FragmentTree::with_viewport(container, Size::new(100.0, 100.0));
