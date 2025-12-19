@@ -19,7 +19,7 @@ This directory contains a **task-based parallel execution system** for rebuildin
 3. **Clear Dependencies**: Each task declares exactly what it needs from prior tasks
 4. **Structured Communication**: Tasks communicate via notes files with standard schema
 5. **Verifiable Completion**: Each task has clear success criteria and tests
-6. **Stability of Records**: Once a task is completed, keep a single stable record (or remove it once) and avoid repeatedly adding/removing the same task stub just for bookkeeping churn.
+6. **Stability of Records**: Once a task is completed, keep a single stable record (or remove it once) and avoid repeatedly adding/removing the same task stub.
 
 ### Architecture
 
