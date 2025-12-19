@@ -769,7 +769,7 @@ pub fn dedupe_links_preserving_order(mut links: Vec<String>) -> Vec<String> {
 
 /// Inject a `<style>` block containing `css` into the HTML document.
 pub fn inject_css_into_html(html: &str, css: &str) -> String {
-    let style_tag = format!("<style>{}</style>", css);
+    let style_tag = format!("<style>{css}</style>");
 
     if let Some(head_end) = html.find("</head>") {
         let mut result = String::with_capacity(html.len() + style_tag.len());
