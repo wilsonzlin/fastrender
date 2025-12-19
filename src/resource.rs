@@ -105,17 +105,6 @@ fn sanitize_filename(input: &str) -> String {
     sanitized
 }
 
-/// Normalize a page identifier (full URL or hostname) to a cache stem.
-pub fn normalize_page_name(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
-    let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
-    Some(url_to_filename(without_www))
-}
-
 /// Default User-Agent string used by HTTP fetchers
 pub const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 fastrender/0.1";
