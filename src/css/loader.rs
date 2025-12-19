@@ -1252,6 +1252,15 @@ mod tests {
     }
 
     #[test]
+    fn resolve_href_with_file_base_file_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = format!("file://{}/html/page.html", dir.path().display());
+        std::fs::create_dir_all(dir.path().join("html")).unwrap();
+        let resolved = resolve_href(&base, "../styles/app.css").expect("resolved file href");
+        assert_eq!(resolved, format!("file://{}/styles/app.css", dir.path().display()));
+    }
+
+    #[test]
     fn resolve_href_returns_none_for_empty_href() {
         let base = "https://example.com/";
         assert_eq!(resolve_href(base, ""), None);
