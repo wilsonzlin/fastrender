@@ -6191,11 +6191,11 @@ pub fn apply_declaration_with_base(
                     let source = styles
                         .background_sizes
                         .get(source_idx)
-                        .cloned()
-                        .unwrap_or(default.clone());
+                        .copied()
+                        .unwrap_or(default);
                     let block_value = values
                         .get(idx)
-                        .cloned()
+                        .copied()
                         .unwrap_or_else(|| values.last().copied().unwrap());
                     let explicit = match source {
                         BackgroundSize::Explicit(mut x, mut y) => {
@@ -6245,11 +6245,11 @@ pub fn apply_declaration_with_base(
                     let source = styles
                         .background_positions
                         .get(source_idx)
-                        .cloned()
-                        .unwrap_or(BackgroundLayer::default().position.clone());
+                        .copied()
+                        .unwrap_or(BackgroundLayer::default().position);
                     let x_comp = xs
                         .get(idx)
-                        .cloned()
+                        .copied()
                         .unwrap_or_else(|| xs.last().copied().unwrap_or(default));
                     let BackgroundPosition::Position { y, .. } = source;
                     positions.push(BackgroundPosition::Position { x: x_comp, y });
@@ -6271,11 +6271,11 @@ pub fn apply_declaration_with_base(
                     let source = styles
                         .background_positions
                         .get(source_idx)
-                        .cloned()
-                        .unwrap_or(BackgroundLayer::default().position.clone());
+                        .copied()
+                        .unwrap_or(BackgroundLayer::default().position);
                     let y_comp = ys
                         .get(idx)
-                        .cloned()
+                        .copied()
                         .unwrap_or_else(|| ys.last().copied().unwrap_or(default));
                     let BackgroundPosition::Position { x, .. } = source;
                     positions.push(BackgroundPosition::Position { x, y: y_comp });
@@ -6296,11 +6296,11 @@ pub fn apply_declaration_with_base(
                     let source = styles
                         .background_positions
                         .get(source_idx)
-                        .cloned()
-                        .unwrap_or(default.clone());
+                        .copied()
+                        .unwrap_or(default);
                     let inline_value = values
                         .get(idx)
-                        .cloned()
+                        .copied()
                         .unwrap_or_else(|| values.last().copied().unwrap());
                     let BackgroundPosition::Position { mut x, mut y } = source;
                     if horizontal_inline {
@@ -6326,11 +6326,11 @@ pub fn apply_declaration_with_base(
                     let source = styles
                         .background_positions
                         .get(source_idx)
-                        .cloned()
-                        .unwrap_or(default.clone());
+                        .copied()
+                        .unwrap_or(default);
                     let block_value = values
                         .get(idx)
-                        .cloned()
+                        .copied()
                         .unwrap_or_else(|| values.last().copied().unwrap());
                     let BackgroundPosition::Position { mut x, mut y } = source;
                     if horizontal_block {
