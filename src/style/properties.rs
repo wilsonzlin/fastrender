@@ -6638,6 +6638,10 @@ fn parse_flex_shorthand(value: &PropertyValue) -> Option<(f32, f32, FlexBasis)> 
                             shrink = Some(*n);
                         }
                     }
+                    PropertyValue::Number(n) if n.is_finite() && *n < 0.0 => {
+                        // Negative grow/shrink values make the declaration invalid.
+                        return None;
+                    }
                     PropertyValue::Keyword(kw) if kw == "auto" || kw == "content" => {
                         if basis.is_none() {
                             basis = Some(FlexBasis::Auto);
@@ -10550,6 +10554,145 @@ mod tests {
 
         assert_eq!(style.flex_direction, FlexDirection::Row);
         assert_eq!(style.flex_wrap, FlexWrap::Wrap);
+    }
+
+    #[test]
+    fn parses_flex_shorthand_keywords() {
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex".to_string(),
+                value: PropertyValue::Keyword("none".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.flex_grow, 0.0);
+        assert_eq!(style.flex_shrink, 0.0);
+        assert!(matches!(style.flex_basis, FlexBasis::Auto));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex".to_string(),
+                value: PropertyValue::Keyword("auto".to_string()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.flex_grow, 1.0);
+        assert_eq!(style.flex_shrink, 1.0);
+        assert!(matches!(style.flex_basis, FlexBasis::Auto));
+    }
+
+    #[test]
+    fn parses_flex_shorthand_numbers_and_basis() {
+        use crate::style::values::{Length, LengthUnit};
+
+        let mut style = ComputedStyle::default();
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex".to_string(),
+                value: PropertyValue::Multiple(vec![
+                    PropertyValue::Number(2.0),
+                    PropertyValue::Number(3.0),
+                    PropertyValue::Length(Length::px(10.0)),
+                ]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.flex_grow, 2.0);
+        assert_eq!(style.flex_shrink, 3.0);
+        assert_eq!(style.flex_basis, FlexBasis::Length(Length::px(10.0)));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex".to_string(),
+                value: PropertyValue::Multiple(vec![PropertyValue::Number(4.0), PropertyValue::Number(5.0)]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.flex_grow, 4.0);
+        assert_eq!(style.flex_shrink, 5.0);
+        assert_eq!(style.flex_basis, FlexBasis::Length(Length::new(0.0, LengthUnit::Percent)));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex".to_string(),
+                value: PropertyValue::Number(6.0),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.flex_grow, 6.0);
+        assert_eq!(style.flex_shrink, 1.0);
+        assert_eq!(style.flex_basis, FlexBasis::Length(Length::new(0.0, LengthUnit::Percent)));
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex".to_string(),
+                value: PropertyValue::Length(Length::px(12.0)),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(style.flex_grow, 1.0);
+        assert_eq!(style.flex_shrink, 1.0);
+        assert_eq!(style.flex_basis, FlexBasis::Length(Length::px(12.0)));
+    }
+
+    #[test]
+    fn flex_shorthand_ignores_negative_numbers() {
+        let mut style = ComputedStyle::default();
+        // Start with known non-defaults so failures are visible.
+        style.flex_grow = 2.0;
+        style.flex_shrink = 2.0;
+        style.flex_basis = FlexBasis::Auto;
+
+        apply_declaration(
+            &mut style,
+            &Declaration {
+                property: "flex".to_string(),
+                value: PropertyValue::Multiple(vec![PropertyValue::Number(-1.0), PropertyValue::Number(3.0)]),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+
+        // Negative flex items are invalid and should leave the previous values intact.
+        assert_eq!(style.flex_grow, 2.0);
+        assert_eq!(style.flex_shrink, 2.0);
+        assert!(matches!(style.flex_basis, FlexBasis::Auto));
     }
 
     #[test]
