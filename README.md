@@ -113,6 +113,9 @@ Render all cached pages to `fetches/renders/` (PNG + per-page logs):
 # Render only specific cached pages with a custom viewport/timeout
 ./target/release/render_pages --pages cnn.com,wikipedia.org --viewport 1366x768 --timeout 60
 
+# You can also pass cache stems positionally instead of --pages
+./target/release/render_pages cnn.com wikipedia.org
+
 # Render with a custom User-Agent for resource fetches
 ./target/release/render_pages --user-agent "MyBot/1.0"
 
