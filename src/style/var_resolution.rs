@@ -40,7 +40,7 @@ const MAX_RECURSION_DEPTH: usize = 10;
 #[derive(Debug, Clone)]
 pub enum VarResolutionResult {
     /// Successfully resolved to a value
-    Resolved(Box<PropertyValue>),
+    Resolved(PropertyValue),
     /// The variable was not found and no fallback was provided
     NotFound(String),
     /// Recursion depth exceeded (possible circular reference)
@@ -133,21 +133,21 @@ pub fn resolve_var_for_property(
 /// # Returns
 ///
 /// The resolved PropertyValue, or the original value if resolution fails
-pub fn resolve_var_with_depth<S: BuildHasher>(
+pub fn resolve_var_with_depth(
     value: &PropertyValue,
-    custom_properties: &HashMap<String, String, S>,
+    custom_properties: &HashMap<String, String>,
     depth: usize,
 ) -> PropertyValue {
     match resolve_var_recursive(value, custom_properties, depth, "") {
-        VarResolutionResult::Resolved(v) => *v,
+        VarResolutionResult::Resolved(v) => v,
         other => other.unwrap_or(value.clone()),
     }
 }
 
 /// Internal recursive implementation of var() resolution
-fn resolve_var_recursive<S: BuildHasher>(
+fn resolve_var_recursive(
     value: &PropertyValue,
-    custom_properties: &HashMap<String, String, S>,
+    custom_properties: &HashMap<String, String>,
     depth: usize,
     property_name: &str,
 ) -> VarResolutionResult {
@@ -163,9 +163,9 @@ fn resolve_var_recursive<S: BuildHasher>(
 }
 
 /// Resolves var() references within a keyword/string value
-fn resolve_keyword_var<S: BuildHasher>(
+fn resolve_keyword_var(
     kw: &str,
-    custom_properties: &HashMap<String, String, S>,
+    custom_properties: &HashMap<String, String>,
     depth: usize,
     property_name: &str,
 ) -> VarResolutionResult {
