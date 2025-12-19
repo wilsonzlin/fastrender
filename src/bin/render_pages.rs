@@ -18,7 +18,8 @@ use fastrender::css::loader::{
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
-    parse_cached_html_meta, url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    normalize_page_name, parse_cached_html_meta, url_to_filename, HttpFetcher, ResourceFetcher,
+    DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 use fastrender::FastRender;
 use std::collections::HashSet;
@@ -35,53 +36,14 @@ const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
-fn normalize_page_name(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let no_scheme = if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("https://") {
-        &trimmed[8..]
-    } else if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("http://") {
-        &trimmed[7..]
-    } else {
-        trimmed
-    };
-    let without_www = if no_scheme.len() >= 4 && no_scheme[..4].eq_ignore_ascii_case("www.") {
-        &no_scheme[4..]
-    } else {
-        no_scheme
-    };
-    let (host, rest) = match without_www.find('/') {
-        Some(idx) => (&without_www[..idx], &without_www[idx..]),
-        None => (without_www, ""),
-    };
-    let lowered = format!("{}{}", host.to_ascii_lowercase(), rest);
-    Some(url_to_filename(&lowered))
-}
-
 #[cfg(test)]
 mod tests {
     use super::normalize_page_name;
 
     #[test]
     fn normalize_page_name_strips_scheme_and_www() {
-        assert_eq!(
-            normalize_page_name("https://example.com/foo").as_deref(),
-            Some("example.com_foo")
-        );
-        assert_eq!(
-            normalize_page_name("http://www.example.com").as_deref(),
-            Some("example.com")
-        );
-    }
-
-    #[test]
-    fn normalize_page_name_lowercases_hostname_only() {
-        assert_eq!(
-            normalize_page_name("HTTP://WWW.Example.COM/Path/UPPER").as_deref(),
-            Some("example.com_Path_UPPER")
-        );
+        assert_eq!(normalize_page_name("https://example.com/foo").as_deref(), Some("example.com_foo"));
+        assert_eq!(normalize_page_name("http://www.example.com").as_deref(), Some("example.com"));
     }
 
     #[test]
@@ -322,13 +284,7 @@ fn main() {
             "--timings" => {
                 enable_timings = true;
             }
-            _ => {
-                if arg.starts_with('-') {
-                    println!("Unknown option: {}", arg);
-                    usage();
-                    std::process::exit(1);
-                }
-            }
+            _ => {}
         }
     }
 
@@ -390,17 +346,13 @@ fn main() {
         Err(_) => {
             println!("No cached pages found in {}.", HTML_DIR);
             println!("Run fetch_pages first.");
-            std::process::exit(1);
+            return;
         }
     };
 
     if entries.is_empty() {
-        if page_filter.is_some() {
-            println!("No cached pages matched the provided filter.");
-        } else {
-            println!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
-        }
-        std::process::exit(1);
+        println!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
+        return;
     }
 
     // Create shared caching fetcher

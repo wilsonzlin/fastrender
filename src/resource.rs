@@ -72,6 +72,17 @@ fn sanitize_filename(input: &str) -> String {
         .collect()
 }
 
+/// Normalize a page identifier (full URL or hostname) to a cache stem.
+pub fn normalize_page_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
+    let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
+    Some(url_to_filename(without_www))
+}
+
 /// Default User-Agent string used by HTTP fetchers
 pub const DEFAULT_USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 fastrender/0.1";
@@ -526,6 +537,19 @@ mod tests {
     #[test]
     fn url_to_filename_parses_uppercase_scheme() {
         assert_eq!(url_to_filename("HTTPS://Example.com/q?a=1"), "example.com_q_a_1");
+    }
+
+    #[test]
+    fn normalize_page_name_handles_urls_and_hosts() {
+        assert_eq!(normalize_page_name("https://www.w3.org").as_deref(), Some("w3.org"));
+        assert_eq!(normalize_page_name("http://example.com/foo").as_deref(), Some("example.com_foo"));
+        assert_eq!(normalize_page_name("example.com").as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn normalize_page_name_rejects_empty() {
+        assert!(normalize_page_name("").is_none());
+        assert!(normalize_page_name("   ").is_none());
     }
 
     #[test]
