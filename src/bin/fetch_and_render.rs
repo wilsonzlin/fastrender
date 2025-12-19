@@ -163,6 +163,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn resolves_relative_http_links() {
         let base = "https://example.com/a/b/page.html";
         let href = "../styles/site.css";
