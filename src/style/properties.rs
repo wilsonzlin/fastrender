@@ -7154,14 +7154,18 @@ fn parse_image_resolution(value: &PropertyValue) -> Option<ImageResolution> {
     match value {
         PropertyValue::Keyword(kw) => parse_image_resolution_tokens(&[kw.as_str()]),
         PropertyValue::Multiple(values) => {
-            let mut tokens = Vec::new();
-            for v in values {
-                match v {
-                    PropertyValue::Keyword(kw) => tokens.push(kw.as_str()),
-                    _ => return None,
-                }
+            let tokens: Vec<_> = values
+                .iter()
+                .map_while(|v| match v {
+                    PropertyValue::Keyword(kw) => Some(kw.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if tokens.len() == values.len() {
+                parse_image_resolution_tokens(&tokens)
+            } else {
+                None
             }
-            parse_image_resolution_tokens(&tokens)
         }
         _ => None,
     }
