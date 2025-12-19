@@ -1134,6 +1134,13 @@ fn apply_vertical_text_orientation(
                 run
             })
             .collect(),
+        TextOrientation::SidewaysLeft => runs
+            .into_iter()
+            .map(|mut run| {
+                run.rotation = RunRotation::Ccw90;
+                run
+            })
+            .collect(),
         TextOrientation::Upright => runs
             .into_iter()
             .map(|mut run| {
@@ -3785,6 +3792,19 @@ mod tests {
         let ctx = FontContext::new();
         let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
         assert!(shaped.iter().all(|r| r.rotation == RunRotation::Cw90));
+    }
+
+    #[test]
+    fn vertical_sideways_left_rotates_runs_counter_clockwise() {
+        let mut style = ComputedStyle::default();
+        style.writing_mode = crate::style::types::WritingMode::VerticalRl;
+        style.text_orientation = crate::style::types::TextOrientation::SidewaysLeft;
+        let ctx = FontContext::new();
+        let shaped = ShapingPipeline::new().shape("Abc", &style, &ctx).unwrap();
+        assert!(
+            shaped.iter().all(|r| r.rotation == RunRotation::Ccw90),
+            "sideways-left should rotate runs counter-clockwise"
+        );
     }
 
     #[test]

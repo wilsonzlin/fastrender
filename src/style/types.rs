@@ -1740,6 +1740,7 @@ pub enum TextOrientation {
     Mixed,
     Upright,
     Sideways,
+    SidewaysLeft,
     SidewaysRight,
 }
 

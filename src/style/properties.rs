@@ -5422,6 +5422,7 @@ pub fn apply_declaration_with_base(
                     "mixed" => TextOrientation::Mixed,
                     "upright" => TextOrientation::Upright,
                     "sideways" => TextOrientation::Sideways,
+                    "sideways-left" => TextOrientation::SidewaysLeft,
                     "sideways-right" => TextOrientation::Sideways,
                     _ => styles.text_orientation,
                 };
@@ -11227,6 +11228,20 @@ mod tests {
             16.0,
         );
         assert_eq!(styles.text_orientation, TextOrientation::Sideways);
+
+        apply_declaration(
+            &mut styles,
+            &Declaration {
+                property: "text-orientation".into(),
+                value: PropertyValue::Keyword("sideways-left".into()),
+                raw_value: String::new(),
+                important: false,
+            },
+            &ComputedStyle::default(),
+            16.0,
+            16.0,
+        );
+        assert_eq!(styles.text_orientation, TextOrientation::SidewaysLeft);
     }
 
     #[test]
