@@ -36,9 +36,7 @@ pub fn normalize_page_name(raw: &str) -> Option<String> {
     }
 
     // Remove scheme prefixes if present, case-insensitively.
-    let no_scheme = trimmed
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
+    let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
 
     // Strip a leading www. to align with cache naming expectations.
     let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
@@ -581,6 +579,14 @@ mod tests {
     fn normalize_page_name_rejects_empty() {
         assert!(normalize_page_name("").is_none());
         assert!(normalize_page_name("   ").is_none());
+    }
+
+    #[test]
+    fn normalize_page_name_strips_fragment_and_whitespace() {
+        assert_eq!(
+            normalize_page_name("  https://example.com/path#section  ").as_deref(),
+            Some("example.com_path")
+        );
     }
 
     #[test]
