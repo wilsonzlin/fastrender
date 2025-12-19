@@ -63,7 +63,7 @@ pub fn url_to_filename(url: &str) -> String {
 }
 
 fn sanitize_filename(input: &str) -> String {
-    input
+    let mut sanitized: String = input
         .replace('/', "_")
         .chars()
         .map(|c| {
@@ -73,7 +73,14 @@ fn sanitize_filename(input: &str) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+
+    // Avoid a trailing underscore when the path ends with a slash (common for canonical URLs).
+    while sanitized.ends_with('_') {
+        sanitized.pop();
+    }
+
+    sanitized
 }
 
 /// Default User-Agent string used by HTTP fetchers

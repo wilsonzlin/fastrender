@@ -528,6 +528,13 @@ mod tests {
     }
 
     #[test]
+    fn url_to_filename_trims_trailing_underscore_from_slash() {
+        assert_eq!(url_to_filename("https://example.com/"), "example.com");
+        assert_eq!(url_to_filename("http://example.com/"), "example.com");
+        assert_eq!(url_to_filename("https://example.com"), "example.com");
+    }
+
+    #[test]
     fn selected_pages_respects_filter() {
         let mut filter = HashSet::new();
         filter.insert(url_to_filename("https://cnn.com"));
