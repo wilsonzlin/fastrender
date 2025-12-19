@@ -1,6 +1,6 @@
 //! Fetch and cache HTML pages for testing
 //!
-//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--accept-language LANG] [--timings]
+//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--timings]
 //!
 //! Fetches all target pages in parallel and caches to fetches/html/
 
@@ -16,8 +16,7 @@ use std::time::Duration;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
-    normalize_page_name, normalize_user_agent_for_log, url_to_filename, HttpFetcher, ResourceFetcher,
-    DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    normalize_page_name, url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
 use rayon::ThreadPoolBuilder;
 use url::Url;
@@ -431,7 +430,7 @@ fn main() {
         config.jobs,
         config.timeout.as_secs()
     );
-    println!("User-Agent: {}", normalize_user_agent_for_log(&config.user_agent));
+    println!("User-Agent: {}", config.user_agent);
     println!("Accept-Language: {}", config.accept_language);
     if config.refresh {
         println!("--refresh: re-fetching all");
@@ -538,6 +537,16 @@ mod tests {
     }
 
     #[test]
+    fn selected_pages_accepts_trailing_slash_filter() {
+        let mut filter = HashSet::new();
+        // Trailing slash should normalize to the same stem as the canonical URL.
+        filter.insert(url_to_filename("https://example.com/"));
+
+        let selected = selected_pages(Some(&filter));
+        assert!(selected.contains(&"https://example.com"));
+    }
+
+    #[test]
     fn selected_pages_respects_filter() {
         let mut filter = HashSet::new();
         filter.insert(url_to_filename("https://cnn.com"));
@@ -553,15 +562,6 @@ mod tests {
     fn selected_pages_none_returns_all() {
         let all = selected_pages(None);
         assert_eq!(all.len(), PAGES.len());
-    }
-
-    #[test]
-    fn selected_pages_accepts_trailing_slash_and_case_insensitive() {
-        let mut filter = HashSet::new();
-        filter.insert(normalize_page_name("HTTPS://EXAMPLE.COM/").unwrap());
-
-        let selected = selected_pages(Some(&filter));
-        assert!(selected.contains(&"https://example.com"));
     }
 
     #[test]
