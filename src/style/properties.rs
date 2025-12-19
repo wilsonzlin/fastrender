@@ -9422,11 +9422,11 @@ fn parse_ellipse_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape,
     input.expect_function_matching("ellipse")?;
     input.parse_nested_block(|nested| {
         let radius_x = nested.try_parse(parse_shape_radius).ok();
-    let radius_y = if let Ok(second) = nested.try_parse(parse_shape_radius) {
-        Some(second)
-    } else {
-        radius_x
-    };
+        let radius_y = if let Ok(second) = nested.try_parse(parse_shape_radius) {
+            Some(second)
+        } else {
+            radius_x
+        };
 
         let position = parse_clip_position(nested)?;
         nested.expect_exhausted()?;
