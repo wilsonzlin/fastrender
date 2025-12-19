@@ -261,4 +261,7 @@ fn render_pages_ignores_non_matching_filters_if_some_match() {
     assert!(renders.join("foo.png").is_file());
     // No PNG is expected for the missing filter entry.
     assert!(!renders.join("missing.png").exists());
+
+    // Summary should still be present when at least one page renders.
+    assert!(renders.join("_summary.log").is_file());
 }
