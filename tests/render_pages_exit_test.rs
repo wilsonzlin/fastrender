@@ -157,3 +157,21 @@ fn render_pages_accepts_full_url_with_query() {
             .is_file()
     );
 }
+
+#[test]
+fn render_pages_normalizes_positional_filters() {
+    let temp = TempDir::new().expect("tempdir");
+    let html_dir = temp.path().join("fetches/html");
+    fs::create_dir_all(&html_dir).expect("create html dir");
+
+    fs::write(html_dir.join("example.com.html"), "<!doctype html><title>Foo</title>").expect("write html");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_render_pages"))
+        .current_dir(temp.path())
+        .arg("EXAMPLE.COM")
+        .status()
+        .expect("run render_pages");
+
+    assert!(status.success(), "expected render_pages to succeed for positional filter");
+    assert!(temp.path().join("fetches/renders/example.com.png").is_file());
+}
