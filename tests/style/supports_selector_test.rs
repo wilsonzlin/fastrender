@@ -53,10 +53,20 @@ fn supports_declaration_accepts_valid_text_orientation() {
 }
 
 #[test]
-fn supports_declaration_rejects_invalid_text_orientation() {
+fn supports_declaration_accepts_sideways_left_text_orientation() {
     let dom = dom::parse_html(r#"<div></div>"#).unwrap();
     let css = r#"@supports (text-orientation: sideways-invalid) { div { display: inline; } }"#;
     let stylesheet = parse_stylesheet(css).unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    assert_eq!(display(&styled.children[0]), "inline");
+}
+
+#[test]
+fn supports_declaration_rejects_invalid_text_orientation() {
+    let dom = dom::parse_html(r#"<div></div>"#).unwrap();
+    let css = r#"@supports (text-orientation: sideways-down) { div { display: inline; } }"#;
+    let stylesheet = parse_stylesheet("supports", css, None).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
     // The invalid value should cause the @supports condition to be false, leaving display as block.

@@ -119,6 +119,21 @@ fn vertical_sideways_orientation_rotates_all() {
     }
 }
 
+#[test]
+fn vertical_sideways_left_orientation_rotates_counter_clockwise() {
+    let pipeline = ShapingPipeline::new();
+    let font_ctx = FontContext::new();
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::VerticalRl;
+    style.text_orientation = TextOrientation::SidewaysLeft;
+
+    let runs = require_fonts!(pipeline.shape_with_direction("AB", &style, &font_ctx, Direction::LeftToRight));
+    assert!(!runs.is_empty());
+    for run in runs {
+        assert_eq!(run.rotation, RunRotation::Ccw90);
+    }
+}
+
 // ============================================================================
 // Script Detection Tests
 // ============================================================================
