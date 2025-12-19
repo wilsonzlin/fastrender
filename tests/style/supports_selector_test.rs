@@ -104,11 +104,33 @@ fn supports_declaration_accepts_text_combine_digits() {
 }
 
 #[test]
+fn supports_declaration_accepts_text_combine_compact_digits() {
+    let dom = dom::parse_html(r#"<div></div>"#).unwrap();
+    let css = r#"@supports (text-combine-upright: digits3) { div { display: inline; } }"#;
+    let stylesheet = parse_stylesheet(css).unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let div = first_div(&styled).expect("div");
+    assert_eq!(display(div), "inline");
+}
+
+#[test]
 fn supports_declaration_rejects_text_combine_invalid_digits() {
     let dom = dom::parse_html(r#"<div></div>"#).unwrap();
     let css = r#"@supports (text-combine-upright: digits 5) { div { display: inline; } }"#;
     let stylesheet = parse_stylesheet(css).unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
     let div = find_first(&styled, "div").expect("div");
+    assert_eq!(display(div), "block");
+}
+
+#[test]
+fn supports_declaration_rejects_text_combine_compact_invalid_digits() {
+    let dom = dom::parse_html(r#"<div></div>"#).unwrap();
+    let css = r#"@supports (text-combine-upright: digits5) { div { display: inline; } }"#;
+    let stylesheet = parse_stylesheet(css).unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let div = first_div(&styled).expect("div");
     assert_eq!(display(div), "block");
 }

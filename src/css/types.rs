@@ -545,12 +545,24 @@ fn supports_value_is_valid(property: &str, value: &str) -> bool {
         }
         "text-combine-upright" => {
             let parts: Vec<_> = value_lower.split_whitespace().collect();
+            if parts.is_empty() {
+                return false;
+            }
+            let parse_digits = |s: &str| -> bool {
+                let tail = s.trim_start_matches("digits");
+                if tail.is_empty() {
+                    return true;
+                }
+                tail.parse::<u8>()
+                    .map(|n| (2..=4).contains(&n))
+                    .unwrap_or(false)
+            };
+
             return match parts.as_slice() {
-                ["none"] | ["all"] | ["digits"] => true,
-                ["digits", n] => match n.parse::<u8>() {
-                    Ok(num) => (2..=4).contains(&num),
-                    Err(_) => false,
-                },
+                ["none"] | ["all"] => true,
+                ["digits"] => true,
+                [single] if single.starts_with("digits") => parse_digits(single),
+                ["digits", n] => parse_digits(n),
                 _ => false,
             };
         }
