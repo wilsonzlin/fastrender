@@ -40,7 +40,7 @@ const MAX_RECURSION_DEPTH: usize = 10;
 #[derive(Debug, Clone)]
 pub enum VarResolutionResult {
     /// Successfully resolved to a value
-    Resolved(PropertyValue),
+    Resolved(Box<PropertyValue>),
     /// The variable was not found and no fallback was provided
     NotFound(String),
     /// Recursion depth exceeded (possible circular reference)
@@ -133,22 +133,21 @@ pub fn resolve_var_for_property(
 /// # Returns
 ///
 /// The resolved PropertyValue, or the original value if resolution fails
-#[allow(clippy::implicit_hasher)]
-pub fn resolve_var_with_depth(
+pub fn resolve_var_with_depth<S: BuildHasher>(
     value: &PropertyValue,
-    custom_properties: &HashMap<String, String>,
+    custom_properties: &HashMap<String, String, S>,
     depth: usize,
 ) -> PropertyValue {
     match resolve_var_recursive(value, custom_properties, depth, "") {
-        VarResolutionResult::Resolved(v) => v,
+        VarResolutionResult::Resolved(v) => *v,
         other => other.unwrap_or(value.clone()),
     }
 }
 
 /// Internal recursive implementation of var() resolution
-fn resolve_var_recursive(
+fn resolve_var_recursive<S: BuildHasher>(
     value: &PropertyValue,
-    custom_properties: &HashMap<String, String>,
+    custom_properties: &HashMap<String, String, S>,
     depth: usize,
     property_name: &str,
 ) -> VarResolutionResult {
@@ -164,9 +163,9 @@ fn resolve_var_recursive(
 }
 
 /// Resolves var() references within a keyword/string value
-fn resolve_keyword_var(
+fn resolve_keyword_var<S: BuildHasher>(
     kw: &str,
-    custom_properties: &HashMap<String, String>,
+    custom_properties: &HashMap<String, String, S>,
     depth: usize,
     property_name: &str,
 ) -> VarResolutionResult {
