@@ -133,3 +133,48 @@ fn replaced_absolute_with_both_insets_shrinks_to_intrinsic_in_block_layout() {
         image_fragment.bounds.x()
     );
 }
+
+#[test]
+fn replaced_absolute_with_both_insets_shrinks_to_intrinsic_in_flex_layout() {
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.position = Position::Relative;
+
+    let mut img_style = ComputedStyle::default();
+    img_style.position = Position::Absolute;
+    img_style.left = Some(Length::px(10.0));
+    img_style.right = Some(Length::px(10.0));
+    img_style.top = Some(Length::px(0.0));
+
+    let img = BoxNode::new_replaced(
+        Arc::new(img_style),
+        ReplacedType::Image {
+            src: String::new(),
+            alt: None,
+            srcset: Vec::<SrcsetCandidate>::new(),
+            sizes: None,
+        },
+        Some(Size::new(60.0, 20.0)),
+        None,
+    );
+
+    let container = BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, vec![img]);
+    let constraints = LayoutConstraints::definite(240.0, 120.0);
+    let fc = FlexFormattingContext::new();
+    let fragment = fc.layout(&container, &constraints).expect("flex layout");
+
+    let image_fragment = fragment
+        .children
+        .first()
+        .expect("absolute replaced fragment should be present");
+
+    assert!(
+        (image_fragment.bounds.width() - 60.0).abs() < 0.1,
+        "replaced element should shrink-to-fit its intrinsic width when both insets are set"
+    );
+    assert!(
+        (image_fragment.bounds.x() - 10.0).abs() < 0.1,
+        "left inset should be honored when shrinking to intrinsic width (got x = {})",
+        image_fragment.bounds.x()
+    );
+}
