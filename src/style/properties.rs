@@ -21,9 +21,9 @@ use crate::style::grid::{
 use crate::style::position::Position;
 use crate::style::types::*;
 use crate::style::values::{Length, LengthUnit};
-use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal};
 use crate::style::var_resolution::{resolve_var_for_property, VarResolutionResult};
 use crate::style::ComputedStyle;
+use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal};
 use cssparser::{Parser, ParserInput, Token};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -2514,7 +2514,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                     .get(source_idx)
                     .cloned()
                     .unwrap_or_else(|| BackgroundLayer::default().position.clone());
-                let x_comp = xs.get(idx).cloned().unwrap_or_else(|| xs.last().cloned().unwrap());
+                let x_comp = xs.get(idx).copied().unwrap_or_else(|| *xs.last().unwrap());
                 let BackgroundPosition::Position { y, .. } = source_pos;
                 positions.push(BackgroundPosition::Position { x: x_comp, y });
             }
@@ -2544,7 +2544,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                     .get(source_idx)
                     .cloned()
                     .unwrap_or_else(|| BackgroundLayer::default().position.clone());
-                let y_comp = ys.get(idx).cloned().unwrap_or_else(|| ys.last().cloned().unwrap());
+                let y_comp = ys.get(idx).copied().unwrap_or_else(|| *ys.last().unwrap());
                 let BackgroundPosition::Position { x, .. } = source_pos;
                 positions.push(BackgroundPosition::Position { x, y: y_comp });
             }
@@ -3338,8 +3338,8 @@ pub fn apply_declaration_with_base(
         }
         "inset-inline" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                let start = values.get(0).cloned().unwrap_or(None);
-                let end = values.get(1).cloned().unwrap_or(start);
+                let start = values.get(0).copied().flatten();
+                let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
                     crate::style::LogicalProperty::Inset {
@@ -3353,8 +3353,8 @@ pub fn apply_declaration_with_base(
         }
         "inset-block" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                let start = values.get(0).cloned().unwrap_or(None);
-                let end = values.get(1).cloned().unwrap_or(start);
+                let start = values.get(0).copied().flatten();
+                let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
                     crate::style::LogicalProperty::Inset {
@@ -3607,8 +3607,8 @@ pub fn apply_declaration_with_base(
         }
         "margin-inline" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                let start = values.get(0).cloned().unwrap_or(None);
-                let end = values.get(1).cloned().unwrap_or(start);
+                let start = values.get(0).copied().flatten();
+                let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
                     crate::style::LogicalProperty::Margin {
@@ -3622,8 +3622,8 @@ pub fn apply_declaration_with_base(
         }
         "margin-block" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                let start = values.get(0).cloned().unwrap_or(None);
-                let end = values.get(1).cloned().unwrap_or(start);
+                let start = values.get(0).copied().flatten();
+                let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
                     crate::style::LogicalProperty::Margin {

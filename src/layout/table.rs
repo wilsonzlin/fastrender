@@ -1833,7 +1833,11 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
         }
     }
 
-    fn resolve_candidates(candidates: &[BorderCandidate], direction: Direction, orientation: Option<bool>) -> BorderCandidate {
+    fn resolve_candidates(
+        candidates: &[BorderCandidate],
+        direction: Direction,
+        orientation: Option<bool>,
+    ) -> BorderCandidate {
         if candidates.is_empty() {
             return BorderCandidate::none();
         }
@@ -2872,13 +2876,23 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
             let specified_indices: Vec<usize> = targets
                 .iter()
                 .enumerate()
-                .filter(|(_, &idx)| matches!(structure.rows[idx].specified_height, Some(SpecifiedHeight::Fixed(_)) | Some(SpecifiedHeight::Percent(_))))
+                .filter(|(_, &idx)| {
+                    matches!(
+                        structure.rows[idx].specified_height,
+                        Some(SpecifiedHeight::Fixed(_)) | Some(SpecifiedHeight::Percent(_))
+                    )
+                })
                 .map(|(local_idx, _)| local_idx)
                 .collect();
             let auto_indices: Vec<usize> = targets
                 .iter()
                 .enumerate()
-                .filter(|(_, &idx)| !matches!(structure.rows[idx].specified_height, Some(SpecifiedHeight::Fixed(_)) | Some(SpecifiedHeight::Percent(_))))
+                .filter(|(_, &idx)| {
+                    !matches!(
+                        structure.rows[idx].specified_height,
+                        Some(SpecifiedHeight::Fixed(_)) | Some(SpecifiedHeight::Percent(_))
+                    )
+                })
                 .map(|(local_idx, _)| local_idx)
                 .collect();
 
@@ -2943,11 +2957,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                     if remaining > 0.0 {
                         if !auto_indices.is_empty() {
                             let per_auto = remaining / auto_indices.len() as f32;
-                            let overshoot_ratio = if equal_share > 0.0 {
-                                per_auto / equal_share
-                            } else {
-                                0.0
-                            };
+                            let overshoot_ratio = if equal_share > 0.0 { per_auto / equal_share } else { 0.0 };
                             if overshoot_ratio > 0.25 && !specified_indices.is_empty() {
                                 let per_spec = remaining / specified_indices.len() as f32;
                                 for &idx in &specified_indices {
@@ -4713,7 +4723,7 @@ impl FormattingContext for TableFormattingContext {
                 }
             };
 
-            let base_y = row_offsets.get(row_start).cloned().unwrap_or(0.0);
+            let base_y = row_offsets.get(row_start).copied().unwrap_or(0.0);
             let mut fragment = laid.fragment;
             // Position the cell box at the start of its row span and give it the full spanned height so
             // backgrounds and borders cover the row. Vertical-align is applied to the cell contents by
@@ -6124,8 +6134,16 @@ mod tests {
         tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
 
         let col = constraints.first().expect("column constraints");
-        assert!(col.min_width < 0.5, "percent padding should be treated as auto with no width base (min={:.2})", col.min_width);
-        assert!(col.max_width < 0.5, "percent padding should be treated as auto with no width base (max={:.2})", col.max_width);
+        assert!(
+            col.min_width < 0.5,
+            "percent padding should be treated as auto with no width base (min={:.2})",
+            col.min_width
+        );
+        assert!(
+            col.max_width < 0.5,
+            "percent padding should be treated as auto with no width base (max={:.2})",
+            col.max_width
+        );
     }
 
     #[test]
