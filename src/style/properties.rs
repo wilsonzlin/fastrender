@@ -6192,7 +6192,7 @@ pub fn apply_declaration_with_base(
                         .background_sizes
                         .get(source_idx)
                         .copied()
-                        .unwrap_or_else(|| default);
+                        .unwrap_or(default);
                     let block_value = values
                         .get(idx)
                         .copied()
@@ -6297,7 +6297,7 @@ pub fn apply_declaration_with_base(
                         .background_positions
                         .get(source_idx)
                         .copied()
-                        .unwrap_or_else(|| default);
+                        .unwrap_or(default);
                     let inline_value = values
                         .get(idx)
                         .copied()
