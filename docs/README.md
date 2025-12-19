@@ -64,6 +64,9 @@ docs/
 - [Benchmarking](testing/benchmarking.md) - Performance benchmarks
 - Style regression harness: `cargo test --quiet --test style_tests`
 
+### Render output logs
+- `render_pages` / `fetch_and_render` write per-page logs to `fetches/renders/<page>.log` and a summary to `fetches/renders/_summary.log`; check these alongside the debugging flags.
+
 ### Debugging renders
 - [Render/Paint Debug Flags](debugging.md) - Environment flags and usage for diagnosing blank/black renders (display list dumps, pixmap stats, oversized background logging aliases `FASTR_LOG_LARGE_BACKGROUNDS`/`FASTR_LOG_LARGE_BACKGROUND`, etc.)
 
