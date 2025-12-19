@@ -466,7 +466,7 @@ impl FontContext {
     #[inline]
     fn range_matches_used(range: (u32, u32), used: &[u32]) -> bool {
         let idx = used.partition_point(|cp| *cp < range.0);
-        used.get(idx).map_or(false, |cp| *cp <= range.1)
+        used.get(idx).is_some_and(|cp| *cp <= range.1)
     }
 
     #[inline]
@@ -1084,10 +1084,10 @@ fn font_supports_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
     };
     let feature_shape = rustybuzz::shape(&face, &[feature], feature_buf);
 
-    let base_info = base_shape.glyph_infos().first().cloned();
-    let feature_info = feature_shape.glyph_infos().first().cloned();
-    let base_pos = base_shape.glyph_positions().first().cloned();
-    let feature_pos = feature_shape.glyph_positions().first().cloned();
+    let base_info = base_shape.glyph_infos().first().copied();
+    let feature_info = feature_shape.glyph_infos().first().copied();
+    let base_pos = base_shape.glyph_positions().first().copied();
+    let feature_pos = feature_shape.glyph_positions().first().copied();
 
     if let (Some(bi), Some(fi), Some(bp), Some(fp)) = (base_info, feature_info, base_pos, feature_pos) {
         bi.glyph_id != fi.glyph_id || bp.x_advance != fp.x_advance || bp.y_offset != fp.y_offset
