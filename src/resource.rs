@@ -598,6 +598,12 @@ mod tests {
     }
 
     #[test]
+    fn url_to_filename_trims_trailing_punctuation() {
+        assert_eq!(url_to_filename("https://example.com./"), "example.com");
+        assert_eq!(url_to_filename("https://example.com_"), "example.com");
+    }
+
+    #[test]
     fn url_to_filename_is_case_insensitive_for_scheme_and_host() {
         assert_eq!(
             url_to_filename("HTTP://WWW.Example.COM/Path/Up"),
