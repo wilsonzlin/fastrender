@@ -31,6 +31,18 @@ struct Config {
 
 const CACHE_DIR: &str = "fetches/html";
 
+fn usage() {
+    println!("Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--accept-language LANG] [--timings]");
+    println!("\nOptions:");
+    println!("  --refresh           Re-fetch all pages even if cached");
+    println!("  --jobs N            Number of parallel fetches (default: num_cpus)");
+    println!("  --timeout SECONDS   Per-request timeout (default: 30)");
+    println!("  --pages a,b,c       Fetch only the listed pages (full URLs or stems ok)");
+    println!("  --user-agent UA     Override the User-Agent header (default: Chrome-like)");
+    println!("  --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)");
+    println!("  --timings           Print per-page fetch durations");
+}
+
 // Target pages for testing
 const PAGES: &[&str] = &[
     // Tier 1: Simple
@@ -200,15 +212,7 @@ fn parse_args() -> Config {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => {
-                println!("Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c]");
-                println!("\nOptions:");
-                println!("  --refresh           Re-fetch all pages even if cached");
-                println!("  --jobs N            Number of parallel fetches (default: num_cpus)");
-                println!("  --timeout SECONDS   Per-request timeout (default: 30)");
-                println!("  --pages a,b,c       Fetch only the listed pages (full URLs or stems ok)");
-                println!("  --user-agent UA     Override the User-Agent header (default: Chrome-like)");
-                println!("  --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)");
-                println!("  --timings           Print per-page fetch durations");
+                usage();
                 std::process::exit(0);
             }
             "--refresh" => refresh = true,
@@ -253,7 +257,13 @@ fn parse_args() -> Config {
                 }
             }
             "--timings" => timings = true,
-            _ => {}
+            _ => {
+                if arg.starts_with('-') {
+                    eprintln!("Unknown option: {}", arg);
+                    usage();
+                    std::process::exit(1);
+                }
+            }
         }
     }
 
@@ -387,7 +397,7 @@ fn main() {
         } else {
             println!("No pages to fetch");
         }
-        return;
+        std::process::exit(1);
     }
 
     if let Some(filter) = &config.page_filter {

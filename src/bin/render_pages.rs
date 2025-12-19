@@ -18,8 +18,8 @@ use fastrender::css::loader::{
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
-    normalize_page_name, parse_cached_html_meta, url_to_filename, HttpFetcher, ResourceFetcher,
-    DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    normalize_page_name, parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
+    DEFAULT_USER_AGENT,
 };
 use fastrender::FastRender;
 use std::collections::HashSet;
