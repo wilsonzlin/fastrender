@@ -1226,4 +1226,12 @@ mod tests {
             Cow::Owned(_) => panic!("expected borrowed output for unescaped input"),
         }
     }
+
+    #[test]
+    fn resolve_href_unescapes_js_escapes() {
+        let base = "https://example.com/";
+        let href = r"https:\/\/cdn.example.com\/styles\/main.css";
+        let resolved = resolve_href(base, href).expect("resolved href");
+        assert_eq!(resolved, "https://cdn.example.com/styles/main.css");
+    }
 }
