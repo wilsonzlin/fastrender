@@ -6201,6 +6201,66 @@ pub fn apply_declaration_with_base(
                 styles.rebuild_background_layers();
             }
         }
+        "background-position-inline" => {
+            if let Some(values) = parse_layer_list(&resolved_value, parse_background_position_component_x) {
+                styles.ensure_background_lists();
+                let horizontal_inline = inline_axis_is_horizontal(styles.writing_mode);
+                let default = BackgroundLayer::default().position;
+                let layer_count = values.len().max(styles.background_positions.len()).max(1);
+                let mut positions = Vec::with_capacity(layer_count);
+                for idx in 0..layer_count {
+                    let source_idx = styles.background_positions.len().saturating_sub(1).min(idx);
+                    let source = styles
+                        .background_positions
+                        .get(source_idx)
+                        .cloned()
+                        .unwrap_or(default.clone());
+                    let inline_value = values
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| values.last().copied().unwrap());
+                    let BackgroundPosition::Position { mut x, mut y } = source;
+                    if horizontal_inline {
+                        x = inline_value;
+                    } else {
+                        y = inline_value;
+                    }
+                    positions.push(BackgroundPosition::Position { x, y });
+                }
+                styles.background_positions = positions;
+                styles.rebuild_background_layers();
+            }
+        }
+        "background-position-block" => {
+            if let Some(values) = parse_layer_list(&resolved_value, parse_background_position_component_y) {
+                styles.ensure_background_lists();
+                let horizontal_block = block_axis_is_horizontal(styles.writing_mode);
+                let default = BackgroundLayer::default().position;
+                let layer_count = values.len().max(styles.background_positions.len()).max(1);
+                let mut positions = Vec::with_capacity(layer_count);
+                for idx in 0..layer_count {
+                    let source_idx = styles.background_positions.len().saturating_sub(1).min(idx);
+                    let source = styles
+                        .background_positions
+                        .get(source_idx)
+                        .cloned()
+                        .unwrap_or(default.clone());
+                    let block_value = values
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| values.last().copied().unwrap());
+                    let BackgroundPosition::Position { mut x, mut y } = source;
+                    if horizontal_block {
+                        x = block_value;
+                    } else {
+                        y = block_value;
+                    }
+                    positions.push(BackgroundPosition::Position { x, y });
+                }
+                styles.background_positions = positions;
+                styles.rebuild_background_layers();
+            }
+        }
         "background-attachment" => {
             let parse = |value: &PropertyValue| match value {
                 PropertyValue::Keyword(kw) => match kw.as_str() {

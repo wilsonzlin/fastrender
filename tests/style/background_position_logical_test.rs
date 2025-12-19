@@ -112,3 +112,37 @@ fn background_position_shorthand_resets_positions() {
     assert_component(&x, 0.0, 0.0, LengthUnit::Percent);
     assert_component(&y, 0.0, 0.0, LengthUnit::Percent);
 }
+
+#[test]
+fn background_position_logical_maps_inline_and_block_horizontal_tb() {
+    // In horizontal-tb, inline maps to the physical x-axis and block maps to the physical y-axis.
+    let dom = dom::parse_html(
+        r#"<div style="background-position-inline: 10%; background-position-block: 20%"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = all_divs(&styled)[0];
+    let (x, y) = bg_pos(node);
+    // Percent values are stored as offsets on the corresponding axis.
+    assert_component(&x, 0.0, 10.0, LengthUnit::Percent);
+    assert_component(&y, 0.0, 20.0, LengthUnit::Percent);
+}
+
+#[test]
+fn background_position_logical_maps_inline_and_block_vertical_rl() {
+    // In vertical-rl, inline maps to the physical y-axis (top→bottom) and block maps to the physical x-axis (right→left).
+    let dom = dom::parse_html(
+        r#"<div style="writing-mode: vertical-rl; background-position-inline: 25%; background-position-block: 0%"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = all_divs(&styled)[0];
+    let (x, y) = bg_pos(node);
+    // Block axis applies to the physical x-axis; inline axis applies to y.
+    assert_component(&x, 0.0, 0.0, LengthUnit::Percent);
+    assert_component(&y, 0.0, 25.0, LengthUnit::Percent);
+}
