@@ -130,6 +130,9 @@ Render all cached pages to `fetches/renders/` (PNG + per-page logs):
 # You can also repeat --pages; the lists are combined and normalized:
 ./target/release/render_pages --pages cnn.com --pages WIKIPEDIA.ORG --timeout 60
 
+# Mix --pages with positional cache stems and full URLs
+./target/release/render_pages --pages cnn.com foo.com https://Example.com/path?Q=1
+
 # You can also pass cache stems positionally instead of --pages
 ./target/release/render_pages cnn.com wikipedia.org
 
