@@ -59,7 +59,6 @@ use crate::text::font_db::{FontStretch as DbFontStretch, FontStyle, LoadedFont};
 use crate::text::font_loader::FontContext;
 use rustybuzz::{Direction as HbDirection, Face, Feature, Language as HbLanguage, UnicodeBuffer, Variation};
 use std::collections::HashSet;
-use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::Arc;
 use ttf_parser::Face as ParserFace;
