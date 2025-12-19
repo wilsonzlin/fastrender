@@ -303,6 +303,9 @@ just test-output
 just watch
 ```
 
+**Guardrails**
+- `tests/readme_guard.rs` ensures the root `README.md` remains present. Avoid deleting or renaming it; accidental removal will fail CI.
+
 ### Test Coverage
 
 We aim for >80% code coverage:
