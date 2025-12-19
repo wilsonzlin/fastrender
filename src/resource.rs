@@ -686,6 +686,14 @@ mod tests {
     }
 
     #[test]
+    fn normalize_user_agent_for_log_strips_prefix_and_whitespace() {
+        assert_eq!(normalize_user_agent_for_log("User-Agent: Foo/1.0"), "Foo/1.0");
+        assert_eq!(normalize_user_agent_for_log("User-Agent:   Foo/1.0   "), "Foo/1.0");
+        assert_eq!(normalize_user_agent_for_log("Mozilla/5.0"), "Mozilla/5.0");
+        assert_eq!(normalize_user_agent_for_log(""), "");
+    }
+
+    #[test]
     fn normalize_page_name_strips_www_case_insensitively() {
         assert_eq!(normalize_page_name("WWW.Example.com").as_deref(), Some("example.com"));
         assert_eq!(normalize_page_name("www.example.com").as_deref(), Some("example.com"));
