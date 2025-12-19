@@ -9153,7 +9153,7 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
 
 fn parse_background_position_component_x(value: &PropertyValue) -> Option<BackgroundPositionComponent> {
     match value {
-        PropertyValue::Keyword(kw) => match kw.as_str() {
+        PropertyValue::Keyword(kw) => match kw.to_ascii_lowercase().as_str() {
             "left" => Some(BackgroundPositionComponent {
                 alignment: 0.0,
                 offset: Length::px(0.0),
