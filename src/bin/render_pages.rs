@@ -390,13 +390,17 @@ fn main() {
         Err(_) => {
             println!("No cached pages found in {}.", HTML_DIR);
             println!("Run fetch_pages first.");
-            return;
+            std::process::exit(1);
         }
     };
 
     if entries.is_empty() {
-        println!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
-        return;
+        if page_filter.is_some() {
+            println!("No cached pages matched the provided filter.");
+        } else {
+            println!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
+        }
+        std::process::exit(1);
     }
 
     // Create shared caching fetcher
