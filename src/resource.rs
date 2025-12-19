@@ -559,6 +559,22 @@ mod tests {
     }
 
     #[test]
+    fn normalize_page_name_handles_urls_and_hosts() {
+        assert_eq!(normalize_page_name("https://www.w3.org").as_deref(), Some("w3.org"));
+        assert_eq!(
+            normalize_page_name("http://example.com/foo").as_deref(),
+            Some("example.com_foo")
+        );
+        assert_eq!(normalize_page_name("example.com").as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn normalize_page_name_rejects_empty() {
+        assert!(normalize_page_name("").is_none());
+        assert!(normalize_page_name("   ").is_none());
+    }
+
+    #[test]
     fn url_to_filename_drops_fragments() {
         assert_eq!(url_to_filename("https://example.com/path#frag"), "example.com_path");
         assert_eq!(

@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::process;
 use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -42,8 +43,14 @@ mod tests {
 
     #[test]
     fn normalize_page_name_strips_scheme_and_www() {
-        assert_eq!(normalize_page_name("https://example.com/foo").as_deref(), Some("example.com_foo"));
-        assert_eq!(normalize_page_name("http://www.example.com").as_deref(), Some("example.com"));
+        assert_eq!(
+            normalize_page_name("https://example.com/foo").as_deref(),
+            Some("example.com_foo")
+        );
+        assert_eq!(
+            normalize_page_name("http://www.example.com").as_deref(),
+            Some("example.com")
+        );
     }
 
     #[test]
@@ -284,7 +291,17 @@ fn main() {
             "--timings" => {
                 enable_timings = true;
             }
-            _ => {}
+            _ => {
+                if arg.starts_with('-') {
+                    usage();
+                    process::exit(1);
+                }
+                let mut filter = page_filter.take().unwrap_or_default();
+                if let Some(normalized) = normalize_page_name(&arg) {
+                    filter.insert(normalized);
+                }
+                page_filter = Some(filter);
+            }
         }
     }
 
@@ -346,13 +363,13 @@ fn main() {
         Err(_) => {
             println!("No cached pages found in {}.", HTML_DIR);
             println!("Run fetch_pages first.");
-            return;
+            process::exit(1);
         }
     };
 
     if entries.is_empty() {
         println!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
-        return;
+        process::exit(1);
     }
 
     // Create shared caching fetcher
