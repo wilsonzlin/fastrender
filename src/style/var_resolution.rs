@@ -111,9 +111,9 @@ pub fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, St
 ///
 /// Passing the property name allows the resolver to parse the substituted value using the
 /// appropriate grammar (e.g., background layers with commas), rather than the generic parser.
-pub fn resolve_var_for_property<S: BuildHasher>(
+pub fn resolve_var_for_property(
     value: &PropertyValue,
-    custom_properties: &HashMap<String, String, S>,
+    custom_properties: &HashMap<String, String>,
     property_name: &str,
 ) -> VarResolutionResult {
     resolve_var_recursive(value, custom_properties, 0, property_name)

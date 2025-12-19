@@ -6633,9 +6633,9 @@ pub fn apply_declaration_with_base(
                             .map(|pair| (pair[0].clone(), pair[1].clone()))
                             .collect();
                     }
-                }
-                _ => {}
-            };
+        }
+        _ => {}
+    }
         }
         "image-orientation" => {
             if let Some(orientation) = parse_image_orientation(&resolved_value) {
@@ -7363,7 +7363,7 @@ fn parse_border_image_shorthand(value: &PropertyValue) -> Option<BorderImage> {
     segments.push(current);
 
     // First segment: source, slice, repeat
-    if let Some(first) = segments.get(0) {
+    if let Some(first) = segments.first() {
         let mut items = first.clone();
         // Extract repeat keywords from the end (1 or 2 tokens)
         let mut rep_tokens: Vec<PropertyValue> = Vec::new();
@@ -7504,7 +7504,7 @@ fn parse_object_position(value: &PropertyValue) -> Option<ObjectPosition> {
         return Some(ObjectPosition { x, y });
     }
 
-    let (first, first_axis) = parsed.get(0).copied().unwrap_or((default, None));
+    let (first, first_axis) = parsed.first().copied().unwrap_or((default, None));
     let (second, second_axis) = parsed.get(1).copied().unwrap_or((default, None));
 
     let (x, y) = match (first_axis, second_axis) {
