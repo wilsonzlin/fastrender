@@ -1244,6 +1244,14 @@ mod tests {
     }
 
     #[test]
+    fn resolve_href_with_file_base_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = format!("file://{}", dir.path().display());
+        let resolved = resolve_href(&base, "styles/app.css").expect("resolved file href");
+        assert_eq!(resolved, format!("file://{}/styles/app.css", dir.path().display()));
+    }
+
+    #[test]
     fn resolve_href_returns_none_for_empty_href() {
         let base = "https://example.com/";
         assert_eq!(resolve_href(base, ""), None);
