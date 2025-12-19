@@ -1234,4 +1234,11 @@ mod tests {
         let resolved = resolve_href(base, href).expect("resolved href");
         assert_eq!(resolved, "https://cdn.example.com/styles/main.css");
     }
+
+    #[test]
+    fn unescape_js_preserves_invalid_sequences() {
+        let input = r"bad\u00zzescape and \q";
+        let unescaped = unescape_js_escapes(input);
+        assert_eq!(unescaped, input.replace("\\", "\\"));
+    }
 }
