@@ -35,4 +35,3 @@ fn fetch_pages_errors_on_unknown_option() {
         status.code()
     );
 }
-
