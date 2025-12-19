@@ -34,6 +34,23 @@ fn assert_component(comp: &BackgroundPositionComponent, align: f32, offset: f32,
     assert_eq!(comp.offset.unit, unit);
 }
 
+fn first_div(styled: &StyledNode) -> StyledNode {
+    fn find(node: &StyledNode) -> Option<StyledNode> {
+        if let Some(name) = node.node.tag_name() {
+            if name.eq_ignore_ascii_case("div") {
+                return Some(node.clone());
+            }
+        }
+        for child in &node.children {
+            if let Some(found) = find(child) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    find(styled).expect("div present")
+}
+
 #[test]
 fn background_position_swapped_keywords_use_axes() {
     let dom = dom::parse_html(
@@ -91,8 +108,8 @@ fn background_position_defaults_to_zero_zero() {
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    let node = all_divs(&styled)[0];
-    let (x, y) = bg_pos(node);
+    let node = first_div(&styled);
+    let (x, y) = bg_pos(&node);
     assert_component(&x, 0.0, 0.0, LengthUnit::Percent);
     assert_component(&y, 0.0, 0.0, LengthUnit::Percent);
 }
@@ -106,9 +123,26 @@ fn background_position_shorthand_resets_positions() {
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-    let node = all_divs(&styled)[0];
+    let node = first_div(&styled);
     // background shorthand should reset position to initial 0% 0%
-    let (x, y) = bg_pos(node);
+    let (x, y) = bg_pos(&node);
+    assert_component(&x, 0.0, 0.0, LengthUnit::Percent);
+    assert_component(&y, 0.0, 0.0, LengthUnit::Percent);
+}
+
+#[test]
+fn background_position_inline_block_is_ignored_for_now() {
+    let dom = dom::parse_html(
+        r#"<div style="writing-mode: vertical-rl; background-position-inline: 10px 20px; background-position-block: 3px 7px;"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = first_div(&styled);
+    let (x, y) = bg_pos(&node);
+    // Logical background-position-* is not implemented; ensure current behavior stays at defaults
+    // until proper logical mapping is added.
     assert_component(&x, 0.0, 0.0, LengthUnit::Percent);
     assert_component(&y, 0.0, 0.0, LengthUnit::Percent);
 }
