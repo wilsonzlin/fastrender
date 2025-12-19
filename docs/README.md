@@ -62,6 +62,7 @@ docs/
 - [WPT Integration](testing/wpt.md) - Web Platform Tests
 - [Reference Tests](testing/reference-tests.md) - Visual regression tests
 - [Benchmarking](testing/benchmarking.md) - Performance benchmarks
+- Style regression harness: `cargo test --quiet --test style_tests`
 
 ### Debugging renders
 - [Render/Paint Debug Flags](debugging.md) - Environment flags and usage for diagnosing blank/black renders
