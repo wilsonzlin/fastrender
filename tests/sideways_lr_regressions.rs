@@ -198,3 +198,29 @@ fn border_inline_width_maps_in_sideways_lr_writing_mode() {
     assert_eq!(style.border_top_width, Length::px(2.0));
     assert_eq!(style.border_bottom_width, Length::px(5.0));
 }
+
+#[test]
+fn logical_border_radius_maps_in_sideways_lr_writing_mode() {
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::SidewaysLr;
+    apply_declaration(
+        &mut style,
+        &decl("border-start-start-radius", PropertyValue::Length(Length::px(9.0))),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    apply_declaration(
+        &mut style,
+        &decl("border-end-end-radius", PropertyValue::Length(Length::px(4.0))),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+
+    // Sideways-lr: inline axis vertical, block axis horizontal left→right.
+    // start-start → top-left, end-end → bottom-right.
+    assert_eq!(style.border_top_left_radius, Length::px(9.0));
+    assert_eq!(style.border_bottom_right_radius, Length::px(4.0));
+}
