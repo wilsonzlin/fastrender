@@ -1236,6 +1236,14 @@ mod tests {
     }
 
     #[test]
+    fn resolve_href_preserves_data_urls() {
+        let base = "https://example.com/";
+        let href = "data:text/css,body%7Bcolor%3Ared%7D";
+        let resolved = resolve_href(base, href).expect("resolved href");
+        assert_eq!(resolved, href);
+    }
+
+    #[test]
     fn unescape_js_preserves_invalid_sequences() {
         let input = r"bad\u00zzescape and \q";
         let unescaped = unescape_js_escapes(input);
