@@ -121,6 +121,7 @@ Render all cached pages to `fetches/renders/` (PNG + per-page logs):
 # - Unknown flags cause a non-zero exit with usage help (fail-fast).
 # - Exits non-zero if no cached pages exist or a --pages filter matches nothing.
 # - Positional args are treated as page filters (cache stems); scheme/www are ignored when matching.
+# - Per-page logs are written to fetches/renders/<page>.log and a summary to fetches/renders/_summary.log.
 
 # Render only specific cached pages with a custom viewport/timeout
 ./target/release/render_pages --pages cnn.com,wikipedia.org --viewport 1366x768 --timeout 60
