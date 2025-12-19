@@ -136,6 +136,8 @@ This is a living document that will be updated as features are implemented.
 | `background-attachment` | P2 | ❌ | CSS 2.1 | Painting | fixed, scroll |
 | `background` | P1 | ❌ | CSS 2.1 | Parsing | Shorthand |
 | `background-size` | P1 | ⚠️ Partial | CSS3 Backgrounds | Painting | Parses including logical inline/block; image painting not implemented; regressions in `tests/style/background_position_logical_test.rs` |
+| `background-size-x` | P2 | ✅ | CSS3 Backgrounds | Painting | Longhand parsed and mapped |
+| `background-size-y` | P2 | ✅ | CSS3 Backgrounds | Painting | Longhand parsed and mapped |
 | `background-size-inline` | P2 | ✅ | CSS Logical Props | Writing mode | Maps logical inline size to physical width/height per writing-mode |
 | `background-size-block` | P2 | ✅ | CSS Logical Props | Writing mode | Maps logical block size to physical width/height per writing-mode |
 | `background-clip` | P2 | ❌ | CSS3 Backgrounds | Painting | |
