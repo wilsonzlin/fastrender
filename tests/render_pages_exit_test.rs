@@ -218,6 +218,7 @@ fn render_pages_combines_pages_options_and_positionals() {
     assert!(renders.join("foo.png").is_file());
     assert!(renders.join("bar.png").is_file());
     assert!(renders.join("baz.png").is_file());
+    assert!(renders.join("_summary.log").is_file(), "expected summary log to be written");
 }
 
 #[test]
