@@ -65,7 +65,9 @@ cargo build --release
 # - If no output filename is given, the PNG is named after the URL (cache stem + .png).
 # - Parent directories in the output path are created automatically.
 # - `render_pages` accepts positional page filters (cache stems) in addition to `--pages`, and
-#   fails fast for unknown flags, missing cache, or unmatched filters.
+#   `--pages` can be repeated and/or comma-separated. Filters are normalized case-insensitively
+#   (schemes stripped, hosts lowercased, leading www./trailing slashes ignored). Fails fast for
+#   unknown flags, missing cache, or unmatched filters.
 # - file:// URLs are supported (trailing slashes tolerated) and default to a URL-derived
 #   output filename when not explicitly provided.
 ```
@@ -116,6 +118,9 @@ Render all cached pages to `fetches/renders/` (PNG + per-page logs):
 
 # Render only specific cached pages with a custom viewport/timeout
 ./target/release/render_pages --pages cnn.com,wikipedia.org --viewport 1366x768 --timeout 60
+
+# You can also repeat --pages; the lists are combined and normalized:
+./target/release/render_pages --pages cnn.com --pages WIKIPEDIA.ORG --timeout 60
 
 # You can also pass cache stems positionally instead of --pages
 ./target/release/render_pages cnn.com wikipedia.org
