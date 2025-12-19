@@ -5419,6 +5419,7 @@ pub fn apply_declaration_with_base(
         }
         "text-orientation" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
+                let kw = kw.to_ascii_lowercase();
                 styles.text_orientation = match kw.as_str() {
                     "mixed" => TextOrientation::Mixed,
                     "upright" => TextOrientation::Upright,
@@ -5799,6 +5800,7 @@ pub fn apply_declaration_with_base(
         }
         "writing-mode" => {
             if let PropertyValue::Keyword(kw) = &resolved_value {
+                let kw = kw.to_ascii_lowercase();
                 styles.writing_mode = match kw.as_str() {
                     "horizontal-tb" => WritingMode::HorizontalTb,
                     "vertical-rl" => WritingMode::VerticalRl,
@@ -9895,30 +9897,33 @@ fn parse_text_decoration_skip_ink(value: &PropertyValue) -> Option<TextDecoratio
 
 fn parse_text_combine_upright(value: &PropertyValue) -> Option<TextCombineUpright> {
     match value {
-        PropertyValue::Keyword(kw) => match kw.as_str() {
-            "none" => Some(TextCombineUpright::None),
-            "all" => Some(TextCombineUpright::All),
-            "digits" => Some(TextCombineUpright::Digits(2)),
-            other if other.starts_with("digits") => {
-                let tail = other["digits".len()..].trim();
-                if tail.is_empty() {
-                    return Some(TextCombineUpright::Digits(2));
-                }
-                if let Ok(count) = tail.parse::<i32>() {
-                    if (2..=4).contains(&count) {
-                        return Some(TextCombineUpright::Digits(count as u8));
+        PropertyValue::Keyword(kw) => {
+            let kw = kw.to_ascii_lowercase();
+            match kw.as_str() {
+                "none" => Some(TextCombineUpright::None),
+                "all" => Some(TextCombineUpright::All),
+                "digits" => Some(TextCombineUpright::Digits(2)),
+                other if other.starts_with("digits") => {
+                    let tail = other["digits".len()..].trim();
+                    if tail.is_empty() {
+                        return Some(TextCombineUpright::Digits(2));
                     }
+                    if let Ok(count) = tail.parse::<i32>() {
+                        if (2..=4).contains(&count) {
+                            return Some(TextCombineUpright::Digits(count as u8));
+                        }
+                    }
+                    None
                 }
-                None
+                _ => None,
             }
-            _ => None,
-        },
+        }
         PropertyValue::Multiple(values) => {
             if values.is_empty() {
                 return None;
             }
             if let PropertyValue::Keyword(first) = &values[0] {
-                if first == "digits" {
+                if first.eq_ignore_ascii_case("digits") {
                     if values.len() == 1 {
                         return Some(TextCombineUpright::Digits(2));
                     }

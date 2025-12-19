@@ -2,7 +2,7 @@ use fastrender::css::parser::parse_stylesheet;
 use fastrender::dom;
 use fastrender::style::cascade::{apply_styles_with_media, StyledNode};
 use fastrender::style::media::MediaContext;
-use fastrender::style::types::{TextCombineUpright, TextOrientation};
+use fastrender::style::types::{TextCombineUpright, TextOrientation, WritingMode};
 
 fn first_node(html: &str, css: &str) -> StyledNode {
     let dom = dom::parse_html(html).expect("parse html");
@@ -45,6 +45,23 @@ fn text_orientation_sideways_right_aliases_sideways() {
 }
 
 #[test]
+fn text_orientation_and_writing_mode_are_case_insensitive() {
+    let node = first_node(
+        r#"<div></div>"#,
+        r#"div { writing-mode: VERTICAL-RL; text-orientation: Upright; }"#,
+    );
+    assert_eq!(node.styles.writing_mode, WritingMode::VerticalRl);
+    assert_eq!(node.styles.text_orientation, TextOrientation::Upright);
+
+    let node = first_node(
+        r#"<div></div>"#,
+        r#"div { writing-mode: Sideways-LR; text-orientation: SIDEWAYS-LEFT; }"#,
+    );
+    assert_eq!(node.styles.writing_mode, WritingMode::SidewaysLr);
+    assert_eq!(node.styles.text_orientation, TextOrientation::SidewaysLeft);
+}
+
+#[test]
 fn text_combine_upright_accepts_digits_range() {
     let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits 3; }"#);
     assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(3));
@@ -64,6 +81,18 @@ fn text_combine_upright_accepts_digits_range() {
 
     let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: digits4; }"#);
     assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(4));
+}
+
+#[test]
+fn text_combine_upright_keywords_are_case_insensitive() {
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: DIGITS 3; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(3));
+
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: DiGiTs4; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::Digits(4));
+
+    let node = first_node(r#"<div></div>"#, r#"div { text-combine-upright: AlL; }"#);
+    assert_eq!(node.styles.text_combine_upright, TextCombineUpright::All);
 }
 
 #[test]
