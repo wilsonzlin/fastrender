@@ -407,8 +407,12 @@ impl FontContext {
         used_codepoints: Option<&[u32]>,
     ) -> Result<()> {
         static MAX_FONTS: OnceLock<usize> = OnceLock::new();
-        let max_fonts = *MAX_FONTS
-            .get_or_init(|| std::env::var("FASTR_MAX_WEB_FONTS").ok().and_then(|v| v.parse().ok()).unwrap_or(8));
+        let max_fonts = *MAX_FONTS.get_or_init(|| {
+            std::env::var("FASTR_MAX_WEB_FONTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(8)
+        });
         if max_fonts == 0 {
             return Ok(());
         }
@@ -1099,8 +1103,8 @@ fn resolve_font_url(url: &str, base_url: Option<&str>) -> String {
     }
 
     if let Some(base) = base_url {
-        if let Ok(base) =
-            Url::parse(base).or_else(|_| Url::from_file_path(base).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+        if let Ok(base) = Url::parse(base)
+            .or_else(|_| Url::from_file_path(base).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
         {
             if let Ok(resolved) = base.join(url) {
                 return resolved.to_string();

@@ -5767,7 +5767,7 @@ impl EmbeddedImportFetcher {
         }
 
         Url::parse(&base_candidate)
-            .or_else(|_| Url::from_file_path(&base_candidate).map_err(|_| url::ParseError::RelativeUrlWithoutBase))
+            .or_else(|_| Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
             .ok()
             .and_then(|base_url| base_url.join(href).ok())
     }
@@ -6526,14 +6526,14 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
                 let r = (orig.red() as f32 * factor).round().clamp(0.0, 255.0) as u8;
                 let g = (orig.green() as f32 * factor).round().clamp(0.0, 255.0) as u8;
                 let b = (orig.blue() as f32 * factor).round().clamp(0.0, 255.0) as u8;
-                dst[idx] = PremultipliedColorU8::from_rgba(r, g, b, agg_alpha)
-                    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+                dst[idx] =
+                    PremultipliedColorU8::from_rgba(r, g, b, agg_alpha).unwrap_or(PremultipliedColorU8::TRANSPARENT);
             } else {
                 let r = (base_ratio.0 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
                 let g = (base_ratio.1 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
                 let b = (base_ratio.2 * agg_alpha as f32).round().clamp(0.0, 255.0) as u8;
-                dst[idx] = PremultipliedColorU8::from_rgba(r, g, b, agg_alpha)
-                    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+                dst[idx] =
+                    PremultipliedColorU8::from_rgba(r, g, b, agg_alpha).unwrap_or(PremultipliedColorU8::TRANSPARENT);
             }
         }
     }
