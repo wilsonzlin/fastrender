@@ -26,6 +26,11 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
         return None;
     }
 
+    // Ignore fragment-only hrefs (e.g., "#section") since they don't resolve to fetchable stylesheets.
+    if href.starts_with('#') {
+        return None;
+    }
+
     if href.starts_with("data:") {
         return Some(href.to_string());
     }
@@ -1286,6 +1291,12 @@ mod tests {
 
         // Schemes are matched case-insensitively.
         assert_eq!(resolve_href(base, "JaVaScRiPt:alert(1)"), None);
+    }
+
+    #[test]
+    fn resolve_href_ignores_fragment_only_hrefs() {
+        let base = "https://example.com/";
+        assert_eq!(resolve_href(base, "#section"), None);
     }
 
     #[test]
