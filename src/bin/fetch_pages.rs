@@ -39,7 +39,7 @@ fn usage() {
     println!("  --refresh           Re-fetch all pages even if cached");
     println!("  --jobs N            Number of parallel fetches (default: num_cpus)");
     println!("  --timeout SECONDS   Per-request timeout (default: 30)");
-    println!("  --pages a,b,c       Fetch only the listed pages (full URLs or stems ok)");
+    println!("  --pages a,b,c       Fetch only the listed pages (full URLs or stems ok; schemes are stripped, hosts lowercased, leading www./trailing slashes removed)");
     println!("  --user-agent UA     Override the User-Agent header (default: Chrome-like)");
     println!("  --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)");
     println!("  --timings           Print per-page fetch durations");
