@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::fs;
+use std::process::Command;
 
 use fastrender::resource::url_to_filename;
 
@@ -52,9 +52,7 @@ fn fetch_and_render_defaults_output_name_from_url() {
     fs::write(&html_path, "<!doctype html><title>Hello</title>").expect("write html");
 
     let url = format!("file://{}", html_path.display());
-    let expected_png = tmp
-        .path()
-        .join(format!("{}.png", url_to_filename(&url)));
+    let expected_png = tmp.path().join(format!("{}.png", url_to_filename(&url)));
 
     let status = Command::new(env!("CARGO_BIN_EXE_fetch_and_render"))
         .current_dir(tmp.path())
