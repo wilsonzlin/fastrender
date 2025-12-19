@@ -404,7 +404,6 @@ fn collect_font_faces_recursive(
     cache: Option<&mut MediaQueryCache>,
     out: &mut Vec<FontFaceRule>,
 ) {
-    // Mutable binding is required to reuse the cache via as_deref_mut() in nested rules.
     let mut cache = cache;
     for rule in rules {
         match rule {
