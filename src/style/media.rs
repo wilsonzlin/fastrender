@@ -2932,7 +2932,11 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(std::sync::Mutex::default).lock().unwrap()
+        // If a prior test panicked while holding the lock, avoid poisoning subsequent tests.
+        LOCK
+            .get_or_init(std::sync::Mutex::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     impl EnvGuard {

@@ -26,6 +26,26 @@ use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
+/// Normalize a page identifier (full URL or hostname) to a cache/output stem.
+///
+/// Strips schemes and leading "www.", lowercases the host, and sanitizes for filenames.
+pub fn normalize_page_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // Remove scheme prefixes if present, case-insensitively.
+    let no_scheme = trimmed
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+
+    // Strip a leading www. to align with cache naming expectations.
+    let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
+
+    Some(url_to_filename(without_www))
+}
+
 /// Normalize a URL into a filename-safe stem used for caches and outputs.
 pub fn url_to_filename(url: &str) -> String {
     // First, try to parse the URL so we can lowercase the hostname (case-insensitive per URL
