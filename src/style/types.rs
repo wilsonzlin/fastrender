@@ -132,7 +132,7 @@ pub enum BorderImageRepeat {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BorderImageSource {
     None,
-    Image(BackgroundImage),
+    Image(Box<BackgroundImage>),
 }
 
 /// Border image slice value (number or percentage)
@@ -1127,7 +1127,7 @@ pub enum FilterFunction {
     HueRotate(f32), // degrees
     Invert(f32),
     Opacity(f32),
-    DropShadow(FilterShadow),
+    DropShadow(Box<FilterShadow>),
 }
 
 /// Transform origin for x/y axes
@@ -2370,7 +2370,7 @@ pub enum BasicShape {
         right: Length,
         bottom: Length,
         left: Length,
-        border_radius: Option<ClipRadii>,
+        border_radius: Box<Option<ClipRadii>>,
     },
     Circle {
         radius: ShapeRadius,
@@ -2392,7 +2392,7 @@ pub enum BasicShape {
 pub enum ClipPath {
     None,
     Box(ReferenceBox),
-    BasicShape(BasicShape, Option<ReferenceBox>),
+    BasicShape(Box<BasicShape>, Option<ReferenceBox>),
 }
 
 /// Reference box used by transforms
