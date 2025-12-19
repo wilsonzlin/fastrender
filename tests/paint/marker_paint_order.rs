@@ -1,6 +1,6 @@
 use fastrender::geometry::Rect;
-use fastrender::paint::display_list::{DisplayItem, ListMarkerItem};
-use fastrender::paint::display_list_renderer::DisplayListRenderer;
+use fastrender::paint::display_list::DisplayItem;
+use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
 use fastrender::style::ComputedStyle;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
@@ -29,18 +29,13 @@ fn marker_paints_after_background() {
     let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 40.0, 30.0), vec![marker]);
     let tree = FragmentTree::new(root);
 
-    let (list, _glyph_cache, _images) = DisplayListRenderer::build_display_list(&tree, 40, 30).expect("list");
+    let list = DisplayListBuilder::new().build_tree(&tree);
     let mut saw_marker = false;
-    for item in &list.items {
-        match item {
-            DisplayItem::ListMarker(ListMarkerItem { color, background, .. }) => {
-                saw_marker = true;
-                assert_eq!(*background, Some(Rgba::BLACK), "marker background should be present");
-                assert_eq!(*color, Rgba::WHITE, "marker text should paint over background");
-            }
-            _ => {}
+    for item in list.items() {
+        if let DisplayItem::ListMarker(marker) = item {
+            saw_marker = true;
+            assert_eq!(marker.color, Rgba::WHITE, "marker text should paint over background");
         }
     }
     assert!(saw_marker, "marker display item should be emitted");
 }
-

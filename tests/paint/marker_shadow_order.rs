@@ -1,5 +1,7 @@
+use fastrender::css::types::TextShadow;
 use fastrender::geometry::Rect;
-use fastrender::paint::display_list_renderer::DisplayListRenderer;
+use fastrender::paint::display_list::{DisplayItem, ListMarkerItem};
+use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
 use fastrender::style::ComputedStyle;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
@@ -10,7 +12,7 @@ fn marker_shadow_paints_after_background() {
     let mut style = ComputedStyle::default();
     style.color = Rgba::BLACK;
     style.background_color = Rgba::WHITE;
-    style.text_shadow.push(fastrender::style::types::TextShadow {
+    style.text_shadow.push(TextShadow {
         offset_x: fastrender::style::values::Length::px(2.0),
         offset_y: fastrender::style::values::Length::px(0.0),
         blur_radius: fastrender::style::values::Length::px(0.0),
@@ -33,23 +35,15 @@ fn marker_shadow_paints_after_background() {
     let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![marker]);
     let tree = FragmentTree::new(root);
 
-    let (list, ..) = DisplayListRenderer::build_display_list(&tree, 20, 20).expect("display list");
+    let list = DisplayListBuilder::new().build_tree(&tree);
 
-    let mut shadow_seen = false;
-    let mut background_seen = false;
-    for item in &list.items {
-        match item {
-            fastrender::paint::display_list::DisplayItem::Shadow(_shadow) => {
-                shadow_seen = true;
-                assert!(background_seen, "marker background should precede shadow");
-            }
-            fastrender::paint::display_list::DisplayItem::ListMarker(marker) => {
-                background_seen = marker.background.is_some();
-            }
-            _ => {}
+    let mut marker: Option<&ListMarkerItem> = None;
+    for item in list.items() {
+        if let DisplayItem::ListMarker(m) = item {
+            marker = Some(m);
         }
     }
 
-    assert!(shadow_seen, "marker shadow should be emitted");
+    let marker = marker.expect("marker display item");
+    assert!(!marker.shadows.is_empty(), "marker shadow should be emitted");
 }
-

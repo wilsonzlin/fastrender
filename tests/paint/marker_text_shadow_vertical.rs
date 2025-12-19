@@ -1,3 +1,5 @@
+use crate::util::bounding_box_for_color;
+use fastrender::css::types::TextShadow;
 use fastrender::geometry::Rect;
 use fastrender::paint::painter::paint_tree;
 use fastrender::style::color::Rgba;
@@ -10,7 +12,7 @@ fn marker_text_shadow_in_vertical_writing() {
     let mut style = ComputedStyle::default();
     style.color = Rgba::BLACK;
     style.font_size = 16.0;
-    style.text_shadow.push(fastrender::style::types::TextShadow {
+    style.text_shadow.push(TextShadow {
         offset_x: fastrender::style::values::Length::px(0.0),
         offset_y: fastrender::style::values::Length::px(4.0),
         blur_radius: fastrender::style::values::Length::px(0.0),
@@ -35,15 +37,10 @@ fn marker_text_shadow_in_vertical_writing() {
 
     let pixmap = paint_tree(&tree, 40, 60, Rgba::WHITE).expect("paint");
 
-    let glyph_bbox = fastrender::tests::display_list_test::bounding_box_for_color(&pixmap, |(r, g, b, a)| {
-        a > 0 && r < 32 && g < 32 && b < 32
-    })
-    .expect("marker glyph");
-    let shadow_bbox = fastrender::tests::display_list_test::bounding_box_for_color(
-        &pixmap,
-        |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80,
-    )
-    .expect("marker shadow");
+    let glyph_bbox =
+        bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("marker glyph");
+    let shadow_bbox =
+        bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("marker shadow");
 
     let dy = shadow_bbox.1 as i32 - glyph_bbox.1 as i32;
     assert!(
@@ -52,4 +49,3 @@ fn marker_text_shadow_in_vertical_writing() {
         dy
     );
 }
-
