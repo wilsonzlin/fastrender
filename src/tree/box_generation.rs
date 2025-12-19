@@ -3378,7 +3378,7 @@ mod tests {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("reversed".to_string(), "".to_string())],
+                attributes: vec![("reversed".to_string(), String::new())],
             },
             children: vec![],
         };
@@ -3544,7 +3544,7 @@ mod tests {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("reversed".to_string(), "".to_string())],
+                attributes: vec![("reversed".to_string(), String::new())],
             },
             children: vec![],
         };
@@ -3630,7 +3630,7 @@ mod tests {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "ol".to_string(),
                     namespace: HTML_NAMESPACE.to_string(),
-                    attributes: vec![("reversed".to_string(), "".to_string())],
+                    attributes: vec![("reversed".to_string(), String::new())],
                 },
                 children: vec![],
             },
@@ -3678,7 +3678,7 @@ mod tests {
             node_type: dom::DomNodeType::Element {
                 tag_name: "ol".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("reversed".to_string(), "".to_string())],
+                attributes: vec![("reversed".to_string(), String::new())],
             },
             children: vec![],
         };
@@ -3814,7 +3814,7 @@ mod tests {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "ol".to_string(),
                     namespace: HTML_NAMESPACE.to_string(),
-                    attributes: vec![("reversed".to_string(), "".to_string())],
+                    attributes: vec![("reversed".to_string(), String::new())],
                 },
                 children: vec![],
             },
@@ -4351,7 +4351,7 @@ mod tests {
                 node_type: dom::DomNodeType::Element {
                     tag_name: "ol".to_string(),
                     namespace: HTML_NAMESPACE.to_string(),
-                    attributes: vec![("reversed".to_string(), "".to_string())],
+                    attributes: vec![("reversed".to_string(), String::new())],
                 },
                 children: vec![],
             },
