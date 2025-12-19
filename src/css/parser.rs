@@ -8,6 +8,7 @@
 
 use super::properties::parse_property_value;
 use super::selectors::PseudoClassParser;
+use std::fmt::Write;
 use super::types::{
     ContainerRule, CssParseError, CssParseResult, CssRule, Declaration, FontFaceRule, FontFaceSource, FontFaceStyle,
     ImportRule, LayerRule, MediaRule, StyleRule, StyleSheet, SupportsCondition, SupportsRule,
