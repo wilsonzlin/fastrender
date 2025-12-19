@@ -668,13 +668,8 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
                     marker_back -= 1;
                 }
                 let sourcemap_marker = if marker_back > 0 && bytes[marker_back - 1] == b'#' {
-                    if marker_back >= 3 && bytes[marker_back - 2] == b'*' && bytes[marker_back - 3] == b'/' {
-                        true
-                    } else if marker_back >= 2 && bytes[marker_back - 2] == b'/' {
-                        true
-                    } else {
-                        false
-                    }
+                    (marker_back >= 3 && bytes[marker_back - 2] == b'*' && bytes[marker_back - 3] == b'/')
+                        || (marker_back >= 2 && bytes[marker_back - 2] == b'/')
                 } else {
                     false
                 };
@@ -859,7 +854,7 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
 
     if let Ok(url) = Url::parse(&input) {
         if url.scheme() == "file" {
-            if let Some(seg) = url.path_segments().and_then(|s| s.last()) {
+            if let Some(seg) = url.path_segments().and_then(|mut s| s.next_back()) {
                 if let Some(host) = seg.strip_suffix(".html") {
                     let guess = format!("https://{host}/");
                     if Url::parse(&guess).is_ok() {
