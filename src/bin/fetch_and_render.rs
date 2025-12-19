@@ -1124,7 +1124,14 @@ fn main() -> Result<()> {
             "--timings" => {
                 enable_timings = true;
             }
-            _ => positional.push(arg),
+            _ => {
+                if arg.starts_with('-') {
+                    eprintln!("Unknown option: {}", arg);
+                    usage(&program);
+                    std::process::exit(1);
+                }
+                positional.push(arg)
+            }
         }
     }
 
