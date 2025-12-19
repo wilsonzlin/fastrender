@@ -1283,6 +1283,13 @@ mod tests {
     }
 
     #[test]
+    fn normalize_scheme_slashes_preserves_scheme_relative() {
+        let input = "//cdn.example.com//assets//img.png";
+        let normalized = normalize_scheme_slashes(input);
+        assert_eq!(normalized, input);
+    }
+
+    #[test]
     fn resolve_href_returns_none_for_empty_href() {
         let base = "https://example.com/";
         assert_eq!(resolve_href(base, ""), None);
