@@ -3338,7 +3338,7 @@ pub fn apply_declaration_with_base(
         }
         "inset-inline" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                let start = values.get(0).copied().flatten();
+                    let start = values.first().copied().flatten();
                 let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
@@ -3353,7 +3353,7 @@ pub fn apply_declaration_with_base(
         }
         "inset-block" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                let start = values.get(0).copied().flatten();
+                let start = values.first().copied().flatten();
                 let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
@@ -3607,7 +3607,7 @@ pub fn apply_declaration_with_base(
         }
         "margin-inline" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                let start = values.get(0).copied().flatten();
+                let start = values.first().copied().flatten();
                 let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
@@ -3622,7 +3622,7 @@ pub fn apply_declaration_with_base(
         }
         "margin-block" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                let start = values.get(0).copied().flatten();
+                let start = values.first().copied().flatten();
                 let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
@@ -4814,7 +4814,7 @@ pub fn apply_declaration_with_base(
                 if parts.is_empty() {
                     return;
                 }
-                let mut row_start = parts.get(0).copied().unwrap_or("auto").to_string();
+                let mut row_start = parts.first().copied().unwrap_or("auto").to_string();
                 let mut col_start = parts.get(1).copied().unwrap_or("auto").to_string();
                 let mut row_end = parts.get(2).copied().unwrap_or("auto").to_string();
                 let mut col_end = parts.get(3).copied().unwrap_or("auto").to_string();
@@ -4963,7 +4963,7 @@ pub fn apply_declaration_with_base(
                             | "no-contextual" => ligature_tokens.push(tok),
                             "lining-nums" | "oldstyle-nums" | "proportional-nums" | "tabular-nums"
                             | "diagonal-fractions" | "stacked-fractions" | "ordinal" | "slashed-zero" => {
-                                numeric_tokens.push(tok)
+                    numeric_tokens.push(tok);
                             }
                             "jis78" | "jis83" | "jis90" | "jis04" | "simplified" | "traditional" | "full-width"
                             | "proportional-width" | "ruby" => east_asian_tokens.push(tok),
@@ -4975,7 +4975,7 @@ pub fn apply_declaration_with_base(
                                 || tok.starts_with("annotation(")
                                 || tok == "historical-forms" =>
                             {
-                                alternate_tokens.push(tok)
+                    alternate_tokens.push(tok);
                             }
                             "sub" | "super" => position_tokens.push(tok),
                             _ => {
@@ -6192,7 +6192,7 @@ pub fn apply_declaration_with_base(
                         .background_sizes
                         .get(source_idx)
                         .copied()
-                        .unwrap_or(default);
+                        .unwrap_or_else(|| default);
                     let block_value = values
                         .get(idx)
                         .copied()
@@ -6246,7 +6246,7 @@ pub fn apply_declaration_with_base(
                         .background_positions
                         .get(source_idx)
                         .copied()
-                        .unwrap_or(BackgroundLayer::default().position);
+                        .unwrap_or_else(|| BackgroundLayer::default().position);
                     let x_comp = xs
                         .get(idx)
                         .copied()
@@ -6272,7 +6272,7 @@ pub fn apply_declaration_with_base(
                         .background_positions
                         .get(source_idx)
                         .copied()
-                        .unwrap_or(BackgroundLayer::default().position);
+                        .unwrap_or_else(|| BackgroundLayer::default().position);
                     let y_comp = ys
                         .get(idx)
                         .copied()
@@ -6297,7 +6297,7 @@ pub fn apply_declaration_with_base(
                         .background_positions
                         .get(source_idx)
                         .copied()
-                        .unwrap_or(default);
+                        .unwrap_or_else(|| default);
                     let inline_value = values
                         .get(idx)
                         .copied()
