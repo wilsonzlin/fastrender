@@ -722,6 +722,12 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_filename_trims_trailing_separators_and_punctuation() {
+        assert_eq!(sanitize_filename("example.com///"), "example.com");
+        assert_eq!(sanitize_filename("foo_bar.."), "foo_bar");
+    }
+
+    #[test]
     fn test_fetched_resource_is_image() {
         let resource = FetchedResource::new(vec![], Some("image/png".to_string()));
         assert!(resource.is_image());
