@@ -537,6 +537,12 @@ fn supports_value_is_valid(property: &str, value: &str) -> bool {
         "overflow" | "overflow-x" | "overflow-y" => {
             return matches!(value_lower.as_str(), "visible" | "hidden" | "scroll" | "auto" | "clip");
         }
+        "text-orientation" => {
+            return matches!(
+                value_lower.as_str(),
+                "mixed" | "upright" | "sideways" | "sideways-right"
+            );
+        }
         "writing-mode" => {
             return matches!(
                 value_lower.as_str(),
@@ -641,7 +647,10 @@ mod tests {
         assert!(!unsupported.matches(), ":has() is unsupported in selector() queries");
 
         let supported = SupportsCondition::Selector(".foo:nth-child(2n+1)".into());
-        assert!(supported.matches(), "nth-child selector should be supported in selector()");
+        assert!(
+            supported.matches(),
+            "nth-child selector should be supported in selector()"
+        );
     }
 }
 
