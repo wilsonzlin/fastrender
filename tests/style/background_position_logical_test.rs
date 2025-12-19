@@ -3,11 +3,25 @@ use fastrender::dom;
 use fastrender::style::cascade::{apply_styles_with_media, StyledNode};
 use fastrender::style::media::MediaContext;
 use fastrender::style::types::{BackgroundPosition, BackgroundPositionComponent};
+use fastrender::style::types::{BackgroundSize, BackgroundSizeComponent};
 use fastrender::style::values::LengthUnit;
 
 fn bg_pos(node: &StyledNode) -> (BackgroundPositionComponent, BackgroundPositionComponent) {
-    match node.styles.background_positions.first().copied().expect("background position") {
+    match node
+        .styles
+        .background_positions
+        .first()
+        .copied()
+        .expect("background position")
+    {
         BackgroundPosition::Position { x, y } => (x, y),
+    }
+}
+
+fn bg_size(node: &StyledNode) -> (BackgroundSizeComponent, BackgroundSizeComponent) {
+    match node.styles.background_sizes.first().cloned().expect("background size") {
+        BackgroundSize::Explicit(x, y) => (x, y),
+        BackgroundSize::Keyword(_) => panic!("expected explicit background size"),
     }
 }
 
@@ -29,8 +43,18 @@ fn all_divs(styled: &StyledNode) -> Vec<&StyledNode> {
 }
 
 fn assert_component(comp: &BackgroundPositionComponent, align: f32, offset: f32, unit: LengthUnit) {
-    assert!((comp.alignment - align).abs() < 1e-6, "expected alignment {} got {}", align, comp.alignment);
-    assert!((comp.offset.value - offset).abs() < 1e-6, "expected offset {} got {}", offset, comp.offset.value);
+    assert!(
+        (comp.alignment - align).abs() < 1e-6,
+        "expected alignment {} got {}",
+        align,
+        comp.alignment
+    );
+    assert!(
+        (comp.offset.value - offset).abs() < 1e-6,
+        "expected offset {} got {}",
+        offset,
+        comp.offset.value
+    );
     assert_eq!(comp.offset.unit, unit);
 }
 
@@ -87,10 +111,7 @@ fn background_position_vertical_first_pair_resolves_axes() {
 
 #[test]
 fn background_position_offsets_follow_keywords() {
-    let dom = dom::parse_html(
-        r#"<div style="background-position: right 10% top 20%"></div>"#,
-    )
-    .unwrap();
+    let dom = dom::parse_html(r#"<div style="background-position: right 10% top 20%"></div>"#).unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
@@ -116,10 +137,7 @@ fn background_position_defaults_to_zero_zero() {
 
 #[test]
 fn background_position_shorthand_resets_positions() {
-    let dom = dom::parse_html(
-        r#"<div style="background-position: 20% 30%; background: red;"></div>"#,
-    )
-    .unwrap();
+    let dom = dom::parse_html(r#"<div style="background-position: 20% 30%; background: red;"></div>"#).unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
@@ -150,10 +168,8 @@ fn background_position_inline_block_is_ignored_for_now() {
 #[test]
 fn background_position_logical_maps_inline_and_block_horizontal_tb() {
     // In horizontal-tb, inline maps to the physical x-axis and block maps to the physical y-axis.
-    let dom = dom::parse_html(
-        r#"<div style="background-position-inline: 10%; background-position-block: 20%"></div>"#,
-    )
-    .unwrap();
+    let dom = dom::parse_html(r#"<div style="background-position-inline: 10%; background-position-block: 20%"></div>"#)
+        .unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
@@ -179,4 +195,46 @@ fn background_position_logical_maps_inline_and_block_vertical_rl() {
     // Block axis applies to the physical x-axis; inline axis applies to y.
     assert_component(&x, 0.0, 0.0, LengthUnit::Percent);
     assert_component(&y, 0.0, 25.0, LengthUnit::Percent);
+}
+
+#[test]
+fn background_size_logical_maps_inline_and_block_horizontal_tb() {
+    // In horizontal-tb, inline maps to the physical x-axis and block maps to y.
+    let dom =
+        dom::parse_html(r#"<div style="background-size-inline: 10px; background-size-block: 20px"></div>"#).unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = all_divs(&styled)[0];
+    let (x, y) = bg_size(node);
+    assert_eq!(
+        x,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::px(10.0))
+    );
+    assert_eq!(
+        y,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::px(20.0))
+    );
+}
+
+#[test]
+fn background_size_logical_maps_inline_and_block_vertical_rl() {
+    // In vertical-rl, inline maps to the physical y-axis and block maps to the physical x-axis.
+    let dom = dom::parse_html(
+        r#"<div style="writing-mode: vertical-rl; background-size-inline: 30%; background-size-block: 5px"></div>"#,
+    )
+    .unwrap();
+    let stylesheet = parse_stylesheet("").unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    let node = all_divs(&styled)[0];
+    let (x, y) = bg_size(node);
+    assert_eq!(
+        x,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::px(5.0))
+    );
+    assert_eq!(
+        y,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(30.0))
+    );
 }

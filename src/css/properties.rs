@@ -35,6 +35,8 @@ const KNOWN_PROPERTIES: &[&str] = &[
     "background-position-y",
     "background-position-inline",
     "background-position-block",
+    "background-size-inline",
+    "background-size-block",
     "background-repeat",
     "background-size",
     "block-size",

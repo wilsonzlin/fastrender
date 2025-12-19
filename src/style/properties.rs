@@ -6137,6 +6137,88 @@ pub fn apply_declaration_with_base(
                 styles.rebuild_background_layers();
             }
         }
+        "background-size-inline" => {
+            if let Some(values) = parse_layer_list(&resolved_value, parse_background_size_component) {
+                styles.ensure_background_lists();
+                let horizontal_inline = inline_axis_is_horizontal(styles.writing_mode);
+                let default = BackgroundLayer::default().size;
+                let layer_count = values.len().max(styles.background_sizes.len()).max(1);
+                let mut sizes = Vec::with_capacity(layer_count);
+                for idx in 0..layer_count {
+                    let source_idx = styles.background_sizes.len().saturating_sub(1).min(idx);
+                    let source = styles
+                        .background_sizes
+                        .get(source_idx)
+                        .cloned()
+                        .unwrap_or(default.clone());
+                    let inline_value = values
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| values.last().copied().unwrap());
+                    let explicit = match source {
+                        BackgroundSize::Explicit(mut x, mut y) => {
+                            if horizontal_inline {
+                                x = inline_value;
+                            } else {
+                                y = inline_value;
+                            }
+                            BackgroundSize::Explicit(x, y)
+                        }
+                        BackgroundSize::Keyword(_) => {
+                            if horizontal_inline {
+                                BackgroundSize::Explicit(inline_value, BackgroundSizeComponent::Auto)
+                            } else {
+                                BackgroundSize::Explicit(BackgroundSizeComponent::Auto, inline_value)
+                            }
+                        }
+                    };
+                    sizes.push(explicit);
+                }
+                styles.background_sizes = sizes;
+                styles.rebuild_background_layers();
+            }
+        }
+        "background-size-block" => {
+            if let Some(values) = parse_layer_list(&resolved_value, parse_background_size_component) {
+                styles.ensure_background_lists();
+                let horizontal_block = block_axis_is_horizontal(styles.writing_mode);
+                let default = BackgroundLayer::default().size;
+                let layer_count = values.len().max(styles.background_sizes.len()).max(1);
+                let mut sizes = Vec::with_capacity(layer_count);
+                for idx in 0..layer_count {
+                    let source_idx = styles.background_sizes.len().saturating_sub(1).min(idx);
+                    let source = styles
+                        .background_sizes
+                        .get(source_idx)
+                        .cloned()
+                        .unwrap_or(default.clone());
+                    let block_value = values
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| values.last().copied().unwrap());
+                    let explicit = match source {
+                        BackgroundSize::Explicit(mut x, mut y) => {
+                            if horizontal_block {
+                                x = block_value;
+                            } else {
+                                y = block_value;
+                            }
+                            BackgroundSize::Explicit(x, y)
+                        }
+                        BackgroundSize::Keyword(_) => {
+                            if horizontal_block {
+                                BackgroundSize::Explicit(block_value, BackgroundSizeComponent::Auto)
+                            } else {
+                                BackgroundSize::Explicit(BackgroundSizeComponent::Auto, block_value)
+                            }
+                        }
+                    };
+                    sizes.push(explicit);
+                }
+                styles.background_sizes = sizes;
+                styles.rebuild_background_layers();
+            }
+        }
         "background-repeat" => {
             if let Some(repeats) = parse_layer_list(&resolved_value, parse_background_repeat) {
                 styles.background_repeats = repeats;
@@ -10698,7 +10780,10 @@ mod tests {
         );
         assert_eq!(style.flex_grow, 4.0);
         assert_eq!(style.flex_shrink, 5.0);
-        assert_eq!(style.flex_basis, FlexBasis::Length(Length::new(0.0, LengthUnit::Percent)));
+        assert_eq!(
+            style.flex_basis,
+            FlexBasis::Length(Length::new(0.0, LengthUnit::Percent))
+        );
 
         apply_declaration(
             &mut style,
@@ -10714,7 +10799,10 @@ mod tests {
         );
         assert_eq!(style.flex_grow, 6.0);
         assert_eq!(style.flex_shrink, 1.0);
-        assert_eq!(style.flex_basis, FlexBasis::Length(Length::new(0.0, LengthUnit::Percent)));
+        assert_eq!(
+            style.flex_basis,
+            FlexBasis::Length(Length::new(0.0, LengthUnit::Percent))
+        );
 
         apply_declaration(
             &mut style,
