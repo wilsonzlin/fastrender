@@ -138,6 +138,7 @@ const PAGES: &[&str] = &[
     "https://cnet.com",
     "https://developer.mozilla.org",
     "https://developer.mozilla.org/en-US/docs/Web/CSS/writing-mode",
+    "https://developer.mozilla.org/en-US/docs/Web/CSS/text-orientation",
     "https://howtogeek.com",
     "https://macrumors.com",
     "https://washingtonpost.com",
