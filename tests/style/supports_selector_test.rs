@@ -75,6 +75,26 @@ fn supports_declaration_rejects_invalid_text_orientation() {
 }
 
 #[test]
+fn supports_declaration_accepts_valid_writing_mode() {
+    let dom = dom::parse_html(r#"<div></div>"#).unwrap();
+    let css = r#"@supports (writing-mode: sideways-lr) { div { display: inline; } }"#;
+    let stylesheet = parse_stylesheet("supports", css, None).unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    assert_eq!(display(&styled.children[0]), "inline");
+}
+
+#[test]
+fn supports_declaration_rejects_invalid_writing_mode() {
+    let dom = dom::parse_html(r#"<div></div>"#).unwrap();
+    let css = r#"@supports (writing-mode: upside-down) { div { display: inline; } }"#;
+    let stylesheet = parse_stylesheet("supports", css, None).unwrap();
+    let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+    assert_eq!(display(&styled.children[0]), "block");
+}
+
+#[test]
 fn supports_declaration_accepts_text_combine_digits() {
     let dom = dom::parse_html(r#"<div></div>"#).unwrap();
     let css = r#"@supports (text-combine-upright: digits 3) { div { display: inline; } }"#;
