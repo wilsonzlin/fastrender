@@ -54,6 +54,11 @@ cargo build --release
 ./target/release/fetch_and_render https://example.com/
 
 # Output: fetched_output.png
+
+# Notes
+# - Unknown flags cause a non-zero exit with usage help (fail-fast).
+# - Exits non-zero when no URL is provided or a file:// target is missing.
+# - If no output filename is given, the PNG is named after the URL (cache stem + .png).
 ```
 
 ### Batch Fetch & Render
