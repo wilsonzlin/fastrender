@@ -18,7 +18,8 @@ use fastrender::css::loader::{
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{
-    parse_cached_html_meta, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
+    parse_cached_html_meta, url_to_filename, HttpFetcher, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE,
+    DEFAULT_USER_AGENT,
 };
 use fastrender::FastRender;
 use std::collections::HashSet;
@@ -34,6 +35,33 @@ const HTML_DIR: &str = "fetches/html";
 const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
+
+fn normalize_page_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let no_scheme = trimmed.trim_start_matches("https://").trim_start_matches("http://");
+    let without_www = no_scheme.strip_prefix("www.").unwrap_or(no_scheme);
+    Some(url_to_filename(without_www))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_page_name;
+
+    #[test]
+    fn normalize_page_name_strips_scheme_and_www() {
+        assert_eq!(normalize_page_name("https://example.com/foo").as_deref(), Some("example.com_foo"));
+        assert_eq!(normalize_page_name("http://www.example.com").as_deref(), Some("example.com"));
+    }
+
+    #[test]
+    fn normalize_page_name_ignores_empty() {
+        assert!(normalize_page_name("").is_none());
+        assert!(normalize_page_name("   ").is_none());
+    }
+}
 
 fn usage() {
     println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings]");
@@ -217,9 +245,8 @@ fn main() {
                 if let Some(val) = args.next() {
                     let mut filter = page_filter.take().unwrap_or_default();
                     for name in val.split(',') {
-                        let trimmed = name.trim();
-                        if !trimmed.is_empty() {
-                            filter.insert(trimmed.to_string());
+                        if let Some(normalized) = normalize_page_name(name) {
+                            filter.insert(normalized);
                         }
                     }
                     page_filter = Some(filter);
