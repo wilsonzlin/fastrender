@@ -22,7 +22,7 @@
 //! - CSS Flexible Box Layout Module Level 1: <https://www.w3.org/TR/css-flexbox-1/>
 //! - Taffy documentation: <https://docs.rs/taffy/>
 
-use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem;
@@ -648,9 +648,11 @@ impl FormattingContext for FlexFormattingContext {
                                         key.0,
                                         key.1
                                     );
-                                    if abort_after_first && *guard >= log_first_n {
-                                        panic!("[flex-first-abort] seq={}", *guard);
-                                    }
+                                    assert!(
+                                        !(abort_after_first && *guard >= log_first_n),
+                                        "[flex-first-abort] seq={}",
+                                        *guard
+                                    );
                                 }
                             }
                         }
@@ -1216,15 +1218,15 @@ impl FormattingContext for FlexFormattingContext {
                         flex_profile::record_measure_store(new_key);
                         record_node_measure_store(measure_box.id);
                     }
-                    if let Some(_ptr) = node_ptr {
-                        let entry = pass_cache.entry(cache_key).or_default();
-                        if !entry.contains_key(&key) {
-                            let stored_size = Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
-                            entry.insert(key, (stored_size, normalized_fragment.clone()));
-                            *pass_stores.entry(cache_key).or_insert(0) += 1;
-                            record_node_measure_store(measure_box.id);
+                        if let Some(_ptr) = node_ptr {
+                            let entry = pass_cache.entry(cache_key).or_default();
+                            if let Entry::Vacant(e) = entry.entry(key) {
+                                let stored_size = Size::new(content_size.width.max(0.0), content_size.height.max(0.0));
+                                e.insert((stored_size, normalized_fragment.clone()));
+                                *pass_stores.entry(cache_key).or_insert(0) += 1;
+                                record_node_measure_store(measure_box.id);
+                            }
                         }
-                    }
 
                     let size = taffy::geometry::Size {
                         width: content_size.width.max(0.0),
