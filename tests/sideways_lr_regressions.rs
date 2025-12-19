@@ -224,3 +224,45 @@ fn logical_border_radius_maps_in_sideways_lr_writing_mode() {
     assert_eq!(style.border_top_left_radius, Length::px(9.0));
     assert_eq!(style.border_bottom_right_radius, Length::px(4.0));
 }
+
+#[test]
+fn background_position_logical_maps_in_sideways_lr_writing_mode() {
+    let mut style = ComputedStyle::default();
+    style.writing_mode = WritingMode::SidewaysLr;
+    apply_declaration(
+        &mut style,
+        &decl(
+            "background-position-inline",
+            PropertyValue::Multiple(vec![
+                PropertyValue::Length(Length::px(10.0)),
+                PropertyValue::Length(Length::px(20.0)),
+            ]),
+        ),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    apply_declaration(
+        &mut style,
+        &decl(
+            "background-position-block",
+            PropertyValue::Multiple(vec![
+                PropertyValue::Length(Length::px(3.0)),
+                PropertyValue::Length(Length::px(7.0)),
+            ]),
+        ),
+        &ComputedStyle::default(),
+        16.0,
+        16.0,
+    );
+    resolve_pending_logical_properties(&mut style);
+
+    // Sideways-lr: inline axis vertical (y), block axis horizontal (x).
+    let fastrender::style::types::BackgroundPosition::Position { x, y } = style.background_positions[0];
+    assert_eq!(x.offset, Length::px(3.0));
+    assert_eq!(y.offset, Length::px(10.0));
+
+    let fastrender::style::types::BackgroundPosition::Position { x, y } = style.background_positions[1];
+    assert_eq!(x.offset, Length::px(7.0));
+    assert_eq!(y.offset, Length::px(20.0));
+}
