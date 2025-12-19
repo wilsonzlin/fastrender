@@ -148,7 +148,7 @@ pub const DEFAULT_USER_AGENT: &str =
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 
 /// Strip a leading "User-Agent:" prefix so logs don't double-prefix when callers
-/// pass a full header value.
+/// pass a full header value. Also trims surrounding whitespace after the prefix.
 pub fn normalize_user_agent_for_log(ua: &str) -> &str {
     ua.strip_prefix("User-Agent:")
         .map(str::trim)
