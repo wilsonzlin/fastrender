@@ -869,7 +869,7 @@ fn parse_viewport(val: &str) -> Option<(u32, u32)> {
     if parts.len() != 2 {
         return None;
     }
-    let w = parts.get(0)?.parse::<u32>().ok()?;
+    let w = parts.first()?.parse::<u32>().ok()?;
     let h = parts.get(1)?.parse::<u32>().ok()?;
     if w == 0 || h == 0 {
         return None;
@@ -1009,10 +1009,10 @@ fn render_once(
         renderer.render_to_png_with_scroll(&html_with_css, width, height, scroll_x as f32, scroll_y as f32)?;
 
     println!("Saving to {}...", output);
-    std::fs::write(&output, png_data)?;
+    std::fs::write(output, png_data)?;
 
     println!("✓ Successfully rendered {} to {}", url, output);
-    println!("  Image size: {} bytes", std::fs::metadata(&output)?.len());
+    println!("  Image size: {} bytes", std::fs::metadata(output)?.len());
     Ok(())
 }
 
@@ -1145,7 +1145,7 @@ fn main() -> Result<()> {
         std::process::exit(1);
     }
 
-    let url = positional.get(0).cloned().unwrap();
+    let url = positional.first().cloned().unwrap();
     let output = positional
         .get(1)
         .cloned()

@@ -293,7 +293,14 @@ impl ImageCache {
         &self,
         resource: &FetchedResource,
         url: &str,
-    ) -> Result<(DynamicImage, Option<OrientationTransform>, Option<f32>, bool, Option<f32>, bool)> {
+    ) -> Result<(
+        DynamicImage,
+        Option<OrientationTransform>,
+        Option<f32>,
+        bool,
+        Option<f32>,
+        bool,
+    )> {
         let bytes = &resource.bytes;
         let content_type = resource.content_type.as_deref();
 
@@ -392,7 +399,7 @@ impl ImageCache {
             .get_field(exif::Tag::XResolution, exif::In::PRIMARY)
             .and_then(|f| {
                 if let exif::Value::Rational(ref vals) = f.value {
-                    vals.get(0).cloned()
+                    vals.first().copied()
                 } else {
                     None
                 }
@@ -402,7 +409,7 @@ impl ImageCache {
             .get_field(exif::Tag::YResolution, exif::In::PRIMARY)
             .and_then(|f| {
                 if let exif::Value::Rational(ref vals) = f.value {
-                    vals.get(0).cloned()
+                    vals.first().copied()
                 } else {
                     None
                 }
@@ -459,22 +466,27 @@ impl ImageCache {
         }
 
         let ratio = meta_ratio.filter(|r| *r > 0.0);
-        let (target_width, target_height) = match (meta_width.filter(|w| *w > 0.0), meta_height.filter(|h| *h > 0.0), ratio) {
-            (Some(w), Some(h), _) => (w, h),
-            (Some(w), None, Some(r)) => (w, (w / r).max(1.0)),
-            (None, Some(h), Some(r)) => ((h * r).max(1.0), h),
-            (Some(w), None, None) => (w, DEFAULT_HEIGHT),
-            (None, Some(h), None) => (DEFAULT_WIDTH, h),
-            (None, None, Some(r)) => (DEFAULT_WIDTH, (DEFAULT_WIDTH / r).max(1.0)),
-            (None, None, None) => (DEFAULT_WIDTH, DEFAULT_HEIGHT),
-        };
+        let (target_width, target_height) =
+            match (meta_width.filter(|w| *w > 0.0), meta_height.filter(|h| *h > 0.0), ratio) {
+                (Some(w), Some(h), _) => (w, h),
+                (Some(w), None, Some(r)) => (w, (w / r).max(1.0)),
+                (None, Some(h), Some(r)) => ((h * r).max(1.0), h),
+                (Some(w), None, None) => (w, DEFAULT_HEIGHT),
+                (None, Some(h), None) => (DEFAULT_WIDTH, h),
+                (None, None, Some(r)) => (DEFAULT_WIDTH, (DEFAULT_WIDTH / r).max(1.0)),
+                (None, None, None) => (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+            };
 
         let render_width = target_width.max(1.0).round() as u32;
         let render_height = target_height.max(1.0).round() as u32;
 
         // Render SVG to pixmap, scaling to the target intrinsic dimensions when needed
-        let mut pixmap = tiny_skia::Pixmap::new(render_width, render_height)
-            .ok_or(Error::Render(RenderError::CanvasCreationFailed { width: render_width, height: render_height }))?;
+        let mut pixmap = tiny_skia::Pixmap::new(render_width, render_height).ok_or(Error::Render(
+            RenderError::CanvasCreationFailed {
+                width: render_width,
+                height: render_height,
+            },
+        ))?;
 
         let scale_x = target_width / source_width;
         let scale_y = target_height / source_height;
@@ -633,10 +645,10 @@ impl Clone for ImageCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::types::OrientationTransform;
     use image::RgbaImage;
     use std::path::PathBuf;
     use std::time::SystemTime;
-    use crate::style::types::OrientationTransform;
 
     #[test]
     fn svg_width_height_set_intrinsic_size_and_ratio() {
