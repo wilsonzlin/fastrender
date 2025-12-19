@@ -126,7 +126,7 @@ fn sanitize_filename(input: &str) -> String {
     // Trim trailing underscores/dots introduced by trailing slashes or punctuation so that
     // "https://example.com/" normalizes to "example.com" instead of "example.com_".
     // If trimming would produce an empty string, fall back to the sanitized value.
-    let mut result = sanitized.trim_end_matches(&['_', '.']).to_string();
+    let mut result = sanitized.trim_end_matches(['_', '.']).to_string();
     if result.is_empty() {
         result = sanitized;
     }

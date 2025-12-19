@@ -371,13 +371,12 @@ pub fn compute_replaced_size(
         _ => None,
     };
 
-    let intrinsic_ratio =
-        specified_ratio
-            .or_else(|| replaced.aspect_ratio)
-            .or_else(|| match (intrinsic_w, intrinsic_h) {
-                (Some(w), Some(h)) if h > 0.0 => Some(w / h),
-                _ => None,
-            });
+    let intrinsic_ratio = specified_ratio
+        .or(replaced.aspect_ratio)
+        .or_else(|| match (intrinsic_w, intrinsic_h) {
+            (Some(w), Some(h)) if h > 0.0 => Some(w / h),
+            _ => None,
+        });
 
     let width_base = percentage_base.and_then(|s| s.width.is_finite().then_some(s.width));
     let height_base = percentage_base.and_then(|s| s.height.is_finite().then_some(s.height));
@@ -578,9 +577,9 @@ mod tests {
     use crate::style::types::{BoxSizing, ScrollbarWidth};
     use crate::style::values::{CalcLength, Length, LengthUnit};
     use crate::style::ComputedStyle;
-    use crate::PositionedStyle;
     use crate::text::font_loader::FontContext;
     use crate::tree::box_tree::ReplacedBox;
+    use crate::PositionedStyle;
 
     #[test]
     fn resolve_length_with_percentage_rejects_non_finite_contexts() {
@@ -629,7 +628,13 @@ mod tests {
         let font_context = FontContext::new();
 
         assert_eq!(
-            resolve_offset_for_positioned(&LengthOrAuto::Length(length), None, Size::new(800.0, 600.0), &style, &font_context),
+            resolve_offset_for_positioned(
+                &LengthOrAuto::Length(length),
+                None,
+                Size::new(800.0, 600.0),
+                &style,
+                &font_context
+            ),
             None
         );
     }

@@ -1068,7 +1068,7 @@ impl BlockFormattingContext {
             .or_else(|| constraints.width())
             .map(|w| w.min(self.viewport_size.width));
         let mut containing_width =
-            containing_width.unwrap_or_else(|| if intrinsic_width { 0.0 } else { self.viewport_size.width });
+            containing_width.unwrap_or(if intrinsic_width { 0.0 } else { self.viewport_size.width });
         if !intrinsic_width && containing_width <= 1.0 {
             let width_is_absolute = parent
                 .style
