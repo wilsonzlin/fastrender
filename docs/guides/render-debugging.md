@@ -5,7 +5,7 @@ This guide collects practical tips for diagnosing blank or black renders.
 ## Useful environment flags
 
 - `FASTR_TRACE_BACKGROUNDS=1` — Logs every background command (rect + color), useful for spotting oversized backgrounds that blanket the viewport.
-- `FASTR_LOG_LARGE_BACKGROUNDS=1` — Logs backgrounds whose height/width far exceed the viewport (heuristic). Helps find misplaced fragments.
+- `FASTR_LOG_LARGE_BACKGROUNDS=1` — Logs backgrounds whose height/width far exceed the viewport (heuristic). Alias: `FASTR_LOG_LARGE_BACKGROUND`. Helps find misplaced fragments.
 - `FASTR_DEBUG_PIXMAP_STATS=1` — After rendering, prints a histogram/summary of the pixmap (unique colors, non-white pixels, bounding boxes). Quickly tells you if the output is blank/black.
 - `FASTR_DUMP_COMMANDS=<N>` — Dumps the first N display list commands to stderr so you can inspect ordering/positions/colors.
 
@@ -43,4 +43,3 @@ FASTR_LOG_LARGE_BACKGROUNDS=1 \
 - If backgrounds look wrong, check stacking context/root handling and fragment offsets.
 - If text/objects are missing, verify clip regions and the final PNG write path.
 - Capture command dumps and pixmap stats as artifacts when filing bugs, noting the environment flags used.
-
