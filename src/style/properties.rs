@@ -2499,11 +2499,11 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                         BackgroundPosition::Position { x, .. } => *x,
                     })
                     .collect();
-            if xs.is_empty() {
-                xs.push(match BackgroundLayer::default().position {
-                    BackgroundPosition::Position { x, .. } => x,
-                });
-            }
+                if xs.is_empty() {
+                    xs.push(match BackgroundLayer::default().position {
+                        BackgroundPosition::Position { x, .. } => x,
+                    });
+                }
             styles.ensure_background_lists();
             let layer_count = xs.len().max(styles.background_positions.len()).max(1);
             let mut positions = Vec::with_capacity(layer_count);
