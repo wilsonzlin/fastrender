@@ -65,6 +65,10 @@ fmt-check:
 lint:
     cargo clippy --all-targets --all-features -- -D warnings
 
+# Run clippy pedantic (relaxed for cognitive/type complexity)
+clippy-pedantic:
+    cargo clippy -q -- -A clippy::cognitive_complexity -A clippy::type_complexity
+
 # Fix auto-fixable clippy issues
 fix:
     cargo clippy --fix --allow-dirty --all-targets --all-features

@@ -84,6 +84,9 @@ cargo test --quiet
 cargo test --quiet --test style_tests
 # or use the Just recipe
 just style-tests
+
+# Clippy pedantic (relaxed for complex/long signatures)
+just clippy-pedantic
 ```
 
 ### Batch Fetch & Render
