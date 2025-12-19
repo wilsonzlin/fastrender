@@ -731,7 +731,7 @@ pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
         let slice = &html[abs..];
         if let Some(colon) = slice.find(':') {
             let after_colon = &slice[colon + 1..];
-            if let Some(q_start_rel) = after_colon.find(|c: char| c == '"' || c == '\'') {
+            if let Some(q_start_rel) = after_colon.find(['"', '\'']) {
                 let quote = after_colon.chars().nth(q_start_rel).unwrap();
                 let after_quote = &after_colon[q_start_rel + 1..];
                 if let Some(q_end_rel) = after_quote.find(quote) {
