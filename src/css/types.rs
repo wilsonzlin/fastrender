@@ -194,15 +194,7 @@ impl StyleSheet {
     ) -> Vec<CollectedRule<'_>> {
         let mut result = Vec::new();
         let mut registry = LayerRegistry::new();
-        collect_rules_recursive(
-            &self.rules,
-            media_ctx,
-            cache.as_deref_mut(),
-            &mut registry,
-            &[],
-            &[],
-            &mut result,
-        );
+        collect_rules_recursive(&self.rules, media_ctx, cache, &mut registry, &[], &[], &mut result);
         result
     }
 
@@ -218,7 +210,7 @@ impl StyleSheet {
         mut cache: Option<&mut MediaQueryCache>,
     ) -> Vec<FontFaceRule> {
         let mut result = Vec::new();
-        collect_font_faces_recursive(&self.rules, media_ctx, cache.as_deref_mut(), &mut result);
+        collect_font_faces_recursive(&self.rules, media_ctx, cache, &mut result);
         result
     }
 
@@ -250,7 +242,7 @@ impl StyleSheet {
             loader,
             base_url,
             media_ctx,
-            cache.as_deref_mut(),
+            cache,
             &mut seen,
             &mut resolved,
         );
@@ -553,9 +545,7 @@ fn supports_value_is_valid(property: &str, value: &str) -> bool {
                 if tail.is_empty() {
                     return true;
                 }
-                tail.parse::<u8>()
-                    .map(|n| (2..=4).contains(&n))
-                    .unwrap_or(false)
+                tail.parse::<u8>().map(|n| (2..=4).contains(&n)).unwrap_or(false)
             };
 
             return match parts.as_slice() {
