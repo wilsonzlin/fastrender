@@ -5723,7 +5723,7 @@ fn first_char_of_item(item: &InlineItem) -> Option<char> {
 fn last_char_of_item(item: &InlineItem) -> Option<char> {
     const OBJECT_REPLACEMENT: char = '\u{FFFC}';
     match item {
-        InlineItem::Text(t) => t.text.chars().rev().next(),
+        InlineItem::Text(t) => t.text.chars().next_back(),
         InlineItem::Tab(_) => Some('\t'),
         InlineItem::InlineBox(b) => b.children.iter().rev().find_map(last_char_of_item),
         InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => Some(OBJECT_REPLACEMENT),
@@ -6005,7 +6005,7 @@ fn is_justify_align(text_align: TextAlign) -> bool {
 }
 
 fn marker_inline_end_margin(style: &ComputedStyle) -> Option<Length> {
-    use crate::style::types::WritingMode::*;
+    use crate::style::types::WritingMode::{HorizontalTb, SidewaysLr, SidewaysRl, VerticalLr, VerticalRl};
     match style.writing_mode {
         HorizontalTb => {
             if matches!(style.direction, crate::style::types::Direction::Rtl) {
@@ -6026,7 +6026,7 @@ fn marker_inline_end_margin(style: &ComputedStyle) -> Option<Length> {
 
 fn marker_inline_gap(style: &ComputedStyle, font_context: &FontContext, viewport_size: Size) -> f32 {
     let resolved = marker_inline_end_margin(style)
-        .and_then(|m| Some(resolve_length_for_width(m, 0.0, style, font_context, viewport_size)))
+        .map(|m| resolve_length_for_width(m, 0.0, style, font_context, viewport_size))
         .unwrap_or(0.0);
 
     if resolved.abs() > f32::EPSILON {
@@ -6040,7 +6040,7 @@ fn marker_inline_start_sign(
     writing_mode: crate::style::types::WritingMode,
     direction: crate::style::types::Direction,
 ) -> f32 {
-    use crate::style::types::WritingMode::*;
+    use crate::style::types::WritingMode::{HorizontalTb, SidewaysLr, SidewaysRl, VerticalLr, VerticalRl};
     match writing_mode {
         HorizontalTb => {
             if matches!(direction, crate::style::types::Direction::Rtl) {

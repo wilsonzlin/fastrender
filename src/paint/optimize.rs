@@ -305,7 +305,7 @@ impl DisplayListOptimizer {
                         }
                         refresh_context_clipping(&mut context_stack, &clip_stack);
                     }
-                    let has_transform = sc.transform.map_or(false, |t| !t.is_identity());
+                    let has_transform = sc.transform.is_some_and(|t| !t.is_identity());
                     if has_transform {
                         active_transform_depth += 1;
                         for clip in &mut clip_stack {

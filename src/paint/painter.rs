@@ -438,10 +438,10 @@ impl BorderEdge {
 }
 
 fn shade_color(color: &Rgba, factor: f32) -> Rgba {
-    let clamp = |v: f32| v.max(0.0).min(255.0) as u8;
-    let r = clamp(color.r as f32 * factor);
-    let g = clamp(color.g as f32 * factor);
-    let b = clamp(color.b as f32 * factor);
+    let clamp_to_u8 = |v: f32| v.clamp(0.0, 255.0) as u8;
+    let r = clamp_to_u8(color.r as f32 * factor);
+    let g = clamp_to_u8(color.g as f32 * factor);
+    let b = clamp_to_u8(color.b as f32 * factor);
     Rgba::new(r, g, b, color.a)
 }
 
@@ -588,7 +588,7 @@ impl Painter {
                     return;
                 }
 
-                let inherited_alt = alt.or_else(|| stored_alt.as_deref()).unwrap_or("");
+                let inherited_alt = alt.or(stored_alt.as_deref()).unwrap_or("");
                 if let Some(text_size) = self.measure_alt_text(inherited_alt, style) {
                     if needs_intrinsic && replaced_box.intrinsic_size.is_none() {
                         replaced_box.intrinsic_size = Some(text_size);
@@ -1763,7 +1763,7 @@ impl Painter {
                     image_cache: self.image_cache.clone(),
                     text_shape_cache: Arc::clone(&self.text_shape_cache),
                 };
-                for cmd in unclipped.into_iter() {
+                for cmd in unclipped {
                     base_painter.execute_command(cmd)?;
                 }
 
@@ -3546,7 +3546,7 @@ impl Painter {
 
             let mut rotated_paths = Vec::with_capacity(glyph_paths.len());
             let mut rotated_bounds = PathBounds::new();
-            for path in glyph_paths.into_iter() {
+            for path in glyph_paths {
                 if let Some(rotated) = path.clone().transform(rotate) {
                     let mapped = rotated.bounds();
                     rotated_bounds.include(&mapped);
