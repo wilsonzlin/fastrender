@@ -73,6 +73,7 @@ docs/
 
 ### CSS Loader notes
 - Link resolution (`src/css/loader.rs`) trims and ignores empty/whitespace-only hrefs, rejects `javascript:`/`mailto:`/`vbscript:` schemes, unescapes JavaScript-escaped URLs, and preserves `data:` URLs when inlining or absolutizing references.
+- Fragment-only hrefs (e.g. `#section`) are ignored when collecting CSS links/imports.
 - `file://` bases are handled for both directories (implicit trailing slash) and files (relative paths resolved against the parent directory).
 - Scheme-relative URLs (`//example.com/...`) are preserved by normalization to resolve against the base scheme.
 
