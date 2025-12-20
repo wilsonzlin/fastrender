@@ -180,9 +180,7 @@ fn distribute_span_min(columns: &mut [ColumnInfo], start: usize, end: usize, req
         })
         .collect();
     let total_cap: f32 = capacities.iter().sum();
-    let mut remaining = deficit;
-
-    if total_cap > 0.0 {
+    let remaining = if total_cap > 0.0 {
         let mut allocated = 0.0;
         for (col, cap) in span.iter_mut().zip(capacities.iter()) {
             if *cap > 0.0 {
@@ -192,8 +190,10 @@ fn distribute_span_min(columns: &mut [ColumnInfo], start: usize, end: usize, req
                 allocated += growth;
             }
         }
-        remaining = (deficit - allocated).max(0.0);
-    }
+        (deficit - allocated).max(0.0)
+    } else {
+        deficit
+    };
 
     if remaining > 0.0 {
         let per = remaining / span.len() as f32;
@@ -234,9 +234,7 @@ fn distribute_span_max(columns: &mut [ColumnInfo], start: usize, end: usize, req
         })
         .collect();
     let total_flex: f32 = flex_ranges.iter().sum();
-    let mut remaining = deficit;
-
-    if total_flex > 0.0 {
+    let remaining = if total_flex > 0.0 {
         let mut allocated = 0.0;
         for (col, range) in span.iter_mut().zip(flex_ranges.iter()) {
             if *range > 0.0 {
@@ -245,8 +243,10 @@ fn distribute_span_max(columns: &mut [ColumnInfo], start: usize, end: usize, req
                 allocated += growth;
             }
         }
-        remaining = (deficit - allocated).max(0.0);
-    }
+        (deficit - allocated).max(0.0)
+    } else {
+        deficit
+    };
 
     if remaining > 0.0 {
         let per = remaining / span.len() as f32;
@@ -1205,7 +1205,7 @@ impl TableStructure {
         let reorder_vec = |vec: &mut Vec<Option<SpecifiedHeight>>| {
             let mut reordered = Vec::with_capacity(vec.len());
             for idx in &row_order {
-                reordered.push(vec.get(*idx).cloned().unwrap_or(None));
+                reordered.push(vec.get(*idx).copied().unwrap_or(None));
             }
             *vec = reordered;
         };
@@ -1215,13 +1215,13 @@ impl TableStructure {
 
         let mut reordered_aligns = Vec::with_capacity(row_vertical_aligns.len());
         for idx in &row_order {
-            reordered_aligns.push(row_vertical_aligns.get(*idx).cloned().unwrap_or(None));
+            reordered_aligns.push(row_vertical_aligns.get(*idx).copied().unwrap_or(None));
         }
         row_vertical_aligns = reordered_aligns;
 
         let mut reordered_vis = Vec::with_capacity(row_visibilities.len());
         for idx in &row_order {
-            reordered_vis.push(row_visibilities.get(*idx).cloned().unwrap_or(Visibility::Visible));
+            reordered_vis.push(row_visibilities.get(*idx).copied().unwrap_or(Visibility::Visible));
         }
         row_visibilities = reordered_vis;
 
@@ -1322,11 +1322,11 @@ impl TableStructure {
         // Initialize rows
         for i in 0..structure.row_count {
             let mut row = RowInfo::new(i);
-            row.specified_height = row_heights.get(i).cloned().unwrap_or(None);
-            row.author_min_height = row_min_heights.get(i).cloned().unwrap_or(None);
-            row.author_max_height = row_max_heights.get(i).cloned().unwrap_or(None);
-            row.visibility = row_visibilities.get(i).cloned().unwrap_or(Visibility::Visible);
-            row.vertical_align = row_vertical_aligns.get(i).cloned().unwrap_or(None);
+            row.specified_height = row_heights.get(i).copied().unwrap_or(None);
+            row.author_min_height = row_min_heights.get(i).copied().unwrap_or(None);
+            row.author_max_height = row_max_heights.get(i).copied().unwrap_or(None);
+            row.visibility = row_visibilities.get(i).copied().unwrap_or(Visibility::Visible);
+            row.vertical_align = row_vertical_aligns.get(i).copied().unwrap_or(None);
             // Preserve the original DOM order for source_index so style lookups remain stable.
             let source_idx = row_order.get(i).copied().unwrap_or(i);
             row.source_index = source_idx;
@@ -1421,7 +1421,7 @@ impl TableStructure {
             }
         }
 
-        for cell in self.cells.into_iter() {
+        for cell in self.cells {
             let Some(new_row) = row_map.get(cell.row).and_then(|m| *m) else {
                 continue;
             };
