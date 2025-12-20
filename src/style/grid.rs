@@ -15,6 +15,7 @@ use cssparser::{Parser, ParserInput, Token};
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
+#[allow(clippy::implicit_hasher)]
 /// Parse grid-template-columns/rows into track list with named lines
 ///
 /// Handles syntax like: `[text-start] 1fr [text-end sidebar-start] 300px [sidebar-end]`
@@ -101,6 +102,7 @@ pub fn parse_grid_template_areas(value: &str) -> Option<Vec<Vec<Option<String>>>
 }
 
 /// Validate that each named area forms a rectangle and return area bounds per name.
+#[allow(clippy::implicit_hasher)]
 pub fn validate_area_rectangles(rows: &[Vec<Option<String>>]) -> Option<HashMap<String, (usize, usize, usize, usize)>> {
     let mut bounds: HashMap<String, (usize, usize, usize, usize)> = HashMap::new();
 
