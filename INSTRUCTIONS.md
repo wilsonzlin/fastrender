@@ -42,6 +42,7 @@ To fetch fresh pages: `cargo run --release --bin fetch_pages`
 - render_pages: renders all cached pages in parallel, outputs PNGs to fetches/renders/
 - Each page gets a .log file with timing, errors, crash info
 - Summary in fetches/renders/_summary.log
+- Guard rails: `just guard-tests` runs the churn guards (README presence, style regression fixture presence, fetch_and_render exit regression) to catch accidental deletions before push
 - Visually inspect fetches/renders/*.png
 - Fix regressions before adding features
 
