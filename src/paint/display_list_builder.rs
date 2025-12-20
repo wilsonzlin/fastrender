@@ -550,7 +550,7 @@ impl DisplayListBuilder {
                         },
                     })
                 })
-                .unwrap_or(ClipItem {
+                .unwrap_or_else(|| ClipItem {
                     shape: ClipShape::Rect {
                         rect: context_bounds,
                         radii: None,
