@@ -135,7 +135,7 @@ This is a living document that will be updated as features are implemented.
 | `background-position-block` | P2 | ✅ | CSS Logical Props | Writing mode | Maps logical block axis to physical x/y per writing-mode |
 | `background-attachment` | P2 | ❌ | CSS 2.1 | Painting | fixed, scroll |
 | `background` | P1 | ❌ | CSS 2.1 | Parsing | Shorthand |
-| `background-size` | P1 | ⚠️ Partial | CSS3 Backgrounds | Painting | Parses including logical inline/block; image painting not implemented; regressions in `tests/style/background_position_logical_test.rs` (inline/block longhands and background-size-x/y); `background-size-y` deprecated |
+| `background-size` | P1 | ⚠️ Partial | CSS3 Backgrounds | Painting | Parses including logical inline/block; image painting not implemented; regressions in `tests/style/background_position_logical_test.rs` (inline/block longhands and background-size-x/y); `background-size-y` deprecated in drafts |
 | `background-size-x` | P2 | ✅ | CSS3 Backgrounds | Painting | Longhand parsed and mapped |
 | `background-size-y` | P2 | ✅ | CSS3 Backgrounds | Painting | Longhand parsed and mapped (deprecated in drafts) |
 | `background-size-inline` | P2 | ✅ | CSS Logical Props | Writing mode | Maps logical inline size to physical width/height per writing-mode |
