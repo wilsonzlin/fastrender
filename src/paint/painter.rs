@@ -4491,9 +4491,7 @@ impl Painter {
                 let shader = LinearGradient::new(start, end, skia_stops, SpreadMode::Pad, Transform::identity())?;
 
                 let mut pixmap = Pixmap::new(width, height)?;
-                let Some(skia_rect) = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-                    return None;
-                };
+                let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
                 let path = PathBuilder::from_rect(skia_rect);
 
                 let mut paint = Paint::default();
@@ -4521,9 +4519,7 @@ impl Painter {
                 let shader = LinearGradient::new(start, end, skia_stops, SpreadMode::Repeat, Transform::identity())?;
 
                 let mut pixmap = Pixmap::new(width, height)?;
-                let Some(skia_rect) = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-                    return None;
-                };
+                let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
                 let path = PathBuilder::from_rect(skia_rect);
 
                 let mut paint = Paint::default();
@@ -4563,9 +4559,7 @@ impl Painter {
                 )?;
 
                 let mut pixmap = Pixmap::new(width, height)?;
-                let Some(skia_rect) = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-                    return None;
-                };
+                let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
                 let path = PathBuilder::from_rect(skia_rect);
                 let mut paint = Paint::default();
                 paint.shader = shader;
@@ -4604,9 +4598,7 @@ impl Painter {
                 )?;
 
                 let mut pixmap = Pixmap::new(width, height)?;
-                let Some(skia_rect) = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-                    return None;
-                };
+                let skia_rect = SkiaRect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
                 let path = PathBuilder::from_rect(skia_rect);
                 let mut paint = Paint::default();
                 paint.shader = shader;
