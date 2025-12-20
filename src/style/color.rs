@@ -146,13 +146,13 @@ fn xyz_d50_to_lab(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
 }
 
 fn oklab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
-    let l_ = (l + 0.3963377774 * a + 0.2158037573 * b).powi(3);
-    let m_ = (l - 0.1055613458 * a - 0.0638541728 * b).powi(3);
-    let s_ = (l - 0.0894841775 * a - 1.2914855480 * b).powi(3);
+    let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
+    let m_ = (l - 0.105_561_35 * a - 0.063_854_17 * b).powi(3);
+    let s_ = (l - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
 
-    let r = 4.0767416621 * l_ - 3.3077115913 * m_ + 0.2309699292 * s_;
-    let g = -1.2684380046 * l_ + 2.6097574011 * m_ - 0.3413193965 * s_;
-    let b = 0.0045143699 * l_ - 0.0057187894 * m_ + 1.0655743600 * s_;
+    let r = 4.076_741_7 * l_ - 3.307_711_6 * m_ + 0.230_969_93 * s_;
+    let g = -1.268_438 * l_ + 2.609_757_4 * m_ - 0.341_319_4 * s_;
+    let b = 0.004_514_37 * l_ - 0.005_718_789 * m_ + 1.065_574_4 * s_;
     (r, g, b)
 }
 
@@ -1496,7 +1496,7 @@ fn parse_color_mix(input: &str) -> Result<Color, ColorParseError> {
     }
 
     let space = {
-        let mut iter = parts[0].trim().split_whitespace();
+        let mut iter = parts[0].split_whitespace();
         if !matches!(iter.next(), Some(tok) if tok.eq_ignore_ascii_case("in")) {
             return Err(ColorParseError::InvalidFormat(input.to_string()));
         }
