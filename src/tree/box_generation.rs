@@ -3852,7 +3852,7 @@ mod tests {
 
         let markers: Vec<String> =
             BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
-                .into_iter()
+                .iter()
                 .filter_map(|node| match &node.box_type {
                     BoxType::Marker(marker) => match &marker.content {
                         MarkerContent::Text(text) => Some(text.clone()),
@@ -3873,7 +3873,7 @@ mod tests {
 
         let markers: Vec<String> =
             BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
-                .into_iter()
+                .iter()
                 .filter_map(|node| match &node.box_type {
                     BoxType::Marker(marker) => match &marker.content {
                         MarkerContent::Text(text) => Some(text.clone()),
@@ -3894,7 +3894,7 @@ mod tests {
 
         let markers: Vec<String> =
             BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
-                .into_iter()
+                .iter()
                 .filter_map(|node| match &node.box_type {
                     BoxType::Marker(marker) => match &marker.content {
                         MarkerContent::Text(text) => Some(text.clone()),
@@ -3916,7 +3916,7 @@ mod tests {
 
         let markers: Vec<String> =
             BoxGenerator::find_boxes_by_predicate(&tree.root, |b| matches!(b.box_type, BoxType::Marker(_)))
-                .into_iter()
+                .iter()
                 .filter_map(|node| match &node.box_type {
                     BoxType::Marker(marker) => match &marker.content {
                         MarkerContent::Text(text) => Some(text.clone()),
