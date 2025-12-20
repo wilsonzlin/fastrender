@@ -685,7 +685,7 @@ fn main() {
         error
     );
 
-    let _ = writeln!(summary, "{:<40} {:>8} {:>10} {}", "PAGE", "TIME", "SIZE", "STATUS");
+    let _ = writeln!(summary, "{:<40} {:>8} {:>10} STATUS", "PAGE", "TIME", "SIZE");
     let _ = writeln!(summary, "{}", "-".repeat(75));
 
     for r in &results {

@@ -420,12 +420,11 @@ impl FormattingContext for FlexFormattingContext {
             .compute_layout_with_measure(
                 root_node,
                 available_space,
-                move |known_dimensions, mut avail, _node_id, node_context, _style| {
+                move |mut known_dimensions, mut avail, _node_id, node_context, _style| {
                     // Treat zero/near-zero definite sizes as absent to avoid pathological
                     // measurement probes when Taffy propagates a 0px available size. This
                     // aligns with constraints_from_taffy, which promotes tiny definites to
                     // Indefinite/MaxContent.
-                    let mut known_dimensions = known_dimensions;
                     if let Some(w) = known_dimensions.width {
                         if w <= 1.0 && matches!(avail.width, AvailableSpace::Definite(v) if v <= 1.0) {
                             known_dimensions.width = None;
@@ -451,7 +450,6 @@ impl FormattingContext for FlexFormattingContext {
 
                     flex_profile::record_measure_lookup();
                     let measure_timer = flex_profile::timer();
-                    let mut known_dimensions = known_dimensions;
                     if let Some(node_ptr) = node_context.as_ref().map(|p| **p) {
                         let box_node = unsafe { &*node_ptr };
                         if known_dimensions.width == Some(0.0)
