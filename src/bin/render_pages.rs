@@ -24,6 +24,7 @@ use fastrender::resource::{
 };
 use fastrender::FastRender;
 use std::collections::HashSet;
+use std::fmt::Write;
 use std::fs;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
@@ -423,19 +424,16 @@ fn main() {
                 let page_start = Instant::now();
                 let mut log = String::new();
 
-                log.push_str(&format!("=== {} ===\n", name));
-                log.push_str(&format!("Source: {}\n", path.display()));
-                log.push_str(&format!("Output: {}\n", output_path.display()));
-                log.push_str(&format!(
-                    "User-Agent: {}\n\n",
-                    normalize_user_agent_for_log(&user_agent)
-                ));
+                let _ = writeln!(log, "=== {} ===", name);
+                let _ = writeln!(log, "Source: {}", path.display());
+                let _ = writeln!(log, "Output: {}", output_path.display());
+                let _ = writeln!(log, "User-Agent: {}\n", normalize_user_agent_for_log(&user_agent));
 
                 // Read HTML first (before catch_unwind)
                 let html_bytes = match fs::read(&path) {
                     Ok(bytes) => bytes,
                     Err(e) => {
-                        log.push_str(&format!("Read error: {}\n", e));
+                        let _ = writeln!(log, "Read error: {}", e);
                         let _ = fs::write(&log_path, &log);
                         results.lock().unwrap().push(PageResult {
                             name,
@@ -456,30 +454,30 @@ fn main() {
                     .unwrap_or((None, None));
 
                 let mut html = decode_html_bytes(&html_bytes, content_type.as_deref());
-                log.push_str(&format!("HTML bytes: {}\n", html_bytes.len()));
+                let _ = writeln!(log, "HTML bytes: {}", html_bytes.len());
                 if let Some(ct) = &content_type {
-                    log.push_str(&format!("Content-Type: {}\n", ct));
+                    let _ = writeln!(log, "Content-Type: {}", ct);
                 }
-                log.push_str(&format!("Viewport: {}x{}\n", viewport_w, viewport_h));
-                log.push_str(&format!("Scroll-X: {}px\n", scroll_x));
-                log.push_str(&format!("Scroll-Y: {}px\n", scroll_y));
+                let _ = writeln!(log, "Viewport: {}x{}", viewport_w, viewport_h);
+                let _ = writeln!(log, "Scroll-X: {}px", scroll_x);
+                let _ = writeln!(log, "Scroll-Y: {}px", scroll_y);
 
                 let mut input_url = source_url.unwrap_or_else(|| format!("file://{}", path.display()));
                 let mut resource_base = infer_base_url(&html, &input_url).into_owned();
-                log.push_str(&format!("Resource base: {}\n", resource_base));
+                let _ = writeln!(log, "Resource base: {}", resource_base);
 
                 if let Some(refresh) = extract_meta_refresh_url(&html) {
                     if let Some(target) = resolve_href(&resource_base, &refresh) {
-                        log.push_str(&format!("Meta refresh to: {}\n", target));
+                        let _ = writeln!(log, "Meta refresh to: {}", target);
                         match fetcher.fetch(&target) {
                             Ok(res) => {
                                 html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
                                 input_url = target.clone();
                                 resource_base = infer_base_url(&html, &input_url).into_owned();
-                                log.push_str(&format!("Followed meta refresh; new base: {}\n", resource_base));
+                                let _ = writeln!(log, "Followed meta refresh; new base: {}", resource_base);
                             }
                             Err(e) => {
-                                log.push_str(&format!("Failed to follow meta refresh: {}\n", e));
+                                let _ = writeln!(log, "Failed to follow meta refresh: {}", e);
                             }
                         }
                     }
@@ -488,16 +486,16 @@ fn main() {
                 if html.to_ascii_lowercase().contains("<noscript") {
                     if let Some(js_redirect) = extract_js_location_redirect(&html) {
                         if let Some(target) = resolve_href(&resource_base, &js_redirect) {
-                            log.push_str(&format!("JS redirect to: {}\n", target));
+                            let _ = writeln!(log, "JS redirect to: {}", target);
                             match fetcher.fetch(&target) {
                                 Ok(res) => {
                                     html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
                                     input_url = target.clone();
                                     resource_base = infer_base_url(&html, &input_url).into_owned();
-                                    log.push_str(&format!("Followed JS redirect; new base: {}\n", resource_base));
+                                    let _ = writeln!(log, "Followed JS redirect; new base: {}", resource_base);
                                 }
                                 Err(e) => {
-                                    log.push_str(&format!("Failed to follow JS redirect: {}\n", e));
+                                    let _ = writeln!(log, "Failed to follow JS redirect: {}", e);
                                 }
                             }
                         }
@@ -539,16 +537,17 @@ fn main() {
                             combined_css.push('\n');
                         }
                         Err(err) => {
-                            log.push_str(&format!("CSS fetch error {}: {}\n", css_url, err));
+                            let _ = writeln!(log, "CSS fetch error {}: {}", css_url, err);
                         }
                     }
                 }
                 if !combined_css.is_empty() {
-                    log.push_str(&format!(
-                        "Inlined CSS: {} bytes from {} link(s)\n",
+                    let _ = writeln!(
+                        log,
+                        "Inlined CSS: {} bytes from {} link(s)",
                         combined_css.len(),
                         seen_links.len()
-                    ));
+                    );
                 }
 
                 let html_for_render = if combined_css.is_empty() {
@@ -616,12 +615,12 @@ fn main() {
                 let (status, size) = match result {
                     Ok(png_data) => {
                         let size = png_data.len();
-                        log.push_str(&format!("PNG size: {} bytes\n", size));
-                        log.push_str(&format!("Time: {}ms\n", time_ms));
+                        let _ = writeln!(log, "PNG size: {} bytes", size);
+                        let _ = writeln!(log, "Time: {}ms", time_ms);
                         log.push_str("Status: OK\n");
 
                         if let Err(e) = fs::write(&output_path, &png_data) {
-                            log.push_str(&format!("Write error: {}\n", e));
+                            let _ = writeln!(log, "Write error: {}", e);
                             (Status::Error(format!("write: {}", e)), None)
                         } else {
                             println!("✓ {} ({}b, {}ms)", name, size, time_ms);
@@ -630,16 +629,16 @@ fn main() {
                     }
                     Err(status) => match status {
                         Status::Error(msg) => {
-                            log.push_str(&format!("Time: {}ms\n", time_ms));
+                            let _ = writeln!(log, "Time: {}ms", time_ms);
                             log.push_str("Status: ERROR\n");
-                            log.push_str(&format!("Error: {}\n", msg));
+                            let _ = writeln!(log, "Error: {}", msg);
                             println!("✗ {} ERROR: {} ({}ms)", name, msg, time_ms);
                             (Status::Error(msg), None)
                         }
                         Status::Crash(msg) => {
-                            log.push_str(&format!("Time: {}ms\n", time_ms));
+                            let _ = writeln!(log, "Time: {}ms", time_ms);
                             log.push_str("Status: CRASH\n");
-                            log.push_str(&format!("Panic: {}\n", msg));
+                            let _ = writeln!(log, "Panic: {}", msg);
 
                             let short: String = msg.chars().take(50).collect();
                             println!("✗ {} CRASH: {} ({}ms)", name, short, time_ms);
@@ -675,18 +674,19 @@ fn main() {
     let summary_path = PathBuf::from(RENDER_DIR).join("_summary.log");
     let mut summary = String::new();
     summary.push_str("=== Render Summary ===\n");
-    summary.push_str(&format!("Date: {}\n", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")));
-    summary.push_str(&format!("Total time: {:.1}s\n", total_elapsed.as_secs_f64()));
-    summary.push_str(&format!(
-        "Pages: {} total, {} pass, {} crash, {} error\n\n",
+    let _ = writeln!(summary, "Date: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
+    let _ = writeln!(summary, "Total time: {:.1}s", total_elapsed.as_secs_f64());
+    let _ = writeln!(
+        summary,
+        "Pages: {} total, {} pass, {} crash, {} error\n",
         results.len(),
         pass,
         crash,
         error
-    ));
+    );
 
-    summary.push_str(&format!("{:<40} {:>8} {:>10} {}\n", "PAGE", "TIME", "SIZE", "STATUS"));
-    summary.push_str(&format!("{}\n", "-".repeat(75)));
+    let _ = writeln!(summary, "{:<40} {:>8} {:>10} {}", "PAGE", "TIME", "SIZE", "STATUS");
+    let _ = writeln!(summary, "{}", "-".repeat(75));
 
     for r in &results {
         let status_str = match &r.status {
@@ -694,18 +694,16 @@ fn main() {
             Status::Crash(msg) => format!("CRASH: {}", msg.chars().take(30).collect::<String>()),
             Status::Error(msg) => format!("ERROR: {}", msg.chars().take(30).collect::<String>()),
         };
-        let size_str = r
-            .size
-            .map(|s| format!("{}b", s))
-            .unwrap_or_else(|| "-".to_string());
-        summary.push_str(&format!(
-            "{:<40} {:>6}ms {:>10} {}\n",
+        let size_str = r.size.map(|s| format!("{}b", s)).unwrap_or_else(|| "-".to_string());
+        let _ = writeln!(
+            summary,
+            "{:<40} {:>6}ms {:>10} {}",
             r.name, r.time_ms, size_str, status_str
-        ));
+        );
     }
 
-    summary.push_str(&format!("\n{}\n", "-".repeat(75)));
-    summary.push_str(&format!("Total: {:.1}s\n", total_elapsed.as_secs_f64()));
+    let _ = writeln!(summary, "\n{}", "-".repeat(75));
+    let _ = writeln!(summary, "Total: {:.1}s", total_elapsed.as_secs_f64());
 
     let _ = fs::write(&summary_path, &summary);
 

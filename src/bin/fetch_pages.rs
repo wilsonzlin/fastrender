@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -311,12 +312,12 @@ fn write_cached_html(
     let mut meta = String::new();
     if let Some(ct) = content_type {
         if !ct.is_empty() {
-            meta.push_str(&format!("content-type: {}\n", ct));
+            let _ = writeln!(meta, "content-type: {}", ct);
         }
     }
     if let Some(url) = source_url {
         if !url.trim().is_empty() {
-            meta.push_str(&format!("url: {}\n", url.trim()));
+            let _ = writeln!(meta, "url: {}", url.trim());
         }
     }
 
@@ -561,7 +562,9 @@ mod tests {
     #[test]
     fn selected_pages_combines_multiple_filters_case_insensitive() {
         let mut filter = HashSet::new();
-        filter.insert(url_to_filename("HTTPS://DEVELOPER.MOZILLA.ORG/en-US/docs/Web/CSS/text-orientation"));
+        filter.insert(url_to_filename(
+            "HTTPS://DEVELOPER.MOZILLA.ORG/en-US/docs/Web/CSS/text-orientation",
+        ));
         filter.insert(url_to_filename("https://RUST-LANG.ORG"));
 
         let selected = selected_pages(Some(&filter));
