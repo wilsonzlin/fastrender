@@ -865,6 +865,7 @@ impl FastRender {
     /// println!("Fragment count: {}", fragment_tree.fragment_count());
     /// println!("Viewport: {:?}", fragment_tree.viewport_size());
     /// ```
+    #[allow(clippy::cognitive_complexity)]
     pub fn layout_document(&mut self, dom: &DomNode, width: u32, height: u32) -> Result<FragmentTree> {
         let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
         let overall_start = timings_enabled.then(Instant::now);
@@ -1457,6 +1458,7 @@ impl FastRender {
         }
     }
 
+    #[allow(clippy::cognitive_complexity)]
     fn resolve_intrinsic_for_replaced(
         &self,
         replaced_box: &mut ReplacedBox,
@@ -2761,6 +2763,7 @@ fn styled_style_summary(style: &ComputedStyle) -> String {
     )
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn diff_layout_fields(old: &ComputedStyle, new: &ComputedStyle) -> Vec<String> {
     let mut out = Vec::new();
     macro_rules! cmp {
