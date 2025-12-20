@@ -3546,7 +3546,7 @@ impl Painter {
 
             let mut rotated_paths = Vec::with_capacity(glyph_paths.len());
             let mut rotated_bounds = PathBounds::new();
-            for path in glyph_paths.drain(..) {
+            for path in glyph_paths.into_iter() {
                 if let Some(rotated) = path.clone().transform(rotate) {
                     let mapped = rotated.bounds();
                     rotated_bounds.include(&mapped);
@@ -3985,7 +3985,7 @@ impl Painter {
             }
         };
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
-        let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
+        let pos = style.map(|s| s.object_position).unwrap_or_else(default_object_position);
 
         let (dest_x, dest_y, mut dest_w, mut dest_h) = match compute_object_fit(
             fit,
@@ -4107,7 +4107,7 @@ impl Painter {
             None => return false,
         };
         let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
-        let pos = style.map(|s| s.object_position).unwrap_or(default_object_position());
+        let pos = style.map(|s| s.object_position).unwrap_or_else(default_object_position);
 
         let (dest_x, dest_y, mut dest_w, mut dest_h) = match compute_object_fit(
             fit,
@@ -4833,7 +4833,7 @@ impl Painter {
             let painter_style = deco.decoration.style;
             let render_line = |pixmap: &mut Pixmap, center: f32, thickness: f32| match painter_style {
                 TextDecorationStyle::Solid => {
-                    draw_solid_line(pixmap, &paint, inline_start, inline_len, center, thickness)
+                    draw_solid_line(pixmap, &paint, inline_start, inline_len, center, thickness);
                 }
                 TextDecorationStyle::Double => {
                     let line_thickness = (thickness * 0.7).max(0.5);
@@ -4880,13 +4880,15 @@ impl Painter {
                     );
                 }
                 TextDecorationStyle::Wavy => {
-                    draw_wavy_line(pixmap, &paint, inline_start, inline_len, center, thickness)
+                    draw_wavy_line(pixmap, &paint, inline_start, inline_len, center, thickness);
                 }
             };
 
             let render_line_segment =
                 |pixmap: &mut Pixmap, start: f32, len: f32, center: f32, thickness: f32| match painter_style {
-                    TextDecorationStyle::Solid => draw_solid_line(pixmap, &paint, start, len, center, thickness),
+                    TextDecorationStyle::Solid => {
+                        draw_solid_line(pixmap, &paint, start, len, center, thickness);
+                    }
                     TextDecorationStyle::Double => {
                         let line_thickness = (thickness * 0.7).max(0.5);
                         let gap = line_thickness.max(thickness * 0.6);
@@ -4917,7 +4919,9 @@ impl Painter {
                             false,
                         );
                     }
-                    TextDecorationStyle::Wavy => draw_wavy_line(pixmap, &paint, start, len, center, thickness),
+                    TextDecorationStyle::Wavy => {
+                        draw_wavy_line(pixmap, &paint, start, len, center, thickness);
+                    }
                 };
 
             let underline_offset = self.resolve_underline_offset_value(deco.underline_offset, style);
@@ -5016,7 +5020,7 @@ impl Painter {
             )
         };
 
-        let mut segments = subtract_intervals((line_start, line_start + line_width), &mut exclusions);
+        let mut segments = subtract_intervals((line_start, line_start + line_width), exclusions.as_mut_slice());
         if segments.is_empty() && skip_ink != TextDecorationSkipInk::All {
             // Never drop the underline entirely when skipping ink; fall back to a full span.
             segments.push((line_start, line_start + line_width));
@@ -6911,7 +6915,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
         for x in 0..width {
             if x < x0 || x >= x1 || y < y0 || y >= y1 {
                 let idx = (y as usize * stride) + (x as usize * 4);
-                data[idx + 0] = 0;
+                data[idx] = 0;
                 data[idx + 1] = 0;
                 data[idx + 2] = 0;
                 data[idx + 3] = 0;
