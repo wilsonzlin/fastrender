@@ -3690,14 +3690,15 @@ impl FormattingContext for TableFormattingContext {
         let mut pad_left = resolve_abs(&box_node.style.padding_left);
         let mut pad_right = resolve_abs(&box_node.style.padding_right);
         let mut pad_top = resolve_abs(&box_node.style.padding_top);
-        let mut pad_bottom = resolve_abs(&box_node.style.padding_bottom);
         // In the collapsing border model, the table box has no padding (CSS 2.2 §17.6.2).
-        if structure.border_collapse == BorderCollapse::Collapse {
+        let pad_bottom = if structure.border_collapse == BorderCollapse::Collapse {
             pad_left = 0.0;
             pad_right = 0.0;
             pad_top = 0.0;
-            pad_bottom = 0.0;
-        }
+            0.0
+        } else {
+            resolve_abs(&box_node.style.padding_bottom)
+        };
         let (border_left, border_right, border_top, border_bottom) =
             if structure.border_collapse == BorderCollapse::Collapse {
                 (0.0, 0.0, 0.0, 0.0)
