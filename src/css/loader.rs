@@ -1295,6 +1295,8 @@ mod tests {
 
         // Schemes are matched case-insensitively.
         assert_eq!(resolve_href(base, "JaVaScRiPt:alert(1)"), None);
+        assert_eq!(resolve_href(base, "MAILTO:UPPER@EXAMPLE.COM"), None);
+        assert_eq!(resolve_href(base, "VbScRiPt:msgbox('hi')"), None);
     }
 
     #[test]
