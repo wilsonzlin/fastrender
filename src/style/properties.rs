@@ -6148,10 +6148,7 @@ pub fn apply_declaration_with_base(
                         .get(source_idx)
                         .copied()
                         .unwrap_or_else(|| default.clone());
-                    let inline_value = values
-                        .get(idx)
-                        .copied()
-                        .unwrap_or_else(|| values.last().copied().unwrap());
+                    let inline_value = values.get(idx).copied().unwrap_or_else(|| values.last().copied().unwrap());
                     let explicit = match source {
                         BackgroundSize::Explicit(mut x, mut y) => {
                             if horizontal_inline {
@@ -6185,10 +6182,7 @@ pub fn apply_declaration_with_base(
                 for idx in 0..layer_count {
                     let source_idx = styles.background_sizes.len().saturating_sub(1).min(idx);
                     let source = styles.background_sizes.get(source_idx).copied().unwrap_or(default);
-                    let block_value = values
-                        .get(idx)
-                        .copied()
-                        .unwrap_or_else(|| values.last().copied().unwrap());
+                    let block_value = values.get(idx).copied().unwrap_or_else(|| values.last().copied().unwrap());
                     let explicit = match source {
                         BackgroundSize::Explicit(mut x, mut y) => {
                             if horizontal_block {
