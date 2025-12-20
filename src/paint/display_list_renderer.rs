@@ -1925,7 +1925,13 @@ impl DisplayListRenderer {
 
                 if !scaled_backdrop.is_empty() {
                     let backdrop_bounds = transform_rect(bounds, &combined_transform);
-                    apply_backdrop_filters(self.canvas.pixmap_mut(), &backdrop_bounds, &scaled_backdrop, radii, self.scale);
+                    apply_backdrop_filters(
+                        self.canvas.pixmap_mut(),
+                        &backdrop_bounds,
+                        &scaled_backdrop,
+                        radii,
+                        self.scale,
+                    );
                 }
 
                 let needs_layer = item.is_isolated
@@ -2895,12 +2901,8 @@ fn resolve_length_for_border_image(
     root_font_size: f32,
     viewport: Option<(f32, f32)>,
 ) -> f32 {
-    let needs_viewport = len.unit.is_viewport_relative()
-        || len
-            .calc
-            .as_ref()
-            .map(|c| c.has_viewport_relative())
-            .unwrap_or(false);
+    let needs_viewport =
+        len.unit.is_viewport_relative() || len.calc.as_ref().map(|c| c.has_viewport_relative()).unwrap_or(false);
     let (vw, vh) = match viewport {
         Some(vp) => vp,
         None if needs_viewport => (f32::NAN, f32::NAN),
@@ -3146,7 +3148,7 @@ fn radial_geometry(
                 (dx_right, dy_top),
                 (dx_right, dy_bottom),
             ];
-            let mut best = std::f32::INFINITY;
+            let mut best = f32::INFINITY;
             let mut best_pair = (0.0, 0.0);
             for (dx, dy) in corners {
                 let dist = (dx * dx + dy * dy).sqrt();
@@ -3167,7 +3169,7 @@ fn radial_geometry(
                 (dx_right, dy_top),
                 (dx_right, dy_bottom),
             ];
-            let mut best = -std::f32::INFINITY;
+            let mut best = -f32::INFINITY;
             let mut best_pair = (0.0, 0.0);
             for (dx, dy) in corners {
                 let dist = (dx * dx + dy * dy).sqrt();
@@ -4229,12 +4231,16 @@ mod tests {
         let filters = vec![ResolvedFilter::Blur(4.0)];
         let (l, t, r, b) = filter_outset(&filters, 1.0);
         // Blur outset is radius * 3 per side.
-        assert!((l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01);
+        assert!(
+            (l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01
+        );
 
         let filters = vec![ResolvedFilter::Blur(2.0)];
         let (l, t, r, b) = filter_outset(&filters, 2.0);
         // Device pixel ratio doubles the blur radius before computing outsets.
-        assert!((l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01);
+        assert!(
+            (l - 12.0).abs() < 0.01 && (t - 12.0).abs() < 0.01 && (r - 12.0).abs() < 0.01 && (b - 12.0).abs() < 0.01
+        );
     }
 
     #[test]
@@ -4679,7 +4685,11 @@ mod tests {
         let pixmap = renderer.render(&list).expect("render");
 
         let origin_px = pixel(&pixmap, 0, 0);
-        assert_eq!(origin_px, (0, 0, 255, 255), "backdrop filter should not run at the origin");
+        assert_eq!(
+            origin_px,
+            (0, 0, 255, 255),
+            "backdrop filter should not run at the origin"
+        );
 
         let translated_px = pixel(&pixmap, 2, 1);
         assert!(
@@ -4776,7 +4786,11 @@ mod tests {
         let pixmap = renderer.render(&list).unwrap();
         let px = pixel(&pixmap, 0, 0);
         // Multiply of red (1,0,0) on 50% gray (0.5,0.5,0.5) yields ~128 red, zero green/blue.
-        assert!((px.0 as i32 - 128).abs() <= 2, "red channel should be ~128 (got {:?})", px);
+        assert!(
+            (px.0 as i32 - 128).abs() <= 2,
+            "red channel should be ~128 (got {:?})",
+            px
+        );
         assert!(px.1 < 5 && px.2 < 5, "green/blue should be near zero (got {:?})", px);
         assert_eq!(px.3, 255, "alpha should remain opaque (got {:?})", px);
     }

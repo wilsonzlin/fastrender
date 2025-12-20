@@ -7002,9 +7002,7 @@ fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRul
     if tag != "td" && tag != "th" {
         return None;
     }
-    if node.get_attribute("nowrap").is_none() {
-        return None;
-    }
+    node.get_attribute("nowrap")?;
 
     Some(MatchedRule {
         origin: StyleOrigin::Author,
@@ -7016,9 +7014,7 @@ fn nowrap_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRul
 }
 
 fn hidden_presentational_hint(node: &DomNode, order: usize) -> Option<MatchedRule<'static>> {
-    if node.get_attribute("hidden").is_none() {
-        return None;
-    }
+    node.get_attribute("hidden")?;
 
     Some(MatchedRule {
         origin: StyleOrigin::Author,

@@ -3850,12 +3850,7 @@ impl Painter {
         self.paint_replaced_placeholder(replaced_type, style, content_rect);
     }
 
-    fn render_iframe_srcdoc(
-        &self,
-        html: &str,
-        content_rect: Rect,
-        style: Option<&ComputedStyle>,
-    ) -> Option<Pixmap> {
+    fn render_iframe_srcdoc(&self, html: &str, content_rect: Rect, style: Option<&ComputedStyle>) -> Option<Pixmap> {
         if content_rect.width() <= 0.0 || content_rect.height() <= 0.0 {
             return None;
         }
@@ -7246,7 +7241,7 @@ fn radial_geometry(
                 (dx_right, dy_top),
                 (dx_right, dy_bottom),
             ];
-            let mut best = std::f32::INFINITY;
+            let mut best = f32::INFINITY;
             let mut best_pair = (0.0, 0.0);
             for (dx, dy) in corners {
                 let dist = (dx * dx + dy * dy).sqrt();
@@ -7267,7 +7262,7 @@ fn radial_geometry(
                 (dx_right, dy_top),
                 (dx_right, dy_bottom),
             ];
-            let mut best = -std::f32::INFINITY;
+            let mut best = -f32::INFINITY;
             let mut best_pair = (0.0, 0.0);
             for (dx, dy) in corners {
                 let dist = (dx * dx + dy * dy).sqrt();

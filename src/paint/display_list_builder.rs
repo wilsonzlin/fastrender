@@ -985,7 +985,7 @@ impl DisplayListBuilder {
                     (dx_right, dy_top),
                     (dx_right, dy_bottom),
                 ];
-                let mut best = std::f32::INFINITY;
+                let mut best = f32::INFINITY;
                 let mut best_pair = (0.0, 0.0);
                 for (dx, dy) in corners {
                     let dist = (dx * dx + dy * dy).sqrt();
@@ -1006,7 +1006,7 @@ impl DisplayListBuilder {
                     (dx_right, dy_top),
                     (dx_right, dy_bottom),
                 ];
-                let mut best = -std::f32::INFINITY;
+                let mut best = -f32::INFINITY;
                 let mut best_pair = (0.0, 0.0);
                 for (dx, dy) in corners {
                     let dist = (dx * dx + dy * dy).sqrt();
