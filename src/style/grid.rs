@@ -340,7 +340,7 @@ pub fn parse_grid_shorthand(value: &str) -> Option<ParsedGridShorthand> {
         template: Some(empty_template_reset()),
         auto_rows: auto_rows.or_else(|| Some(vec![GridTrack::Auto])),
         auto_columns: auto_cols.or_else(|| Some(vec![GridTrack::Auto])),
-        auto_flow: auto_flow.or_else(|| Some(crate::style::types::GridAutoFlow::Row)),
+        auto_flow: auto_flow.or(Some(crate::style::types::GridAutoFlow::Row)),
     })
 }
 
