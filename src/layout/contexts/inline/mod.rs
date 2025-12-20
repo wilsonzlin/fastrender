@@ -5102,7 +5102,7 @@ impl InlineFormattingContext {
                 crate::style::types::UnicodeBidi::Plaintext => None,
                 _ => match paragraph_direction {
                     crate::style::types::Direction::Rtl => Some(unicode_bidi::Level::rtl()),
-                    _ => Some(unicode_bidi::Level::ltr()),
+                    crate::style::types::Direction::Ltr => Some(unicode_bidi::Level::ltr()),
                 },
             };
             let start_idx = lines_out.len();
@@ -6092,7 +6092,7 @@ fn determine_paragraph_direction(items: &[InlineItem]) -> Option<crate::style::t
                 }
             }
             InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
-                out.push(OBJECT_REPLACEMENT)
+                out.push(OBJECT_REPLACEMENT);
             }
         }
     }
@@ -6172,7 +6172,7 @@ pub(crate) fn push_embedding_level(level: unicode_bidi::Level, dir: Direction) -
     } else if dir == Direction::Ltr && next % 2 == 1 {
         next = next.saturating_add(1);
     }
-    let max = unicode_bidi::level::MAX_EXPLICIT_DEPTH as u8;
+    let max = unicode_bidi::level::MAX_EXPLICIT_DEPTH;
     if next > max {
         return level;
     }
@@ -6319,7 +6319,7 @@ fn item_has_interchar_opportunity(item: &InlineItem) -> bool {
             if t.is_marker {
                 return false;
             }
-            t.cluster_byte_offsets().skip(1).next().is_some() || t.text.chars().count() > 1
+            t.cluster_byte_offsets().nth(1).is_some() || t.text.chars().count() > 1
         }
         InlineItem::InlineBox(b) => b.children.iter().any(item_has_interchar_opportunity),
         InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
