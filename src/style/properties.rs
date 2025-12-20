@@ -747,14 +747,15 @@ fn parse_scroll_snap_type_keywords(parts: &[String]) -> Option<ScrollSnapType> {
         "both" => ScrollSnapAxis::Both,
         _ => return None,
     };
-    let mut strictness = ScrollSnapStrictness::Proximity;
-    if parts.len() == 2 {
-        strictness = match parts[1].to_ascii_lowercase().as_str() {
+    let strictness = if parts.len() == 2 {
+        match parts[1].to_ascii_lowercase().as_str() {
             "mandatory" => ScrollSnapStrictness::Mandatory,
             "proximity" => ScrollSnapStrictness::Proximity,
             _ => return None,
-        };
-    }
+        }
+    } else {
+        ScrollSnapStrictness::Proximity
+    };
     Some(ScrollSnapType { axis, strictness })
 }
 
@@ -4540,8 +4541,8 @@ pub fn apply_declaration_with_base(
                 if n.is_finite() && (n.fract() == 0.0) {
                     // CSS order is an integer; ignore non-integers.
                     let int = n as i64;
-                    if int >= i32::MIN as i64 && int <= i32::MAX as i64 {
-                        styles.order = int as i32;
+                    if let Ok(val) = i32::try_from(int) {
+                        styles.order = val;
                     }
                 }
             }
@@ -7115,10 +7116,7 @@ fn parse_image_resolution_tokens(tokens: &[&str]) -> Option<ImageResolution> {
                 if resolution.is_some() {
                     return None;
                 }
-                resolution = parse_resolution_token(&lower);
-                if resolution.is_none() {
-                    return None;
-                }
+                resolution = Some(parse_resolution_token(&lower)?);
             }
         }
     }

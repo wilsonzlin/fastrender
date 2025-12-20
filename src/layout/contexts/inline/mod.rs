@@ -2775,7 +2775,7 @@ impl InlineFormattingContext {
                     if off == 0 || off >= item.text.len() {
                         return None;
                     }
-                    let prev = item.text[..off].chars().rev().next();
+                    let prev = item.text[..off].chars().next_back();
                     let next = item.text[off..].chars().next();
                     let is_space_boundary = prev.map(is_expandable_space).unwrap_or(false)
                         && next.map(|c| !is_expandable_space(c)).unwrap_or(false);
@@ -3213,10 +3213,7 @@ impl InlineFormattingContext {
                 continue;
             }
 
-            let is_forced = text_item
-                .forced_break_offsets
-                .iter()
-                .any(|offset| *offset == brk.byte_offset);
+            let is_forced = text_item.forced_break_offsets.contains(&brk.byte_offset);
             if brk.byte_offset == len
                 && brk.break_type == BreakType::Allowed
                 && !brk.adds_hyphen
@@ -4130,7 +4127,7 @@ fn apply_break_properties(
                 if brk.break_type == BreakType::Mandatory {
                     return true;
                 }
-                let prev = text[..brk.byte_offset.min(text.len())].chars().rev().next();
+                let prev = text[..brk.byte_offset.min(text.len())].chars().next_back();
                 prev.map(|c| c.is_whitespace() || c == '-' || c == '\u{00AD}')
                     .unwrap_or(false)
             });
@@ -4686,7 +4683,9 @@ impl InlineFormattingContext {
             if items.is_empty() {
                 break;
             }
-            let Some(idx) = items.iter().position(|i| !is_marker_item(i)) else { break };
+            let Some(idx) = items.iter().position(|i| !is_marker_item(i)) else {
+                break;
+            };
             let item = items.remove(idx);
             let remaining = target_width - self.line_items_width(items);
             if remaining <= WIDTH_EPS {
@@ -4814,8 +4813,7 @@ impl InlineFormattingContext {
                 }
                 VerticalAlign::Bottom => {
                     let metrics = positioned.item.baseline_metrics();
-                    positioned.baseline_offset =
-                        line.height - metrics.height - line.baseline + metrics.baseline_offset;
+                    positioned.baseline_offset = line.height - metrics.height - line.baseline + metrics.baseline_offset;
                 }
                 _ => {}
             }
@@ -6635,7 +6633,9 @@ mod tests {
                 FragmentContent::Replaced { .. } => {
                     marker_x.get_or_insert(node.bounds.x());
                 }
-                FragmentContent::Text { ref text, is_marker, .. } => {
+                FragmentContent::Text {
+                    ref text, is_marker, ..
+                } => {
                     if is_marker {
                         marker_x.get_or_insert(node.bounds.x());
                     } else if text.contains('…') {
@@ -6651,7 +6651,10 @@ mod tests {
         }
 
         assert!(texts.iter().any(|t| t.contains('…')));
-        assert_eq!(line_count, 1, "marker and content should share a single line when no wrapping occurs");
+        assert_eq!(
+            line_count, 1,
+            "marker and content should share a single line when no wrapping occurs"
+        );
         let marker_x = marker_x.expect("marker x");
         let ellipsis_x = ellipsis_x.expect("ellipsis x");
 
@@ -6688,7 +6691,9 @@ mod tests {
         let mut stack = vec![&fragment];
         while let Some(node) = stack.pop() {
             match node.content {
-                FragmentContent::Text { ref text, is_marker, .. } => {
+                FragmentContent::Text {
+                    ref text, is_marker, ..
+                } => {
                     if is_marker {
                         marker_x.get_or_insert(node.bounds.x());
                     } else if text.contains('…') {
@@ -6708,7 +6713,10 @@ mod tests {
         let ellipsis_x = ellipsis_x.expect("ellipsis x");
 
         assert!(marker_x < -5.0, "outside marker should sit before content");
-        assert!(ellipsis_x >= 0.0, "start ellipsis should appear within the content region");
+        assert!(
+            ellipsis_x >= 0.0,
+            "start ellipsis should appear within the content region"
+        );
     }
 
     fn marker_and_text_positions_vertical(fragment: &FragmentNode) -> (Option<f32>, Option<f32>) {
