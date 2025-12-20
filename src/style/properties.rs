@@ -235,23 +235,30 @@ fn parse_background_image_value(value: &PropertyValue) -> Option<BackgroundImage
 
 fn parse_image_set_resolution(token: &str) -> Option<f32> {
     let lower = token.trim().to_ascii_lowercase();
-    if let Some(rest) = lower.strip_suffix("x") {
-        return rest.parse::<f32>().ok().filter(|v| *v > 0.0);
-    }
-    if let Some(rest) = lower.strip_suffix("dppx") {
-        return rest.parse::<f32>().ok().filter(|v| *v > 0.0);
-    }
-    if let Some(rest) = lower.strip_suffix("dpi") {
-        return rest.parse::<f32>().ok().filter(|v| *v > 0.0).map(|dpi| dpi / 96.0);
-    }
-    if let Some(rest) = lower.strip_suffix("dpcm") {
-        return rest
-            .parse::<f32>()
-            .ok()
-            .filter(|v| *v > 0.0)
-            .map(|dpcm| (dpcm * 2.54) / 96.0);
-    }
-    None
+    lower
+        .strip_suffix('x')
+        .and_then(|rest| rest.parse::<f32>().ok())
+        .filter(|v| *v > 0.0)
+        .or_else(|| {
+            lower
+                .strip_suffix("dppx")
+                .and_then(|rest| rest.parse::<f32>().ok())
+                .filter(|v| *v > 0.0)
+        })
+        .or_else(|| {
+            lower
+                .strip_suffix("dpi")
+                .and_then(|rest| rest.parse::<f32>().ok())
+                .filter(|v| *v > 0.0)
+                .map(|dpi| dpi / 96.0)
+        })
+        .or_else(|| {
+            lower
+                .strip_suffix("dpcm")
+                .and_then(|rest| rest.parse::<f32>().ok())
+                .filter(|v| *v > 0.0)
+                .map(|dpcm| (dpcm * 2.54) / 96.0)
+        })
 }
 
 fn split_image_set_candidates(inner: &str) -> Vec<String> {
