@@ -6766,10 +6766,12 @@ fn dimension_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
 
     let mut css = String::new();
     if let Some(w) = width {
-        css.push_str(&format!("width: {};", w));
+        use std::fmt::Write;
+        let _ = write!(css, "width: {};", w);
     }
     if let Some(h) = height {
-        css.push_str(&format!("height: {};", h));
+        use std::fmt::Write;
+        let _ = write!(css, "height: {};", h);
     }
 
     Some(MatchedRule {
