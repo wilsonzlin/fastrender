@@ -7586,8 +7586,8 @@ fn parse_transform_origin(value: &PropertyValue) -> Option<TransformOrigin> {
     let mut x: Option<Length> = None;
     let mut y: Option<Length> = None;
 
-    for comp in components.into_iter().take(3) {
-        match comp {
+    for comp in components.iter().take(3) {
+        match *comp {
             PropertyValue::Length(len) => push_component(&mut x, &mut y, *len, AxisHint::Either),
             PropertyValue::Percentage(pct) => push_component(&mut x, &mut y, Length::percent(*pct), AxisHint::Either),
             PropertyValue::Keyword(kw) => {
