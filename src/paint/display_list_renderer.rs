@@ -1004,12 +1004,13 @@ impl DisplayListRenderer {
             ..item.left.clone()
         };
 
-        let mut pushed_clip = false;
-        if radii.has_radius() {
+        let pushed_clip = if radii.has_radius() {
             self.canvas.save();
             self.canvas.set_clip_with_radii(rect, Some(radii));
-            pushed_clip = true;
-        }
+            true
+        } else {
+            false
+        };
 
         if let Some(border_image) = item.image.as_ref() {
             if self.render_border_image(
