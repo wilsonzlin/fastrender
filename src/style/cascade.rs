@@ -859,6 +859,7 @@ pub fn apply_styles_with_media_target_and_imports(
 }
 
 /// Apply styles with optional media-query caching to share media evaluation across passes.
+#[allow(clippy::needless_option_as_deref)]
 pub fn apply_styles_with_media_target_and_imports_cached(
     dom: &DomNode,
     stylesheet: &StyleSheet,

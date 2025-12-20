@@ -3381,7 +3381,7 @@ impl DisplayListBuilder {
             let label_style_ref = label_style
                 .as_ref()
                 .map(|s| s as &ComputedStyle)
-                .or_else(|| fragment.style.as_deref());
+                .or(fragment.style.as_deref());
             let _ = self.emit_text_with_style(label_text, label_style_ref, label_rect);
         }
     }
