@@ -222,7 +222,7 @@ fn builder_clip_path_masks_rendered_output() {
     let mut style = fastrender::ComputedStyle::default();
     style.background_color = Rgba::RED;
     style.clip_path = ClipPath::BasicShape(
-        BasicShape::Circle {
+        Box::new(BasicShape::Circle {
             radius: ShapeRadius::Length(Length::px(3.0)),
             position: BackgroundPosition::Position {
                 x: BackgroundPositionComponent {
@@ -234,7 +234,7 @@ fn builder_clip_path_masks_rendered_output() {
                     offset: Length::px(0.0),
                 },
             },
-        },
+        }),
         None,
     );
 
@@ -254,14 +254,14 @@ fn builder_clip_path_polygon_masks_rendered_output() {
     let mut style = fastrender::ComputedStyle::default();
     style.background_color = Rgba::RED;
     style.clip_path = ClipPath::BasicShape(
-        BasicShape::Polygon {
+        Box::new(BasicShape::Polygon {
             fill: FillRule::NonZero,
             points: vec![
                 (Length::px(0.0), Length::px(0.0)),
                 (Length::px(0.0), Length::px(10.0)),
                 (Length::px(10.0), Length::px(0.0)),
             ],
-        },
+        }),
         None,
     );
 
@@ -281,13 +281,13 @@ fn builder_clip_path_inset_masks_rendered_output() {
     let mut style = fastrender::ComputedStyle::default();
     style.background_color = Rgba::RED;
     style.clip_path = ClipPath::BasicShape(
-        BasicShape::Inset {
+        Box::new(BasicShape::Inset {
             top: Length::px(2.0),
             right: Length::px(2.0),
             bottom: Length::px(2.0),
             left: Length::px(2.0),
-            border_radius: None,
-        },
+            border_radius: Box::new(None),
+        }),
         None,
     );
 
@@ -609,7 +609,7 @@ fn display_list_border_image_nine_slice() {
     style.border_bottom_style = BorderStyle::Solid;
     style.border_left_style = BorderStyle::Solid;
     style.border_image = BorderImage {
-        source: BorderImageSource::Image(BackgroundImage::Url(data_url)),
+        source: BorderImageSource::Image(Box::new(BackgroundImage::Url(data_url))),
         slice: BorderImageSlice {
             top: BorderImageSliceValue::Number(1.0),
             right: BorderImageSliceValue::Number(1.0),
@@ -707,7 +707,7 @@ fn display_list_border_image_generated_uniform_color() {
     style.border_bottom_style = BorderStyle::Solid;
     style.border_left_style = BorderStyle::Solid;
     style.border_image = BorderImage {
-        source: BorderImageSource::Image(BackgroundImage::LinearGradient {
+        source: BorderImageSource::Image(Box::new(BackgroundImage::LinearGradient {
             angle: 0.0,
             stops: vec![
                 ColorStop {
@@ -719,7 +719,7 @@ fn display_list_border_image_generated_uniform_color() {
                     position: Some(1.0),
                 },
             ],
-        }),
+        })),
         slice: BorderImageSlice {
             top: BorderImageSliceValue::Number(1.0),
             right: BorderImageSliceValue::Number(1.0),
