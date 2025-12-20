@@ -4508,7 +4508,7 @@ impl InlineFormattingContext {
         }
 
         let mut out = Vec::with_capacity(lines.len());
-        for line in lines.drain(..) {
+        for line in lines.into_iter() {
             let limit = line.available_width;
             let inline_indent_cut = match line.resolved_direction {
                 crate::style::types::Direction::Rtl => (-line.indent).max(0.0),
