@@ -5151,7 +5151,7 @@ impl InlineFormattingContext {
 
                             let mut candidate_ctx = float_ctx
                                 .as_deref()
-                                .or_else(|| local_float_ctx.as_ref())
+                                .or(local_float_ctx.as_ref())
                                 .cloned()
                                 .unwrap_or_else(|| FloatContext::new(available_inline.max(0.0)));
 
@@ -5247,7 +5247,7 @@ impl InlineFormattingContext {
                         &mut use_first_line_width,
                         &mut line_offset,
                         &mut lines,
-                        float_ctx.as_deref().or_else(|| local_float_ctx.as_ref()),
+                        float_ctx.as_deref().or(local_float_ctx.as_ref()),
                         &mut flow_order,
                     );
 
@@ -5278,7 +5278,7 @@ impl InlineFormattingContext {
         }
 
         // Flush any remaining content
-        let final_ctx = float_ctx.as_deref().or_else(|| local_float_ctx.as_ref());
+        let final_ctx = float_ctx.as_deref().or(local_float_ctx.as_ref());
         flush_pending(
             &mut pending,
             &mut use_first_line_width,

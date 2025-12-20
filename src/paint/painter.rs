@@ -1731,7 +1731,7 @@ impl Painter {
                 let mut outline_commands = Vec::new();
                 let mut unclipped = Vec::new();
                 let mut clipped = Vec::new();
-                for cmd in translated.into_iter() {
+                for cmd in translated {
                     match cmd {
                         DisplayCommand::Outline { .. } => outline_commands.push(cmd),
                         DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. }
@@ -1741,7 +1741,7 @@ impl Painter {
                                 && (rect.width() - root_rect.width()).abs() < f32::EPSILON
                                 && (rect.height() - root_rect.height()).abs() < f32::EPSILON =>
                         {
-                            unclipped.push(cmd)
+                            unclipped.push(cmd);
                         }
                         _ => clipped.push(cmd),
                     }
@@ -1763,7 +1763,7 @@ impl Painter {
                     image_cache: self.image_cache.clone(),
                     text_shape_cache: Arc::clone(&self.text_shape_cache),
                 };
-                for cmd in unclipped.drain(..) {
+                for cmd in unclipped.into_iter() {
                     base_painter.execute_command(cmd)?;
                 }
 
@@ -2518,9 +2518,9 @@ impl Painter {
             && (tile_rect.width() > pixmap.width() as f32 || tile_rect.height() > pixmap.height() as f32)
         {
             let (snapped_w, offset_x) =
-                snap_upscale(tile_rect.width(), pixmap.width() as f32).unwrap_or((tile_rect.width(), 0.0));
+                snap_upscale(tile_rect.width(), pixmap.width() as f32).unwrap_or_else(|| (tile_rect.width(), 0.0));
             let (snapped_h, offset_y) =
-                snap_upscale(tile_rect.height(), pixmap.height() as f32).unwrap_or((tile_rect.height(), 0.0));
+                snap_upscale(tile_rect.height(), pixmap.height() as f32).unwrap_or_else(|| (tile_rect.height(), 0.0));
             tile_rect = Rect::from_xywh(tile_rect.x() + offset_x, tile_rect.y() + offset_y, snapped_w, snapped_h);
         }
 
@@ -2747,7 +2747,7 @@ impl Painter {
             | BackgroundImage::RepeatingConicGradient { .. } => {
                 let img_w = outer_rect.width().max(1.0).round() as u32;
                 let img_h = outer_rect.height().max(1.0).round() as u32;
-                let Some(pixmap) = self.render_generated_image(&*bg, style, img_w, img_h) else {
+                let Some(pixmap) = self.render_generated_image(bg, style, img_w, img_h) else {
                     return false;
                 };
                 (pixmap, img_w, img_h)
