@@ -556,7 +556,8 @@ impl<'a> ElementRef<'a> {
                 if let Some(a_tag) = ancestor.tag_name() {
                     if a_tag.eq_ignore_ascii_case("fieldset") && ancestor.get_attribute_ref("disabled").is_some() {
                         // Find first legend child of this fieldset.
-                        let first_legend = ancestor.element_children().iter().find(|child| {
+                        let element_children = ancestor.element_children();
+                        let first_legend = element_children.iter().find(|child| {
                             child
                                 .tag_name()
                                 .map(|t| t.eq_ignore_ascii_case("legend"))

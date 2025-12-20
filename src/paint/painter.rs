@@ -744,11 +744,13 @@ impl Painter {
 
     #[inline]
     fn device_transform(&self, transform: Option<Transform>) -> Option<Transform> {
-        transform.map(|mut t| {
+        if let Some(mut t) = transform {
             t.tx *= self.scale;
             t.ty *= self.scale;
-            t
-        })
+            Some(t)
+        } else {
+            None
+        }
     }
 
     #[allow(dead_code)]
