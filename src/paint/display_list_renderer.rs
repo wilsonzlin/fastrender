@@ -1961,7 +1961,7 @@ impl DisplayListRenderer {
                 }
             }
             DisplayItem::PopStackingContext => {
-                let record = self.stacking_layers.pop().unwrap_or(StackingRecord {
+                let record = self.stacking_layers.pop().unwrap_or_else(|| StackingRecord {
                     needs_layer: false,
                     filters: Vec::new(),
                     radii: BorderRadii::ZERO,
