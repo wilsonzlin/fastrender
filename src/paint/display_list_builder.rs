@@ -3598,7 +3598,7 @@ fn collect_underline_exclusions_vertical(
     intervals
 }
 
-fn subtract_intervals(total: (f32, f32), exclusions: &mut Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+fn subtract_intervals(total: (f32, f32), exclusions: &mut [(f32, f32)]) -> Vec<(f32, f32)> {
     exclusions.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     let mut start = total.0;
     let mut allowed = Vec::new();
