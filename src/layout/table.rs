@@ -1036,6 +1036,7 @@ impl TableStructure {
     /// # Returns
     ///
     /// A fully resolved TableStructure ready for layout
+    #[allow(clippy::cognitive_complexity)]
     pub fn from_box_tree(table_box: &BoxNode) -> Self {
         let mut structure = TableStructure::new();
 
@@ -1764,6 +1765,7 @@ pub struct CollapsedBorders {
 /// Resolve the border widths for a table in collapsed border model.
 /// Returns resolved borders for vertical and horizontal grid lines.
 /// Lengths: vertical = columns + 1, horizontal = rows + 1.
+#[allow(clippy::cognitive_complexity)]
 fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) -> CollapsedBorders {
     #[derive(Clone, Copy)]
     enum BorderOrigin {
@@ -2803,6 +2805,7 @@ pub fn calculate_auto_layout_widths(structure: &mut TableStructure, available_wi
 /// - rowspan contributions spread evenly across rows
 /// - specified row heights (length or percentage when a definite available height is provided)
 /// - distributing remaining space to auto rows when an available height is known
+#[allow(clippy::cognitive_complexity)]
 pub fn calculate_row_heights(structure: &mut TableStructure, available_height: Option<f32>) {
     if structure.row_count == 0 {
         return;
@@ -3528,6 +3531,7 @@ impl Default for TableFormattingContext {
 
 impl FormattingContext for TableFormattingContext {
     /// Performs full table layout following CSS table algorithms (auto layout)
+    #[allow(clippy::cognitive_complexity)]
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let _profile = layout_timer(LayoutKind::Table);
         static DUMP_TABLE: OnceLock<bool> = OnceLock::new();

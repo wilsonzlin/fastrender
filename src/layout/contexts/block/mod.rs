@@ -164,6 +164,7 @@ impl BlockFormattingContext {
     }
 
     /// Lays out a single block-level child and returns its fragment
+    #[allow(clippy::cognitive_complexity)]
     fn layout_block_child(
         &self,
         parent: &BoxNode,
@@ -893,6 +894,7 @@ impl BlockFormattingContext {
     }
 
     /// Lays out all children of a box
+    #[allow(clippy::cognitive_complexity)]
     fn layout_children(
         &self,
         parent: &BoxNode,
@@ -1715,6 +1717,7 @@ impl std::fmt::Debug for BlockFormattingContext {
 }
 
 impl FormattingContext for BlockFormattingContext {
+    #[allow(clippy::cognitive_complexity)]
     fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
         let _profile = layout_timer(LayoutKind::Block);
         let style = &box_node.style;
