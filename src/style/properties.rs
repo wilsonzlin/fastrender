@@ -431,7 +431,7 @@ fn tokenize_image_set_candidate(value_str: &str) -> Vec<String> {
     let mut current = String::new();
     let mut paren = 0;
     let mut bracket = 0;
-    let mut brace: usize = 0;
+            let mut brace: usize = 0;
     let mut in_string: Option<char> = None;
     let mut chars = value_str.chars().peekable();
 
