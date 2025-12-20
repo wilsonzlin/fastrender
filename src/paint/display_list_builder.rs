@@ -1794,8 +1794,7 @@ impl DisplayListBuilder {
 
                 if let Some(image) = sources
                     .iter()
-                    .filter_map(|s| self.decode_image(s, style_for_image, false))
-                    .next()
+                    .find_map(|s| self.decode_image(s, style_for_image, false))
                 {
                     let (dest_x, dest_y, dest_w, dest_h) = {
                         let (fit, position, font_size) = if let Some(style) = fragment.style.as_deref() {
@@ -1814,7 +1813,7 @@ impl DisplayListBuilder {
                             font_size,
                             self.viewport,
                         )
-                        .unwrap_or((0.0, 0.0, rect.width(), rect.height()))
+                        .unwrap_or_else(|| (0.0, 0.0, rect.width(), rect.height()))
                     };
 
                     let dest_rect = Rect::from_xywh(rect.x() + dest_x, rect.y() + dest_y, dest_w, dest_h);
@@ -1958,16 +1957,17 @@ impl DisplayListBuilder {
         let clip_radii = Self::resolve_clip_radii(style, rects, clip_box, self.viewport);
         let blend_mode = Self::convert_blend_mode(layer.blend_mode);
         let use_blend = blend_mode != BlendMode::Normal;
-        let mut pushed_clip = false;
-        if !clip_radii.is_zero() {
+        let pushed_clip = if clip_radii.is_zero() {
+            false
+        } else {
             self.list.push(DisplayItem::PushClip(ClipItem {
                 shape: ClipShape::Rect {
                     rect: clip_rect,
                     radii: Some(clip_radii),
                 },
             }));
-            pushed_clip = true;
-        }
+            true
+        };
         if use_blend {
             self.list
                 .push(DisplayItem::PushBlendMode(BlendModeItem { mode: blend_mode }));
