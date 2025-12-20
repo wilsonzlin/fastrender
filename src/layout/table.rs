@@ -2006,7 +2006,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                     if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
                         column_styles[visible] = column_styles[visible]
                             .take()
-                            .or_else(|| Some((child.style.clone(), source_counter)));
+                            .or(Some((child.style.clone(), source_counter)));
                         source_counter += 1;
                         first_visible.get_or_insert(visible);
                         last_visible = Some(visible);
