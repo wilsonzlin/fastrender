@@ -5157,7 +5157,9 @@ impl Painter {
                     crate::text::pipeline::Direction::RightToLeft => {
                         run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5) * self.scale
                     }
-                    _ => run_origin_inline + (glyph.x_offset + glyph.x_advance * 0.5) * self.scale,
+                    crate::text::pipeline::Direction::LeftToRight => {
+                        run_origin_inline + (glyph.x_offset + glyph.x_advance * 0.5) * self.scale
+                    }
                 };
                 let (mark_center_x, mark_center_y) = if inline_vertical {
                     (block_center, inline_center)
@@ -5424,7 +5426,7 @@ fn collect_underline_exclusions(
         for glyph in &run.glyphs {
             let glyph_x = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset * device_scale,
-                _ => run_origin + glyph.x_offset * device_scale,
+                crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset * device_scale,
             };
             let glyph_y = baseline_y - glyph.y_offset * device_scale;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
@@ -5479,7 +5481,7 @@ fn collect_underline_exclusions_vertical(
         for glyph in &run.glyphs {
             let inline_pos = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset * device_scale,
-                _ => run_origin + glyph.x_offset * device_scale,
+                crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset * device_scale,
             };
             let block_pos = block_baseline - glyph.y_offset * device_scale;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
@@ -5779,7 +5781,7 @@ impl css::types::CssImportLoader for EmbeddedImportFetcher {
 
         match resolved.scheme() {
             "file" => {
-                let path = resolved.to_file_path().map_err(|_| RenderError::InvalidParameters {
+                let path = resolved.to_file_path().map_err(|()| RenderError::InvalidParameters {
                     message: format!("Invalid file URL for @import: {}", resolved),
                 })?;
                 let bytes = std::fs::read(&path)?;
