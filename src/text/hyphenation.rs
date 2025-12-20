@@ -106,16 +106,18 @@ impl HyphenationPatterns {
 
 fn cached_patterns(language: SupportedLanguage) -> Result<Arc<HyphenationPatterns>> {
     let cache = PATTERN_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().expect("pattern cache poisoned");
-    if let Some(existing) = guard.get(&language).cloned() {
-        drop(guard);
-        return Ok(existing);
-    }
+    if let Ok(mut guard) = cache.lock() {
+        if let Some(existing) = guard.get(&language).cloned() {
+            return Ok(existing);
+        }
 
-    let loaded = Arc::new(HyphenationPatterns::new(language)?);
-    guard.insert(language, Arc::clone(&loaded));
-    drop(guard);
-    Ok(loaded)
+        let loaded = Arc::new(HyphenationPatterns::new(language)?);
+        guard.insert(language, Arc::clone(&loaded));
+        Ok(loaded)
+    } else {
+        // If the lock is poisoned, fall back to loading without caching to avoid panicking.
+        HyphenationPatterns::new(language).map(Arc::new)
+    }
 }
 
 impl std::fmt::Debug for HyphenationPatterns {
