@@ -1035,15 +1035,13 @@ fn set_length_with_order(target: &mut Option<Length>, order_slot: &mut i32, valu
 }
 
 fn sanitize_min_length(value: Option<Length>) -> Option<Length> {
-    if let Some(len) = value {
+    value.map(|len| {
         if len.calc.is_none() && len.value < 0.0 {
-            Some(Length::px(0.0))
+            Length::px(0.0)
         } else {
-            Some(len)
+            len
         }
-    } else {
-        None
-    }
+    })
 }
 
 fn sanitize_max_length(value: Option<Length>) -> Option<Length> {
