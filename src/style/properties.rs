@@ -6148,7 +6148,10 @@ pub fn apply_declaration_with_base(
                         .get(source_idx)
                         .copied()
                         .unwrap_or_else(|| default.clone());
-                    let inline_value = values.get(idx).copied().unwrap_or_else(|| values.last().copied().unwrap());
+                    let inline_value = values
+                        .get(idx)
+                        .copied()
+                        .unwrap_or_else(|| values.last().copied().unwrap());
                     let explicit = match source {
                         BackgroundSize::Explicit(mut x, mut y) => {
                             if horizontal_inline {
@@ -6182,7 +6185,10 @@ pub fn apply_declaration_with_base(
                 for idx in 0..layer_count {
                     let source_idx = styles.background_sizes.len().saturating_sub(1).min(idx);
                     let source = styles.background_sizes.get(source_idx).copied().unwrap_or(default);
-                    let block_value = values.get(idx).copied().unwrap_or_else(|| values.last().copied().unwrap());
+                    let block_value = values
+                        .get(idx)
+                        .copied()
+                        .unwrap_or_else(|| values.last().copied().unwrap());
                     let explicit = match source {
                         BackgroundSize::Explicit(mut x, mut y) => {
                             if horizontal_block {
@@ -6221,9 +6227,7 @@ pub fn apply_declaration_with_base(
         "background-position-x" => {
             if let Some(xs) = parse_layer_list(&resolved_value, parse_background_position_component_x) {
                 styles.ensure_background_lists();
-                let default = match BackgroundLayer::default().position {
-                    BackgroundPosition::Position { x, .. } => x,
-                };
+                let BackgroundPosition::Position { x: default, .. } = BackgroundLayer::default().position;
                 let layer_count = xs.len().max(styles.background_positions.len()).max(1);
                 let mut positions = Vec::with_capacity(layer_count);
                 for idx in 0..layer_count {
@@ -6247,9 +6251,7 @@ pub fn apply_declaration_with_base(
         "background-position-y" => {
             if let Some(ys) = parse_layer_list(&resolved_value, parse_background_position_component_y) {
                 styles.ensure_background_lists();
-                let default = match BackgroundLayer::default().position {
-                    BackgroundPosition::Position { y, .. } => y,
-                };
+                let BackgroundPosition::Position { y: default, .. } = BackgroundLayer::default().position;
                 let layer_count = ys.len().max(styles.background_positions.len()).max(1);
                 let mut positions = Vec::with_capacity(layer_count);
                 for idx in 0..layer_count {
