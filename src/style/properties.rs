@@ -9212,7 +9212,6 @@ fn parse_clip_path_value(value: &PropertyValue) -> Option<ClipPath> {
     }
 }
 
-#[allow(clippy::option_option)]
 fn parse_clip_value(value: &PropertyValue) -> Option<Option<ClipRect>> {
     match value {
         PropertyValue::Keyword(raw) => {
