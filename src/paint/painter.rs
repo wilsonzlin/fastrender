@@ -1418,10 +1418,13 @@ impl Painter {
 
         let has_background = Self::has_paintable_background(&style);
         if has_background {
-            let mut background_rect = abs_bounds;
-            if is_root_fragment && (abs_bounds.width() <= 0.0 || abs_bounds.height() <= 0.0) {
-                background_rect = Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height);
-            }
+            let background_rect = if is_root_fragment
+                && (abs_bounds.width() <= 0.0 || abs_bounds.height() <= 0.0)
+            {
+                Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
+            } else {
+                abs_bounds
+            };
             items.push(DisplayCommand::Background {
                 rect: background_rect,
                 style: style.clone(),
