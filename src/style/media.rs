@@ -1680,6 +1680,7 @@ impl MediaContext {
     /// - `FASTR_COLOR_DEPTH` = integer bits per color channel (e.g., 8)
     /// - `FASTR_COLOR_INDEX` = integer palette size (e.g., 256)
     /// - `FASTR_MONOCHROME_DEPTH` = integer bits for monochrome devices (e.g., 1)
+    #[allow(clippy::cognitive_complexity)]
     pub fn with_env_overrides(mut self) -> Self {
         if let Ok(value) = env::var("FASTR_PREFERS_COLOR_SCHEME") {
             let v = value.trim().to_ascii_lowercase();
@@ -2933,8 +2934,7 @@ mod tests {
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         // If a prior test panicked while holding the lock, avoid poisoning subsequent tests.
-        LOCK
-            .get_or_init(std::sync::Mutex::default)
+        LOCK.get_or_init(std::sync::Mutex::default)
             .lock()
             .unwrap_or_else(|e| e.into_inner())
     }

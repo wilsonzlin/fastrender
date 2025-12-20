@@ -36,9 +36,7 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     }
 
     let href_lower = href.to_ascii_lowercase();
-    if href_lower.starts_with("javascript:")
-        || href_lower.starts_with("vbscript:")
-        || href_lower.starts_with("mailto:")
+    if href_lower.starts_with("javascript:") || href_lower.starts_with("vbscript:") || href_lower.starts_with("mailto:")
     {
         return None;
     }
@@ -628,6 +626,7 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
 /// without executing JavaScript, scan the raw HTML for any substring that looks
 /// like a CSS URL (ends with `.css`, possibly with a query string) and try to
 /// resolve and fetch it as a stylesheet.
+#[allow(clippy::cognitive_complexity)]
 pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
     let mut urls = Vec::new();
     let mut seen = HashSet::new();

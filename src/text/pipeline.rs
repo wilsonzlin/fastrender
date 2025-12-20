@@ -1653,6 +1653,7 @@ fn build_family_entries(style: &ComputedStyle) -> Vec<crate::text::font_fallback
     entries
 }
 
+#[allow(clippy::cognitive_complexity)]
 fn resolve_font_for_char(
     ch: char,
     families: &[crate::text::font_fallback::FamilyEntry],

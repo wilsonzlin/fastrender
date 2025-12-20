@@ -258,6 +258,7 @@ impl DisplayListOptimizer {
     }
 
     /// Cull items outside the viewport
+    #[allow(clippy::cognitive_complexity)]
     fn cull_items(&self, items: Vec<DisplayItem>, viewport: Rect) -> Vec<DisplayItem> {
         let mut result = Vec::with_capacity(items.len());
         let mut transform_stack: Vec<bool> = Vec::new();
