@@ -41,6 +41,10 @@ test-output:
 style-tests:
     cargo test --quiet --test style_tests
 
+# Run README guard (ensures README.md exists and is non-empty)
+readme-guard:
+    cargo test --quiet --test readme_guard
+
 # Run a specific test
 test-one TEST:
     cargo test {{TEST}} -- --nocapture
