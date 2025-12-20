@@ -579,12 +579,12 @@ impl FontContext {
         oblique_angle: Option<f32>,
         ch: Option<char>,
     ) -> Option<LoadedFont> {
-        let guard = self.web_fonts.read().ok()?;
+        let faces = self.web_fonts.read().ok()?.clone();
         let desired_stretch = stretch.to_percentage();
         let mut best: Option<((u8, f32, f32, u8, (u8, f32), usize), LoadedFont)> = None;
 
         let family_folded = case_fold(family);
-        for face in guard.iter().filter(|f| case_fold(&f.family) == family_folded) {
+        for face in faces.iter().filter(|f| case_fold(&f.family) == family_folded) {
             if let Some(ch) = ch {
                 if !face.supports_char(ch) {
                     continue;
