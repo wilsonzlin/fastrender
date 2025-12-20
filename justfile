@@ -52,6 +52,10 @@ guard-tests:
     cargo test --quiet background_position_logical_regression_is_present
     cargo test --quiet fetch_and_render_exit_regression_is_present
 
+# Run a quick guard test listing the guards (fast sanity check)
+guard-tests-quick:
+    cargo test --quiet --test guard_tests_quick
+
 # Run a specific test
 test-one TEST:
     cargo test {{TEST}} -- --nocapture
