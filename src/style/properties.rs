@@ -7739,15 +7739,11 @@ fn parse_container_shorthand(value: &PropertyValue) -> Option<(Vec<String>, Opti
     if let Some(right_part) = right {
         if !right_part.is_empty() {
             container_type = parse_container_type_keyword(right_part);
-            if container_type.is_none() {
-                return None;
-            }
+            container_type?;
         }
     } else if names.is_empty() && !left.is_empty() {
         container_type = parse_container_type_keyword(left);
-        if container_type.is_none() {
-            return None;
-        }
+        container_type?;
     }
 
     if names.is_empty() && container_type.is_none() {
