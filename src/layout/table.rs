@@ -4358,7 +4358,7 @@ impl FormattingContext for TableFormattingContext {
                 // Table left/right border widths are based on the first row's collapsed border
                 // (CSS 2.2 §17.6.2), with any excess in later rows spilling into the margin.
                 if structure.row_count > 0 {
-                    segments.get(0).map(|b| b.width).unwrap_or(0.0)
+                    segments.first().map(|b| b.width).unwrap_or(0.0)
                 } else {
                     0.0
                 }
@@ -4442,9 +4442,9 @@ impl FormattingContext for TableFormattingContext {
             // Precompute column offsets for positioning in the separated model.
             let start_x = border_left + pad_left;
             let mut x = start_x + h_spacing * 0.5;
-            for col_idx in 0..structure.column_count {
+            for width in col_widths.iter().take(structure.column_count) {
                 col_offsets.push(x);
-                x += col_widths[col_idx] + h_spacing;
+                x += width + h_spacing;
             }
 
             content_width = if col_widths.is_empty() {
@@ -4653,7 +4653,6 @@ impl FormattingContext for TableFormattingContext {
         // Position cell fragments with vertical alignment within their row block
         let row_metric_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
         // Ensure baseline selection follows row/column order (CSS 2.1 row baseline rules).
-        let mut laid_out_cells = laid_out_cells;
         laid_out_cells.sort_by_key(|c| (c.cell.row, c.cell.col));
 
         // Compute table baseline per CSS 2.1: the baseline of the first row that has a
@@ -4677,11 +4676,7 @@ impl FormattingContext for TableFormattingContext {
             let x = if structure.border_collapse == BorderCollapse::Collapse {
                 col_offsets.get(cell.col).copied().unwrap_or(0.0)
             } else {
-                let mut x = content_origin_x + h_spacing;
-                for col_idx in 0..cell.col {
-                    x += col_widths[col_idx] + h_spacing;
-                }
-                x
+                content_origin_x + h_spacing + col_widths.iter().take(cell.col).map(|w| w + h_spacing).sum::<f32>()
             };
 
             let row_start = cell.row;
@@ -4701,10 +4696,11 @@ impl FormattingContext for TableFormattingContext {
                 VerticalAlign::Middle => (((spanned_height - laid.height) / 2.0).max(0.0), None),
                 _ => {
                     let raw_baseline = laid.baseline.unwrap_or(laid.height);
-                    let mut baseline = raw_baseline;
-                    if raw_baseline >= laid.height && spanned_height > laid.height {
-                        baseline = spanned_height;
-                    }
+                    let baseline = if raw_baseline >= laid.height && spanned_height > laid.height {
+                        spanned_height
+                    } else {
+                        raw_baseline
+                    };
                     let baseline = if laid.cell.rowspan > 1 {
                         let span_end = (cell.row + cell.rowspan).min(row_metrics.len());
                         spanning_baseline_allocation(spanned_height, baseline, row_start, span_end, &row_metric_heights)
