@@ -1952,9 +1952,7 @@ impl DisplayListBuilder {
         let clip_radii = Self::resolve_clip_radii(style, rects, clip_box, self.viewport);
         let blend_mode = Self::convert_blend_mode(layer.blend_mode);
         let use_blend = blend_mode != BlendMode::Normal;
-        let pushed_clip = if clip_radii.is_zero() {
-            false
-        } else {
+        let pushed_clip = !clip_radii.is_zero() && {
             self.list.push(DisplayItem::PushClip(ClipItem {
                 shape: ClipShape::Rect {
                     rect: clip_rect,
