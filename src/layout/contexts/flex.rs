@@ -924,15 +924,17 @@ impl FormattingContext for FlexFormattingContext {
                         avail.width = AvailableSpace::MaxContent;
                     }
                     if !log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id) {
-                        let seq = {
-                            let mut counts =
-                                LOG_MEASURE_COUNTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
-                            let entry = counts.entry(measure_box.id).or_insert(0);
-                            (*entry < 3).then(|| {
-                                *entry += 1;
-                                *entry
-                            })
-                        };
+                        let seq = LOG_MEASURE_COUNTS
+                            .get_or_init(|| Mutex::new(HashMap::new()))
+                            .lock()
+                            .ok()
+                            .and_then(|mut counts| {
+                                let entry = counts.entry(measure_box.id).or_insert(0);
+                                (*entry < 3).then(|| {
+                                    *entry += 1;
+                                    *entry
+                                })
+                            });
                         if let Some(seq) = seq {
                             let selector = measure_box
                                 .debug_info
@@ -1184,15 +1186,17 @@ impl FormattingContext for FlexFormattingContext {
                     }
 
                     if !log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id) {
-                        let seq = {
-                            let mut counts =
-                                LOG_MEASURE_COUNTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
-                            let entry = counts.entry(measure_box.id).or_insert(0);
-                            (*entry < 3).then(|| {
-                                *entry += 1;
-                                *entry
-                            })
-                        };
+                        let seq = LOG_MEASURE_COUNTS
+                            .get_or_init(|| Mutex::new(HashMap::new()))
+                            .lock()
+                            .ok()
+                            .and_then(|mut counts| {
+                                let entry = counts.entry(measure_box.id).or_insert(0);
+                                (*entry < 3).then(|| {
+                                    *entry += 1;
+                                    *entry
+                                })
+                            });
                         if let Some(seq) = seq {
                             let selector = measure_box
                                 .debug_info
