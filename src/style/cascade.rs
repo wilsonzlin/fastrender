@@ -6734,7 +6734,8 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
     if matches!(tag.as_str(), "td" | "th" | "tr") {
         if let Some(valign) = node.get_attribute("valign") {
             if let Some(mapped) = map_valign(&valign) {
-                declarations.push_str(&format!("vertical-align: {};", mapped));
+                use std::fmt::Write;
+                let _ = write!(declarations, "vertical-align: {};", mapped.trim());
             }
         }
     }
