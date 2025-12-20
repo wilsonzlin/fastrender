@@ -844,15 +844,20 @@ impl DisplayListBuilder {
                     let gap = i.saturating_sub(start_idx + 1);
                     if gap > 0 {
                         let step = (pos - start_pos) / (gap as f32 + 1.0);
-                        for j in 1..=gap {
-                            positions[start_idx + j] = Some((start_pos + step * j as f32).max(start_pos));
+                        for (j, slot) in positions
+                            .iter_mut()
+                            .enumerate()
+                            .take(start_idx + gap + 1)
+                            .skip(start_idx + 1)
+                        {
+                            *slot = Some((start_pos + step * j as f32).max(start_pos));
                         }
                     }
                 } else if i > 0 {
                     let gap = i;
                     let step = pos / gap as f32;
-                    for j in 0..i {
-                        positions[j] = Some(step * j as f32);
+                    for (j, slot) in positions.iter_mut().take(i).enumerate() {
+                        *slot = Some(step * j as f32);
                     }
                 }
                 last_known = Some((i, pos));
