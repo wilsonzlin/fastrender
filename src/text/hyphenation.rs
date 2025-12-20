@@ -113,6 +113,7 @@ fn cached_patterns(language: SupportedLanguage) -> Result<Arc<HyphenationPattern
 
     let loaded = Arc::new(HyphenationPatterns::new(language)?);
     guard.insert(language, Arc::clone(&loaded));
+    drop(guard);
     Ok(loaded)
 }
 
