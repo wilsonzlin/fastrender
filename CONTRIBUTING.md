@@ -106,6 +106,7 @@ git checkout -b fix/your-bug-fix
 - Add tests for new functionality
 - Update documentation as needed
 - Run checks locally before committing
+- Avoid no-op edits: ensure `git diff` shows meaningful changes before committing; whitespace-only or unchanged hunks add churn and may block pushes.
 
 ### 3. Run Pre-Commit Checks
 
