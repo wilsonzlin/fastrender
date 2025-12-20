@@ -87,6 +87,9 @@ just style-tests
 
 # Clippy pedantic (relaxed for complex/long signatures)
 just clippy-pedantic
+
+# README guard (fails if README.md is missing/empty)
+cargo test --quiet --test readme_guard
 ```
 
 ### Batch Fetch & Render
