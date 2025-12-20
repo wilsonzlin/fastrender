@@ -2747,18 +2747,18 @@ impl DisplayListRenderer {
 
     fn resolve_font(&self, font_id: Option<&FontId>) -> Option<LoadedFont> {
         let mut families = Vec::new();
-        let mut weight = 400;
-        let mut italic = false;
-        let mut oblique = false;
-        let mut stretch = FontStretch::Normal;
-
-        if let Some(id) = font_id {
-            families.push(id.family.clone());
-            weight = id.weight;
-            italic = matches!(id.style, DbFontStyle::Italic);
-            oblique = matches!(id.style, DbFontStyle::Oblique);
-            stretch = id.stretch;
-        }
+        let (weight, italic, oblique, stretch) = match font_id {
+            Some(id) => {
+                families.push(id.family.clone());
+                (
+                    id.weight,
+                    matches!(id.style, DbFontStyle::Italic),
+                    matches!(id.style, DbFontStyle::Oblique),
+                    id.stretch,
+                )
+            }
+            None => (400, false, false, FontStretch::Normal),
+        };
 
         if families.is_empty() {
             families.push("sans-serif".to_string());

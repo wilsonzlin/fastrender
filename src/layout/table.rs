@@ -4376,15 +4376,13 @@ impl FormattingContext for TableFormattingContext {
         let mut row_line_pos = Vec::new();
         let mut row_offsets = Vec::with_capacity(structure.row_count);
         let mut col_offsets = Vec::with_capacity(structure.column_count);
-        let content_width: f32;
-        let content_height: f32;
 
         // Collapsed borders place border strokes on grid lines, with half of the outer
         // borders inside the table box and half potentially spilling into the margin
         // area (CSS 2.2 §17.6.2). Compute line centers and cell start offsets from the
         // resolved line widths so that the table width/height include only half of the
         // outer collapsed borders.
-        if structure.border_collapse == BorderCollapse::Collapse {
+        let (content_width, content_height) = if structure.border_collapse == BorderCollapse::Collapse {
             let (cols, starts, collapsed_width) =
                 collapsed_line_positions(&col_widths, &vertical_line_max, pad_left, pad_right);
             column_line_pos = cols;
@@ -4396,8 +4394,7 @@ impl FormattingContext for TableFormattingContext {
             row_line_pos = rows;
             row_offsets = starts;
 
-            content_width = collapsed_width;
-            content_height = collapsed_height;
+            (collapsed_width, collapsed_height)
         } else {
             let content_origin_y = border_top + pad_top;
             let mut y = content_origin_y + v_spacing * 0.5;
@@ -4446,13 +4443,13 @@ impl FormattingContext for TableFormattingContext {
                 x += width + h_spacing;
             }
 
-            content_width = if col_widths.is_empty() {
+            let width = if col_widths.is_empty() {
                 available_content
             } else {
                 let total_spacing = h_spacing * structure.column_count as f32;
                 col_widths.iter().sum::<f32>() + total_spacing
             };
-            content_height = if structure.row_count > 0 {
+            let height = if structure.row_count > 0 {
                 row_offsets
                     .last()
                     .map(|start| start + row_metrics.last().map(|r| r.height).unwrap_or(0.0) + v_spacing * 0.5)
@@ -4461,7 +4458,8 @@ impl FormattingContext for TableFormattingContext {
             } else {
                 0.0
             };
-        }
+            (width, height)
+        };
 
         let content_origin_x = if structure.border_collapse == BorderCollapse::Collapse {
             col_offsets.first().copied().unwrap_or(pad_left) - vertical_line_max.first().copied().unwrap_or(0.0) * 0.5
