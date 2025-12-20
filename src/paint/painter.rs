@@ -1477,7 +1477,7 @@ impl Painter {
                 return own_style;
             }
         }
-        if let Some(html) = fragment.children.get(0) {
+        if let Some(html) = fragment.children.first() {
             if let Some(style) = html.style.clone() {
                 if Self::has_paintable_background(&style) {
                     return Some(style);
