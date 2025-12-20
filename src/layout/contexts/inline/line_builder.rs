@@ -1961,7 +1961,7 @@ fn reorder_paragraph(
     let mut global_offset = 0usize;
     let mut paragraph_text = String::new();
 
-    for (_line_idx, leaves) in line_leaves.into_iter().enumerate() {
+    for leaves in line_leaves {
         let line_start = global_offset;
         for leaf in leaves {
             let mut stack: Vec<(UnicodeBidi, Direction)> = vec![(root_unicode_bidi, root_direction)];
@@ -2115,7 +2115,7 @@ fn reorder_paragraph(
             let leaf_override = paragraph_leaves
                 .get(mapping.leaf_index)
                 .and_then(|p| p.bidi_context)
-                .map_or(false, |ctx| ctx.override_all);
+                .is_some_and(|ctx| ctx.override_all);
             if leaf_override {
                 segments.push(VisualSegment {
                     mapping: *mapping,
@@ -4280,7 +4280,15 @@ mod tests {
             .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
             .expect("shape");
         let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
-        let item = TextItem::new(runs, text.to_string(), metrics, Vec::new(), Vec::new(), style.clone(), Direction::Ltr);
+        let item = TextItem::new(
+            runs,
+            text.to_string(),
+            metrics,
+            Vec::new(),
+            Vec::new(),
+            style.clone(),
+            Direction::Ltr,
+        );
 
         // Offset 2 lands inside the multi-byte emoji; split_at should clamp to the previous
         // boundary rather than panicking.

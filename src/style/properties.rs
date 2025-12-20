@@ -29,7 +29,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 thread_local! {
-    static IMAGE_SET_DPR: Cell<f32> = Cell::new(1.0);
+    static IMAGE_SET_DPR: Cell<f32> = const { Cell::new(1.0) };
 }
 
 /// Default viewport used by tests and legacy callers.
@@ -288,9 +288,7 @@ fn split_image_set_candidates(inner: &str) -> Vec<String> {
                 current.push(ch);
             }
             ')' => {
-                if paren > 0 {
-                    paren -= 1;
-                }
+                paren = paren.saturating_sub(1);
                 current.push(ch);
             }
             '[' => {
@@ -298,9 +296,7 @@ fn split_image_set_candidates(inner: &str) -> Vec<String> {
                 current.push(ch);
             }
             ']' => {
-                if bracket > 0 {
-                    bracket -= 1;
-                }
+                bracket = bracket.saturating_sub(1);
                 current.push(ch);
             }
             '{' => {
@@ -431,7 +427,7 @@ fn tokenize_image_set_candidate(value_str: &str) -> Vec<String> {
     let mut current = String::new();
     let mut paren = 0;
     let mut bracket = 0;
-            let mut brace: usize = 0;
+    let mut brace: usize = 0;
     let mut in_string: Option<char> = None;
     let mut chars = value_str.chars().peekable();
 
@@ -2488,18 +2484,18 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.rebuild_background_layers();
         }
         "background-position-x" => {
-                let mut xs: Vec<_> = source
-                    .background_positions
-                    .iter()
-                    .map(|p| match p {
-                        BackgroundPosition::Position { x, .. } => *x,
-                    })
-                    .collect();
-                if xs.is_empty() {
-                    xs.push(match BackgroundLayer::default().position {
-                        BackgroundPosition::Position { x, .. } => x,
-                    });
-                }
+            let mut xs: Vec<_> = source
+                .background_positions
+                .iter()
+                .map(|p| match p {
+                    BackgroundPosition::Position { x, .. } => *x,
+                })
+                .collect();
+            if xs.is_empty() {
+                xs.push(match BackgroundLayer::default().position {
+                    BackgroundPosition::Position { x, .. } => x,
+                });
+            }
             styles.ensure_background_lists();
             let layer_count = xs.len().max(styles.background_positions.len()).max(1);
             let mut positions = Vec::with_capacity(layer_count);
@@ -2510,10 +2506,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                     .get(source_idx)
                     .copied()
                     .unwrap_or_else(|| BackgroundLayer::default().position);
-                let x_comp = xs
-                    .get(idx)
-                    .copied()
-                    .unwrap_or_else(|| *xs.last().unwrap());
+                let x_comp = xs.get(idx).copied().unwrap_or_else(|| *xs.last().unwrap());
                 let BackgroundPosition::Position { y, .. } = source_pos;
                 positions.push(BackgroundPosition::Position { x: x_comp, y });
             }
@@ -2521,13 +2514,13 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
             styles.rebuild_background_layers();
         }
         "background-position-y" => {
-                let mut ys: Vec<_> = source
-                    .background_positions
-                    .iter()
-                    .map(|p| match p {
-                        BackgroundPosition::Position { y, .. } => *y,
-                    })
-                    .collect();
+            let mut ys: Vec<_> = source
+                .background_positions
+                .iter()
+                .map(|p| match p {
+                    BackgroundPosition::Position { y, .. } => *y,
+                })
+                .collect();
             if ys.is_empty() {
                 ys.push(match BackgroundLayer::default().position {
                     BackgroundPosition::Position { y, .. } => y,
@@ -2543,10 +2536,7 @@ fn apply_property_from_source(styles: &mut ComputedStyle, source: &ComputedStyle
                     .get(source_idx)
                     .copied()
                     .unwrap_or_else(|| BackgroundLayer::default().position);
-                let y_comp = ys
-                    .get(idx)
-                    .copied()
-                    .unwrap_or_else(|| *ys.last().unwrap());
+                let y_comp = ys.get(idx).copied().unwrap_or_else(|| *ys.last().unwrap());
                 let BackgroundPosition::Position { x, .. } = source_pos;
                 positions.push(BackgroundPosition::Position { x, y: y_comp });
             }
@@ -3340,7 +3330,7 @@ pub fn apply_declaration_with_base(
         }
         "inset-inline" => {
             if let Some(values) = extract_margin_values(&resolved_value) {
-                    let start = values.first().copied().flatten();
+                let start = values.first().copied().flatten();
                 let end = values.get(1).copied().flatten().or(start);
                 push_logical(
                     styles,
@@ -4965,7 +4955,7 @@ pub fn apply_declaration_with_base(
                             | "no-contextual" => ligature_tokens.push(tok),
                             "lining-nums" | "oldstyle-nums" | "proportional-nums" | "tabular-nums"
                             | "diagonal-fractions" | "stacked-fractions" | "ordinal" | "slashed-zero" => {
-                    numeric_tokens.push(tok);
+                                numeric_tokens.push(tok);
                             }
                             "jis78" | "jis83" | "jis90" | "jis04" | "simplified" | "traditional" | "full-width"
                             | "proportional-width" | "ruby" => east_asian_tokens.push(tok),
@@ -4977,7 +4967,7 @@ pub fn apply_declaration_with_base(
                                 || tok.starts_with("annotation(")
                                 || tok == "historical-forms" =>
                             {
-                    alternate_tokens.push(tok);
+                                alternate_tokens.push(tok);
                             }
                             "sub" | "super" => position_tokens.push(tok),
                             _ => {
@@ -6190,11 +6180,7 @@ pub fn apply_declaration_with_base(
                 let mut sizes = Vec::with_capacity(layer_count);
                 for idx in 0..layer_count {
                     let source_idx = styles.background_sizes.len().saturating_sub(1).min(idx);
-                    let source = styles
-                        .background_sizes
-                        .get(source_idx)
-                        .copied()
-                        .unwrap_or(default);
+                    let source = styles.background_sizes.get(source_idx).copied().unwrap_or(default);
                     let block_value = values
                         .get(idx)
                         .copied()
@@ -6295,11 +6281,7 @@ pub fn apply_declaration_with_base(
                 let mut positions = Vec::with_capacity(layer_count);
                 for idx in 0..layer_count {
                     let source_idx = styles.background_positions.len().saturating_sub(1).min(idx);
-                    let source = styles
-                        .background_positions
-                        .get(source_idx)
-                        .copied()
-                        .unwrap_or(default);
+                    let source = styles.background_positions.get(source_idx).copied().unwrap_or(default);
                     let inline_value = values
                         .get(idx)
                         .copied()
@@ -6325,11 +6307,7 @@ pub fn apply_declaration_with_base(
                 let mut positions = Vec::with_capacity(layer_count);
                 for idx in 0..layer_count {
                     let source_idx = styles.background_positions.len().saturating_sub(1).min(idx);
-                    let source = styles
-                        .background_positions
-                        .get(source_idx)
-                        .copied()
-                        .unwrap_or(default);
+                    let source = styles.background_positions.get(source_idx).copied().unwrap_or(default);
                     let block_value = values
                         .get(idx)
                         .copied()
@@ -6610,35 +6588,33 @@ pub fn apply_declaration_with_base(
                 };
             }
         }
-        "quotes" => {
-            match &resolved_value {
-                PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
-                    styles.quotes.clear();
-                }
-                PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
-                    styles.quotes = crate::style::content::default_quotes();
-                }
-                PropertyValue::Multiple(list) if list.iter().all(|v| matches!(v, PropertyValue::String(_))) => {
-                    let strings: Vec<String> = list
-                        .iter()
-                        .filter_map(|v| {
-                            if let PropertyValue::String(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
+        "quotes" => match &resolved_value {
+            PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
+                styles.quotes.clear();
+            }
+            PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
+                styles.quotes = crate::style::content::default_quotes();
+            }
+            PropertyValue::Multiple(list) if list.iter().all(|v| matches!(v, PropertyValue::String(_))) => {
+                let strings: Vec<String> = list
+                    .iter()
+                    .filter_map(|v| {
+                        if let PropertyValue::String(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if strings.len() % 2 == 0 && !strings.is_empty() {
+                    styles.quotes = strings
+                        .chunks(2)
+                        .map(|pair| (pair[0].clone(), pair[1].clone()))
                         .collect();
-                    if strings.len() % 2 == 0 && !strings.is_empty() {
-                        styles.quotes = strings
-                            .chunks(2)
-                            .map(|pair| (pair[0].clone(), pair[1].clone()))
-                            .collect();
-                    }
-        }
-        _ => {}
-    }
-        }
+                }
+            }
+            _ => {}
+        },
         "image-orientation" => {
             if let Some(orientation) = parse_image_orientation(&resolved_value) {
                 styles.image_orientation = orientation;
@@ -8726,9 +8702,8 @@ fn parse_angle_degrees<'i, 't>(input: &mut Parser<'i, 't>) -> Result<f32, csspar
     let location = input.current_source_location();
     let token = input.next()?;
     let component = match token {
-        Token::Dimension { value, ref unit, .. } => {
-            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or_else(|| location.new_custom_error(()))?
-        }
+        Token::Dimension { value, ref unit, .. } => angle_component_from_unit(&unit.to_ascii_lowercase(), *value)
+            .ok_or_else(|| location.new_custom_error(()))?,
         Token::Function(ref name) => {
             let func = name.as_ref().to_ascii_lowercase();
             match func.as_str() {
@@ -9392,11 +9367,11 @@ fn parse_inset_shape<'i, 't>(input: &mut Parser<'i, 't>) -> Result<BasicShape, c
             _ => offsets.into_iter().take(4).collect(),
         };
 
-    let radii = if nested.try_parse(|p| p.expect_ident_matching("round")).is_ok() {
-        Some(parse_clip_radii(nested)?)
-    } else {
-        None
-    };
+        let radii = if nested.try_parse(|p| p.expect_ident_matching("round")).is_ok() {
+            Some(parse_clip_radii(nested)?)
+        } else {
+            None
+        };
 
         nested.expect_exhausted()?;
         Ok(BasicShape::Inset {

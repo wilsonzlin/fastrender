@@ -299,7 +299,7 @@ pub fn parse_grid_shorthand(value: &str) -> Option<ParsedGridShorthand> {
     let left_has_flow = left.to_ascii_lowercase().contains("auto-flow");
     let right_has_flow = right
         .as_ref()
-        .map_or(false, |r| r.to_ascii_lowercase().contains("auto-flow"));
+        .is_some_and(|r| r.to_ascii_lowercase().contains("auto-flow"));
 
     if left_has_flow {
         let (flow_parsed, remainder) = parse_auto_flow_tokens(left);
@@ -339,9 +339,9 @@ pub fn parse_grid_shorthand(value: &str) -> Option<ParsedGridShorthand> {
 
     Some(ParsedGridShorthand {
         template: Some(empty_template_reset()),
-        auto_rows: auto_rows.or_else(|| Some(vec![GridTrack::Auto])),
-        auto_columns: auto_cols.or_else(|| Some(vec![GridTrack::Auto])),
-        auto_flow: auto_flow.or_else(|| Some(crate::style::types::GridAutoFlow::Row)),
+        auto_rows: auto_rows.or(Some(vec![GridTrack::Auto])),
+        auto_columns: auto_cols.or(Some(vec![GridTrack::Auto])),
+        auto_flow: auto_flow.or(Some(crate::style::types::GridAutoFlow::Row)),
     })
 }
 
@@ -978,8 +978,7 @@ mod tests {
 
     #[test]
     fn auto_fit_repeat_keeps_named_lines() {
-        let (_tracks, names, line_names) =
-            parse_grid_tracks_with_names("repeat(auto-fit, [col-start] 10px [col-end])");
+        let (_tracks, names, line_names) = parse_grid_tracks_with_names("repeat(auto-fit, [col-start] 10px [col-end])");
         assert_eq!(names.get("col-start"), Some(&vec![0]));
         assert_eq!(names.get("col-end"), Some(&vec![1]));
         assert!(line_names[0].contains(&"col-start".to_string()));
@@ -990,8 +989,7 @@ mod tests {
 
     #[test]
     fn auto_fill_repeat_keeps_named_lines() {
-        let (_tracks, names, line_names) =
-            parse_grid_tracks_with_names("repeat(auto-fill, [a] 20px [b c])");
+        let (_tracks, names, line_names) = parse_grid_tracks_with_names("repeat(auto-fill, [a] 20px [b c])");
         assert_eq!(names.get("a"), Some(&vec![0]));
         assert_eq!(names.get("b"), Some(&vec![1]));
         assert_eq!(names.get("c"), Some(&vec![1]));
