@@ -6070,7 +6070,7 @@ fn fragment_counts(node: &FragmentNode) -> (usize, usize, usize, usize, usize) {
         FragmentContent::Replaced { .. } => replaced += 1,
         FragmentContent::Line { .. } => lines += 1,
         FragmentContent::Inline { .. } => inline += 1,
-        _ => {}
+        FragmentContent::Block { .. } => {}
     }
     for child in &node.children {
         let (t, tx, r, l, i) = fragment_counts(child);
