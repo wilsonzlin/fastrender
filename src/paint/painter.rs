@@ -3435,7 +3435,7 @@ impl Painter {
 
             let mut rotated_paths = Vec::with_capacity(glyph_paths.len());
             let mut rotated_bounds = PathBounds::new();
-            for path in glyph_paths.into_iter() {
+            for path in glyph_paths {
                 if let Some(rotated) = path.clone().transform(rotate) {
                     let rect = path.bounds();
                     let corners = [
