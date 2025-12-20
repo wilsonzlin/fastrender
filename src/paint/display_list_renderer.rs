@@ -3554,7 +3554,7 @@ mod tests {
             style: CssBorderStyle::Dotted,
             color: Rgba::BLACK,
         };
-        list.push(DisplayItem::Border(BorderItem {
+        list.push(DisplayItem::Border(Box::new(BorderItem {
             rect: Rect::from_xywh(2.0, 1.0, 10.0, 4.0),
             top: side.clone(),
             right: side.clone(),
@@ -3562,7 +3562,7 @@ mod tests {
             left: side,
             image: None,
             radii: BorderRadii::ZERO,
-        }));
+        })));
 
         let pixmap = renderer.render(&list).unwrap();
         // Outside the border box should stay untouched when strokes are centered on the edges.
@@ -3616,7 +3616,7 @@ mod tests {
             style: CssBorderStyle::Solid,
             color: Rgba::BLACK,
         };
-        list.push(DisplayItem::Border(BorderItem {
+        list.push(DisplayItem::Border(Box::new(BorderItem {
             rect: Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
             top: side.clone(),
             right: side.clone(),
@@ -3624,7 +3624,7 @@ mod tests {
             left: side,
             image: Some(border_image),
             radii: BorderRadii::ZERO,
-        }));
+        })));
 
         let pixmap = renderer.render(&list).unwrap();
         // Top-left border area should come from the red slice.

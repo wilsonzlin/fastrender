@@ -2610,7 +2610,7 @@ impl DisplayListBuilder {
         };
 
         let radii = Self::border_radii(rect, style).clamped(rect.width(), rect.height());
-        self.list.push(DisplayItem::Border(BorderItem {
+        self.list.push(DisplayItem::Border(Box::new(BorderItem {
             rect,
             top: sides.0,
             right: sides.1,
@@ -2618,7 +2618,7 @@ impl DisplayListBuilder {
             left: sides.3,
             image: border_image,
             radii,
-        }));
+        })));
     }
 
     fn emit_outline(&mut self, rect: Rect, style: &ComputedStyle) {

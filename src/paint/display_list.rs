@@ -95,7 +95,7 @@ pub enum DisplayItem {
     ConicGradient(ConicGradientItem),
 
     /// Draw CSS borders with per-side styles
-    Border(BorderItem),
+    Border(Box<BorderItem>),
 
     /// Draw text decorations for an inline fragment
     TextDecoration(TextDecorationItem),
