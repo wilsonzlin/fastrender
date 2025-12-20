@@ -45,6 +45,12 @@ style-tests:
 readme-guard:
     cargo test --quiet --test readme_guard
 
+# Run repository guard tests (README, style regression presence, fetch_and_render exit regression)
+guard-tests:
+    cargo test --quiet readme_is_present
+    cargo test --quiet background_position_logical_regression_is_present
+    cargo test --quiet fetch_and_render_exit_regression_is_present
+
 # Run a specific test
 test-one TEST:
     cargo test {{TEST}} -- --nocapture
