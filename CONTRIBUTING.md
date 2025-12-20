@@ -330,6 +330,7 @@ Open `coverage/index.html` to view the coverage report.
 3. ✅ No clippy warnings: `just lint`
 4. ✅ Documentation builds: `just doc-check`
 5. ✅ All CI checks pass: `just ci`
+6. 🔒 Guard rails: `just guard-tests` (especially if touching README/docs/regression files)
 
 ### PR Description Template
 
