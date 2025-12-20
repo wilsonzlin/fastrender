@@ -38,7 +38,6 @@ const MAX_RECURSION_DEPTH: usize = 10;
 
 /// Result of a var() resolution attempt
 #[allow(clippy::large_enum_variant)]
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum VarResolutionResult {
     /// Successfully resolved to a value
