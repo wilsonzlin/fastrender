@@ -398,8 +398,7 @@ impl TextItem {
             Some((before_runs, after_runs))
         })?;
 
-        let mut before_text_owned: Option<String> = None;
-        if insert_hyphen {
+        let before_text_owned: Option<String> = if insert_hyphen {
             let mut hyphen_buf = [0u8; 3];
             let hyphen_text = INSERTED_HYPHEN.encode_utf8(&mut hyphen_buf);
             let offset = before_text.len();
@@ -422,8 +421,10 @@ impl TextItem {
             before_runs.extend(hyphen_runs);
             let mut owned = before_text.to_string();
             owned.push_str(hyphen_text);
-            before_text_owned = Some(owned);
-        }
+            Some(owned)
+        } else {
+            None
+        };
 
         let line_height = self.metrics.line_height;
         let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
@@ -1802,12 +1803,13 @@ impl<'a> LineBuilder<'a> {
         let font_context = self.font_context.clone();
 
         for (start, end) in ranges {
-            let mut paragraph_level = base_level;
-            if self.root_unicode_bidi == UnicodeBidi::Plaintext
+            let paragraph_level = if self.root_unicode_bidi == UnicodeBidi::Plaintext
                 || Self::paragraph_all_plaintext(&self.lines[start..end])
             {
-                paragraph_level = None;
-            }
+                None
+            } else {
+                base_level
+            };
             reorder_paragraph(
                 &mut self.lines[start..end],
                 paragraph_level,
