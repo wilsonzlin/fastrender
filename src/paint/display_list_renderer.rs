@@ -3306,9 +3306,7 @@ fn render_generated_border_image(
             let shader = LinearGradient::new(start, end, skia_stops, SpreadMode::Pad, Transform::identity())?;
 
             let mut pixmap = Pixmap::new(width, height)?;
-            let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-                return None;
-            };
+            let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
             let path = PathBuilder::from_rect(skia_rect);
 
             let mut paint = tiny_skia::Paint::default();
@@ -3335,9 +3333,7 @@ fn render_generated_border_image(
             let shader = LinearGradient::new(start, end, skia_stops, SpreadMode::Repeat, Transform::identity())?;
 
             let mut pixmap = Pixmap::new(width, height)?;
-            let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-                return None;
-            };
+            let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
             let path = PathBuilder::from_rect(skia_rect);
 
             let mut paint = tiny_skia::Paint::default();
@@ -3370,9 +3366,7 @@ fn render_generated_border_image(
             )?;
 
             let mut pixmap = Pixmap::new(width, height)?;
-            let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-                return None;
-            };
+            let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
             let path = PathBuilder::from_rect(skia_rect);
             let mut paint = tiny_skia::Paint::default();
             paint.shader = shader;
@@ -3404,9 +3398,7 @@ fn render_generated_border_image(
             )?;
 
             let mut pixmap = Pixmap::new(width, height)?;
-            let Some(skia_rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32) else {
-                return None;
-            };
+            let skia_rect = tiny_skia::Rect::from_xywh(0.0, 0.0, width as f32, height as f32)?;
             let path = PathBuilder::from_rect(skia_rect);
             let mut paint = tiny_skia::Paint::default();
             paint.shader = shader;

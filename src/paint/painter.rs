@@ -1069,12 +1069,10 @@ impl Painter {
                 if let Some(style) = child.style.as_deref() {
                     if creates_stacking_context(style, style_ref, false) {
                         let z = style.z_index.unwrap_or(0);
-                        if z < 0 {
-                            negative_contexts.push((z, idx));
-                        } else if z == 0 {
-                            zero_contexts.push((z, idx));
-                        } else {
-                            positive_contexts.push((z, idx));
+                        match z.cmp(&0) {
+                            std::cmp::Ordering::Less => negative_contexts.push((z, idx)),
+                            std::cmp::Ordering::Equal => zero_contexts.push((z, idx)),
+                            std::cmp::Ordering::Greater => positive_contexts.push((z, idx)),
                         }
                         continue;
                     }
@@ -1180,12 +1178,10 @@ impl Painter {
             if let Some(style) = child.style.as_deref() {
                 if creates_stacking_context(style, style_ref, false) {
                     let z = style.z_index.unwrap_or(0);
-                    if z < 0 {
-                        negative_contexts.push((z, idx));
-                    } else if z == 0 {
-                        zero_contexts.push((z, idx));
-                    } else {
-                        positive_contexts.push((z, idx));
+                    match z.cmp(&0) {
+                        std::cmp::Ordering::Less => negative_contexts.push((z, idx)),
+                        std::cmp::Ordering::Equal => zero_contexts.push((z, idx)),
+                        std::cmp::Ordering::Greater => positive_contexts.push((z, idx)),
                     }
                     continue;
                 }
@@ -3409,7 +3405,7 @@ impl Painter {
         for glyph in &run.glyphs {
             let glyph_x = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset * self.scale,
-                _ => origin_x + glyph.x_offset * self.scale,
+                crate::text::pipeline::Direction::LeftToRight => origin_x + glyph.x_offset * self.scale,
             };
             let glyph_y = baseline_y - glyph.y_offset * self.scale;
 
@@ -3518,7 +3514,7 @@ impl Painter {
         for glyph in &run.glyphs {
             let inline_pos = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => inline_origin - glyph.x_offset * self.scale,
-                _ => inline_origin + glyph.x_offset * self.scale,
+                crate::text::pipeline::Direction::LeftToRight => inline_origin + glyph.x_offset * self.scale,
             };
             let block_pos = block_origin - glyph.y_offset * self.scale;
             let glyph_id: u16 = glyph.glyph_id as u16;

@@ -888,20 +888,25 @@ pub fn apply_styles_with_media_target_and_imports_cached(
 
     // Resolve imports if a loader is provided
     let author_sheet = if let Some(loader) = import_loader {
-        stylesheet.resolve_imports_with_cache(loader, base_url, media_ctx, media_cache.as_deref_mut())
+        stylesheet.resolve_imports_with_cache(
+            loader,
+            base_url,
+            media_ctx,
+            media_cache.as_mut().map(|cache| &mut **cache),
+        )
     } else {
         stylesheet.clone()
     };
 
     // Collect applicable rules from both stylesheets
     // User-agent rules come first (lower priority)
-    let ua_rules = if let Some(cache) = media_cache.as_deref_mut() {
-        ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    let ua_rules = if let Some(cache) = media_cache.as_mut() {
+        ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(&mut **cache))
     } else {
         ua_stylesheet.collect_style_rules(media_ctx)
     };
-    let author_rules = if let Some(cache) = media_cache.as_deref_mut() {
-        author_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    let author_rules = if let Some(cache) = media_cache.as_mut() {
+        author_sheet.collect_style_rules_with_cache(media_ctx, Some(&mut **cache))
     } else {
         author_sheet.collect_style_rules(media_ctx)
     };
@@ -934,7 +939,7 @@ pub fn apply_styles_with_media_target_and_imports_cached(
             let mut scratch = CascadeScratch::new(rule_index.rules.len());
             let mut node_counter: usize = 1;
             let mut ancestor_ids: Vec<usize> = Vec::new();
-            let mut reuse_counter_opt = if container_scope.is_some() || reuse_map.is_some() {
+            let reuse_counter_opt = if container_scope.is_some() || reuse_map.is_some() {
                 Some(&mut reuse_counter)
             } else {
                 None
@@ -956,7 +961,7 @@ pub fn apply_styles_with_media_target_and_imports_cached(
                 container_ctx,
                 container_scope,
                 reuse_map,
-                reuse_counter_opt.as_deref_mut(),
+                reuse_counter_opt,
             )
         })
     });
@@ -6735,7 +6740,7 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
         if let Some(valign) = node.get_attribute("valign") {
             if let Some(mapped) = map_valign(&valign) {
                 use std::fmt::Write;
-                let _ = write!(declarations, "vertical-align: {};", mapped.trim());
+                let _ = write!(declarations, "vertical-align: {};", mapped);
             }
         }
     }
