@@ -108,6 +108,7 @@ fn cached_patterns(language: SupportedLanguage) -> Result<Arc<HyphenationPattern
     let cache = PATTERN_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut guard = cache.lock().expect("pattern cache poisoned");
     if let Some(existing) = guard.get(&language).cloned() {
+        drop(guard);
         return Ok(existing);
     }
 
