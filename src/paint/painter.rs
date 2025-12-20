@@ -5114,7 +5114,7 @@ impl Painter {
                     for glyph in &run.glyphs {
                         let glyph_x = match run.direction {
                             crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset * self.scale,
-                            _ => run_origin + glyph.x_offset * self.scale,
+                            crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset * self.scale,
                         };
                         let glyph_y = mark_metrics.baseline_offset * self.scale;
                         if let Some(path) =
