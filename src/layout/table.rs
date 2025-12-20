@@ -4056,10 +4056,11 @@ impl FormattingContext for TableFormattingContext {
                 heights.get(laid.cell.row).copied().unwrap_or(laid.height)
             };
             let raw_baseline = laid.baseline.unwrap_or(laid.height);
-            let mut baseline = raw_baseline;
-            if raw_baseline >= laid.height && target_height > laid.height {
-                baseline = target_height;
-            }
+            let baseline = if raw_baseline >= laid.height && target_height > laid.height {
+                target_height
+            } else {
+                raw_baseline
+            };
             if laid.cell.rowspan > 1 && span_end > laid.cell.row {
                 spanning_baseline_allocation(target_height, baseline, laid.cell.row, span_end, heights)
             } else {
@@ -4095,16 +4096,13 @@ impl FormattingContext for TableFormattingContext {
         let percent_height_base = table_height.map(|base| compute_percent_height_base(base));
 
         let row_floor = |idx: usize, current: f32| -> f32 {
-            let row = structure.rows.get(idx);
-            if row.is_none() {
-                return current;
-            }
-            let row = row.unwrap();
+            let row = match structure.rows.get(idx) {
+                Some(row) => row,
+                None => return current,
+            };
             let mut floor = current;
-            if let Some((min_len, _)) = Some(resolve_row_min_max(row, percent_height_base)) {
-                if let Some(min) = min_len {
-                    floor = floor.max(min);
-                }
+            if let Some((Some(min), _)) = Some(resolve_row_min_max(row, percent_height_base)) {
+                floor = floor.max(min);
             }
             if let Some(spec) = row.specified_height {
                 match spec {
@@ -4816,7 +4814,7 @@ impl FormattingContext for TableFormattingContext {
                     let is_left_edge = col_idx == 0;
                     let is_right_edge = col_idx == structure.column_count;
                     let base_edge_width = if is_left_edge {
-                        vertical_line_max.get(0).copied().unwrap_or(border.width)
+                        vertical_line_max.first().copied().unwrap_or(border.width)
                     } else if is_right_edge {
                         vertical_line_max
                             .get(structure.column_count)
@@ -4888,7 +4886,7 @@ impl FormattingContext for TableFormattingContext {
                     let is_top_edge = row_idx == 0;
                     let is_bottom_edge = row_idx == structure.row_count;
                     let base_edge_width = if is_top_edge {
-                        horizontal_line_max.get(0).copied().unwrap_or(border.width)
+                        horizontal_line_max.first().copied().unwrap_or(border.width)
                     } else if is_bottom_edge {
                         horizontal_line_max
                             .get(structure.row_count)
