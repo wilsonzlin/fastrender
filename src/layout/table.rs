@@ -2579,9 +2579,11 @@ pub fn calculate_fixed_layout_widths(structure: &mut TableStructure, available_w
         };
 
         // Prefer shrinking only auto columns. Percent/fixed columns may legitimately overrun.
-        shrink_pass(&mut structure.columns, &mut shrink, &|c: &ColumnInfo| {
-            c.specified_width.is_none()
-        });
+        shrink_pass(
+            &mut structure.columns,
+            &mut shrink,
+            &ColumnInfo::specified_width.is_none,
+        );
     } else if total + 0.01 < content_width {
         // Grow flexible columns up to their max, leave remaining slack unused if max caps are hit.
         let mut extra = content_width - total;
