@@ -3134,7 +3134,7 @@ impl DisplayListBuilder {
         for glyph in &run.glyphs {
             let x = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => origin_x - glyph.x_offset,
-                _ => origin_x + glyph.x_offset,
+                crate::text::pipeline::Direction::LeftToRight => origin_x + glyph.x_offset,
             };
             let y = baseline_y - glyph.y_offset;
             glyphs.push(GlyphInstance {
@@ -3159,7 +3159,7 @@ impl DisplayListBuilder {
         for glyph in &run.glyphs {
             let inline_pos = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => inline_origin - glyph.x_offset,
-                _ => inline_origin + glyph.x_offset,
+                crate::text::pipeline::Direction::LeftToRight => inline_origin + glyph.x_offset,
             };
             let block_pos = block_baseline - glyph.y_offset;
             glyphs.push(GlyphInstance {
@@ -3282,7 +3282,7 @@ impl DisplayListBuilder {
                             for g in r.glyphs {
                                 let x = match r.direction {
                                     crate::text::pipeline::Direction::RightToLeft => mark_origin - g.x_offset,
-                                    _ => mark_origin + g.x_offset,
+                                    crate::text::pipeline::Direction::LeftToRight => mark_origin + g.x_offset,
                                 };
                                 glyphs.push(GlyphInstance {
                                     glyph_id: g.glyph_id,
