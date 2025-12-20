@@ -13,6 +13,7 @@ use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use cssparser::{Parser, ParserInput, Token};
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 /// Parse grid-template-columns/rows into track list with named lines
 ///
@@ -30,7 +31,7 @@ pub fn parse_grid_tracks_with_names(
 }
 
 /// Parse a single grid line reference (e.g., "text-start", "3", "auto")
-pub fn parse_grid_line(value: &str, named_lines: &HashMap<String, Vec<usize>>) -> i32 {
+pub fn parse_grid_line<S: BuildHasher>(value: &str, named_lines: &HashMap<String, Vec<usize>, S>) -> i32 {
     let value = value.trim();
 
     // Try parsing as integer first
@@ -453,7 +454,10 @@ fn split_once_unquoted(input: &str, delim: char) -> (&str, Option<&str>) {
 pub fn finalize_grid_placement(_styles: &mut ComputedStyle) {}
 
 /// Parse grid-column or grid-row placement (e.g., "text", "1 / 3", "auto")
-pub fn parse_grid_line_placement(value: &str, named_lines: &HashMap<String, Vec<usize>>) -> (i32, i32) {
+pub fn parse_grid_line_placement<S: BuildHasher>(
+    value: &str,
+    named_lines: &HashMap<String, Vec<usize>, S>,
+) -> (i32, i32) {
     let value = value.trim();
 
     // Check if it contains a slash (explicit start / end)
