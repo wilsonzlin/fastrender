@@ -1142,7 +1142,7 @@ impl FormattingContext for FlexFormattingContext {
                         max_w_bound,
                     );
 
-                    let mut max_h_bound = resolved_max_h.unwrap_or_else(|| match avail.height {
+                    let mut max_h_bound = resolved_max_h.unwrap_or(match avail.height {
                         AvailableSpace::Definite(h) => h,
                         _ => this.viewport_size.height,
                     });

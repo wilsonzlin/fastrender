@@ -393,14 +393,14 @@ fn selector_key(selector: &Selector<crate::css::selectors::FastRenderSelectorImp
                 Component::Class(cls) => class = Some(cls.0.clone()),
                 Component::LocalName(local) => tag = Some(local.lower_name.0.clone()),
                 Component::AttributeInNoNamespaceExists { local_name_lower, .. } => {
-                    attr.get_or_insert(local_name_lower.0.clone());
+                    attr.get_or_insert_with(|| local_name_lower.0.clone());
                 }
                 Component::AttributeInNoNamespace { local_name, .. } => {
-                    attr.get_or_insert(local_name.0.clone());
+                    attr.get_or_insert_with(|| local_name.0.clone());
                 }
                 Component::AttributeOther(other) => {
                     if other.namespace.is_none() {
-                        attr.get_or_insert(other.local_name_lower.0.clone());
+                        attr.get_or_insert_with(|| other.local_name_lower.0.clone());
                     }
                 }
                 _ => {}
@@ -1040,7 +1040,7 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
             order,
             layer_order: vec![u32::MAX],
             declarations: decls,
-        })
+        });
     };
 
     match tag.as_str() {
@@ -5570,12 +5570,10 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![
-                    (
-                        "style".to_string(),
-                        "writing-mode: vertical-rl; text-orientation: upright;".to_string(),
-                    ),
-                ],
+                attributes: vec![(
+                    "style".to_string(),
+                    "writing-mode: vertical-rl; text-orientation: upright;".to_string(),
+                )],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
