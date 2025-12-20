@@ -513,8 +513,6 @@ impl TextItem {
             .with_vertical_align(self.vertical_align);
         }
 
-        let mut before_item = before_item;
-        let mut after_item = after_item;
         if self.is_marker {
             before_item.is_marker = true;
             after_item.is_marker = true;
