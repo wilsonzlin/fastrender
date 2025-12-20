@@ -850,7 +850,7 @@ impl Painter {
                     limit.min(texts.len()),
                     texts.len()
                 );
-                for (idx, cmd) in texts.into_iter().take(limit).enumerate() {
+                for (idx, cmd) in texts.iter().take(limit).enumerate() {
                     if let DisplayCommand::Text {
                         rect,
                         baseline_offset,
