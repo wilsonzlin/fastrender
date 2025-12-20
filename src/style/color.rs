@@ -158,16 +158,16 @@ fn oklab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
 
 fn linear_srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
-    let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
-    let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+    let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+    let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
 
     let l_ = l.cbrt();
     let m_ = m.cbrt();
     let s_ = s.cbrt();
 
-    let l_ok = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
-    let a_ok = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
-    let b_ok = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+    let l_ok = 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_;
+    let a_ok = 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_;
+    let b_ok = 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_;
     (l_ok, a_ok, b_ok)
 }
 
@@ -947,10 +947,11 @@ fn parse_hwb(s: &str) -> Result<Color, ColorParseError> {
     let h = parse_hue_component(&mut parser)?;
     let w = parse_percentage_component(&mut parser)?;
     let b = parse_percentage_component(&mut parser)?;
-    let mut alpha = 1.0;
-    if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
-        alpha = parse_alpha_component(&mut parser)?;
-    }
+    let alpha = if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+        parse_alpha_component(&mut parser)?
+    } else {
+        1.0
+    };
 
     Ok(Color::Rgba(hwb_to_rgba(h, w, b, alpha)))
 }
