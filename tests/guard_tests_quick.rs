@@ -1,10 +1,12 @@
-// Convenience guard: ensure core guard tests are available for quick runs.
+//! Quick guard placeholder to keep `just guard-tests-quick` working.
+
 #[test]
-fn guard_tests_quick_list() {
-    // This test lists guard-related tests so `cargo test --quiet guard_tests_quick` remains fast.
-    // It doesn’t assert on code; presence in the suite is the guard.
+fn guard_tests_quick() {
+    // List guard-related tests so `cargo test --quiet guard_tests_quick` remains fast and discoverable.
     let guards = [
+        "readme_guard",
         "readme_is_present",
+        "fetch_and_render_example_is_present",
         "background_position_logical_regression_is_present",
         "fetch_and_render_exit_regression_is_present",
     ];
