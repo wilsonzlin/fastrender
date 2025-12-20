@@ -93,6 +93,9 @@ cargo test --quiet --test readme_guard
 
 # Run all guard tests (README, style regression presence, fetch_and_render exit regression)
 just guard-tests
+
+# Quick guard listing (prints guard tests, does not run them all)
+just guard-tests-quick
 ```
 
 ### Batch Fetch & Render
