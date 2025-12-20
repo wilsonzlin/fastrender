@@ -880,7 +880,7 @@ impl FastRender {
         // Collect codepoints used in text nodes to avoid fetching unused web font subsets.
         let used_codepoints = dom::collect_text_codepoints(dom);
 
-        let mut stage_start = overall_start.clone();
+        let mut stage_start = overall_start;
 
         // Apply styles to create styled tree
         let target_fragment = self.current_target_fragment();
