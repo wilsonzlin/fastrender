@@ -132,7 +132,6 @@ pub fn resolve_var_for_property(
 /// # Returns
 ///
 /// The resolved PropertyValue, or the original value if resolution fails
-#[allow(clippy::implicit_hasher)]
 pub fn resolve_var_with_depth(
     value: &PropertyValue,
     custom_properties: &HashMap<String, String>,

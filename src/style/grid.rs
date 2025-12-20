@@ -30,7 +30,6 @@ pub fn parse_grid_tracks_with_names(
 }
 
 /// Parse a single grid line reference (e.g., "text-start", "3", "auto")
-#[allow(clippy::implicit_hasher)]
 pub fn parse_grid_line(value: &str, named_lines: &HashMap<String, Vec<usize>>) -> i32 {
     let value = value.trim();
 
@@ -454,7 +453,6 @@ fn split_once_unquoted(input: &str, delim: char) -> (&str, Option<&str>) {
 pub fn finalize_grid_placement(_styles: &mut ComputedStyle) {}
 
 /// Parse grid-column or grid-row placement (e.g., "text", "1 / 3", "auto")
-#[allow(clippy::implicit_hasher)]
 pub fn parse_grid_line_placement(value: &str, named_lines: &HashMap<String, Vec<usize>>) -> (i32, i32) {
     let value = value.trim();
 
