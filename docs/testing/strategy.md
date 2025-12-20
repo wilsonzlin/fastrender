@@ -14,6 +14,7 @@ Testing is NOT a phase that happens after implementation. It's continuous, integ
 
 - Style regression harness: `cargo test --quiet --test style_tests` (or `just style-tests`)
 - Guard tests (README + CLI example, style regression presence, fetch_and_render exit regression): `just guard-tests`
+- Quick guard listing (fast, prints guard list): `just guard-tests-quick`
 
 ## Test Pyramid
 
