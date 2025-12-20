@@ -90,13 +90,11 @@ just clippy-pedantic
 
 # README guard (fails if README.md is missing/empty)
 cargo test --quiet --test readme_guard
-# or via just
-just readme-guard
 
 # Run all guard tests (README, style regression presence, fetch_and_render exit regression)
 just guard-tests
 
-# Quick guard listing (prints guard tests, does not run them all)
+# Quick guard list (fast sanity check)
 just guard-tests-quick
 ```
 
