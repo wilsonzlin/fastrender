@@ -305,7 +305,11 @@ just watch
 ```
 
 **Guardrails**
-- `tests/readme_guard.rs` ensures the root `README.md` remains present. Avoid deleting or renaming it; accidental removal will fail CI.
+- Guard tests:
+  - `tests/readme_guard.rs` ensures the root `README.md` remains present.
+  - `tests/readme_presence.rs` and `tests/style_regressions_presence.rs` ensure critical docs/regressions stay checked in.
+  - `tests/fetch_and_render_exit_presence.rs` guards the fetch_and_render exit regression.
+  Run them together via `just guard-tests` before pushing to avoid churn from accidental deletions.
 
 ### Test Coverage
 
