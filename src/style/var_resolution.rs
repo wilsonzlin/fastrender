@@ -40,7 +40,7 @@ const MAX_RECURSION_DEPTH: usize = 10;
 #[derive(Debug, Clone)]
 pub enum VarResolutionResult {
     /// Successfully resolved to a value
-    Resolved(Box<PropertyValue>),
+    Resolved(PropertyValue),
     /// The variable was not found and no fallback was provided
     NotFound(String),
     /// Recursion depth exceeded (possible circular reference)
@@ -53,7 +53,7 @@ impl VarResolutionResult {
     /// Returns the resolved value if successful, otherwise returns the original value
     pub fn unwrap_or(self, default: PropertyValue) -> PropertyValue {
         match self {
-            VarResolutionResult::Resolved(value) => *value,
+            VarResolutionResult::Resolved(value) => value,
             _ => default,
         }
     }
@@ -102,7 +102,7 @@ impl VarResolutionResult {
 #[allow(clippy::implicit_hasher)]
 pub fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, String>) -> PropertyValue {
     match resolve_var_recursive(value, custom_properties, 0, "") {
-        VarResolutionResult::Resolved(v) => *v,
+        VarResolutionResult::Resolved(v) => v,
         other => other.unwrap_or(value.clone()),
     }
 }
@@ -185,10 +185,10 @@ fn resolve_keyword_var(
             // Recursively resolve in case the result contains more var() references
             return resolve_var_recursive(&parsed, custom_properties, depth + 1, property_name);
         }
-        return VarResolutionResult::Resolved(Box::new(PropertyValue::Keyword(resolved_str)));
+        return VarResolutionResult::Resolved(PropertyValue::Keyword(resolved_str));
     }
 
-    VarResolutionResult::Resolved(Box::new(PropertyValue::Keyword(kw.to_string())))
+    VarResolutionResult::Resolved(PropertyValue::Keyword(kw.to_string()))
 }
 
 /// Resolves a simple var() reference (content inside var(...))
@@ -210,7 +210,7 @@ fn resolve_simple_var(
         if let Some(mut parsed) = parse_resolved_value(resolved_value, property_name) {
             // Recursively resolve in case the value contains another var()
             parsed = resolve_var_recursive(&parsed, custom_properties, depth + 1, property_name).unwrap_or(parsed);
-            return VarResolutionResult::Resolved(Box::new(parsed));
+            return VarResolutionResult::Resolved(parsed);
         }
         // If parsing fails, return as keyword and try to resolve recursively
         let as_keyword = PropertyValue::Keyword(resolved_value.clone());
@@ -229,7 +229,7 @@ fn resolve_simple_var(
 
         if let Some(mut parsed) = parse_resolved_value(&resolved_fallback, property_name) {
             parsed = resolve_var_recursive(&parsed, custom_properties, depth + 1, property_name).unwrap_or(parsed);
-            return VarResolutionResult::Resolved(Box::new(parsed));
+            return VarResolutionResult::Resolved(parsed);
         }
         let as_keyword = PropertyValue::Keyword(resolved_fallback);
         return resolve_var_recursive(&as_keyword, custom_properties, depth + 1, property_name);
