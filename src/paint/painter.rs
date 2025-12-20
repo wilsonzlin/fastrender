@@ -8971,6 +8971,31 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_missing_gradient_stops() {
+        let stops = vec![
+            ColorStop {
+                color: Color::Rgba(Rgba::RED),
+                position: None,
+            },
+            ColorStop {
+                color: Color::Rgba(Rgba::GREEN),
+                position: Some(0.5),
+            },
+            ColorStop {
+                color: Color::Rgba(Rgba::BLUE),
+                position: None,
+            },
+        ];
+
+        let resolved = super::normalize_color_stops(&stops, Rgba::WHITE);
+
+        assert_eq!(resolved.len(), 3);
+        assert!((resolved[0].0 - 0.0).abs() < 1e-6);
+        assert!((resolved[1].0 - 0.5).abs() < 1e-6);
+        assert!((resolved[2].0 - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn normalize_color_stops_resolves_current_color() {
         let stops = vec![
             crate::css::types::ColorStop {
