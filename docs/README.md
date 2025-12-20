@@ -64,7 +64,7 @@ docs/
 - [Benchmarking](testing/benchmarking.md) - Performance benchmarks
 - Style regression harness: `cargo test --quiet --test style_tests` (or `just style-tests`)
 - Clippy pedantic helper (relaxed cognitive/type complexity): `just clippy-pedantic`
-- Guard tests (README, style regression presence, fetch_and_render exit regression): `just guard-tests`
+- Guard tests (README + CLI example, style regression presence, fetch_and_render exit regression): `just guard-tests`
 
 ### Render output logs
 - `render_pages` / `fetch_and_render` write per-page logs to `fetches/renders/<page>.log` and a summary to `fetches/renders/_summary.log`; check these alongside the debugging flags.

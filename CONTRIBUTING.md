@@ -310,6 +310,7 @@ just watch
   - `tests/readme_presence.rs` and `tests/style_regressions_presence.rs` ensure critical docs/regressions stay checked in.
   - `tests/fetch_and_render_exit_presence.rs` guards the fetch_and_render exit regression.
   Run them together via `just guard-tests` before pushing to avoid churn from accidental deletions.
+  The bundle also checks the README CLI example.
 
 ### Test Coverage
 
