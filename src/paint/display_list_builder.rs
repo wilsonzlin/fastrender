@@ -390,7 +390,7 @@ impl DisplayListBuilder {
 
         let viewport = self
             .viewport
-            .unwrap_or((context_bounds.width(), context_bounds.height()));
+            .unwrap_or_else(|| (context_bounds.width(), context_bounds.height()));
         let clip_path = root_style.and_then(|style| resolve_clip_path(style, context_bounds, viewport, &self.font_ctx));
         let clip_rect = root_style.and_then(|style| {
             let clip = style.clip.as_ref()?;
