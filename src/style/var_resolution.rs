@@ -53,7 +53,7 @@ impl VarResolutionResult {
     /// Returns the resolved value if successful, otherwise returns the original value
     pub fn unwrap_or(self, default: PropertyValue) -> PropertyValue {
         match self {
-            VarResolutionResult::Resolved(value) => value,
+            VarResolutionResult::Resolved(value) => *value,
             _ => default,
         }
     }
@@ -157,7 +157,7 @@ fn resolve_var_recursive(
 
     match value {
         PropertyValue::Keyword(kw) => resolve_keyword_var(kw, custom_properties, depth, property_name),
-        _ => VarResolutionResult::Resolved(value.clone()),
+        _ => VarResolutionResult::Resolved(Box::new(value.clone())),
     }
 }
 
@@ -584,10 +584,10 @@ mod tests {
         let value = PropertyValue::Keyword("var(--bg)".to_string());
         let resolved = resolve_var_for_property(&value, &props, "background-image");
 
-        if let VarResolutionResult::Resolved(boxed @ PropertyValue::Multiple(_)) = resolved {
+        if let VarResolutionResult::Resolved(boxed) = resolved {
             let list = match *boxed {
                 PropertyValue::Multiple(list) => list,
-                _ => unreachable!(),
+                _ => panic!("Expected Multiple for background layers, got {:?}", boxed),
             };
             assert_eq!(list.len(), 3); // url, comma token, gradient
             assert!(matches!(list[0], PropertyValue::Url(ref u) if u == "image.png"));

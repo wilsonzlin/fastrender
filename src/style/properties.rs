@@ -3110,7 +3110,7 @@ pub fn apply_declaration_with_base(
 
     // Resolve var() references in the value
     let resolved_value = match resolve_var_for_property(&decl.value, &styles.custom_properties, &decl.property) {
-        VarResolutionResult::Resolved(v) => v,
+        VarResolutionResult::Resolved(v) => *v,
         // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
         _ => return,
     };
