@@ -2584,7 +2584,7 @@ impl DisplayListBuilder {
                     | BackgroundImage::RepeatingRadialGradient { .. }
                     | BackgroundImage::ConicGradient { .. }
                     | BackgroundImage::RepeatingConicGradient { .. } => {
-                        Some(BorderImageSourceItem::Generated((**bg).clone()))
+                        Some(BorderImageSourceItem::Generated(Box::new((**bg).clone())))
                     }
                     BackgroundImage::None => None,
                 };

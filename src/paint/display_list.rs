@@ -918,7 +918,7 @@ pub enum BorderImageSourceItem {
     Raster(ImageData),
 
     /// Generated image such as a gradient.
-    Generated(BackgroundImage),
+    Generated(Box<BackgroundImage>),
 }
 
 // ============================================================================
