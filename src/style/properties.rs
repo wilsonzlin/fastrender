@@ -261,7 +261,7 @@ fn split_image_set_candidates(inner: &str) -> Vec<String> {
     let mut current = String::new();
     let mut parts = Vec::new();
     let mut in_string: Option<char> = None;
-    let mut chars = inner.chars().peekable();
+    let mut chars = inner.chars();
 
     while let Some(ch) = chars.next() {
         if let Some(quote) = in_string {
