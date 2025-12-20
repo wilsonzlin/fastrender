@@ -845,14 +845,13 @@ impl DisplayListBuilder {
                     if gap > 0 {
                         let step = (pos - start_pos) / (gap as f32 + 1.0);
                         for (offset, slot) in positions[start_idx + 1..i].iter_mut().enumerate() {
-                            let j = (offset + 1) as f32;
-                            *slot = Some((start_pos + step * j).max(start_pos));
+                            *slot = Some((start_pos + step * (offset + 1) as f32).max(start_pos));
                         }
                     }
                 } else if i > 0 {
                     let gap = i;
                     let step = pos / gap as f32;
-                    for (j, slot) in positions[..i].iter_mut().enumerate() {
+                    for (j, slot) in positions.iter_mut().take(i).enumerate() {
                         *slot = Some(step * j as f32);
                     }
                 }
@@ -906,15 +905,15 @@ impl DisplayListBuilder {
                     let gap = i.saturating_sub(start_idx + 1);
                     if gap > 0 {
                         let step = (pos - start_pos) / (gap as f32 + 1.0);
-                        for j in 1..=gap {
-                            positions[start_idx + j] = Some(start_pos + step * j as f32);
+                        for (offset, slot) in positions[start_idx + 1..i].iter_mut().enumerate() {
+                            *slot = Some(start_pos + step * (offset + 1) as f32);
                         }
                     }
                 } else if i > 0 {
                     let gap = i;
                     let step = pos / gap as f32;
-                    for j in 0..i {
-                        positions[j] = Some(step * j as f32);
+                    for (j, slot) in positions.iter_mut().take(i).enumerate() {
+                        *slot = Some(step * j as f32);
                     }
                 }
                 last_known = Some((i, pos));
@@ -3243,7 +3242,9 @@ impl DisplayListBuilder {
                 crate::text::pipeline::Direction::RightToLeft => {
                     run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5)
                 }
-                _ => run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5,
+                crate::text::pipeline::Direction::LeftToRight => {
+                    run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5
+                }
             };
             let center = if inline_vertical {
                 Point::new(block_center, inline_center)
@@ -3522,7 +3523,7 @@ fn collect_underline_exclusions(
         for glyph in &run.glyphs {
             let glyph_x = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
-                _ => run_origin + glyph.x_offset,
+                crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
             };
             let glyph_y = baseline_y - glyph.y_offset;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
@@ -3574,7 +3575,7 @@ fn collect_underline_exclusions_vertical(
         for glyph in &run.glyphs {
             let inline_pos = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
-                _ => run_origin + glyph.x_offset,
+                crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
             };
             let block_pos = block_baseline - glyph.y_offset;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
