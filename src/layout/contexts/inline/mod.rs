@@ -2536,8 +2536,7 @@ impl InlineFormattingContext {
         inline_vertical: bool,
     ) -> FragmentNode {
         static LOG_BASELINE: OnceLock<Option<AtomicUsize>> = OnceLock::new();
-        let mut log_line = false;
-        if LOG_BASELINE
+        let log_line = LOG_BASELINE
             .get_or_init(|| {
                 if std::env::var("FASTR_LOG_INLINE_BASELINE")
                     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
@@ -2550,10 +2549,7 @@ impl InlineFormattingContext {
             })
             .as_ref()
             .map(|counter| counter.fetch_add(1, Ordering::Relaxed) < 5)
-            .unwrap_or(false)
-        {
-            log_line = true;
-        }
+            .unwrap_or(false);
 
         let should_justify = is_justify_align(line_align) && !matches!(resolved_justify, TextJustify::None);
         let mut items: Vec<PositionedItem> = if should_justify {
