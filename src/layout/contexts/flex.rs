@@ -736,9 +736,15 @@ impl FormattingContext for FlexFormattingContext {
                         if let Some(threshold) = log_measure_first_above {
                             let elapsed = measure_timer.map(|s| s.elapsed().as_millis()).unwrap_or(0);
                             if elapsed >= threshold {
-                                let mut count = LOG_MEASURE_FIRST_COUNT.get_or_init(|| Mutex::new(0)).lock().unwrap();
-                                if *count < log_measure_first {
-                                    *count += 1;
+                                let seq = {
+                                    let mut count =
+                                        LOG_MEASURE_FIRST_COUNT.get_or_init(|| Mutex::new(0)).lock().unwrap();
+                                    (*count < log_measure_first).then(|| {
+                                        *count += 1;
+                                        *count
+                                    })
+                                };
+                                if let Some(seq) = seq {
                                     let selector = box_node
                                         .debug_info
                                         .as_ref()
@@ -746,7 +752,7 @@ impl FormattingContext for FlexFormattingContext {
                                         .unwrap_or_else(|| "<anon>".to_string());
                                     eprintln!(
                                         "[flex-measure-first] seq={} id={} selector={} elapsed_ms={} known=({:?},{:?}) avail=({:?},{:?})",
-                                        *count,
+                                        seq,
                                         box_node.id,
                                         selector,
                                         elapsed,
@@ -918,16 +924,24 @@ impl FormattingContext for FlexFormattingContext {
                         avail.width = AvailableSpace::MaxContent;
                     }
                     if !log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id) {
-                        let mut counts = LOG_MEASURE_COUNTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
-                        let entry = counts.entry(measure_box.id).or_insert(0);
-                        let selector = measure_box
-                            .debug_info
-                            .as_ref()
-                            .map(|d| d.to_selector())
-                            .unwrap_or_else(|| "<anon>".to_string());
-                        if *entry < 3 {
+                        let seq = {
+                            let mut counts =
+                                LOG_MEASURE_COUNTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+                            let entry = counts.entry(measure_box.id).or_insert(0);
+                            (*entry < 3).then(|| {
+                                *entry += 1;
+                                *entry
+                            })
+                        };
+                        if let Some(seq) = seq {
+                            let selector = measure_box
+                                .debug_info
+                                .as_ref()
+                                .map(|d| d.to_selector())
+                                .unwrap_or_else(|| "<anon>".to_string());
                             eprintln!(
-                                "[flex-measure] id={} selector={} display={:?} basis={:?} width_decl={:?} avail_w={:?} known_w={:?} avail_after={:?}",
+                                "[flex-measure] seq={} id={} selector={} display={:?} basis={:?} width_decl={:?} avail_w={:?} known_w={:?} avail_after={:?}",
+                                seq,
                                 measure_box.id,
                                 selector,
                                 measure_box.style.display,
@@ -938,7 +952,6 @@ impl FormattingContext for FlexFormattingContext {
                                 avail.width,
                             );
                         }
-                        *entry += 1;
                     }
                     let constraints = this.constraints_from_taffy(known_dimensions, avail, parent_inline_base);
                     if log_small_avail {
@@ -1171,16 +1184,24 @@ impl FormattingContext for FlexFormattingContext {
                     }
 
                     if !log_measure_ids.is_empty() && log_measure_ids.contains(&measure_box.id) {
-                        let mut counts = LOG_MEASURE_COUNTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
-                        let entry = counts.entry(measure_box.id).or_insert(0);
-                        if *entry < 3 {
+                        let seq = {
+                            let mut counts =
+                                LOG_MEASURE_COUNTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+                            let entry = counts.entry(measure_box.id).or_insert(0);
+                            (*entry < 3).then(|| {
+                                *entry += 1;
+                                *entry
+                            })
+                        };
+                        if let Some(seq) = seq {
                             let selector = measure_box
                                 .debug_info
                                 .as_ref()
                                 .map(|d| d.to_selector())
                                 .unwrap_or_else(|| "<anon>".to_string());
                             eprintln!(
-                                "[flex-measure-result] id={} selector={} avail=({:?},{:?}) known=({:?},{:?}) constraints=({:?},{:?}) content=({:.2},{:.2}) intrinsic=({:.2},{:.2}) min=({:.2},{:.2}) max=({:.2},{:.2}) inline_hint={:?}",
+                                "[flex-measure-result] seq={} id={} selector={} avail=({:?},{:?}) known=({:?},{:?}) constraints=({:?},{:?}) content=({:.2},{:.2}) intrinsic=({:.2},{:.2}) min=({:.2},{:.2}) max=({:.2},{:.2}) inline_hint={:?}",
+                                seq,
                                 measure_box.id,
                                 selector,
                                 avail.width,
@@ -1200,7 +1221,6 @@ impl FormattingContext for FlexFormattingContext {
                                 intrinsic_inline_hint,
                             );
                         }
-                        *entry += 1;
                     }
 
                     let normalized_fragment = std::sync::Arc::new(normalize_fragment_origin(&fragment));
@@ -3272,19 +3292,21 @@ impl FlexFormattingContext {
             }
             let should_log = log_overflow || (!log_overflow_ids.is_empty() && log_overflow_ids.contains(&box_node.id));
             if should_log && max_child_x > container_w + 0.5 {
-                let mut counts = OVERFLOW_COUNTS
-                    .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
-                    .lock()
-                    .ok();
-                let log_allowed = counts
-                    .as_mut()
-                    .map(|map| {
-                        let counter = map.entry(box_node.id).or_insert(0);
-                        let allowed = *counter < 2;
-                        *counter += 1;
-                        allowed
-                    })
-                    .unwrap_or(true);
+                let log_allowed = {
+                    let mut counts = OVERFLOW_COUNTS
+                        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+                        .lock()
+                        .ok();
+                    counts
+                        .as_mut()
+                        .map(|map| {
+                            let counter = map.entry(box_node.id).or_insert(0);
+                            let allowed = *counter < 2;
+                            *counter += 1;
+                            allowed
+                        })
+                        .unwrap_or(true)
+                };
                 if log_allowed {
                     let selector = box_node
                         .debug_info
@@ -3329,19 +3351,21 @@ impl FlexFormattingContext {
             let max_child_y = children.iter().map(|c| c.bounds.max_y()).fold(0.0, f32::max);
             let should_log = log_overflow || (!log_overflow_ids.is_empty() && log_overflow_ids.contains(&box_node.id));
             if should_log && max_child_y > container_h * 1.5 {
-                let mut counts = OVERFLOW_COUNTS
-                    .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
-                    .lock()
-                    .ok();
-                let log_allowed = counts
-                    .as_mut()
-                    .map(|map| {
-                        let counter = map.entry(box_node.id).or_insert(0);
-                        let allowed = *counter < 2;
-                        *counter += 1;
-                        allowed
-                    })
-                    .unwrap_or(true);
+                let log_allowed = {
+                    let mut counts = OVERFLOW_COUNTS
+                        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+                        .lock()
+                        .ok();
+                    counts
+                        .as_mut()
+                        .map(|map| {
+                            let counter = map.entry(box_node.id).or_insert(0);
+                            let allowed = *counter < 2;
+                            *counter += 1;
+                            allowed
+                        })
+                        .unwrap_or(true)
+                };
                 if log_allowed {
                     let selector = box_node
                         .debug_info
