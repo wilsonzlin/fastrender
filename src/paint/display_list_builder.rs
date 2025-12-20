@@ -550,7 +550,7 @@ impl DisplayListBuilder {
                         },
                     })
                 })
-                .unwrap_or_else(|| ClipItem {
+                .unwrap_or(ClipItem {
                     shape: ClipShape::Rect {
                         rect: context_bounds,
                         radii: None,
@@ -844,20 +844,15 @@ impl DisplayListBuilder {
                     let gap = i.saturating_sub(start_idx + 1);
                     if gap > 0 {
                         let step = (pos - start_pos) / (gap as f32 + 1.0);
-                        for (j, slot) in positions
-                            .iter_mut()
-                            .enumerate()
-                            .take(start_idx + gap + 1)
-                            .skip(start_idx + 1)
-                        {
-                            *slot = Some((start_pos + step * j as f32).max(start_pos));
+                        for j in 1..=gap {
+                            positions[start_idx + j] = Some((start_pos + step * j as f32).max(start_pos));
                         }
                     }
                 } else if i > 0 {
                     let gap = i;
                     let step = pos / gap as f32;
-                    for (j, slot) in positions.iter_mut().take(i).enumerate() {
-                        *slot = Some(step * j as f32);
+                    for j in 0..i {
+                        positions[j] = Some(step * j as f32);
                     }
                 }
                 last_known = Some((i, pos));
@@ -1957,17 +1952,16 @@ impl DisplayListBuilder {
         let clip_radii = Self::resolve_clip_radii(style, rects, clip_box, self.viewport);
         let blend_mode = Self::convert_blend_mode(layer.blend_mode);
         let use_blend = blend_mode != BlendMode::Normal;
-        let pushed_clip = if clip_radii.is_zero() {
-            false
-        } else {
+        let mut pushed_clip = false;
+        if !clip_radii.is_zero() {
             self.list.push(DisplayItem::PushClip(ClipItem {
                 shape: ClipShape::Rect {
                     rect: clip_rect,
                     radii: Some(clip_radii),
                 },
             }));
-            true
-        };
+            pushed_clip = true;
+        }
         if use_blend {
             self.list
                 .push(DisplayItem::PushBlendMode(BlendModeItem { mode: blend_mode }));
@@ -3248,9 +3242,7 @@ impl DisplayListBuilder {
                 crate::text::pipeline::Direction::RightToLeft => {
                     run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5)
                 }
-                crate::text::pipeline::Direction::LeftToRight => {
-                    run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5
-                }
+                _ => run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5,
             };
             let center = if inline_vertical {
                 Point::new(block_center, inline_center)
@@ -3464,7 +3456,8 @@ impl DisplayListBuilder {
         let orientation = style
             .map(|s| s.image_orientation.resolve(image.orientation, decorative))
             .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, decorative));
-        let (css_w, css_h) = image.css_dimensions(orientation, &image_resolution, self.device_pixel_ratio, None)?;
+        let (css_w, css_h) = image
+            .css_dimensions(orientation, &image_resolution, self.device_pixel_ratio, None)?;
         let rgba = image.to_oriented_rgba(orientation);
         let (w, h) = rgba.dimensions();
         if w == 0 || h == 0 {
@@ -3529,7 +3522,7 @@ fn collect_underline_exclusions(
         for glyph in &run.glyphs {
             let glyph_x = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
-                crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
+                _ => run_origin + glyph.x_offset,
             };
             let glyph_y = baseline_y - glyph.y_offset;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
@@ -3581,7 +3574,7 @@ fn collect_underline_exclusions_vertical(
         for glyph in &run.glyphs {
             let inline_pos = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
-                crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
+                _ => run_origin + glyph.x_offset,
             };
             let block_pos = block_baseline - glyph.y_offset;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
