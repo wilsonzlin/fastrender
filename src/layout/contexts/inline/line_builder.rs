@@ -667,7 +667,7 @@ impl TextItem {
                             mandatory_break = Some(*brk);
                         }
                     }
-                    _ => allowed_break = Some(*brk),
+                    BreakType::Allowed => allowed_break = Some(*brk),
                 }
             } else {
                 break;
