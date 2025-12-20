@@ -9043,11 +9043,11 @@ fn parse_background_position(value: &PropertyValue) -> Option<BackgroundPosition
                 // treat the first as vertical center and second as horizontal (center left -> left center).
                 if first_v.is_none() && first_h.is_some() && second_h.is_some() && second_v.is_none() {
                     x = second_h;
-                    y = first_v.or_else(|| Some(component_from_keyword(0.5, None)));
+                    y = Some(first_v.unwrap_or_else(|| component_from_keyword(0.5, None)));
                 } else if first_v.is_some() && second_h.is_none() && second_v.is_some() {
                     // first vertical only, second vertical or center -> treat first vertical, second becomes horizontal center.
                     y = first_v;
-                    x = second_h.or_else(|| Some(component_from_keyword(0.5, None)));
+                    x = Some(second_h.unwrap_or_else(|| component_from_keyword(0.5, None)));
                 } else {
                     x = first_h.or(second_h);
                     y = second_v.or(first_v);
