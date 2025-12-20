@@ -528,11 +528,7 @@ impl FontContext {
             .ok()
             .and_then(|f| f.tables().math)
             .is_some();
-        let mut guard = match self.web_fonts.write() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        guard.push(WebFontFace {
+        let push_face = WebFontFace {
             family,
             data,
             index,
@@ -546,7 +542,10 @@ impl FontContext {
                 face.unicode_ranges.clone()
             },
             has_math,
-        });
+        };
+        if let Ok(mut guard) = self.web_fonts.write() {
+            guard.push(push_face);
+        }
     }
 
     #[inline]
