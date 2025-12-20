@@ -1877,7 +1877,7 @@ impl DisplayListRenderer {
                 .stroke_rect_with_blend(self.ds_rect(*rect), *color, self.ds_len(*width), *blend_mode),
             DisplayItem::FillRoundedRect(item) => {
                 self.canvas
-                    .draw_rounded_rect(self.ds_rect(item.rect), self.ds_radii(item.radii), item.color)
+                    .draw_rounded_rect(self.ds_rect(item.rect), self.ds_radii(item.radii), item.color);
             }
             DisplayItem::StrokeRoundedRect(item) => self.canvas.stroke_rounded_rect(
                 self.ds_rect(item.rect),
@@ -1892,17 +1892,17 @@ impl DisplayListRenderer {
             DisplayItem::Border(item) => self.render_border(item),
             DisplayItem::TextDecoration(item) => {
                 let scaled = self.scale_decoration_item(item);
-                self.render_text_decoration(&scaled)?
+                self.render_text_decoration(&scaled)?;
             }
             DisplayItem::Text(item) => {
                 let scaled = self.scale_text_item(item);
-                self.render_text(&scaled)?
+                self.render_text(&scaled)?;
             }
             DisplayItem::Image(item) => self.render_image(item)?,
             DisplayItem::BoxShadow(item) => self.render_box_shadow(item),
             DisplayItem::ListMarker(item) => {
                 let scaled = self.scale_list_marker_item(item);
-                self.render_list_marker(&scaled)?
+                self.render_list_marker(&scaled)?;
             }
             DisplayItem::PushStackingContext(item) => {
                 let scaled_filters = self.ds_filters(&item.filters);
@@ -2688,9 +2688,9 @@ impl DisplayListRenderer {
             && (dest_rect.width() > pixmap.width() as f32 || dest_rect.height() > pixmap.height() as f32)
         {
             let (snapped_w, offset_x) = crate::paint::painter::snap_upscale(dest_rect.width(), pixmap.width() as f32)
-                .unwrap_or((dest_rect.width(), 0.0));
+                .unwrap_or_else(|| (dest_rect.width(), 0.0));
             let (snapped_h, offset_y) = crate::paint::painter::snap_upscale(dest_rect.height(), pixmap.height() as f32)
-                .unwrap_or((dest_rect.height(), 0.0));
+                .unwrap_or_else(|| (dest_rect.height(), 0.0));
             dest_rect = Rect::from_xywh(dest_rect.x() + offset_x, dest_rect.y() + offset_y, snapped_w, snapped_h);
         }
 
