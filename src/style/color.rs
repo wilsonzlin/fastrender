@@ -885,14 +885,17 @@ fn parse_rgb(s: &str) -> Result<Color, ColorParseError> {
     }
     channels.push(parse_rgb_channel(&mut parser)?);
 
-    let mut alpha = 1.0;
-    if comma_syntax {
+    let alpha = if comma_syntax {
         if parser.try_parse(|p| p.expect_comma()).is_ok() {
-            alpha = parse_alpha_component(&mut parser)?;
+            parse_alpha_component(&mut parser)?
+        } else {
+            1.0
         }
     } else if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
-        alpha = parse_alpha_component(&mut parser)?;
-    }
+        parse_alpha_component(&mut parser)?
+    } else {
+        1.0
+    };
 
     if channels.len() != 3 {
         return Err(ColorParseError::InvalidFormat(s.to_string()));
