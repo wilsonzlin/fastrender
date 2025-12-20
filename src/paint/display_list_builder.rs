@@ -3464,10 +3464,7 @@ impl DisplayListBuilder {
         let orientation = style
             .map(|s| s.image_orientation.resolve(image.orientation, decorative))
             .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, decorative));
-        let Some((css_w, css_h)) = image.css_dimensions(orientation, &image_resolution, self.device_pixel_ratio, None)
-        else {
-            return None;
-        };
+        let (css_w, css_h) = image.css_dimensions(orientation, &image_resolution, self.device_pixel_ratio, None)?;
         let rgba = image.to_oriented_rgba(orientation);
         let (w, h) = rgba.dimensions();
         if w == 0 || h == 0 {
