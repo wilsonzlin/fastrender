@@ -1952,16 +1952,17 @@ impl DisplayListBuilder {
         let clip_radii = Self::resolve_clip_radii(style, rects, clip_box, self.viewport);
         let blend_mode = Self::convert_blend_mode(layer.blend_mode);
         let use_blend = blend_mode != BlendMode::Normal;
-        let mut pushed_clip = false;
-        if !clip_radii.is_zero() {
+        let pushed_clip = if clip_radii.is_zero() {
+            false
+        } else {
             self.list.push(DisplayItem::PushClip(ClipItem {
                 shape: ClipShape::Rect {
                     rect: clip_rect,
                     radii: Some(clip_radii),
                 },
             }));
-            pushed_clip = true;
-        }
+            true
+        };
         if use_blend {
             self.list
                 .push(DisplayItem::PushBlendMode(BlendModeItem { mode: blend_mode }));
@@ -3183,13 +3184,12 @@ impl DisplayListBuilder {
             return None;
         }
         let mark_color = style.text_emphasis_color.unwrap_or(style.color);
-        let mut ascent = run.font_size * 0.8;
-        let mut descent = run.font_size * 0.2;
-        if let Ok(metrics) = run.font.metrics() {
+        let (ascent, descent) = if let Ok(metrics) = run.font.metrics() {
             let scaled = metrics.scale(run.font_size);
-            ascent = scaled.ascent;
-            descent = scaled.descent;
-        }
+            (scaled.ascent, scaled.descent)
+        } else {
+            (run.font_size * 0.8, run.font_size * 0.2)
+        };
         let mark_size = (style.font_size * 0.5).max(1.0);
         let gap = mark_size * 0.3;
         let resolved_position = match style.text_emphasis_position {
