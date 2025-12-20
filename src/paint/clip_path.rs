@@ -220,7 +220,7 @@ fn resolve_basic_shape(
                 (reference.height() - top_px - bottom_px).max(0.0),
             );
             let radii = border_radius
-                .map(|r| resolve_clip_radii(r, style, rect, viewport, font_ctx))
+                .map(|r| resolve_clip_radii(&r, style, rect, viewport, font_ctx))
                 .unwrap_or(BorderRadii::ZERO)
                 .clamped(rect.width(), rect.height());
             Some(ResolvedClipPath::Inset { rect, radii })
@@ -403,7 +403,7 @@ fn resolve_clip_length(
 }
 
 fn resolve_clip_radii(
-    radii: ClipRadii,
+    radii: &ClipRadii,
     style: &ComputedStyle,
     rect: Rect,
     viewport: (f32, f32),
