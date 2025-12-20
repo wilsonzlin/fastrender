@@ -57,6 +57,7 @@ use tiny_skia::FilterQuality;
 /// Display items are the building blocks of the display list. Each item
 /// represents one paint operation (draw rectangle, draw text, etc.).
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum DisplayItem {
     /// Fill a rectangle with a solid color
     FillRect(FillRectItem),
@@ -913,6 +914,7 @@ pub struct BorderImageItem {
 
 /// Border-image source variants.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum BorderImageSourceItem {
     /// Pre-decoded raster pixels.
     Raster(ImageData),
