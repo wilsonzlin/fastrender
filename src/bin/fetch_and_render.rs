@@ -877,6 +877,7 @@ fn parse_viewport(val: &str) -> Option<(u32, u32)> {
     Some((w, h))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_once(
     url: &str,
     output: &str,
