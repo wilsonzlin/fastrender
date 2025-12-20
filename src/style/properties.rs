@@ -9212,6 +9212,7 @@ fn parse_clip_path_value(value: &PropertyValue) -> Option<ClipPath> {
     }
 }
 
+#[allow(clippy::option_option)]
 fn parse_clip_value(value: &PropertyValue) -> Option<Option<ClipRect>> {
     match value {
         PropertyValue::Keyword(raw) => {
@@ -9669,6 +9670,7 @@ fn parse_text_decoration_style(value: &PropertyValue) -> Option<TextDecorationSt
     }
 }
 
+#[allow(clippy::option_option)]
 fn parse_text_decoration_color(value: &PropertyValue, current_color: Rgba) -> Option<Option<Rgba>> {
     match value {
         PropertyValue::Color(c) => Some(Some(c.to_rgba(current_color))),
@@ -9821,6 +9823,7 @@ fn parse_text_emphasis_style(value: &PropertyValue) -> Option<TextEmphasisStyle>
     }
 }
 
+#[allow(clippy::option_option)]
 fn parse_text_emphasis_color(value: &PropertyValue, current_color: Rgba) -> Option<Option<Rgba>> {
     match value {
         PropertyValue::Color(c) => Some(Some(c.to_rgba(current_color))),
@@ -9919,6 +9922,7 @@ fn parse_text_emphasis_position(value: &PropertyValue) -> Option<TextEmphasisPos
     }
 }
 
+#[allow(clippy::option_option)]
 fn parse_text_emphasis_shorthand(
     value: &PropertyValue,
     current_color: Rgba,
