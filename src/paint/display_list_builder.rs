@@ -1619,7 +1619,7 @@ impl DisplayListBuilder {
                 let style_opt = fragment.style.as_deref();
                 let color = style_opt.map(|s| s.color).unwrap_or(Rgba::BLACK);
                 let shadows = Self::text_shadows_from_style(style_opt);
-                let inline_vertical = style_opt.map_or(false, |s| {
+                let inline_vertical = style_opt.is_some_and(|s| {
                     matches!(
                         s.writing_mode,
                         crate::style::types::WritingMode::VerticalRl
