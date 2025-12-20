@@ -1276,12 +1276,10 @@ impl Painter {
             .unwrap_or(false);
         let viewport = (self.css_width, self.css_height);
         let filters = style_ref
-            .as_deref()
             .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx))
             .unwrap_or_default();
         let has_filters = !filters.is_empty();
         let backdrop_filters = style_ref
-            .as_deref()
             .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx))
             .unwrap_or_default();
         let has_backdrop = !backdrop_filters.is_empty();

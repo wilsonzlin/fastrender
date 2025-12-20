@@ -1669,7 +1669,6 @@ impl<'a> LineBuilder<'a> {
                 self.finish_line();
             }
 
-            let inline_box = inline_box;
             if inline_box.start_edge > 0.0 {
                 self.current_x += inline_box.start_edge;
             }

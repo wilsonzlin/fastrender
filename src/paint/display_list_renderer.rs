@@ -81,7 +81,7 @@ fn transform_rect(rect: Rect, ts: &Transform) -> Rect {
 }
 
 fn shade_color(color: &Rgba, factor: f32) -> Rgba {
-    let clamp = |v: f32| v.max(0.0).min(255.0) as u8;
+    let clamp = |v: f32| v.clamp(0.0, 255.0) as u8;
     let r = clamp(color.r as f32 * factor);
     let g = clamp(color.g as f32 * factor);
     let b = clamp(color.b as f32 * factor);
@@ -548,7 +548,7 @@ fn apply_color_filter(pixmap: &mut Pixmap, f: impl Fn((u8, u8, u8), f32) -> ((u8
         let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
         *pixel =
             tiny_skia::PremultipliedColorU8::from_rgba(premultiply(c.0), premultiply(c.1), premultiply(c.2), final_a)
-                .unwrap_or(tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+                .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
     }
 }
 
@@ -2460,11 +2460,11 @@ impl DisplayListRenderer {
         let inline_vertical = emphasis.inline_vertical;
         if let TextEmphasisStyle::String(_) = emphasis.style {
             if let Some(text) = &emphasis.text {
-                let font = self
-                    .resolve_font(text.font_id.as_ref())
-                    .ok_or(RenderError::RasterizationFailed {
-                        reason: "Unable to resolve font for emphasis string".into(),
-                    })?;
+                let font =
+                    self.resolve_font(text.font_id.as_ref())
+                        .ok_or_else(|| RenderError::RasterizationFailed {
+                            reason: "Unable to resolve font for emphasis string".into(),
+                        })?;
                 let glyphs: Vec<GlyphPosition> = text
                     .glyphs
                     .iter()
@@ -2698,7 +2698,6 @@ impl DisplayListRenderer {
             opacity: self.canvas.opacity(),
             blend_mode: self.canvas.blend_mode(),
             quality: item.filter_quality.into(),
-            ..Default::default()
         };
 
         let scale_x = dest_rect.width() / pixmap.width() as f32;
