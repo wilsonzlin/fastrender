@@ -3248,7 +3248,9 @@ impl DisplayListBuilder {
                 crate::text::pipeline::Direction::RightToLeft => {
                     run_origin_inline - (glyph.x_offset + glyph.x_advance * 0.5)
                 }
-                _ => run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5,
+                crate::text::pipeline::Direction::LeftToRight => {
+                    run_origin_inline + glyph.x_offset + glyph.x_advance * 0.5
+                }
             };
             let center = if inline_vertical {
                 Point::new(block_center, inline_center)
@@ -3530,7 +3532,7 @@ fn collect_underline_exclusions(
         for glyph in &run.glyphs {
             let glyph_x = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
-                _ => run_origin + glyph.x_offset,
+                crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
             };
             let glyph_y = baseline_y - glyph.y_offset;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
@@ -3582,7 +3584,7 @@ fn collect_underline_exclusions_vertical(
         for glyph in &run.glyphs {
             let inline_pos = match run.direction {
                 crate::text::pipeline::Direction::RightToLeft => run_origin - glyph.x_offset,
-                _ => run_origin + glyph.x_offset,
+                crate::text::pipeline::Direction::LeftToRight => run_origin + glyph.x_offset,
             };
             let block_pos = block_baseline - glyph.y_offset;
             if let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(glyph.glyph_id as u16)) {
