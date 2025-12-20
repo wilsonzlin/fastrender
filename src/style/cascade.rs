@@ -888,25 +888,20 @@ pub fn apply_styles_with_media_target_and_imports_cached(
 
     // Resolve imports if a loader is provided
     let author_sheet = if let Some(loader) = import_loader {
-        stylesheet.resolve_imports_with_cache(
-            loader,
-            base_url,
-            media_ctx,
-            media_cache.as_mut().map(|cache| &mut **cache),
-        )
+        stylesheet.resolve_imports_with_cache(loader, base_url, media_ctx, media_cache.as_deref_mut())
     } else {
         stylesheet.clone()
     };
 
     // Collect applicable rules from both stylesheets
     // User-agent rules come first (lower priority)
-    let ua_rules = if let Some(cache) = media_cache.as_mut() {
-        ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(&mut **cache))
+    let ua_rules = if let Some(cache) = media_cache.as_deref_mut() {
+        ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(cache))
     } else {
         ua_stylesheet.collect_style_rules(media_ctx)
     };
-    let author_rules = if let Some(cache) = media_cache.as_mut() {
-        author_sheet.collect_style_rules_with_cache(media_ctx, Some(&mut **cache))
+    let author_rules = if let Some(cache) = media_cache.as_deref_mut() {
+        author_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
     } else {
         author_sheet.collect_style_rules(media_ctx)
     };
