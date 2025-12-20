@@ -4893,12 +4893,10 @@ impl InlineFormattingContext {
         let inline_percent_base = inline_space.to_option().or(constraints.inline_percentage_base);
         let mut available_inline = match inline_space {
             AvailableSpace::Definite(w) => w,
-            _ => inline_percent_base.unwrap_or_else(|| {
-                if inline_vertical {
-                    self.viewport_size.height
-                } else {
-                    self.viewport_size.width
-                }
+            _ => inline_percent_base.unwrap_or(if inline_vertical {
+                self.viewport_size.height
+            } else {
+                self.viewport_size.width
             }),
         };
         if !available_inline.is_finite() || available_inline <= 0.0 {
@@ -4922,12 +4920,10 @@ impl InlineFormattingContext {
         };
         let available_block = match block_space {
             AvailableSpace::Definite(h) => h,
-            _ => constraints.inline_percentage_base.unwrap_or_else(|| {
-                if inline_vertical {
-                    self.viewport_size.width
-                } else {
-                    self.viewport_size.height
-                }
+            _ => constraints.inline_percentage_base.unwrap_or(if inline_vertical {
+                self.viewport_size.width
+            } else {
+                self.viewport_size.height
             }),
         };
         let available_height = if inline_vertical {
