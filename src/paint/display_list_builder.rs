@@ -844,15 +844,16 @@ impl DisplayListBuilder {
                     let gap = i.saturating_sub(start_idx + 1);
                     if gap > 0 {
                         let step = (pos - start_pos) / (gap as f32 + 1.0);
-                        for j in 1..=gap {
-                            positions[start_idx + j] = Some((start_pos + step * j as f32).max(start_pos));
+                        for (offset, slot) in positions[start_idx + 1..i].iter_mut().enumerate() {
+                            let j = (offset + 1) as f32;
+                            *slot = Some((start_pos + step * j).max(start_pos));
                         }
                     }
                 } else if i > 0 {
                     let gap = i;
                     let step = pos / gap as f32;
-                    for j in 0..i {
-                        positions[j] = Some(step * j as f32);
+                    for (j, slot) in positions[..i].iter_mut().enumerate() {
+                        *slot = Some(step * j as f32);
                     }
                 }
                 last_known = Some((i, pos));
@@ -3456,8 +3457,7 @@ impl DisplayListBuilder {
         let orientation = style
             .map(|s| s.image_orientation.resolve(image.orientation, decorative))
             .unwrap_or_else(|| ImageOrientation::default().resolve(image.orientation, decorative));
-        let (css_w, css_h) = image
-            .css_dimensions(orientation, &image_resolution, self.device_pixel_ratio, None)?;
+        let (css_w, css_h) = image.css_dimensions(orientation, &image_resolution, self.device_pixel_ratio, None)?;
         let rgba = image.to_oriented_rgba(orientation);
         let (w, h) = rgba.dimensions();
         if w == 0 || h == 0 {
