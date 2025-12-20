@@ -4056,11 +4056,10 @@ impl FormattingContext for TableFormattingContext {
                 heights.get(laid.cell.row).copied().unwrap_or(laid.height)
             };
             let raw_baseline = laid.baseline.unwrap_or(laid.height);
-            let baseline = if raw_baseline >= laid.height && target_height > laid.height {
-                target_height
-            } else {
-                raw_baseline
-            };
+            let mut baseline = raw_baseline;
+            if raw_baseline >= laid.height && target_height > laid.height {
+                baseline = target_height;
+            }
             if laid.cell.rowspan > 1 && span_end > laid.cell.row {
                 spanning_baseline_allocation(target_height, baseline, laid.cell.row, span_end, heights)
             } else {
@@ -4096,13 +4095,14 @@ impl FormattingContext for TableFormattingContext {
         let percent_height_base = table_height.map(|base| compute_percent_height_base(base));
 
         let row_floor = |idx: usize, current: f32| -> f32 {
-            let row = match structure.rows.get(idx) {
-                Some(row) => row,
-                None => return current,
-            };
+            let row = structure.rows.get(idx);
+            if row.is_none() {
+                return current;
+            }
+            let row = row.unwrap();
             let mut floor = current;
-            if let Some((Some(min), _)) = Some(resolve_row_min_max(row, percent_height_base)) {
-                floor = floor.max(min);
+            if let Some((Some(min_len), _)) = Some(resolve_row_min_max(row, percent_height_base)) {
+                floor = floor.max(min_len);
             }
             if let Some(spec) = row.specified_height {
                 match spec {
