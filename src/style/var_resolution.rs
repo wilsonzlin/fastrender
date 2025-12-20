@@ -741,7 +741,7 @@ mod tests {
 
     #[test]
     fn test_resolve_var_result_methods() {
-        let resolved = VarResolutionResult::Resolved(PropertyValue::Keyword("blue".to_string()));
+        let resolved = VarResolutionResult::Resolved(Box::new(PropertyValue::Keyword("blue".to_string())));
         assert!(resolved.is_resolved());
 
         let default = PropertyValue::Keyword("red".to_string());
