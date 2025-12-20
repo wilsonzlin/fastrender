@@ -96,6 +96,17 @@ just guard-tests
 
 # Quick guard list (fast sanity check)
 just guard-tests-quick
+
+## Guard rails
+
+Run these guards before pushing to catch accidental deletions of critical docs and fixtures:
+
+```bash
+# Full guard suite (README presence + CLI example, style regression fixture, fetch_and_render exit regression)
+just guard-tests
+
+# Quick listing of guard checks (fast)
+just guard-tests-quick
 ```
 
 ### Batch Fetch & Render
