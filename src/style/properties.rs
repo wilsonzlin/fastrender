@@ -4812,14 +4812,15 @@ pub fn apply_declaration_with_base(
                 let mut row_start = parts.first().copied().unwrap_or("auto").to_string();
                 let mut col_start = parts.get(1).copied().unwrap_or("auto").to_string();
                 let mut row_end = parts.get(2).copied().unwrap_or("auto").to_string();
-                let mut col_end = parts.get(3).copied().unwrap_or("auto").to_string();
-                if parts.len() == 1 {
+                let col_end = if parts.len() == 1 {
                     // Single area name: map to area start/end
                     row_start = format!("{}-start", parts[0]);
                     row_end = format!("{}-end", parts[0]);
                     col_start = row_start.clone();
-                    col_end = row_end.clone();
-                }
+                    row_end.clone()
+                } else {
+                    parts.get(3).copied().unwrap_or("auto").to_string()
+                };
                 styles.grid_row_raw = Some(format!("{} / {}", row_start, row_end));
                 styles.grid_column_raw = Some(format!("{} / {}", col_start, col_end));
             }
