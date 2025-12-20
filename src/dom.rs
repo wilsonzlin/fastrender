@@ -902,9 +902,7 @@ impl<'a> ElementRef<'a> {
     }
 
     fn range_state(&self) -> Option<bool> {
-        let Some(tag) = self.node.tag_name() else {
-            return None;
-        };
+        let tag = self.node.tag_name()?;
         if !tag.eq_ignore_ascii_case("input") {
             return None;
         }
@@ -922,9 +920,7 @@ impl<'a> ElementRef<'a> {
             .get_attribute_ref("value")
             .map(|v| v.to_string())
             .unwrap_or_default();
-        let Some(num) = Self::parse_number(&value) else {
-            return None;
-        };
+        let num = Self::parse_number(&value)?;
 
         self.numeric_in_range(num)
     }
