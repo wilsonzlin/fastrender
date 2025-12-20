@@ -985,7 +985,7 @@ impl GridFormattingContext {
                 CrateAvailableSpace::Definite(bounds.width()),
                 CrateAvailableSpace::Definite(bounds.height()),
             )
-            .with_inline_percentage_base(constraints.inline_percentage_base.or(Some(bounds.width())));
+            .with_inline_percentage_base(constraints.inline_percentage_base.or_else(|| Some(bounds.width())));
 
             let mut laid_out = fc.layout(&layout_child, &child_constraints)?;
             translate_fragment_tree(&mut laid_out, Point::new(bounds.x(), bounds.y()));
