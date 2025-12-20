@@ -914,7 +914,6 @@ pub struct BorderImageItem {
 
 /// Border-image source variants.
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
 pub enum BorderImageSourceItem {
     /// Pre-decoded raster pixels.
     Raster(ImageData),
