@@ -118,6 +118,8 @@ pub(crate) fn block_axis_is_horizontal(wm: WritingMode) -> bool {
 }
 
 /// Pending logical properties (margin/padding/border) to resolve after writing-mode is known.
+// Outer Option tracks presence in the cascade; inner Option carries keyword vs length (e.g., auto vs length).
+#[allow(clippy::option_option)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalProperty {
     Margin {
