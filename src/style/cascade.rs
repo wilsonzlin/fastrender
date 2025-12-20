@@ -6717,7 +6717,8 @@ fn alignment_presentational_hint(node: &DomNode, order: usize) -> Option<Matched
                 tag.as_str(),
                 "td" | "th" | "tr" | "table" | "div" | "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "center"
             ) {
-                declarations.push_str(&format!("text-align: {};", mapped));
+                use std::fmt::Write;
+                let _ = writeln!(declarations, "text-align: {};", mapped);
             }
             if tag == "table" {
                 match mapped {
@@ -6983,7 +6984,8 @@ fn replaced_alignment_presentational_hint(node: &DomNode, order: usize) -> Optio
         _ => {}
     }
     if let Some(valign) = map_valign(&align_lower) {
-        declarations.push_str(&format!("vertical-align: {};", valign));
+        use std::fmt::Write;
+        let _ = writeln!(declarations, "vertical-align: {};", valign);
     }
 
     if declarations.is_empty() {
