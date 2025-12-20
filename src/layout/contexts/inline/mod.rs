@@ -4512,7 +4512,7 @@ impl InlineFormattingContext {
             let limit = line.available_width;
             let inline_indent_cut = match line.resolved_direction {
                 crate::style::types::Direction::Rtl => (-line.indent).max(0.0),
-                _ => line.indent.max(0.0),
+                crate::style::types::Direction::Ltr => line.indent.max(0.0),
             };
             let usable_limit = if limit.is_finite() {
                 (limit - inline_indent_cut).max(0.0)
