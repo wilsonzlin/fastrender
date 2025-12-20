@@ -1077,7 +1077,6 @@ impl Containment {
         }
     }
 
-    #[allow(clippy::fn_params_excessive_bools)]
     pub fn with_flags(size: bool, inline_size: bool, layout: bool, style: bool, paint: bool) -> Self {
         Self {
             size,
