@@ -381,9 +381,7 @@ fn distribute_rowspan_targets(
     let mut total_weight: f32 = weights.iter().sum();
     if total_weight <= 0.0 {
         total_weight = targets.len() as f32;
-        for w in &mut weights {
-            *w = 1.0;
-        }
+        weights.fill(1.0);
     }
 
     let mut shares = vec![0.0; targets.len()];
@@ -1875,7 +1873,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                 if is_vertical {
                     let target = match direction {
                         Direction::Rtl => non_none.iter().map(|c| c.col).max().unwrap_or(0),
-                        _ => non_none.iter().map(|c| c.col).min().unwrap_or(0),
+                        Direction::Ltr => non_none.iter().map(|c| c.col).min().unwrap_or(0),
                     };
                     non_none.retain(|c| c.col == target);
                 } else {
@@ -2004,7 +2002,7 @@ fn compute_collapsed_borders(table_box: &BoxNode, structure: &TableStructure) ->
                     if let Some(visible) = source_col_to_visible.get(source_col_idx).and_then(|m| *m) {
                         column_styles[visible] = column_styles[visible]
                             .take()
-                            .or(Some((child.style.clone(), source_counter)));
+                            .or_else(|| Some((child.style.clone(), source_counter)));
                         source_counter += 1;
                         first_visible.get_or_insert(visible);
                         last_visible = Some(visible);
@@ -2582,7 +2580,7 @@ pub fn calculate_fixed_layout_widths(structure: &mut TableStructure, available_w
 
         // Prefer shrinking only auto columns. Percent/fixed columns may legitimately overrun.
         shrink_pass(&mut structure.columns, &mut shrink, &|c: &ColumnInfo| {
-            matches!(c.specified_width, None)
+            c.specified_width.is_none()
         });
     } else if total + 0.01 < content_width {
         // Grow flexible columns up to their max, leave remaining slack unused if max caps are hit.
@@ -2898,7 +2896,7 @@ pub fn calculate_row_heights(structure: &mut TableStructure, available_height: O
                 if specified_indices.is_empty() {
                     // No specified rows: distribute proportional to existing floors, but
                     // fall back to equal shares when any row has no floor contribution.
-                    let weights: Vec<f32> = current.iter().cloned().collect();
+                    let weights: Vec<f32> = current.to_vec();
                     if weights.iter().any(|w| *w <= 0.0) {
                         let per = remaining / current.len() as f32;
                         for c in &mut current {
@@ -3238,7 +3236,9 @@ impl TableFormattingContext {
             let width_is_percent = matches!(width_decl.map(|w| w.unit), Some(LengthUnit::Percent));
             let (mut min_w, mut max_w) = match mode {
                 DistributionMode::Fixed => (0.0, f32::INFINITY), // content is ignored in fixed layout
-                _ => self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse, percent_base),
+                DistributionMode::Auto => {
+                    self.measure_cell_intrinsic_widths(cell_box, structure.border_collapse, percent_base)
+                }
             };
             let mut has_max_cap = false;
             // Apply min-width/max-width from the cell itself. Percentages only participate when the
