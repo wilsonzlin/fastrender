@@ -132,7 +132,7 @@ fn truncate_text(text: &str, limit: usize) -> String {
 #[derive(Debug, Clone)]
 enum InlineFlowSegment {
     InlineItems(Vec<InlineItem>),
-    Block(BoxNode),
+    Block(Box<BoxNode>),
 }
 
 #[derive(Debug, Clone)]
@@ -294,6 +294,7 @@ impl InlineFormattingContext {
         )
     }
 
+    #[allow(clippy::cognitive_complexity)]
     fn collect_inline_flow_segments_with_base(
         &self,
         box_node: &BoxNode,
@@ -827,7 +828,7 @@ impl InlineFormattingContext {
                     }
                     flush_current(&mut segments, &mut current_items);
                     pending_space = None;
-                    segments.push(InlineFlowSegment::Block(child.clone()));
+                    segments.push(InlineFlowSegment::Block(Box::new(child.clone())));
                 }
             }
         }
@@ -839,6 +840,7 @@ impl InlineFormattingContext {
         Ok(segments)
     }
 
+    #[allow(clippy::cognitive_complexity)]
     fn collect_inline_items_internal(
         &self,
         box_node: &BoxNode,
@@ -4260,15 +4262,13 @@ impl InlineFormattingContext {
         float_ctx: Option<&FloatContext>,
         float_base_y: f32,
     ) -> Vec<Line> {
-        let mut first_width = if use_first_line_width {
+        let first_width = if matches!(text_wrap, TextWrap::Balance | TextWrap::Pretty) {
+            subsequent_line_width
+        } else if use_first_line_width {
             first_line_width
         } else {
             subsequent_line_width
         };
-
-        if matches!(text_wrap, TextWrap::Balance | TextWrap::Pretty) {
-            first_width = subsequent_line_width;
-        }
         self.build_lines(
             items.to_vec(),
             first_width,
@@ -4822,6 +4822,7 @@ impl InlineFormattingContext {
         line
     }
 
+    #[allow(clippy::cognitive_complexity)]
     pub fn layout_with_floats(
         &self,
         box_node: &BoxNode,
@@ -4962,7 +4963,7 @@ impl InlineFormattingContext {
                         inline_items += items.len();
                         text_items += items.iter().filter(|i| matches!(i, InlineItem::Text(_))).count();
                     }
-                    InlineFlowSegment::Block { .. } => block_segments += 1,
+                    InlineFlowSegment::Block(_) => block_segments += 1,
                 }
             }
             eprintln!(
@@ -5003,7 +5004,7 @@ impl InlineFormattingContext {
                             }
                             summaries.push(format!("seg{seg_idx}: {}", kinds.join(", ")));
                         }
-                        InlineFlowSegment::Block { .. } => summaries.push(format!("seg{seg_idx}: Block")),
+                        InlineFlowSegment::Block(_) => summaries.push(format!("seg{seg_idx}: Block")),
                     }
                 }
                 eprintln!(
@@ -5045,7 +5046,7 @@ impl InlineFormattingContext {
                                 let desc: Vec<String> = items.iter().take(6).map(|i| describe_item(i, 0)).collect();
                                 verbose_segments.push(format!("seg{seg_idx}: {}", desc.join(", ")));
                             }
-                            InlineFlowSegment::Block { .. } => verbose_segments.push(format!("seg{seg_idx}: Block")),
+                            InlineFlowSegment::Block(_) => verbose_segments.push(format!("seg{seg_idx}: Block")),
                         }
                     }
                     eprintln!(
