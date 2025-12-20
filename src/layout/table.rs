@@ -381,9 +381,7 @@ fn distribute_rowspan_targets(
     let mut total_weight: f32 = weights.iter().sum();
     if total_weight <= 0.0 {
         total_weight = targets.len() as f32;
-        for w in &mut weights {
-            *w = 1.0;
-        }
+        weights.fill(1.0);
     }
 
     let mut shares = vec![0.0; targets.len()];
@@ -602,10 +600,8 @@ fn distribute_extra_row_height_with_groups(
         }
 
         for (g_idx, used) in group_consumed.into_iter().enumerate() {
-            if let Some(rem) = group_remaining.get_mut(g_idx) {
-                if let Some(val) = rem {
-                    *val = (*val - used).max(0.0);
-                }
+            if let Some(Some(val)) = group_remaining.get_mut(g_idx) {
+                *val = (*val - used).max(0.0);
             }
         }
 
