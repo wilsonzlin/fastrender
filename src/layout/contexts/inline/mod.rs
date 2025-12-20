@@ -4486,7 +4486,7 @@ impl InlineFormattingContext {
 
     fn apply_text_overflow(
         &self,
-        mut lines: Vec<Line>,
+        lines: Vec<Line>,
         style: &Arc<ComputedStyle>,
         strut_metrics: &BaselineMetrics,
         inline_vertical: bool,
