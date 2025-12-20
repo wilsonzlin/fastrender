@@ -7141,9 +7141,9 @@ fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, 
 
     let mut output = Vec::with_capacity(stops.len());
     let mut prev = 0.0;
-    for (idx, pos_opt) in positions.into_iter().enumerate() {
-        let pos = pos_opt.unwrap_or(prev);
-        let clamped = pos.max(prev).clamp(0.0, 1.0);
+    for (idx, pos_opt) in positions.iter().enumerate() {
+        let pos = pos_opt.unwrap_or(&prev);
+        let clamped = (*pos).max(prev).clamp(0.0, 1.0);
         prev = clamped;
         output.push((clamped, stops[idx].color.to_rgba(current_color)));
     }
@@ -7204,9 +7204,9 @@ fn normalize_color_stops_unclamped(stops: &[ColorStop], current_color: Rgba) -> 
     }
     let mut output = Vec::with_capacity(stops.len());
     let mut prev = 0.0;
-    for (idx, pos_opt) in positions.into_iter().enumerate() {
-        let pos = pos_opt.unwrap_or(prev);
-        let monotonic = pos.max(prev);
+    for (idx, pos_opt) in positions.iter().enumerate() {
+        let pos = pos_opt.unwrap_or(&prev);
+        let monotonic = (*pos).max(prev);
         prev = monotonic;
         output.push((monotonic, stops[idx].color.to_rgba(current_color)));
     }
