@@ -99,6 +99,8 @@ impl VarResolutionResult {
 ///
 /// This helper performs property-agnostic resolution (parses fallback/results without knowing
 /// the destination property). For property-aware parsing, use `resolve_var_for_property`.
+// Custom properties are keyed by String with the default hasher; this is fine for our usage.
+#[allow(clippy::implicit_hasher)]
 pub fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, String>) -> PropertyValue {
     match resolve_var_recursive(value, custom_properties, 0, "") {
         VarResolutionResult::Resolved(v) => *v,
@@ -110,6 +112,8 @@ pub fn resolve_var(value: &PropertyValue, custom_properties: &HashMap<String, St
 ///
 /// Passing the property name allows the resolver to parse the substituted value using the
 /// appropriate grammar (e.g., background layers with commas), rather than the generic parser.
+// As above, allow implicit_hasher for the property map rather than plumbing a custom hasher.
+#[allow(clippy::implicit_hasher)]
 pub fn resolve_var_for_property(
     value: &PropertyValue,
     custom_properties: &HashMap<String, String>,
@@ -132,6 +136,7 @@ pub fn resolve_var_for_property(
 /// # Returns
 ///
 /// The resolved PropertyValue, or the original value if resolution fails
+#[allow(clippy::implicit_hasher)]
 pub fn resolve_var_with_depth(
     value: &PropertyValue,
     custom_properties: &HashMap<String, String>,

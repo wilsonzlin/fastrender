@@ -833,6 +833,9 @@ pub fn apply_styles_with_media_and_target(
 }
 
 /// Apply styles with media context, optional :target, and optional import loader/base URL.
+// These entry points intentionally use default hashers for style caches and run infrequently.
+// Allow pedantic implicit_hasher here instead of plumbing custom hashers through the API surface.
+#[allow(clippy::implicit_hasher)]
 pub fn apply_styles_with_media_target_and_imports(
     dom: &DomNode,
     stylesheet: &StyleSheet,
@@ -860,6 +863,8 @@ pub fn apply_styles_with_media_target_and_imports(
 
 /// Apply styles with optional media-query caching to share media evaluation across passes.
 #[allow(clippy::needless_option_as_deref)]
+// Cached variant shares the same rationale: default hashers are fine for these usize keys/maps.
+#[allow(clippy::implicit_hasher)]
 pub fn apply_styles_with_media_target_and_imports_cached(
     dom: &DomNode,
     stylesheet: &StyleSheet,
