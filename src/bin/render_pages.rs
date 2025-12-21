@@ -1,8 +1,5 @@
 //! Render all cached pages in parallel
 //!
-//! Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--timings] [page ...]
-//! Notes: unknown flags exit 1 with usage; positional args are treated as page filters (cache stems).
-//!
 //! Renders all HTML files in fetches/html/ to fetches/renders/
 //! Logs per-page to fetches/renders/{name}.log
 //! Summary to fetches/renders/_summary.log
@@ -10,6 +7,7 @@
 mod caching_fetcher;
 
 use caching_fetcher::CachingFetcher;
+use clap::Parser;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
 use fastrender::css::loader::extract_css_links;
@@ -47,103 +45,123 @@ const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
-fn usage() {
-  println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings] [page ...]");
-  println!("  --jobs N          Number of parallel renders (default: num_cpus)");
-  println!("  --timeout SECONDS Per-page timeout (optional)");
-  println!(
-    "  --viewport WxH    Override viewport size for all pages (e.g., 1366x768; default 1200x800)"
-  );
-  println!(
-    "  --pages a,b,c     Render only the listed cached pages (use cache stems like cnn.com)"
-  );
-  println!("  --dpr FLOAT       Device pixel ratio for media queries/srcset (default: 1.0)");
-  println!("  --prefers-reduced-transparency reduce|no-preference|true|false (overrides env)");
-  println!("  --prefers-reduced-motion       reduce|no-preference|true|false (overrides env)");
-  println!("  --prefers-reduced-data        reduce|no-preference|true|false (overrides env)");
-  println!("  --prefers-contrast            more|high|less|low|custom|forced|no-preference (overrides env)");
-  println!("  --prefers-color-scheme        light|dark|no-preference (overrides env)");
-  println!("  --scroll-x PX     Horizontal scroll offset applied to rendering (default: 0)");
-  println!("  --scroll-y PX     Vertical scroll offset applied to rendering (default: 0)");
-  println!("  --user-agent UA   Override the User-Agent header (default: Chrome-like)");
-  println!(
-    "  --accept-language LANG  Override the Accept-Language header (default: en-US,en;q=0.9)"
-  );
-  println!(
-    "  --css-limit N     Maximum number of external stylesheets to fetch (default: unlimited)"
-  );
-  println!("  --timings         Enable FASTR_RENDER_TIMINGS to print per-stage timings");
-  println!("  Logs: fetches/renders/<page>.log per page and fetches/renders/_summary.log");
-  println!(
-    "  page ...          Positional page filters (cache stems); unknown options exit with status 1"
-  );
+/// Render all cached pages in parallel
+#[derive(Parser, Debug)]
+#[command(name = "render_pages", version, about)]
+struct Args {
+  /// Number of parallel renders
+  #[arg(long, short, default_value_t = num_cpus::get())]
+  jobs: usize,
+
+  /// Per-page timeout in seconds
+  #[arg(long)]
+  timeout: Option<u64>,
+
+  /// Viewport size as WxH (e.g., 1200x800)
+  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
+  viewport: (u32, u32),
+
+  /// Device pixel ratio for media queries/srcset
+  #[arg(long, default_value = "1.0")]
+  dpr: f32,
+
+  /// Reduced transparency preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_transparency: Option<bool>,
+
+  /// Reduced motion preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_motion: Option<bool>,
+
+  /// Reduced data preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_data: Option<bool>,
+
+  /// Contrast preference (more|high|less|low|custom|forced|no-preference)
+  #[arg(long, value_parser = parse_contrast)]
+  prefers_contrast: Option<String>,
+
+  /// Color scheme preference (light|dark|no-preference)
+  #[arg(long, value_parser = parse_color_scheme)]
+  prefers_color_scheme: Option<String>,
+
+  /// Render only listed pages (comma-separated)
+  #[arg(long, value_delimiter = ',')]
+  pages: Option<Vec<String>>,
+
+  /// Horizontal scroll offset in CSS px
+  #[arg(long, default_value = "0.0")]
+  scroll_x: f32,
+
+  /// Vertical scroll offset in CSS px
+  #[arg(long, default_value = "0.0")]
+  scroll_y: f32,
+
+  /// Override the User-Agent header
+  #[arg(long, default_value = DEFAULT_USER_AGENT)]
+  user_agent: String,
+
+  /// Override the Accept-Language header
+  #[arg(long, default_value = DEFAULT_ACCEPT_LANGUAGE)]
+  accept_language: String,
+
+  /// Maximum number of external stylesheets to fetch
+  #[arg(long)]
+  css_limit: Option<usize>,
+
+  /// Enable per-stage timing logs
+  #[arg(long)]
+  timings: bool,
+
+  /// Positional page filters (cache stems)
+  #[arg(trailing_var_arg = true)]
+  filter_pages: Vec<String>,
 }
 
-fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
+fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
+  let parts: Vec<&str> = s.split('x').collect();
+  if parts.len() != 2 {
+    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
+  }
+  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
+  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
+  if w == 0 || h == 0 {
+    return Err("width and height must be > 0".to_string());
+  }
+  Ok((w, h))
+}
+
+fn parse_bool_preference(s: &str) -> Result<bool, String> {
+  let v = s.trim().to_ascii_lowercase();
   if matches!(
     v.as_str(),
     "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
   ) {
-    return Some(true);
+    return Ok(true);
   }
   if matches!(
     v.as_str(),
     "0" | "false" | "no" | "off" | "none" | "no-preference"
   ) {
-    return Some(false);
+    return Ok(false);
   }
-  None
+  Err(format!("invalid value: {s}"))
 }
 
-fn parse_prefers_reduced_motion(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Some(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Some(false);
-  }
-  None
-}
-
-fn parse_prefers_contrast(val: &str) -> Option<String> {
-  let v = val.trim().to_ascii_lowercase();
+fn parse_contrast(s: &str) -> Result<String, String> {
+  let v = s.trim().to_ascii_lowercase();
   match v.as_str() {
-    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Some(v),
-    _ => None,
+    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
+    _ => Err(format!("invalid contrast value: {s}")),
   }
 }
 
-fn parse_prefers_color_scheme(val: &str) -> Option<String> {
-  let v = val.trim().to_ascii_lowercase();
+fn parse_color_scheme(s: &str) -> Result<String, String> {
+  let v = s.trim().to_ascii_lowercase();
   match v.as_str() {
-    "light" | "dark" | "no-preference" => Some(v),
-    _ => None,
+    "light" | "dark" | "no-preference" => Ok(v),
+    _ => Err(format!("invalid color scheme: {s}")),
   }
-}
-
-fn parse_prefers_reduced_data(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Some(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Some(false);
-  }
-  None
 }
 
 struct PageResult {
@@ -166,189 +184,55 @@ fn main() {
   {
     eprintln!("FASTR_LAYOUT_PROFILE enabled: layout timings will be logged");
   }
-  let mut args = std::env::args().skip(1);
-  let mut jobs = num_cpus::get();
-  let mut page_filter: Option<HashSet<String>> = None;
-  let mut timeout_secs: Option<u64> = None;
-  let mut viewport: Option<(u32, u32)> = None;
-  let mut device_pixel_ratio: f32 = 1.0;
-  let mut prefers_reduced_transparency: Option<bool> = None;
-  let mut prefers_reduced_motion: Option<bool> = None;
-  let mut prefers_reduced_data: Option<bool> = None;
-  let mut prefers_contrast: Option<String> = None;
-  let mut prefers_color_scheme: Option<String> = None;
-  let mut scroll_x: f32 = 0.0;
-  let mut scroll_y: f32 = 0.0;
-  let mut user_agent = DEFAULT_USER_AGENT.to_string();
-  let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
-  let mut enable_timings = false;
-  let mut css_limit: Option<usize> = None;
-  while let Some(arg) = args.next() {
-    match arg.as_str() {
-      "--help" | "-h" => {
-        usage();
-        return;
-      }
-      "--jobs" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse() {
-            jobs = parsed;
-          }
-        }
-      }
-      "--timeout" => {
-        if let Some(val) = args.next() {
-          match val.parse::<u64>() {
-            Ok(0) => timeout_secs = None,
-            Ok(secs) => timeout_secs = Some(secs),
-            Err(_) => {}
-          }
-        }
-      }
-      "--viewport" => {
-        if let Some(val) = args.next() {
-          let mut parts = val.split('x');
-          if let (Some(w), Some(h)) = (parts.next(), parts.next()) {
-            if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
-              viewport = Some((w, h));
-            }
-          }
-        }
-      }
-      "--dpr" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<f32>() {
-            if parsed.is_finite() && parsed > 0.0 {
-              device_pixel_ratio = parsed;
-            }
-          }
-        }
-      }
-      "--prefers-reduced-transparency" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
-        }
-      }
-      "--prefers-reduced-motion" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_motion = parse_prefers_reduced_motion(&val);
-        }
-      }
-      "--prefers-reduced-data" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_data = parse_prefers_reduced_data(&val);
-        }
-      }
-      "--prefers-contrast" => {
-        if let Some(val) = args.next() {
-          prefers_contrast = parse_prefers_contrast(&val);
-        }
-      }
-      "--prefers-color-scheme" => {
-        if let Some(val) = args.next() {
-          prefers_color_scheme = parse_prefers_color_scheme(&val);
-        }
-      }
-      "--pages" => {
-        if let Some(val) = args.next() {
-          let mut filter = page_filter.take().unwrap_or_default();
-          for name in val.split(',') {
-            if let Some(normalized) = normalize_page_name(name) {
-              filter.insert(normalized);
-            }
-          }
-          page_filter = Some(filter);
-        }
-      }
-      "--scroll-y" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<f32>() {
-            if parsed.is_finite() {
-              scroll_y = parsed;
-            }
-          }
-        }
-      }
-      "--scroll-x" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<f32>() {
-            if parsed.is_finite() {
-              scroll_x = parsed;
-            }
-          }
-        }
-      }
-      "--user-agent" => {
-        if let Some(val) = args.next() {
-          if !val.trim().is_empty() {
-            user_agent = val;
-          }
-        }
-      }
-      "--accept-language" => {
-        if let Some(val) = args.next() {
-          if !val.trim().is_empty() {
-            accept_language = val;
-          }
-        }
-      }
-      "--css-limit" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<usize>() {
-            css_limit = Some(parsed);
-          }
-        }
-      }
-      "--timings" => {
-        enable_timings = true;
-      }
-      _ => {
-        // Treat unknown options as errors; positional args are page filters.
-        if arg.starts_with('-') {
-          eprintln!("Unknown option: {}", arg);
-          usage();
-          std::process::exit(1);
-        } else {
-          let mut filter = page_filter.take().unwrap_or_default();
-          if let Some(normalized) = normalize_page_name(&arg) {
-            filter.insert(normalized);
-          }
-          page_filter = Some(filter);
-        }
-      }
-    }
-  }
 
-  if enable_timings {
+  let args = Args::parse();
+
+  // Build page filter from --pages and positional args
+  let page_filter: Option<HashSet<String>> = {
+    let mut all_pages: Vec<String> = args.pages.unwrap_or_default();
+    all_pages.extend(args.filter_pages.clone());
+    if all_pages.is_empty() {
+      None
+        } else {
+      Some(
+        all_pages
+          .iter()
+          .filter_map(|name| normalize_page_name(name))
+          .collect(),
+      )
+    }
+  };
+
+  if args.timings {
     std::env::set_var("FASTR_RENDER_TIMINGS", "1");
   }
 
-  if let Some(reduce) = prefers_reduced_transparency {
+  if let Some(reduce) = args.prefers_reduced_transparency {
     std::env::set_var(
       "FASTR_PREFERS_REDUCED_TRANSPARENCY",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(reduce) = prefers_reduced_motion {
+  if let Some(reduce) = args.prefers_reduced_motion {
     std::env::set_var(
       "FASTR_PREFERS_REDUCED_MOTION",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(reduce) = prefers_reduced_data {
+  if let Some(reduce) = args.prefers_reduced_data {
     std::env::set_var(
       "FASTR_PREFERS_REDUCED_DATA",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(contrast) = prefers_contrast {
+  if let Some(ref contrast) = args.prefers_contrast {
     std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
   }
 
-  if let Some(color_scheme) = prefers_color_scheme {
+  if let Some(ref color_scheme) = args.prefers_color_scheme {
     std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
   }
 
@@ -362,7 +246,7 @@ fn main() {
       .filter_map(|e| e.ok())
       .filter(|e| e.path().extension().map(|x| x == "html").unwrap_or(false))
       .filter(|e| {
-        if let Some(filter) = &page_filter {
+        if let Some(ref filter) = page_filter {
           if let Some(stem_os) = e.path().file_stem() {
             if let Some(stem) = stem_os.to_str() {
               return filter.contains(stem);
@@ -389,14 +273,16 @@ fn main() {
   // Create shared caching fetcher
   let fetcher = Arc::new(CachingFetcher::new(
     HttpFetcher::new()
-      .with_user_agent(user_agent.clone())
-      .with_accept_language(accept_language.clone()),
+      .with_user_agent(args.user_agent.clone())
+      .with_accept_language(args.accept_language.clone()),
     ASSET_DIR,
   ));
 
-  println!("Rendering {} pages ({} parallel)...", entries.len(), jobs);
-  println!("User-Agent: {}", normalize_user_agent_for_log(&user_agent));
-  println!("Accept-Language: {}", accept_language);
+  let (viewport_w, viewport_h) = args.viewport;
+
+  println!("Rendering {} pages ({} parallel)...", entries.len(), args.jobs);
+  println!("User-Agent: {}", normalize_user_agent_for_log(&args.user_agent));
+  println!("Accept-Language: {}", args.accept_language);
   println!();
 
   let start = Instant::now();
@@ -404,22 +290,27 @@ fn main() {
 
   // Use a thread pool with limited concurrency
   let pool = rayon::ThreadPoolBuilder::new()
-    .num_threads(jobs)
+    .num_threads(args.jobs)
     .build()
     .expect("create thread pool");
+
+  let timeout_secs = args.timeout;
+  let device_pixel_ratio = args.dpr;
+  let scroll_x = args.scroll_x;
+  let scroll_y = args.scroll_y;
+  let css_limit = args.css_limit;
 
   pool.scope(|s| {
     for entry in &entries {
       let results = &results;
       let path = entry.path();
       let fetcher = Arc::clone(&fetcher);
-      let user_agent = user_agent.clone();
+      let user_agent = args.user_agent.clone();
 
       s.spawn(move |_| {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let output_path = PathBuf::from(RENDER_DIR).join(format!("{}.png", name));
         let log_path = PathBuf::from(RENDER_DIR).join(format!("{}.log", name));
-        let (viewport_w, viewport_h) = viewport.unwrap_or((1200, 800));
 
         let page_start = Instant::now();
         let mut log = String::new();

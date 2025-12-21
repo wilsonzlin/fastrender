@@ -1,3 +1,4 @@
+use clap::Parser;
 use fastrender::api::FastRender;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
@@ -37,94 +38,105 @@ use std::fs;
 use std::time::Duration;
 use url::Url;
 
-fn usage() {
-  eprintln!(
-        "Usage: inspect_frag [--viewport WxH] [--dpr RATIO] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--timeout SECONDS] <file.html | file://url>"
-    );
-  eprintln!("  --viewport WxH   Set viewport size (default 1200x800)");
-  eprintln!("  --dpr RATIO      Device pixel ratio for media queries/srcset (default 1.0)");
-  eprintln!("  --scroll-x PX    Horizontal scroll offset in CSS px (default 0)");
-  eprintln!("  --scroll-y PX    Vertical scroll offset in CSS px (default 0)");
-  eprintln!("  --prefers-reduced-transparency reduce|no-preference|true|false (overrides env)");
-  eprintln!("  --prefers-reduced-motion       reduce|no-preference|true|false (overrides env)");
-  eprintln!("  --prefers-reduced-data        reduce|no-preference|true|false (overrides env)");
-  eprintln!("  --prefers-contrast             more|high|less|low|custom|forced|no-preference (overrides env)");
-  eprintln!("  --prefers-color-scheme         light|dark|no-preference (overrides env)");
-  eprintln!(
-    "  --user-agent                   Override the User-Agent header (default: Chrome-like)"
-  );
-  eprintln!(
-    "  --accept-language              Override Accept-Language header (default: en-US,en;q=0.9)"
-  );
-  eprintln!(
-    "  --timeout SECONDS              Abort after this many seconds (no timeout by default)"
-  );
+/// Inspect fragment tree for a given HTML file
+#[derive(Parser, Debug)]
+#[command(name = "inspect_frag", version, about)]
+struct Args {
+  /// HTML file or file:// URL to inspect
+  file: String,
+
+  /// Viewport size as WxH (e.g., 1200x800)
+  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
+  viewport: (u32, u32),
+
+  /// Device pixel ratio for media queries/srcset
+  #[arg(long, default_value = "1.0")]
+  dpr: f32,
+
+  /// Horizontal scroll offset in CSS px
+  #[arg(long, default_value = "0.0")]
+  scroll_x: f32,
+
+  /// Vertical scroll offset in CSS px
+  #[arg(long, default_value = "0.0")]
+  scroll_y: f32,
+
+  /// Reduced transparency preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_transparency: Option<bool>,
+
+  /// Reduced motion preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_motion: Option<bool>,
+
+  /// Reduced data preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_data: Option<bool>,
+
+  /// Contrast preference (more|high|less|low|custom|forced|no-preference)
+  #[arg(long, value_parser = parse_contrast)]
+  prefers_contrast: Option<String>,
+
+  /// Color scheme preference (light|dark|no-preference)
+  #[arg(long, value_parser = parse_color_scheme)]
+  prefers_color_scheme: Option<String>,
+
+  /// Override the User-Agent header
+  #[arg(long, default_value = DEFAULT_USER_AGENT)]
+  user_agent: String,
+
+  /// Override the Accept-Language header
+  #[arg(long, default_value = DEFAULT_ACCEPT_LANGUAGE)]
+  accept_language: String,
+
+  /// Abort after this many seconds
+  #[arg(long)]
+  timeout: Option<u64>,
 }
 
-fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
+fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
+  let parts: Vec<&str> = s.split('x').collect();
+  if parts.len() != 2 {
+    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
+  }
+  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
+  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
+  if w == 0 || h == 0 {
+    return Err("width and height must be > 0".to_string());
+  }
+  Ok((w, h))
+}
+
+fn parse_bool_preference(s: &str) -> Result<bool, String> {
+  let v = s.trim().to_ascii_lowercase();
   if matches!(
     v.as_str(),
     "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
   ) {
-    return Some(true);
+    return Ok(true);
   }
   if matches!(
     v.as_str(),
     "0" | "false" | "no" | "off" | "none" | "no-preference"
   ) {
-    return Some(false);
+    return Ok(false);
   }
-  None
+  Err(format!("invalid value: {s}"))
 }
 
-fn parse_prefers_reduced_motion(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Some(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Some(false);
-  }
-  None
-}
-
-fn parse_prefers_reduced_data(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Some(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Some(false);
-  }
-  None
-}
-
-fn parse_prefers_contrast(val: &str) -> Option<String> {
-  let v = val.trim().to_ascii_lowercase();
+fn parse_contrast(s: &str) -> Result<String, String> {
+  let v = s.trim().to_ascii_lowercase();
   match v.as_str() {
-    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Some(v),
-    _ => None,
+    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
+    _ => Err(format!("invalid contrast value: {s}")),
   }
 }
 
-fn parse_prefers_color_scheme(val: &str) -> Option<String> {
-  let v = val.trim().to_ascii_lowercase();
+fn parse_color_scheme(s: &str) -> Result<String, String> {
+  let v = s.trim().to_ascii_lowercase();
   match v.as_str() {
-    "light" | "dark" | "no-preference" => Some(v),
-    _ => None,
+    "light" | "dark" | "no-preference" => Ok(v),
+    _ => Err(format!("invalid color scheme: {s}")),
   }
 }
 
@@ -145,132 +157,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     default_hook(info);
   }));
 
-  let mut args = env::args().skip(1);
-  let mut viewport_size = (1200u32, 800u32);
-  let mut device_pixel_ratio = 1.0f32;
-  let mut scroll_x = 0.0f32;
-  let mut scroll_y = 0.0f32;
-  let mut prefers_reduced_transparency: Option<bool> = None;
-  let mut prefers_reduced_motion: Option<bool> = None;
-  let mut prefers_reduced_data: Option<bool> = None;
-  let mut prefers_contrast: Option<String> = None;
-  let mut prefers_color_scheme: Option<String> = None;
-  let mut user_agent = DEFAULT_USER_AGENT.to_string();
-  let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
-  let mut raw_path: Option<String> = None;
-  let mut timeout_secs: Option<u64> = None;
-  while let Some(arg) = args.next() {
-    match arg.as_str() {
-      "--help" | "-h" => {
-        usage();
-        return Ok(());
-      }
-      "--viewport" => {
-        if let Some(val) = args.next() {
-          let mut parts = val.split('x');
-          if let (Some(w), Some(h)) = (parts.next(), parts.next()) {
-            if let (Ok(w), Ok(h)) = (w.parse::<u32>(), h.parse::<u32>()) {
-              viewport_size = (w, h);
-            }
-          }
-        }
-      }
-      "--dpr" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<f32>() {
-            if parsed.is_finite() && parsed > 0.0 {
-              device_pixel_ratio = parsed;
-            }
-          }
-        }
-      }
-      "--prefers-reduced-transparency" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
-        }
-      }
-      "--prefers-reduced-motion" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_motion = parse_prefers_reduced_motion(&val);
-        }
-      }
-      "--prefers-reduced-data" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_data = parse_prefers_reduced_data(&val);
-        }
-      }
-      "--prefers-contrast" => {
-        if let Some(val) = args.next() {
-          prefers_contrast = parse_prefers_contrast(&val);
-        }
-      }
-      "--prefers-color-scheme" => {
-        if let Some(val) = args.next() {
-          prefers_color_scheme = parse_prefers_color_scheme(&val);
-        }
-      }
-      "--user-agent" => {
-        if let Some(val) = args.next() {
-          if !val.trim().is_empty() {
-            user_agent = val;
-          }
-        }
-      }
-      "--accept-language" => {
-        if let Some(val) = args.next() {
-          if !val.trim().is_empty() {
-            accept_language = val;
-          }
-        }
-      }
-      "--timeout" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<u64>() {
-            if parsed > 0 {
-              timeout_secs = Some(parsed);
-            }
-          }
-        }
-      }
-      "--scroll-x" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<f32>() {
-            if parsed.is_finite() {
-              scroll_x = parsed;
-            }
-          }
-        }
-      }
-      "--scroll-y" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<f32>() {
-            if parsed.is_finite() {
-              scroll_y = parsed;
-            }
-          }
-        }
-      }
-      _ => {
-        if raw_path.is_none() {
-          raw_path = Some(arg);
-        } else {
-          eprintln!("Unexpected extra argument: {arg}");
-          usage();
-          std::process::exit(1);
-        }
-      }
-    }
-  }
+  let args = Args::parse();
 
-  let raw_path = match raw_path {
-    Some(path) => path,
-    None => {
-      usage();
-      std::process::exit(1);
-    }
-  };
+  let (viewport_w, viewport_h) = args.viewport;
 
-  if let Some(sec) = timeout_secs {
+  if let Some(sec) = args.timeout {
     std::thread::spawn(move || {
       std::thread::sleep(Duration::from_secs(sec));
       eprintln!("inspect_frag: timed out after {}s", sec);
@@ -278,7 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
   }
 
-  let (path, input_url) = if let Ok(url) = Url::parse(&raw_path) {
+  let (path, input_url) = if let Ok(url) = Url::parse(&args.file) {
     if url.scheme() == "file" {
       let path_buf = url.to_file_path().map_err(|_| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file:// path")
@@ -287,60 +178,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       (canonical, url.to_string())
     } else {
       // Treat non-file URLs as paths; callers should pass a plain file path for cached HTML.
-      let fallback = raw_path.clone();
+      let fallback = args.file.clone();
       let input = Url::from_file_path(&fallback)
         .map(|u| u.to_string())
         .unwrap_or_else(|_| format!("file://{fallback}"));
       (fallback, input)
     }
   } else {
-    let input = Url::from_file_path(&raw_path)
+    let input = Url::from_file_path(&args.file)
       .map(|u| u.to_string())
-      .unwrap_or_else(|_| format!("file://{raw_path}"));
-    (raw_path, input)
+      .unwrap_or_else(|_| format!("file://{}", args.file));
+    (args.file.clone(), input)
   };
 
   let mut html = fs::read_to_string(&path)?;
   let resource_base = infer_base_url(&html, &input_url).into_owned();
 
-  if let Some(reduce) = prefers_reduced_transparency {
+  if let Some(reduce) = args.prefers_reduced_transparency {
     env::set_var(
       "FASTR_PREFERS_REDUCED_TRANSPARENCY",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(reduce) = prefers_reduced_motion {
+  if let Some(reduce) = args.prefers_reduced_motion {
     env::set_var(
       "FASTR_PREFERS_REDUCED_MOTION",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(reduce) = prefers_reduced_data {
+  if let Some(reduce) = args.prefers_reduced_data {
     env::set_var(
       "FASTR_PREFERS_REDUCED_DATA",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(contrast) = prefers_contrast {
+  if let Some(ref contrast) = args.prefers_contrast {
     env::set_var("FASTR_PREFERS_CONTRAST", contrast);
   }
 
-  if let Some(color_scheme) = prefers_color_scheme {
+  if let Some(ref color_scheme) = args.prefers_color_scheme {
     env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
   }
 
-  if scroll_x != 0.0 || scroll_y != 0.0 {
+  if args.scroll_x != 0.0 || args.scroll_y != 0.0 {
     eprintln!(
       "Applying scroll offset: x={:.1}px y={:.1}px",
-      scroll_x, scroll_y
+      args.scroll_x, args.scroll_y
     );
   }
 
   let mut renderer = FastRender::builder()
-    .device_pixel_ratio(device_pixel_ratio)
+    .device_pixel_ratio(args.dpr)
     .build()?;
   renderer.set_base_url(resource_base.clone());
 
@@ -362,8 +253,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if !css_links.is_empty() {
       let fetcher = HttpFetcher::new()
-        .with_user_agent(user_agent.clone())
-        .with_accept_language(accept_language.clone());
+        .with_user_agent(args.user_agent.clone())
+        .with_accept_language(args.accept_language.clone());
       let mut combined_css = String::new();
       let mut seen_imports = HashSet::new();
       for link in css_links {
@@ -396,8 +287,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let dom = dom::parse_html(&html)?;
 
-  let media_ctx = MediaContext::screen(viewport_size.0 as f32, viewport_size.1 as f32)
-    .with_device_pixel_ratio(device_pixel_ratio)
+  let media_ctx = MediaContext::screen(viewport_w as f32, viewport_h as f32)
+    .with_device_pixel_ratio(args.dpr)
     .with_env_overrides();
   let stylesheet = extract_css(&dom)?;
   let styled = apply_styles_with_media_and_target(&dom, &stylesheet, &media_ctx, None);
@@ -577,11 +468,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("text boxes: {}", text_boxes);
 
   let engine = LayoutEngine::with_font_context(
-    LayoutConfig::for_viewport(Size::new(viewport_size.0 as f32, viewport_size.1 as f32)),
+    LayoutConfig::for_viewport(Size::new(viewport_w as f32, viewport_h as f32)),
     renderer.font_context().clone(),
   );
   let fragment_tree = engine.layout_tree(&box_tree)?;
-  let scroll_offset = Point::new(-scroll_x, -scroll_y);
+  let scroll_offset = Point::new(-args.scroll_x, -args.scroll_y);
   let mut box_debug: HashMap<usize, String> = HashMap::new();
   collect_box_debug(&box_tree.root, &mut box_debug);
   let mut box_styles: HashMap<usize, std::sync::Arc<ComputedStyle>> = HashMap::new();
@@ -709,7 +600,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
     .unwrap_or(false);
   if log_viewport {
-    let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_size.0 as f32, viewport_size.1 as f32);
+    let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_w as f32, viewport_h as f32);
     let mut in_view = 0usize;
     let mut text_in_view = 0usize;
     let mut samples: Vec<(f32, String)> = Vec::new();
@@ -905,7 +796,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   // Also list contexts intersecting the viewport to locate visible layers.
   println!("viewport-intersecting stacking contexts:");
-  let viewport = Rect::from_xywh(0.0, 0.0, viewport_size.0 as f32, viewport_size.1 as f32);
+  let viewport = Rect::from_xywh(0.0, 0.0, viewport_w as f32, viewport_h as f32);
   for ctx in stacks.iter().filter(|c| c.rect.intersects(viewport)) {
     let bg = ctx.style.background_color;
     println!(
@@ -948,7 +839,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
   // Backgrounds that intersect the viewport
-  let viewport = Rect::from_xywh(0.0, 0.0, viewport_size.0 as f32, viewport_size.1 as f32);
+  let viewport = Rect::from_xywh(0.0, 0.0, viewport_w as f32, viewport_h as f32);
   let mut view_bgs: Vec<_> = fragments_abs
     .iter()
     .filter_map(|(abs, frag)| {

@@ -1,35 +1,14 @@
 //! Fetch a single page and render it to an image.
 //!
-//! Usage: fetch_and_render [--timeout SECONDS] [--viewport WxH] [--scroll-x PX] [--scroll-y PX] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]
-//!
 //! Examples:
-//!   fetch_and_render --timeout 120 --viewport 1200x800 --dpr 2.0 https://www.example.com output.png 1200 800 0 0
-//!
-//! Options:
-//!   --timeout SECONDS   Per-page timeout (default: 0 = no timeout)
-//!   --viewport WxH      Override the viewport size (e.g., 1366x768; default 1200x800)
-//!   --scroll-x PX       Horizontal scroll offset in CSS px (default: 0)
-//!   --scroll-y PX       Vertical scroll offset in CSS px (default: 0)
-//!   --dpr FLOAT         Device pixel ratio for media queries/srcset (default: 1.0)
-//!   --prefers-reduced-transparency reduce|no-preference|true|false
-//!                        User media preference for reduced transparency (overrides env)
-//!   --prefers-reduced-motion reduce|no-preference|true|false
-//!                        User media preference for reduced motion (overrides env)
-//!   --prefers-reduced-data reduce|no-preference|true|false
-//!                        User media preference for reduced data (overrides env)
-//!   --prefers-contrast   more|high|less|low|custom|forced|no-preference (overrides env)
-//!   --prefers-color-scheme light|dark|no-preference (overrides env)
-//!   --full-page         Expand the render target to the full content size (respects FASTR_FULL_PAGE env)
-//!   --user-agent UA     Override the User-Agent header (default: Chrome-like)
-//!   --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)
-//!   --css-limit         Maximum number of external stylesheets to fetch (default: unlimited)
-//!   --timings           Enable FASTR_RENDER_TIMINGS for per-stage logs
+//!   fetch_and_render --timeout 120 --viewport 1200x800 --dpr 2.0 https://www.example.com output.png
 
 #![allow(clippy::io_other_error)]
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::len_zero)]
 #![allow(clippy::items_after_test_module)]
 
+use clap::Parser;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
 use fastrender::css::loader::extract_css_links;
@@ -51,7 +30,6 @@ use fastrender::Error;
 use fastrender::FastRender;
 use fastrender::Result;
 use std::collections::HashSet;
-use std::env;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
@@ -60,6 +38,143 @@ use std::time::Duration;
 use url::Url;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
+
+/// Fetch a single page and render it to an image
+#[derive(Parser, Debug)]
+#[command(name = "fetch_and_render", version, about)]
+struct Args {
+  /// URL to fetch and render
+  url: String,
+
+  /// Output file path (defaults to <url>.png)
+  output: Option<String>,
+
+  /// Viewport width (deprecated, use --viewport)
+  #[arg(hide = true)]
+  width: Option<u32>,
+
+  /// Viewport height (deprecated, use --viewport)
+  #[arg(hide = true)]
+  height: Option<u32>,
+
+  /// Scroll X offset (deprecated, use --scroll-x)
+  #[arg(hide = true)]
+  scroll_x_pos: Option<u32>,
+
+  /// Scroll Y offset (deprecated, use --scroll-y)
+  #[arg(hide = true)]
+  scroll_y_pos: Option<u32>,
+
+  /// Per-page timeout in seconds (0 = no timeout)
+  #[arg(long, default_value = "0")]
+  timeout: u64,
+
+  /// Viewport size as WxH (e.g., 1200x800)
+  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
+  viewport: (u32, u32),
+
+  /// Horizontal scroll offset in CSS px
+  #[arg(long, default_value = "0")]
+  scroll_x: u32,
+
+  /// Vertical scroll offset in CSS px
+  #[arg(long, default_value = "0")]
+  scroll_y: u32,
+
+  /// Device pixel ratio for media queries/srcset
+  #[arg(long, default_value = "1.0")]
+  dpr: f32,
+
+  /// Reduced transparency preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_transparency: Option<bool>,
+
+  /// Reduced motion preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_motion: Option<bool>,
+
+  /// Reduced data preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_data: Option<bool>,
+
+  /// Contrast preference (more|high|less|low|custom|forced|no-preference)
+  #[arg(long, value_parser = parse_contrast)]
+  prefers_contrast: Option<String>,
+
+  /// Color scheme preference (light|dark|no-preference)
+  #[arg(long, value_parser = parse_color_scheme)]
+  prefers_color_scheme: Option<String>,
+
+  /// Expand render target to full content size
+  #[arg(long)]
+  full_page: bool,
+
+  /// Override the User-Agent header
+  #[arg(long, default_value = DEFAULT_USER_AGENT)]
+  user_agent: String,
+
+  /// Override the Accept-Language header
+  #[arg(long, default_value = DEFAULT_ACCEPT_LANGUAGE)]
+  accept_language: String,
+
+  /// Maximum number of external stylesheets to fetch
+  #[arg(long)]
+  css_limit: Option<usize>,
+
+  /// Enable per-stage timing logs
+  #[arg(long)]
+  timings: bool,
+}
+
+fn parse_viewport(s: &str) -> std::result::Result<(u32, u32), String> {
+  let parts: Vec<&str> = s.split('x').collect();
+  if parts.len() != 2 {
+    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
+  }
+  let w = parts[0]
+    .parse::<u32>()
+    .map_err(|_| "invalid width")?;
+  let h = parts[1]
+    .parse::<u32>()
+    .map_err(|_| "invalid height")?;
+  if w == 0 || h == 0 {
+    return Err("width and height must be > 0".to_string());
+  }
+  Ok((w, h))
+}
+
+fn parse_bool_preference(s: &str) -> std::result::Result<bool, String> {
+  let v = s.trim().to_ascii_lowercase();
+  if matches!(
+    v.as_str(),
+    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+  ) {
+    return Ok(true);
+  }
+  if matches!(
+    v.as_str(),
+    "0" | "false" | "no" | "off" | "none" | "no-preference"
+  ) {
+    return Ok(false);
+  }
+  Err(format!("invalid value: {s}"))
+}
+
+fn parse_contrast(s: &str) -> std::result::Result<String, String> {
+  let v = s.trim().to_ascii_lowercase();
+  match v.as_str() {
+    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
+    _ => Err(format!("invalid contrast value: {s}")),
+  }
+}
+
+fn parse_color_scheme(s: &str) -> std::result::Result<String, String> {
+  let v = s.trim().to_ascii_lowercase();
+  match v.as_str() {
+    "light" | "dark" | "no-preference" => Ok(v),
+    _ => Err(format!("invalid color scheme: {s}")),
+  }
+}
 
 fn fetch_bytes(
   url: &str,
@@ -341,14 +456,11 @@ mod tests {
 
   #[test]
   fn parse_prefers_reduced_transparency_values() {
-    assert_eq!(parse_prefers_reduced_transparency("reduce"), Some(true));
-    assert_eq!(
-      parse_prefers_reduced_transparency("no-preference"),
-      Some(false)
-    );
-    assert_eq!(parse_prefers_reduced_transparency("yes"), Some(true));
-    assert_eq!(parse_prefers_reduced_transparency("off"), Some(false));
-    assert_eq!(parse_prefers_reduced_transparency("maybe"), None);
+    assert_eq!(parse_bool_preference("reduce"), Ok(true));
+    assert_eq!(parse_bool_preference("no-preference"), Ok(false));
+    assert_eq!(parse_bool_preference("yes"), Ok(true));
+    assert_eq!(parse_bool_preference("off"), Ok(false));
+    assert!(parse_bool_preference("maybe").is_err());
   }
 
   #[test]
@@ -828,158 +940,49 @@ mod tests {
 
   #[test]
   fn parse_prefers_reduced_data_values() {
-    assert_eq!(parse_prefers_reduced_data("reduce"), Some(true));
-    assert_eq!(parse_prefers_reduced_data("no-preference"), Some(false));
-    assert_eq!(parse_prefers_reduced_data("yes"), Some(true));
-    assert_eq!(parse_prefers_reduced_data("off"), Some(false));
-    assert_eq!(parse_prefers_reduced_data("maybe"), None);
+    assert_eq!(parse_bool_preference("reduce"), Ok(true));
+    assert_eq!(parse_bool_preference("no-preference"), Ok(false));
+    assert_eq!(parse_bool_preference("yes"), Ok(true));
+    assert_eq!(parse_bool_preference("off"), Ok(false));
+    assert!(parse_bool_preference("maybe").is_err());
   }
 
   #[test]
   fn parse_prefers_reduced_motion_values() {
-    assert_eq!(parse_prefers_reduced_motion("reduce"), Some(true));
-    assert_eq!(parse_prefers_reduced_motion("no-preference"), Some(false));
-    assert_eq!(parse_prefers_reduced_motion("yes"), Some(true));
-    assert_eq!(parse_prefers_reduced_motion("off"), Some(false));
-    assert_eq!(parse_prefers_reduced_motion("maybe"), None);
+    assert_eq!(parse_bool_preference("reduce"), Ok(true));
+    assert_eq!(parse_bool_preference("no-preference"), Ok(false));
+    assert_eq!(parse_bool_preference("yes"), Ok(true));
+    assert_eq!(parse_bool_preference("off"), Ok(false));
+    assert!(parse_bool_preference("maybe").is_err());
   }
 
   #[test]
   fn parse_prefers_contrast_values() {
-    assert_eq!(parse_prefers_contrast("more"), Some("more".to_string()));
-    assert_eq!(parse_prefers_contrast("HIGH"), Some("high".to_string()));
-    assert_eq!(parse_prefers_contrast("forced"), Some("forced".to_string()));
-    assert_eq!(parse_prefers_contrast("maybe"), None);
+    assert_eq!(parse_contrast("more"), Ok("more".to_string()));
+    assert_eq!(parse_contrast("HIGH"), Ok("high".to_string()));
+    assert_eq!(parse_contrast("forced"), Ok("forced".to_string()));
+    assert!(parse_contrast("maybe").is_err());
   }
 
   #[test]
   fn parse_prefers_color_scheme_values() {
-    assert_eq!(parse_prefers_color_scheme("dark"), Some("dark".to_string()));
+    assert_eq!(parse_color_scheme("dark"), Ok("dark".to_string()));
+    assert_eq!(parse_color_scheme("LIGHT"), Ok("light".to_string()));
     assert_eq!(
-      parse_prefers_color_scheme("LIGHT"),
-      Some("light".to_string())
+      parse_color_scheme("no-preference"),
+      Ok("no-preference".to_string())
     );
-    assert_eq!(
-      parse_prefers_color_scheme("no-preference"),
-      Some("no-preference".to_string())
-    );
-    assert_eq!(parse_prefers_color_scheme("pink"), None);
+    assert!(parse_color_scheme("pink").is_err());
   }
 
   #[test]
   fn parse_viewport_values() {
-    assert_eq!(parse_viewport("1200x800"), Some((1200, 800)));
-    assert_eq!(parse_viewport("800x600"), Some((800, 600)));
-    assert_eq!(parse_viewport("0x600"), None);
-    assert_eq!(parse_viewport("800"), None);
-    assert_eq!(parse_viewport("800x"), None);
+    assert_eq!(parse_viewport("1200x800"), Ok((1200, 800)));
+    assert_eq!(parse_viewport("800x600"), Ok((800, 600)));
+    assert!(parse_viewport("0x600").is_err());
+    assert!(parse_viewport("800").is_err());
+    assert!(parse_viewport("800x").is_err());
   }
-}
-
-fn usage(program: &str) {
-  eprintln!(
-        "Usage: {program} [--timeout SECONDS] [--viewport WxH] [--scroll-x PX] [--scroll-y PX] [--dpr FLOAT] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--full-page] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings] <url> [output.png] [width] [height] [scroll_x] [scroll_y]"
-    );
-  eprintln!("Example: {program} --timeout 120 --viewport 1366x768 --dpr 2.0 https://www.example.com output.png 1200 800 0 0");
-  eprintln!("  --viewport WxH      Override viewport size (default: 1200x800)");
-  eprintln!("  --scroll-x PX       Horizontal scroll offset in CSS px (default: 0)");
-  eprintln!("  --scroll-y PX       Vertical scroll offset in CSS px (default: 0)");
-  eprintln!("  width: viewport width (default: 1200)");
-  eprintln!("  height: viewport height (default: 800)");
-  eprintln!("  dpr: device pixel ratio for media queries/srcset (default: 1.0)");
-  eprintln!("  prefers-reduced-transparency: reduce|no-preference|true|false (overrides env)");
-  eprintln!("  prefers-reduced-motion: reduce|no-preference|true|false (overrides env)");
-  eprintln!("  prefers-reduced-data: reduce|no-preference|true|false (overrides env)");
-  eprintln!("  prefers-contrast: more|high|less|low|custom|forced|no-preference (overrides env)");
-  eprintln!("  prefers-color-scheme: light|dark|no-preference (overrides env)");
-  eprintln!("  full-page: expand render target to full content size (or set FASTR_FULL_PAGE)");
-  eprintln!("  user-agent: override the User-Agent header (default: Chrome-like)");
-  eprintln!("  accept-language: override Accept-Language header (default: en-US,en;q=0.9)");
-  eprintln!("  css-limit: maximum number of external stylesheets to fetch (default: unlimited)");
-  eprintln!("  timings: set FASTR_RENDER_TIMINGS to print per-stage timings");
-  eprintln!(
-    "  output: defaults to <url>.png (derived from the URL); parent directories are created"
-  );
-}
-
-fn parse_prefers_reduced_transparency(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Some(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Some(false);
-  }
-  None
-}
-
-fn parse_prefers_reduced_data(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Some(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Some(false);
-  }
-  None
-}
-
-fn parse_prefers_reduced_motion(val: &str) -> Option<bool> {
-  let v = val.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer" | "reduce-motion"
-  ) {
-    return Some(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Some(false);
-  }
-  None
-}
-
-fn parse_prefers_contrast(val: &str) -> Option<String> {
-  let v = val.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Some(v),
-    _ => None,
-  }
-}
-
-fn parse_prefers_color_scheme(val: &str) -> Option<String> {
-  let v = val.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "light" | "dark" | "no-preference" => Some(v),
-    _ => None,
-  }
-}
-
-fn parse_viewport(val: &str) -> Option<(u32, u32)> {
-  let parts: Vec<&str> = val.split('x').collect();
-  if parts.len() != 2 {
-    return None;
-  }
-  let w = parts.first()?.parse::<u32>().ok()?;
-  let h = parts.get(1)?.parse::<u32>().ok()?;
-  if w == 0 || h == 0 {
-    return None;
-  }
-  Some((w, h))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1132,157 +1135,18 @@ fn render_once(
 }
 
 fn main() -> Result<()> {
-  let program = env::args()
-    .next()
-    .unwrap_or_else(|| "fetch_and_render".to_string());
-  let mut args = env::args().skip(1);
-  let mut timeout_secs: Option<u64> = None;
-  let mut dpr: f32 = 1.0;
-  let mut prefers_reduced_transparency: Option<bool> = None;
-  let mut prefers_reduced_motion: Option<bool> = None;
-  let mut prefers_reduced_data: Option<bool> = None;
-  let mut prefers_contrast: Option<String> = None;
-  let mut prefers_color_scheme: Option<String> = None;
-  let mut positional: Vec<String> = Vec::new();
-  let mut viewport: Option<(u32, u32)> = None;
-  let mut scroll_override: Option<(u32, u32)> = None;
-  let mut css_limit: Option<usize> = None;
-  let mut full_page = false;
-  let mut user_agent = DEFAULT_USER_AGENT.to_string();
-  let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
-  let mut enable_timings = false;
-  while let Some(arg) = args.next() {
-    match arg.as_str() {
-      "--help" | "-h" => {
-        usage(&program);
-        return Ok(());
-      }
-      "--timeout" => {
-        if let Some(val) = args.next() {
-          match val.parse::<u64>() {
-            Ok(0) => timeout_secs = None,
-            Ok(secs) => timeout_secs = Some(secs),
-            Err(_) => {}
-          }
-        }
-      }
-      "--dpr" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse::<f32>() {
-            if parsed.is_finite() && parsed > 0.0 {
-              dpr = parsed;
-            }
-          }
-        }
-      }
-      "--prefers-reduced-transparency" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_transparency = parse_prefers_reduced_transparency(&val);
-        }
-      }
-      "--prefers-reduced-motion" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_motion = parse_prefers_reduced_motion(&val);
-        }
-      }
-      "--prefers-reduced-data" => {
-        if let Some(val) = args.next() {
-          prefers_reduced_data = parse_prefers_reduced_data(&val);
-        }
-      }
-      "--prefers-contrast" => {
-        if let Some(val) = args.next() {
-          prefers_contrast = parse_prefers_contrast(&val);
-        }
-      }
-      "--prefers-color-scheme" => {
-        if let Some(val) = args.next() {
-          prefers_color_scheme = parse_prefers_color_scheme(&val);
-        }
-      }
-      "--viewport" => {
-        if let Some(val) = args.next() {
-          viewport = parse_viewport(&val).or(viewport);
-        }
-      }
-      "--scroll-x" => {
-        if let Some(val) = args.next() {
-          if let Ok(px) = val.parse::<u32>() {
-            scroll_override = Some((px, scroll_override.map(|(_, y)| y).unwrap_or(0)));
-          }
-        }
-      }
-      "--scroll-y" => {
-        if let Some(val) = args.next() {
-          if let Ok(py) = val.parse::<u32>() {
-            scroll_override = Some((scroll_override.map(|(x, _)| x).unwrap_or(0), py));
-          }
-        }
-      }
-      "--full-page" => {
-        full_page = true;
-      }
-      "--user-agent" => {
-        if let Some(val) = args.next() {
-          if !val.trim().is_empty() {
-            user_agent = val;
-          }
-        }
-      }
-      "--accept-language" => {
-        if let Some(val) = args.next() {
-          if !val.trim().is_empty() {
-            accept_language = val;
-          }
-        }
-      }
-      "--css-limit" => {
-        if let Some(val) = args.next() {
-          if let Ok(limit) = val.parse::<usize>() {
-            css_limit = Some(limit);
-          }
-        }
-      }
-      "--timings" => {
-        enable_timings = true;
-      }
-      _ => {
-        if arg.starts_with('-') {
-          eprintln!("Unknown option: {}", arg);
-          usage(&program);
-          std::process::exit(1);
-        }
-        positional.push(arg)
-      }
-    }
-  }
+  let args = Args::parse();
 
-  if positional.is_empty() {
-    usage(&program);
-    std::process::exit(1);
-  }
+  // Resolve dimensions from viewport or deprecated positional args
+  let (width, height) = args.viewport;
+  let width = args.width.unwrap_or(width);
+  let height = args.height.unwrap_or(height);
+  let scroll_x = args.scroll_x_pos.unwrap_or(args.scroll_x);
+  let scroll_y = args.scroll_y_pos.unwrap_or(args.scroll_y);
 
-  let url = positional.first().cloned().unwrap();
-  let output = positional
-    .get(1)
-    .cloned()
-    .unwrap_or_else(|| format!("{}.png", url_to_filename(&url)));
-  let width = viewport
-    .map(|(w, _)| w)
-    .or_else(|| positional.get(2).and_then(|v| v.parse::<u32>().ok()))
-    .unwrap_or(1200);
-  let height = viewport
-    .map(|(_, h)| h)
-    .or_else(|| positional.get(3).and_then(|v| v.parse::<u32>().ok()))
-    .unwrap_or(800);
-  let scroll_x = scroll_override
-    .map(|(x, _)| x)
-    .or_else(|| positional.get(4).and_then(|v| v.parse::<u32>().ok()))
-    .unwrap_or(0);
-  let scroll_y = scroll_override
-    .map(|(_, y)| y)
-    .or_else(|| positional.get(5).and_then(|v| v.parse::<u32>().ok()))
-    .unwrap_or(0);
+  let output = args
+    .output
+    .unwrap_or_else(|| format!("{}.png", url_to_filename(&args.url)));
 
   let output_path = std::path::Path::new(&output);
   if let Some(parent) = output_path.parent() {
@@ -1291,59 +1155,70 @@ fn main() -> Result<()> {
     }
   }
 
-  if let Some(reduce) = prefers_reduced_transparency {
+  let timeout_secs = if args.timeout == 0 {
+    None
+  } else {
+    Some(args.timeout)
+  };
+
+  // Set environment variables for media preferences
+  if let Some(reduce) = args.prefers_reduced_transparency {
     std::env::set_var(
       "FASTR_PREFERS_REDUCED_TRANSPARENCY",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(reduce) = prefers_reduced_motion {
+  if let Some(reduce) = args.prefers_reduced_motion {
     std::env::set_var(
       "FASTR_PREFERS_REDUCED_MOTION",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(reduce) = prefers_reduced_data {
+  if let Some(reduce) = args.prefers_reduced_data {
     std::env::set_var(
       "FASTR_PREFERS_REDUCED_DATA",
       if reduce { "reduce" } else { "no-preference" },
     );
   }
 
-  if let Some(contrast) = prefers_contrast {
+  if let Some(contrast) = args.prefers_contrast {
     std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
   }
 
-  if let Some(color_scheme) = prefers_color_scheme {
+  if let Some(color_scheme) = args.prefers_color_scheme {
     std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
   }
 
-  if full_page {
+  if args.full_page {
     std::env::set_var("FASTR_FULL_PAGE", "1");
   }
 
-  if enable_timings {
+  if args.timings {
     std::env::set_var("FASTR_RENDER_TIMINGS", "1");
   }
 
   eprintln!(
     "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",
-    normalize_user_agent_for_log(&user_agent),
-    accept_language,
+    normalize_user_agent_for_log(&args.user_agent),
+    args.accept_language,
     width,
     height,
-    dpr,
+    args.dpr,
     scroll_x,
     scroll_y,
     output
   );
 
   let (tx, rx) = channel();
-  let url_clone = url.clone();
+  let url_clone = args.url.clone();
   let output_clone = output.clone();
-  let accept_language_clone = accept_language.clone();
+  let user_agent = args.user_agent.clone();
+  let accept_language = args.accept_language.clone();
+  let css_limit = args.css_limit;
+  let dpr = args.dpr;
+
   thread::Builder::new()
     .name("fetch_and_render-worker".to_string())
     .stack_size(STACK_SIZE)
@@ -1358,7 +1233,7 @@ fn main() -> Result<()> {
         dpr,
         timeout_secs,
         &user_agent,
-        &accept_language_clone,
+        &accept_language,
         css_limit,
       ));
     })

@@ -1,9 +1,8 @@
 //! Fetch and cache HTML pages for testing
 //!
-//! Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--timings]
-//!
 //! Fetches all target pages in parallel and caches to fetches/html/
 
+use clap::Parser;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::extract_js_location_redirect;
 use fastrender::html::meta_refresh::extract_meta_refresh_url;
@@ -26,28 +25,39 @@ use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
 
-struct Config {
-  refresh: bool,
-  jobs: usize,
-  timeout: Duration,
-  page_filter: Option<HashSet<String>>, // normalized via url_to_filename
-  user_agent: String,
-  accept_language: String,
-  timings: bool,
-}
-
 const CACHE_DIR: &str = "fetches/html";
 
-fn usage() {
-  println!("Usage: fetch_pages [--refresh] [--jobs N] [--timeout SECONDS] [--pages a,b,c] [--user-agent UA] [--accept-language LANG] [--timings]");
-  println!("\nOptions:");
-  println!("  --refresh           Re-fetch all pages even if cached");
-  println!("  --jobs N            Number of parallel fetches (default: num_cpus)");
-  println!("  --timeout SECONDS   Per-request timeout (default: 30)");
-  println!("  --pages a,b,c       Fetch only the listed pages (full URLs or stems ok; schemes are stripped, hosts lowercased, leading www./trailing slashes removed)");
-  println!("  --user-agent UA     Override the User-Agent header (default: Chrome-like)");
-  println!("  --accept-language   Override the Accept-Language header (default: en-US,en;q=0.9)");
-  println!("  --timings           Print per-page fetch durations");
+/// Fetch and cache HTML pages for testing
+#[derive(Parser, Debug)]
+#[command(name = "fetch_pages", version, about)]
+struct Args {
+  /// Re-fetch all pages even if cached
+  #[arg(long)]
+  refresh: bool,
+
+  /// Number of parallel fetches
+  #[arg(long, short, default_value_t = num_cpus::get())]
+  jobs: usize,
+
+  /// Per-request timeout in seconds
+  #[arg(long, default_value = "30")]
+  timeout: u64,
+
+  /// Fetch only listed pages (comma-separated URLs or stems)
+  #[arg(long, value_delimiter = ',')]
+  pages: Option<Vec<String>>,
+
+  /// Override the User-Agent header
+  #[arg(long, default_value = DEFAULT_USER_AGENT)]
+  user_agent: String,
+
+  /// Override the Accept-Language header
+  #[arg(long, default_value = DEFAULT_ACCEPT_LANGUAGE)]
+  accept_language: String,
+
+  /// Print per-page fetch durations
+  #[arg(long)]
+  timings: bool,
 }
 
 // Target pages for testing
@@ -205,86 +215,6 @@ const PAGES: &[&str] = &[
   "https://slashdot.org",
 ];
 
-fn parse_args() -> Config {
-  let mut refresh = false;
-  let mut jobs = num_cpus::get();
-  let mut timeout_secs: u64 = 30;
-  let mut filter: HashSet<String> = HashSet::new();
-  let mut has_filter = false;
-  let mut user_agent = DEFAULT_USER_AGENT.to_string();
-  let mut accept_language = DEFAULT_ACCEPT_LANGUAGE.to_string();
-  let mut timings = false;
-
-  let mut args = std::env::args().skip(1);
-  while let Some(arg) = args.next() {
-    match arg.as_str() {
-      "--help" | "-h" => {
-        usage();
-        std::process::exit(0);
-      }
-      "--refresh" => refresh = true,
-      "--jobs" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse() {
-            if parsed > 0 {
-              jobs = parsed;
-            }
-          }
-        }
-      }
-      "--timeout" => {
-        if let Some(val) = args.next() {
-          if let Ok(parsed) = val.parse() {
-            timeout_secs = parsed;
-          }
-        }
-      }
-      "--pages" => {
-        if let Some(val) = args.next() {
-          has_filter = true;
-          for name in val.split(',') {
-            if let Some(normalized) = normalize_page_name(name) {
-              filter.insert(normalized);
-            }
-          }
-        }
-      }
-      "--user-agent" => {
-        if let Some(val) = args.next() {
-          if !val.trim().is_empty() {
-            user_agent = val;
-          }
-        }
-      }
-      "--accept-language" => {
-        if let Some(val) = args.next() {
-          if !val.trim().is_empty() {
-            accept_language = val;
-          }
-        }
-      }
-      "--timings" => timings = true,
-      _ => {
-        if arg.starts_with('-') {
-          eprintln!("Unknown option: {}", arg);
-          usage();
-          std::process::exit(1);
-        }
-      }
-    }
-  }
-
-  Config {
-    refresh,
-    jobs,
-    timeout: Duration::from_secs(timeout_secs),
-    page_filter: if has_filter { Some(filter) } else { None },
-    user_agent,
-    accept_language,
-    timings,
-  }
-}
-
 fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
   PAGES
     .iter()
@@ -399,13 +329,21 @@ fn fetch_page(
 }
 
 fn main() {
-  let config = parse_args();
+  let args = Args::parse();
+
+  // Build page filter from --pages
+  let page_filter: Option<HashSet<String>> = args.pages.map(|pages| {
+    pages
+      .iter()
+      .filter_map(|name| normalize_page_name(name))
+      .collect()
+  });
 
   fs::create_dir_all(CACHE_DIR).expect("create cache dir");
 
-  let selected = selected_pages(config.page_filter.as_ref());
+  let selected = selected_pages(page_filter.as_ref());
   if selected.is_empty() {
-    if config.page_filter.is_some() {
+    if page_filter.is_some() {
       println!("No pages matched the provided filter");
     } else {
       println!("No pages to fetch");
@@ -413,7 +351,7 @@ fn main() {
     std::process::exit(1);
   }
 
-  if let Some(filter) = &config.page_filter {
+  if let Some(filter) = &page_filter {
     let matched: HashSet<_> = selected
       .iter()
       .flat_map(|u| {
@@ -435,15 +373,17 @@ fn main() {
     }
   }
 
+  let timeout = Duration::from_secs(args.timeout);
+
   println!(
     "Fetching {} pages ({} parallel, {}s timeout)...",
     selected.len(),
-    config.jobs,
-    config.timeout.as_secs()
+    args.jobs,
+    args.timeout
   );
-  println!("User-Agent: {}", config.user_agent);
-  println!("Accept-Language: {}", config.accept_language);
-  if config.refresh {
+  println!("User-Agent: {}", args.user_agent);
+  println!("Accept-Language: {}", args.accept_language);
+  if args.refresh {
     println!("--refresh: re-fetching all");
   }
   println!();
@@ -454,7 +394,7 @@ fn main() {
   let failed_urls: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
   let pool = ThreadPoolBuilder::new()
-    .num_threads(config.jobs)
+    .num_threads(args.jobs)
     .build()
     .expect("create thread pool");
 
@@ -464,11 +404,10 @@ fn main() {
       let failed = Arc::clone(&failed);
       let skipped = Arc::clone(&skipped);
       let failed_urls = Arc::clone(&failed_urls);
-      let refresh = config.refresh;
-      let timeout = config.timeout;
-      let user_agent = config.user_agent.clone();
-      let accept_language = config.accept_language.clone();
-      let timings = config.timings;
+      let refresh = args.refresh;
+      let user_agent = args.user_agent.clone();
+      let accept_language = args.accept_language.clone();
+      let timings = args.timings;
 
       s.spawn(move |_| {
         let filename = url_to_filename(url);

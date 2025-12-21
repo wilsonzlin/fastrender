@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
 chrono = "0.4.42"
 csscolorparser = "0.6"
 cssparser = "0.35"
