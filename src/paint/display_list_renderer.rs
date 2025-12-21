@@ -3706,7 +3706,7 @@ mod tests {
                 style,
                 color: Rgba::BLACK,
             };
-            list.push(DisplayItem::Border(BorderItem {
+            list.push(DisplayItem::Border(Box::new(BorderItem {
                 rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
                 top: side.clone(),
                 right: side.clone(),
@@ -3714,7 +3714,7 @@ mod tests {
                 left: side,
                 image: None,
                 radii: BorderRadii::ZERO,
-            }));
+            })));
             list
         };
 

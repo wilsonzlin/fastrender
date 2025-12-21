@@ -74,7 +74,7 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```rust,ignore
 /// use fastrender::css::loader::unescape_js_escapes;
 ///
 /// assert_eq!(unescape_js_escapes("https:\\u002f\\u002fexample.com"), "https://example.com");

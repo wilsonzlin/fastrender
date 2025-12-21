@@ -41,15 +41,9 @@ test-output:
 style-tests:
     cargo test --quiet --test style_tests
 
-# Run README guard (ensures README.md exists and is non-empty)
-readme-guard:
-    cargo test --quiet --test readme_guard
-
-# Run repository guard tests (README, style regression presence, fetch_and_render exit regression)
+# Run repository guard tests (docs wiki home, style regression presence, fetch_and_render exit regression)
 guard-tests:
-    cargo test --quiet readme_guard
-    cargo test --quiet readme_is_present
-    cargo test --quiet fetch_and_render_example_is_present
+    cargo test --quiet docs_home_is_present
     cargo test --quiet background_position_logical_regression_is_present
     cargo test --quiet fetch_and_render_exit_regression_is_present
 

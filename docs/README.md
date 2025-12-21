@@ -1,112 +1,29 @@
-# FastRender Documentation
+# FastRender internal docs (wiki)
 
-This directory contains all technical documentation for FastRender.
+This `docs/` directory is the canonical “wiki” for this repository. It is internal-only and should reflect **repo reality** (current code, current tools, current behavior), not historical plans or abandoned file layouts.
 
-## Directory Structure
+If a document can’t be kept accurate, delete it and replace it with something smaller and true.
 
-```
-docs/
-├── architecture/      # High-level architecture and design decisions
-├── core/              # Core types, box generation, formatting contexts
-├── layout/            # Layout algorithms (block, inline, flex, grid, table, float, positioned)
-├── text/              # Text system (fonts, shaping, line breaking)
-├── paint/             # Paint system (display list, rasterization, stacking contexts)
-├── css-features/      # CSS feature implementations (variables, media queries, etc.)
-├── testing/           # Testing strategy, WPT integration, benchmarks
-├── guides/            # Developer guides (migration, API design, code standards)
-├── research/          # Research notes on specs and other implementations
-├── tasks/             # Task-based implementation system
-│   ├── wave-1/ to wave-6/  # Task definitions by wave
-│   └── notes/              # Implementation notes from completed tasks
-└── archive/           # Historical/completed documentation
-    └── refactor/      # Completed refactoring phases
-```
+## Start here
 
-## Quick Links
+- Running the renderer: [running.md](running.md)
+- CLI tools & workflows: [cli.md](cli.md)
+- Library API: [api.md](api.md)
+- Architecture overview: [architecture.md](architecture.md)
+- Debugging renders: [debugging.md](debugging.md)
+- Profiling & perf logging: [perf_logging.md](perf_logging.md)
+- Runtime environment variables: [env-vars.md](env-vars.md)
+- Testing: [testing.md](testing.md)
+- Vendoring / dependency patches: [vendoring.md](vendoring.md)
+- CSS loading & URL resolution: [css-loading.md](css-loading.md)
 
-### Architecture & Core
-- [Architecture Decisions](architecture/decisions.md) - Key design choices
-- [Foundation Research](architecture/foundation.md) - Background research
-- [Type System](core/type-system.md) - Core types and primitives
-- [Box Generation](core/box-generation.md) - DOM to box tree conversion
-- [Formatting Contexts](core/formatting-contexts.md) - BFC, IFC, etc.
+## Research & notes
 
-### Layout
-- [Block Layout](layout/block.md) - Block formatting context
-- [Inline Layout](layout/inline.md) - Inline formatting context
-- [Flexbox](layout/flex.md) - CSS Flexbox via Taffy
-- [Grid](layout/grid.md) - CSS Grid via Taffy
-- [Table](layout/table.md) - CSS Tables
-- [Float](layout/float.md) - Float positioning
-- [Positioned](layout/positioned.md) - Absolute/relative/fixed/sticky
+- Research notes: `research/` (spec deep dives and implementation references)
+- Durable internal notes: `notes/` (small “why/how” writeups that are worth keeping)
 
-### Text
-- [Font System](text/font-system.md) - Font loading and management
-- [Text Shaping](text/shaping.md) - Unicode text shaping
-- [Line Breaking](text/line-breaking.md) - UAX #14 line breaking
+## Conventions
 
-### Paint
-- [Display List](paint/display-list.md) - Display list generation
-- [Rasterization](paint/rasterization.md) - Pixel rendering
-- [Stacking Contexts](paint/stacking-contexts.md) - Z-order and compositing
-
-### CSS Features
-- [CSS Variables](css-features/variables.md) - Custom properties
-- [Media Queries](css-features/media-queries.md) - Responsive design
-- [Pseudo-elements](css-features/pseudo-elements.md) - ::before, ::after
-- [Margin Collapse](css-features/margin-collapse.md) - Vertical margin collapsing
-- [Feature Roadmap](css-features/roadmap.md) - Planned CSS features
-
-### Testing
-- [Testing Strategy](testing/strategy.md) - Overall testing approach
-- [WPT Integration](testing/wpt.md) - Web Platform Tests
-- [Reference Tests](testing/reference-tests.md) - Visual regression tests
-- [Benchmarking](testing/benchmarking.md) - Performance benchmarks
-- Style regression harness: `cargo test --quiet --test style_tests` (or `just style-tests`)
-- Clippy pedantic helper (relaxed cognitive/type complexity): `just clippy-pedantic`
-- Guard tests (README + CLI example, style regression presence, fetch_and_render exit regression): `just guard-tests`
-- Quick guard listing (prints guard list, fast): `just guard-tests-quick`
-
-### Render output logs
-- `render_pages` / `fetch_and_render` write per-page logs to `fetches/renders/<page>.log` and a summary to `fetches/renders/_summary.log`; check these alongside the debugging flags.
-
-### Debugging renders
-- [Render/Paint Debug Flags](debugging.md) - Environment flags and usage for diagnosing blank/black renders (display list dumps, pixmap stats, oversized background logging aliases `FASTR_LOG_LARGE_BACKGROUNDS`/`FASTR_LOG_LARGE_BACKGROUND`, etc.)
-
-### CSS Loader notes
-- Link resolution (`src/css/loader.rs`) trims and ignores empty/whitespace-only hrefs, rejects `javascript:`/`mailto:`/`vbscript:` schemes, unescapes JavaScript-escaped URLs, and preserves `data:` URLs when inlining or absolutizing references.
-- Fragment-only hrefs (e.g. `#section`) are ignored when collecting CSS links/imports.
-- `file://` bases are handled for both directories (implicit trailing slash) and files (relative paths resolved against the parent directory).
-- Scheme-relative URLs (`//example.com/...`) are preserved by normalization to resolve against the base scheme.
-
-### Guides
-- [Migration Guide](guides/migration.md) - Migrating from V1
-- [API Design](guides/api-design.md) - Public API documentation
-- [Code Standards](guides/code-standards.md) - Coding conventions
-- [Reference Materials](guides/reference-materials.md) - External resources
-- [Implementation Checklist](guides/implementation-checklist.md) - Progress tracking
-
-### Research
-- [Servo Layout](research/servo-layout-architecture.md) - Servo's layout architecture
-- [Table Layout Spec](research/table-layout-spec.md) - CSS table specification
-- [Unicode Text](research/unicode-text-algorithms.md) - Unicode algorithms
-- [Stacking Context Spec](research/stacking-context-spec.md) - Stacking context rules
-
-### Task System
-- [Task System README](tasks/README.md) - How the task system works
-- [Task Graph](tasks/TASK_GRAPH.md) - Full dependency graph
-- [Task Template](tasks/TASK_TEMPLATE.md) - Template for new tasks
-
-## For Contributors
-
-1. **New to the project?** Start with [Architecture Decisions](architecture/decisions.md)
-2. **Implementing a feature?** Find the relevant topic directory
-3. **Working on a task?** See [Task System README](tasks/README.md)
-4. **Writing tests?** See [Testing Strategy](testing/strategy.md)
-
-## Document Conventions
-
-- Each document is self-contained with context and references
-- Code examples use Rust with syntax highlighting
-- CSS spec references link to official W3C specifications
-- Implementation notes reference specific source files
+- Prefer linking to actual repo paths (e.g. `src/api.rs`) over describing hypothetical files.
+- Avoid “phase/wave/task” planning docs in the wiki; keep planning outside the repo.
+- Keep docs scoped: a small accurate doc beats a large drifting one.
