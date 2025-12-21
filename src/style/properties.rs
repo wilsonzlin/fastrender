@@ -15801,7 +15801,7 @@ mod tests {
         apply_declaration(&mut style, &length_decl, &ComputedStyle::default(), 16.0, 16.0);
         match style.tab_size {
             TabSize::Length(len) => assert!((len.to_px() - 20.0).abs() < 0.001),
-            other => panic!("expected length tab size, got {:?}", other),
+            TabSize::Number(n) => panic!("expected length tab size, got Number({n})"),
         }
     }
 

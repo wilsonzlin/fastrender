@@ -24,6 +24,11 @@
 #![allow(clippy::imprecise_flops)]
 #![allow(clippy::many_single_char_names)]
 #![allow(clippy::too_many_arguments)]
+#![allow(clippy::cognitive_complexity)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::items_after_test_module)]
+#![allow(clippy::large_stack_frames)]
+#![allow(clippy::large_stack_arrays)]
 // Style preferences
 #![allow(clippy::must_use_candidate)]
 #![allow(clippy::missing_const_for_fn)]

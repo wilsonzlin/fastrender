@@ -29,8 +29,8 @@ Cache layout:
 
 ## Inspect layout/paint artifacts
 
-The `inspect_frag` example is the main “what happened?” tool:
+The `inspect_frag` binary is the main “what happened?” tool:
 
-- `cargo run --release --example inspect_frag -- file:///abs/path/to/file.html`
+- `cargo run --release --bin inspect_frag -- file:///abs/path/to/file.html`
 
 It is designed for inspecting fragments and style/layout decisions on a single input.

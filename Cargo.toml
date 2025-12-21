@@ -2,99 +2,52 @@
 name = "fastrender"
 version = "0.1.0"
 edition = "2021"
-authors = ["FastRender Contributors"]
 description = "High-performance Rust HTML/CSS to image renderer"
 rust-version = "1.70"
+publish = false
 
 [dependencies]
-# ============================================================================
-# HTML/CSS Parsing
-# ============================================================================
-
-# HTML parsing
-html5ever = "0.35"
-markup5ever_rcdom = "0.35"
-
-# CSS parsing - using Mozilla's battle-tested parsers
+base64 = "0.22"
+chrono = "0.4.42"
+csscolorparser = "0.6"
 cssparser = "0.35"
-selectors = "0.32"
-precomputed-hash = "0.1"
-
-# ============================================================================
-# Layout
-# ============================================================================
-
-# Layout engine - vendored locally to fix grid auto-placement
-taffy = { path = "vendor/taffy" }
-
-# ============================================================================
-# Text Shaping and Fonts
-# ============================================================================
-
-# Text shaping
-rustybuzz = "0.20"
-ttf-parser = "0.25"
+encoding_rs = "0.8"
 fontdb = "0.23"
-wuff = "0.2"
-
-# Unicode text processing
-unicode-linebreak = "0.1"
+html5ever = "0.35"
+hyphenation = { version = "0.8", features = ["embed_en-us"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+kamadak-exif = "0.6"
+markup5ever_rcdom = "0.35"
+memchr = "2.7"
+num_cpus = "1.17.0"
+percent-encoding = "2.3"
+precomputed-hash = "0.1"
+rayon = "1.10.0"
+resvg = "0.43"
+roxmltree = "0.20"
+rustybuzz = "0.20"
+selectors = "0.32"
+taffy = { path = "vendor/taffy" }
+thiserror = "1.0"
+tiny-skia = "0.11"
+ttf-parser = "0.25"
 unicode-bidi = "0.3"
+unicode-linebreak = "0.1"
 unicode-script = "0.5"
 unicode-segmentation = "1.11"
 unicode-vo = "0.1"
-
-# Hyphenation
-hyphenation = { version = "0.8", features = ["embed_en-us"] }
-
-# ============================================================================
-# 2D Graphics and Rendering
-# ============================================================================
-
-# 2D rendering backend
-tiny-skia = "0.11"
-
-# Image encoding/decoding
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
-kamadak-exif = "0.6"
-
-# SVG rendering
-resvg = "0.43"
-roxmltree = "0.20"
-
-# ============================================================================
-# Utilities
-# ============================================================================
-
-# CSS color parsing
-csscolorparser = "0.6"
-
-# URL handling
 url = "2.5"
 urlencoding = "2.1"
-encoding_rs = "0.8"
-percent-encoding = "2.3"
-memchr = "2.7"
-
-# Error handling
-thiserror = "1.0"
-
-# HTTP client for loading resources
 ureq = "3.1"
-
-# Base64 encoding for data URLs
-base64 = "0.22"
-rayon = "1.10.0"
-num_cpus = "1.17.0"
-chrono = "0.4.42"
-
-# ============================================================================
-# Development Dependencies
-# ============================================================================
+wuff = "0.2"
 
 [dev-dependencies]
 criterion = "0.5"
 tempfile = "3"
+
+[[bench]]
+name = "cascade_bench"
+harness = false
 
 [[bench]]
 name = "render_benchmark"
@@ -111,10 +64,6 @@ harness = false
 [[bench]]
 name = "paint_benches"
 harness = false
-
-# ============================================================================
-# Release Profile Optimization
-# ============================================================================
 
 [profile.release]
 opt-level = 3

@@ -7,7 +7,7 @@ fn display(node: &StyledNode) -> String {
     node.styles.display.to_string()
 }
 
-fn first_div<'a>(node: &'a StyledNode) -> Option<&'a StyledNode> {
+fn first_div(node: &StyledNode) -> Option<&StyledNode> {
     if node.node.tag_name() == Some("div") {
         return Some(node);
     }

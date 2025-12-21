@@ -2942,7 +2942,7 @@ mod tests {
     impl EnvGuard {
         fn new(key: &'static str, value: Option<&str>) -> Self {
             thread_local! {
-                static DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+                static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
             }
 
             let mut lock = None;
@@ -2965,7 +2965,7 @@ mod tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             thread_local! {
-                static DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+                static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
             }
 
             DEPTH.with(|depth| {

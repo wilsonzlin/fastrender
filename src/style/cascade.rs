@@ -2150,10 +2150,10 @@ mod tests {
     fn important_overrides_more_specific_normal_declarations() {
         let dom = element_with_id_and_class("target", "item", None);
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             #target { color: red; }
             .item { color: blue !important; }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -2188,10 +2188,10 @@ mod tests {
             children: vec![],
         };
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             .pagetop { line-height: 12px; }
             span.pagetop { display: block; margin: 3px 5px; }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -2207,10 +2207,10 @@ mod tests {
     fn revert_falls_back_to_ua_for_non_inherited_property() {
         let dom = element_with_id_and_class("target", "box", None);
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             .box { display: inline; }
             #target { display: revert; }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -2257,10 +2257,10 @@ mod tests {
     fn layer_order_controls_cascade_priority() {
         let dom = element_with_id_and_class("target", "", None);
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             @layer base { #target { color: rgb(1, 2, 3); } }
             @layer theme { #target { color: rgb(4, 5, 6); } }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -2272,11 +2272,11 @@ mod tests {
     fn blockless_layer_prelude_defines_order() {
         let dom = element_with_id_and_class("target", "", None);
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             @layer base, theme;
             @layer base { #target { color: rgb(1, 2, 3); } }
             @layer theme { #target { color: rgb(9, 8, 7); } }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -2288,10 +2288,10 @@ mod tests {
     fn unlayered_rules_override_layered() {
         let dom = element_with_id_and_class("target", "", None);
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             @layer base { #target { color: rgb(1, 1, 1); } }
             #target { color: rgb(2, 3, 4); }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -2303,10 +2303,10 @@ mod tests {
     fn revert_layer_restores_previous_layer_value() {
         let dom = element_with_id_and_class("target", "", None);
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             @layer base { #target { color: rgb(10, 20, 30); } }
             @layer theme { #target { color: rgb(200, 100, 50); color: revert-layer; } }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -2318,10 +2318,10 @@ mod tests {
     fn dotted_layer_names_create_nested_paths() {
         let dom = element_with_id_and_class("target", "", None);
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             @layer ui.controls { #target { color: rgb(1, 2, 3); } }
             @layer ui { #target { color: rgb(9, 9, 9); } }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -2334,14 +2334,14 @@ mod tests {
     fn revert_layer_uses_nearest_layer_base() {
         let dom = element_with_id_and_class("target", "", None);
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             @layer theme {
               #target { color: rgb(1, 2, 3); }
               @layer accents {
                 #target { color: rgb(10, 20, 30); color: revert-layer; }
               }
             }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -3011,7 +3011,7 @@ mod tests {
         let styled = apply_styles_with_media(&dom, &stylesheet, &media);
 
         assert!(matches!(
-            styled.styles.background_layers.get(0).and_then(|l| l.image.as_ref()),
+            styled.styles.background_layers.first().and_then(|l| l.image.as_ref()),
             Some(crate::style::types::BackgroundImage::Url(url)) if url == "hi.png"
         ));
     }
@@ -3757,7 +3757,7 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "details".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("open".to_string(), "".to_string())],
+                attributes: vec![("open".to_string(), String::new())],
             },
             children: vec![summary.clone()],
         };
@@ -3783,7 +3783,7 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "details".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("open".to_string(), "".to_string())],
+                attributes: vec![("open".to_string(), String::new())],
             },
             children: details_closed_with_content.children.clone(),
         };
@@ -3909,7 +3909,7 @@ mod tests {
                 namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
                     ("type".to_string(), "text".to_string()),
-                    ("disabled".to_string(), "".to_string()),
+                    ("disabled".to_string(), String::new()),
                 ],
             },
             children: vec![],
@@ -3919,7 +3919,7 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "select".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("disabled".to_string(), "".to_string())],
+                attributes: vec![("disabled".to_string(), String::new())],
             },
             children: vec![DomNode {
                 node_type: DomNodeType::Element {
@@ -4049,7 +4049,7 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("hidden".to_string(), "".to_string())],
+                attributes: vec![("hidden".to_string(), String::new())],
             },
             children: vec![],
         };
@@ -4064,7 +4064,7 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "div".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("hidden".to_string(), "".to_string())],
+                attributes: vec![("hidden".to_string(), String::new())],
             },
             children: vec![],
         };
@@ -4809,7 +4809,7 @@ mod tests {
             node_type: DomNodeType::Element {
                 tag_name: "td".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
-                attributes: vec![("nowrap".to_string(), "".to_string())],
+                attributes: vec![("nowrap".to_string(), String::new())],
             },
             children: vec![],
         };
@@ -4828,7 +4828,7 @@ mod tests {
                 tag_name: "td".to_string(),
                 namespace: HTML_NAMESPACE.to_string(),
                 attributes: vec![
-                    ("nowrap".to_string(), "".to_string()),
+                    ("nowrap".to_string(), String::new()),
                     ("style".to_string(), "white-space: normal;".to_string()),
                 ],
             },
@@ -4902,7 +4902,7 @@ mod tests {
                     ]
                 );
             }
-            other => panic!("expected hints, got {other:?}"),
+            WillChange::Auto => panic!("expected hints, got Auto"),
         }
     }
 
@@ -4976,7 +4976,7 @@ mod tests {
         let child_styles = &styled.children[0].styles;
         match child_styles.text_underline_offset {
             TextUnderlineOffset::Length(l) => assert!((l.to_px() - 2.0).abs() < 0.01),
-            other => panic!("expected underline offset to inherit, got {:?}", other),
+            TextUnderlineOffset::Auto => panic!("expected underline offset to inherit, got Auto"),
         }
         assert!(
             matches!(child_styles.text_underline_position, TextUnderlinePosition::UnderRight),
@@ -5642,7 +5642,7 @@ mod tests {
         };
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             li::marker {
                 color: red;
                 display: block;
@@ -5652,7 +5652,7 @@ mod tests {
                 text-decoration: underline;
                 text-indent: 40px;
             }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -5735,12 +5735,12 @@ mod tests {
         };
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             li::marker {
                 list-style-type: square;
                 list-style-image: url(bullet.png);
             }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -5777,13 +5777,13 @@ mod tests {
         };
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             li::marker {
                 text-combine-upright: all;
                 letter-spacing: 2px;
                 visibility: hidden;
             }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -5920,12 +5920,12 @@ mod tests {
         };
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             li::marker {
                 text-align: center;
                 text-indent: 40px;
             }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -5944,12 +5944,12 @@ mod tests {
         );
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             li::marker {
                 text-decoration: underline;
                 text-shadow: 1px 1px red;
             }
-        "#,
+        ",
         )
         .unwrap();
         let styled = apply_styles(&dom, &stylesheet);
@@ -6066,13 +6066,13 @@ mod tests {
         };
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             li::marker {
                 white-space: normal;
                 unicode-bidi: normal;
                 text-transform: uppercase;
             }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -6114,13 +6114,13 @@ mod tests {
         };
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             li::marker {
                 text-emphasis-style: open dot;
                 text-emphasis-color: red;
                 text-emphasis-position: under right;
             }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -6167,11 +6167,11 @@ mod tests {
         };
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             li::marker {
                 cursor: move;
             }
-        "#,
+        ",
         )
         .unwrap();
 
@@ -6200,10 +6200,10 @@ mod tests {
         };
 
         let stylesheet = parse_stylesheet(
-            r#"
+            r"
             #target, .foo { color: red; }
             .bar { color: blue; }
-        "#,
+        ",
         )
         .unwrap();
 

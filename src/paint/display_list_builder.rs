@@ -4260,7 +4260,7 @@ mod tests {
 
         let chosen = match &style.list_style_image {
             crate::style::types::ListStyleImage::Url(url) => url.clone(),
-            other => panic!("unexpected list-style-image: {other:?}"),
+            crate::style::types::ListStyleImage::None => panic!("unexpected list-style-image: None"),
         };
 
         let mut fragment = FragmentNode::new_replaced(

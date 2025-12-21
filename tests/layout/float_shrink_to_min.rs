@@ -4,7 +4,7 @@ use fastrender::layout::contexts::block::BlockFormattingContext;
 use fastrender::layout::constraints::LayoutConstraints;
 use fastrender::style::float::Float;
 use fastrender::style::values::Length;
-use fastrender::{BoxNode, ComputedStyle, FormattingContextType};
+use fastrender::{BoxNode, ComputedStyle, FormattingContext, FormattingContextType};
 
 /// Floats with `width: auto` should use the CSS shrink-to-fit formula and then
 /// honor `min-width`/`max-width` caps. When the available width is smaller than
@@ -22,7 +22,7 @@ fn float_auto_width_honors_min_width() {
 
     let container = BoxNode::new_block(container_style, FormattingContextType::Block, vec![float_box]);
 
-    let mut bfc = BlockFormattingContext::new();
+    let bfc = BlockFormattingContext::new();
     let constraints = LayoutConstraints::definite(100.0, 1000.0);
     let fragment = bfc.layout(&container, &constraints).expect("layout should succeed");
 
@@ -47,7 +47,7 @@ fn float_auto_width_clamps_to_max_width() {
 
     let container = BoxNode::new_block(container_style, FormattingContextType::Block, vec![float_box]);
 
-    let mut bfc = BlockFormattingContext::new();
+    let bfc = BlockFormattingContext::new();
     let constraints = LayoutConstraints::definite(200.0, 1000.0);
     let fragment = bfc.layout(&container, &constraints).expect("layout should succeed");
 

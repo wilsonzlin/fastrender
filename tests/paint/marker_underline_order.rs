@@ -1,4 +1,4 @@
-use crate::util::bounding_box_for_color;
+use super::util::bounding_box_for_color;
 use fastrender::geometry::Rect;
 use fastrender::paint::painter::paint_tree;
 use fastrender::style::color::Rgba;

@@ -5,14 +5,14 @@
 
 #[allow(unused_imports)]
 use fastrender::geometry::Rect;
+use fastrender::style::display::Display;
+use fastrender::style::float::Float;
+use fastrender::style::values::Length;
 use fastrender::ComputedStyle;
 use fastrender::FormattingContextFactory;
 #[allow(unused_imports)]
 use fastrender::{BoxNode, FormattingContextType, FragmentNode};
 use fastrender::{FormattingContext, IntrinsicSizingMode, LayoutConstraints};
-use fastrender::style::display::Display;
-use fastrender::style::float::Float;
-use fastrender::style::values::Length;
 use std::sync::Arc;
 
 // =============================================================================

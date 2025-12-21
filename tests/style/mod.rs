@@ -1,0 +1,31 @@
+//! Style integration tests.
+
+mod aria_label_noop_test;
+mod background_position_logical_test;
+mod cascade_marker_test;
+mod content_generation_test;
+mod counters_test;
+mod css_numeric_functions;
+mod defaults_test;
+mod extract_print;
+mod flex_property_test;
+mod grid_property_test;
+mod logical_properties_test;
+mod media_invalid_calc;
+mod media_invalid_type;
+mod media_test;
+mod order_property_test;
+mod root_font_size_percent_test;
+mod style_variables_test;
+mod supports_selector_test;
+mod supports_writing_mode_test;
+mod tab_size_test;
+mod text_combine_upright_case_insensitive_test;
+mod text_combine_upright_invalid_test;
+mod text_decoration_skip_ink_test;
+mod text_orientation_case_insensitive_test;
+mod text_orientation_inheritance_top_test;
+mod text_orientation_properties;
+mod user_agent_test;
+mod var_resolution_test;
+mod writing_mode_inheritance_top_test;

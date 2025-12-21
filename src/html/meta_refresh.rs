@@ -182,7 +182,7 @@ fn unescape_js_literal(s: &str) -> String {
                         let lo = chars.next();
                         if let (Some(hi), Some(lo)) = (hi, lo) {
                             if let (Some(hi_v), Some(lo_v)) = (hi.to_digit(16), lo.to_digit(16)) {
-                    if let Some(c) = char::from_u32(hi_v * 16 + lo_v) {
+                                if let Some(c) = char::from_u32(hi_v * 16 + lo_v) {
                                     out.push(c);
                                     continue;
                                 }
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn extracts_meta_refresh_url() {
-        let html = r#"<html><head><meta http-equiv='refresh' content='0; url=/fallback.html'></head></html>"#;
+        let html = r"<html><head><meta http-equiv='refresh' content='0; url=/fallback.html'></head></html>";
         assert_eq!(extract_meta_refresh_url(html), Some("/fallback.html".to_string()));
     }
 
@@ -522,7 +522,10 @@ mod tests {
             super::unescape_js_literal("https:\\/\\/example.com\\/unicode\\u002fpath"),
             "https://example.com/unicode/path"
         );
-        assert_eq!(super::unescape_js_literal("/encoded%2Fpath%20with"), "/encoded/path with");
+        assert_eq!(
+            super::unescape_js_literal("/encoded%2Fpath%20with"),
+            "/encoded/path with"
+        );
     }
 
     #[test]

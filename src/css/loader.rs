@@ -1053,12 +1053,12 @@ mod tests {
 
     #[test]
     fn ignores_sourceurl_comments_in_embedded_css_scan() {
-        let html = r#"
+        let html = r"
             <style>
             /*# sourceURL=https://example.com/wp-includes/blocks/button/style.min.css */
             body { color: black; }
             </style>
-        "#;
+        ";
         let urls = extract_embedded_css_urls(html, "https://example.com/");
         assert!(urls.is_empty());
     }
@@ -1106,11 +1106,11 @@ mod tests {
 
     #[test]
     fn strips_sourceurl_prefix_in_embedded_css_urls() {
-        let html = r#"
+        let html = r"
             <script>
                 /* sourceURL=https://example.com/assets/style.css */
             </script>
-        "#;
+        ";
         let urls = extract_embedded_css_urls(html, "https://example.com/");
         assert_eq!(urls, vec!["https://example.com/assets/style.css".to_string()]);
     }
@@ -1134,14 +1134,14 @@ mod tests {
 
     #[test]
     fn ignores_embedded_css_class_tokens() {
-        let html = r#"
+        let html = r"
             <style>
                 .css-v2kfba{height:100%;width:100%;}
             </style>
             <script>
                 const cls = '.css-15ru6p1{font-size:inherit;font-weight:normal;}'
             </script>
-        "#;
+        ";
         let urls = extract_embedded_css_urls(html, "https://example.com/");
         assert!(urls.is_empty());
     }
@@ -1349,6 +1349,6 @@ mod tests {
     fn unescape_js_preserves_invalid_sequences() {
         let input = r"bad\u00zzescape and \q";
         let unescaped = unescape_js_escapes(input);
-        assert_eq!(unescaped, input.replace("\\", "\\"));
+        assert_eq!(unescaped, input);
     }
 }

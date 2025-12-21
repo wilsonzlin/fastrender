@@ -721,8 +721,15 @@ impl TextItem {
 
     fn compute_cluster_advances(runs: &[ShapedRun], text: &str, fallback_font_size: f32) -> Vec<ClusterBoundary> {
         let text_len = text.len();
-        if runs.is_empty() || text_len == 0 {
+        if text_len == 0 {
             return Vec::new();
+        }
+        if runs.is_empty() {
+            let estimated = (text.chars().count() as f32) * fallback_font_size * 0.5;
+            return vec![ClusterBoundary {
+                byte_offset: text_len,
+                advance: estimated,
+            }];
         }
 
         let mut sorted_runs: Vec<&ShapedRun> = runs.iter().collect();
@@ -3081,8 +3088,7 @@ mod tests {
                         InlineItem::Text(t) => Some(t.text.clone()),
                         _ => None,
                     })
-                    .collect::<Vec<_>>()
-                    .join(""),
+                    .collect::<String>(),
                 _ => String::new(),
             })
             .collect();
@@ -3125,8 +3131,7 @@ mod tests {
                         InlineItem::Text(t) => Some(t.text.clone()),
                         _ => None,
                     })
-                    .collect::<Vec<_>>()
-                    .join(""),
+                    .collect::<String>(),
                 _ => String::new(),
             })
             .collect();
@@ -3173,8 +3178,7 @@ mod tests {
                         InlineItem::Text(t) => Some(t.text.clone()),
                         _ => None,
                     })
-                    .collect::<Vec<_>>()
-                    .join(""),
+                    .collect::<String>(),
                 _ => String::new(),
             })
             .collect();
@@ -3397,13 +3401,11 @@ mod tests {
                                     InlineItem::Text(t) => Some(t.text.clone()),
                                     _ => None,
                                 })
-                                .collect::<Vec<_>>()
-                                .join(""),
+                                .collect::<String>(),
                         ),
                         _ => None,
                     })
-                    .collect::<Vec<_>>()
-                    .join(""),
+                    .collect::<String>(),
                 _ => String::new(),
             })
             .collect();
@@ -3558,13 +3560,11 @@ mod tests {
                                     InlineItem::Text(t) => Some(t.text.clone()),
                                     _ => None,
                                 })
-                                .collect::<Vec<_>>()
-                                .join(""),
+                                .collect::<String>(),
                         ),
                         _ => None,
                     })
-                    .collect::<Vec<_>>()
-                    .join(""),
+                    .collect::<String>(),
                 _ => String::new(),
             })
             .collect();
@@ -4086,7 +4086,7 @@ mod tests {
     #[test]
     fn bidi_isolate_spans_children_as_single_context() {
         // Logical text with a single RTL isolate containing both child segments.
-        let expected = reorder_with_controls(&format!("A \u{2067}XY\u{2069} Z"), Some(Level::ltr()));
+        let expected = reorder_with_controls("A \u{2067}XY\u{2069} Z", Some(Level::ltr()));
 
         let mut builder = make_builder(200.0);
         builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));

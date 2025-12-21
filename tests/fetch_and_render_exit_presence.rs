@@ -4,12 +4,11 @@ use std::path::Path;
 
 #[test]
 fn fetch_and_render_exit_regression_is_present() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fetch_and_render_exit_test.rs");
-    assert!(path.exists(), "tests/fetch_and_render_exit_test.rs must exist");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/bin/fetch_and_render_exit_test.rs");
+    assert!(path.exists(), "tests/bin/fetch_and_render_exit_test.rs must exist");
     let len = path
         .metadata()
-        .expect("stat tests/fetch_and_render_exit_test.rs")
+        .expect("stat tests/bin/fetch_and_render_exit_test.rs")
         .len();
-    assert!(len > 0, "tests/fetch_and_render_exit_test.rs should not be empty");
+    assert!(len > 0, "tests/bin/fetch_and_render_exit_test.rs should not be empty");
 }

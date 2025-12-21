@@ -1394,7 +1394,7 @@ mod tests {
 
     #[test]
     fn supports_rule_applies_when_feature_supported() {
-        let css = r#"@supports (display: grid) { .ok { color: red; } }"#;
+        let css = r"@supports (display: grid) { .ok { color: red; } }";
         let result = parse_stylesheet_with_errors(css);
         assert_eq!(result.error_count(), 0, "parse errors: {:?}", result.errors);
         let stylesheet = result.stylesheet;
@@ -1409,7 +1409,7 @@ mod tests {
 
     #[test]
     fn supports_rule_skipped_when_feature_unsupported() {
-        let css = r#"@supports (not-a-prop: foo) { .skip { color: red; } }"#;
+        let css = r"@supports (not-a-prop: foo) { .skip { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1418,7 +1418,7 @@ mod tests {
 
     #[test]
     fn supports_is_case_insensitive_for_properties() {
-        let css = r#"@supports (DISPLAY: GRID) { .ok { color: red; } }"#;
+        let css = r"@supports (DISPLAY: GRID) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1427,7 +1427,7 @@ mod tests {
 
     #[test]
     fn supports_rejects_invalid_value_for_known_property() {
-        let css = r#"@supports (display: not-a-value) { .nope { color: red; } }"#;
+        let css = r"@supports (display: not-a-value) { .nope { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1436,7 +1436,7 @@ mod tests {
 
     #[test]
     fn supports_selector_applies_when_selector_parses() {
-        let css = r#"@supports selector(div > span) { .ok { color: red; } }"#;
+        let css = r"@supports selector(div > span) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         assert_eq!(stylesheet.rules.len(), 1, "expected one @supports rule");
         let cond = match &stylesheet.rules[0] {
@@ -1452,7 +1452,7 @@ mod tests {
     #[test]
     fn supports_selector_skips_when_selector_unsupported() {
         // :has() is not implemented in our selector parser, so the feature query should fail.
-        let css = r#"@supports selector(div:has(span)) { .skip { color: red; } }"#;
+        let css = r"@supports selector(div:has(span)) { .skip { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1463,7 +1463,7 @@ mod tests {
     fn supports_selector_list_fails_when_any_selector_unsupported() {
         // A selector list that contains an unsupported selector should cause the whole selector()
         // feature query to evaluate to false per the spec.
-        let css = r#"@supports selector(div, span:has(a)) { .skip { color: red; } }"#;
+        let css = r"@supports selector(div, span:has(a)) { .skip { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1476,7 +1476,7 @@ mod tests {
 
     #[test]
     fn supports_not_selector_inverts_result() {
-        let css = r#"@supports not selector(div:has(span)) { .ok { color: red; } }"#;
+        let css = r"@supports not selector(div:has(span)) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1497,7 +1497,7 @@ mod tests {
 
     #[test]
     fn supports_selector_allows_whitespace_and_case() {
-        let css = r#"@supports SeLeCtOr ( div.foo , span.bar ) { .ok { color: red; } }"#;
+        let css = r"@supports SeLeCtOr ( div.foo , span.bar ) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1510,7 +1510,7 @@ mod tests {
 
     #[test]
     fn supports_and_is_case_insensitive() {
-        let css = r#"@supports (display: grid) AND (position: sticky) { .ok { color: red; } }"#;
+        let css = r"@supports (display: grid) AND (position: sticky) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1519,7 +1519,7 @@ mod tests {
 
     #[test]
     fn supports_or_is_case_insensitive() {
-        let css = r#"@supports (not-a-prop: foo) Or (display: grid) { .ok { color: red; } }"#;
+        let css = r"@supports (not-a-prop: foo) Or (display: grid) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1532,7 +1532,7 @@ mod tests {
 
     #[test]
     fn supports_not_is_case_insensitive() {
-        let css = r#"@supports NOT (display: grid) { .skip { color: red; } }"#;
+        let css = r"@supports NOT (display: grid) { .skip { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1545,7 +1545,7 @@ mod tests {
 
     #[test]
     fn supports_and_or_precedence_is_correct() {
-        let css = r#"@supports (display: grid) or ((position: sticky) and (float: left)) { .ok { color: red; } }"#;
+        let css = r"@supports (display: grid) or ((position: sticky) and (float: left)) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1555,7 +1555,7 @@ mod tests {
             "or of supported and unsupported groups should still match"
         );
 
-        let css2 = r#"@supports (not-a-prop: foo) or (position: sticky and float: left) { .ok { color: red; } }"#;
+        let css2 = r"@supports (not-a-prop: foo) or (position: sticky and float: left) { .ok { color: red; } }";
         let stylesheet2 = parse_stylesheet(css2).unwrap();
         let rules2 = stylesheet2.collect_style_rules(&media);
         assert_eq!(rules2.len(), 1, "OR with a supported branch should succeed");
@@ -1563,7 +1563,7 @@ mod tests {
 
     #[test]
     fn supports_custom_property_always_matches_with_value() {
-        let css = r#"@supports (--foo: bar) { .ok { color: red; } }"#;
+        let css = r"@supports (--foo: bar) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1576,7 +1576,7 @@ mod tests {
 
     #[test]
     fn supports_custom_property_requires_value() {
-        let css = r#"@supports (--foo: ) { .skip { color: red; } }"#;
+        let css = r"@supports (--foo: ) { .skip { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1589,7 +1589,7 @@ mod tests {
 
     #[test]
     fn supports_nested_not_inside_parens() {
-        let css = r#"@supports (not (display: grid)) { .skip { color: red; } }"#;
+        let css = r"@supports (not (display: grid)) { .skip { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1598,7 +1598,7 @@ mod tests {
 
     #[test]
     fn supports_double_not_inside_parens() {
-        let css = r#"@supports (not (not (display: grid))) { .ok { color: red; } }"#;
+        let css = r"@supports (not (not (display: grid))) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1607,7 +1607,7 @@ mod tests {
 
     #[test]
     fn supports_not_with_inner_or() {
-        let css = r#"@supports (not ((display: grid) or (position: sticky))) { .skip { color: red; } }"#;
+        let css = r"@supports (not ((display: grid) or (position: sticky))) { .skip { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);
@@ -1616,7 +1616,7 @@ mod tests {
 
     #[test]
     fn supports_operator_boundary_allows_parens_without_spaces() {
-        let css = r#"@supports ((display: grid)and(position: sticky)) { .ok { color: red; } }"#;
+        let css = r"@supports ((display: grid)and(position: sticky)) { .ok { color: red; } }";
         let stylesheet = parse_stylesheet(css).unwrap();
         let media = crate::style::media::MediaContext::screen(800.0, 600.0);
         let rules = stylesheet.collect_style_rules(&media);

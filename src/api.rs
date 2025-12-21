@@ -3576,7 +3576,7 @@ mod tests {
     #[test]
     fn render_html_with_horizontal_scroll_offsets_viewport() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 html, body { margin: 0; padding: 0; }
                 body {
@@ -3588,7 +3588,7 @@ mod tests {
                 }
             </style>
             <div></div>
-        "#;
+        ";
 
         // Reference render to sample both halves of the gradient.
         let reference = renderer
@@ -3694,13 +3694,13 @@ mod tests {
     #[test]
     fn layout_document_uses_viewport_for_media_queries() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 @media (max-width: 600px) { body { color: rgb(255, 0, 0); } }
                 @media (min-width: 601px) { body { color: rgb(0, 0, 255); } }
             </style>
             <body>hi</body>
-        "#;
+        ";
         let dom = renderer.parse_html(html).unwrap();
 
         let small = renderer.layout_document(&dom, 500, 800).unwrap();
@@ -4261,7 +4261,7 @@ mod tests {
         let mut node = BoxNode::new_replaced(
             Arc::new(ComputedStyle::default()),
             ReplacedType::Svg {
-                content: r#"<svg xmlns='http://www.w3.org/2000/svg' width='20' height='12'></svg>"#.to_string(),
+                content: r"<svg xmlns='http://www.w3.org/2000/svg' width='20' height='12'></svg>".to_string(),
             },
             None,
             None,
@@ -4291,7 +4291,7 @@ mod tests {
             Arc::new(ComputedStyle::default()),
             ReplacedType::Svg {
                 content:
-                    r#"<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100' viewBox='0 0 50 100' preserveAspectRatio='none'></svg>"#
+                    r"<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100' viewBox='0 0 50 100' preserveAspectRatio='none'></svg>"
                         .to_string(),
             },
             None,
@@ -4321,7 +4321,7 @@ mod tests {
         let mut node = BoxNode::new_replaced(
             Arc::new(ComputedStyle::default()),
             ReplacedType::Svg {
-                content: r#"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 100'></svg>"#.to_string(),
+                content: r"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 100'></svg>".to_string(),
             },
             None,
             None,
@@ -4342,11 +4342,11 @@ mod tests {
         let mut node = BoxNode::new_replaced(
             Arc::new(ComputedStyle::default()),
             ReplacedType::Svg {
-                content: r#"
+                content: r"
                     <svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='0 0 20 10'>
                         <rect x='0' y='0' width='20' height='10' stroke='black' stroke-width='50' fill='none'/>
                     </svg>
-                "#
+                "
                 .to_string(),
             },
             None,
@@ -4565,14 +4565,14 @@ mod tests {
     #[test]
     fn scroll_snap_mandatory_adjusts_offsets() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 html, body { margin: 0; height: 100%; scroll-snap-type: y mandatory; }
                 section { height: 200px; scroll-snap-align: start; }
             </style>
             <section></section>
             <section></section>
-        "#;
+        ";
 
         let dom = renderer.parse_html(html).unwrap();
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
@@ -4585,14 +4585,14 @@ mod tests {
     #[test]
     fn scroll_snap_none_leaves_offsets_unchanged() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 html, body { margin: 0; height: 100%; scroll-snap-type: none; }
                 section { height: 200px; scroll-snap-align: start; }
             </style>
             <section></section>
             <section></section>
-        "#;
+        ";
 
         let dom = renderer.parse_html(html).unwrap();
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
@@ -4608,14 +4608,14 @@ mod tests {
     #[test]
     fn scroll_snap_proximity_only_when_close() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 html, body { margin: 0; height: 100%; scroll-snap-type: y proximity; }
                 section { height: 200px; scroll-snap-align: start; }
             </style>
             <section></section>
             <section></section>
-        "#;
+        ";
 
         let dom = renderer.parse_html(html).unwrap();
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
@@ -4664,7 +4664,7 @@ mod tests {
     #[test]
     fn scroll_padding_insets_snapport_alignment() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 html, body {
                     margin: 0;
@@ -4676,7 +4676,7 @@ mod tests {
             </style>
             <section></section>
             <section></section>
-        "#;
+        ";
 
         let dom = renderer.parse_html(html).unwrap();
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
@@ -4698,7 +4698,7 @@ mod tests {
     #[test]
     fn scroll_margin_shifts_snap_targets() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 html, body { margin: 0; height: 100%; scroll-snap-type: y mandatory; }
                 section { height: 120px; scroll-snap-align: start; }
@@ -4706,7 +4706,7 @@ mod tests {
             </style>
             <section></section>
             <section></section>
-        "#;
+        ";
 
         let dom = renderer.parse_html(html).unwrap();
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
@@ -4722,7 +4722,7 @@ mod tests {
     #[test]
     fn scroll_snap_horizontal_mandatory_adjusts_offsets() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 html, body {
                     margin: 0;
@@ -4739,7 +4739,7 @@ mod tests {
                 }
             </style>
             <section></section><section></section>
-        "#;
+        ";
 
         let dom = renderer.parse_html(html).unwrap();
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();
@@ -4758,7 +4758,7 @@ mod tests {
     #[test]
     fn scroll_snap_inline_axis_matches_horizontal_flow() {
         let mut renderer = FastRender::new().unwrap();
-        let html = r#"
+        let html = r"
             <style>
                 html, body {
                     margin: 0;
@@ -4775,7 +4775,7 @@ mod tests {
                 }
             </style>
             <section></section><section></section>
-        "#;
+        ";
 
         let dom = renderer.parse_html(html).unwrap();
         let fragments = renderer.layout_document(&dom, 100, 100).unwrap();

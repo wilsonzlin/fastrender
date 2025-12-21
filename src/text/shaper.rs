@@ -875,7 +875,13 @@ impl TextShaper {
                 let (start, len) = self.cluster_text_span(text, current_cluster_start_byte, cluster_byte);
                 let glyph_count = glyph_idx - current_glyph_start;
                 if len > 0 && glyph_count > 0 {
-                    clusters.push(GlyphCluster::new(start, len, current_glyph_start, glyph_count, current_advance));
+                    clusters.push(GlyphCluster::new(
+                        start,
+                        len,
+                        current_glyph_start,
+                        glyph_count,
+                        current_advance,
+                    ));
                 }
 
                 current_cluster_start_byte = cluster_byte;
@@ -890,7 +896,13 @@ impl TextShaper {
         let (start, len) = self.cluster_text_span(text, current_cluster_start_byte, text.len());
         let glyph_count = glyphs.len() - current_glyph_start;
         if len > 0 && glyph_count > 0 {
-            clusters.push(GlyphCluster::new(start, len, current_glyph_start, glyph_count, current_advance));
+            clusters.push(GlyphCluster::new(
+                start,
+                len,
+                current_glyph_start,
+                glyph_count,
+                current_advance,
+            ));
         }
 
         clusters

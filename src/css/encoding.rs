@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn defaults_to_utf8() {
-        let text = decode_css_bytes("body { color: blue; }".as_bytes(), None);
+        let text = decode_css_bytes(b"body { color: blue; }", None);
         assert!(text.contains("blue"));
     }
 }

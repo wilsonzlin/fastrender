@@ -3124,8 +3124,8 @@ mod tests {
         };
 
         let children = &root.children;
-        let container_ref = children.get(0).unwrap();
-        let target_ref = container_ref.children.get(0).unwrap();
+        let container_ref = children.first().unwrap();
+        let target_ref = container_ref.children.first().unwrap();
         let other_ref = children.get(1).unwrap();
 
         with_target_fragment(Some("#section"), || {
@@ -3220,10 +3220,10 @@ mod tests {
                 .unwrap_or_default(),
             _ => panic!("expected html element"),
         };
-        assert!(!classes.iter().any(|c| *c == "no-js"));
-        assert!(classes.iter().any(|c| *c == "js-enabled"));
-        assert!(classes.iter().any(|c| *c == "foo"));
-        assert!(classes.iter().any(|c| *c == "jsl10n-visible"));
+        assert!(!classes.contains(&"no-js"));
+        assert!(classes.contains(&"js-enabled"));
+        assert!(classes.contains(&"foo"));
+        assert!(classes.contains(&"jsl10n-visible"));
     }
 
     #[test]
@@ -3242,7 +3242,7 @@ mod tests {
                 .unwrap_or_default(),
             _ => panic!("expected html element"),
         };
-        assert!(classes.iter().any(|c| *c == "jsl10n-visible"));
+        assert!(classes.contains(&"jsl10n-visible"));
     }
 
     #[test]
@@ -3273,7 +3273,7 @@ mod tests {
                 .unwrap_or_default(),
             _ => panic!("expected body element"),
         };
-        assert!(classes.iter().any(|c| *c == "portal"));
-        assert!(classes.iter().any(|c| *c == "jsl10n-visible"));
+        assert!(classes.contains(&"portal"));
+        assert!(classes.contains(&"jsl10n-visible"));
     }
 }

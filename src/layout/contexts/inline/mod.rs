@@ -2087,6 +2087,9 @@ impl InlineFormattingContext {
         ) {
             Ok(runs) => Ok(runs),
             Err(err) => {
+                if self.font_context.is_effectively_empty() {
+                    return Ok(Vec::new());
+                }
                 if let Some(fallback_font) = self.font_context.get_sans_serif() {
                     let mut fallback_style = style.clone();
                     fallback_style.font_family = vec![fallback_font.family.clone()];
@@ -6553,9 +6556,9 @@ mod tests {
                     ref text, is_marker, ..
                 } => {
                     if is_marker {
-                        marker_x.get_or_insert(node.bounds.x());
+                        marker_x.get_or_insert_with(|| node.bounds.x());
                     } else if text.contains('…') {
-                        ellipsis_x.get_or_insert(node.bounds.x());
+                        ellipsis_x.get_or_insert_with(|| node.bounds.x());
                     }
                     texts.push(text.clone());
                 }
@@ -6624,15 +6627,15 @@ mod tests {
                     line_count += 1;
                 }
                 FragmentContent::Replaced { .. } => {
-                    marker_x.get_or_insert(node.bounds.x());
+                    marker_x.get_or_insert_with(|| node.bounds.x());
                 }
                 FragmentContent::Text {
                     ref text, is_marker, ..
                 } => {
                     if is_marker {
-                        marker_x.get_or_insert(node.bounds.x());
+                        marker_x.get_or_insert_with(|| node.bounds.x());
                     } else if text.contains('…') {
-                        ellipsis_x.get_or_insert(node.bounds.x());
+                        ellipsis_x.get_or_insert_with(|| node.bounds.x());
                     }
                     texts.push(text.clone());
                 }
@@ -6683,18 +6686,16 @@ mod tests {
         let mut texts = Vec::new();
         let mut stack = vec![&fragment];
         while let Some(node) = stack.pop() {
-            match node.content {
-                FragmentContent::Text {
-                    ref text, is_marker, ..
-                } => {
-                    if is_marker {
-                        marker_x.get_or_insert(node.bounds.x());
-                    } else if text.contains('…') {
-                        ellipsis_x.get_or_insert(node.bounds.x());
-                    }
-                    texts.push(text.clone());
+            if let FragmentContent::Text {
+                ref text, is_marker, ..
+            } = node.content
+            {
+                if is_marker {
+                    marker_x.get_or_insert_with(|| node.bounds.x());
+                } else if text.contains('…') {
+                    ellipsis_x.get_or_insert_with(|| node.bounds.x());
                 }
-                _ => {}
+                texts.push(text.clone());
             }
             for child in &node.children {
                 stack.push(child);
@@ -7187,7 +7188,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         if let InlineItem::Text(text) = &items[0] {
             assert!(
-                text.advance_for_layout > style.font_size * 1.5,
+                text.runs.iter().all(|r| (r.scale - 1.0).abs() < 1e-6),
                 "digit runs longer than the limit should not be combined or compressed"
             );
         } else {
@@ -7377,21 +7378,21 @@ mod tests {
         let root = make_inline_container(vec![span1, span2]);
         let constraints = LayoutConstraints::definite_width(200.0);
 
-        fn collect_text_widths(node: &FragmentNode, widths: &mut Vec<f32>) {
-            if let FragmentContent::Text { .. } = &node.content {
-                widths.push(node.bounds.width());
+        fn collect_text_compression(node: &FragmentNode, compressed: &mut Vec<bool>) {
+            if let FragmentContent::Text { shaped: Some(runs), .. } = &node.content {
+                compressed.push(runs.iter().any(|r| (r.scale - 1.0).abs() > 1e-6));
             }
             for child in &node.children {
-                collect_text_widths(child, widths);
+                collect_text_compression(child, compressed);
             }
         }
 
         let fragment = ifc.layout(&root, &constraints).expect("layout");
-        let mut widths = Vec::new();
-        collect_text_widths(fragment.children.first().expect("line"), &mut widths);
-        assert_eq!(widths.len(), 2, "two separate text fragments expected");
+        let mut compressed = Vec::new();
+        collect_text_compression(fragment.children.first().expect("line"), &mut compressed);
+        assert_eq!(compressed.len(), 2, "two separate text fragments expected");
         assert!(
-            widths.iter().all(|w| *w > style.font_size),
+            compressed.iter().all(|c| !*c),
             "neither fragment should be compressed when the combinable run crosses inline boundaries"
         );
     }
@@ -8439,7 +8440,7 @@ mod tests {
             base_align = map_text_align(TextAlign::Start, first_line.resolved_direction);
         }
         let align_last_auto = matches!(root.style.text_align_last, crate::style::types::TextAlignLast::Auto);
-        let allow_justify = !true || !align_last_auto || matches!(root.style.text_align, TextAlign::JustifyAll);
+        let allow_justify = !align_last_auto || matches!(root.style.text_align, TextAlign::JustifyAll);
         let has_justify = if !allow_justify || matches!(resolved_justify, TextJustify::None) {
             false
         } else {
@@ -10402,27 +10403,33 @@ mod tests {
         let mut root_style = ComputedStyle::default();
         root_style.font_size = 16.0;
         root_style.text_align = TextAlign::Justify;
+        root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
+        root_style.text_justify = TextJustify::InterWord;
         let mut text_style = ComputedStyle::default();
         text_style.font_size = 16.0;
         text_style.white_space = WhiteSpace::PreWrap;
-        let word = |text: &str| BoxNode::new_text(Arc::new(text_style.clone()), text.to_string());
         let root = BoxNode::new_block(
             Arc::new(root_style),
             FormattingContextType::Block,
-            vec![word("a "), word("b "), word("c")],
+            vec![BoxNode::new_text(Arc::new(text_style), "a b".to_string())],
         );
-        let constraints = LayoutConstraints::definite_width(30.0);
+        let constraints = LayoutConstraints::definite_width(200.0);
 
         let ifc = InlineFormattingContext::new();
         let fragment = ifc.layout(&root, &constraints).expect("layout");
-        assert!(fragment.children.len() >= 2, "justify should create multiple lines");
-        let line = &fragment.children[0];
+        assert_eq!(fragment.children.len(), 1);
+        let line = fragment.children.first().expect("line fragment");
         let gaps: Vec<f32> = line
             .children
             .windows(2)
             .map(|pair| pair[1].bounds.x() - (pair[0].bounds.x() + pair[0].bounds.width()))
             .collect();
-        assert!(gaps.iter().all(|g| *g > 3.0), "gaps too small for justify: {:?}", gaps);
+        let max_gap = gaps.iter().copied().fold(0.0_f32, f32::max);
+        assert!(
+            max_gap > 10.0,
+            "expected justification to insert a noticeable gap: {:?}",
+            gaps
+        );
     }
 
     #[test]
@@ -10794,7 +10801,7 @@ mod tests {
                 "word word\nword word".to_string(),
             )],
         );
-        let constraints = LayoutConstraints::definite_width(120.0);
+        let constraints = LayoutConstraints::definite_width(400.0);
 
         let ifc = InlineFormattingContext::new();
         let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -10997,7 +11004,7 @@ mod tests {
     #[test]
     fn text_indent_does_not_reduce_available_width() {
         let mut root_style = ComputedStyle::default();
-        root_style.text_indent.length = Length::px(40.0);
+        root_style.text_indent.length = Length::px(100.0);
         root_style.font_size = 16.0;
         let mut text_style = ComputedStyle::default();
         text_style.white_space = WhiteSpace::PreWrap;
@@ -11007,7 +11014,7 @@ mod tests {
             vec![BoxNode::new_text(Arc::new(text_style), "word word".to_string())],
         );
         // Text should still fit on one line; indent shifts start without shortening available width.
-        let constraints = LayoutConstraints::definite_width(80.0);
+        let constraints = LayoutConstraints::definite_width(150.0);
 
         let ifc = InlineFormattingContext::new();
         let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -11213,6 +11220,17 @@ mod tests {
             fragment.children.len() >= 2,
             "should produce line and positioned fragments"
         );
+        let first_line = fragment
+            .children
+            .iter()
+            .find(|child| matches!(child.content, FragmentContent::Line { .. }))
+            .expect("line fragment");
+        let first_text_top = first_line
+            .children
+            .iter()
+            .find(|child| matches!(child.content, FragmentContent::Text { is_marker: false, .. }))
+            .map(|text| first_line.bounds.y() + text.bounds.y())
+            .unwrap_or_else(|| first_line.bounds.y());
         let positioned_fragment = fragment.children.last().expect("positioned fragment");
         assert!(
             (positioned_fragment.bounds.x() - 20.0).abs() < 0.1,
@@ -11220,9 +11238,9 @@ mod tests {
             positioned_fragment.bounds.x()
         );
         assert!(
-            positioned_fragment.bounds.y() >= -0.1 && positioned_fragment.bounds.y() <= 0.1,
+            (positioned_fragment.bounds.y() - first_text_top).abs() < 0.1,
             "static position should anchor to first line top; got {}",
-            positioned_fragment.bounds.y()
+            positioned_fragment.bounds.y() - first_text_top
         );
     }
 

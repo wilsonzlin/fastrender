@@ -285,7 +285,10 @@ fn background_size_logical_maps_inline_and_block_vertical_lr() {
 
     let node = all_divs(&styled)[0];
     let (x, y) = bg_size(node);
-    assert_eq!(x, BackgroundSizeComponent::Length(fastrender::style::values::Length::px(7.0)));
+    assert_eq!(
+        x,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::px(7.0))
+    );
     assert_eq!(
         y,
         BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(12.0))
@@ -308,7 +311,10 @@ fn background_size_logical_maps_inline_and_block_sideways_lr() {
         x,
         BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(15.0))
     );
-    assert_eq!(y, BackgroundSizeComponent::Length(fastrender::style::values::Length::px(40.0)));
+    assert_eq!(
+        y,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::px(40.0))
+    );
 }
 
 #[test]
@@ -327,15 +333,15 @@ fn background_size_logical_maps_inline_and_block_sideways_rl() {
         x,
         BackgroundSizeComponent::Length(fastrender::style::values::Length::percent(18.0))
     );
-    assert_eq!(y, BackgroundSizeComponent::Length(fastrender::style::values::Length::px(25.0)));
+    assert_eq!(
+        y,
+        BackgroundSizeComponent::Length(fastrender::style::values::Length::px(25.0))
+    );
 }
 
 #[test]
 fn background_position_x_sets_x_components() {
-    let dom = dom::parse_html(
-        r#"<div style="background-position-x: 10px"></div>"#,
-    )
-    .unwrap();
+    let dom = dom::parse_html(r#"<div style="background-position-x: 10px"></div>"#).unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
@@ -347,10 +353,7 @@ fn background_position_x_sets_x_components() {
 
 #[test]
 fn background_position_y_sets_y_components() {
-    let dom = dom::parse_html(
-        r#"<div style="background-position-y: 15px"></div>"#,
-    )
-    .unwrap();
+    let dom = dom::parse_html(r#"<div style="background-position-y: 15px"></div>"#).unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 

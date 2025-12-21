@@ -619,10 +619,7 @@ mod tests {
 
     #[test]
     fn url_to_filename_trims_whitespace_and_fragment() {
-        assert_eq!(
-            url_to_filename("  https://Example.com/Path#Frag  "),
-            "example.com_Path"
-        );
+        assert_eq!(url_to_filename("  https://Example.com/Path#Frag  "), "example.com_Path");
     }
 
     #[test]
@@ -700,7 +697,10 @@ mod tests {
 
     #[test]
     fn normalize_page_name_trims_trailing_punctuation() {
-        assert_eq!(normalize_page_name("https://example.com./").as_deref(), Some("example.com"));
+        assert_eq!(
+            normalize_page_name("https://example.com./").as_deref(),
+            Some("example.com")
+        );
         assert_eq!(normalize_page_name("example.com_").as_deref(), Some("example.com"));
     }
 

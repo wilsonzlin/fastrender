@@ -1,12 +1,7 @@
-use fastrender::layout::{FormattingContext, FormattingContextFactory, LayoutConstraints};
 use fastrender::style::display::Display;
 use fastrender::tree::box_tree::BoxNode;
-use fastrender::{ComputedStyle, FormattingContextType};
+use fastrender::{ComputedStyle, FormattingContextFactory, FormattingContextType, LayoutConstraints};
 use std::sync::Arc;
-
-fn default_style() -> Arc<ComputedStyle> {
-    Arc::new(ComputedStyle::default())
-}
 
 #[test]
 fn aria_hidden_does_not_hide_layout() {
@@ -27,4 +22,3 @@ fn aria_hidden_does_not_hide_layout() {
     assert!(fragment.bounds.width() > 0.0);
     assert!(fragment.children[0].bounds.width() > 0.0);
 }
-

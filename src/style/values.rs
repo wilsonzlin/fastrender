@@ -522,31 +522,30 @@ mod tests {
 
     #[test]
     fn resolve_length_handles_non_finite_contexts() {
-        use std::f32::NAN;
-
-        assert_eq!(Length::percent(50.0).resolve_against(NAN), None);
-        assert_eq!(Length::em(2.0).resolve_with_font_size(NAN), None);
+        assert_eq!(Length::percent(50.0).resolve_against(f32::NAN), None);
+        assert_eq!(Length::em(2.0).resolve_with_font_size(f32::NAN), None);
         assert_eq!(
-            Length::new(10.0, LengthUnit::Vw).resolve_with_viewport(NAN, 800.0),
+            Length::new(10.0, LengthUnit::Vw).resolve_with_viewport(f32::NAN, 800.0),
             None
         );
         assert_eq!(
-            Length::percent(10.0).resolve_with_context(Some(NAN), NAN, NAN, NAN, NAN),
+            Length::percent(10.0).resolve_with_context(Some(f32::NAN), f32::NAN, f32::NAN, f32::NAN, f32::NAN),
             None
         );
     }
 
     #[test]
     fn calc_length_requires_percentage_base() {
-        use std::f32::NAN;
-
         let mut calc = CalcLength::empty();
         calc.push(LengthUnit::Percent, 50.0).unwrap();
         calc.push(LengthUnit::Px, 10.0).unwrap();
 
         let length = Length::calc(calc);
         assert_eq!(length.resolve_with_context(None, 800.0, 600.0, 16.0, 16.0), None);
-        assert_eq!(length.resolve_with_context(Some(NAN), 800.0, 600.0, 16.0, 16.0), None);
+        assert_eq!(
+            length.resolve_with_context(Some(f32::NAN), 800.0, 600.0, 16.0, 16.0),
+            None
+        );
         assert_eq!(
             length.resolve_with_context(Some(200.0), 800.0, 600.0, 16.0, 16.0),
             Some(110.0)
@@ -554,19 +553,19 @@ mod tests {
 
         // Non-finite viewport/font contexts should fail resolution.
         assert_eq!(
-            length.resolve_with_context(Some(200.0), NAN, 600.0, 16.0, 16.0),
+            length.resolve_with_context(Some(200.0), f32::NAN, 600.0, 16.0, 16.0),
             None
         );
         assert_eq!(
-            length.resolve_with_context(Some(200.0), 800.0, NAN, 16.0, 16.0),
+            length.resolve_with_context(Some(200.0), 800.0, f32::NAN, 16.0, 16.0),
             None
         );
         assert_eq!(
-            length.resolve_with_context(Some(200.0), 800.0, 600.0, NAN, 16.0),
+            length.resolve_with_context(Some(200.0), 800.0, 600.0, f32::NAN, 16.0),
             None
         );
         assert_eq!(
-            length.resolve_with_context(Some(200.0), 800.0, 600.0, 16.0, NAN),
+            length.resolve_with_context(Some(200.0), 800.0, 600.0, 16.0, f32::NAN),
             None
         );
 

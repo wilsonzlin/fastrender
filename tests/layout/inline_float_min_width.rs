@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use fastrender::layout::contexts::inline::InlineFormattingContext;
 use fastrender::layout::constraints::LayoutConstraints;
+use fastrender::style::display::Display;
 use fastrender::style::float::Float;
 use fastrender::style::values::Length;
 use fastrender::{BoxNode, ComputedStyle, FragmentContent};
@@ -12,7 +13,7 @@ use fastrender::{BoxNode, ComputedStyle, FragmentContent};
 #[test]
 fn inline_float_honors_min_width() {
     let mut float_style = ComputedStyle::default();
-    float_style.display = fastrender::style::types::Display::Inline;
+    float_style.display = Display::Inline;
     float_style.float = Float::Left;
     float_style.min_width = Some(Length::px(80.0));
     float_style.height = Some(Length::px(10.0));

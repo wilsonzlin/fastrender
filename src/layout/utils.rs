@@ -774,7 +774,7 @@ mod tests {
         let style = ComputedStyle::default();
         let replaced = ReplacedBox {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
-                src: "".to_string(),
+                src: String::new(),
                 alt: None,
                 sizes: None,
                 srcset: Vec::new(),
@@ -817,7 +817,7 @@ mod tests {
         style.height = Some(Length::px(50.0));
         let replaced = ReplacedBox {
             replaced_type: crate::tree::box_tree::ReplacedType::Image {
-                src: "".to_string(),
+                src: String::new(),
                 alt: None,
                 sizes: None,
                 srcset: Vec::new(),

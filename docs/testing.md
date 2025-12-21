@@ -6,6 +6,13 @@ FastRender’s test suite is primarily Rust unit/integration tests plus a small 
 
 - Run everything: `cargo test --quiet`
 
+## Fonts
+
+Text shaping and many rendering/layout tests assume at least one system font is available.
+
+- Linux containers: install a basic font package (e.g. `fonts-dejavu-core` on Ubuntu/Debian).
+- Desktop OSes typically have usable defaults preinstalled.
+
 ## Style regression harness
 
 - Run: `cargo test --quiet --test style_tests`

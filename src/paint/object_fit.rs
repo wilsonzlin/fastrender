@@ -22,11 +22,7 @@ pub fn resolve_object_position(
         PositionComponent::Keyword(PositionKeyword::End) => free,
         PositionComponent::Length(len) => {
             let needs_viewport = len.unit.is_viewport_relative()
-                || len
-                    .calc
-                    .as_ref()
-                    .map(|c| c.has_viewport_relative())
-                    .unwrap_or(false);
+                || len.calc.as_ref().map(|c| c.has_viewport_relative()).unwrap_or(false);
             let (vw, vh) = match viewport {
                 Some((vw, vh)) => (vw, vh),
                 None if needs_viewport => (f32::NAN, f32::NAN),
@@ -192,8 +188,7 @@ mod tests {
         };
 
         let (offset_x, _, _, _) =
-            compute_object_fit(ObjectFit::None, position, 120.0, 50.0, 20.0, 20.0, 16.0, None)
-                .expect("fit computed");
+            compute_object_fit(ObjectFit::None, position, 120.0, 50.0, 20.0, 20.0, 16.0, None).expect("fit computed");
         // free_x = 100 (box 120 - dest_w 20). 50% + 10px => 60px.
         assert!((offset_x - 60.0).abs() < 0.01);
 

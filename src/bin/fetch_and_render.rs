@@ -28,6 +28,7 @@
 #![allow(clippy::io_other_error)]
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::len_zero)]
+#![allow(clippy::items_after_test_module)]
 
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::{
@@ -131,13 +132,6 @@ fn fetch_bytes(
     )))
 }
 
-/// Best-effort extraction of CSS URLs that appear inside inline scripts or attributes.
-///
-/// Some sites load their primary stylesheets dynamically and never emit a
-/// `<link rel="stylesheet">` element in the static HTML. To render those pages
-/// without executing JavaScript, scan the raw HTML for any substring that looks
-/// like a CSS URL (ends with `.css`, possibly with a query string) and try to
-/// resolve and fetch it as a stylesheet.
 #[cfg(test)]
 mod tests {
     use super::*;

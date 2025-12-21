@@ -4547,10 +4547,14 @@ mod tests {
         let renderer = DisplayListRenderer::new(120, 100, Rgba::WHITE, font_ctx).expect("renderer");
         let pixmap = renderer.render(&list).expect("rendered");
 
-        let black_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("text pixels");
-        let red_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+        let black_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| {
+            a > 0 && r.abs_diff(g) <= 10 && r.abs_diff(b) <= 10 && r < 96 && g < 96 && b < 96
+        })
+        .expect("text pixels");
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| {
+            a > 0 && r > 32 && r > g.saturating_add(20) && r > b.saturating_add(20)
+        })
+        .expect("shadow");
 
         let dx = red_bbox.0 as i32 - black_bbox.0 as i32;
         let dy = red_bbox.1 as i32 - black_bbox.1 as i32;

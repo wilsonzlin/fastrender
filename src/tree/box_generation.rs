@@ -3155,7 +3155,7 @@ mod tests {
         match marker_box.box_type {
             BoxType::Marker(marker) => match marker.content {
                 MarkerContent::Text(t) => assert_eq!(t, "[iii]"),
-                _ => panic!("expected text marker"),
+                MarkerContent::Image(_) => panic!("expected text marker"),
             },
             _ => panic!("expected marker box"),
         }
@@ -3193,7 +3193,7 @@ mod tests {
         match marker_box.box_type {
             BoxType::Marker(marker) => match marker.content {
                 MarkerContent::Text(t) => assert_eq!(t, "★ "),
-                _ => panic!("expected text marker from string list-style-type"),
+                MarkerContent::Image(_) => panic!("expected text marker from string list-style-type"),
             },
             _ => panic!("expected marker box"),
         }
@@ -3271,7 +3271,7 @@ mod tests {
                 li.children.first().and_then(|child| match &child.box_type {
                     BoxType::Marker(m) => match &m.content {
                         MarkerContent::Text(t) => Some(t.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3353,7 +3353,7 @@ mod tests {
                 li.children.first().and_then(|child| match &child.box_type {
                     BoxType::Marker(m) => match &m.content {
                         MarkerContent::Text(t) => Some(t.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3435,7 +3435,7 @@ mod tests {
                 li.children.first().and_then(|child| match &child.box_type {
                     BoxType::Marker(m) => match &m.content {
                         MarkerContent::Text(t) => Some(t.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3519,7 +3519,7 @@ mod tests {
                 li.children.first().and_then(|child| match &child.box_type {
                     BoxType::Marker(m) => match &m.content {
                         MarkerContent::Text(t) => Some(t.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3603,7 +3603,7 @@ mod tests {
                 li.children.first().and_then(|child| match &child.box_type {
                     BoxType::Marker(m) => match &m.content {
                         MarkerContent::Text(t) => Some(t.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3733,7 +3733,7 @@ mod tests {
                 li.children.first().and_then(|child| match &child.box_type {
                     BoxType::Marker(m) => match &m.content {
                         MarkerContent::Text(t) => Some(t.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3832,7 +3832,7 @@ mod tests {
                 BoxType::Block(_) => child.children.first().and_then(|c| match &c.box_type {
                     BoxType::Marker(m) => match &m.content {
                         MarkerContent::Text(t) => Some(t.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 }),
@@ -3856,7 +3856,7 @@ mod tests {
                 .filter_map(|node| match &node.box_type {
                     BoxType::Marker(marker) => match &marker.content {
                         MarkerContent::Text(text) => Some(text.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3867,7 +3867,7 @@ mod tests {
 
     #[test]
     fn reversed_ordered_list_counts_down_with_ua_defaults() {
-        let dom = crate::dom::parse_html(r#"<ol reversed><li>one</li><li>two</li><li>three</li></ol>"#).unwrap();
+        let dom = crate::dom::parse_html(r"<ol reversed><li>one</li><li>two</li><li>three</li></ol>").unwrap();
         let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
         let tree = generate_box_tree(&styled);
 
@@ -3877,7 +3877,7 @@ mod tests {
                 .filter_map(|node| match &node.box_type {
                     BoxType::Marker(marker) => match &marker.content {
                         MarkerContent::Text(text) => Some(text.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3898,7 +3898,7 @@ mod tests {
                 .filter_map(|node| match &node.box_type {
                     BoxType::Marker(marker) => match &marker.content {
                         MarkerContent::Text(text) => Some(text.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -3920,7 +3920,7 @@ mod tests {
                 .filter_map(|node| match &node.box_type {
                     BoxType::Marker(marker) => match &marker.content {
                         MarkerContent::Text(text) => Some(text.clone()),
-                        _ => None,
+                        MarkerContent::Image(_) => None,
                     },
                     _ => None,
                 })
@@ -4076,14 +4076,14 @@ mod tests {
         let open_marker = match &tree.root.children[0].children[0].box_type {
             BoxType::Marker(marker) => match &marker.content {
                 MarkerContent::Text(t) => t.clone(),
-                other => panic!("expected text marker, got {:?}", other),
+                MarkerContent::Image(_) => panic!("expected text marker, got Image"),
             },
             other => panic!("expected marker, got {:?}", other),
         };
         let closed_marker = match &tree.root.children[1].children[0].box_type {
             BoxType::Marker(marker) => match &marker.content {
                 MarkerContent::Text(t) => t.clone(),
-                other => panic!("expected text marker, got {:?}", other),
+                MarkerContent::Image(_) => panic!("expected text marker, got Image"),
             },
             other => panic!("expected marker, got {:?}", other),
         };
@@ -4250,14 +4250,14 @@ mod tests {
         let first_marker_text = match &menu_box.children[0].children[0].box_type {
             BoxType::Marker(marker) => match &marker.content {
                 MarkerContent::Text(t) => t.clone(),
-                other => panic!("expected text marker for first menu item, got {:?}", other),
+                MarkerContent::Image(_) => panic!("expected text marker for first menu item, got Image"),
             },
             other => panic!("expected marker for first menu item, got {:?}", other),
         };
         let second_marker_text = match &menu_box.children[1].children[0].box_type {
             BoxType::Marker(marker) => match &marker.content {
                 MarkerContent::Text(t) => t.clone(),
-                other => panic!("expected text marker for second menu item, got {:?}", other),
+                MarkerContent::Image(_) => panic!("expected text marker for second menu item, got Image"),
             },
             other => panic!("expected marker for second menu item, got {:?}", other),
         };
@@ -4378,11 +4378,11 @@ mod tests {
 
         let first_text = match first_inner_marker {
             MarkerContent::Text(t) => t,
-            other => panic!("expected text marker, got {:?}", other),
+            MarkerContent::Image(_) => panic!("expected text marker, got Image"),
         };
         let second_text = match second_inner_marker {
             MarkerContent::Text(t) => t,
-            other => panic!("expected text marker, got {:?}", other),
+            MarkerContent::Image(_) => panic!("expected text marker, got Image"),
         };
 
         assert_eq!(first_text, "1 ");
@@ -4442,7 +4442,7 @@ mod tests {
                         panic!("expected image marker type");
                     }
                 }
-                other => panic!("expected image marker, got {:?}", other),
+                MarkerContent::Text(_) => panic!("expected image marker, got Text"),
             },
             other => panic!("expected marker, got {:?}", other),
         }

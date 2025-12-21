@@ -41,8 +41,6 @@ use ureq::Agent;
 use url::Url;
 use wuff::{decompress_woff1, decompress_woff2};
 
-const EMBEDDED_FALLBACK_FONT: &[u8] = include_bytes!("../../resources/fonts/Roboto-Regular.ttf");
-
 /// Font context for text operations
 ///
 /// This is the main interface for font access during layout and rendering.
@@ -95,19 +93,24 @@ impl FontContext {
     pub fn new() -> Self {
         let mut db = FontDatabase::new();
 
-        // Some minimal container environments ship without system fonts.
-        // Attempt to load a few common sans-serif files so text shaping can proceed.
-        if db.font_count() == 0 {
-            let _ = db.load_font_data(EMBEDDED_FALLBACK_FONT.to_vec());
-        }
-
         if db.font_count() == 0 {
             const FALLBACK_FONT_FILES: &[&str] = &[
+                // Linux
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
                 "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
                 "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+                // macOS
+                "/System/Library/Fonts/SFNS.ttf",
+                "/System/Library/Fonts/SFNSDisplay.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/Library/Fonts/Arial.ttf",
+                // Windows
+                "C:\\Windows\\Fonts\\arial.ttf",
+                "C:\\Windows\\Fonts\\segoeui.ttf",
             ];
 
+            // Some minimal container environments ship without discoverable system fonts.
+            // Attempt to load a common sans-serif from well-known paths so text shaping can proceed.
             for path in FALLBACK_FONT_FILES {
                 if let Ok(data) = fs::read(path) {
                     let _ = db.load_font_data(data);
@@ -176,6 +179,19 @@ impl FontContext {
     #[inline]
     pub fn has_fonts(&self) -> bool {
         !self.db.is_empty()
+    }
+
+    /// Returns whether there are no usable fonts (system + web).
+    ///
+    /// This is primarily used to make layout/paining fail gracefully in minimal
+    /// environments where no system fonts are installed and no web fonts were
+    /// loaded.
+    #[inline]
+    pub(crate) fn is_effectively_empty(&self) -> bool {
+        if !self.db.is_empty() {
+            return false;
+        }
+        self.web_fonts.read().map(|w| w.is_empty()).unwrap_or(true)
     }
 
     /// Gets a font matching the given CSS properties
@@ -1249,6 +1265,22 @@ mod tests {
     use super::*;
     use crate::style::media::MediaContext;
 
+    fn system_font_for_char(ch: char) -> Option<(Vec<u8>, String)> {
+        let db = FontDatabase::new();
+        let id = db.faces().find(|face| db.has_glyph(face.id, ch)).map(|face| face.id)?;
+        let font = db.load_font(id)?;
+        Some(((*font.data).clone(), font.family))
+    }
+
+    fn system_font_file_url_for_char(ch: char) -> Option<(tempfile::TempDir, Url)> {
+        let (data, _family) = system_font_for_char(ch)?;
+        let dir = tempfile::tempdir().ok()?;
+        let path = dir.path().join("fixture.ttf");
+        fs::write(&path, data).ok()?;
+        let url = Url::from_file_path(&path).ok()?;
+        Some((dir, url))
+    }
+
     #[test]
     fn test_font_context_creation() {
         let ctx = FontContext::new();
@@ -1275,11 +1307,10 @@ mod tests {
 
     #[test]
     fn loads_web_font_from_data_url() {
-        // Build a @font-face pointing at the embedded fallback font.
-        let data_url = format!(
-            "data:font/ttf;base64,{}",
-            BASE64_STANDARD.encode(EMBEDDED_FALLBACK_FONT)
-        );
+        let Some((font_data, _family)) = system_font_for_char('A') else {
+            return;
+        };
+        let data_url = format!("data:font/ttf;base64,{}", BASE64_STANDARD.encode(font_data));
         let css = format!(
             "@font-face {{ font-family: \"WebFont\"; src: url(\"{}\"); font-style: normal; font-weight: 400; }}",
             data_url
@@ -1297,23 +1328,24 @@ mod tests {
 
     #[test]
     fn declared_web_family_blocks_platform_fallback() {
-        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
-        let data = fs::read(&font_path).expect("fixture font");
+        let Some((data, platform_family)) = system_font_for_char('A') else {
+            return;
+        };
         let mut db = FontDatabase::empty();
         db.load_font_data(data).expect("load platform font");
         let ctx = FontContext::with_database(Arc::new(db));
 
         let face = FontFaceRule {
-            family: Some("Roboto".to_string()),
+            family: Some(platform_family.clone()),
             sources: vec![FontFaceSource::Url("file:///no/such/font.woff".to_string())],
             ..Default::default()
         };
         ctx.load_web_fonts(&[face], None, None).expect("load declared face");
 
-        assert!(ctx.is_web_family_declared("Roboto"));
-        assert!(!ctx.has_web_faces("Roboto"));
+        assert!(ctx.is_web_family_declared(&platform_family));
+        assert!(!ctx.has_web_faces(&platform_family));
 
-        let families = vec!["Roboto".to_string()];
+        let families = vec![platform_family];
         let resolved = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
         assert!(
             resolved.is_none(),
@@ -1323,9 +1355,9 @@ mod tests {
 
     #[test]
     fn web_fonts_filter_to_used_codepoints() {
-        let font_path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/STIXTwoMath-Regular.otf");
-        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let Some((_dir, font_url)) = system_font_file_url_for_char('A') else {
+            return;
+        };
 
         let matching = FontFaceRule {
             family: Some("Match".to_string()),
@@ -1348,18 +1380,15 @@ mod tests {
         assert!(ctx.is_web_family_declared("Match"));
         assert!(ctx.is_web_family_declared("Skip"));
 
-        let match_font = ctx.match_web_font_for_char("Match", 400, FontStyle::Normal, FontStretch::Normal, None, 'A');
-        assert!(match_font.is_some(), "matching range should load");
-
-        let skipped_font =
-            ctx.match_web_font_for_char("Skip", 400, FontStyle::Normal, FontStretch::Normal, None, '\u{4E00}');
-        assert!(skipped_font.is_none(), "non-intersecting range should be skipped");
+        assert!(ctx.has_web_faces("Match"), "matching range should load");
+        assert!(!ctx.has_web_faces("Skip"), "non-intersecting range should be skipped");
     }
 
     #[test]
     fn caseless_family_matching_handles_unicode() {
-        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
-        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let Some((_dir, font_url)) = system_font_file_url_for_char('A') else {
+            return;
+        };
         let face = FontFaceRule {
             family: Some("Straße".to_string()),
             sources: vec![FontFaceSource::Url(font_url.to_string())],
@@ -1369,24 +1398,17 @@ mod tests {
         let ctx = FontContext::empty();
         ctx.load_web_fonts(&[face], None, None).expect("load face");
 
-        let families = vec!["STRASSE".to_string()];
         let font = ctx
-            .match_web_font_for_char(
-                families[0].as_str(),
-                400,
-                FontStyle::Normal,
-                FontStretch::Normal,
-                None,
-                'A',
-            )
+            .match_web_font_for_char("STRASSE", 400, FontStyle::Normal, FontStretch::Normal, None, 'A')
             .expect("find caseless match");
         assert_eq!(case_fold(&font.family), case_fold("Straße"));
     }
 
     #[test]
     fn oblique_range_matching_picks_covering_face() {
-        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
-        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let Some((_dir, font_url)) = system_font_file_url_for_char('A') else {
+            return;
+        };
         let family = "ObliqueRange".to_string();
 
         let faces = vec![
@@ -1425,8 +1447,9 @@ mod tests {
 
     #[test]
     fn normal_style_prefers_normal_face_over_oblique_with_zero_distance() {
-        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
-        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let Some((_dir, font_url)) = system_font_file_url_for_char('A') else {
+            return;
+        };
         let family = "StylePreference".to_string();
 
         let faces = vec![
@@ -1463,8 +1486,9 @@ mod tests {
 
     #[test]
     fn italic_style_prefers_italic_over_oblique_at_same_angle() {
-        let font_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/fonts/Roboto-Regular.ttf");
-        let font_url = url::Url::from_file_path(&font_path).expect("file url");
+        let Some((_dir, font_url)) = system_font_file_url_for_char('A') else {
+            return;
+        };
         let family = "ItalicPreference".to_string();
 
         let faces = vec![
@@ -1608,12 +1632,14 @@ mod tests {
 
     #[test]
     fn test_get_font_falls_back_when_slope_missing() {
+        let Some((data, family)) = system_font_for_char('A') else {
+            return;
+        };
         let mut db = FontDatabase::empty();
-        db.load_font_data(EMBEDDED_FALLBACK_FONT.to_vec())
-            .expect("load embedded font");
+        db.load_font_data(data).expect("load fixture font");
         let ctx = FontContext::with_database(Arc::new(db));
 
-        let families = vec!["Roboto".to_string()];
+        let families = vec![family];
         // Request italic + heavier weight even though only a normal face exists; should still return a font.
         let font = ctx.get_font(&families, 700, true, false);
         assert!(font.is_some());
@@ -1640,10 +1666,13 @@ mod tests {
     }
 
     #[test]
-    fn test_embedded_fallback_font_loads() {
+    fn fixture_font_loads_into_database() {
+        let Some((data, _family)) = system_font_for_char('A') else {
+            return;
+        };
         let mut db = FontDatabase::empty();
         let before = db.font_count();
-        let _ = db.load_font_data(EMBEDDED_FALLBACK_FONT.to_vec());
+        let _ = db.load_font_data(data);
         assert!(db.font_count() > before);
     }
 

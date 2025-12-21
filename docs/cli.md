@@ -20,8 +20,8 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Entry: `src/bin/fetch_and_render.rs`
 - Run: `cargo run --release --bin fetch_and_render -- --help`
 
-## `inspect_frag` (example)
+## `inspect_frag`
 
 - Purpose: inspect fragment output (and related style/layout state) for a single input.
-- Entry: `examples/inspect_frag.rs`
-- Run: `cargo run --release --example inspect_frag -- --help`
+- Entry: `src/bin/inspect_frag.rs`
+- Run: `cargo run --release --bin inspect_frag -- --help`

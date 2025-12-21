@@ -1,8 +1,6 @@
-use fastrender::layout::{FormattingContext, FormattingContextFactory, LayoutConstraints};
 use fastrender::style::display::Display;
-use fastrender::style::types::Width;
 use fastrender::tree::box_tree::BoxNode;
-use fastrender::{ComputedStyle, FormattingContextType};
+use fastrender::{ComputedStyle, FormattingContextFactory, FormattingContextType, LayoutConstraints};
 use std::sync::Arc;
 
 fn default_style() -> Arc<ComputedStyle> {
@@ -14,7 +12,8 @@ fn legend_shrinks_to_content_width() {
     // Legend with auto width should shrink to its content, not fill the fieldset width.
     let mut legend_style = ComputedStyle::default();
     legend_style.display = Display::Block;
-    legend_style.width = Some(Width::Auto);
+    legend_style.width = None;
+    legend_style.shrink_to_fit_inline_size = true;
     let legend = BoxNode::new_block(
         Arc::new(legend_style),
         FormattingContextType::Block,
@@ -38,4 +37,3 @@ fn legend_shrinks_to_content_width() {
     let legend_frag = &fragment.children[0];
     assert!(legend_frag.bounds.width() < 100.0, "legend width {:?}", legend_frag.bounds.width());
 }
-

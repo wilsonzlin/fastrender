@@ -3,8 +3,8 @@ use fastrender::layout::contexts::grid::GridFormattingContext;
 use fastrender::style::display::Display;
 use fastrender::style::types::GridTrack;
 use fastrender::style::values::Length;
-use fastrender::{BoxNode, ComputedStyle, FormattingContext, FormattingContextType};
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
+use fastrender::{BoxNode, ComputedStyle, FormattingContext, FormattingContextType};
 use std::sync::Arc;
 
 fn grid_container(children: Vec<BoxNode>) -> BoxNode {
@@ -78,7 +78,11 @@ fn grid_item_auto_margins_center_item() {
     let child = &fragment.children[0];
 
     // With a 200px container, 50px item, and auto inline margins, the item should be centered.
-    assert!((child.bounds.x() - 75.0).abs() <= 0.5, "expected centered item, got x={}" , child.bounds.x());
+    assert!(
+        (child.bounds.x() - 75.0).abs() <= 0.5,
+        "expected centered item, got x={}",
+        child.bounds.x()
+    );
     assert_eq!(child.bounds.width(), 50.0);
 }
 
@@ -94,7 +98,11 @@ fn grid_item_auto_block_margins_center_vertically() {
     let child = &fragment.children[0];
     // Content height is 100 (content-box) with 10px padding on each side, so the padding pushes the child down.
     // With a 20px tall item and auto block margins, it should center in the 100px content and start around y=50.
-    assert!((child.bounds.y() - 50.0).abs() <= 0.5, "expected vertically centered item, got y={}", child.bounds.y());
+    assert!(
+        (child.bounds.y() - 50.0).abs() <= 0.5,
+        "expected vertically centered item, got y={}",
+        child.bounds.y()
+    );
     assert_eq!(child.bounds.height(), 20.0);
 }
 
@@ -109,7 +117,11 @@ fn grid_children_are_laid_out_even_when_taffy_reports_zero_width() {
     grid_style.min_height = Some(Length::new(100.0, fastrender::style::values::LengthUnit::Vh));
     let text_style = Arc::new(ComputedStyle::default());
     let text = BoxNode::new_text(text_style.clone(), "Grid child text".to_string());
-    let child = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![text]);
+    let child = BoxNode::new_block(
+        Arc::new(ComputedStyle::default()),
+        FormattingContextType::Block,
+        vec![text],
+    );
     let grid = BoxNode::new_block(Arc::new(grid_style), FormattingContextType::Grid, vec![child]);
 
     let fc = GridFormattingContext::new();
@@ -123,7 +135,10 @@ fn grid_children_are_laid_out_even_when_taffy_reports_zero_width() {
     // The child should occupy space in the grid instead of collapsing to zero width, and
     // its subtree should contain the laid-out text fragments.
     assert!(child_frag.bounds.width() > 0.0);
-    assert!(count_text_fragments(child_frag) > 0, "expected text fragments inside grid child");
+    assert!(
+        count_text_fragments(child_frag) > 0,
+        "expected text fragments inside grid child"
+    );
 }
 
 #[test]
@@ -143,7 +158,11 @@ fn nested_grid_items_preserve_measured_children() {
 
     let text_style = Arc::new(ComputedStyle::default());
     let text = BoxNode::new_text(text_style, "Nested grid child".to_string());
-    let inner_block = BoxNode::new_block(Arc::new(ComputedStyle::default()), FormattingContextType::Block, vec![text]);
+    let inner_block = BoxNode::new_block(
+        Arc::new(ComputedStyle::default()),
+        FormattingContextType::Block,
+        vec![text],
+    );
     let inner_grid = BoxNode::new_block(Arc::new(inner_style), FormattingContextType::Grid, vec![inner_block]);
     let outer_grid = BoxNode::new_block(Arc::new(outer_style), FormattingContextType::Grid, vec![inner_grid]);
 
@@ -156,7 +175,7 @@ fn nested_grid_items_preserve_measured_children() {
     let inner_fragment = &fragment.children[0];
 
     assert!(
-        inner_fragment.children.len() > 0,
+        !inner_fragment.children.is_empty(),
         "nested grid fragment should preserve its laid-out children"
     );
     assert!(

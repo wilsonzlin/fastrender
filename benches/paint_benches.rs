@@ -16,6 +16,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use fastrender::geometry::{Point, Rect};
+use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
 use fastrender::tree::fragment_tree::{FragmentNode, FragmentTree};
@@ -137,8 +138,10 @@ fn create_complex_display_list(item_count: usize) -> DisplayList {
             4 => {
                 // Clip
                 list.push(DisplayItem::PushClip(ClipItem {
-                    rect: Rect::from_xywh(450.0, y, 100.0, 25.0),
-                    radii: None,
+                    shape: ClipShape::Rect {
+                        rect: Rect::from_xywh(450.0, y, 100.0, 25.0),
+                        radii: None,
+                    },
                 }));
                 list.push(DisplayItem::FillRect(FillRectItem {
                     rect: Rect::from_xywh(440.0, y - 5.0, 120.0, 35.0),
@@ -449,8 +452,10 @@ fn bench_display_item_creation(c: &mut Criterion) {
     group.bench_function("clip_item", |b| {
         b.iter(|| {
             DisplayItem::PushClip(ClipItem {
-                rect: Rect::from_xywh(black_box(10.0), black_box(20.0), black_box(100.0), black_box(50.0)),
-                radii: None,
+                shape: ClipShape::Rect {
+                    rect: Rect::from_xywh(black_box(10.0), black_box(20.0), black_box(100.0), black_box(50.0)),
+                    radii: None,
+                },
             })
         })
     });

@@ -2649,8 +2649,7 @@ fn parse_calc_angle_factor<'i, 't>(
             is_angle: false,
         }),
         Token::Dimension { value, ref unit, .. } => {
-            angle_component_from_unit(&unit.to_ascii_lowercase(), *value)
-                .ok_or_else(|| location.new_custom_error(()))
+            angle_component_from_unit(&unit.to_ascii_lowercase(), *value).ok_or_else(|| location.new_custom_error(()))
         }
         Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
             input.parse_nested_block(parse_calc_angle_sum)

@@ -128,10 +128,7 @@ fn margin_and_inset_accept_calc_zero() {
     let zero = parse_length("calc(0)").expect("calc zero");
     apply_declaration(
         &mut style,
-        &decl(
-            "margin",
-            PropertyValue::Multiple(vec![PropertyValue::Length(zero.clone())]),
-        ),
+        &decl("margin", PropertyValue::Multiple(vec![PropertyValue::Length(zero)])),
         &ComputedStyle::default(),
         16.0,
         16.0,

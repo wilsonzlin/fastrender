@@ -403,7 +403,11 @@ fn resolve_length(
     root_font_size: f32,
     viewport: crate::geometry::Size,
 ) -> f32 {
-    let base = if containing_width.is_finite() { Some(containing_width) } else { None };
+    let base = if containing_width.is_finite() {
+        Some(containing_width)
+    } else {
+        None
+    };
     resolve_length_with_percentage(length, base, viewport, font_size, root_font_size).unwrap_or(0.0)
 }
 

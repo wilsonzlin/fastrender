@@ -4060,10 +4060,11 @@ impl FormattingContext for TableFormattingContext {
                 heights.get(laid.cell.row).copied().unwrap_or(laid.height)
             };
             let raw_baseline = laid.baseline.unwrap_or(laid.height);
-            let mut baseline = raw_baseline;
-            if raw_baseline >= laid.height && target_height > laid.height {
-                baseline = target_height;
-            }
+            let baseline = if raw_baseline >= laid.height && target_height > laid.height {
+                target_height
+            } else {
+                raw_baseline
+            };
             if laid.cell.rowspan > 1 && span_end > laid.cell.row {
                 spanning_baseline_allocation(target_height, baseline, laid.cell.row, span_end, heights)
             } else {
@@ -5761,7 +5762,7 @@ mod tests {
         let tfc = TableFormattingContext::new();
         tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
 
-        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
         assert!(
             min >= 80.0,
             "cell min-width should clamp column minimum, got {:.2}",
@@ -5800,7 +5801,7 @@ mod tests {
             Some(200.0),
         );
 
-        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
         assert!(
             (min - 100.0).abs() < 0.5,
             "50% min-width should resolve against definite 200px table width (got {:.2})",
@@ -5832,7 +5833,7 @@ mod tests {
         let tfc = TableFormattingContext::new();
         tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
 
-        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
         assert!(
             min < 1.0,
             "percentage min-width should be ignored without a definite base (got {:.2})",
@@ -5868,7 +5869,7 @@ mod tests {
         tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
 
         let constraint = constraints
-            .get(0)
+            .first()
             .cloned()
             .unwrap_or_else(|| ColumnConstraints::new(0.0, 0.0));
         assert!(
@@ -5914,7 +5915,7 @@ mod tests {
         let tfc = TableFormattingContext::new();
         tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
 
-        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
         assert!(
             min >= 120.0,
             "column min-width should apply to constraints, got {:.2}",
@@ -5957,7 +5958,7 @@ mod tests {
         tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
 
         let constraint = constraints
-            .get(0)
+            .first()
             .cloned()
             .unwrap_or_else(|| ColumnConstraints::new(0.0, 0.0));
         assert!(
@@ -6010,7 +6011,7 @@ mod tests {
             Some(200.0),
         );
 
-        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
         assert!(
             (min - 100.0).abs() < 0.5,
             "percent min-width should resolve against definite table width, got {:.2}",
@@ -6050,7 +6051,7 @@ mod tests {
         // percent_base None to mimic auto table width
         tfc.populate_column_constraints(&table, &structure, &mut constraints, DistributionMode::Auto, None);
 
-        let min = constraints.get(0).map(|c| c.min_width).unwrap_or(0.0);
+        let min = constraints.first().map(|c| c.min_width).unwrap_or(0.0);
         assert!(
             min < 50.0,
             "percent min-width should be treated as auto when table width is indefinite, got {:.2}",
@@ -6366,7 +6367,7 @@ mod tests {
         let border = borders
             .vertical
             .get(1)
-            .and_then(|col| col.get(0))
+            .and_then(|col| col.first())
             .copied()
             .unwrap_or_else(ResolvedBorder::none);
         assert_eq!(border.style, BorderStyle::Solid, "higher-priority style should win");
@@ -6689,7 +6690,7 @@ mod tests {
 
     #[test]
     fn collapsed_segments_trim_to_corner_winners() {
-        let row_line_pos = vec![0.0, 30.0];
+        let row_line_pos = [0.0, 30.0];
         let corner_top = ResolvedBorder {
             width: 10.0,
             style: BorderStyle::Solid,

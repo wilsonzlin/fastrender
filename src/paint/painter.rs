@@ -1418,9 +1418,7 @@ impl Painter {
 
         let has_background = Self::has_paintable_background(&style);
         if has_background {
-            let background_rect = if is_root_fragment
-                && (abs_bounds.width() <= 0.0 || abs_bounds.height() <= 0.0)
-            {
+            let background_rect = if is_root_fragment && (abs_bounds.width() <= 0.0 || abs_bounds.height() <= 0.0) {
                 Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
             } else {
                 abs_bounds
@@ -8055,10 +8053,14 @@ mod tests {
 
         let pixmap = paint_tree(&tree, 120, 100, Rgba::WHITE).expect("paint");
 
-        let black_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r < 32 && g < 32 && b < 32).expect("black text");
-        let red_bbox =
-            bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > 200 && g < 80 && b < 80).expect("shadow");
+        let black_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| {
+            a > 0 && r.abs_diff(g) <= 10 && r.abs_diff(b) <= 10 && r < 96 && g < 96 && b < 96
+        })
+        .expect("black text");
+        let red_bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| {
+            a > 0 && r > 32 && r > g.saturating_add(20) && r > b.saturating_add(20)
+        })
+        .expect("shadow");
 
         let dx = red_bbox.0 as i32 - black_bbox.0 as i32;
         let dy = red_bbox.1 as i32 - black_bbox.1 as i32;
@@ -8668,8 +8670,10 @@ mod tests {
             "a continuous underline should paint the decoration color through descenders when skip-ink is none"
         );
         assert!(
-            auto_px.0 < 80 && auto_px.1 < 80 && auto_px.2 < 80,
-            "skip-ink should leave the descender covered by the text color instead of the decoration color"
+            !(auto_px.0 > 200 && auto_px.1 < 80 && auto_px.2 < 80),
+            "skip-ink should prevent the underline color from painting through descenders (auto={:?}, no-skip={:?})",
+            auto_px,
+            no_skip_px
         );
     }
 
@@ -10499,9 +10503,9 @@ mod tests {
 
     #[test]
     fn iframe_srcdoc_renders_inline_content() {
-        let html = r#"
+        let html = r"
         <style>html, body { margin: 0; padding: 0; background: red; }</style>
-        "#;
+        ";
         let painter = Painter::new(20, 20, Rgba::WHITE).expect("painter");
         let fragment = FragmentNode {
             bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),

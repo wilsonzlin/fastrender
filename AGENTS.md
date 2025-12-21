@@ -2,7 +2,7 @@
 
 This repository is an internal HTML/CSS renderer in Rust. The goal is to render real pages into pixel-correct raster output while staying spec-faithful.
 
-`docs/README.md` is the internal wiki entry point.
+`docs/index.md` is the internal wiki entry point.
 
 ## Project goals
 
@@ -41,8 +41,8 @@ Pick one spec area and implement a coherent slice end-to-end (parsing → cascad
 ## Tooling
 
 - Binaries: `fetch_pages`, `render_pages`, `fetch_and_render` (see `docs/cli.md`)
-- Deep inspection: `cargo run --release --example inspect_frag -- ...`
-- Debug/profiling toggles: `docs/env-vars.md`, `docs/debugging.md`, `docs/perf_logging.md`
+- Deep inspection: `cargo run --release --bin inspect_frag -- ...`
+- Debug/profiling toggles: `docs/env-vars.md`, `docs/debugging.md`, `docs/perf-logging.md`
 
 ## Documentation policy
 

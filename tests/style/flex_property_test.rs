@@ -25,7 +25,13 @@ fn styled_children(html: &str) -> Vec<StyledNode> {
     container
         .children
         .iter()
-        .filter(|child| child.node.tag_name().map(|t| t.eq_ignore_ascii_case("span")).unwrap_or(false))
+        .filter(|child| {
+            child
+                .node
+                .tag_name()
+                .map(|t| t.eq_ignore_ascii_case("span"))
+                .unwrap_or(false)
+        })
         .cloned()
         .collect()
 }
@@ -51,7 +57,9 @@ fn flex_shrink_ignores_negative_numbers() {
 
 #[test]
 fn flex_shorthand_none_and_auto_keywords() {
-    let children = styled_children(r#"<div style="display:flex"><span style="flex: none"></span><span style="flex: auto"></span></div>"#);
+    let children = styled_children(
+        r#"<div style="display:flex"><span style="flex: none"></span><span style="flex: auto"></span></div>"#,
+    );
     assert_eq!(children[0].styles.flex_grow, 0.0);
     assert_eq!(children[0].styles.flex_shrink, 0.0);
     assert!(matches!(

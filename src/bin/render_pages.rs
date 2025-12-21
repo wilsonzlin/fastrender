@@ -38,37 +38,6 @@ const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
 
-#[cfg(test)]
-mod tests {
-    use super::normalize_page_name;
-
-    #[test]
-    fn normalize_page_name_strips_scheme_and_www() {
-        assert_eq!(
-            normalize_page_name("https://example.com/foo").as_deref(),
-            Some("example.com_foo")
-        );
-        assert_eq!(
-            normalize_page_name("http://www.example.com").as_deref(),
-            Some("example.com")
-        );
-    }
-
-    #[test]
-    fn normalize_page_name_ignores_empty() {
-        assert!(normalize_page_name("").is_none());
-        assert!(normalize_page_name("   ").is_none());
-    }
-
-    #[test]
-    fn normalize_page_name_strips_trailing_punctuation_and_whitespace() {
-        assert_eq!(
-            normalize_page_name(" https://Example.com./path/ ").as_deref(),
-            Some("example.com_path")
-        );
-    }
-}
-
 fn usage() {
     println!("Usage: render_pages [--jobs N] [--timeout SECONDS] [--viewport WxH] [--pages a,b,c] [--dpr FLOAT] [--scroll-x PX] [--scroll-y PX] [--prefers-reduced-transparency <value>] [--prefers-reduced-motion <value>] [--prefers-reduced-data <value>] [--prefers-contrast <value>] [--prefers-color-scheme <value>] [--user-agent UA] [--accept-language LANG] [--css-limit N] [--timings] [page ...]");
     println!("  --jobs N          Number of parallel renders (default: num_cpus)");
@@ -725,5 +694,36 @@ fn main() {
 
     if crash > 0 || error > 0 {
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_page_name;
+
+    #[test]
+    fn normalize_page_name_strips_scheme_and_www() {
+        assert_eq!(
+            normalize_page_name("https://example.com/foo").as_deref(),
+            Some("example.com_foo")
+        );
+        assert_eq!(
+            normalize_page_name("http://www.example.com").as_deref(),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn normalize_page_name_ignores_empty() {
+        assert!(normalize_page_name("").is_none());
+        assert!(normalize_page_name("   ").is_none());
+    }
+
+    #[test]
+    fn normalize_page_name_strips_trailing_punctuation_and_whitespace() {
+        assert_eq!(
+            normalize_page_name(" https://Example.com./path/ ").as_deref(),
+            Some("example.com_path")
+        );
     }
 }

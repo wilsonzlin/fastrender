@@ -19,10 +19,7 @@ fn find_first<'a>(node: &'a StyledNode, tag: &str) -> Option<&'a StyledNode> {
 
 #[test]
 fn parses_integer_order() {
-    let dom = dom::parse_html(
-        r#"<div><span style="order: -2">a</span><span style="order: 5">b</span></div>"#,
-    )
-    .unwrap();
+    let dom = dom::parse_html(r#"<div><span style="order: -2">a</span><span style="order: 5">b</span></div>"#).unwrap();
     let stylesheet = parse_stylesheet("").unwrap();
     let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
     let div = find_first(&styled, "div").expect("div");

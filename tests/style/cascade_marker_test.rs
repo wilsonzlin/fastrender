@@ -75,7 +75,10 @@ fn marker_allows_text_affecting_properties() {
 
     assert_eq!(marker_style.color, fastrender::Rgba::rgb(10, 20, 30));
     assert_eq!(marker_style.font_size, 24.0);
-    assert_eq!(marker_style.text_transform, TextTransform::with_case(CaseTransform::Uppercase));
+    assert_eq!(
+        marker_style.text_transform,
+        TextTransform::with_case(CaseTransform::Uppercase)
+    );
 }
 
 #[test]
@@ -87,9 +90,15 @@ fn marker_ignores_outline_properties() {
     let defaults = ComputedStyle::default();
 
     // Outline on markers should be cleared to defaults and not inherit from the list item.
-    assert!(matches!(marker_style.outline_style, fastrender::style::types::OutlineStyle::None));
+    assert!(matches!(
+        marker_style.outline_style,
+        fastrender::style::types::OutlineStyle::None
+    ));
     assert_eq!(marker_style.outline_width, defaults.outline_width);
-    assert!(matches!(marker_style.outline_color, fastrender::style::types::OutlineColor::Invert));
+    assert!(matches!(
+        marker_style.outline_color,
+        fastrender::style::types::OutlineColor::Invert
+    ));
     assert_eq!(marker_style.outline_offset, defaults.outline_offset);
 }
 
@@ -109,5 +118,8 @@ fn marker_ignores_vertical_align() {
     let li = styled_list_item(rules, "<ul><li></li></ul>");
     let marker_style = li.marker_styles.as_ref().expect("marker styles");
 
-    assert!(matches!(marker_style.vertical_align, fastrender::style::types::VerticalAlign::Baseline));
+    assert!(matches!(
+        marker_style.vertical_align,
+        fastrender::style::types::VerticalAlign::Baseline
+    ));
 }

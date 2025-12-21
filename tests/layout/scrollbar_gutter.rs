@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use fastrender::layout::contexts::block::BlockFormattingContext;
 use fastrender::layout::constraints::LayoutConstraints;
+use fastrender::layout::contexts::block::BlockFormattingContext;
 use fastrender::layout::utils::resolve_scrollbar_width;
 use fastrender::style::types::{Overflow, ScrollbarGutter};
 use fastrender::style::values::Length;
