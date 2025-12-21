@@ -35,132 +35,152 @@ use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::display_list::BorderRadii;
 use crate::style::color::Rgba;
-use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Stroke, Transform,
-};
+use tiny_skia::FillRule;
+use tiny_skia::LineCap;
+use tiny_skia::LineJoin;
+use tiny_skia::Paint;
+use tiny_skia::Path;
+use tiny_skia::PathBuilder;
+use tiny_skia::Pixmap;
+use tiny_skia::PixmapPaint;
+use tiny_skia::PremultipliedColorU8;
+use tiny_skia::Stroke;
+use tiny_skia::Transform;
 
 /// Border widths for all four sides
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct BorderWidths {
-    /// Top border width
-    pub top: f32,
-    /// Right border width
-    pub right: f32,
-    /// Bottom border width
-    pub bottom: f32,
-    /// Left border width
-    pub left: f32,
+  /// Top border width
+  pub top: f32,
+  /// Right border width
+  pub right: f32,
+  /// Bottom border width
+  pub bottom: f32,
+  /// Left border width
+  pub left: f32,
 }
 
 impl BorderWidths {
-    /// Creates uniform border widths
-    pub const fn uniform(width: f32) -> Self {
-        Self {
-            top: width,
-            right: width,
-            bottom: width,
-            left: width,
-        }
+  /// Creates uniform border widths
+  pub const fn uniform(width: f32) -> Self {
+    Self {
+      top: width,
+      right: width,
+      bottom: width,
+      left: width,
     }
+  }
 
-    /// Creates border widths from individual values
-    pub const fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
-        Self {
-            top,
-            right,
-            bottom,
-            left,
-        }
+  /// Creates border widths from individual values
+  pub const fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
+    Self {
+      top,
+      right,
+      bottom,
+      left,
     }
+  }
 
-    /// Returns true if any border has non-zero width
-    pub fn has_border(&self) -> bool {
-        self.top > 0.0 || self.right > 0.0 || self.bottom > 0.0 || self.left > 0.0
-    }
+  /// Returns true if any border has non-zero width
+  pub fn has_border(&self) -> bool {
+    self.top > 0.0 || self.right > 0.0 || self.bottom > 0.0 || self.left > 0.0
+  }
 }
 
 /// Border colors for all four sides
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BorderColors {
-    /// Top border color
-    pub top: Rgba,
-    /// Right border color
-    pub right: Rgba,
-    /// Bottom border color
-    pub bottom: Rgba,
-    /// Left border color
-    pub left: Rgba,
+  /// Top border color
+  pub top: Rgba,
+  /// Right border color
+  pub right: Rgba,
+  /// Bottom border color
+  pub bottom: Rgba,
+  /// Left border color
+  pub left: Rgba,
 }
 
 impl BorderColors {
-    /// Creates uniform border colors
-    pub const fn uniform(color: Rgba) -> Self {
-        Self {
-            top: color,
-            right: color,
-            bottom: color,
-            left: color,
-        }
+  /// Creates uniform border colors
+  pub const fn uniform(color: Rgba) -> Self {
+    Self {
+      top: color,
+      right: color,
+      bottom: color,
+      left: color,
     }
+  }
 
-    /// Creates border colors from individual values
-    pub const fn new(top: Rgba, right: Rgba, bottom: Rgba, left: Rgba) -> Self {
-        Self {
-            top,
-            right,
-            bottom,
-            left,
-        }
+  /// Creates border colors from individual values
+  pub const fn new(top: Rgba, right: Rgba, bottom: Rgba, left: Rgba) -> Self {
+    Self {
+      top,
+      right,
+      bottom,
+      left,
     }
+  }
 }
 
 impl Default for BorderColors {
-    fn default() -> Self {
-        Self::uniform(Rgba::BLACK)
-    }
+  fn default() -> Self {
+    Self::uniform(Rgba::BLACK)
+  }
 }
 
 /// Box shadow parameters
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxShadow {
-    /// Horizontal offset (positive = right)
-    pub offset_x: f32,
-    /// Vertical offset (positive = down)
-    pub offset_y: f32,
-    /// Blur radius (gaussian blur standard deviation)
-    pub blur_radius: f32,
-    /// Spread radius (expands/contracts shadow)
-    pub spread_radius: f32,
-    /// Shadow color (typically with alpha)
-    pub color: Rgba,
-    /// Whether this is an inset shadow
-    pub inset: bool,
+  /// Horizontal offset (positive = right)
+  pub offset_x: f32,
+  /// Vertical offset (positive = down)
+  pub offset_y: f32,
+  /// Blur radius (gaussian blur standard deviation)
+  pub blur_radius: f32,
+  /// Spread radius (expands/contracts shadow)
+  pub spread_radius: f32,
+  /// Shadow color (typically with alpha)
+  pub color: Rgba,
+  /// Whether this is an inset shadow
+  pub inset: bool,
 }
 
 impl BoxShadow {
-    /// Creates a new outset box shadow
-    pub const fn new(offset_x: f32, offset_y: f32, blur_radius: f32, spread_radius: f32, color: Rgba) -> Self {
-        Self {
-            offset_x,
-            offset_y,
-            blur_radius,
-            spread_radius,
-            color,
-            inset: false,
-        }
+  /// Creates a new outset box shadow
+  pub const fn new(
+    offset_x: f32,
+    offset_y: f32,
+    blur_radius: f32,
+    spread_radius: f32,
+    color: Rgba,
+  ) -> Self {
+    Self {
+      offset_x,
+      offset_y,
+      blur_radius,
+      spread_radius,
+      color,
+      inset: false,
     }
+  }
 
-    /// Creates a new inset box shadow
-    pub const fn inset(offset_x: f32, offset_y: f32, blur_radius: f32, spread_radius: f32, color: Rgba) -> Self {
-        Self {
-            offset_x,
-            offset_y,
-            blur_radius,
-            spread_radius,
-            color,
-            inset: true,
-        }
+  /// Creates a new inset box shadow
+  pub const fn inset(
+    offset_x: f32,
+    offset_y: f32,
+    blur_radius: f32,
+    spread_radius: f32,
+    color: Rgba,
+  ) -> Self {
+    Self {
+      offset_x,
+      offset_y,
+      blur_radius,
+      spread_radius,
+      color,
+      inset: true,
     }
+  }
 }
 
 // ============================================================================
@@ -169,26 +189,26 @@ impl BoxShadow {
 
 /// Converts our Rgba type to tiny-skia's Color
 fn to_skia_color(color: Rgba) -> tiny_skia::Color {
-    tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.alpha_u8())
+  tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.alpha_u8())
 }
 
 /// Creates a Paint object with the given color
 fn make_paint(color: Rgba) -> Paint<'static> {
-    let mut paint = Paint::default();
-    paint.set_color(to_skia_color(color));
-    paint.anti_alias = true;
-    paint
+  let mut paint = Paint::default();
+  paint.set_color(to_skia_color(color));
+  paint.anti_alias = true;
+  paint
 }
 
 /// Creates a Stroke object with the given width
 fn make_stroke(width: f32) -> Stroke {
-    Stroke {
-        width,
-        line_cap: LineCap::Butt,
-        line_join: LineJoin::Miter,
-        miter_limit: 4.0,
-        dash: None,
-    }
+  Stroke {
+    width,
+    line_cap: LineCap::Butt,
+    line_join: LineJoin::Miter,
+    miter_limit: 4.0,
+    dash: None,
+  }
 }
 
 // ============================================================================
@@ -210,28 +230,48 @@ fn make_stroke(width: f32) -> Stroke {
 ///
 /// Returns `true` if the rectangle was drawn, `false` if it couldn't be rendered
 /// (e.g., zero dimensions or completely transparent color).
-pub fn fill_rect(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, height: f32, color: Rgba) -> bool {
-    // Skip if completely transparent or zero-sized
-    if color.a == 0.0 || width <= 0.0 || height <= 0.0 {
-        return false;
-    }
+pub fn fill_rect(
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  color: Rgba,
+) -> bool {
+  // Skip if completely transparent or zero-sized
+  if color.a == 0.0 || width <= 0.0 || height <= 0.0 {
+    return false;
+  }
 
-    // Create rectangle path
-    let rect = match tiny_skia::Rect::from_xywh(x, y, width, height) {
-        Some(r) => r,
-        None => return false,
-    };
+  // Create rectangle path
+  let rect = match tiny_skia::Rect::from_xywh(x, y, width, height) {
+    Some(r) => r,
+    None => return false,
+  };
 
-    let path = PathBuilder::from_rect(rect);
-    let paint = make_paint(color);
+  let path = PathBuilder::from_rect(rect);
+  let paint = make_paint(color);
 
-    pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-    true
+  pixmap.fill_path(
+    &path,
+    &paint,
+    FillRule::Winding,
+    Transform::identity(),
+    None,
+  );
+  true
 }
 
 /// Fills a rectangle from a Rect struct
 pub fn fill_rect_from_rect(pixmap: &mut Pixmap, rect: &Rect, color: Rgba) -> bool {
-    fill_rect(pixmap, rect.x(), rect.y(), rect.width(), rect.height(), color)
+  fill_rect(
+    pixmap,
+    rect.x(),
+    rect.y(),
+    rect.width(),
+    rect.height(),
+    color,
+  )
 }
 
 /// Strokes a rectangle outline
@@ -250,37 +290,37 @@ pub fn fill_rect_from_rect(pixmap: &mut Pixmap, rect: &Rect, color: Rgba) -> boo
 ///
 /// Returns `true` if the rectangle was drawn.
 pub fn stroke_rect(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: Rgba,
-    stroke_width: f32,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  color: Rgba,
+  stroke_width: f32,
 ) -> bool {
-    // Skip if completely transparent or zero-sized
-    if color.a == 0.0 || width <= 0.0 || height <= 0.0 || stroke_width <= 0.0 {
-        return false;
-    }
+  // Skip if completely transparent or zero-sized
+  if color.a == 0.0 || width <= 0.0 || height <= 0.0 || stroke_width <= 0.0 {
+    return false;
+  }
 
-    // Adjust rectangle to account for stroke centering
-    let half_stroke = stroke_width / 2.0;
-    let rect = match tiny_skia::Rect::from_xywh(
-        x + half_stroke,
-        y + half_stroke,
-        width - stroke_width,
-        height - stroke_width,
-    ) {
-        Some(r) => r,
-        None => return false,
-    };
+  // Adjust rectangle to account for stroke centering
+  let half_stroke = stroke_width / 2.0;
+  let rect = match tiny_skia::Rect::from_xywh(
+    x + half_stroke,
+    y + half_stroke,
+    width - stroke_width,
+    height - stroke_width,
+  ) {
+    Some(r) => r,
+    None => return false,
+  };
 
-    let path = PathBuilder::from_rect(rect);
-    let paint = make_paint(color);
-    let stroke = make_stroke(stroke_width);
+  let path = PathBuilder::from_rect(rect);
+  let paint = make_paint(color);
+  let stroke = make_stroke(stroke_width);
 
-    pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-    true
+  pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+  true
 }
 
 // ============================================================================
@@ -291,79 +331,99 @@ pub fn stroke_rect(
 ///
 /// Creates a path with circular arcs at each corner. The radii are
 /// automatically clamped to prevent overlap.
-fn build_rounded_rect_path(x: f32, y: f32, width: f32, height: f32, radii: &BorderRadii) -> Option<Path> {
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
+fn build_rounded_rect_path(
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+) -> Option<Path> {
+  if width <= 0.0 || height <= 0.0 {
+    return None;
+  }
 
-    // Clamp radii to prevent overlap
-    let radii = radii.clamped(width, height);
+  // Clamp radii to prevent overlap
+  let radii = radii.clamped(width, height);
 
-    // If no radii, return a simple rectangle
-    if radii.is_zero() {
-        let rect = tiny_skia::Rect::from_xywh(x, y, width, height)?;
-        return Some(PathBuilder::from_rect(rect));
-    }
+  // If no radii, return a simple rectangle
+  if radii.is_zero() {
+    let rect = tiny_skia::Rect::from_xywh(x, y, width, height)?;
+    return Some(PathBuilder::from_rect(rect));
+  }
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    let right = x + width;
-    let bottom = y + height;
+  let right = x + width;
+  let bottom = y + height;
 
-    // Start at top-left, after the radius
-    pb.move_to(x + radii.top_left, y);
+  // Start at top-left, after the radius
+  pb.move_to(x + radii.top_left, y);
 
-    // Top edge to top-right corner
-    pb.line_to(right - radii.top_right, y);
+  // Top edge to top-right corner
+  pb.line_to(right - radii.top_right, y);
 
-    // Top-right corner arc
-    if radii.top_right > 0.0 {
-        // Approximate arc with cubic bezier
-        // Control point factor for 90-degree arc: 0.5522847498
-        let k = 0.552_284_8;
-        let r = radii.top_right;
-        pb.cubic_to(right - r * (1.0 - k), y, right, y + r * (1.0 - k), right, y + r);
-    }
+  // Top-right corner arc
+  if radii.top_right > 0.0 {
+    // Approximate arc with cubic bezier
+    // Control point factor for 90-degree arc: 0.5522847498
+    let k = 0.552_284_8;
+    let r = radii.top_right;
+    pb.cubic_to(
+      right - r * (1.0 - k),
+      y,
+      right,
+      y + r * (1.0 - k),
+      right,
+      y + r,
+    );
+  }
 
-    // Right edge to bottom-right corner
-    pb.line_to(right, bottom - radii.bottom_right);
+  // Right edge to bottom-right corner
+  pb.line_to(right, bottom - radii.bottom_right);
 
-    // Bottom-right corner arc
-    if radii.bottom_right > 0.0 {
-        let k = 0.552_284_8;
-        let r = radii.bottom_right;
-        pb.cubic_to(
-            right,
-            bottom - r * (1.0 - k),
-            right - r * (1.0 - k),
-            bottom,
-            right - r,
-            bottom,
-        );
-    }
+  // Bottom-right corner arc
+  if radii.bottom_right > 0.0 {
+    let k = 0.552_284_8;
+    let r = radii.bottom_right;
+    pb.cubic_to(
+      right,
+      bottom - r * (1.0 - k),
+      right - r * (1.0 - k),
+      bottom,
+      right - r,
+      bottom,
+    );
+  }
 
-    // Bottom edge to bottom-left corner
-    pb.line_to(x + radii.bottom_left, bottom);
+  // Bottom edge to bottom-left corner
+  pb.line_to(x + radii.bottom_left, bottom);
 
-    // Bottom-left corner arc
-    if radii.bottom_left > 0.0 {
-        let k = 0.552_284_8;
-        let r = radii.bottom_left;
-        pb.cubic_to(x + r * (1.0 - k), bottom, x, bottom - r * (1.0 - k), x, bottom - r);
-    }
+  // Bottom-left corner arc
+  if radii.bottom_left > 0.0 {
+    let k = 0.552_284_8;
+    let r = radii.bottom_left;
+    pb.cubic_to(
+      x + r * (1.0 - k),
+      bottom,
+      x,
+      bottom - r * (1.0 - k),
+      x,
+      bottom - r,
+    );
+  }
 
-    // Left edge to top-left corner
-    pb.line_to(x, y + radii.top_left);
+  // Left edge to top-left corner
+  pb.line_to(x, y + radii.top_left);
 
-    // Top-left corner arc
-    if radii.top_left > 0.0 {
-        let k = 0.552_284_8;
-        let r = radii.top_left;
-        pb.cubic_to(x, y + r * (1.0 - k), x + r * (1.0 - k), y, x + r, y);
-    }
+  // Top-left corner arc
+  if radii.top_left > 0.0 {
+    let k = 0.552_284_8;
+    let r = radii.top_left;
+    pb.cubic_to(x, y + r * (1.0 - k), x + r * (1.0 - k), y, x + r, y);
+  }
 
-    pb.close();
-    pb.finish()
+  pb.close();
+  pb.finish()
 }
 
 /// Fills a rounded rectangle with a solid color
@@ -382,75 +442,81 @@ fn build_rounded_rect_path(x: f32, y: f32, width: f32, height: f32, radii: &Bord
 ///
 /// Returns `true` if the rectangle was drawn.
 pub fn fill_rounded_rect(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radii: &BorderRadii,
-    color: Rgba,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+  color: Rgba,
 ) -> bool {
-    // Skip if completely transparent
-    if color.a == 0.0 {
-        return false;
-    }
+  // Skip if completely transparent
+  if color.a == 0.0 {
+    return false;
+  }
 
-    // If no radii, use simple rectangle
-    if radii.is_zero() {
-        return fill_rect(pixmap, x, y, width, height, color);
-    }
+  // If no radii, use simple rectangle
+  if radii.is_zero() {
+    return fill_rect(pixmap, x, y, width, height, color);
+  }
 
-    let path = match build_rounded_rect_path(x, y, width, height, radii) {
-        Some(p) => p,
-        None => return false,
-    };
+  let path = match build_rounded_rect_path(x, y, width, height, radii) {
+    Some(p) => p,
+    None => return false,
+  };
 
-    let paint = make_paint(color);
-    pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-    true
+  let paint = make_paint(color);
+  pixmap.fill_path(
+    &path,
+    &paint,
+    FillRule::Winding,
+    Transform::identity(),
+    None,
+  );
+  true
 }
 
 /// Strokes a rounded rectangle outline
 pub fn stroke_rounded_rect(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radii: &BorderRadii,
-    color: Rgba,
-    stroke_width: f32,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+  color: Rgba,
+  stroke_width: f32,
 ) -> bool {
-    // Skip if completely transparent
-    if color.a == 0.0 || stroke_width <= 0.0 {
-        return false;
-    }
+  // Skip if completely transparent
+  if color.a == 0.0 || stroke_width <= 0.0 {
+    return false;
+  }
 
-    // If no radii, use simple rectangle
-    if radii.is_zero() {
-        return stroke_rect(pixmap, x, y, width, height, color, stroke_width);
-    }
+  // If no radii, use simple rectangle
+  if radii.is_zero() {
+    return stroke_rect(pixmap, x, y, width, height, color, stroke_width);
+  }
 
-    // Adjust for stroke centering
-    let half_stroke = stroke_width / 2.0;
-    let inner_radii = radii.shrink(half_stroke);
+  // Adjust for stroke centering
+  let half_stroke = stroke_width / 2.0;
+  let inner_radii = radii.shrink(half_stroke);
 
-    let path = match build_rounded_rect_path(
-        x + half_stroke,
-        y + half_stroke,
-        width - stroke_width,
-        height - stroke_width,
-        &inner_radii,
-    ) {
-        Some(p) => p,
-        None => return false,
-    };
+  let path = match build_rounded_rect_path(
+    x + half_stroke,
+    y + half_stroke,
+    width - stroke_width,
+    height - stroke_width,
+    &inner_radii,
+  ) {
+    Some(p) => p,
+    None => return false,
+  };
 
-    let paint = make_paint(color);
-    let stroke = make_stroke(stroke_width);
+  let paint = make_paint(color);
+  let stroke = make_stroke(stroke_width);
 
-    pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-    true
+  pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+  true
 }
 
 // ============================================================================
@@ -477,165 +543,203 @@ pub fn stroke_rounded_rect(
 ///
 /// Returns `true` if borders were drawn.
 pub fn render_borders(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    widths: &BorderWidths,
-    colors: &BorderColors,
-    radii: &BorderRadii,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  widths: &BorderWidths,
+  colors: &BorderColors,
+  radii: &BorderRadii,
 ) -> bool {
-    if !widths.has_border() {
-        return false;
-    }
+  if !widths.has_border() {
+    return false;
+  }
 
-    let mut rendered = false;
+  let mut rendered = false;
 
-    // For rounded borders, use stroke rendering
-    if radii.has_radius() {
-        rendered |= render_rounded_borders(pixmap, x, y, width, height, widths, colors, radii);
-    } else {
-        // For straight borders, render each side as a trapezoid
-        rendered |= render_top_border(pixmap, x, y, width, widths, colors.top);
-        rendered |= render_right_border(pixmap, x, y, width, height, widths, colors.right);
-        rendered |= render_bottom_border(pixmap, x, y, width, height, widths, colors.bottom);
-        rendered |= render_left_border(pixmap, x, y, height, widths, colors.left);
-    }
+  // For rounded borders, use stroke rendering
+  if radii.has_radius() {
+    rendered |= render_rounded_borders(pixmap, x, y, width, height, widths, colors, radii);
+  } else {
+    // For straight borders, render each side as a trapezoid
+    rendered |= render_top_border(pixmap, x, y, width, widths, colors.top);
+    rendered |= render_right_border(pixmap, x, y, width, height, widths, colors.right);
+    rendered |= render_bottom_border(pixmap, x, y, width, height, widths, colors.bottom);
+    rendered |= render_left_border(pixmap, x, y, height, widths, colors.left);
+  }
 
-    rendered
+  rendered
 }
 
 /// Renders the top border as a trapezoid
-fn render_top_border(pixmap: &mut Pixmap, x: f32, y: f32, width: f32, widths: &BorderWidths, color: Rgba) -> bool {
-    if widths.top <= 0.0 || color.a == 0.0 {
-        return false;
-    }
+fn render_top_border(
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  widths: &BorderWidths,
+  color: Rgba,
+) -> bool {
+  if widths.top <= 0.0 || color.a == 0.0 {
+    return false;
+  }
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Outer top-left
-    pb.move_to(x, y);
-    // Outer top-right
-    pb.line_to(x + width, y);
-    // Inner top-right (diagonal cut for miter)
-    pb.line_to(x + width - widths.right, y + widths.top);
-    // Inner top-left (diagonal cut for miter)
-    pb.line_to(x + widths.left, y + widths.top);
-    pb.close();
+  // Outer top-left
+  pb.move_to(x, y);
+  // Outer top-right
+  pb.line_to(x + width, y);
+  // Inner top-right (diagonal cut for miter)
+  pb.line_to(x + width - widths.right, y + widths.top);
+  // Inner top-left (diagonal cut for miter)
+  pb.line_to(x + widths.left, y + widths.top);
+  pb.close();
 
-    if let Some(path) = pb.finish() {
-        let paint = make_paint(color);
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-        return true;
-    }
+  if let Some(path) = pb.finish() {
+    let paint = make_paint(color);
+    pixmap.fill_path(
+      &path,
+      &paint,
+      FillRule::Winding,
+      Transform::identity(),
+      None,
+    );
+    return true;
+  }
 
-    false
+  false
 }
 
 /// Renders the right border as a trapezoid
 fn render_right_border(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    widths: &BorderWidths,
-    color: Rgba,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  widths: &BorderWidths,
+  color: Rgba,
 ) -> bool {
-    if widths.right <= 0.0 || color.a == 0.0 {
-        return false;
-    }
+  if widths.right <= 0.0 || color.a == 0.0 {
+    return false;
+  }
 
-    let right = x + width;
-    let bottom = y + height;
+  let right = x + width;
+  let bottom = y + height;
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Outer top-right
-    pb.move_to(right, y);
-    // Outer bottom-right
-    pb.line_to(right, bottom);
-    // Inner bottom-right
-    pb.line_to(right - widths.right, bottom - widths.bottom);
-    // Inner top-right
-    pb.line_to(right - widths.right, y + widths.top);
-    pb.close();
+  // Outer top-right
+  pb.move_to(right, y);
+  // Outer bottom-right
+  pb.line_to(right, bottom);
+  // Inner bottom-right
+  pb.line_to(right - widths.right, bottom - widths.bottom);
+  // Inner top-right
+  pb.line_to(right - widths.right, y + widths.top);
+  pb.close();
 
-    if let Some(path) = pb.finish() {
-        let paint = make_paint(color);
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-        return true;
-    }
+  if let Some(path) = pb.finish() {
+    let paint = make_paint(color);
+    pixmap.fill_path(
+      &path,
+      &paint,
+      FillRule::Winding,
+      Transform::identity(),
+      None,
+    );
+    return true;
+  }
 
-    false
+  false
 }
 
 /// Renders the bottom border as a trapezoid
 fn render_bottom_border(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    widths: &BorderWidths,
-    color: Rgba,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  widths: &BorderWidths,
+  color: Rgba,
 ) -> bool {
-    if widths.bottom <= 0.0 || color.a == 0.0 {
-        return false;
-    }
+  if widths.bottom <= 0.0 || color.a == 0.0 {
+    return false;
+  }
 
-    let right = x + width;
-    let bottom = y + height;
+  let right = x + width;
+  let bottom = y + height;
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Outer bottom-left
-    pb.move_to(x, bottom);
-    // Outer bottom-right
-    pb.line_to(right, bottom);
-    // Inner bottom-right
-    pb.line_to(right - widths.right, bottom - widths.bottom);
-    // Inner bottom-left
-    pb.line_to(x + widths.left, bottom - widths.bottom);
-    pb.close();
+  // Outer bottom-left
+  pb.move_to(x, bottom);
+  // Outer bottom-right
+  pb.line_to(right, bottom);
+  // Inner bottom-right
+  pb.line_to(right - widths.right, bottom - widths.bottom);
+  // Inner bottom-left
+  pb.line_to(x + widths.left, bottom - widths.bottom);
+  pb.close();
 
-    if let Some(path) = pb.finish() {
-        let paint = make_paint(color);
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-        return true;
-    }
+  if let Some(path) = pb.finish() {
+    let paint = make_paint(color);
+    pixmap.fill_path(
+      &path,
+      &paint,
+      FillRule::Winding,
+      Transform::identity(),
+      None,
+    );
+    return true;
+  }
 
-    false
+  false
 }
 
 /// Renders the left border as a trapezoid
-fn render_left_border(pixmap: &mut Pixmap, x: f32, y: f32, height: f32, widths: &BorderWidths, color: Rgba) -> bool {
-    if widths.left <= 0.0 || color.a == 0.0 {
-        return false;
-    }
+fn render_left_border(
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  height: f32,
+  widths: &BorderWidths,
+  color: Rgba,
+) -> bool {
+  if widths.left <= 0.0 || color.a == 0.0 {
+    return false;
+  }
 
-    let bottom = y + height;
+  let bottom = y + height;
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Outer top-left
-    pb.move_to(x, y);
-    // Outer bottom-left
-    pb.line_to(x, bottom);
-    // Inner bottom-left
-    pb.line_to(x + widths.left, bottom - widths.bottom);
-    // Inner top-left
-    pb.line_to(x + widths.left, y + widths.top);
-    pb.close();
+  // Outer top-left
+  pb.move_to(x, y);
+  // Outer bottom-left
+  pb.line_to(x, bottom);
+  // Inner bottom-left
+  pb.line_to(x + widths.left, bottom - widths.bottom);
+  // Inner top-left
+  pb.line_to(x + widths.left, y + widths.top);
+  pb.close();
 
-    if let Some(path) = pb.finish() {
-        let paint = make_paint(color);
-        pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-        return true;
-    }
+  if let Some(path) = pb.finish() {
+    let paint = make_paint(color);
+    pixmap.fill_path(
+      &path,
+      &paint,
+      FillRule::Winding,
+      Transform::identity(),
+      None,
+    );
+    return true;
+  }
 
-    false
+  false
 }
 
 /// Renders rounded borders using stroke rendering
@@ -644,174 +748,186 @@ fn render_left_border(pixmap: &mut Pixmap, x: f32, y: f32, height: f32, widths: 
 /// This is a simplification - full CSS rounded border rendering is complex
 /// when colors differ per side.
 fn render_rounded_borders(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    widths: &BorderWidths,
-    colors: &BorderColors,
-    radii: &BorderRadii,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  widths: &BorderWidths,
+  colors: &BorderColors,
+  radii: &BorderRadii,
 ) -> bool {
-    // If all colors are the same, we can use simple stroke
-    if colors.top == colors.right && colors.right == colors.bottom && colors.bottom == colors.left {
-        // Average the widths for the stroke
-        let avg_width = (widths.top + widths.right + widths.bottom + widths.left) / 4.0;
-        if avg_width > 0.0 {
-            return stroke_rounded_rect(pixmap, x, y, width, height, radii, colors.top, avg_width);
-        }
-        return false;
+  // If all colors are the same, we can use simple stroke
+  if colors.top == colors.right && colors.right == colors.bottom && colors.bottom == colors.left {
+    // Average the widths for the stroke
+    let avg_width = (widths.top + widths.right + widths.bottom + widths.left) / 4.0;
+    if avg_width > 0.0 {
+      return stroke_rounded_rect(pixmap, x, y, width, height, radii, colors.top, avg_width);
     }
+    return false;
+  }
 
-    // For different colors per side, render each side separately
-    // This is an approximation that doesn't perfectly handle corner transitions
-    let mut rendered = false;
+  // For different colors per side, render each side separately
+  // This is an approximation that doesn't perfectly handle corner transitions
+  let mut rendered = false;
 
-    // Top border segment
-    if widths.top > 0.0 && colors.top.a > 0.0 {
-        let half = widths.top / 2.0;
-        let inner_radii = radii.shrink(half);
-        if let Some(path) = build_top_border_path(x, y, width, widths, &inner_radii) {
-            let paint = make_paint(colors.top);
-            let stroke = make_stroke(widths.top);
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-            rendered = true;
-        }
+  // Top border segment
+  if widths.top > 0.0 && colors.top.a > 0.0 {
+    let half = widths.top / 2.0;
+    let inner_radii = radii.shrink(half);
+    if let Some(path) = build_top_border_path(x, y, width, widths, &inner_radii) {
+      let paint = make_paint(colors.top);
+      let stroke = make_stroke(widths.top);
+      pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+      rendered = true;
     }
+  }
 
-    // Right border segment
-    if widths.right > 0.0 && colors.right.a > 0.0 {
-        let half = widths.right / 2.0;
-        let inner_radii = radii.shrink(half);
-        if let Some(path) = build_right_border_path(x, y, width, height, widths, &inner_radii) {
-            let paint = make_paint(colors.right);
-            let stroke = make_stroke(widths.right);
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-            rendered = true;
-        }
+  // Right border segment
+  if widths.right > 0.0 && colors.right.a > 0.0 {
+    let half = widths.right / 2.0;
+    let inner_radii = radii.shrink(half);
+    if let Some(path) = build_right_border_path(x, y, width, height, widths, &inner_radii) {
+      let paint = make_paint(colors.right);
+      let stroke = make_stroke(widths.right);
+      pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+      rendered = true;
     }
+  }
 
-    // Bottom border segment
-    if widths.bottom > 0.0 && colors.bottom.a > 0.0 {
-        let half = widths.bottom / 2.0;
-        let inner_radii = radii.shrink(half);
-        if let Some(path) = build_bottom_border_path(x, y, width, height, widths, &inner_radii) {
-            let paint = make_paint(colors.bottom);
-            let stroke = make_stroke(widths.bottom);
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-            rendered = true;
-        }
+  // Bottom border segment
+  if widths.bottom > 0.0 && colors.bottom.a > 0.0 {
+    let half = widths.bottom / 2.0;
+    let inner_radii = radii.shrink(half);
+    if let Some(path) = build_bottom_border_path(x, y, width, height, widths, &inner_radii) {
+      let paint = make_paint(colors.bottom);
+      let stroke = make_stroke(widths.bottom);
+      pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+      rendered = true;
     }
+  }
 
-    // Left border segment
-    if widths.left > 0.0 && colors.left.a > 0.0 {
-        let half = widths.left / 2.0;
-        let inner_radii = radii.shrink(half);
-        if let Some(path) = build_left_border_path(x, y, height, widths, &inner_radii) {
-            let paint = make_paint(colors.left);
-            let stroke = make_stroke(widths.left);
-            pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-            rendered = true;
-        }
+  // Left border segment
+  if widths.left > 0.0 && colors.left.a > 0.0 {
+    let half = widths.left / 2.0;
+    let inner_radii = radii.shrink(half);
+    if let Some(path) = build_left_border_path(x, y, height, widths, &inner_radii) {
+      let paint = make_paint(colors.left);
+      let stroke = make_stroke(widths.left);
+      pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+      rendered = true;
     }
+  }
 
-    rendered
+  rendered
 }
 
 /// Builds path for top border segment (with rounded corners)
-fn build_top_border_path(x: f32, y: f32, width: f32, widths: &BorderWidths, radii: &BorderRadii) -> Option<Path> {
-    let half_top = widths.top / 2.0;
-    let half_left = widths.left / 2.0;
-    let half_right = widths.right / 2.0;
+fn build_top_border_path(
+  x: f32,
+  y: f32,
+  width: f32,
+  widths: &BorderWidths,
+  radii: &BorderRadii,
+) -> Option<Path> {
+  let half_top = widths.top / 2.0;
+  let half_left = widths.left / 2.0;
+  let half_right = widths.right / 2.0;
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Start after top-left corner
-    let start_x = x + half_left + radii.top_left;
-    pb.move_to(start_x, y + half_top);
+  // Start after top-left corner
+  let start_x = x + half_left + radii.top_left;
+  pb.move_to(start_x, y + half_top);
 
-    // Line to before top-right corner
-    let end_x = x + width - half_right - radii.top_right;
-    pb.line_to(end_x, y + half_top);
+  // Line to before top-right corner
+  let end_x = x + width - half_right - radii.top_right;
+  pb.line_to(end_x, y + half_top);
 
-    pb.finish()
+  pb.finish()
 }
 
 /// Builds path for right border segment (with rounded corners)
 fn build_right_border_path(
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    widths: &BorderWidths,
-    radii: &BorderRadii,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  widths: &BorderWidths,
+  radii: &BorderRadii,
 ) -> Option<Path> {
-    let half_top = widths.top / 2.0;
-    let half_right = widths.right / 2.0;
-    let half_bottom = widths.bottom / 2.0;
+  let half_top = widths.top / 2.0;
+  let half_right = widths.right / 2.0;
+  let half_bottom = widths.bottom / 2.0;
 
-    let right = x + width - half_right;
+  let right = x + width - half_right;
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Start after top-right corner
-    let start_y = y + half_top + radii.top_right;
-    pb.move_to(right, start_y);
+  // Start after top-right corner
+  let start_y = y + half_top + radii.top_right;
+  pb.move_to(right, start_y);
 
-    // Line to before bottom-right corner
-    let end_y = y + height - half_bottom - radii.bottom_right;
-    pb.line_to(right, end_y);
+  // Line to before bottom-right corner
+  let end_y = y + height - half_bottom - radii.bottom_right;
+  pb.line_to(right, end_y);
 
-    pb.finish()
+  pb.finish()
 }
 
 /// Builds path for bottom border segment (with rounded corners)
 fn build_bottom_border_path(
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    widths: &BorderWidths,
-    radii: &BorderRadii,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  widths: &BorderWidths,
+  radii: &BorderRadii,
 ) -> Option<Path> {
-    let half_bottom = widths.bottom / 2.0;
-    let half_left = widths.left / 2.0;
-    let half_right = widths.right / 2.0;
+  let half_bottom = widths.bottom / 2.0;
+  let half_left = widths.left / 2.0;
+  let half_right = widths.right / 2.0;
 
-    let bottom = y + height - half_bottom;
+  let bottom = y + height - half_bottom;
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Start after bottom-right corner
-    let start_x = x + width - half_right - radii.bottom_right;
-    pb.move_to(start_x, bottom);
+  // Start after bottom-right corner
+  let start_x = x + width - half_right - radii.bottom_right;
+  pb.move_to(start_x, bottom);
 
-    // Line to before bottom-left corner
-    let end_x = x + half_left + radii.bottom_left;
-    pb.line_to(end_x, bottom);
+  // Line to before bottom-left corner
+  let end_x = x + half_left + radii.bottom_left;
+  pb.line_to(end_x, bottom);
 
-    pb.finish()
+  pb.finish()
 }
 
 /// Builds path for left border segment (with rounded corners)
-fn build_left_border_path(x: f32, y: f32, height: f32, widths: &BorderWidths, radii: &BorderRadii) -> Option<Path> {
-    let half_top = widths.top / 2.0;
-    let half_left = widths.left / 2.0;
-    let half_bottom = widths.bottom / 2.0;
+fn build_left_border_path(
+  x: f32,
+  y: f32,
+  height: f32,
+  widths: &BorderWidths,
+  radii: &BorderRadii,
+) -> Option<Path> {
+  let half_top = widths.top / 2.0;
+  let half_left = widths.left / 2.0;
+  let half_bottom = widths.bottom / 2.0;
 
-    let left = x + half_left;
+  let left = x + half_left;
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Start after bottom-left corner
-    let start_y = y + height - half_bottom - radii.bottom_left;
-    pb.move_to(left, start_y);
+  // Start after bottom-left corner
+  let start_y = y + height - half_bottom - radii.bottom_left;
+  pb.move_to(left, start_y);
 
-    // Line to before top-left corner
-    let end_y = y + half_top + radii.top_left;
-    pb.line_to(left, end_y);
+  // Line to before top-left corner
+  let end_y = y + half_top + radii.top_left;
+  pb.line_to(left, end_y);
 
-    pb.finish()
+  pb.finish()
 }
 
 // ============================================================================
@@ -846,301 +962,303 @@ fn build_left_border_path(x: f32, y: f32, height: f32, widths: &BorderWidths, ra
 /// - Blur is approximated by rendering multiple semi-transparent layers
 /// - True gaussian blur would require a separate render target and convolution
 pub fn render_box_shadow(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radii: &BorderRadii,
-    shadow: &BoxShadow,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+  shadow: &BoxShadow,
 ) -> bool {
-    if shadow.color.a == 0.0 {
-        return false;
-    }
+  if shadow.color.a == 0.0 {
+    return false;
+  }
 
-    if shadow.inset {
-        render_inset_shadow(pixmap, x, y, width, height, radii, shadow)
-    } else {
-        render_outset_shadow(pixmap, x, y, width, height, radii, shadow)
-    }
+  if shadow.inset {
+    render_inset_shadow(pixmap, x, y, width, height, radii, shadow)
+  } else {
+    render_outset_shadow(pixmap, x, y, width, height, radii, shadow)
+  }
 }
 
 /// Renders an outset (regular) box shadow
 fn render_outset_shadow(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radii: &BorderRadii,
-    shadow: &BoxShadow,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+  shadow: &BoxShadow,
 ) -> bool {
-    let sigma = shadow.blur_radius.max(0.0);
-    let spread = shadow.spread_radius;
-    let shadow_rect = Rect::from_xywh(
-        x + shadow.offset_x - spread,
-        y + shadow.offset_y - spread,
-        width + spread * 2.0,
-        height + spread * 2.0,
-    );
-    let radii = BorderRadii {
-        top_left: (radii.top_left + spread).max(0.0),
-        top_right: (radii.top_right + spread).max(0.0),
-        bottom_right: (radii.bottom_right + spread).max(0.0),
-        bottom_left: (radii.bottom_left + spread).max(0.0),
-    };
+  let sigma = shadow.blur_radius.max(0.0);
+  let spread = shadow.spread_radius;
+  let shadow_rect = Rect::from_xywh(
+    x + shadow.offset_x - spread,
+    y + shadow.offset_y - spread,
+    width + spread * 2.0,
+    height + spread * 2.0,
+  );
+  let radii = BorderRadii {
+    top_left: (radii.top_left + spread).max(0.0),
+    top_right: (radii.top_right + spread).max(0.0),
+    bottom_right: (radii.bottom_right + spread).max(0.0),
+    bottom_left: (radii.bottom_left + spread).max(0.0),
+  };
 
-    let blur_pad = (sigma * 3.0).ceil();
-    let min_x = (shadow_rect.x() - blur_pad).floor();
-    let min_y = (shadow_rect.y() - blur_pad).floor();
-    let max_x = (shadow_rect.x() + shadow_rect.width() + blur_pad).ceil();
-    let max_y = (shadow_rect.y() + shadow_rect.height() + blur_pad).ceil();
+  let blur_pad = (sigma * 3.0).ceil();
+  let min_x = (shadow_rect.x() - blur_pad).floor();
+  let min_y = (shadow_rect.y() - blur_pad).floor();
+  let max_x = (shadow_rect.x() + shadow_rect.width() + blur_pad).ceil();
+  let max_y = (shadow_rect.y() + shadow_rect.height() + blur_pad).ceil();
 
-    if max_x <= min_x || max_y <= min_y {
-        return false;
-    }
+  if max_x <= min_x || max_y <= min_y {
+    return false;
+  }
 
-    let canvas_w = (max_x - min_x).max(1.0) as u32;
-    let canvas_h = (max_y - min_y).max(1.0) as u32;
-    let mut tmp = match Pixmap::new(canvas_w, canvas_h) {
-        Some(p) => p,
-        None => return false,
-    };
+  let canvas_w = (max_x - min_x).max(1.0) as u32;
+  let canvas_h = (max_y - min_y).max(1.0) as u32;
+  let mut tmp = match Pixmap::new(canvas_w, canvas_h) {
+    Some(p) => p,
+    None => return false,
+  };
 
-    let draw_x = shadow_rect.x() - min_x;
-    let draw_y = shadow_rect.y() - min_y;
+  let draw_x = shadow_rect.x() - min_x;
+  let draw_y = shadow_rect.y() - min_y;
 
-    let _ = fill_rounded_rect(
-        &mut tmp,
-        draw_x,
-        draw_y,
-        shadow_rect.width(),
-        shadow_rect.height(),
-        &radii,
-        shadow.color,
-    );
+  let _ = fill_rounded_rect(
+    &mut tmp,
+    draw_x,
+    draw_y,
+    shadow_rect.width(),
+    shadow_rect.height(),
+    &radii,
+    shadow.color,
+  );
 
-    if sigma > 0.0 {
-        apply_gaussian_blur(&mut tmp, sigma);
-    }
+  if sigma > 0.0 {
+    apply_gaussian_blur(&mut tmp, sigma);
+  }
 
-    let mut paint = PixmapPaint::default();
-    paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-    pixmap.draw_pixmap(
-        min_x as i32,
-        min_y as i32,
-        tmp.as_ref(),
-        &paint,
-        Transform::identity(),
-        None,
-    );
-    true
+  let mut paint = PixmapPaint::default();
+  paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+  pixmap.draw_pixmap(
+    min_x as i32,
+    min_y as i32,
+    tmp.as_ref(),
+    &paint,
+    Transform::identity(),
+    None,
+  );
+  true
 }
 
 /// Renders an inset box shadow
 fn render_inset_shadow(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radii: &BorderRadii,
-    shadow: &BoxShadow,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+  shadow: &BoxShadow,
 ) -> bool {
-    let sigma = shadow.blur_radius.max(0.0);
-    let blur_pad = (sigma * 3.0).ceil();
-    let spread = shadow.spread_radius;
+  let sigma = shadow.blur_radius.max(0.0);
+  let blur_pad = (sigma * 3.0).ceil();
+  let spread = shadow.spread_radius;
 
-    let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs()).ceil();
-    let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs()).ceil();
+  let pad_x = (blur_pad + shadow.offset_x.abs() + spread.abs()).ceil();
+  let pad_y = (blur_pad + shadow.offset_y.abs() + spread.abs()).ceil();
 
-    let canvas_w = (width + pad_x * 2.0).max(1.0) as u32;
-    let canvas_h = (height + pad_y * 2.0).max(1.0) as u32;
-    let mut tmp = match Pixmap::new(canvas_w, canvas_h) {
-        Some(p) => p,
-        None => return false,
-    };
+  let canvas_w = (width + pad_x * 2.0).max(1.0) as u32;
+  let canvas_h = (height + pad_y * 2.0).max(1.0) as u32;
+  let mut tmp = match Pixmap::new(canvas_w, canvas_h) {
+    Some(p) => p,
+    None => return false,
+  };
 
-    let outer_x = pad_x + shadow.offset_x + spread;
-    let outer_y = pad_y + shadow.offset_y + spread;
-    let outer_w = (width - 2.0 * spread).max(0.0);
-    let outer_h = (height - 2.0 * spread).max(0.0);
+  let outer_x = pad_x + shadow.offset_x + spread;
+  let outer_y = pad_y + shadow.offset_y + spread;
+  let outer_w = (width - 2.0 * spread).max(0.0);
+  let outer_h = (height - 2.0 * spread).max(0.0);
 
-    let adjusted_radii = radii.shrink(spread).clamped(outer_w, outer_h);
-    let _ = fill_rounded_rect(
-        &mut tmp,
-        outer_x,
-        outer_y,
-        outer_w,
-        outer_h,
-        &adjusted_radii,
-        shadow.color,
-    );
+  let adjusted_radii = radii.shrink(spread).clamped(outer_w, outer_h);
+  let _ = fill_rounded_rect(
+    &mut tmp,
+    outer_x,
+    outer_y,
+    outer_w,
+    outer_h,
+    &adjusted_radii,
+    shadow.color,
+  );
 
-    if sigma > 0.0 {
-        apply_gaussian_blur(&mut tmp, sigma);
+  if sigma > 0.0 {
+    apply_gaussian_blur(&mut tmp, sigma);
+  }
+
+  // Clip to the outer box to keep inset shadows inside
+  let width_px = tmp.width() as usize;
+  let height_px = tmp.height() as usize;
+  let pixels_ptr = tmp.pixels_mut().as_mut_ptr();
+  for y_idx in 0..height_px {
+    let row = unsafe { std::slice::from_raw_parts_mut(pixels_ptr.add(y_idx * width_px), width_px) };
+    let y_coord = y_idx as f32;
+    let outside_y = y_coord < outer_y || y_coord > outer_y + outer_h;
+    if outside_y {
+      for px in row {
+        *px = PremultipliedColorU8::TRANSPARENT;
+      }
+      continue;
     }
-
-    // Clip to the outer box to keep inset shadows inside
-    let width_px = tmp.width() as usize;
-    let height_px = tmp.height() as usize;
-    let pixels_ptr = tmp.pixels_mut().as_mut_ptr();
-    for y_idx in 0..height_px {
-        let row = unsafe { std::slice::from_raw_parts_mut(pixels_ptr.add(y_idx * width_px), width_px) };
-        let y_coord = y_idx as f32;
-        let outside_y = y_coord < outer_y || y_coord > outer_y + outer_h;
-        if outside_y {
-            for px in row {
-                *px = PremultipliedColorU8::TRANSPARENT;
-            }
-            continue;
-        }
-        for (x_idx, px) in row.iter_mut().enumerate() {
-            let x_coord = x_idx as f32;
-            if x_coord < outer_x || x_coord > outer_x + outer_w {
-                *px = PremultipliedColorU8::TRANSPARENT;
-            }
-        }
+    for (x_idx, px) in row.iter_mut().enumerate() {
+      let x_coord = x_idx as f32;
+      if x_coord < outer_x || x_coord > outer_x + outer_w {
+        *px = PremultipliedColorU8::TRANSPARENT;
+      }
     }
+  }
 
-    let mut final_paint = PixmapPaint::default();
-    final_paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-    pixmap.draw_pixmap(
-        (x - pad_x) as i32,
-        (y - pad_y) as i32,
-        tmp.as_ref(),
-        &final_paint,
-        Transform::identity(),
-        None,
-    );
-    true
+  let mut final_paint = PixmapPaint::default();
+  final_paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+  pixmap.draw_pixmap(
+    (x - pad_x) as i32,
+    (y - pad_y) as i32,
+    tmp.as_ref(),
+    &final_paint,
+    Transform::identity(),
+    None,
+  );
+  true
 }
 
 /// Renders a blurred shadow by drawing multiple layers
 #[allow(dead_code)]
 fn render_blurred_shadow(
-    pixmap: &mut Pixmap,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    radii: &BorderRadii,
-    blur_radius: f32,
-    color: Rgba,
+  pixmap: &mut Pixmap,
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+  radii: &BorderRadii,
+  blur_radius: f32,
+  color: Rgba,
 ) -> bool {
-    // Number of layers for blur approximation
-    let layers = (blur_radius * 2.0).ceil() as i32;
-    let layers = layers.clamp(1, 20);
+  // Number of layers for blur approximation
+  let layers = (blur_radius * 2.0).ceil() as i32;
+  let layers = layers.clamp(1, 20);
 
-    let mut rendered = false;
+  let mut rendered = false;
 
-    for i in 0..layers {
-        let t = (i as f32) / (layers as f32);
-        let expand = blur_radius * (1.0 - t);
+  for i in 0..layers {
+    let t = (i as f32) / (layers as f32);
+    let expand = blur_radius * (1.0 - t);
 
-        // Calculate layer opacity (gaussian-like falloff)
-        let alpha_factor = 1.0 - t * t; // Quadratic falloff
-        let layer_alpha = ((color.alpha_u8() as f32) / (layers as f32) * alpha_factor) as u8;
+    // Calculate layer opacity (gaussian-like falloff)
+    let alpha_factor = 1.0 - t * t; // Quadratic falloff
+    let layer_alpha = ((color.alpha_u8() as f32) / (layers as f32) * alpha_factor) as u8;
 
-        if layer_alpha == 0 {
-            continue;
-        }
-
-        let layer_color = Rgba::from_rgba8(color.r, color.g, color.b, layer_alpha);
-
-        // Expand the rectangle for this layer
-        let layer_x = x - expand;
-        let layer_y = y - expand;
-        let layer_width = width + expand * 2.0;
-        let layer_height = height + expand * 2.0;
-
-        // Expand radii proportionally
-        let layer_radii = BorderRadii {
-            top_left: radii.top_left + expand,
-            top_right: radii.top_right + expand,
-            bottom_right: radii.bottom_right + expand,
-            bottom_left: radii.bottom_left + expand,
-        };
-
-        rendered |= fill_rounded_rect(
-            pixmap,
-            layer_x,
-            layer_y,
-            layer_width,
-            layer_height,
-            &layer_radii,
-            layer_color,
-        );
+    if layer_alpha == 0 {
+      continue;
     }
 
-    rendered
+    let layer_color = Rgba::from_rgba8(color.r, color.g, color.b, layer_alpha);
+
+    // Expand the rectangle for this layer
+    let layer_x = x - expand;
+    let layer_y = y - expand;
+    let layer_width = width + expand * 2.0;
+    let layer_height = height + expand * 2.0;
+
+    // Expand radii proportionally
+    let layer_radii = BorderRadii {
+      top_left: radii.top_left + expand,
+      top_right: radii.top_right + expand,
+      bottom_right: radii.bottom_right + expand,
+      bottom_left: radii.bottom_left + expand,
+    };
+
+    rendered |= fill_rounded_rect(
+      pixmap,
+      layer_x,
+      layer_y,
+      layer_width,
+      layer_height,
+      &layer_radii,
+      layer_color,
+    );
+  }
+
+  rendered
 }
 
 /// Renders a blurred inset shadow
 #[allow(dead_code)]
 fn render_blurred_inset_shadow(
-    pixmap: &mut Pixmap,
-    outer_x: f32,
-    outer_y: f32,
-    outer_width: f32,
-    outer_height: f32,
-    outer_radii: &BorderRadii,
-    inner_x: f32,
-    inner_y: f32,
-    inner_width: f32,
-    inner_height: f32,
-    inner_radii: &BorderRadii,
-    blur_radius: f32,
-    color: Rgba,
+  pixmap: &mut Pixmap,
+  outer_x: f32,
+  outer_y: f32,
+  outer_width: f32,
+  outer_height: f32,
+  outer_radii: &BorderRadii,
+  inner_x: f32,
+  inner_y: f32,
+  inner_width: f32,
+  inner_height: f32,
+  inner_radii: &BorderRadii,
+  blur_radius: f32,
+  color: Rgba,
 ) -> bool {
-    // For inset shadow, we draw from inner to outer with decreasing opacity
-    let layers = (blur_radius * 2.0).ceil() as i32;
-    let layers = layers.clamp(1, 20);
+  // For inset shadow, we draw from inner to outer with decreasing opacity
+  let layers = (blur_radius * 2.0).ceil() as i32;
+  let layers = layers.clamp(1, 20);
 
-    let mut rendered = false;
+  let mut rendered = false;
 
-    for i in 0..layers {
-        let t = (i as f32) / (layers as f32);
+  for i in 0..layers {
+    let t = (i as f32) / (layers as f32);
 
-        // Interpolate from inner to outer
-        let layer_x = inner_x + (outer_x - inner_x) * t;
-        let layer_y = inner_y + (outer_y - inner_y) * t;
-        let layer_width = inner_width + (outer_width - inner_width) * t;
-        let layer_height = inner_height + (outer_height - inner_height) * t;
+    // Interpolate from inner to outer
+    let layer_x = inner_x + (outer_x - inner_x) * t;
+    let layer_y = inner_y + (outer_y - inner_y) * t;
+    let layer_width = inner_width + (outer_width - inner_width) * t;
+    let layer_height = inner_height + (outer_height - inner_height) * t;
 
-        // Interpolate radii
-        let layer_radii = BorderRadii {
-            top_left: inner_radii.top_left + (outer_radii.top_left - inner_radii.top_left) * t,
-            top_right: inner_radii.top_right + (outer_radii.top_right - inner_radii.top_right) * t,
-            bottom_right: inner_radii.bottom_right + (outer_radii.bottom_right - inner_radii.bottom_right) * t,
-            bottom_left: inner_radii.bottom_left + (outer_radii.bottom_left - inner_radii.bottom_left) * t,
-        };
+    // Interpolate radii
+    let layer_radii = BorderRadii {
+      top_left: inner_radii.top_left + (outer_radii.top_left - inner_radii.top_left) * t,
+      top_right: inner_radii.top_right + (outer_radii.top_right - inner_radii.top_right) * t,
+      bottom_right: inner_radii.bottom_right
+        + (outer_radii.bottom_right - inner_radii.bottom_right) * t,
+      bottom_left: inner_radii.bottom_left
+        + (outer_radii.bottom_left - inner_radii.bottom_left) * t,
+    };
 
-        // Calculate opacity
-        let alpha_factor = t * t; // Quadratic increase toward edges
-        let layer_alpha = ((color.alpha_u8() as f32) / (layers as f32) * alpha_factor) as u8;
+    // Calculate opacity
+    let alpha_factor = t * t; // Quadratic increase toward edges
+    let layer_alpha = ((color.alpha_u8() as f32) / (layers as f32) * alpha_factor) as u8;
 
-        if layer_alpha == 0 {
-            continue;
-        }
-
-        let layer_color = Rgba::from_rgba8(color.r, color.g, color.b, layer_alpha);
-
-        // Draw as a frame (outer - inner)
-        // Simplified: just draw the layer rectangle
-        // A proper implementation would use clipping
-        rendered |= fill_rounded_rect(
-            pixmap,
-            layer_x,
-            layer_y,
-            layer_width,
-            layer_height,
-            &layer_radii,
-            layer_color,
-        );
+    if layer_alpha == 0 {
+      continue;
     }
 
-    rendered
+    let layer_color = Rgba::from_rgba8(color.r, color.g, color.b, layer_alpha);
+
+    // Draw as a frame (outer - inner)
+    // Simplified: just draw the layer rectangle
+    // A proper implementation would use clipping
+    rendered |= fill_rounded_rect(
+      pixmap,
+      layer_x,
+      layer_y,
+      layer_width,
+      layer_height,
+      &layer_radii,
+      layer_color,
+    );
+  }
+
+  rendered
 }
 
 // ============================================================================
@@ -1148,237 +1266,310 @@ fn render_blurred_inset_shadow(
 // ============================================================================
 
 /// Renders a simple line
-pub fn draw_line(pixmap: &mut Pixmap, x1: f32, y1: f32, x2: f32, y2: f32, color: Rgba, width: f32) -> bool {
-    if color.a == 0.0 || width <= 0.0 {
-        return false;
-    }
+pub fn draw_line(
+  pixmap: &mut Pixmap,
+  x1: f32,
+  y1: f32,
+  x2: f32,
+  y2: f32,
+  color: Rgba,
+  width: f32,
+) -> bool {
+  if color.a == 0.0 || width <= 0.0 {
+    return false;
+  }
 
-    let mut pb = PathBuilder::new();
-    pb.move_to(x1, y1);
-    pb.line_to(x2, y2);
+  let mut pb = PathBuilder::new();
+  pb.move_to(x1, y1);
+  pb.line_to(x2, y2);
 
-    let path = match pb.finish() {
-        Some(p) => p,
-        None => return false,
-    };
+  let path = match pb.finish() {
+    Some(p) => p,
+    None => return false,
+  };
 
-    let paint = make_paint(color);
-    let stroke = make_stroke(width);
+  let paint = make_paint(color);
+  let stroke = make_stroke(width);
 
-    pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-    true
+  pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+  true
 }
 
 /// Fills an ellipse
 pub fn fill_ellipse(pixmap: &mut Pixmap, cx: f32, cy: f32, rx: f32, ry: f32, color: Rgba) -> bool {
-    if color.a == 0.0 || rx <= 0.0 || ry <= 0.0 {
-        return false;
-    }
+  if color.a == 0.0 || rx <= 0.0 || ry <= 0.0 {
+    return false;
+  }
 
-    // Approximate ellipse with bezier curves
-    let k = 0.552_284_8;
-    let kx = k * rx;
-    let ky = k * ry;
+  // Approximate ellipse with bezier curves
+  let k = 0.552_284_8;
+  let kx = k * rx;
+  let ky = k * ry;
 
-    let mut pb = PathBuilder::new();
+  let mut pb = PathBuilder::new();
 
-    // Start at top
-    pb.move_to(cx, cy - ry);
+  // Start at top
+  pb.move_to(cx, cy - ry);
 
-    // Top-right quadrant
-    pb.cubic_to(cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy);
+  // Top-right quadrant
+  pb.cubic_to(cx + kx, cy - ry, cx + rx, cy - ky, cx + rx, cy);
 
-    // Bottom-right quadrant
-    pb.cubic_to(cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry);
+  // Bottom-right quadrant
+  pb.cubic_to(cx + rx, cy + ky, cx + kx, cy + ry, cx, cy + ry);
 
-    // Bottom-left quadrant
-    pb.cubic_to(cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy);
+  // Bottom-left quadrant
+  pb.cubic_to(cx - kx, cy + ry, cx - rx, cy + ky, cx - rx, cy);
 
-    // Top-left quadrant
-    pb.cubic_to(cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry);
+  // Top-left quadrant
+  pb.cubic_to(cx - rx, cy - ky, cx - kx, cy - ry, cx, cy - ry);
 
-    pb.close();
+  pb.close();
 
-    let path = match pb.finish() {
-        Some(p) => p,
-        None => return false,
-    };
+  let path = match pb.finish() {
+    Some(p) => p,
+    None => return false,
+  };
 
-    let paint = make_paint(color);
-    pixmap.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-    true
+  let paint = make_paint(color);
+  pixmap.fill_path(
+    &path,
+    &paint,
+    FillRule::Winding,
+    Transform::identity(),
+    None,
+  );
+  true
 }
 
 /// Fills a circle (convenience function)
 pub fn fill_circle(pixmap: &mut Pixmap, cx: f32, cy: f32, radius: f32, color: Rgba) -> bool {
-    fill_ellipse(pixmap, cx, cy, radius, radius, color)
+  fill_ellipse(pixmap, cx, cy, radius, radius, color)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_border_radii_uniform() {
-        let radii = BorderRadii::uniform(10.0);
-        assert_eq!(radii.top_left, 10.0);
-        assert_eq!(radii.top_right, 10.0);
-        assert_eq!(radii.bottom_right, 10.0);
-        assert_eq!(radii.bottom_left, 10.0);
-        assert!(radii.has_radius());
-    }
+  #[test]
+  fn test_border_radii_uniform() {
+    let radii = BorderRadii::uniform(10.0);
+    assert_eq!(radii.top_left, 10.0);
+    assert_eq!(radii.top_right, 10.0);
+    assert_eq!(radii.bottom_right, 10.0);
+    assert_eq!(radii.bottom_left, 10.0);
+    assert!(radii.has_radius());
+  }
 
-    #[test]
-    fn test_border_radii_zero() {
-        let radii = BorderRadii::zero();
-        assert!(!radii.has_radius());
-        assert!(radii.is_zero());
-    }
+  #[test]
+  fn test_border_radii_zero() {
+    let radii = BorderRadii::zero();
+    assert!(!radii.has_radius());
+    assert!(radii.is_zero());
+  }
 
-    #[test]
-    fn test_border_radii_clamped() {
-        let radii = BorderRadii::new(100.0, 100.0, 100.0, 100.0);
-        let clamped = radii.clamped(50.0, 50.0);
-        // Should be scaled down so sum of adjacent radii doesn't exceed dimension
-        assert!(clamped.top_left + clamped.top_right <= 50.0);
-        assert!(clamped.bottom_left + clamped.bottom_right <= 50.0);
-    }
+  #[test]
+  fn test_border_radii_clamped() {
+    let radii = BorderRadii::new(100.0, 100.0, 100.0, 100.0);
+    let clamped = radii.clamped(50.0, 50.0);
+    // Should be scaled down so sum of adjacent radii doesn't exceed dimension
+    assert!(clamped.top_left + clamped.top_right <= 50.0);
+    assert!(clamped.bottom_left + clamped.bottom_right <= 50.0);
+  }
 
-    #[test]
-    fn test_border_radii_shrink() {
-        let radii = BorderRadii::uniform(10.0);
-        let shrunk = radii.shrink(3.0);
-        assert_eq!(shrunk.top_left, 7.0);
-        assert_eq!(shrunk.top_right, 7.0);
+  #[test]
+  fn test_border_radii_shrink() {
+    let radii = BorderRadii::uniform(10.0);
+    let shrunk = radii.shrink(3.0);
+    assert_eq!(shrunk.top_left, 7.0);
+    assert_eq!(shrunk.top_right, 7.0);
 
-        let over_shrunk = radii.shrink(15.0);
-        assert_eq!(over_shrunk.top_left, 0.0);
-    }
+    let over_shrunk = radii.shrink(15.0);
+    assert_eq!(over_shrunk.top_left, 0.0);
+  }
 
-    #[test]
-    fn test_border_widths() {
-        let widths = BorderWidths::uniform(5.0);
-        assert!(widths.has_border());
+  #[test]
+  fn test_border_widths() {
+    let widths = BorderWidths::uniform(5.0);
+    assert!(widths.has_border());
 
-        let no_border = BorderWidths::new(0.0, 0.0, 0.0, 0.0);
-        assert!(!no_border.has_border());
-    }
+    let no_border = BorderWidths::new(0.0, 0.0, 0.0, 0.0);
+    assert!(!no_border.has_border());
+  }
 
-    #[test]
-    fn test_fill_rect() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::rgb(255, 0, 0));
-        assert!(result);
-    }
+  #[test]
+  fn test_fill_rect() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::rgb(255, 0, 0));
+    assert!(result);
+  }
 
-    #[test]
-    fn test_fill_rect_transparent() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::TRANSPARENT);
-        assert!(!result);
-    }
+  #[test]
+  fn test_fill_rect_transparent() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let result = fill_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::TRANSPARENT);
+    assert!(!result);
+  }
 
-    #[test]
-    fn test_fill_rect_zero_size() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let result = fill_rect(&mut pixmap, 10.0, 10.0, 0.0, 50.0, Rgba::rgb(255, 0, 0));
-        assert!(!result);
-    }
+  #[test]
+  fn test_fill_rect_zero_size() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let result = fill_rect(&mut pixmap, 10.0, 10.0, 0.0, 50.0, Rgba::rgb(255, 0, 0));
+    assert!(!result);
+  }
 
-    #[test]
-    fn test_stroke_rect() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let result = stroke_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, Rgba::rgb(0, 0, 255), 2.0);
-        assert!(result);
-    }
+  #[test]
+  fn test_stroke_rect() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let result = stroke_rect(
+      &mut pixmap,
+      10.0,
+      10.0,
+      50.0,
+      50.0,
+      Rgba::rgb(0, 0, 255),
+      2.0,
+    );
+    assert!(result);
+  }
 
-    #[test]
-    fn test_fill_rounded_rect() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let radii = BorderRadii::uniform(10.0);
-        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Rgba::rgb(0, 255, 0));
-        assert!(result);
-    }
+  #[test]
+  fn test_fill_rounded_rect() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let radii = BorderRadii::uniform(10.0);
+    let result = fill_rounded_rect(
+      &mut pixmap,
+      10.0,
+      10.0,
+      50.0,
+      50.0,
+      &radii,
+      Rgba::rgb(0, 255, 0),
+    );
+    assert!(result);
+  }
 
-    #[test]
-    fn test_fill_rounded_rect_no_radii() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let radii = BorderRadii::zero();
-        let result = fill_rounded_rect(&mut pixmap, 10.0, 10.0, 50.0, 50.0, &radii, Rgba::rgb(0, 255, 0));
-        assert!(result);
-    }
+  #[test]
+  fn test_fill_rounded_rect_no_radii() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let radii = BorderRadii::zero();
+    let result = fill_rounded_rect(
+      &mut pixmap,
+      10.0,
+      10.0,
+      50.0,
+      50.0,
+      &radii,
+      Rgba::rgb(0, 255, 0),
+    );
+    assert!(result);
+  }
 
-    #[test]
-    fn test_render_borders() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let widths = BorderWidths::uniform(5.0);
-        let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
-        let radii = BorderRadii::zero();
-        let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
-        assert!(result);
-    }
+  #[test]
+  fn test_render_borders() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let widths = BorderWidths::uniform(5.0);
+    let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
+    let radii = BorderRadii::zero();
+    let result = render_borders(
+      &mut pixmap,
+      10.0,
+      10.0,
+      80.0,
+      80.0,
+      &widths,
+      &colors,
+      &radii,
+    );
+    assert!(result);
+  }
 
-    #[test]
-    fn test_render_borders_different_colors() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let widths = BorderWidths::uniform(5.0);
-        let colors = BorderColors::new(
-            Rgba::rgb(255, 0, 0),
-            Rgba::rgb(0, 255, 0),
-            Rgba::rgb(0, 0, 255),
-            Rgba::rgb(255, 255, 0),
-        );
-        let radii = BorderRadii::zero();
-        let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
-        assert!(result);
-    }
+  #[test]
+  fn test_render_borders_different_colors() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let widths = BorderWidths::uniform(5.0);
+    let colors = BorderColors::new(
+      Rgba::rgb(255, 0, 0),
+      Rgba::rgb(0, 255, 0),
+      Rgba::rgb(0, 0, 255),
+      Rgba::rgb(255, 255, 0),
+    );
+    let radii = BorderRadii::zero();
+    let result = render_borders(
+      &mut pixmap,
+      10.0,
+      10.0,
+      80.0,
+      80.0,
+      &widths,
+      &colors,
+      &radii,
+    );
+    assert!(result);
+  }
 
-    #[test]
-    fn test_render_rounded_borders() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let widths = BorderWidths::uniform(5.0);
-        let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
-        let radii = BorderRadii::uniform(10.0);
-        let result = render_borders(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &widths, &colors, &radii);
-        assert!(result);
-    }
+  #[test]
+  fn test_render_rounded_borders() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let widths = BorderWidths::uniform(5.0);
+    let colors = BorderColors::uniform(Rgba::rgb(0, 0, 0));
+    let radii = BorderRadii::uniform(10.0);
+    let result = render_borders(
+      &mut pixmap,
+      10.0,
+      10.0,
+      80.0,
+      80.0,
+      &widths,
+      &colors,
+      &radii,
+    );
+    assert!(result);
+  }
 
-    #[test]
-    fn test_render_box_shadow() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let radii = BorderRadii::zero();
-        let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
-        let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 50.0, 50.0, &radii, &shadow);
-        assert!(result);
-    }
+  #[test]
+  fn test_render_box_shadow() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let radii = BorderRadii::zero();
+    let shadow = BoxShadow::new(5.0, 5.0, 10.0, 0.0, Rgba::from_rgba8(0, 0, 0, 128));
+    let result = render_box_shadow(&mut pixmap, 20.0, 20.0, 50.0, 50.0, &radii, &shadow);
+    assert!(result);
+  }
 
-    #[test]
-    fn test_render_inset_shadow() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let radii = BorderRadii::zero();
-        let shadow = BoxShadow::inset(5.0, 5.0, 10.0, 5.0, Rgba::from_rgba8(0, 0, 0, 128));
-        let result = render_box_shadow(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &radii, &shadow);
-        assert!(result);
-    }
+  #[test]
+  fn test_render_inset_shadow() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let radii = BorderRadii::zero();
+    let shadow = BoxShadow::inset(5.0, 5.0, 10.0, 5.0, Rgba::from_rgba8(0, 0, 0, 128));
+    let result = render_box_shadow(&mut pixmap, 10.0, 10.0, 80.0, 80.0, &radii, &shadow);
+    assert!(result);
+  }
 
-    #[test]
-    fn test_draw_line() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let result = draw_line(&mut pixmap, 0.0, 0.0, 100.0, 100.0, Rgba::rgb(255, 0, 0), 2.0);
-        assert!(result);
-    }
+  #[test]
+  fn test_draw_line() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let result = draw_line(
+      &mut pixmap,
+      0.0,
+      0.0,
+      100.0,
+      100.0,
+      Rgba::rgb(255, 0, 0),
+      2.0,
+    );
+    assert!(result);
+  }
 
-    #[test]
-    fn test_fill_circle() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let result = fill_circle(&mut pixmap, 50.0, 50.0, 30.0, Rgba::rgb(0, 128, 255));
-        assert!(result);
-    }
+  #[test]
+  fn test_fill_circle() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let result = fill_circle(&mut pixmap, 50.0, 50.0, 30.0, Rgba::rgb(0, 128, 255));
+    assert!(result);
+  }
 
-    #[test]
-    fn test_fill_ellipse() {
-        let mut pixmap = Pixmap::new(100, 100).unwrap();
-        let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 40.0, 20.0, Rgba::rgb(128, 0, 255));
-        assert!(result);
-    }
+  #[test]
+  fn test_fill_ellipse() {
+    let mut pixmap = Pixmap::new(100, 100).unwrap();
+    let result = fill_ellipse(&mut pixmap, 50.0, 50.0, 40.0, 20.0, Rgba::rgb(128, 0, 255));
+    assert!(result);
+  }
 }

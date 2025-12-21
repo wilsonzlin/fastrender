@@ -1,24 +1,27 @@
 use fastrender::FastRender;
 
 fn is_all_white(pixmap: &resvg::tiny_skia::Pixmap) -> bool {
-    // Expect white background (255,255,255,255) when nothing is painted.
-    // If any pixel differs, content rendered.
-    pixmap.data().chunks_exact(4).all(|px| px == [255, 255, 255, 255])
+  // Expect white background (255,255,255,255) when nothing is painted.
+  // If any pixel differs, content rendered.
+  pixmap
+    .data()
+    .chunks_exact(4)
+    .all(|px| px == [255, 255, 255, 255])
 }
 
 fn pixel(pixmap: &resvg::tiny_skia::Pixmap, x: u32, y: u32) -> [u8; 4] {
-    let idx = (y as usize * pixmap.width() as usize + x as usize) * 4;
-    let data = pixmap.data();
-    [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]
+  let idx = (y as usize * pixmap.width() as usize + x as usize) * 4;
+  let data = pixmap.data();
+  [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]
 }
 
 fn is_red(pixel: [u8; 4]) -> bool {
-    pixel == [255, 0, 0, 255]
+  pixel == [255, 0, 0, 255]
 }
 
 #[test]
 fn absolutely_positioned_body_with_insets_renders_content() {
-    std::thread::Builder::new()
+  std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| {
             let mut renderer = FastRender::new().expect("renderer");
@@ -50,7 +53,7 @@ fn absolutely_positioned_body_with_insets_renders_content() {
 
 #[test]
 fn fixed_positioned_inset_auto_width_fills_viewport() {
-    std::thread::Builder::new()
+  std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| {
             let mut renderer = FastRender::new().expect("renderer");
@@ -75,7 +78,7 @@ fn fixed_positioned_inset_auto_width_fills_viewport() {
 
 #[test]
 fn absolute_inset_auto_width_fills_parent() {
-    std::thread::Builder::new()
+  std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| {
             let mut renderer = FastRender::new().expect("renderer");
@@ -101,11 +104,11 @@ fn absolute_inset_auto_width_fills_parent() {
 
 #[test]
 fn fixed_flex_container_centers_children_with_insets() {
-    std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
-        .spawn(|| {
-            let mut renderer = FastRender::new().expect("renderer");
-            let html = r#"
+  std::thread::Builder::new()
+    .stack_size(64 * 1024 * 1024)
+    .spawn(|| {
+      let mut renderer = FastRender::new().expect("renderer");
+      let html = r#"
             <style>
               body { margin: 0; background: white; }
               .overlay {
@@ -124,16 +127,19 @@ fn fixed_flex_container_centers_children_with_insets() {
             <div class="overlay"><div class="message"></div></div>
             "#;
 
-            let pixmap = renderer.render_html(html, 200, 200).expect("render");
+      let pixmap = renderer.render_html(html, 200, 200).expect("render");
 
-            // Centered vertically means the red bar should appear near the middle, not stuck at the top.
-            assert!(is_red(pixel(&pixmap, 100, 100)), "center pixel should be red");
-            assert!(
-                !is_red(pixel(&pixmap, 100, 10)),
-                "top padding should remain white when justified center"
-            );
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+      // Centered vertically means the red bar should appear near the middle, not stuck at the top.
+      assert!(
+        is_red(pixel(&pixmap, 100, 100)),
+        "center pixel should be red"
+      );
+      assert!(
+        !is_red(pixel(&pixmap, 100, 10)),
+        "top padding should remain white when justified center"
+      );
+    })
+    .unwrap()
+    .join()
+    .unwrap();
 }

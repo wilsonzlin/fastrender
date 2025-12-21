@@ -20,49 +20,53 @@ use url::Url;
 /// directory paths. JavaScript-escaped hrefs (e.g. `https:\/\/example.com`) are
 /// unescaped before resolution.
 pub fn resolve_href(base: &str, href: &str) -> Option<String> {
-    let href = unescape_js_escapes(href);
-    let href = href.trim();
-    if href.is_empty() {
-        return None;
-    }
+  let href = unescape_js_escapes(href);
+  let href = href.trim();
+  if href.is_empty() {
+    return None;
+  }
 
-    // Ignore fragment-only hrefs (e.g., "#section") since they don't resolve to fetchable stylesheets.
-    if href.starts_with('#') {
-        return None;
-    }
+  // Ignore fragment-only hrefs (e.g., "#section") since they don't resolve to fetchable stylesheets.
+  if href.starts_with('#') {
+    return None;
+  }
 
-    if href.starts_with("data:") {
-        return Some(href.to_string());
-    }
+  if href.starts_with("data:") {
+    return Some(href.to_string());
+  }
 
-    let href_lower = href.to_ascii_lowercase();
-    if href_lower.starts_with("javascript:") || href_lower.starts_with("vbscript:") || href_lower.starts_with("mailto:")
-    {
-        return None;
-    }
+  let href_lower = href.to_ascii_lowercase();
+  if href_lower.starts_with("javascript:")
+    || href_lower.starts_with("vbscript:")
+    || href_lower.starts_with("mailto:")
+  {
+    return None;
+  }
 
-    if href.starts_with('#') {
-        return None;
-    }
+  if href.starts_with('#') {
+    return None;
+  }
 
-    if let Ok(abs) = Url::parse(href) {
-        return Some(abs.to_string());
-    }
+  if let Ok(abs) = Url::parse(href) {
+    return Some(abs.to_string());
+  }
 
-    let mut base_candidate = base.to_string();
-    if base_candidate.starts_with("file://") {
-        let path = &base_candidate["file://".len()..];
-        if Path::new(path).is_dir() && !base_candidate.ends_with('/') {
-            base_candidate.push('/');
-        }
+  let mut base_candidate = base.to_string();
+  if base_candidate.starts_with("file://") {
+    let path = &base_candidate["file://".len()..];
+    if Path::new(path).is_dir() && !base_candidate.ends_with('/') {
+      base_candidate.push('/');
     }
+  }
 
-    Url::parse(&base_candidate)
-        .or_else(|_| Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase))
-        .ok()?
-        .join(href)
-        .ok()
-        .map(|u| u.to_string())
+  Url::parse(&base_candidate)
+    .or_else(|_| {
+      Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase)
+    })
+    .ok()?
+    .join(href)
+    .ok()
+    .map(|u| u.to_string())
 }
 
 /// Best-effort unescaping for JavaScript-escaped URL strings embedded in HTML/JS.
@@ -81,218 +85,228 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
 /// assert_eq!(unescape_js_escapes(r#"https:\/\/example.com\/path"#), "https://example.com/path");
 /// ```
 fn unescape_js_escapes(input: &str) -> Cow<'_, str> {
-    if !input.contains('\\') {
-        return Cow::Borrowed(input);
-    }
+  if !input.contains('\\') {
+    return Cow::Borrowed(input);
+  }
 
-    let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            if i + 1 < bytes.len() && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\'' || bytes[i + 1] == b'/') {
-                out.push(bytes[i + 1] as char);
-                i += 2;
-                continue;
-            }
+  let mut out = String::with_capacity(input.len());
+  let bytes = input.as_bytes();
+  let mut i = 0;
+  while i < bytes.len() {
+    if bytes[i] == b'\\' {
+      if i + 1 < bytes.len()
+        && (bytes[i + 1] == b'"' || bytes[i + 1] == b'\'' || bytes[i + 1] == b'/')
+      {
+        out.push(bytes[i + 1] as char);
+        i += 2;
+        continue;
+      }
 
-            if i + 5 < bytes.len() && (bytes[i + 1] == b'u' || bytes[i + 1] == b'U') {
-                if let Ok(code) = u16::from_str_radix(&input[i + 2..i + 6], 16) {
-                    if let Some(ch) = char::from_u32(code as u32) {
-                        out.push(ch);
-                        i += 6;
-                        continue;
-                    }
-                }
-            }
+      if i + 5 < bytes.len() && (bytes[i + 1] == b'u' || bytes[i + 1] == b'U') {
+        if let Ok(code) = u16::from_str_radix(&input[i + 2..i + 6], 16) {
+          if let Some(ch) = char::from_u32(code as u32) {
+            out.push(ch);
+            i += 6;
+            continue;
+          }
         }
-
-        out.push(bytes[i] as char);
-        i += 1;
+      }
     }
 
-    Cow::Owned(out)
+    out.push(bytes[i] as char);
+    i += 1;
+  }
+
+  Cow::Owned(out)
 }
 
 fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
-    let mut cleaned = candidate
-        .trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')'))
-        .trim()
-        .to_string();
+  let mut cleaned = candidate
+    .trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')'))
+    .trim()
+    .to_string();
 
-    if cleaned.is_empty() {
-        return None;
-    }
+  if cleaned.is_empty() {
+    return None;
+  }
 
-    // Strip common sourceURL markers that get inlined with CSS text (e.g.,
-    // "sourceURL=https://example.com/style.css").
-    if cleaned.to_ascii_lowercase().starts_with("sourceurl=") {
-        if let Some((_, rest)) = cleaned.split_once('=') {
-            cleaned = rest.to_string();
-        }
+  // Strip common sourceURL markers that get inlined with CSS text (e.g.,
+  // "sourceURL=https://example.com/style.css").
+  if cleaned.to_ascii_lowercase().starts_with("sourceurl=") {
+    if let Some((_, rest)) = cleaned.split_once('=') {
+      cleaned = rest.to_string();
     }
+  }
 
-    if let Some(pos) = cleaned.to_ascii_lowercase().rfind(".css") {
-        let trailing = &cleaned[pos + 4..];
-        if trailing.chars().all(|c| c == '/') {
-            cleaned.truncate(pos + 4);
-        }
+  if let Some(pos) = cleaned.to_ascii_lowercase().rfind(".css") {
+    let trailing = &cleaned[pos + 4..];
+    if trailing.chars().all(|c| c == '/') {
+      cleaned.truncate(pos + 4);
     }
+  }
 
-    cleaned = decode_html_entities(&cleaned);
-    cleaned = unescape_js_escapes(&cleaned).into_owned();
-    cleaned = normalize_scheme_slashes(&cleaned);
-    if cleaned.contains('\\') {
-        cleaned = cleaned.replace('\\', "");
-    }
+  cleaned = decode_html_entities(&cleaned);
+  cleaned = unescape_js_escapes(&cleaned).into_owned();
+  cleaned = normalize_scheme_slashes(&cleaned);
+  if cleaned.contains('\\') {
+    cleaned = cleaned.replace('\\', "");
+  }
 
-    if cleaned.is_empty() {
-        None
-    } else {
-        Some(cleaned)
-    }
+  if cleaned.is_empty() {
+    None
+  } else {
+    Some(cleaned)
+  }
 }
 
 /// Rewrite `url(...)` references in a CSS string to be absolute using the stylesheet's base URL.
 pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
-    #[derive(PartialEq)]
-    enum State {
-        Normal,
-        SingleString,
-        DoubleString,
-        Comment,
-    }
+  #[derive(PartialEq)]
+  enum State {
+    Normal,
+    SingleString,
+    DoubleString,
+    Comment,
+  }
 
-    let mut out = String::with_capacity(css.len());
-    let mut state = State::Normal;
-    let bytes = css.as_bytes();
-    let mut i = 0usize;
-    let mut last_emit = 0usize;
+  let mut out = String::with_capacity(css.len());
+  let mut state = State::Normal;
+  let bytes = css.as_bytes();
+  let mut i = 0usize;
+  let mut last_emit = 0usize;
 
-    while i < bytes.len() {
-        match state {
-            State::Normal => {
-                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                    i += 2;
-                    state = State::Comment;
-                    continue;
-                }
-                if bytes[i] == b'\'' {
-                    i += 1;
-                    state = State::SingleString;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    i += 1;
-                    state = State::DoubleString;
-                    continue;
-                }
-
-                if (bytes[i] == b'u' || bytes[i] == b'U')
-                    && i + 3 < bytes.len()
-                    && bytes[i + 1..].len() >= 3
-                    && bytes[i + 1].eq_ignore_ascii_case(&b'r')
-                    && bytes[i + 2].eq_ignore_ascii_case(&b'l')
-                {
-                    let mut j = i + 3;
-                    while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                        j += 1;
-                    }
-                    if j < bytes.len() && bytes[j] == b'(' {
-                        j += 1;
-                        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                            j += 1;
-                        }
-                        let content_start = j;
-                        let mut in_single = false;
-                        let mut in_double = false;
-                        while j < bytes.len() {
-                            let b = bytes[j];
-                            if !in_single && !in_double && b == b')' {
-                                break;
-                            }
-                            match b {
-                                b'\\' => {
-                                    j += 1;
-                                }
-                                b'\'' if !in_double => in_single = !in_single,
-                                b'"' if !in_single => in_double = !in_double,
-                                _ => {}
-                            }
-                            j += 1;
-                        }
-                        if j < bytes.len() && bytes[j] == b')' {
-                            let content_end = j;
-                            out.push_str(&css[last_emit..i]);
-
-                            let raw = css[content_start..content_end].trim();
-                            let unquoted = raw.trim_matches('"').trim_matches('\'').to_string();
-                            if let Some(resolved) = resolve_href(base_url, &unquoted) {
-                                let _ = write!(out, "url(\"{}\")", resolved);
-                            } else {
-                                out.push_str(&css[i..=content_end]);
-                            }
-                            i = content_end + 1;
-                            last_emit = i;
-                            continue;
-                        }
-                    }
-                }
-                i += 1;
-            }
-            State::SingleString => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'\'' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-            State::DoubleString => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-            State::Comment => {
-                if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                    i += 2;
-                    state = State::Normal;
-                } else {
-                    i += 1;
-                }
-            }
+  while i < bytes.len() {
+    match state {
+      State::Normal => {
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+          i += 2;
+          state = State::Comment;
+          continue;
         }
-    }
+        if bytes[i] == b'\'' {
+          i += 1;
+          state = State::SingleString;
+          continue;
+        }
+        if bytes[i] == b'"' {
+          i += 1;
+          state = State::DoubleString;
+          continue;
+        }
 
-    out.push_str(&css[last_emit..]);
-    out
+        if (bytes[i] == b'u' || bytes[i] == b'U')
+          && i + 3 < bytes.len()
+          && bytes[i + 1..].len() >= 3
+          && bytes[i + 1].eq_ignore_ascii_case(&b'r')
+          && bytes[i + 2].eq_ignore_ascii_case(&b'l')
+        {
+          let mut j = i + 3;
+          while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+          }
+          if j < bytes.len() && bytes[j] == b'(' {
+            j += 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+              j += 1;
+            }
+            let content_start = j;
+            let mut in_single = false;
+            let mut in_double = false;
+            while j < bytes.len() {
+              let b = bytes[j];
+              if !in_single && !in_double && b == b')' {
+                break;
+              }
+              match b {
+                b'\\' => {
+                  j += 1;
+                }
+                b'\'' if !in_double => in_single = !in_single,
+                b'"' if !in_single => in_double = !in_double,
+                _ => {}
+              }
+              j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b')' {
+              let content_end = j;
+              out.push_str(&css[last_emit..i]);
+
+              let raw = css[content_start..content_end].trim();
+              let unquoted = raw.trim_matches('"').trim_matches('\'').to_string();
+              if let Some(resolved) = resolve_href(base_url, &unquoted) {
+                let _ = write!(out, "url(\"{}\")", resolved);
+              } else {
+                out.push_str(&css[i..=content_end]);
+              }
+              i = content_end + 1;
+              last_emit = i;
+              continue;
+            }
+          }
+        }
+        i += 1;
+      }
+      State::SingleString => {
+        if bytes[i] == b'\\' {
+          i += 2;
+          continue;
+        }
+        if bytes[i] == b'\'' {
+          state = State::Normal;
+        }
+        i += 1;
+      }
+      State::DoubleString => {
+        if bytes[i] == b'\\' {
+          i += 2;
+          continue;
+        }
+        if bytes[i] == b'"' {
+          state = State::Normal;
+        }
+        i += 1;
+      }
+      State::Comment => {
+        if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+          i += 2;
+          state = State::Normal;
+        } else {
+          i += 1;
+        }
+      }
+    }
+  }
+
+  out.push_str(&css[last_emit..]);
+  out
 }
 
 fn parse_import_target(rule: &str) -> Option<(String, String)> {
-    let after_at = rule.strip_prefix("@import")?.trim_start();
-    let (target, rest) = if let Some(inner) = after_at.strip_prefix("url(") {
-        let close = inner.find(')')?;
-        let url_part = &inner[..close].trim();
-        let url_str = url_part.trim_matches(|c| c == '"' || c == '\'').to_string();
-        let media = inner[close + 1..].trim().trim_end_matches(';').trim().to_string();
-        (url_str, media)
-    } else if let Some(quote) = after_at.chars().next().filter(|c| *c == '"' || *c == '\'') {
-        let rest = &after_at[1..];
-        let close_idx = rest.find(quote)?;
-        let url_str = rest[..close_idx].to_string();
-        let media = rest[close_idx + 1..].trim().trim_end_matches(';').trim().to_string();
-        (url_str, media)
-    } else {
-        return None;
-    };
-    Some((target, rest))
+  let after_at = rule.strip_prefix("@import")?.trim_start();
+  let (target, rest) = if let Some(inner) = after_at.strip_prefix("url(") {
+    let close = inner.find(')')?;
+    let url_part = &inner[..close].trim();
+    let url_str = url_part.trim_matches(|c| c == '"' || c == '\'').to_string();
+    let media = inner[close + 1..]
+      .trim()
+      .trim_end_matches(';')
+      .trim()
+      .to_string();
+    (url_str, media)
+  } else if let Some(quote) = after_at.chars().next().filter(|c| *c == '"' || *c == '\'') {
+    let rest = &after_at[1..];
+    let close_idx = rest.find(quote)?;
+    let url_str = rest[..close_idx].to_string();
+    let media = rest[close_idx + 1..]
+      .trim()
+      .trim_end_matches(';')
+      .trim()
+      .to_string();
+    (url_str, media)
+  } else {
+    return None;
+  };
+  Some((target, rest))
 }
 
 /// Inline `@import` rules by fetching their targets recursively.
@@ -301,322 +315,322 @@ fn parse_import_target(rule: &str) -> Option<(String, String)> {
 /// stylesheet URL before inlining, so relative asset references continue to work
 /// once the CSS is embedded in the document.
 pub fn inline_imports<S: BuildHasher>(
-    css: &str,
-    base_url: &str,
-    fetch: &dyn Fn(&str) -> Result<String>,
-    seen: &mut HashSet<String, S>,
+  css: &str,
+  base_url: &str,
+  fetch: &dyn Fn(&str) -> Result<String>,
+  seen: &mut HashSet<String, S>,
 ) -> String {
-    #[derive(PartialEq)]
-    enum State {
-        Normal,
-        Single,
-        Double,
-        Comment,
-    }
+  #[derive(PartialEq)]
+  enum State {
+    Normal,
+    Single,
+    Double,
+    Comment,
+  }
 
-    let mut out = String::with_capacity(css.len());
-    let mut state = State::Normal;
-    let bytes = css.as_bytes();
-    let mut i = 0usize;
-    let mut last_emit = 0usize;
+  let mut out = String::with_capacity(css.len());
+  let mut state = State::Normal;
+  let bytes = css.as_bytes();
+  let mut i = 0usize;
+  let mut last_emit = 0usize;
 
-    while i < bytes.len() {
-        match state {
-            State::Normal => {
-                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-                    state = State::Comment;
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'\'' {
-                    state = State::Single;
-                    i += 1;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    state = State::Double;
-                    i += 1;
-                    continue;
-                }
-
-                if bytes[i] == b'@' {
-                    let remainder = &css[i..];
-                    if remainder.len() >= 7 && remainder[1..].to_lowercase().starts_with("import") {
-                        let mut j = i;
-                        let mut inner_state = State::Normal;
-                        while j < bytes.len() {
-                            match inner_state {
-                                State::Normal => {
-                                    if bytes[j] == b';' {
-                                        j += 1;
-                                        break;
-                                    }
-                                    if bytes[j] == b'\'' {
-                                        inner_state = State::Single;
-                                    } else if bytes[j] == b'"' {
-                                        inner_state = State::Double;
-                                    } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'*' {
-                                        inner_state = State::Comment;
-                                        j += 1;
-                                    }
-                                }
-                                State::Single => {
-                                    if bytes[j] == b'\\' {
-                                        j += 1;
-                                    } else if bytes[j] == b'\'' {
-                                        inner_state = State::Normal;
-                                    }
-                                }
-                                State::Double => {
-                                    if bytes[j] == b'\\' {
-                                        j += 1;
-                                    } else if bytes[j] == b'"' {
-                                        inner_state = State::Normal;
-                                    }
-                                }
-                                State::Comment => {
-                                    if bytes[j] == b'*' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
-                                        inner_state = State::Normal;
-                                        j += 1;
-                                    }
-                                }
-                            }
-                            j += 1;
-                        }
-
-                        let rule = css[i..j].trim();
-                        if let Some((target, media)) = parse_import_target(rule) {
-                            if let Some(resolved) = resolve_href(base_url, &target) {
-                                out.push_str(&css[last_emit..i]);
-                                if seen.insert(resolved.clone()) {
-                                    if let Ok(fetched) = fetch(&resolved) {
-                                        let rewritten = absolutize_css_urls(&fetched, &resolved);
-                                        let inlined = inline_imports(&rewritten, &resolved, fetch, seen);
-                                        if media.is_empty() || media.eq_ignore_ascii_case("all") {
-                                            out.push_str(&inlined);
-                                        } else {
-                                            let _ = write!(out, "@media {} {{\n{}\n}}\n", media, inlined);
-                                        }
-                                    }
-                                }
-                                last_emit = j;
-                                i = j;
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                i += 1;
-            }
-            State::Single => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'\'' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-            State::Double => {
-                if bytes[i] == b'\\' {
-                    i += 2;
-                    continue;
-                }
-                if bytes[i] == b'"' {
-                    state = State::Normal;
-                }
-                i += 1;
-            }
-            State::Comment => {
-                if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-                    state = State::Normal;
-                    i += 2;
-                } else {
-                    i += 1;
-                }
-            }
+  while i < bytes.len() {
+    match state {
+      State::Normal => {
+        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+          state = State::Comment;
+          i += 2;
+          continue;
         }
-    }
+        if bytes[i] == b'\'' {
+          state = State::Single;
+          i += 1;
+          continue;
+        }
+        if bytes[i] == b'"' {
+          state = State::Double;
+          i += 1;
+          continue;
+        }
 
-    out.push_str(&css[last_emit..]);
-    out
+        if bytes[i] == b'@' {
+          let remainder = &css[i..];
+          if remainder.len() >= 7 && remainder[1..].to_lowercase().starts_with("import") {
+            let mut j = i;
+            let mut inner_state = State::Normal;
+            while j < bytes.len() {
+              match inner_state {
+                State::Normal => {
+                  if bytes[j] == b';' {
+                    j += 1;
+                    break;
+                  }
+                  if bytes[j] == b'\'' {
+                    inner_state = State::Single;
+                  } else if bytes[j] == b'"' {
+                    inner_state = State::Double;
+                  } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'*' {
+                    inner_state = State::Comment;
+                    j += 1;
+                  }
+                }
+                State::Single => {
+                  if bytes[j] == b'\\' {
+                    j += 1;
+                  } else if bytes[j] == b'\'' {
+                    inner_state = State::Normal;
+                  }
+                }
+                State::Double => {
+                  if bytes[j] == b'\\' {
+                    j += 1;
+                  } else if bytes[j] == b'"' {
+                    inner_state = State::Normal;
+                  }
+                }
+                State::Comment => {
+                  if bytes[j] == b'*' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
+                    inner_state = State::Normal;
+                    j += 1;
+                  }
+                }
+              }
+              j += 1;
+            }
+
+            let rule = css[i..j].trim();
+            if let Some((target, media)) = parse_import_target(rule) {
+              if let Some(resolved) = resolve_href(base_url, &target) {
+                out.push_str(&css[last_emit..i]);
+                if seen.insert(resolved.clone()) {
+                  if let Ok(fetched) = fetch(&resolved) {
+                    let rewritten = absolutize_css_urls(&fetched, &resolved);
+                    let inlined = inline_imports(&rewritten, &resolved, fetch, seen);
+                    if media.is_empty() || media.eq_ignore_ascii_case("all") {
+                      out.push_str(&inlined);
+                    } else {
+                      let _ = write!(out, "@media {} {{\n{}\n}}\n", media, inlined);
+                    }
+                  }
+                }
+                last_emit = j;
+                i = j;
+                continue;
+              }
+            }
+          }
+        }
+
+        i += 1;
+      }
+      State::Single => {
+        if bytes[i] == b'\\' {
+          i += 2;
+          continue;
+        }
+        if bytes[i] == b'\'' {
+          state = State::Normal;
+        }
+        i += 1;
+      }
+      State::Double => {
+        if bytes[i] == b'\\' {
+          i += 2;
+          continue;
+        }
+        if bytes[i] == b'"' {
+          state = State::Normal;
+        }
+        i += 1;
+      }
+      State::Comment => {
+        if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+          state = State::Normal;
+          i += 2;
+        } else {
+          i += 1;
+        }
+      }
+    }
+  }
+
+  out.push_str(&css[last_emit..]);
+  out
 }
 
 fn extract_attr_value(tag_source: &str, attr: &str) -> Option<String> {
-    let tag_lower = tag_source.to_lowercase();
-    if let Some(attr_pos) = tag_lower.find(attr) {
-        let attr_slice = &tag_source[attr_pos..];
-        if let Some(qpos) = attr_slice.find('"').or_else(|| attr_slice.find('\'')) {
-            let quote = attr_slice.chars().nth(qpos).unwrap();
-            let after = &attr_slice[qpos + 1..];
-            if let Some(end) = after.find(quote) {
-                return Some(decode_html_entities(&after[..end]));
-            }
-        }
+  let tag_lower = tag_source.to_lowercase();
+  if let Some(attr_pos) = tag_lower.find(attr) {
+    let attr_slice = &tag_source[attr_pos..];
+    if let Some(qpos) = attr_slice.find('"').or_else(|| attr_slice.find('\'')) {
+      let quote = attr_slice.chars().nth(qpos).unwrap();
+      let after = &attr_slice[qpos + 1..];
+      if let Some(end) = after.find(quote) {
+        return Some(decode_html_entities(&after[..end]));
+      }
     }
-    None
+  }
+  None
 }
 
 fn decode_html_entities(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c != '&' {
-            out.push(c);
-            continue;
-        }
-
-        let mut entity = String::new();
-        while let Some(&next) = chars.peek() {
-            entity.push(next);
-            chars.next();
-            if next == ';' {
-                break;
-            }
-        }
-
-        if entity.is_empty() {
-            out.push('&');
-            continue;
-        }
-
-        let mut ent = entity.as_str();
-        if let Some(stripped) = ent.strip_prefix('/') {
-            ent = stripped;
-        }
-
-        let decoded = match ent {
-            "amp;" => Some('&'),
-            "quot;" => Some('"'),
-            "apos;" => Some('\''),
-            "lt;" => Some('<'),
-            "gt;" => Some('>'),
-            _ => {
-                if let Some(num) = ent.strip_prefix('#') {
-                    let trimmed = num.trim_end_matches(';');
-                    if let Some(hex) = trimmed.strip_prefix(['x', 'X']) {
-                        u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
-                    } else {
-                        trimmed.parse::<u32>().ok().and_then(char::from_u32)
-                    }
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some(ch) = decoded {
-            out.push(ch);
-        } else {
-            out.push('&');
-            out.push_str(&entity);
-        }
+  let mut out = String::with_capacity(input.len());
+  let mut chars = input.chars().peekable();
+  while let Some(c) = chars.next() {
+    if c != '&' {
+      out.push(c);
+      continue;
     }
-    normalize_scheme_slashes(&out)
+
+    let mut entity = String::new();
+    while let Some(&next) = chars.peek() {
+      entity.push(next);
+      chars.next();
+      if next == ';' {
+        break;
+      }
+    }
+
+    if entity.is_empty() {
+      out.push('&');
+      continue;
+    }
+
+    let mut ent = entity.as_str();
+    if let Some(stripped) = ent.strip_prefix('/') {
+      ent = stripped;
+    }
+
+    let decoded = match ent {
+      "amp;" => Some('&'),
+      "quot;" => Some('"'),
+      "apos;" => Some('\''),
+      "lt;" => Some('<'),
+      "gt;" => Some('>'),
+      _ => {
+        if let Some(num) = ent.strip_prefix('#') {
+          let trimmed = num.trim_end_matches(';');
+          if let Some(hex) = trimmed.strip_prefix(['x', 'X']) {
+            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+          } else {
+            trimmed.parse::<u32>().ok().and_then(char::from_u32)
+          }
+        } else {
+          None
+        }
+      }
+    };
+
+    if let Some(ch) = decoded {
+      out.push(ch);
+    } else {
+      out.push('&');
+      out.push_str(&entity);
+    }
+  }
+  normalize_scheme_slashes(&out)
 }
 
 fn normalize_scheme_slashes(s: &str) -> String {
-    if s.starts_with("//") {
-        // Preserve scheme-relative URLs as-is so they can be resolved against the base
-        // scheme rather than collapsing the host into a path segment.
-        return s.to_string();
-    }
+  if s.starts_with("//") {
+    // Preserve scheme-relative URLs as-is so they can be resolved against the base
+    // scheme rather than collapsing the host into a path segment.
+    return s.to_string();
+  }
 
-    let mut out = s.to_string();
-    if let Some(pos) = out.find("://") {
-        let (scheme, rest) = out.split_at(pos + 3);
-        let mut trimmed = rest.trim_start_matches('/').to_string();
-        while trimmed.contains("//") {
-            trimmed = trimmed.replace("//", "/");
-        }
-        return format!("{}{}", scheme, trimmed);
+  let mut out = s.to_string();
+  if let Some(pos) = out.find("://") {
+    let (scheme, rest) = out.split_at(pos + 3);
+    let mut trimmed = rest.trim_start_matches('/').to_string();
+    while trimmed.contains("//") {
+      trimmed = trimmed.replace("//", "/");
     }
+    return format!("{}{}", scheme, trimmed);
+  }
 
-    while out.contains("//") {
-        out = out.replace("//", "/");
-    }
-    out
+  while out.contains("//") {
+    out = out.replace("//", "/");
+  }
+  out
 }
 
 /// Extract `<link rel="stylesheet">` URLs from an HTML document.
 pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
-    let mut css_urls = Vec::new();
-    let mut print_only_urls = Vec::new();
-    let debug = std::env::var("FASTR_LOG_CSS_LINKS").is_ok();
+  let mut css_urls = Vec::new();
+  let mut print_only_urls = Vec::new();
+  let debug = std::env::var("FASTR_LOG_CSS_LINKS").is_ok();
 
-    let lower = html.to_lowercase();
-    let mut pos = 0;
+  let lower = html.to_lowercase();
+  let mut pos = 0;
 
-    while let Some(link_start) = lower[pos..].find("<link") {
-        let abs_start = pos + link_start;
-        if let Some(link_end) = lower[abs_start..].find('>') {
-            let link_tag = &html[abs_start..=abs_start + link_end];
-            let link_tag_lower = link_tag.to_lowercase();
+  while let Some(link_start) = lower[pos..].find("<link") {
+    let abs_start = pos + link_start;
+    if let Some(link_end) = lower[abs_start..].find('>') {
+      let link_tag = &html[abs_start..=abs_start + link_end];
+      let link_tag_lower = link_tag.to_lowercase();
 
-            if link_tag_lower.contains("stylesheet") {
-                if debug {
-                    eprintln!("[css] found <link>: {}", link_tag);
-                }
-                if let Some(media) = extract_attr_value(link_tag, "media") {
-                    let media_lower = media.to_ascii_lowercase();
-                    let has_screen = media_lower.contains("screen") || media_lower.contains("all");
-                    let has_print = media_lower.contains("print");
-                    if debug {
-                        eprintln!(
-                            "[css] media attr: {} (print={}, screen={})",
-                            media, has_print, has_screen
-                        );
-                    }
-                    if has_print && !has_screen {
-                        if let Some(href) = extract_attr_value(link_tag, "href") {
-                            let href = normalize_scheme_slashes(&href);
-                            if let Some(full_url) = resolve_href(base_url, &href) {
-                                print_only_urls.push(full_url);
-                            }
-                        }
-                        pos = abs_start + link_end + 1;
-                        continue;
-                    }
-                } else if link_tag_lower.contains("media") {
-                    let has_screen = link_tag_lower.contains("screen") || link_tag_lower.contains("all");
-                    let has_print = link_tag_lower.contains("print");
-                    if debug {
-                        eprintln!(
-                            "[css] media substring in tag (no attr parsed), print={}, screen={}",
-                            has_print, has_screen
-                        );
-                    }
-                    if has_print && !has_screen {
-                        if let Some(href) = extract_attr_value(link_tag, "href") {
-                            let href = normalize_scheme_slashes(&href);
-                            if let Some(full_url) = resolve_href(base_url, &href) {
-                                print_only_urls.push(full_url);
-                            }
-                        }
-                        pos = abs_start + link_end + 1;
-                        continue;
-                    }
-                }
-                if let Some(href) = extract_attr_value(link_tag, "href") {
-                    let href = normalize_scheme_slashes(&href);
-                    if let Some(full_url) = resolve_href(base_url, &href) {
-                        css_urls.push(full_url);
-                    }
-                }
-            }
-
-            pos = abs_start + link_end + 1;
-        } else {
-            break;
+      if link_tag_lower.contains("stylesheet") {
+        if debug {
+          eprintln!("[css] found <link>: {}", link_tag);
         }
-    }
+        if let Some(media) = extract_attr_value(link_tag, "media") {
+          let media_lower = media.to_ascii_lowercase();
+          let has_screen = media_lower.contains("screen") || media_lower.contains("all");
+          let has_print = media_lower.contains("print");
+          if debug {
+            eprintln!(
+              "[css] media attr: {} (print={}, screen={})",
+              media, has_print, has_screen
+            );
+          }
+          if has_print && !has_screen {
+            if let Some(href) = extract_attr_value(link_tag, "href") {
+              let href = normalize_scheme_slashes(&href);
+              if let Some(full_url) = resolve_href(base_url, &href) {
+                print_only_urls.push(full_url);
+              }
+            }
+            pos = abs_start + link_end + 1;
+            continue;
+          }
+        } else if link_tag_lower.contains("media") {
+          let has_screen = link_tag_lower.contains("screen") || link_tag_lower.contains("all");
+          let has_print = link_tag_lower.contains("print");
+          if debug {
+            eprintln!(
+              "[css] media substring in tag (no attr parsed), print={}, screen={}",
+              has_print, has_screen
+            );
+          }
+          if has_print && !has_screen {
+            if let Some(href) = extract_attr_value(link_tag, "href") {
+              let href = normalize_scheme_slashes(&href);
+              if let Some(full_url) = resolve_href(base_url, &href) {
+                print_only_urls.push(full_url);
+              }
+            }
+            pos = abs_start + link_end + 1;
+            continue;
+          }
+        }
+        if let Some(href) = extract_attr_value(link_tag, "href") {
+          let href = normalize_scheme_slashes(&href);
+          if let Some(full_url) = resolve_href(base_url, &href) {
+            css_urls.push(full_url);
+          }
+        }
+      }
 
-    if css_urls.is_empty() && !print_only_urls.is_empty() {
-        css_urls.extend(print_only_urls);
+      pos = abs_start + link_end + 1;
+    } else {
+      break;
     }
-    dedupe_links_preserving_order(css_urls)
+  }
+
+  if css_urls.is_empty() && !print_only_urls.is_empty() {
+    css_urls.extend(print_only_urls);
+  }
+  dedupe_links_preserving_order(css_urls)
 }
 
 /// Heuristic extraction of CSS URLs that appear inside inline scripts or attributes.
@@ -628,192 +642,193 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
 /// resolve and fetch it as a stylesheet.
 #[allow(clippy::cognitive_complexity)]
 pub fn extract_embedded_css_urls(html: &str, base_url: &str) -> Vec<String> {
-    let mut urls = Vec::new();
-    let mut seen = HashSet::new();
-    let bytes = html.as_bytes();
-    let mut idx = 0;
+  let mut urls = Vec::new();
+  let mut seen = HashSet::new();
+  let bytes = html.as_bytes();
+  let mut idx = 0;
 
-    while let Some(pos) = memchr::memmem::find(&bytes[idx..], b".css") {
-        let abs_pos = idx + pos;
+  while let Some(pos) = memchr::memmem::find(&bytes[idx..], b".css") {
+    let abs_pos = idx + pos;
 
-        let mut start = abs_pos;
-        while start > 0 {
-            let c = bytes[start - 1] as char;
-            if matches!(c, '"' | '\'' | '(' | '<') || c.is_whitespace() {
-                break;
+    let mut start = abs_pos;
+    while start > 0 {
+      let c = bytes[start - 1] as char;
+      if matches!(c, '"' | '\'' | '(' | '<') || c.is_whitespace() {
+        break;
+      }
+      start -= 1;
+    }
+
+    let mut end = abs_pos + 4;
+    while end < bytes.len() {
+      let c = bytes[end] as char;
+      if matches!(c, '"' | '\'' | ')' | '>' | '{' | '}') || c.is_whitespace() {
+        break;
+      }
+      end += 1;
+    }
+
+    // If this candidate appears inside a <link> tag that is print-only, skip it.
+    if abs_pos > 0 {
+      let tag_start = bytes[..abs_pos].iter().rposition(|&b| b == b'<');
+      let tag_end = bytes[abs_pos..].iter().position(|&b| b == b'>');
+      if let (Some(ts), Some(te_rel)) = (tag_start, tag_end) {
+        let te = abs_pos + te_rel;
+        if te > ts {
+          let tag = &html[ts..=te];
+          let tag_lower = tag.to_ascii_lowercase();
+          if tag_lower.contains("<link") && tag_lower.contains("media") {
+            let has_screen = tag_lower.contains("screen") || tag_lower.contains("all");
+            let has_print = tag_lower.contains("print");
+            if has_print && !has_screen {
+              idx = end;
+              continue;
             }
-            start -= 1;
+          }
+        }
+      }
+    }
+
+    // Skip identifiers like `window.css = ...` where the token is an assignment target
+    // rather than a URL. If the next non-whitespace character after the match is '=',
+    // treat it as a property access and ignore it.
+    let mut lookahead = end;
+    while lookahead < bytes.len() && (bytes[lookahead] as char).is_whitespace() {
+      lookahead += 1;
+    }
+    if lookahead < bytes.len() && bytes[lookahead] == b'=' {
+      idx = end;
+      continue;
+    }
+
+    if end > start {
+      let candidate = &html[start..end];
+      if candidate.len() < 512 {
+        let raw_lower = candidate.to_ascii_lowercase();
+
+        // Detect sourceURL-style sourcemap markers (/*# or //#) immediately preceding the token.
+        let mut marker_back = start;
+        while marker_back > 0 && (bytes[marker_back - 1] as char).is_whitespace() {
+          marker_back -= 1;
+        }
+        let sourcemap_marker = if marker_back > 0 && bytes[marker_back - 1] == b'#' {
+          (marker_back >= 3 && bytes[marker_back - 2] == b'*' && bytes[marker_back - 3] == b'/')
+            || (marker_back >= 2 && bytes[marker_back - 2] == b'/')
+        } else {
+          false
+        };
+
+        if sourcemap_marker && raw_lower.contains("sourceurl=") {
+          idx = end;
+          continue;
         }
 
-        let mut end = abs_pos + 4;
-        while end < bytes.len() {
-            let c = bytes[end] as char;
-            if matches!(c, '"' | '\'' | ')' | '>' | '{' | '}') || c.is_whitespace() {
-                break;
-            }
-            end += 1;
-        }
-
-        // If this candidate appears inside a <link> tag that is print-only, skip it.
-        if abs_pos > 0 {
-            let tag_start = bytes[..abs_pos].iter().rposition(|&b| b == b'<');
-            let tag_end = bytes[abs_pos..].iter().position(|&b| b == b'>');
-            if let (Some(ts), Some(te_rel)) = (tag_start, tag_end) {
-                let te = abs_pos + te_rel;
-                if te > ts {
-                    let tag = &html[ts..=te];
-                    let tag_lower = tag.to_ascii_lowercase();
-                    if tag_lower.contains("<link") && tag_lower.contains("media") {
-                        let has_screen = tag_lower.contains("screen") || tag_lower.contains("all");
-                        let has_print = tag_lower.contains("print");
-                        if has_print && !has_screen {
-                            idx = end;
-                            continue;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Skip identifiers like `window.css = ...` where the token is an assignment target
-        // rather than a URL. If the next non-whitespace character after the match is '=',
-        // treat it as a property access and ignore it.
-        let mut lookahead = end;
-        while lookahead < bytes.len() && (bytes[lookahead] as char).is_whitespace() {
-            lookahead += 1;
-        }
-        if lookahead < bytes.len() && bytes[lookahead] == b'=' {
+        if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
+          if cleaned.contains('{') || cleaned.contains('}') {
             idx = end;
             continue;
-        }
-
-        if end > start {
-            let candidate = &html[start..end];
-            if candidate.len() < 512 {
-                let raw_lower = candidate.to_ascii_lowercase();
-
-                // Detect sourceURL-style sourcemap markers (/*# or //#) immediately preceding the token.
-                let mut marker_back = start;
-                while marker_back > 0 && (bytes[marker_back - 1] as char).is_whitespace() {
-                    marker_back -= 1;
-                }
-                let sourcemap_marker = if marker_back > 0 && bytes[marker_back - 1] == b'#' {
-                    (marker_back >= 3 && bytes[marker_back - 2] == b'*' && bytes[marker_back - 3] == b'/')
-                        || (marker_back >= 2 && bytes[marker_back - 2] == b'/')
-                } else {
-                    false
-                };
-
-                if sourcemap_marker && raw_lower.contains("sourceurl=") {
-                    idx = end;
-                    continue;
-                }
-
-                if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
-                    if cleaned.contains('{') || cleaned.contains('}') {
-                        idx = end;
-                        continue;
-                    }
-                    if let Some(first) = cleaned.chars().next() {
-                        if !(first.is_ascii_alphanumeric() || matches!(first, '/' | '.' | '#')) {
-                            idx = end;
-                            continue;
-                        }
-                    }
-
-                    let cleaned_lower = cleaned.to_ascii_lowercase();
-                    if cleaned_lower.contains("sourceurl=") {
-                        idx = end;
-                        continue;
-                    }
-                    let css_pos = cleaned_lower.find(".css");
-                    if let Some(pos) = css_pos {
-                        let after = cleaned_lower.as_bytes().get(pos + 4).copied();
-                        if let Some(ch) = after {
-                            let ch = ch as char;
-                            if ch != '?' && ch != '#' && ch != '/' && ch != '%' && ch != '"' && ch != '\'' {
-                                idx = end;
-                                continue;
-                            }
-                        }
-                    } else {
-                        idx = end;
-                        continue;
-                    }
-                    if !cleaned_lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
-                        if let Some(resolved) = resolve_href(base_url, &cleaned) {
-                            if seen.insert(resolved.clone()) {
-                                urls.push(resolved);
-                            }
-                        }
-                    }
-                }
+          }
+          if let Some(first) = cleaned.chars().next() {
+            if !(first.is_ascii_alphanumeric() || matches!(first, '/' | '.' | '#')) {
+              idx = end;
+              continue;
             }
-        }
+          }
 
-        idx = end;
+          let cleaned_lower = cleaned.to_ascii_lowercase();
+          if cleaned_lower.contains("sourceurl=") {
+            idx = end;
+            continue;
+          }
+          let css_pos = cleaned_lower.find(".css");
+          if let Some(pos) = css_pos {
+            let after = cleaned_lower.as_bytes().get(pos + 4).copied();
+            if let Some(ch) = after {
+              let ch = ch as char;
+              if ch != '?' && ch != '#' && ch != '/' && ch != '%' && ch != '"' && ch != '\'' {
+                idx = end;
+                continue;
+              }
+            }
+          } else {
+            idx = end;
+            continue;
+          }
+          if !cleaned_lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
+            if let Some(resolved) = resolve_href(base_url, &cleaned) {
+              if seen.insert(resolved.clone()) {
+                urls.push(resolved);
+              }
+            }
+          }
+        }
+      }
     }
 
-    let lower = html.to_lowercase();
-    let mut pos = 0;
-    while let Some(hit) = lower[pos..].find("cssurl") {
-        let abs = pos + hit;
-        let slice = &html[abs..];
-        if let Some(colon) = slice.find(':') {
-            let after_colon = &slice[colon + 1..];
-            if let Some(q_start_rel) = after_colon.find(['"', '\'']) {
-                let quote = after_colon.chars().nth(q_start_rel).unwrap();
-                let after_quote = &after_colon[q_start_rel + 1..];
-                if let Some(q_end_rel) = after_quote.find(quote) {
-                    let candidate = &after_quote[..q_end_rel];
-                    if !candidate.to_ascii_lowercase().contains("style.csstext") && !candidate.trim_end().ends_with(':')
-                    {
-                        if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
-                            let lower = cleaned.to_ascii_lowercase();
-                            if !lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
-                                if let Some(resolved) = resolve_href(base_url, &cleaned) {
-                                    if seen.insert(resolved.clone()) {
-                                        urls.push(resolved);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        pos = abs + 6;
-    }
+    idx = end;
+  }
 
-    urls
+  let lower = html.to_lowercase();
+  let mut pos = 0;
+  while let Some(hit) = lower[pos..].find("cssurl") {
+    let abs = pos + hit;
+    let slice = &html[abs..];
+    if let Some(colon) = slice.find(':') {
+      let after_colon = &slice[colon + 1..];
+      if let Some(q_start_rel) = after_colon.find(['"', '\'']) {
+        let quote = after_colon.chars().nth(q_start_rel).unwrap();
+        let after_quote = &after_colon[q_start_rel + 1..];
+        if let Some(q_end_rel) = after_quote.find(quote) {
+          let candidate = &after_quote[..q_end_rel];
+          if !candidate.to_ascii_lowercase().contains("style.csstext")
+            && !candidate.trim_end().ends_with(':')
+          {
+            if let Some(cleaned) = normalize_embedded_css_candidate(candidate) {
+              let lower = cleaned.to_ascii_lowercase();
+              if !lower.contains("style.csstext") && !cleaned.trim_end().ends_with(':') {
+                if let Some(resolved) = resolve_href(base_url, &cleaned) {
+                  if seen.insert(resolved.clone()) {
+                    urls.push(resolved);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    pos = abs + 6;
+  }
+
+  urls
 }
 
 /// Deduplicate a list while preserving the order of first occurrence.
 pub fn dedupe_links_preserving_order(mut links: Vec<String>) -> Vec<String> {
-    let mut seen: HashSet<String> = HashSet::with_capacity(links.len());
-    links.retain(|link| seen.insert(link.clone()));
-    links
+  let mut seen: HashSet<String> = HashSet::with_capacity(links.len());
+  links.retain(|link| seen.insert(link.clone()));
+  links
 }
 
 /// Inject a `<style>` block containing `css` into the HTML document.
 pub fn inject_css_into_html(html: &str, css: &str) -> String {
-    let style_tag = format!("<style>{css}</style>");
+  let style_tag = format!("<style>{css}</style>");
 
-    if let Some(head_end) = html.find("</head>") {
-        let mut result = String::with_capacity(html.len() + style_tag.len());
-        result.push_str(&html[..head_end]);
-        result.push_str(&style_tag);
-        result.push_str(&html[head_end..]);
-        result
-    } else if let Some(body_start) = html.find("<body") {
-        let mut result = String::with_capacity(html.len() + style_tag.len());
-        result.push_str(&html[..body_start]);
-        result.push_str(&style_tag);
-        result.push_str(&html[body_start..]);
-        result
-    } else {
-        format!("{style_tag}{html}")
-    }
+  if let Some(head_end) = html.find("</head>") {
+    let mut result = String::with_capacity(html.len() + style_tag.len());
+    result.push_str(&html[..head_end]);
+    result.push_str(&style_tag);
+    result.push_str(&html[head_end..]);
+    result
+  } else if let Some(body_start) = html.find("<body") {
+    let mut result = String::with_capacity(html.len() + style_tag.len());
+    result.push_str(&html[..body_start]);
+    result.push_str(&style_tag);
+    result.push_str(&html[body_start..]);
+    result
+  } else {
+    format!("{style_tag}{html}")
+  }
 }
 
 /// Infer a reasonable base URL for the document.
@@ -824,317 +839,310 @@ pub fn inject_css_into_html(html: &str, css: &str) -> String {
 /// resort, an `https://{filename}/` origin so relative resources resolve against
 /// the original site instead of the local filesystem.
 pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
-    // Canonicalize file:// inputs so relative cached paths become absolute.
-    let mut input = Cow::Borrowed(input_url);
-    let mut is_file_input = false;
-    if input_url.starts_with("file://") && !input_url.starts_with("file:///") {
-        // file://relative/path.html
-        let rel = &input_url["file://".len()..];
-        if let Ok(canon) = std::fs::canonicalize(rel) {
-            input = Cow::Owned(format!("file://{}", canon.display()));
-        }
-    } else if let Ok(url) = Url::parse(input_url) {
-        if url.scheme() == "file" {
-            if let Ok(path) = url.to_file_path() {
-                if let Ok(canon) = path.canonicalize() {
-                    input = Cow::Owned(format!("file://{}", canon.display()));
-                }
-            }
-        }
+  // Canonicalize file:// inputs so relative cached paths become absolute.
+  let mut input = Cow::Borrowed(input_url);
+  let mut is_file_input = false;
+  if input_url.starts_with("file://") && !input_url.starts_with("file:///") {
+    // file://relative/path.html
+    let rel = &input_url["file://".len()..];
+    if let Ok(canon) = std::fs::canonicalize(rel) {
+      input = Cow::Owned(format!("file://{}", canon.display()));
     }
-
-    if let Ok(url) = Url::parse(&input) {
-        is_file_input = url.scheme() == "file";
+  } else if let Ok(url) = Url::parse(input_url) {
+    if url.scheme() == "file" {
+      if let Ok(path) = url.to_file_path() {
+        if let Ok(canon) = path.canonicalize() {
+          input = Cow::Owned(format!("file://{}", canon.display()));
+        }
+      }
     }
+  }
 
-    let lower = html.to_lowercase();
-    for (needle, attr, filter, allow_for_http_inputs) in [
-        ("<base", "href", None, true),
-        ("<link", "href", Some("rel=\"canonical\""), false),
-        ("<meta", "content", Some("property=\"og:url\""), false),
-    ] {
-        if !allow_for_http_inputs && !is_file_input {
+  if let Ok(url) = Url::parse(&input) {
+    is_file_input = url.scheme() == "file";
+  }
+
+  let lower = html.to_lowercase();
+  for (needle, attr, filter, allow_for_http_inputs) in [
+    ("<base", "href", None, true),
+    ("<link", "href", Some("rel=\"canonical\""), false),
+    ("<meta", "content", Some("property=\"og:url\""), false),
+  ] {
+    if !allow_for_http_inputs && !is_file_input {
+      continue;
+    }
+    let mut pos = 0;
+    while let Some(idx) = lower[pos..].find(needle) {
+      let abs = pos + idx;
+      if let Some(end) = lower[abs..].find('>') {
+        let tag_slice = &html[abs..=abs + end];
+        let tag_lower = &lower[abs..=abs + end];
+        if let Some(f) = filter {
+          if !tag_lower.contains(f) {
+            pos = abs + end + 1;
             continue;
+          }
         }
-        let mut pos = 0;
-        while let Some(idx) = lower[pos..].find(needle) {
-            let abs = pos + idx;
-            if let Some(end) = lower[abs..].find('>') {
-                let tag_slice = &html[abs..=abs + end];
-                let tag_lower = &lower[abs..=abs + end];
-                if let Some(f) = filter {
-                    if !tag_lower.contains(f) {
-                        pos = abs + end + 1;
-                        continue;
-                    }
-                }
-                if let Some(val) = extract_attr_value(tag_slice, attr) {
-                    if let Some(resolved) = resolve_href(&input, &val) {
-                        if resolved.starts_with("http://") || resolved.starts_with("https://") {
-                            return Cow::Owned(resolved);
-                        }
-                    }
-                }
-                pos = abs + end + 1;
-            } else {
-                break;
+        if let Some(val) = extract_attr_value(tag_slice, attr) {
+          if let Some(resolved) = resolve_href(&input, &val) {
+            if resolved.starts_with("http://") || resolved.starts_with("https://") {
+              return Cow::Owned(resolved);
             }
+          }
         }
+        pos = abs + end + 1;
+      } else {
+        break;
+      }
     }
+  }
 
-    if let Ok(url) = Url::parse(&input) {
-        if url.scheme() == "file" {
-            if let Some(seg) = url.path_segments().and_then(|mut s| s.next_back()) {
-                if let Some(host) = seg.strip_suffix(".html") {
-                    let guess = format!("https://{host}/");
-                    if Url::parse(&guess).is_ok() {
-                        return Cow::Owned(guess);
-                    }
-                }
-            }
+  if let Ok(url) = Url::parse(&input) {
+    if url.scheme() == "file" {
+      if let Some(seg) = url.path_segments().and_then(|mut s| s.next_back()) {
+        if let Some(host) = seg.strip_suffix(".html") {
+          let guess = format!("https://{host}/");
+          if Url::parse(&guess).is_ok() {
+            return Cow::Owned(guess);
+          }
         }
+      }
     }
+  }
 
-    input
+  input
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use tempfile;
+  use super::*;
+  use tempfile;
 
-    #[test]
-    fn resolves_relative_http_links() {
-        let base = "https://example.com/a/b/page.html";
-        let href = "../styles/site.css";
-        let resolved = resolve_href(base, href).expect("resolved");
-        assert_eq!(resolved, "https://example.com/a/styles/site.css");
+  #[test]
+  fn resolves_relative_http_links() {
+    let base = "https://example.com/a/b/page.html";
+    let href = "../styles/site.css";
+    let resolved = resolve_href(base, href).expect("resolved");
+    assert_eq!(resolved, "https://example.com/a/styles/site.css");
+  }
+
+  #[test]
+  fn resolves_protocol_relative_links() {
+    let base = "https://example.com/index.html";
+    let href = "//cdn.example.com/main.css";
+    let resolved = resolve_href(base, href).expect("resolved");
+    assert_eq!(resolved, "https://cdn.example.com/main.css");
+  }
+
+  #[test]
+  fn absolutizes_css_urls_rewrites_urls() {
+    let css = "body { background: url(\"images/bg.png\"); }";
+    let out = absolutize_css_urls(css, "https://example.com/styles/main.css");
+    assert!(out.contains("https://example.com/styles/images/bg.png"));
+  }
+
+  #[test]
+  fn inline_imports_flattens_nested_imports() {
+    let mut seen = HashSet::new();
+    let css = "@import \"nested.css\";\nbody { color: black; }";
+    let fetched = |url: &str| -> Result<String> {
+      if url.ends_with("nested.css") {
+        Ok("p { margin: 0; }".to_string())
+      } else {
+        Ok(String::new())
+      }
+    };
+    let out = inline_imports(css, "https://example.com/main.css", &fetched, &mut seen);
+    if !out.contains("p { margin: 0; }") {
+      eprintln!("inline_imports output: {out}");
     }
+    assert!(out.contains("p { margin: 0; }"));
+    assert!(out.contains("body { color: black; }"));
+  }
 
-    #[test]
-    fn resolves_protocol_relative_links() {
-        let base = "https://example.com/index.html";
-        let href = "//cdn.example.com/main.css";
-        let resolved = resolve_href(base, href).expect("resolved");
-        assert_eq!(resolved, "https://cdn.example.com/main.css");
-    }
-
-    #[test]
-    fn absolutizes_css_urls_rewrites_urls() {
-        let css = "body { background: url(\"images/bg.png\"); }";
-        let out = absolutize_css_urls(css, "https://example.com/styles/main.css");
-        assert!(out.contains("https://example.com/styles/images/bg.png"));
-    }
-
-    #[test]
-    fn inline_imports_flattens_nested_imports() {
-        let mut seen = HashSet::new();
-        let css = "@import \"nested.css\";\nbody { color: black; }";
-        let fetched = |url: &str| -> Result<String> {
-            if url.ends_with("nested.css") {
-                Ok("p { margin: 0; }".to_string())
-            } else {
-                Ok(String::new())
-            }
-        };
-        let out = inline_imports(css, "https://example.com/main.css", &fetched, &mut seen);
-        if !out.contains("p { margin: 0; }") {
-            eprintln!("inline_imports output: {out}");
-        }
-        assert!(out.contains("p { margin: 0; }"));
-        assert!(out.contains("body { color: black; }"));
-    }
-
-    #[test]
-    fn extracts_stylesheet_hrefs_with_resolution() {
-        let html = r#"
+  #[test]
+  fn extracts_stylesheet_hrefs_with_resolution() {
+    let html = r#"
             <link rel="stylesheet" href="../styles/a.css">
             <link rel="alternate stylesheet" href="b.css">
             <link rel="icon" href="favicon.ico">
         "#;
-        let urls = extract_css_links(html, "https://example.com/app/index.html");
-        assert_eq!(urls.len(), 2);
-        assert!(urls.contains(&"https://example.com/styles/a.css".to_string()));
-        assert!(urls.contains(&"https://example.com/app/b.css".to_string()));
-    }
+    let urls = extract_css_links(html, "https://example.com/app/index.html");
+    assert_eq!(urls.len(), 2);
+    assert!(urls.contains(&"https://example.com/styles/a.css".to_string()));
+    assert!(urls.contains(&"https://example.com/app/b.css".to_string()));
+  }
 
-    #[test]
-    fn unescapes_js_escaped_stylesheet_hrefs() {
-        let html = r#"
+  #[test]
+  fn unescapes_js_escaped_stylesheet_hrefs() {
+    let html = r#"
             <link rel="stylesheet" href="https://cdn.example.com/app.css?foo=bar\u0026baz=qux">
         "#;
-        let urls = extract_css_links(html, "https://example.com/");
-        assert_eq!(
-            urls,
-            vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]
-        );
-    }
+    let urls = extract_css_links(html, "https://example.com/");
+    assert_eq!(urls, vec![
+      "https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()
+    ]);
+  }
 
-    #[test]
-    fn detects_embedded_css_urls() {
-        let html = r#"
+  #[test]
+  fn detects_embedded_css_urls() {
+    let html = r#"
             <script>var cssUrl="assets/site.css?v=1";</script>
             <style>@import url("/shared/base.css");</style>
         "#;
-        let urls = extract_embedded_css_urls(html, "https://example.com/app/");
-        assert!(urls.contains(&"https://example.com/app/assets/site.css?v=1".to_string()));
-        assert!(urls.contains(&"https://example.com/shared/base.css".to_string()));
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/app/");
+    assert!(urls.contains(&"https://example.com/app/assets/site.css?v=1".to_string()));
+    assert!(urls.contains(&"https://example.com/shared/base.css".to_string()));
+  }
 
-    #[test]
-    fn normalizes_escaped_embedded_css_urls() {
-        let html = r#"
+  #[test]
+  fn normalizes_escaped_embedded_css_urls() {
+    let html = r#"
             <link rel="stylesheet" href="https://cdn.example.com/styles/main.css">
             <script>
                 var url = "https://cdn.example.com/styles/main.css\\\"/\u003c";
             </script>
         "#;
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert_eq!(urls, vec!["https://cdn.example.com/styles/main.css".to_string()]);
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert_eq!(urls, vec![
+      "https://cdn.example.com/styles/main.css".to_string()
+    ]);
+  }
 
-    #[test]
-    fn decodes_html_entities_in_stylesheet_hrefs() {
-        let html = r#"
+  #[test]
+  fn decodes_html_entities_in_stylesheet_hrefs() {
+    let html = r#"
             <link rel="stylesheet" href="https://&#47;&#47;cdn.example.com&#47;main.css">
             <link rel="stylesheet" href="https://&/#47;&#47;cdn.example.com&#47;other.css">
             <link rel="stylesheet" href="https:////cdn.example.com////more.css">
         "#;
-        let urls = extract_css_links(html, "https://example.com/");
-        assert_eq!(
-            urls,
-            vec![
-                "https://cdn.example.com/main.css".to_string(),
-                "https://cdn.example.com/other.css".to_string(),
-                "https://cdn.example.com/more.css".to_string(),
-            ]
-        );
-    }
+    let urls = extract_css_links(html, "https://example.com/");
+    assert_eq!(urls, vec![
+      "https://cdn.example.com/main.css".to_string(),
+      "https://cdn.example.com/other.css".to_string(),
+      "https://cdn.example.com/more.css".to_string(),
+    ]);
+  }
 
-    #[test]
-    fn resolves_scheme_relative_urls() {
-        let html = r#"
+  #[test]
+  fn resolves_scheme_relative_urls() {
+    let html = r#"
             <link rel="stylesheet" href="//cdn.example.com/app.css">
         "#;
-        let urls = extract_css_links(html, "https://example.com/page");
-        assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
+    let urls = extract_css_links(html, "https://example.com/page");
+    assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
 
-        let resolved = resolve_href("https://example.com/page", "//cdn.example.com/app.css");
-        assert_eq!(resolved, Some("https://cdn.example.com/app.css".to_string()));
-    }
+    let resolved = resolve_href("https://example.com/page", "//cdn.example.com/app.css");
+    assert_eq!(
+      resolved,
+      Some("https://cdn.example.com/app.css".to_string())
+    );
+  }
 
-    #[test]
-    fn skips_print_only_stylesheets() {
-        let html = r#"
+  #[test]
+  fn skips_print_only_stylesheets() {
+    let html = r#"
             <link rel="stylesheet" media="print" href="https://cdn.example.com/print.css">
             <link rel="stylesheet" media="print, screen" href="https://cdn.example.com/both.css">
             <link rel="stylesheet" media="screen" href="https://cdn.example.com/screen.css">
         "#;
-        let urls = extract_css_links(html, "https://example.com/");
-        assert_eq!(
-            urls,
-            vec![
-                "https://cdn.example.com/both.css".to_string(),
-                "https://cdn.example.com/screen.css".to_string(),
-            ]
-        );
-    }
+    let urls = extract_css_links(html, "https://example.com/");
+    assert_eq!(urls, vec![
+      "https://cdn.example.com/both.css".to_string(),
+      "https://cdn.example.com/screen.css".to_string(),
+    ]);
+  }
 
-    #[test]
-    fn unescapes_json_style_embedded_urls() {
-        let html = r#"
+  #[test]
+  fn unescapes_json_style_embedded_urls() {
+    let html = r#"
             <script>
                 window.css = "https:\\/\\/cdn.example.com\\/app.css\\"";
             </script>
         "#;
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
+  }
 
-    #[test]
-    fn ignores_sourceurl_comments_in_embedded_css_scan() {
-        let html = r"
+  #[test]
+  fn ignores_sourceurl_comments_in_embedded_css_scan() {
+    let html = r"
             <style>
             /*# sourceURL=https://example.com/wp-includes/blocks/button/style.min.css */
             body { color: black; }
             </style>
         ";
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert!(urls.is_empty());
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert!(urls.is_empty());
+  }
 
-    #[test]
-    fn unescapes_js_escaped_embedded_css_urls() {
-        let html = r#"
+  #[test]
+  fn unescapes_js_escaped_embedded_css_urls() {
+    let html = r#"
             <script>
                 const css = "https://cdn.example.com/app.css?foo=bar\\u0026baz=qux";
             </script>
         "#;
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert_eq!(
-            urls,
-            vec!["https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()]
-        );
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert_eq!(urls, vec![
+      "https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()
+    ]);
+  }
 
-    #[test]
-    fn embedded_scan_skips_print_only_link_tags() {
-        let html = r#"
+  #[test]
+  fn embedded_scan_skips_print_only_link_tags() {
+    let html = r#"
             <link rel="stylesheet" media="print" href="https://cdn.example.com/print.css">
         "#;
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert!(urls.is_empty());
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert!(urls.is_empty());
+  }
 
-    #[test]
-    fn decodes_html_entities_in_embedded_css_urls() {
-        let html = r#"
+  #[test]
+  fn decodes_html_entities_in_embedded_css_urls() {
+    let html = r#"
             <script>
                 const css = "https://&/#47;&#47;cdn.example.com&#47;main.css";
                 const other = "https:////cdn.example.com////more.css";
             </script>
         "#;
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert_eq!(
-            urls,
-            vec![
-                "https://cdn.example.com/main.css".to_string(),
-                "https://cdn.example.com/more.css".to_string()
-            ]
-        );
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert_eq!(urls, vec![
+      "https://cdn.example.com/main.css".to_string(),
+      "https://cdn.example.com/more.css".to_string()
+    ]);
+  }
 
-    #[test]
-    fn strips_sourceurl_prefix_in_embedded_css_urls() {
-        let html = r"
+  #[test]
+  fn strips_sourceurl_prefix_in_embedded_css_urls() {
+    let html = r"
             <script>
                 /* sourceURL=https://example.com/assets/style.css */
             </script>
         ";
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert_eq!(urls, vec!["https://example.com/assets/style.css".to_string()]);
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert_eq!(urls, vec![
+      "https://example.com/assets/style.css".to_string()
+    ]);
+  }
 
-    #[test]
-    fn dedupes_stylesheet_links_preserving_order() {
-        let html = r#"
+  #[test]
+  fn dedupes_stylesheet_links_preserving_order() {
+    let html = r#"
             <link rel="stylesheet" href="/a.css">
             <link rel="stylesheet" href="/b.css">
             <link rel="stylesheet" href="/a.css">
         "#;
-        let urls = extract_css_links(html, "https://example.com/app/index.html");
-        assert_eq!(
-            urls,
-            vec![
-                "https://example.com/a.css".to_string(),
-                "https://example.com/b.css".to_string(),
-            ]
-        );
-    }
+    let urls = extract_css_links(html, "https://example.com/app/index.html");
+    assert_eq!(urls, vec![
+      "https://example.com/a.css".to_string(),
+      "https://example.com/b.css".to_string(),
+    ]);
+  }
 
-    #[test]
-    fn ignores_embedded_css_class_tokens() {
-        let html = r"
+  #[test]
+  fn ignores_embedded_css_class_tokens() {
+    let html = r"
             <style>
                 .css-v2kfba{height:100%;width:100%;}
             </style>
@@ -1142,213 +1150,219 @@ mod tests {
                 const cls = '.css-15ru6p1{font-size:inherit;font-weight:normal;}'
             </script>
         ";
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert!(urls.is_empty());
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert!(urls.is_empty());
+  }
 
-    #[test]
-    fn ignores_percent_encoded_css_class_tokens() {
-        let html = r#"
+  #[test]
+  fn ignores_percent_encoded_css_class_tokens() {
+    let html = r#"
             <script>
                 const bogus = ">%3E.css-v2kfba%7Bheight:100%;width:100%;%7D%3C/style";
             </script>
         "#;
-        let urls = extract_embedded_css_urls(html, "https://example.com/");
-        assert!(urls.is_empty());
-    }
+    let urls = extract_embedded_css_urls(html, "https://example.com/");
+    assert!(urls.is_empty());
+  }
 
-    #[test]
-    fn falls_back_to_print_styles_when_no_screen_stylesheets() {
-        let html = r#"
+  #[test]
+  fn falls_back_to_print_styles_when_no_screen_stylesheets() {
+    let html = r#"
             <link rel="stylesheet" media="print" href="/print.css">
         "#;
-        let urls = extract_css_links(html, "https://example.com/");
-        assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
+    let urls = extract_css_links(html, "https://example.com/");
+    assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
+  }
+
+  #[test]
+  fn infers_base_from_cached_file() {
+    let html = "<html><head></head></html>";
+    let base = infer_base_url(html, "file:///tmp/fetches/html/news.ycombinator.com.html");
+    assert_eq!(base, "https://news.ycombinator.com/");
+  }
+
+  #[test]
+  fn canonicalizes_relative_file_url_before_inference() {
+    let html = "<html><head></head></html>";
+    let tmp = tempfile::tempdir().unwrap();
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(tmp.path()).unwrap();
+
+    let rel = "fetches/html/news.ycombinator.com.html";
+    let rel_path = std::path::Path::new(rel);
+    if let Some(parent) = rel_path.parent() {
+      std::fs::create_dir_all(parent).unwrap();
     }
+    std::fs::write(rel_path, html).unwrap();
 
-    #[test]
-    fn infers_base_from_cached_file() {
-        let html = "<html><head></head></html>";
-        let base = infer_base_url(html, "file:///tmp/fetches/html/news.ycombinator.com.html");
-        assert_eq!(base, "https://news.ycombinator.com/");
-    }
+    let abs = rel_path.canonicalize().unwrap();
+    let rel_url = format!("file://{}", rel);
+    let inferred = infer_base_url(html, &rel_url);
+    // When the file exists locally, we still expect the HTTPS origin guess.
+    assert_eq!(inferred, "https://news.ycombinator.com/");
+    // And the canonicalized file URL was at least parseable (implicit by no panic).
+    assert!(abs.exists());
 
-    #[test]
-    fn canonicalizes_relative_file_url_before_inference() {
-        let html = "<html><head></head></html>";
-        let tmp = tempfile::tempdir().unwrap();
-        let prev_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(tmp.path()).unwrap();
+    std::env::set_current_dir(prev_cwd).unwrap();
+  }
 
-        let rel = "fetches/html/news.ycombinator.com.html";
-        let rel_path = std::path::Path::new(rel);
-        if let Some(parent) = rel_path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(rel_path, html).unwrap();
-
-        let abs = rel_path.canonicalize().unwrap();
-        let rel_url = format!("file://{}", rel);
-        let inferred = infer_base_url(html, &rel_url);
-        // When the file exists locally, we still expect the HTTPS origin guess.
-        assert_eq!(inferred, "https://news.ycombinator.com/");
-        // And the canonicalized file URL was at least parseable (implicit by no panic).
-        assert!(abs.exists());
-
-        std::env::set_current_dir(prev_cwd).unwrap();
-    }
-
-    #[test]
-    fn prefers_document_url_over_canonical_for_http_inputs() {
-        let html = r#"
+  #[test]
+  fn prefers_document_url_over_canonical_for_http_inputs() {
+    let html = r#"
             <link rel="canonical" href="https://example.com/">
         "#;
-        let base = infer_base_url(html, "https://example.com/path/page.html");
-        assert_eq!(base, "https://example.com/path/page.html");
+    let base = infer_base_url(html, "https://example.com/path/page.html");
+    assert_eq!(base, "https://example.com/path/page.html");
 
-        let resolved = resolve_href(&base, "../styles/app.css").expect("resolved");
-        assert_eq!(resolved, "https://example.com/styles/app.css");
-    }
+    let resolved = resolve_href(&base, "../styles/app.css").expect("resolved");
+    assert_eq!(resolved, "https://example.com/styles/app.css");
+  }
 
-    #[test]
-    fn uses_canonical_hint_for_file_inputs() {
-        let html = r#"
+  #[test]
+  fn uses_canonical_hint_for_file_inputs() {
+    let html = r#"
             <link rel="canonical" href="https://example.net/app/">
         "#;
-        let base = infer_base_url(html, "file:///tmp/cache/example.net.html");
-        assert_eq!(base, "https://example.net/app/");
+    let base = infer_base_url(html, "file:///tmp/cache/example.net.html");
+    assert_eq!(base, "https://example.net/app/");
+  }
+
+  #[test]
+  fn unescape_js_handles_slashes_and_quotes() {
+    let input = r#"https:\/\/example.com\/path\"quoted\'"#;
+    let unescaped = unescape_js_escapes(input);
+    assert_eq!(unescaped, "https://example.com/path\"quoted\'");
+  }
+
+  #[test]
+  fn unescape_js_handles_unicode_escapes() {
+    let input = r"foo\u0026bar\U0041baz"; // & and 'A'
+    let unescaped = unescape_js_escapes(input);
+    assert_eq!(unescaped, "foo&barAbaz");
+  }
+
+  #[test]
+  fn unescape_js_borrows_when_unescaped() {
+    use std::borrow::Cow;
+
+    let input = "https://example.com/path";
+    let out = unescape_js_escapes(input);
+    match out {
+      Cow::Borrowed(s) => assert_eq!(s, input),
+      Cow::Owned(_) => panic!("expected borrowed output for unescaped input"),
     }
+  }
 
-    #[test]
-    fn unescape_js_handles_slashes_and_quotes() {
-        let input = r#"https:\/\/example.com\/path\"quoted\'"#;
-        let unescaped = unescape_js_escapes(input);
-        assert_eq!(unescaped, "https://example.com/path\"quoted\'");
-    }
+  #[test]
+  fn resolve_href_unescapes_js_escapes() {
+    let base = "https://example.com/";
+    let href = r"https:\/\/cdn.example.com\/styles\/main.css";
+    let resolved = resolve_href(base, href).expect("resolved href");
+    assert_eq!(resolved, "https://cdn.example.com/styles/main.css");
+  }
 
-    #[test]
-    fn unescape_js_handles_unicode_escapes() {
-        let input = r"foo\u0026bar\U0041baz"; // & and 'A'
-        let unescaped = unescape_js_escapes(input);
-        assert_eq!(unescaped, "foo&barAbaz");
-    }
+  #[test]
+  fn resolve_href_preserves_data_urls() {
+    let base = "https://example.com/";
+    let href = "data:text/css,body%7Bcolor%3Ared%7D";
+    let resolved = resolve_href(base, href).expect("resolved href");
+    assert_eq!(resolved, href);
+  }
 
-    #[test]
-    fn unescape_js_borrows_when_unescaped() {
-        use std::borrow::Cow;
+  #[test]
+  fn resolve_href_with_file_base_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = format!("file://{}", dir.path().display());
+    let resolved = resolve_href(&base, "styles/app.css").expect("resolved file href");
+    assert_eq!(
+      resolved,
+      format!("file://{}/styles/app.css", dir.path().display())
+    );
+  }
 
-        let input = "https://example.com/path";
-        let out = unescape_js_escapes(input);
-        match out {
-            Cow::Borrowed(s) => assert_eq!(s, input),
-            Cow::Owned(_) => panic!("expected borrowed output for unescaped input"),
-        }
-    }
+  #[test]
+  fn resolve_href_with_file_base_file_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = format!("file://{}/html/page.html", dir.path().display());
+    std::fs::create_dir_all(dir.path().join("html")).unwrap();
+    let resolved = resolve_href(&base, "../styles/app.css").expect("resolved file href");
+    assert_eq!(
+      resolved,
+      format!("file://{}/styles/app.css", dir.path().display())
+    );
+  }
 
-    #[test]
-    fn resolve_href_unescapes_js_escapes() {
-        let base = "https://example.com/";
-        let href = r"https:\/\/cdn.example.com\/styles\/main.css";
-        let resolved = resolve_href(base, href).expect("resolved href");
-        assert_eq!(resolved, "https://cdn.example.com/styles/main.css");
-    }
+  #[test]
+  fn resolve_href_rejects_non_parseable_base() {
+    // Base that cannot be parsed as URL or file path should yield None
+    let base = "not-a-url";
+    assert_eq!(resolve_href(base, "styles/app.css"), None);
+  }
 
-    #[test]
-    fn resolve_href_preserves_data_urls() {
-        let base = "https://example.com/";
-        let href = "data:text/css,body%7Bcolor%3Ared%7D";
-        let resolved = resolve_href(base, href).expect("resolved href");
-        assert_eq!(resolved, href);
-    }
+  #[test]
+  fn resolve_href_rejects_script_and_mailto_schemes() {
+    let base = "https://example.com/";
+    assert_eq!(resolve_href(base, "javascript:alert(1)"), None);
+    assert_eq!(resolve_href(base, "mailto:test@example.com"), None);
+    assert_eq!(resolve_href(base, "vbscript:msgbox('hi')"), None);
 
-    #[test]
-    fn resolve_href_with_file_base_directory() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = format!("file://{}", dir.path().display());
-        let resolved = resolve_href(&base, "styles/app.css").expect("resolved file href");
-        assert_eq!(resolved, format!("file://{}/styles/app.css", dir.path().display()));
-    }
+    // Schemes are matched case-insensitively.
+    assert_eq!(resolve_href(base, "JaVaScRiPt:alert(1)"), None);
+    assert_eq!(resolve_href(base, "MAILTO:UPPER@EXAMPLE.COM"), None);
+    assert_eq!(resolve_href(base, "VbScRiPt:msgbox('hi')"), None);
+  }
 
-    #[test]
-    fn resolve_href_with_file_base_file_parent() {
-        let dir = tempfile::tempdir().unwrap();
-        let base = format!("file://{}/html/page.html", dir.path().display());
-        std::fs::create_dir_all(dir.path().join("html")).unwrap();
-        let resolved = resolve_href(&base, "../styles/app.css").expect("resolved file href");
-        assert_eq!(resolved, format!("file://{}/styles/app.css", dir.path().display()));
-    }
+  #[test]
+  fn resolve_href_ignores_fragment_only_hrefs() {
+    let base = "https://example.com/";
+    assert_eq!(resolve_href(base, "#section"), None);
+    assert_eq!(resolve_href(base, "#"), None);
+  }
 
-    #[test]
-    fn resolve_href_rejects_non_parseable_base() {
-        // Base that cannot be parsed as URL or file path should yield None
-        let base = "not-a-url";
-        assert_eq!(resolve_href(base, "styles/app.css"), None);
-    }
+  #[test]
+  fn resolve_href_trims_whitespace() {
+    let base = "https://example.com/";
+    let resolved = resolve_href(base, "   ./foo.css \n").expect("resolved href");
+    assert_eq!(resolved, "https://example.com/foo.css");
+  }
 
-    #[test]
-    fn resolve_href_rejects_script_and_mailto_schemes() {
-        let base = "https://example.com/";
-        assert_eq!(resolve_href(base, "javascript:alert(1)"), None);
-        assert_eq!(resolve_href(base, "mailto:test@example.com"), None);
-        assert_eq!(resolve_href(base, "vbscript:msgbox('hi')"), None);
+  #[test]
+  fn resolve_href_rejects_whitespace_only() {
+    let base = "https://example.com/";
+    assert_eq!(resolve_href(base, "   \t\n"), None);
+  }
 
-        // Schemes are matched case-insensitively.
-        assert_eq!(resolve_href(base, "JaVaScRiPt:alert(1)"), None);
-        assert_eq!(resolve_href(base, "MAILTO:UPPER@EXAMPLE.COM"), None);
-        assert_eq!(resolve_href(base, "VbScRiPt:msgbox('hi')"), None);
-    }
+  #[test]
+  fn decode_html_entities_decodes_known_and_preserves_unknown() {
+    let input = "&amp;&lt;&gt;&quot;&apos;&#65;&#x41;&copy;";
+    let decoded = decode_html_entities(input);
+    assert_eq!(decoded, "&<>\"'AA&copy;");
+  }
 
-    #[test]
-    fn resolve_href_ignores_fragment_only_hrefs() {
-        let base = "https://example.com/";
-        assert_eq!(resolve_href(base, "#section"), None);
-        assert_eq!(resolve_href(base, "#"), None);
-    }
+  #[test]
+  fn normalize_scheme_slashes_collapses_extra_slashes() {
+    let input = "https:////example.com//foo//bar";
+    let normalized = normalize_scheme_slashes(input);
+    assert_eq!(normalized, "https://example.com/foo/bar");
+  }
 
-    #[test]
-    fn resolve_href_trims_whitespace() {
-        let base = "https://example.com/";
-        let resolved = resolve_href(base, "   ./foo.css \n").expect("resolved href");
-        assert_eq!(resolved, "https://example.com/foo.css");
-    }
+  #[test]
+  fn normalize_scheme_slashes_preserves_scheme_relative() {
+    let input = "//cdn.example.com//assets//img.png";
+    let normalized = normalize_scheme_slashes(input);
+    assert_eq!(normalized, input);
+  }
 
-    #[test]
-    fn resolve_href_rejects_whitespace_only() {
-        let base = "https://example.com/";
-        assert_eq!(resolve_href(base, "   \t\n"), None);
-    }
+  #[test]
+  fn resolve_href_returns_none_for_empty_href() {
+    let base = "https://example.com/";
+    assert_eq!(resolve_href(base, ""), None);
+  }
 
-    #[test]
-    fn decode_html_entities_decodes_known_and_preserves_unknown() {
-        let input = "&amp;&lt;&gt;&quot;&apos;&#65;&#x41;&copy;";
-        let decoded = decode_html_entities(input);
-        assert_eq!(decoded, "&<>\"'AA&copy;");
-    }
-
-    #[test]
-    fn normalize_scheme_slashes_collapses_extra_slashes() {
-        let input = "https:////example.com//foo//bar";
-        let normalized = normalize_scheme_slashes(input);
-        assert_eq!(normalized, "https://example.com/foo/bar");
-    }
-
-    #[test]
-    fn normalize_scheme_slashes_preserves_scheme_relative() {
-        let input = "//cdn.example.com//assets//img.png";
-        let normalized = normalize_scheme_slashes(input);
-        assert_eq!(normalized, input);
-    }
-
-    #[test]
-    fn resolve_href_returns_none_for_empty_href() {
-        let base = "https://example.com/";
-        assert_eq!(resolve_href(base, ""), None);
-    }
-
-    #[test]
-    fn unescape_js_preserves_invalid_sequences() {
-        let input = r"bad\u00zzescape and \q";
-        let unescaped = unescape_js_escapes(input);
-        assert_eq!(unescaped, input);
-    }
+  #[test]
+  fn unescape_js_preserves_invalid_sequences() {
+    let input = r"bad\u00zzescape and \q";
+    let unescaped = unescape_js_escapes(input);
+    assert_eq!(unescaped, input);
+  }
 }

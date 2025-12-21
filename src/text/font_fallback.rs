@@ -39,8 +39,14 @@
 //!
 //! - CSS Fonts Module Level 4, Section 5: <https://www.w3.org/TR/css-fonts-4/#font-matching-algorithm>
 
-use super::font_db::{FontDatabase, FontStretch, FontStyle, FontWeight, GenericFamily};
-use fontdb::{Family, Query, ID};
+use super::font_db::FontDatabase;
+use super::font_db::FontStretch;
+use super::font_db::FontStyle;
+use super::font_db::FontWeight;
+use super::font_db::GenericFamily;
+use fontdb::Family;
+use fontdb::Query;
+use fontdb::ID;
 
 /// Unique identifier for a font face in the database.
 ///
@@ -50,15 +56,15 @@ use fontdb::{Family, Query, ID};
 pub struct FontId(pub ID);
 
 impl FontId {
-    /// Creates a new FontId from a fontdb ID.
-    pub fn new(id: ID) -> Self {
-        Self(id)
-    }
+  /// Creates a new FontId from a fontdb ID.
+  pub fn new(id: ID) -> Self {
+    Self(id)
+  }
 
-    /// Returns the underlying fontdb ID.
-    pub fn inner(self) -> ID {
-        self.0
-    }
+  /// Returns the underlying fontdb ID.
+  pub fn inner(self) -> ID {
+    self.0
+  }
 }
 
 /// A font family entry in the fallback chain.
@@ -66,27 +72,27 @@ impl FontId {
 /// Can be either a named font family or a generic family.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FamilyEntry {
-    /// A specific font family name (e.g., "Roboto", "Arial").
-    Named(String),
-    /// A generic font family (e.g., sans-serif, monospace).
-    Generic(GenericFamily),
+  /// A specific font family name (e.g., "Roboto", "Arial").
+  Named(String),
+  /// A generic font family (e.g., sans-serif, monospace).
+  Generic(GenericFamily),
 }
 
 impl FamilyEntry {
-    /// Creates a named family entry.
-    pub fn named(name: impl Into<String>) -> Self {
-        Self::Named(name.into())
-    }
+  /// Creates a named family entry.
+  pub fn named(name: impl Into<String>) -> Self {
+    Self::Named(name.into())
+  }
 
-    /// Creates a generic family entry.
-    pub fn generic(family: GenericFamily) -> Self {
-        Self::Generic(family)
-    }
+  /// Creates a generic family entry.
+  pub fn generic(family: GenericFamily) -> Self {
+    Self::Generic(family)
+  }
 
-    /// Returns true if this is a generic family.
-    pub fn is_generic(&self) -> bool {
-        matches!(self, Self::Generic(_))
-    }
+  /// Returns true if this is a generic family.
+  pub fn is_generic(&self) -> bool {
+    matches!(self, Self::Generic(_))
+  }
 }
 
 /// Font fallback chain.
@@ -117,281 +123,281 @@ impl FamilyEntry {
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct FallbackChain {
-    /// Ordered list of font families to try.
-    families: Vec<FamilyEntry>,
+  /// Ordered list of font families to try.
+  families: Vec<FamilyEntry>,
 
-    /// Font weight for matching (100-900, 400 = normal).
-    weight: FontWeight,
+  /// Font weight for matching (100-900, 400 = normal).
+  weight: FontWeight,
 
-    /// Font style for matching.
-    style: FontStyle,
+  /// Font style for matching.
+  style: FontStyle,
 
-    /// Font stretch for matching.
-    stretch: FontStretch,
+  /// Font stretch for matching.
+  stretch: FontStretch,
 }
 
 impl FallbackChain {
-    /// Creates an empty fallback chain.
-    pub fn new() -> Self {
-        Self {
-            families: Vec::new(),
-            weight: FontWeight::NORMAL,
-            style: FontStyle::Normal,
-            stretch: FontStretch::Normal,
+  /// Creates an empty fallback chain.
+  pub fn new() -> Self {
+    Self {
+      families: Vec::new(),
+      weight: FontWeight::NORMAL,
+      style: FontStyle::Normal,
+      stretch: FontStretch::Normal,
+    }
+  }
+
+  /// Creates a fallback chain from a list of family names.
+  ///
+  /// This parses each name, detecting generic families automatically.
+  ///
+  /// # Example
+  ///
+  /// ```rust,ignore
+  /// let chain = FallbackChain::from_families(&[
+  ///     "Roboto".to_string(),
+  ///     "Arial".to_string(),
+  ///     "sans-serif".to_string(),
+  /// ]);
+  /// ```
+  pub fn from_families(families: &[String]) -> Self {
+    let mut chain = Self::new();
+    for family in families {
+      if let Some(generic) = GenericFamily::parse(family) {
+        chain = chain.add_generic(generic);
+      } else {
+        chain = chain.add_family(family);
+      }
+    }
+    chain
+  }
+
+  /// Adds a named font family to the chain.
+  ///
+  /// The family is added at the end of the chain.
+  pub fn add_family(mut self, name: impl Into<String>) -> Self {
+    self.families.push(FamilyEntry::Named(name.into()));
+    self
+  }
+
+  /// Adds a generic font family to the chain.
+  ///
+  /// Generic families are typically added last as a fallback.
+  pub fn add_generic(mut self, family: GenericFamily) -> Self {
+    self.families.push(FamilyEntry::Generic(family));
+    self
+  }
+
+  /// Sets the font weight for matching.
+  ///
+  /// Values range from 100 (thin) to 900 (black).
+  /// Common values: 400 (normal), 700 (bold).
+  pub fn with_weight(mut self, weight: u16) -> Self {
+    self.weight = FontWeight::new(weight);
+    self
+  }
+
+  /// Sets the font style for matching.
+  pub fn with_style(mut self, style: FontStyle) -> Self {
+    self.style = style;
+    self
+  }
+
+  /// Sets the font stretch for matching.
+  pub fn with_stretch(mut self, stretch: FontStretch) -> Self {
+    self.stretch = stretch;
+    self
+  }
+
+  /// Returns the families in this chain.
+  pub fn families(&self) -> &[FamilyEntry] {
+    &self.families
+  }
+
+  /// Returns true if the chain is empty.
+  pub fn is_empty(&self) -> bool {
+    self.families.is_empty()
+  }
+
+  /// Returns the number of families in the chain.
+  pub fn len(&self) -> usize {
+    self.families.len()
+  }
+
+  /// Resolves a font for the given character.
+  ///
+  /// Tries each font in the chain until one is found that contains
+  /// a glyph for the character. Returns None if no font can render
+  /// the character.
+  ///
+  /// # Arguments
+  ///
+  /// * `c` - The character to find a font for
+  /// * `db` - The font database to search
+  ///
+  /// # Returns
+  ///
+  /// The FontId of the first font that can render the character,
+  /// or None if no suitable font is found.
+  ///
+  /// # Example
+  ///
+  /// ```rust,ignore
+  /// let db = FontDatabase::new();
+  /// let chain = FallbackChain::from_families(&["Arial".to_string()]);
+  ///
+  /// if let Some(font_id) = chain.resolve('A', &db) {
+  ///     println!("Found font for 'A'");
+  /// }
+  /// ```
+  pub fn resolve(&self, c: char, db: &FontDatabase) -> Option<FontId> {
+    // Special handling for emoji characters
+    if FontDatabase::is_emoji(c) {
+      if let Some(font_id) = self.resolve_emoji(c, db) {
+        return Some(font_id);
+      }
+      // If no emoji font found, fall through to regular resolution
+    }
+
+    // Try each family in order
+    for entry in &self.families {
+      if let Some(font_id) = self.try_resolve_entry(entry, c, db) {
+        return Some(font_id);
+      }
+    }
+
+    // Last resort: try any font in the database
+    self.resolve_any_font(c, db)
+  }
+
+  /// Resolves the best font for any text (not character-specific).
+  ///
+  /// Returns the first font that matches the chain, regardless of
+  /// glyph coverage. Useful for getting the primary font before
+  /// text is known.
+  pub fn resolve_default(&self, db: &FontDatabase) -> Option<FontId> {
+    for entry in &self.families {
+      if let Some(font_id) = self.query_font(entry, db) {
+        return Some(font_id);
+      }
+    }
+
+    // Fall back to any font
+    db.faces().next().map(|f| FontId::new(f.id))
+  }
+
+  /// Resolves an emoji character.
+  ///
+  /// Tries emoji-specific fonts first before falling back to
+  /// the regular chain.
+  fn resolve_emoji(&self, c: char, db: &FontDatabase) -> Option<FontId> {
+    // Check if chain explicitly includes emoji fonts
+    for entry in &self.families {
+      if let FamilyEntry::Generic(GenericFamily::Emoji) = entry {
+        if let Some(font_id) = self.try_resolve_entry(entry, c, db) {
+          return Some(font_id);
         }
+      }
     }
 
-    /// Creates a fallback chain from a list of family names.
-    ///
-    /// This parses each name, detecting generic families automatically.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let chain = FallbackChain::from_families(&[
-    ///     "Roboto".to_string(),
-    ///     "Arial".to_string(),
-    ///     "sans-serif".to_string(),
-    /// ]);
-    /// ```
-    pub fn from_families(families: &[String]) -> Self {
-        let mut chain = Self::new();
-        for family in families {
-            if let Some(generic) = GenericFamily::parse(family) {
-                chain = chain.add_generic(generic);
-            } else {
-                chain = chain.add_family(family);
-            }
-        }
-        chain
+    // Try system emoji fonts
+    db.find_emoji_fonts()
+      .into_iter()
+      .find(|&id| db.has_glyph(id, c))
+      .map(FontId::new)
+  }
+
+  /// Tries to resolve a single family entry for a character.
+  fn try_resolve_entry(&self, entry: &FamilyEntry, c: char, db: &FontDatabase) -> Option<FontId> {
+    match entry {
+      FamilyEntry::Named(name) => self.resolve_named(name, c, db),
+      FamilyEntry::Generic(generic) => self.resolve_generic(*generic, c, db),
+    }
+  }
+
+  /// Resolves a named font family for a character.
+  fn resolve_named(&self, name: &str, c: char, db: &FontDatabase) -> Option<FontId> {
+    let query = Query {
+      families: &[Family::Name(name)],
+      weight: fontdb::Weight(self.weight.value()),
+      stretch: self.stretch.into(),
+      style: self.style.into(),
+    };
+
+    if let Some(id) = db.inner().query(&query) {
+      if db.has_glyph(id, c) {
+        return Some(FontId::new(id));
+      }
     }
 
-    /// Adds a named font family to the chain.
-    ///
-    /// The family is added at the end of the chain.
-    pub fn add_family(mut self, name: impl Into<String>) -> Self {
-        self.families.push(FamilyEntry::Named(name.into()));
-        self
+    None
+  }
+
+  /// Resolves a generic font family for a character.
+  fn resolve_generic(&self, generic: GenericFamily, c: char, db: &FontDatabase) -> Option<FontId> {
+    // First try the fontdb generic family
+    let query = Query {
+      families: &[generic.to_fontdb()],
+      weight: fontdb::Weight(self.weight.value()),
+      stretch: self.stretch.into(),
+      style: self.style.into(),
+    };
+
+    if let Some(id) = db.inner().query(&query) {
+      if db.has_glyph(id, c) {
+        return Some(FontId::new(id));
+      }
     }
 
-    /// Adds a generic font family to the chain.
-    ///
-    /// Generic families are typically added last as a fallback.
-    pub fn add_generic(mut self, family: GenericFamily) -> Self {
-        self.families.push(FamilyEntry::Generic(family));
-        self
+    // Try known fallback names for this generic family
+    for name in generic.fallback_families() {
+      if let Some(font_id) = self.resolve_named(name, c, db) {
+        return Some(font_id);
+      }
     }
 
-    /// Sets the font weight for matching.
-    ///
-    /// Values range from 100 (thin) to 900 (black).
-    /// Common values: 400 (normal), 700 (bold).
-    pub fn with_weight(mut self, weight: u16) -> Self {
-        self.weight = FontWeight::new(weight);
-        self
-    }
+    None
+  }
 
-    /// Sets the font style for matching.
-    pub fn with_style(mut self, style: FontStyle) -> Self {
-        self.style = style;
-        self
-    }
-
-    /// Sets the font stretch for matching.
-    pub fn with_stretch(mut self, stretch: FontStretch) -> Self {
-        self.stretch = stretch;
-        self
-    }
-
-    /// Returns the families in this chain.
-    pub fn families(&self) -> &[FamilyEntry] {
-        &self.families
-    }
-
-    /// Returns true if the chain is empty.
-    pub fn is_empty(&self) -> bool {
-        self.families.is_empty()
-    }
-
-    /// Returns the number of families in the chain.
-    pub fn len(&self) -> usize {
-        self.families.len()
-    }
-
-    /// Resolves a font for the given character.
-    ///
-    /// Tries each font in the chain until one is found that contains
-    /// a glyph for the character. Returns None if no font can render
-    /// the character.
-    ///
-    /// # Arguments
-    ///
-    /// * `c` - The character to find a font for
-    /// * `db` - The font database to search
-    ///
-    /// # Returns
-    ///
-    /// The FontId of the first font that can render the character,
-    /// or None if no suitable font is found.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let db = FontDatabase::new();
-    /// let chain = FallbackChain::from_families(&["Arial".to_string()]);
-    ///
-    /// if let Some(font_id) = chain.resolve('A', &db) {
-    ///     println!("Found font for 'A'");
-    /// }
-    /// ```
-    pub fn resolve(&self, c: char, db: &FontDatabase) -> Option<FontId> {
-        // Special handling for emoji characters
-        if FontDatabase::is_emoji(c) {
-            if let Some(font_id) = self.resolve_emoji(c, db) {
-                return Some(font_id);
-            }
-            // If no emoji font found, fall through to regular resolution
-        }
-
-        // Try each family in order
-        for entry in &self.families {
-            if let Some(font_id) = self.try_resolve_entry(entry, c, db) {
-                return Some(font_id);
-            }
-        }
-
-        // Last resort: try any font in the database
-        self.resolve_any_font(c, db)
-    }
-
-    /// Resolves the best font for any text (not character-specific).
-    ///
-    /// Returns the first font that matches the chain, regardless of
-    /// glyph coverage. Useful for getting the primary font before
-    /// text is known.
-    pub fn resolve_default(&self, db: &FontDatabase) -> Option<FontId> {
-        for entry in &self.families {
-            if let Some(font_id) = self.query_font(entry, db) {
-                return Some(font_id);
-            }
-        }
-
-        // Fall back to any font
-        db.faces().next().map(|f| FontId::new(f.id))
-    }
-
-    /// Resolves an emoji character.
-    ///
-    /// Tries emoji-specific fonts first before falling back to
-    /// the regular chain.
-    fn resolve_emoji(&self, c: char, db: &FontDatabase) -> Option<FontId> {
-        // Check if chain explicitly includes emoji fonts
-        for entry in &self.families {
-            if let FamilyEntry::Generic(GenericFamily::Emoji) = entry {
-                if let Some(font_id) = self.try_resolve_entry(entry, c, db) {
-                    return Some(font_id);
-                }
-            }
-        }
-
-        // Try system emoji fonts
-        db.find_emoji_fonts()
-            .into_iter()
-            .find(|&id| db.has_glyph(id, c))
-            .map(FontId::new)
-    }
-
-    /// Tries to resolve a single family entry for a character.
-    fn try_resolve_entry(&self, entry: &FamilyEntry, c: char, db: &FontDatabase) -> Option<FontId> {
-        match entry {
-            FamilyEntry::Named(name) => self.resolve_named(name, c, db),
-            FamilyEntry::Generic(generic) => self.resolve_generic(*generic, c, db),
-        }
-    }
-
-    /// Resolves a named font family for a character.
-    fn resolve_named(&self, name: &str, c: char, db: &FontDatabase) -> Option<FontId> {
-        let query = Query {
-            families: &[Family::Name(name)],
-            weight: fontdb::Weight(self.weight.value()),
-            stretch: self.stretch.into(),
-            style: self.style.into(),
-        };
-
-        if let Some(id) = db.inner().query(&query) {
-            if db.has_glyph(id, c) {
-                return Some(FontId::new(id));
-            }
-        }
-
-        None
-    }
-
-    /// Resolves a generic font family for a character.
-    fn resolve_generic(&self, generic: GenericFamily, c: char, db: &FontDatabase) -> Option<FontId> {
-        // First try the fontdb generic family
-        let query = Query {
-            families: &[generic.to_fontdb()],
-            weight: fontdb::Weight(self.weight.value()),
-            stretch: self.stretch.into(),
-            style: self.style.into(),
-        };
-
-        if let Some(id) = db.inner().query(&query) {
-            if db.has_glyph(id, c) {
-                return Some(FontId::new(id));
-            }
-        }
-
-        // Try known fallback names for this generic family
+  /// Queries for a font without checking glyph coverage.
+  fn query_font(&self, entry: &FamilyEntry, db: &FontDatabase) -> Option<FontId> {
+    let families: Vec<Family> = match entry {
+      FamilyEntry::Named(name) => vec![Family::Name(name)],
+      FamilyEntry::Generic(generic) => {
+        // Include the generic family and its fallback names
+        let mut families = vec![generic.to_fontdb()];
         for name in generic.fallback_families() {
-            if let Some(font_id) = self.resolve_named(name, c, db) {
-                return Some(font_id);
-            }
+          families.push(Family::Name(name));
         }
+        families
+      }
+    };
 
-        None
+    for family in &families {
+      let query = Query {
+        families: std::slice::from_ref(family),
+        weight: fontdb::Weight(self.weight.value()),
+        stretch: self.stretch.into(),
+        style: self.style.into(),
+      };
+
+      if let Some(id) = db.inner().query(&query) {
+        return Some(FontId::new(id));
+      }
     }
 
-    /// Queries for a font without checking glyph coverage.
-    fn query_font(&self, entry: &FamilyEntry, db: &FontDatabase) -> Option<FontId> {
-        let families: Vec<Family> = match entry {
-            FamilyEntry::Named(name) => vec![Family::Name(name)],
-            FamilyEntry::Generic(generic) => {
-                // Include the generic family and its fallback names
-                let mut families = vec![generic.to_fontdb()];
-                for name in generic.fallback_families() {
-                    families.push(Family::Name(name));
-                }
-                families
-            }
-        };
+    None
+  }
 
-        for family in &families {
-            let query = Query {
-                families: std::slice::from_ref(family),
-                weight: fontdb::Weight(self.weight.value()),
-                stretch: self.stretch.into(),
-                style: self.style.into(),
-            };
-
-            if let Some(id) = db.inner().query(&query) {
-                return Some(FontId::new(id));
-            }
-        }
-
-        None
+  /// Last resort: try to find any font that has the glyph.
+  fn resolve_any_font(&self, c: char, db: &FontDatabase) -> Option<FontId> {
+    for face in db.faces() {
+      if db.has_glyph(face.id, c) {
+        return Some(FontId::new(face.id));
+      }
     }
-
-    /// Last resort: try to find any font that has the glyph.
-    fn resolve_any_font(&self, c: char, db: &FontDatabase) -> Option<FontId> {
-        for face in db.faces() {
-            if db.has_glyph(face.id, c) {
-                return Some(FontId::new(face.id));
-            }
-        }
-        None
-    }
+    None
+  }
 }
 
 /// Builder for constructing fallback chains.
@@ -400,157 +406,163 @@ impl FallbackChain {
 /// additional configuration options.
 #[derive(Debug, Clone, Default)]
 pub struct FallbackChainBuilder {
-    chain: FallbackChain,
+  chain: FallbackChain,
 }
 
 impl FallbackChainBuilder {
-    /// Creates a new builder.
-    pub fn new() -> Self {
-        Self::default()
-    }
+  /// Creates a new builder.
+  pub fn new() -> Self {
+    Self::default()
+  }
 
-    /// Adds a named font family.
-    pub fn family(mut self, name: impl Into<String>) -> Self {
-        self.chain = self.chain.add_family(name);
-        self
-    }
+  /// Adds a named font family.
+  pub fn family(mut self, name: impl Into<String>) -> Self {
+    self.chain = self.chain.add_family(name);
+    self
+  }
 
-    /// Adds a generic font family.
-    pub fn generic(mut self, family: GenericFamily) -> Self {
-        self.chain = self.chain.add_generic(family);
-        self
-    }
+  /// Adds a generic font family.
+  pub fn generic(mut self, family: GenericFamily) -> Self {
+    self.chain = self.chain.add_generic(family);
+    self
+  }
 
-    /// Sets the font weight.
-    pub fn weight(mut self, weight: u16) -> Self {
-        self.chain = self.chain.with_weight(weight);
-        self
-    }
+  /// Sets the font weight.
+  pub fn weight(mut self, weight: u16) -> Self {
+    self.chain = self.chain.with_weight(weight);
+    self
+  }
 
-    /// Sets normal font weight (400).
-    pub fn normal(self) -> Self {
-        self.weight(400)
-    }
+  /// Sets normal font weight (400).
+  pub fn normal(self) -> Self {
+    self.weight(400)
+  }
 
-    /// Sets bold font weight (700).
-    pub fn bold(self) -> Self {
-        self.weight(700)
-    }
+  /// Sets bold font weight (700).
+  pub fn bold(self) -> Self {
+    self.weight(700)
+  }
 
-    /// Sets the font style.
-    pub fn style(mut self, style: FontStyle) -> Self {
-        self.chain = self.chain.with_style(style);
-        self
-    }
+  /// Sets the font style.
+  pub fn style(mut self, style: FontStyle) -> Self {
+    self.chain = self.chain.with_style(style);
+    self
+  }
 
-    /// Sets italic font style.
-    pub fn italic(self) -> Self {
-        self.style(FontStyle::Italic)
-    }
+  /// Sets italic font style.
+  pub fn italic(self) -> Self {
+    self.style(FontStyle::Italic)
+  }
 
-    /// Sets the font stretch.
-    pub fn stretch(mut self, stretch: FontStretch) -> Self {
-        self.chain = self.chain.with_stretch(stretch);
-        self
-    }
+  /// Sets the font stretch.
+  pub fn stretch(mut self, stretch: FontStretch) -> Self {
+    self.chain = self.chain.with_stretch(stretch);
+    self
+  }
 
-    /// Builds the fallback chain.
-    pub fn build(self) -> FallbackChain {
-        self.chain
-    }
+  /// Builds the fallback chain.
+  pub fn build(self) -> FallbackChain {
+    self.chain
+  }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_fallback_chain_new() {
-        let chain = FallbackChain::new();
-        assert!(chain.is_empty());
-        assert_eq!(chain.len(), 0);
+  #[test]
+  fn test_fallback_chain_new() {
+    let chain = FallbackChain::new();
+    assert!(chain.is_empty());
+    assert_eq!(chain.len(), 0);
+  }
+
+  #[test]
+  fn test_fallback_chain_add_family() {
+    let chain = FallbackChain::new()
+      .add_family("Arial")
+      .add_family("Helvetica");
+
+    assert_eq!(chain.len(), 2);
+    assert!(!chain.is_empty());
+  }
+
+  #[test]
+  fn test_fallback_chain_add_generic() {
+    let chain = FallbackChain::new()
+      .add_family("Custom")
+      .add_generic(GenericFamily::SansSerif);
+
+    assert_eq!(chain.len(), 2);
+
+    match &chain.families()[1] {
+      FamilyEntry::Generic(GenericFamily::SansSerif) => {}
+      _ => panic!("Expected generic sans-serif"),
     }
+  }
 
-    #[test]
-    fn test_fallback_chain_add_family() {
-        let chain = FallbackChain::new().add_family("Arial").add_family("Helvetica");
+  #[test]
+  fn test_fallback_chain_from_families() {
+    let families = vec![
+      "Roboto".to_string(),
+      "Arial".to_string(),
+      "sans-serif".to_string(),
+    ];
+    let chain = FallbackChain::from_families(&families);
 
-        assert_eq!(chain.len(), 2);
-        assert!(!chain.is_empty());
-    }
+    assert_eq!(chain.len(), 3);
 
-    #[test]
-    fn test_fallback_chain_add_generic() {
-        let chain = FallbackChain::new()
-            .add_family("Custom")
-            .add_generic(GenericFamily::SansSerif);
+    // First two should be named
+    assert!(matches!(&chain.families()[0], FamilyEntry::Named(n) if n == "Roboto"));
+    assert!(matches!(&chain.families()[1], FamilyEntry::Named(n) if n == "Arial"));
 
-        assert_eq!(chain.len(), 2);
+    // Last should be generic
+    assert!(matches!(
+      &chain.families()[2],
+      FamilyEntry::Generic(GenericFamily::SansSerif)
+    ));
+  }
 
-        match &chain.families()[1] {
-            FamilyEntry::Generic(GenericFamily::SansSerif) => {}
-            _ => panic!("Expected generic sans-serif"),
-        }
-    }
+  #[test]
+  fn test_fallback_chain_builder() {
+    let chain = FallbackChainBuilder::new()
+      .family("Roboto")
+      .family("Arial")
+      .generic(GenericFamily::SansSerif)
+      .bold()
+      .italic()
+      .build();
 
-    #[test]
-    fn test_fallback_chain_from_families() {
-        let families = vec!["Roboto".to_string(), "Arial".to_string(), "sans-serif".to_string()];
-        let chain = FallbackChain::from_families(&families);
+    assert_eq!(chain.len(), 3);
+    assert_eq!(chain.weight, FontWeight::BOLD);
+    assert_eq!(chain.style, FontStyle::Italic);
+  }
 
-        assert_eq!(chain.len(), 3);
+  #[test]
+  fn test_family_entry_is_generic() {
+    let named = FamilyEntry::named("Arial");
+    assert!(!named.is_generic());
 
-        // First two should be named
-        assert!(matches!(&chain.families()[0], FamilyEntry::Named(n) if n == "Roboto"));
-        assert!(matches!(&chain.families()[1], FamilyEntry::Named(n) if n == "Arial"));
+    let generic = FamilyEntry::generic(GenericFamily::Serif);
+    assert!(generic.is_generic());
+  }
 
-        // Last should be generic
-        assert!(matches!(
-            &chain.families()[2],
-            FamilyEntry::Generic(GenericFamily::SansSerif)
-        ));
-    }
+  #[test]
+  fn test_fallback_chain_resolve_with_empty_db() {
+    let db = FontDatabase::empty();
+    let chain = FallbackChain::new().add_family("Arial");
 
-    #[test]
-    fn test_fallback_chain_builder() {
-        let chain = FallbackChainBuilder::new()
-            .family("Roboto")
-            .family("Arial")
-            .generic(GenericFamily::SansSerif)
-            .bold()
-            .italic()
-            .build();
+    // Should return None since no fonts are loaded
+    let result = chain.resolve('A', &db);
+    assert!(result.is_none());
+  }
 
-        assert_eq!(chain.len(), 3);
-        assert_eq!(chain.weight, FontWeight::BOLD);
-        assert_eq!(chain.style, FontStyle::Italic);
-    }
+  #[test]
+  fn test_fallback_chain_resolve_default_empty() {
+    let db = FontDatabase::empty();
+    let chain = FallbackChain::new().add_family("Arial");
 
-    #[test]
-    fn test_family_entry_is_generic() {
-        let named = FamilyEntry::named("Arial");
-        assert!(!named.is_generic());
-
-        let generic = FamilyEntry::generic(GenericFamily::Serif);
-        assert!(generic.is_generic());
-    }
-
-    #[test]
-    fn test_fallback_chain_resolve_with_empty_db() {
-        let db = FontDatabase::empty();
-        let chain = FallbackChain::new().add_family("Arial");
-
-        // Should return None since no fonts are loaded
-        let result = chain.resolve('A', &db);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_fallback_chain_resolve_default_empty() {
-        let db = FontDatabase::empty();
-        let chain = FallbackChain::new().add_family("Arial");
-
-        let result = chain.resolve_default(&db);
-        assert!(result.is_none());
-    }
+    let result = chain.resolve_default(&db);
+    assert!(result.is_none());
+  }
 }

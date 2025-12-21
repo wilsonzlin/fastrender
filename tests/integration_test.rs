@@ -6,7 +6,7 @@ use fastrender::FastRender;
 
 #[test]
 fn test_simple_html_rendering() {
-    let html = r#"
+  let html = r#"
         <html>
             <body>
                 <div style="width: 100px; height: 100px; background-color: red;"></div>
@@ -14,17 +14,17 @@ fn test_simple_html_rendering() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
-    let image_bytes = result.unwrap();
-    assert!(!image_bytes.is_empty());
+  assert!(result.is_ok());
+  let image_bytes = result.unwrap();
+  assert!(!image_bytes.is_empty());
 }
 
 #[test]
 fn test_text_rendering() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -39,15 +39,15 @@ fn test_text_rendering() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_flexbox_layout() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -72,15 +72,15 @@ fn test_flexbox_layout() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_grid_layout() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -105,15 +105,15 @@ fn test_grid_layout() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_gradient_background() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -130,15 +130,15 @@ fn test_gradient_background() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_border_radius() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -156,15 +156,15 @@ fn test_border_radius() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_box_shadow() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -182,15 +182,15 @@ fn test_box_shadow() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_transform() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -208,15 +208,15 @@ fn test_transform() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_multiple_output_formats() {
-    let html = r#"
+  let html = r#"
         <html>
             <body>
                 <div style="width: 100px; height: 100px; background-color: cyan;"></div>
@@ -224,24 +224,24 @@ fn test_multiple_output_formats() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
+  let mut renderer = FastRender::new().unwrap();
 
-    // Test PNG
-    let png_result = renderer.render_to_png(html, 400, 300);
-    assert!(png_result.is_ok());
+  // Test PNG
+  let png_result = renderer.render_to_png(html, 400, 300);
+  assert!(png_result.is_ok());
 
-    // Test JPEG
-    let jpeg_result = renderer.render_to_jpeg(html, 400, 300, 85);
-    assert!(jpeg_result.is_ok());
+  // Test JPEG
+  let jpeg_result = renderer.render_to_jpeg(html, 400, 300, 85);
+  assert!(jpeg_result.is_ok());
 
-    // Test WebP
-    let webp_result = renderer.render_to_webp(html, 400, 300, 85);
-    assert!(webp_result.is_ok());
+  // Test WebP
+  let webp_result = renderer.render_to_webp(html, 400, 300, 85);
+  assert!(webp_result.is_ok());
 }
 
 #[test]
 fn test_custom_viewport_size() {
-    let html = r#"
+  let html = r#"
         <html>
             <body>
                 <div style="width: 50%; height: 50%; background-color: yellow;"></div>
@@ -249,24 +249,27 @@ fn test_custom_viewport_size() {
         </html>
     "#;
 
-    let mut renderer = FastRender::builder().viewport_size(1024, 768).build().unwrap();
+  let mut renderer = FastRender::builder()
+    .viewport_size(1024, 768)
+    .build()
+    .unwrap();
 
-    let result = renderer.render(html);
-    assert!(result.is_ok());
+  let result = renderer.render(html);
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_invalid_dimensions() {
-    let html = "<html><body></body></html>";
-    let mut renderer = FastRender::new().unwrap();
+  let html = "<html><body></body></html>";
+  let mut renderer = FastRender::new().unwrap();
 
-    let result = renderer.render_to_png(html, 0, 0);
-    assert!(result.is_err());
+  let result = renderer.render_to_png(html, 0, 0);
+  assert!(result.is_err());
 }
 
 #[test]
 fn test_malformed_html() {
-    let html = r#"
+  let html = r#"
         <html>
             <body>
                 <div>Unclosed div
@@ -274,16 +277,16 @@ fn test_malformed_html() {
             </body>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    // Should still work due to error recovery
-    assert!(result.is_ok());
+  // Should still work due to error recovery
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_class_selector() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -300,15 +303,15 @@ fn test_class_selector() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_id_selector() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -325,15 +328,15 @@ fn test_id_selector() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }
 
 #[test]
 fn test_nested_elements() {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -357,8 +360,8 @@ fn test_nested_elements() {
         </html>
     "#;
 
-    let mut renderer = FastRender::new().unwrap();
-    let result = renderer.render_to_png(html, 800, 600);
+  let mut renderer = FastRender::new().unwrap();
+  let result = renderer.render_to_png(html, 800, 600);
 
-    assert!(result.is_ok());
+  assert!(result.is_ok());
 }

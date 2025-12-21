@@ -36,7 +36,8 @@ use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// Intrinsic sizing mode for content-based size queries
@@ -62,17 +63,17 @@ use std::sync::Arc;
 /// CSS Sizing Module Level 3: <https://www.w3.org/TR/css-sizing-3/>
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicSizingMode {
-    /// Minimum content size (narrowest possible without overflow)
-    ///
-    /// Corresponds to CSS `min-content` keyword.
-    /// For text, this is typically the width of the longest word.
-    MinContent,
+  /// Minimum content size (narrowest possible without overflow)
+  ///
+  /// Corresponds to CSS `min-content` keyword.
+  /// For text, this is typically the width of the longest word.
+  MinContent,
 
-    /// Maximum content size (widest without line breaking)
-    ///
-    /// Corresponds to CSS `max-content` keyword.
-    /// For text, this is the width needed to fit all content on one line.
-    MaxContent,
+  /// Maximum content size (widest without line breaking)
+  ///
+  /// Corresponds to CSS `max-content` keyword.
+  /// For text, this is the width needed to fit all content on one line.
+  MaxContent,
 }
 
 thread_local! {
@@ -87,68 +88,71 @@ static BLOCK_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 static FLEX_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 static INLINE_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-fn cache_key(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<(usize, usize, IntrinsicSizingMode)> {
-    let id = node.id();
-    if id == 0 {
-        return None;
-    }
-    let style_ptr = Arc::as_ptr(&node.style) as usize;
-    Some((id, style_ptr, mode))
+fn cache_key(
+  node: &BoxNode,
+  mode: IntrinsicSizingMode,
+) -> Option<(usize, usize, IntrinsicSizingMode)> {
+  let id = node.id();
+  if id == 0 {
+    return None;
+  }
+  let style_ptr = Arc::as_ptr(&node.style) as usize;
+  Some((id, style_ptr, mode))
 }
 
 pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<f32> {
-    CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
-    let key = cache_key(node, mode)?;
-    let hit = INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow().get(&key).copied());
-    if hit.is_some() {
-        CACHE_HITS.fetch_add(1, Ordering::Relaxed);
-    }
-    hit
+  CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
+  let key = cache_key(node, mode)?;
+  let hit = INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow().get(&key).copied());
+  if hit.is_some() {
+    CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+  }
+  hit
 }
 
 pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, value: f32) {
-    if let Some(key) = cache_key(node, mode) {
-        INTRINSIC_INLINE_CACHE.with(|cache| {
-            cache.borrow_mut().insert(key, value);
-        });
-        CACHE_STORES.fetch_add(1, Ordering::Relaxed);
-    }
+  if let Some(key) = cache_key(node, mode) {
+    INTRINSIC_INLINE_CACHE.with(|cache| {
+      cache.borrow_mut().insert(key, value);
+    });
+    CACHE_STORES.fetch_add(1, Ordering::Relaxed);
+  }
 }
 
 pub(crate) fn intrinsic_cache_clear() {
-    INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow_mut().clear());
+  INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 pub(crate) fn intrinsic_cache_reset_counters() {
-    CACHE_LOOKUPS.store(0, Ordering::Relaxed);
-    CACHE_HITS.store(0, Ordering::Relaxed);
-    CACHE_STORES.store(0, Ordering::Relaxed);
-    BLOCK_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
-    FLEX_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
-    INLINE_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
+  CACHE_LOOKUPS.store(0, Ordering::Relaxed);
+  CACHE_HITS.store(0, Ordering::Relaxed);
+  CACHE_STORES.store(0, Ordering::Relaxed);
+  BLOCK_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
+  FLEX_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
+  INLINE_INTRINSIC_CALLS.store(0, Ordering::Relaxed);
 }
 
 pub(crate) fn intrinsic_cache_stats() -> (usize, usize, usize, usize, usize, usize) {
-    (
-        CACHE_LOOKUPS.load(Ordering::Relaxed),
-        CACHE_HITS.load(Ordering::Relaxed),
-        CACHE_STORES.load(Ordering::Relaxed),
-        BLOCK_INTRINSIC_CALLS.load(Ordering::Relaxed),
-        FLEX_INTRINSIC_CALLS.load(Ordering::Relaxed),
-        INLINE_INTRINSIC_CALLS.load(Ordering::Relaxed),
-    )
+  (
+    CACHE_LOOKUPS.load(Ordering::Relaxed),
+    CACHE_HITS.load(Ordering::Relaxed),
+    CACHE_STORES.load(Ordering::Relaxed),
+    BLOCK_INTRINSIC_CALLS.load(Ordering::Relaxed),
+    FLEX_INTRINSIC_CALLS.load(Ordering::Relaxed),
+    INLINE_INTRINSIC_CALLS.load(Ordering::Relaxed),
+  )
 }
 
 pub(crate) fn count_block_intrinsic_call() {
-    BLOCK_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+  BLOCK_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn count_flex_intrinsic_call() {
-    FLEX_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+  FLEX_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
 }
 
 pub(crate) fn count_inline_intrinsic_call() {
-    INLINE_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+  INLINE_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Common trait for all formatting contexts
@@ -210,72 +214,84 @@ pub(crate) fn count_inline_intrinsic_call() {
 /// - W4.T12: InlineFormattingContext implementation
 /// - W2.T10: LayoutEngine (dispatches to FCs)
 pub trait FormattingContext: Send + Sync {
-    /// Lays out a box within this formatting context
-    ///
-    /// This is the main entry point for layout. It takes a box tree node and
-    /// available space, performs layout according to this FC's rules, and
-    /// returns a positioned fragment tree.
-    ///
-    /// # Arguments
-    ///
-    /// * `box_node` - The box to layout (must be compatible with this FC)
-    /// * `constraints` - Available space constraints
-    ///
-    /// # Returns
-    ///
-    /// A positioned fragment tree with:
-    /// - Final size (width and height)
-    /// - Final position (relative to parent's content box)
-    /// - Laid out children (if any)
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - Box type is not supported by this formatting context
-    /// - Circular dependency detected in sizing
-    /// - Required context (fonts, images, etc.) is missing
-    fn layout(&self, box_node: &BoxNode, constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError>;
+  /// Lays out a box within this formatting context
+  ///
+  /// This is the main entry point for layout. It takes a box tree node and
+  /// available space, performs layout according to this FC's rules, and
+  /// returns a positioned fragment tree.
+  ///
+  /// # Arguments
+  ///
+  /// * `box_node` - The box to layout (must be compatible with this FC)
+  /// * `constraints` - Available space constraints
+  ///
+  /// # Returns
+  ///
+  /// A positioned fragment tree with:
+  /// - Final size (width and height)
+  /// - Final position (relative to parent's content box)
+  /// - Laid out children (if any)
+  ///
+  /// # Errors
+  ///
+  /// Returns error if:
+  /// - Box type is not supported by this formatting context
+  /// - Circular dependency detected in sizing
+  /// - Required context (fonts, images, etc.) is missing
+  fn layout(
+    &self,
+    box_node: &BoxNode,
+    constraints: &LayoutConstraints,
+  ) -> Result<FragmentNode, LayoutError>;
 
-    /// Computes intrinsic size for a box in the inline axis
-    ///
-    /// Used when parent needs to know content-based size before layout.
-    /// This is critical for:
-    /// - Auto-sizing: `width: auto` on shrink-to-fit boxes
-    /// - Flexbox: `flex-basis: content`
-    /// - Grid: `grid-template-columns: min-content`
-    /// - Table: Auto column width calculation
-    ///
-    /// # Arguments
-    ///
-    /// * `box_node` - The box to measure
-    /// * `mode` - Whether to compute min-content or max-content size
-    ///
-    /// # Returns
-    ///
-    /// Intrinsic inline size in CSS pixels. The inline axis is:
-    /// - Horizontal in horizontal writing modes (most common)
-    /// - Vertical in vertical writing modes
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - Content cannot be measured (missing fonts, images, etc.)
-    /// - Box type not supported
-    ///
-    /// # Performance Note
-    ///
-    /// This method may be called multiple times during layout (e.g., for table
-    /// column sizing). Implementations should consider caching if expensive.
-    fn compute_intrinsic_inline_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError>;
+  /// Computes intrinsic size for a box in the inline axis
+  ///
+  /// Used when parent needs to know content-based size before layout.
+  /// This is critical for:
+  /// - Auto-sizing: `width: auto` on shrink-to-fit boxes
+  /// - Flexbox: `flex-basis: content`
+  /// - Grid: `grid-template-columns: min-content`
+  /// - Table: Auto column width calculation
+  ///
+  /// # Arguments
+  ///
+  /// * `box_node` - The box to measure
+  /// * `mode` - Whether to compute min-content or max-content size
+  ///
+  /// # Returns
+  ///
+  /// Intrinsic inline size in CSS pixels. The inline axis is:
+  /// - Horizontal in horizontal writing modes (most common)
+  /// - Vertical in vertical writing modes
+  ///
+  /// # Errors
+  ///
+  /// Returns error if:
+  /// - Content cannot be measured (missing fonts, images, etc.)
+  /// - Box type not supported
+  ///
+  /// # Performance Note
+  ///
+  /// This method may be called multiple times during layout (e.g., for table
+  /// column sizing). Implementations should consider caching if expensive.
+  fn compute_intrinsic_inline_size(
+    &self,
+    box_node: &BoxNode,
+    mode: IntrinsicSizingMode,
+  ) -> Result<f32, LayoutError>;
 
-    /// Computes intrinsic size for a box in the block axis
-    ///
-    /// Used for shrink-to-fit resolution of absolutely positioned height when
-    /// both vertical insets are specified, mirroring the inline shrink path.
-    fn compute_intrinsic_block_size(&self, box_node: &BoxNode, mode: IntrinsicSizingMode) -> Result<f32, LayoutError> {
-        // Default to inline size for contexts that have symmetric handling.
-        self.compute_intrinsic_inline_size(box_node, mode)
-    }
+  /// Computes intrinsic size for a box in the block axis
+  ///
+  /// Used for shrink-to-fit resolution of absolutely positioned height when
+  /// both vertical insets are specified, mirroring the inline shrink path.
+  fn compute_intrinsic_block_size(
+    &self,
+    box_node: &BoxNode,
+    mode: IntrinsicSizingMode,
+  ) -> Result<f32, LayoutError> {
+    // Default to inline size for contexts that have symmetric handling.
+    self.compute_intrinsic_inline_size(box_node, mode)
+  }
 }
 
 /// Layout errors
@@ -283,156 +299,171 @@ pub trait FormattingContext: Send + Sync {
 /// Errors that can occur during layout operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LayoutError {
-    /// Box type not supported by this formatting context
-    ///
-    /// For example, trying to layout a table box with BlockFormattingContext.
-    UnsupportedBoxType(String),
+  /// Box type not supported by this formatting context
+  ///
+  /// For example, trying to layout a table box with BlockFormattingContext.
+  UnsupportedBoxType(String),
 
-    /// Circular dependency in sizing
-    ///
-    /// Occurs when box's size depends on itself, creating infinite recursion.
-    /// Example: percentage height when parent height depends on child height.
-    CircularDependency,
+  /// Circular dependency in sizing
+  ///
+  /// Occurs when box's size depends on itself, creating infinite recursion.
+  /// Example: percentage height when parent height depends on child height.
+  CircularDependency,
 
-    /// Missing required context
-    ///
-    /// Required resources (fonts, images, etc.) are not available.
-    MissingContext(String),
+  /// Missing required context
+  ///
+  /// Required resources (fonts, images, etc.) are not available.
+  MissingContext(String),
 }
 
 impl std::fmt::Display for LayoutError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnsupportedBoxType(msg) => write!(f, "Unsupported box type: {}", msg),
-            Self::CircularDependency => write!(f, "Circular dependency in layout"),
-            Self::MissingContext(msg) => write!(f, "Missing context: {}", msg),
-        }
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::UnsupportedBoxType(msg) => write!(f, "Unsupported box type: {}", msg),
+      Self::CircularDependency => write!(f, "Circular dependency in layout"),
+      Self::MissingContext(msg) => write!(f, "Missing context: {}", msg),
     }
+  }
 }
 
 impl std::error::Error for LayoutError {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::geometry::Rect;
+  use super::*;
+  use crate::geometry::Rect;
+  use crate::style::display::FormattingContextType;
+  use crate::style::ComputedStyle;
+  use std::sync::Arc;
 
-    use crate::style::display::FormattingContextType;
-    use crate::style::ComputedStyle;
-    use std::sync::Arc;
+  /// Stub formatting context for testing trait requirements
+  ///
+  /// This demonstrates the minimal implementation needed to satisfy
+  /// the FormattingContext trait contract.
+  #[derive(Debug)]
+  struct StubFormattingContext;
 
-    /// Stub formatting context for testing trait requirements
-    ///
-    /// This demonstrates the minimal implementation needed to satisfy
-    /// the FormattingContext trait contract.
-    #[derive(Debug)]
-    struct StubFormattingContext;
-
-    impl FormattingContext for StubFormattingContext {
-        fn layout(&self, _box_node: &BoxNode, _constraints: &LayoutConstraints) -> Result<FragmentNode, LayoutError> {
-            // Stub: just return a fixed-size fragment
-            Ok(FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 50.0), vec![]))
-        }
-
-        fn compute_intrinsic_inline_size(
-            &self,
-            _box_node: &BoxNode,
-            _mode: IntrinsicSizingMode,
-        ) -> Result<f32, LayoutError> {
-            // Stub: return fixed width
-            Ok(100.0)
-        }
+  impl FormattingContext for StubFormattingContext {
+    fn layout(
+      &self,
+      _box_node: &BoxNode,
+      _constraints: &LayoutConstraints,
+    ) -> Result<FragmentNode, LayoutError> {
+      // Stub: just return a fixed-size fragment
+      Ok(FragmentNode::new_block(
+        Rect::from_xywh(0.0, 0.0, 100.0, 50.0),
+        vec![],
+      ))
     }
 
-    #[test]
-    fn test_stub_fc_implements_trait() {
-        let fc = StubFormattingContext;
-        let style = Arc::new(ComputedStyle::default());
-        let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
-
-        let constraints = LayoutConstraints::definite(800.0, 600.0);
-        let fragment = fc.layout(&box_node, &constraints).unwrap();
-
-        assert_eq!(fragment.bounds.width(), 100.0);
-        assert_eq!(fragment.bounds.height(), 50.0);
+    fn compute_intrinsic_inline_size(
+      &self,
+      _box_node: &BoxNode,
+      _mode: IntrinsicSizingMode,
+    ) -> Result<f32, LayoutError> {
+      // Stub: return fixed width
+      Ok(100.0)
     }
+  }
 
-    #[test]
-    fn test_intrinsic_sizing_min_content() {
-        let fc = StubFormattingContext;
-        let style = Arc::new(ComputedStyle::default());
-        let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+  #[test]
+  fn test_stub_fc_implements_trait() {
+    let fc = StubFormattingContext;
+    let style = Arc::new(ComputedStyle::default());
+    let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
 
-        let size = fc
-            .compute_intrinsic_inline_size(&box_node, IntrinsicSizingMode::MinContent)
-            .unwrap();
+    let constraints = LayoutConstraints::definite(800.0, 600.0);
+    let fragment = fc.layout(&box_node, &constraints).unwrap();
 
-        assert_eq!(size, 100.0);
-    }
+    assert_eq!(fragment.bounds.width(), 100.0);
+    assert_eq!(fragment.bounds.height(), 50.0);
+  }
 
-    #[test]
-    fn test_intrinsic_sizing_max_content() {
-        let fc = StubFormattingContext;
-        let style = Arc::new(ComputedStyle::default());
-        let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+  #[test]
+  fn test_intrinsic_sizing_min_content() {
+    let fc = StubFormattingContext;
+    let style = Arc::new(ComputedStyle::default());
+    let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
 
-        let size = fc
-            .compute_intrinsic_inline_size(&box_node, IntrinsicSizingMode::MaxContent)
-            .unwrap();
+    let size = fc
+      .compute_intrinsic_inline_size(&box_node, IntrinsicSizingMode::MinContent)
+      .unwrap();
 
-        assert_eq!(size, 100.0);
-    }
+    assert_eq!(size, 100.0);
+  }
 
-    #[test]
-    fn test_layout_with_definite_constraints() {
-        let fc = StubFormattingContext;
-        let style = Arc::new(ComputedStyle::default());
-        let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+  #[test]
+  fn test_intrinsic_sizing_max_content() {
+    let fc = StubFormattingContext;
+    let style = Arc::new(ComputedStyle::default());
+    let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
 
-        let constraints = LayoutConstraints::definite(1024.0, 768.0);
-        let fragment = fc.layout(&box_node, &constraints).unwrap();
+    let size = fc
+      .compute_intrinsic_inline_size(&box_node, IntrinsicSizingMode::MaxContent)
+      .unwrap();
 
-        // Fragment should be positioned at origin
-        assert_eq!(fragment.bounds.x(), 0.0);
-        assert_eq!(fragment.bounds.y(), 0.0);
-    }
+    assert_eq!(size, 100.0);
+  }
 
-    #[test]
-    fn test_layout_with_indefinite_constraints() {
-        let fc = StubFormattingContext;
-        let style = Arc::new(ComputedStyle::default());
-        let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+  #[test]
+  fn test_layout_with_definite_constraints() {
+    let fc = StubFormattingContext;
+    let style = Arc::new(ComputedStyle::default());
+    let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
 
-        let constraints = LayoutConstraints::indefinite();
-        let fragment = fc.layout(&box_node, &constraints).unwrap();
+    let constraints = LayoutConstraints::definite(1024.0, 768.0);
+    let fragment = fc.layout(&box_node, &constraints).unwrap();
 
-        // Should still produce valid fragment
-        assert!(fragment.bounds.width() > 0.0);
-    }
+    // Fragment should be positioned at origin
+    assert_eq!(fragment.bounds.x(), 0.0);
+    assert_eq!(fragment.bounds.y(), 0.0);
+  }
 
-    #[test]
-    fn test_layout_error_display() {
-        let err = LayoutError::UnsupportedBoxType("test".to_string());
-        assert_eq!(err.to_string(), "Unsupported box type: test");
+  #[test]
+  fn test_layout_with_indefinite_constraints() {
+    let fc = StubFormattingContext;
+    let style = Arc::new(ComputedStyle::default());
+    let box_node = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
 
-        let err = LayoutError::CircularDependency;
-        assert_eq!(err.to_string(), "Circular dependency in layout");
+    let constraints = LayoutConstraints::indefinite();
+    let fragment = fc.layout(&box_node, &constraints).unwrap();
 
-        let err = LayoutError::MissingContext("fonts".to_string());
-        assert_eq!(err.to_string(), "Missing context: fonts");
-    }
+    // Should still produce valid fragment
+    assert!(fragment.bounds.width() > 0.0);
+  }
 
-    #[test]
-    fn test_intrinsic_sizing_mode_equality() {
-        assert_eq!(IntrinsicSizingMode::MinContent, IntrinsicSizingMode::MinContent);
-        assert_eq!(IntrinsicSizingMode::MaxContent, IntrinsicSizingMode::MaxContent);
-        assert_ne!(IntrinsicSizingMode::MinContent, IntrinsicSizingMode::MaxContent);
-    }
+  #[test]
+  fn test_layout_error_display() {
+    let err = LayoutError::UnsupportedBoxType("test".to_string());
+    assert_eq!(err.to_string(), "Unsupported box type: test");
 
-    #[test]
-    fn test_formatting_context_is_send_sync() {
-        // Verify that our trait requires Send + Sync
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<StubFormattingContext>();
-    }
+    let err = LayoutError::CircularDependency;
+    assert_eq!(err.to_string(), "Circular dependency in layout");
+
+    let err = LayoutError::MissingContext("fonts".to_string());
+    assert_eq!(err.to_string(), "Missing context: fonts");
+  }
+
+  #[test]
+  fn test_intrinsic_sizing_mode_equality() {
+    assert_eq!(
+      IntrinsicSizingMode::MinContent,
+      IntrinsicSizingMode::MinContent
+    );
+    assert_eq!(
+      IntrinsicSizingMode::MaxContent,
+      IntrinsicSizingMode::MaxContent
+    );
+    assert_ne!(
+      IntrinsicSizingMode::MinContent,
+      IntrinsicSizingMode::MaxContent
+    );
+  }
+
+  #[test]
+  fn test_formatting_context_is_send_sync() {
+    // Verify that our trait requires Send + Sync
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<StubFormattingContext>();
+  }
 }

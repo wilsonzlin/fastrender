@@ -195,81 +195,129 @@ pub mod resource;
 // ============================================================================
 
 // Main entry point
-pub use api::{FastRender, FastRenderBuilder, FastRenderConfig, Pixmap};
-
+pub use api::FastRender;
+pub use api::FastRenderBuilder;
+pub use api::FastRenderConfig;
+pub use api::Pixmap;
+// CSS
+pub use css::parser::parse_stylesheet_with_errors;
+pub use css::types::CssParseError;
+pub use css::types::CssParseResult;
+pub use css::types::PropertyValue;
+pub use css::types::Transform;
+// Debug tools
+pub use debug::tree_printer::{
+  ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff
+};
 // Error handling
 pub use error::{Error, Result};
-
 // Geometry primitives
 pub use geometry::{EdgeOffsets, Point, Rect, Size};
-
-// Tree structures
-pub use style::display::FormattingContextType;
-pub use tree::box_generation::BoxGenerator;
-pub use tree::box_tree::{BoxNode, BoxTree, BoxType};
-pub use tree::debug::DebugInfo;
-pub use tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
-pub use tree::pseudo_elements::{
-    count_pseudo_boxes, find_pseudo_boxes, get_pseudo_type, is_pseudo_box, PseudoContent, PseudoContentItem,
-    PseudoElementConfig, PseudoElementGenerator, PseudoElementStyle, PseudoElementType,
+// Image output
+pub use image_output::OutputFormat;
+// Layout
+pub use layout::absolute_positioning::{
+  AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins
 };
-
+pub use layout::constraints::AvailableSpace;
+pub use layout::constraints::LayoutConstraints;
+pub use layout::contexts::factory::FormattingContextFactory;
+pub use layout::contexts::positioned::ContainingBlock;
+pub use layout::contexts::positioned::PositionedLayout;
+pub use layout::contexts::positioned::StickyConstraints;
+pub use layout::engine::LayoutConfig;
+pub use layout::engine::LayoutEngine;
+pub use layout::float_context::FloatContext;
+pub use layout::float_context::FloatSide;
+pub use layout::formatting_context::FormattingContext;
+pub use layout::formatting_context::IntrinsicSizingMode;
+// Paint
+pub use paint::canvas::Canvas;
+pub use paint::display_list::BlendMode;
+pub use paint::display_list::BlendModeItem;
+pub use paint::display_list::BorderRadii;
+pub use paint::display_list::BoxShadowItem;
+pub use paint::display_list::ClipItem;
+pub use paint::display_list::ConicGradientItem;
+pub use paint::display_list::DisplayItem;
+pub use paint::display_list::DisplayList;
+pub use paint::display_list::FillRectItem;
+pub use paint::display_list::FillRoundedRectItem;
+pub use paint::display_list::GlyphInstance;
+pub use paint::display_list::GradientSpread;
+pub use paint::display_list::GradientStop;
+pub use paint::display_list::ImageData;
+pub use paint::display_list::ImageFilterQuality;
+pub use paint::display_list::ImageItem;
+pub use paint::display_list::LinearGradientItem;
+pub use paint::display_list::OpacityItem;
+pub use paint::display_list::RadialGradientItem;
+pub use paint::display_list::StackingContextItem;
+pub use paint::display_list::StrokeRectItem;
+pub use paint::display_list::StrokeRoundedRectItem;
+pub use paint::display_list::TextItem as PaintTextItem;
+pub use paint::display_list::Transform2D;
+pub use paint::display_list::TransformItem;
+pub use paint::optimize::DisplayListOptimizer;
+pub use paint::optimize::OptimizationConfig;
+pub use paint::stacking::build_stacking_tree;
+pub use paint::stacking::build_stacking_tree_with_styles;
+pub use paint::stacking::creates_stacking_context;
+pub use paint::stacking::get_stacking_context_reason;
+pub use paint::stacking::StackingContext;
+pub use paint::stacking::StackingContextReason;
+pub use paint::text_rasterize::GlyphCache;
+pub use paint::text_rasterize::TextRasterizer;
+// Resource fetching
+pub use resource::{FetchedResource, HttpFetcher, ResourceFetcher};
 // Style types
 pub use style::color::{Color, ColorParseError, Hsla, Rgba};
 pub use style::computed::PositionedStyle;
-pub use style::display::{Display, DisplayParseError};
-pub use style::position::{Position, PositionParseError};
-pub use style::types::Overflow;
-pub use style::values::{Length, LengthOrAuto, LengthUnit};
-pub use style::ComputedStyle;
-
-// Layout
-pub use layout::absolute_positioning::{AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins};
-pub use layout::constraints::{AvailableSpace, LayoutConstraints};
-pub use layout::contexts::factory::FormattingContextFactory;
-pub use layout::contexts::positioned::{ContainingBlock, PositionedLayout, StickyConstraints};
-pub use layout::engine::{LayoutConfig, LayoutEngine};
-pub use layout::float_context::{FloatContext, FloatSide};
-pub use layout::formatting_context::{FormattingContext, IntrinsicSizingMode};
-
+pub use style::display::Display;
+pub use style::display::DisplayParseError;
+// Tree structures
+pub use style::display::FormattingContextType;
 // Additional style types
 pub use style::float::{Clear, Float};
-
-// Paint
-pub use paint::canvas::Canvas;
-pub use paint::display_list::{
-    BlendMode, BlendModeItem, BorderRadii, BoxShadowItem, ClipItem, ConicGradientItem, DisplayItem, DisplayList,
-    FillRectItem, FillRoundedRectItem, GlyphInstance, GradientSpread, GradientStop, ImageData, ImageFilterQuality,
-    ImageItem, LinearGradientItem, OpacityItem, RadialGradientItem, StackingContextItem, StrokeRectItem,
-    StrokeRoundedRectItem, TextItem as PaintTextItem, Transform2D, TransformItem,
-};
-pub use paint::optimize::{DisplayListOptimizer, OptimizationConfig};
-pub use paint::stacking::{
-    build_stacking_tree, build_stacking_tree_with_styles, creates_stacking_context, get_stacking_context_reason,
-    StackingContext, StackingContextReason,
-};
-pub use paint::text_rasterize::{GlyphCache, TextRasterizer};
-
+pub use style::position::Position;
+pub use style::position::PositionParseError;
+pub use style::types::Overflow;
+pub use style::values::Length;
+pub use style::values::LengthOrAuto;
+pub use style::values::LengthUnit;
+pub use style::ComputedStyle;
 // Text
 pub use text::font_db::{
-    FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb, GenericFamily, LoadedFont,
+  FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb, GenericFamily, LoadedFont
 };
-pub use text::font_fallback::{FallbackChain, FallbackChainBuilder, FamilyEntry};
+pub use text::font_fallback::FallbackChain;
+pub use text::font_fallback::FallbackChainBuilder;
+pub use text::font_fallback::FamilyEntry;
 pub use text::font_loader::FontContext;
-pub use text::hyphenation::{
-    find_soft_hyphens, is_soft_hyphen, remove_soft_hyphens, Hyphenator, HyphensMode, SupportedLanguage,
-};
-pub use text::shaper::{Script, TextDirection, TextShaper};
-
-// CSS
-pub use css::parser::parse_stylesheet_with_errors;
-pub use css::types::{CssParseError, CssParseResult, PropertyValue, Transform};
-
-// Image output
-pub use image_output::OutputFormat;
-
-// Resource fetching
-pub use resource::{FetchedResource, HttpFetcher, ResourceFetcher};
-
-// Debug tools
-pub use debug::tree_printer::{ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff};
+pub use text::hyphenation::find_soft_hyphens;
+pub use text::hyphenation::is_soft_hyphen;
+pub use text::hyphenation::remove_soft_hyphens;
+pub use text::hyphenation::Hyphenator;
+pub use text::hyphenation::HyphensMode;
+pub use text::hyphenation::SupportedLanguage;
+pub use text::shaper::Script;
+pub use text::shaper::TextDirection;
+pub use text::shaper::TextShaper;
+pub use tree::box_generation::BoxGenerator;
+pub use tree::box_tree::BoxNode;
+pub use tree::box_tree::BoxTree;
+pub use tree::box_tree::BoxType;
+pub use tree::debug::DebugInfo;
+pub use tree::fragment_tree::FragmentContent;
+pub use tree::fragment_tree::FragmentNode;
+pub use tree::fragment_tree::FragmentTree;
+pub use tree::pseudo_elements::count_pseudo_boxes;
+pub use tree::pseudo_elements::find_pseudo_boxes;
+pub use tree::pseudo_elements::get_pseudo_type;
+pub use tree::pseudo_elements::is_pseudo_box;
+pub use tree::pseudo_elements::PseudoContent;
+pub use tree::pseudo_elements::PseudoContentItem;
+pub use tree::pseudo_elements::PseudoElementConfig;
+pub use tree::pseudo_elements::PseudoElementGenerator;
+pub use tree::pseudo_elements::PseudoElementStyle;
+pub use tree::pseudo_elements::PseudoElementType;

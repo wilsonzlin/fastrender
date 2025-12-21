@@ -1,106 +1,19 @@
-# FastRender rustfmt configuration
-#
-# This file defines the code style for the FastRender project.
-# All code should be formatted with `cargo fmt` before committing.
-#
-# NOTE: Many rustfmt features require nightly Rust. This config uses only
-# stable features. To use advanced features, switch to nightly and uncomment
-# the unstable features section at the bottom.
-
-# Use Rust 2021 edition features
-edition = "2021"
-
-# Maximum line width
-# Default is 100, we use 120 for better use of modern wide screens
-max_width = 120
-
-# Hard tabs or spaces
-# Spaces are standard in Rust ecosystem
+fn_single_line = false
+force_explicit_abi = true
+format_macro_bodies = true
+format_macro_matchers = true
+group_imports = "One"
 hard_tabs = false
-
-# Number of spaces per tab
-tab_spaces = 4
-
-# Use field init shorthand when possible
-# foo: foo -> foo
-use_field_init_shorthand = true
-
-# Use try! macro or ? operator
-# Always prefer ? over try!
-use_try_shorthand = true
-
-# Newline style
-# Unix line endings
-newline_style = "Unix"
-
-# Reorder imports
-# Alphabetically sort use statements
+hex_literal_case = "Lower"
+imports_granularity = "Item"
+imports_layout = "Horizontal"
+merge_derives = true
+overflow_delimited_expr = true
+remove_nested_parens = true
+reorder_impl_items = true
 reorder_imports = true
-
-# Reorder modules
-# Alphabetically sort mod declarations
 reorder_modules = true
-
-# ============================================================================
-# Unstable Features (require nightly rustfmt)
-# ============================================================================
-#
-# To use these features:
-# 1. Switch to nightly: rustup default nightly
-# 2. Uncomment the lines below
-# 3. Update CI to use nightly
-#
-# unstable_features = true
-#
-# # Maximum width for comments
-# comment_width = 100
-#
-# # Wrap comments at comment_width
-# wrap_comments = true
-#
-# # Format code in doc comments
-# format_code_in_doc_comments = true
-#
-# # Normalize comments
-# normalize_comments = true
-#
-# # Normalize doc attributes (use /// instead of /** */)
-# normalize_doc_attributes = true
-#
-# # Format strings automatically
-# format_strings = true
-#
-# # Format macro bodies
-# format_macro_bodies = true
-#
-# # Group imports
-# imports_granularity = "Crate"
-# group_imports = "StdExternalCrate"
-#
-# # Use trailing commas for multiline constructs
-# trailing_comma = "Vertical"
-#
-# # Where to put the opening brace
-# brace_style = "SameLineWhere"
-#
-# # Remove extra blank lines
-# blank_lines_upper_bound = 1
-#
-# # Chain formatting
-# chain_width = 60
-#
-# # Array formatting
-# array_width = 80
-#
-# # Struct formatting
-# struct_variant_width = 50
-#
-# # Match block formatting
-# match_arm_blocks = true
-# match_arm_leading_pipes = "Never"
-#
-# # Overflow behavior
-# overflow_delimited_expr = true
-#
-# # Allow single line if statements
-# single_line_if_else_max_width = 50
+tab_spaces = 2
+trailing_semicolon = true
+use_field_init_shorthand = true
+wrap_comments = false

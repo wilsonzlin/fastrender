@@ -31,26 +31,41 @@
 //!   4. After all items, finalize last line
 //! ```
 
-use super::baseline::{BaselineMetrics, LineBaselineAccumulator, VerticalAlign};
+use super::baseline::BaselineMetrics;
+use super::baseline::LineBaselineAccumulator;
+use super::baseline::VerticalAlign;
 use crate::geometry::Size;
-use crate::layout::inline::float_integration::{InlineFloatIntegration, LineSpaceOptions};
+use crate::layout::inline::float_integration::InlineFloatIntegration;
+use crate::layout::inline::float_integration::LineSpaceOptions;
 use crate::style::display::Display;
-use crate::style::types::{Direction, ListStylePosition, OverflowWrap, TextWrap, UnicodeBidi, WhiteSpace, WordBreak};
+use crate::style::types::Direction;
+use crate::style::types::ListStylePosition;
+use crate::style::types::OverflowWrap;
+use crate::style::types::TextWrap;
+use crate::style::types::UnicodeBidi;
+use crate::style::types::WhiteSpace;
+use crate::style::types::WordBreak;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
-use crate::text::line_break::{BreakOpportunity, BreakType};
-use crate::text::pipeline::{ShapedRun, ShapingPipeline};
+use crate::text::line_break::BreakOpportunity;
+use crate::text::line_break::BreakType;
+use crate::text::pipeline::ShapedRun;
+use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::ReplacedType;
-use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, OnceLock};
-use unicode_bidi::{BidiInfo, Level};
+use crate::tree::fragment_tree::FragmentContent;
+use crate::tree::fragment_tree::FragmentNode;
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use unicode_bidi::BidiInfo;
+use unicode_bidi::Level;
 
 fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
-    match dir {
-        Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
-        Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
-    }
+  match dir {
+    Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
+    Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
+  }
 }
 
 /// An item in the inline formatting context
@@ -58,3994 +73,4245 @@ fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
 /// Represents different types of content that can appear inline.
 #[derive(Debug, Clone)]
 pub enum InlineItem {
-    /// Shaped text ready for layout
-    Text(TextItem),
+  /// Shaped text ready for layout
+  Text(TextItem),
 
-    /// A tab character that expands to the next tab stop
-    Tab(TabItem),
+  /// A tab character that expands to the next tab stop
+  Tab(TabItem),
 
-    /// An inline box (span, a, em, etc.) with children
-    InlineBox(InlineBoxItem),
+  /// An inline box (span, a, em, etc.) with children
+  InlineBox(InlineBoxItem),
 
-    /// An inline-block box (atomic inline)
-    InlineBlock(InlineBlockItem),
+  /// An inline-block box (atomic inline)
+  InlineBlock(InlineBlockItem),
 
-    /// A replaced element (img, canvas, etc.)
-    Replaced(ReplacedItem),
+  /// A replaced element (img, canvas, etc.)
+  Replaced(ReplacedItem),
 
-    /// A floating box encountered in the inline stream
-    Floating(FloatingItem),
+  /// A floating box encountered in the inline stream
+  Floating(FloatingItem),
 }
 
 impl InlineItem {
-    /// Returns the width of this item
-    pub fn width(&self) -> f32 {
-        match self {
-            InlineItem::Text(t) => t.advance_for_layout,
-            InlineItem::Tab(t) => t.width(),
-            InlineItem::InlineBox(b) => b.width(),
-            InlineItem::InlineBlock(b) => b.total_width(),
-            InlineItem::Replaced(r) => r.total_width(),
-            InlineItem::Floating(_) => 0.0,
-        }
+  /// Returns the width of this item
+  pub fn width(&self) -> f32 {
+    match self {
+      InlineItem::Text(t) => t.advance_for_layout,
+      InlineItem::Tab(t) => t.width(),
+      InlineItem::InlineBox(b) => b.width(),
+      InlineItem::InlineBlock(b) => b.total_width(),
+      InlineItem::Replaced(r) => r.total_width(),
+      InlineItem::Floating(_) => 0.0,
     }
+  }
 
-    /// Returns the intrinsic width excluding margins (border/padding included)
-    pub fn intrinsic_width(&self) -> f32 {
-        match self {
-            InlineItem::Text(t) => t.advance_for_layout,
-            InlineItem::Tab(t) => t.width(),
-            InlineItem::InlineBox(b) => b.width(),
-            InlineItem::InlineBlock(b) => b.width,
-            InlineItem::Replaced(r) => r.intrinsic_width(),
-            InlineItem::Floating(_) => 0.0,
-        }
+  /// Returns the intrinsic width excluding margins (border/padding included)
+  pub fn intrinsic_width(&self) -> f32 {
+    match self {
+      InlineItem::Text(t) => t.advance_for_layout,
+      InlineItem::Tab(t) => t.width(),
+      InlineItem::InlineBox(b) => b.width(),
+      InlineItem::InlineBlock(b) => b.width,
+      InlineItem::Replaced(r) => r.intrinsic_width(),
+      InlineItem::Floating(_) => 0.0,
     }
+  }
 
-    /// Returns baseline metrics for this item
-    pub fn baseline_metrics(&self) -> BaselineMetrics {
-        match self {
-            InlineItem::Text(t) => t.metrics,
-            InlineItem::Tab(t) => t.metrics,
-            InlineItem::InlineBox(b) => b.metrics,
-            InlineItem::InlineBlock(b) => b.metrics,
-            InlineItem::Replaced(r) => r.metrics,
-            InlineItem::Floating(f) => f.metrics,
-        }
+  /// Returns baseline metrics for this item
+  pub fn baseline_metrics(&self) -> BaselineMetrics {
+    match self {
+      InlineItem::Text(t) => t.metrics,
+      InlineItem::Tab(t) => t.metrics,
+      InlineItem::InlineBox(b) => b.metrics,
+      InlineItem::InlineBlock(b) => b.metrics,
+      InlineItem::Replaced(r) => r.metrics,
+      InlineItem::Floating(f) => f.metrics,
     }
+  }
 
-    /// Returns the vertical alignment for this item
-    pub fn vertical_align(&self) -> VerticalAlign {
-        match self {
-            InlineItem::Text(t) => t.vertical_align,
-            InlineItem::Tab(t) => t.vertical_align,
-            InlineItem::InlineBox(b) => b.vertical_align,
-            InlineItem::InlineBlock(b) => b.vertical_align,
-            InlineItem::Replaced(r) => r.vertical_align,
-            InlineItem::Floating(f) => f.vertical_align,
-        }
+  /// Returns the vertical alignment for this item
+  pub fn vertical_align(&self) -> VerticalAlign {
+    match self {
+      InlineItem::Text(t) => t.vertical_align,
+      InlineItem::Tab(t) => t.vertical_align,
+      InlineItem::InlineBox(b) => b.vertical_align,
+      InlineItem::InlineBlock(b) => b.vertical_align,
+      InlineItem::Replaced(r) => r.vertical_align,
+      InlineItem::Floating(f) => f.vertical_align,
     }
+  }
 
-    /// Returns true if this item can be broken (for text)
-    pub fn is_breakable(&self) -> bool {
-        matches!(self, InlineItem::Text(_) | InlineItem::InlineBox(_))
-    }
+  /// Returns true if this item can be broken (for text)
+  pub fn is_breakable(&self) -> bool {
+    matches!(self, InlineItem::Text(_) | InlineItem::InlineBox(_))
+  }
 
-    pub fn direction(&self) -> Direction {
-        match self {
-            InlineItem::Text(t) => t.style.direction,
-            InlineItem::Tab(t) => t.direction,
-            InlineItem::InlineBox(b) => b.direction,
-            InlineItem::InlineBlock(b) => b.direction,
-            InlineItem::Replaced(r) => r.direction,
-            InlineItem::Floating(f) => f.direction,
-        }
+  pub fn direction(&self) -> Direction {
+    match self {
+      InlineItem::Text(t) => t.style.direction,
+      InlineItem::Tab(t) => t.direction,
+      InlineItem::InlineBox(b) => b.direction,
+      InlineItem::InlineBlock(b) => b.direction,
+      InlineItem::Replaced(r) => r.direction,
+      InlineItem::Floating(f) => f.direction,
     }
+  }
 
-    pub fn unicode_bidi(&self) -> UnicodeBidi {
-        match self {
-            InlineItem::Text(t) => t.style.unicode_bidi,
-            InlineItem::Tab(t) => t.unicode_bidi,
-            InlineItem::InlineBox(b) => b.unicode_bidi,
-            InlineItem::InlineBlock(b) => b.unicode_bidi,
-            InlineItem::Replaced(r) => r.unicode_bidi,
-            InlineItem::Floating(f) => f.unicode_bidi,
-        }
+  pub fn unicode_bidi(&self) -> UnicodeBidi {
+    match self {
+      InlineItem::Text(t) => t.style.unicode_bidi,
+      InlineItem::Tab(t) => t.unicode_bidi,
+      InlineItem::InlineBox(b) => b.unicode_bidi,
+      InlineItem::InlineBlock(b) => b.unicode_bidi,
+      InlineItem::Replaced(r) => r.unicode_bidi,
+      InlineItem::Floating(f) => f.unicode_bidi,
     }
+  }
 
-    /// Resolves the width of this item when placed at `start_x`.
-    ///
-    /// Tabs depend on their starting position to find the next tab stop; other items are fixed width.
-    pub fn resolve_width_at(mut self, start_x: f32) -> (Self, f32) {
-        match &mut self {
-            InlineItem::Tab(tab) => {
-                let width = tab.resolve_width(start_x);
-                (self, width)
-            }
-            _ => {
-                let width = self.width();
-                (self, width)
-            }
-        }
+  /// Resolves the width of this item when placed at `start_x`.
+  ///
+  /// Tabs depend on their starting position to find the next tab stop; other items are fixed width.
+  pub fn resolve_width_at(mut self, start_x: f32) -> (Self, f32) {
+    match &mut self {
+      InlineItem::Tab(tab) => {
+        let width = tab.resolve_width(start_x);
+        (self, width)
+      }
+      _ => {
+        let width = self.width();
+        (self, width)
+      }
     }
+  }
 }
 
 fn allows_soft_wrap(style: &ComputedStyle) -> bool {
-    !matches!(style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre) && !matches!(style.text_wrap, TextWrap::NoWrap)
+  !matches!(style.white_space, WhiteSpace::Nowrap | WhiteSpace::Pre)
+    && !matches!(style.text_wrap, TextWrap::NoWrap)
 }
 
 pub(crate) fn log_line_width_enabled() -> bool {
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| {
-        std::env::var("FASTR_LOG_LINE_WIDTH")
-            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-            .unwrap_or(false)
-    })
+  static FLAG: OnceLock<bool> = OnceLock::new();
+  *FLAG.get_or_init(|| {
+    std::env::var("FASTR_LOG_LINE_WIDTH")
+      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+      .unwrap_or(false)
+  })
 }
 
 /// A shaped text item
 #[derive(Debug, Clone)]
 pub struct TextItem {
-    /// The shaped runs (bidi/script/font-aware)
-    pub runs: Vec<ShapedRun>,
+  /// The shaped runs (bidi/script/font-aware)
+  pub runs: Vec<ShapedRun>,
 
-    /// Total horizontal advance
-    pub advance: f32,
-    /// Horizontal advance used for layout (may differ for markers)
-    pub advance_for_layout: f32,
+  /// Total horizontal advance
+  pub advance: f32,
+  /// Horizontal advance used for layout (may differ for markers)
+  pub advance_for_layout: f32,
 
-    /// Baseline metrics
-    pub metrics: BaselineMetrics,
+  /// Baseline metrics
+  pub metrics: BaselineMetrics,
 
-    /// Vertical alignment
-    pub vertical_align: VerticalAlign,
+  /// Vertical alignment
+  pub vertical_align: VerticalAlign,
 
-    /// Break opportunities within this text
-    pub break_opportunities: Vec<BreakOpportunity>,
-    /// Offsets of forced breaks inserted during normalization (e.g., newlines)
-    pub forced_break_offsets: Vec<usize>,
+  /// Break opportunities within this text
+  pub break_opportunities: Vec<BreakOpportunity>,
+  /// Offsets of forced breaks inserted during normalization (e.g., newlines)
+  pub forced_break_offsets: Vec<usize>,
 
-    /// Original text for fragment creation
-    pub text: String,
+  /// Original text for fragment creation
+  pub text: String,
 
-    /// Font size used
-    pub font_size: f32,
+  /// Font size used
+  pub font_size: f32,
 
-    /// Computed style for this text run
-    pub style: Arc<ComputedStyle>,
-    /// Base paragraph direction used for shaping
-    pub base_direction: Direction,
-    /// Whether this text item is a list marker
-    pub is_marker: bool,
-    /// Additional paint offset applied at fragment creation (used for outside markers)
-    pub paint_offset: f32,
-    /// Cumulative advances at cluster boundaries (text order)
-    cluster_advances: Vec<ClusterBoundary>,
+  /// Computed style for this text run
+  pub style: Arc<ComputedStyle>,
+  /// Base paragraph direction used for shaping
+  pub base_direction: Direction,
+  /// Whether this text item is a list marker
+  pub is_marker: bool,
+  /// Additional paint offset applied at fragment creation (used for outside markers)
+  pub paint_offset: f32,
+  /// Cumulative advances at cluster boundaries (text order)
+  cluster_advances: Vec<ClusterBoundary>,
 }
 
 /// A floating box placeholder encountered in the inline stream
 #[derive(Debug, Clone)]
 pub struct FloatingItem {
-    pub box_node: crate::tree::box_tree::BoxNode,
-    pub metrics: BaselineMetrics,
-    pub vertical_align: VerticalAlign,
-    pub direction: Direction,
-    pub unicode_bidi: UnicodeBidi,
+  pub box_node: crate::tree::box_tree::BoxNode,
+  pub metrics: BaselineMetrics,
+  pub vertical_align: VerticalAlign,
+  pub direction: Direction,
+  pub unicode_bidi: UnicodeBidi,
 }
 
 #[derive(Debug, Clone)]
 struct ClusterBoundary {
-    /// Byte offset in the source text where this cluster starts
-    byte_offset: usize,
-    /// Advance width from the start of the item up to and including this cluster
-    advance: f32,
+  /// Byte offset in the source text where this cluster starts
+  byte_offset: usize,
+  /// Advance width from the start of the item up to and including this cluster
+  advance: f32,
 }
 
 impl TextItem {
-    /// Creates a new text item
-    pub fn new(
-        runs: Vec<ShapedRun>,
-        text: String,
-        metrics: BaselineMetrics,
-        break_opportunities: Vec<BreakOpportunity>,
-        forced_break_offsets: Vec<usize>,
-        style: Arc<ComputedStyle>,
-        base_direction: Direction,
-    ) -> Self {
-        let cluster_advances = Self::compute_cluster_advances(&runs, text.as_str(), style.font_size);
-        let aligned_breaks = Self::align_breaks_to_clusters(break_opportunities, &cluster_advances, text.len());
-        let advance: f32 = cluster_advances
-            .last()
-            .map(|c| c.advance)
-            .unwrap_or_else(|| runs.iter().map(|r| r.advance).sum());
-        let font_size = style.font_size;
-        Self {
-            runs,
-            advance,
-            advance_for_layout: advance,
-            metrics,
-            vertical_align: VerticalAlign::Baseline,
-            break_opportunities: aligned_breaks,
-            forced_break_offsets,
-            text,
-            font_size,
-            style,
-            base_direction,
-            is_marker: false,
-            paint_offset: 0.0,
-            cluster_advances,
+  /// Creates a new text item
+  pub fn new(
+    runs: Vec<ShapedRun>,
+    text: String,
+    metrics: BaselineMetrics,
+    break_opportunities: Vec<BreakOpportunity>,
+    forced_break_offsets: Vec<usize>,
+    style: Arc<ComputedStyle>,
+    base_direction: Direction,
+  ) -> Self {
+    let cluster_advances = Self::compute_cluster_advances(&runs, text.as_str(), style.font_size);
+    let aligned_breaks =
+      Self::align_breaks_to_clusters(break_opportunities, &cluster_advances, text.len());
+    let advance: f32 = cluster_advances
+      .last()
+      .map(|c| c.advance)
+      .unwrap_or_else(|| runs.iter().map(|r| r.advance).sum());
+    let font_size = style.font_size;
+    Self {
+      runs,
+      advance,
+      advance_for_layout: advance,
+      metrics,
+      vertical_align: VerticalAlign::Baseline,
+      break_opportunities: aligned_breaks,
+      forced_break_offsets,
+      text,
+      font_size,
+      style,
+      base_direction,
+      is_marker: false,
+      paint_offset: 0.0,
+      cluster_advances,
+    }
+  }
+
+  /// Byte offsets for each grapheme cluster boundary within the item.
+  pub fn cluster_byte_offsets(&self) -> impl Iterator<Item = usize> + '_ {
+    self.cluster_advances.iter().map(|c| c.byte_offset)
+  }
+
+  /// Add allowed break opportunities at every cluster boundary.
+  pub fn add_breaks_at_clusters(&mut self) {
+    if self.text.is_empty() {
+      return;
+    }
+    let additional: Vec<BreakOpportunity> = self
+      .cluster_byte_offsets()
+      .filter(|offset| *offset > 0 && *offset < self.text.len())
+      .map(|offset| BreakOpportunity::new(offset, BreakType::Allowed))
+      .collect();
+    self.break_opportunities.extend(additional);
+    self.break_opportunities.sort_by_key(|b| b.byte_offset);
+    self.break_opportunities.dedup_by(|a, b| {
+      if a.byte_offset != b.byte_offset {
+        return false;
+      }
+      if let BreakType::Mandatory = a.break_type {
+        *b = *a;
+      }
+      true
+    });
+  }
+
+  pub fn recompute_cluster_advances(&mut self) {
+    self.cluster_advances = Self::compute_cluster_advances(&self.runs, &self.text, self.font_size);
+  }
+
+  /// Derive baseline metrics from shaped runs and CSS line-height
+  pub fn metrics_from_runs(
+    runs: &[ShapedRun],
+    line_height: f32,
+    fallback_font_size: f32,
+  ) -> BaselineMetrics {
+    let mut ascent: f32 = 0.0;
+    let mut descent: f32 = 0.0;
+    let mut line_gap: f32 = 0.0;
+    let mut x_height: Option<f32> = None;
+
+    for run in runs {
+      if let Ok(metrics) = run.font.metrics() {
+        let scaled = metrics.scale(run.font_size);
+        ascent = ascent.max(scaled.ascent);
+        descent = descent.max(scaled.descent);
+        line_gap = line_gap.max(scaled.line_gap);
+        if x_height.is_none() {
+          x_height = scaled.x_height;
         }
+      }
     }
 
-    /// Byte offsets for each grapheme cluster boundary within the item.
-    pub fn cluster_byte_offsets(&self) -> impl Iterator<Item = usize> + '_ {
-        self.cluster_advances.iter().map(|c| c.byte_offset)
+    if ascent == 0.0 && descent == 0.0 {
+      ascent = fallback_font_size * 0.8;
+      descent = fallback_font_size * 0.2;
     }
 
-    /// Add allowed break opportunities at every cluster boundary.
-    pub fn add_breaks_at_clusters(&mut self) {
-        if self.text.is_empty() {
-            return;
-        }
-        let additional: Vec<BreakOpportunity> = self
-            .cluster_byte_offsets()
-            .filter(|offset| *offset > 0 && *offset < self.text.len())
-            .map(|offset| BreakOpportunity::new(offset, BreakType::Allowed))
-            .collect();
-        self.break_opportunities.extend(additional);
-        self.break_opportunities.sort_by_key(|b| b.byte_offset);
-        self.break_opportunities.dedup_by(|a, b| {
-            if a.byte_offset != b.byte_offset {
-                return false;
-            }
-            if let BreakType::Mandatory = a.break_type {
-                *b = *a;
-            }
-            true
-        });
+    BaselineMetrics {
+      baseline_offset: ascent,
+      height: line_height,
+      ascent,
+      descent,
+      line_gap,
+      line_height,
+      x_height,
+    }
+  }
+
+  /// Sets the vertical alignment
+  pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
+    self.vertical_align = align;
+    self
+  }
+
+  /// Splits this text item at a byte offset, returning (before, after)
+  ///
+  /// This is used for line breaking within text.
+  pub fn split_at(
+    &self,
+    byte_offset: usize,
+    insert_hyphen: bool,
+    shaper: &ShapingPipeline,
+    font_context: &FontContext,
+  ) -> Option<(TextItem, TextItem)> {
+    const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
+    let text_len = self.text.len();
+    if byte_offset == 0 || byte_offset >= text_len {
+      return None;
     }
 
-    pub fn recompute_cluster_advances(&mut self) {
-        self.cluster_advances = Self::compute_cluster_advances(&self.runs, &self.text, self.font_size);
+    let target_offset = if self.text.is_char_boundary(byte_offset) {
+      byte_offset
+    } else {
+      Self::previous_char_boundary_in_text(&self.text, byte_offset)
+    };
+
+    if target_offset == 0 || target_offset >= text_len {
+      return None;
     }
 
-    /// Derive baseline metrics from shaped runs and CSS line-height
-    pub fn metrics_from_runs(runs: &[ShapedRun], line_height: f32, fallback_font_size: f32) -> BaselineMetrics {
-        let mut ascent: f32 = 0.0;
-        let mut descent: f32 = 0.0;
-        let mut line_gap: f32 = 0.0;
-        let mut x_height: Option<f32> = None;
-
-        for run in runs {
-            if let Ok(metrics) = run.font.metrics() {
-                let scaled = metrics.scale(run.font_size);
-                ascent = ascent.max(scaled.ascent);
-                descent = descent.max(scaled.descent);
-                line_gap = line_gap.max(scaled.line_gap);
-                if x_height.is_none() {
-                    x_height = scaled.x_height;
-                }
-            }
-        }
-
-        if ascent == 0.0 && descent == 0.0 {
-            ascent = fallback_font_size * 0.8;
-            descent = fallback_font_size * 0.2;
-        }
-
-        BaselineMetrics {
-            baseline_offset: ascent,
-            height: line_height,
-            ascent,
-            descent,
-            line_gap,
-            line_height,
-            x_height,
-        }
+    let mut split_offset = self
+      .cluster_boundary_at_or_before(target_offset)
+      .map(|b| b.byte_offset)
+      .unwrap_or(target_offset);
+    if split_offset < target_offset {
+      split_offset = target_offset;
     }
 
-    /// Sets the vertical alignment
-    pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
-        self.vertical_align = align;
-        self
+    if split_offset == 0 || split_offset >= text_len || !self.text.is_char_boundary(split_offset) {
+      return None;
     }
 
-    /// Splits this text item at a byte offset, returning (before, after)
-    ///
-    /// This is used for line breaking within text.
-    pub fn split_at(
-        &self,
-        byte_offset: usize,
-        insert_hyphen: bool,
-        shaper: &ShapingPipeline,
-        font_context: &FontContext,
-    ) -> Option<(TextItem, TextItem)> {
-        const INSERTED_HYPHEN: char = '\u{2010}'; // CSS hyphenation hyphen
-        let text_len = self.text.len();
-        if byte_offset == 0 || byte_offset >= text_len {
-            return None;
-        }
+    // Split the text
+    let before_text = self.text.get(..split_offset)?;
+    let after_text = self.text.get(split_offset..)?;
 
-        let target_offset = if self.text.is_char_boundary(byte_offset) {
-            byte_offset
-        } else {
-            Self::previous_char_boundary_in_text(&self.text, byte_offset)
-        };
-
-        if target_offset == 0 || target_offset >= text_len {
-            return None;
-        }
-
-        let mut split_offset = self
-            .cluster_boundary_at_or_before(target_offset)
-            .map(|b| b.byte_offset)
-            .unwrap_or(target_offset);
-        if split_offset < target_offset {
-            split_offset = target_offset;
-        }
-
-        if split_offset == 0 || split_offset >= text_len || !self.text.is_char_boundary(split_offset) {
-            return None;
-        }
-
-        // Split the text
-        let before_text = self.text.get(..split_offset)?;
-        let after_text = self.text.get(split_offset..)?;
-
-        let (mut before_runs, after_runs) = self.split_runs_preserving_shaping(split_offset).or_else(|| {
-            let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
-            let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
-            Some((before_runs, after_runs))
+    let (mut before_runs, after_runs) =
+      self
+        .split_runs_preserving_shaping(split_offset)
+        .or_else(|| {
+          let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
+          let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
+          Some((before_runs, after_runs))
         })?;
 
-        let before_text_owned: Option<String> = if insert_hyphen {
-            let mut hyphen_buf = [0u8; 3];
-            let hyphen_text = INSERTED_HYPHEN.encode_utf8(&mut hyphen_buf);
-            let offset = before_text.len();
-            let mut hyphen_runs = shaper.shape(hyphen_text, &self.style, font_context).ok()?;
-            TextItem::apply_spacing_to_runs(
-                &mut hyphen_runs,
-                hyphen_text,
-                self.style.letter_spacing,
-                self.style.word_spacing,
-            );
+    let before_text_owned: Option<String> = if insert_hyphen {
+      let mut hyphen_buf = [0u8; 3];
+      let hyphen_text = INSERTED_HYPHEN.encode_utf8(&mut hyphen_buf);
+      let offset = before_text.len();
+      let mut hyphen_runs = shaper.shape(hyphen_text, &self.style, font_context).ok()?;
+      TextItem::apply_spacing_to_runs(
+        &mut hyphen_runs,
+        hyphen_text,
+        self.style.letter_spacing,
+        self.style.word_spacing,
+      );
 
-            for run in &mut hyphen_runs {
-                run.start += offset;
-                run.end += offset;
-                for glyph in &mut run.glyphs {
-                    glyph.cluster = glyph.cluster.saturating_add(offset as u32);
-                }
+      for run in &mut hyphen_runs {
+        run.start += offset;
+        run.end += offset;
+        for glyph in &mut run.glyphs {
+          glyph.cluster = glyph.cluster.saturating_add(offset as u32);
+        }
+      }
+
+      before_runs.extend(hyphen_runs);
+      let mut owned = before_text.to_string();
+      owned.push_str(hyphen_text);
+      Some(owned)
+    } else {
+      None
+    };
+
+    let line_height = self.metrics.line_height;
+    let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
+    let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
+
+    let mut before_item = TextItem::new(
+      before_runs,
+      before_text_owned
+        .clone()
+        .unwrap_or_else(|| before_text.to_string()),
+      before_metrics,
+      self
+        .break_opportunities
+        .iter()
+        .filter(|b| b.byte_offset <= split_offset)
+        .copied()
+        .collect(),
+      self
+        .forced_break_offsets
+        .iter()
+        .copied()
+        .filter(|o| *o <= split_offset)
+        .collect(),
+      self.style.clone(),
+      self.base_direction,
+    )
+    .with_vertical_align(self.vertical_align);
+
+    let mut after_item = TextItem::new(
+      after_runs,
+      after_text.to_string(),
+      after_metrics,
+      self
+        .break_opportunities
+        .iter()
+        .filter(|b| b.byte_offset > split_offset)
+        .map(|b| {
+          BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen)
+        })
+        .collect(),
+      self
+        .forced_break_offsets
+        .iter()
+        .copied()
+        .filter(|o| *o > split_offset)
+        .map(|o| o - split_offset)
+        .collect(),
+      self.style.clone(),
+      self.base_direction,
+    )
+    .with_vertical_align(self.vertical_align);
+
+    if before_item.advance <= 0.0 || after_item.advance <= 0.0 {
+      let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
+      let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
+      let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
+      let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
+      before_item = TextItem::new(
+        before_runs,
+        before_text_owned.unwrap_or_else(|| before_text.to_string()),
+        before_metrics,
+        self
+          .break_opportunities
+          .iter()
+          .filter(|b| b.byte_offset <= split_offset)
+          .copied()
+          .collect(),
+        self
+          .forced_break_offsets
+          .iter()
+          .copied()
+          .filter(|o| *o <= split_offset)
+          .collect(),
+        self.style.clone(),
+        self.base_direction,
+      )
+      .with_vertical_align(self.vertical_align);
+
+      after_item = TextItem::new(
+        after_runs,
+        after_text.to_string(),
+        after_metrics,
+        self
+          .break_opportunities
+          .iter()
+          .filter(|b| b.byte_offset > split_offset)
+          .map(|b| {
+            BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen)
+          })
+          .collect(),
+        self
+          .forced_break_offsets
+          .iter()
+          .copied()
+          .filter(|o| *o > split_offset)
+          .map(|o| o - split_offset)
+          .collect(),
+        self.style.clone(),
+        self.base_direction,
+      )
+      .with_vertical_align(self.vertical_align);
+    }
+
+    if self.is_marker {
+      before_item.is_marker = true;
+      after_item.is_marker = true;
+      before_item.paint_offset = self.paint_offset;
+      after_item.paint_offset = self.paint_offset;
+      before_item.advance_for_layout = self.advance_for_layout.min(before_item.advance_for_layout);
+      after_item.advance_for_layout =
+        (self.advance_for_layout - before_item.advance_for_layout).max(0.0);
+    }
+
+    Some((before_item, after_item))
+  }
+
+  /// Applies letter- and word-spacing to shaped runs.
+  ///
+  /// Spacing is added after each cluster (except the final cluster).
+  /// Word spacing stacks on top of letter spacing for space-like clusters.
+  pub(crate) fn apply_spacing_to_runs(
+    runs: &mut [ShapedRun],
+    text: &str,
+    letter_spacing: f32,
+    word_spacing: f32,
+  ) {
+    if runs.is_empty() || text.is_empty() {
+      return;
+    }
+    if letter_spacing == 0.0 && word_spacing == 0.0 {
+      return;
+    }
+
+    #[derive(Debug)]
+    struct ClusterRef {
+      run_idx: usize,
+      glyph_end: usize,
+      offset: usize,
+      is_space: bool,
+    }
+
+    let mut clusters: Vec<ClusterRef> = Vec::new();
+
+    for (run_idx, run) in runs.iter().enumerate() {
+      if run.glyphs.is_empty() {
+        continue;
+      }
+
+      let mut idx = 0;
+      while idx < run.glyphs.len() {
+        let cluster_value = run.glyphs[idx].cluster;
+        while idx < run.glyphs.len() && run.glyphs[idx].cluster == cluster_value {
+          idx += 1;
+        }
+        let glyph_end = idx;
+
+        let offset = run.start.saturating_add(cluster_value as usize);
+        let ch = text.get(offset..).and_then(|s| s.chars().next());
+        let is_space = matches!(ch, Some(' ') | Some('\u{00A0}') | Some('\t'));
+
+        clusters.push(ClusterRef {
+          run_idx,
+          glyph_end,
+          offset,
+          is_space,
+        });
+      }
+    }
+
+    clusters.sort_by_key(|c| c.offset);
+
+    if clusters.is_empty() {
+      return;
+    }
+
+    let mut run_cluster_extras: Vec<Vec<(usize, f32)>> = vec![Vec::new(); runs.len()];
+
+    for (i, cluster) in clusters.iter().enumerate() {
+      if i == clusters.len() - 1 {
+        break; // No spacing after the last cluster
+      }
+
+      let mut extra = letter_spacing;
+      if cluster.is_space {
+        extra += word_spacing;
+      }
+
+      if extra == 0.0 {
+        continue;
+      }
+
+      let last_glyph_idx = cluster.glyph_end.saturating_sub(1);
+      run_cluster_extras[cluster.run_idx].push((last_glyph_idx, extra));
+    }
+
+    for (run_idx, run) in runs.iter_mut().enumerate() {
+      if run.glyphs.is_empty() {
+        continue;
+      }
+
+      let mut extra_by_glyph = vec![0.0; run.glyphs.len()];
+      for (glyph_idx, extra) in run_cluster_extras
+        .get(run_idx)
+        .map(|v| v.as_slice())
+        .unwrap_or(&[])
+      {
+        if *glyph_idx < extra_by_glyph.len() {
+          extra_by_glyph[*glyph_idx] += *extra;
+        }
+      }
+
+      let mut cumulative_shift = 0.0;
+      let mut new_advance = 0.0;
+
+      for (idx, glyph) in run.glyphs.iter_mut().enumerate() {
+        glyph.x_offset += cumulative_shift;
+        glyph.x_advance += extra_by_glyph[idx];
+        cumulative_shift += extra_by_glyph[idx];
+        new_advance += glyph.x_advance;
+      }
+
+      run.advance = new_advance;
+    }
+  }
+
+  /// Gets the horizontal advance at a given byte offset
+  pub fn advance_at_offset(&self, byte_offset: usize) -> f32 {
+    if byte_offset == 0 {
+      return 0.0;
+    }
+    if byte_offset >= self.text.len() {
+      return self.advance;
+    }
+
+    if let Some(boundary) = self.cluster_boundary_at_or_before(byte_offset) {
+      return boundary.advance;
+    }
+
+    if self.runs.is_empty() {
+      let char_count = self.text.chars().count().max(1);
+      let offset_chars = self.text[..byte_offset].chars().count();
+      return self.advance * (offset_chars as f32 / char_count as f32);
+    }
+
+    // Fallback: linear approximation if cluster data is missing
+    let char_count = self.text.chars().count().max(1);
+    let offset_chars = self.text[..byte_offset].chars().count();
+    self.advance * (offset_chars as f32 / char_count as f32)
+  }
+
+  /// Finds the best break point that fits within max_width
+  pub fn find_break_point(&self, max_width: f32) -> Option<BreakOpportunity> {
+    // Find the last break opportunity that fits
+    let mut mandatory_break: Option<BreakOpportunity> = None;
+    let mut allowed_break: Option<BreakOpportunity> = None;
+
+    for brk in &self.break_opportunities {
+      let width_at_break = self.advance_at_offset(brk.byte_offset);
+      if width_at_break <= max_width {
+        match brk.break_type {
+          BreakType::Mandatory => {
+            if mandatory_break.is_none() {
+              mandatory_break = Some(*brk);
             }
+          }
+          BreakType::Allowed => allowed_break = Some(*brk),
+        }
+      } else {
+        break;
+      }
+    }
 
-            before_runs.extend(hyphen_runs);
-            let mut owned = before_text.to_string();
-            owned.push_str(hyphen_text);
-            Some(owned)
+    let mut best_break = mandatory_break.or(allowed_break);
+    if best_break.is_some() || !allows_soft_wrap(self.style.as_ref()) {
+      return best_break;
+    }
+
+    let can_overflow_break_word = matches!(
+      self.style.word_break,
+      WordBreak::BreakWord | WordBreak::Anywhere
+    );
+    let can_overflow_break_by_wrap = self.style.overflow_wrap == OverflowWrap::BreakWord;
+
+    if can_overflow_break_word || can_overflow_break_by_wrap {
+      // Allow breaking anywhere within the word if nothing else fits
+      for (idx, _) in self.text.char_indices().skip(1) {
+        let width_at_break = self.advance_at_offset(idx);
+        if width_at_break <= max_width {
+          best_break = Some(BreakOpportunity::allowed(idx));
         } else {
-            None
-        };
-
-        let line_height = self.metrics.line_height;
-        let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
-        let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
-
-        let mut before_item = TextItem::new(
-            before_runs,
-            before_text_owned.clone().unwrap_or_else(|| before_text.to_string()),
-            before_metrics,
-            self.break_opportunities
-                .iter()
-                .filter(|b| b.byte_offset <= split_offset)
-                .copied()
-                .collect(),
-            self.forced_break_offsets
-                .iter()
-                .copied()
-                .filter(|o| *o <= split_offset)
-                .collect(),
-            self.style.clone(),
-            self.base_direction,
-        )
-        .with_vertical_align(self.vertical_align);
-
-        let mut after_item = TextItem::new(
-            after_runs,
-            after_text.to_string(),
-            after_metrics,
-            self.break_opportunities
-                .iter()
-                .filter(|b| b.byte_offset > split_offset)
-                .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen))
-                .collect(),
-            self.forced_break_offsets
-                .iter()
-                .copied()
-                .filter(|o| *o > split_offset)
-                .map(|o| o - split_offset)
-                .collect(),
-            self.style.clone(),
-            self.base_direction,
-        )
-        .with_vertical_align(self.vertical_align);
-
-        if before_item.advance <= 0.0 || after_item.advance <= 0.0 {
-            let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
-            let after_runs = shaper.shape(after_text, &self.style, font_context).ok()?;
-            let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
-            let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
-            before_item = TextItem::new(
-                before_runs,
-                before_text_owned.unwrap_or_else(|| before_text.to_string()),
-                before_metrics,
-                self.break_opportunities
-                    .iter()
-                    .filter(|b| b.byte_offset <= split_offset)
-                    .copied()
-                    .collect(),
-                self.forced_break_offsets
-                    .iter()
-                    .copied()
-                    .filter(|o| *o <= split_offset)
-                    .collect(),
-                self.style.clone(),
-                self.base_direction,
-            )
-            .with_vertical_align(self.vertical_align);
-
-            after_item = TextItem::new(
-                after_runs,
-                after_text.to_string(),
-                after_metrics,
-                self.break_opportunities
-                    .iter()
-                    .filter(|b| b.byte_offset > split_offset)
-                    .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen))
-                    .collect(),
-                self.forced_break_offsets
-                    .iter()
-                    .copied()
-                    .filter(|o| *o > split_offset)
-                    .map(|o| o - split_offset)
-                    .collect(),
-                self.style.clone(),
-                self.base_direction,
-            )
-            .with_vertical_align(self.vertical_align);
+          break;
         }
-
-        if self.is_marker {
-            before_item.is_marker = true;
-            after_item.is_marker = true;
-            before_item.paint_offset = self.paint_offset;
-            after_item.paint_offset = self.paint_offset;
-            before_item.advance_for_layout = self.advance_for_layout.min(before_item.advance_for_layout);
-            after_item.advance_for_layout = (self.advance_for_layout - before_item.advance_for_layout).max(0.0);
-        }
-
-        Some((before_item, after_item))
+      }
     }
 
-    /// Applies letter- and word-spacing to shaped runs.
-    ///
-    /// Spacing is added after each cluster (except the final cluster).
-    /// Word spacing stacks on top of letter spacing for space-like clusters.
-    pub(crate) fn apply_spacing_to_runs(runs: &mut [ShapedRun], text: &str, letter_spacing: f32, word_spacing: f32) {
-        if runs.is_empty() || text.is_empty() {
-            return;
-        }
-        if letter_spacing == 0.0 && word_spacing == 0.0 {
-            return;
-        }
+    best_break
+  }
 
-        #[derive(Debug)]
-        struct ClusterRef {
-            run_idx: usize,
-            glyph_end: usize,
-            offset: usize,
-            is_space: bool,
-        }
-
-        let mut clusters: Vec<ClusterRef> = Vec::new();
-
-        for (run_idx, run) in runs.iter().enumerate() {
-            if run.glyphs.is_empty() {
-                continue;
-            }
-
-            let mut idx = 0;
-            while idx < run.glyphs.len() {
-                let cluster_value = run.glyphs[idx].cluster;
-                while idx < run.glyphs.len() && run.glyphs[idx].cluster == cluster_value {
-                    idx += 1;
-                }
-                let glyph_end = idx;
-
-                let offset = run.start.saturating_add(cluster_value as usize);
-                let ch = text.get(offset..).and_then(|s| s.chars().next());
-                let is_space = matches!(ch, Some(' ') | Some('\u{00A0}') | Some('\t'));
-
-                clusters.push(ClusterRef {
-                    run_idx,
-                    glyph_end,
-                    offset,
-                    is_space,
-                });
-            }
-        }
-
-        clusters.sort_by_key(|c| c.offset);
-
-        if clusters.is_empty() {
-            return;
-        }
-
-        let mut run_cluster_extras: Vec<Vec<(usize, f32)>> = vec![Vec::new(); runs.len()];
-
-        for (i, cluster) in clusters.iter().enumerate() {
-            if i == clusters.len() - 1 {
-                break; // No spacing after the last cluster
-            }
-
-            let mut extra = letter_spacing;
-            if cluster.is_space {
-                extra += word_spacing;
-            }
-
-            if extra == 0.0 {
-                continue;
-            }
-
-            let last_glyph_idx = cluster.glyph_end.saturating_sub(1);
-            run_cluster_extras[cluster.run_idx].push((last_glyph_idx, extra));
-        }
-
-        for (run_idx, run) in runs.iter_mut().enumerate() {
-            if run.glyphs.is_empty() {
-                continue;
-            }
-
-            let mut extra_by_glyph = vec![0.0; run.glyphs.len()];
-            for (glyph_idx, extra) in run_cluster_extras.get(run_idx).map(|v| v.as_slice()).unwrap_or(&[]) {
-                if *glyph_idx < extra_by_glyph.len() {
-                    extra_by_glyph[*glyph_idx] += *extra;
-                }
-            }
-
-            let mut cumulative_shift = 0.0;
-            let mut new_advance = 0.0;
-
-            for (idx, glyph) in run.glyphs.iter_mut().enumerate() {
-                glyph.x_offset += cumulative_shift;
-                glyph.x_advance += extra_by_glyph[idx];
-                cumulative_shift += extra_by_glyph[idx];
-                new_advance += glyph.x_advance;
-            }
-
-            run.advance = new_advance;
-        }
+  fn cluster_boundary_at_or_before(&self, byte_offset: usize) -> Option<ClusterBoundary> {
+    if self.cluster_advances.is_empty() {
+      return None;
     }
 
-    /// Gets the horizontal advance at a given byte offset
-    pub fn advance_at_offset(&self, byte_offset: usize) -> f32 {
-        if byte_offset == 0 {
-            return 0.0;
-        }
-        if byte_offset >= self.text.len() {
-            return self.advance;
-        }
+    let mut idx = match self
+      .cluster_advances
+      .binary_search_by_key(&byte_offset, |c| c.byte_offset)
+    {
+      Ok(i) => i,
+      Err(i) => i.checked_sub(1)?,
+    };
 
-        if let Some(boundary) = self.cluster_boundary_at_or_before(byte_offset) {
-            return boundary.advance;
-        }
-
-        if self.runs.is_empty() {
-            let char_count = self.text.chars().count().max(1);
-            let offset_chars = self.text[..byte_offset].chars().count();
-            return self.advance * (offset_chars as f32 / char_count as f32);
-        }
-
-        // Fallback: linear approximation if cluster data is missing
-        let char_count = self.text.chars().count().max(1);
-        let offset_chars = self.text[..byte_offset].chars().count();
-        self.advance * (offset_chars as f32 / char_count as f32)
+    // If there are multiple entries for the same offset, keep the one with the largest advance
+    while idx + 1 < self.cluster_advances.len()
+      && self.cluster_advances[idx + 1].byte_offset == self.cluster_advances[idx].byte_offset
+    {
+      idx += 1;
     }
 
-    /// Finds the best break point that fits within max_width
-    pub fn find_break_point(&self, max_width: f32) -> Option<BreakOpportunity> {
-        // Find the last break opportunity that fits
-        let mut mandatory_break: Option<BreakOpportunity> = None;
-        let mut allowed_break: Option<BreakOpportunity> = None;
+    self.cluster_advances.get(idx).cloned()
+  }
 
-        for brk in &self.break_opportunities {
-            let width_at_break = self.advance_at_offset(brk.byte_offset);
-            if width_at_break <= max_width {
-                match brk.break_type {
-                    BreakType::Mandatory => {
-                        if mandatory_break.is_none() {
-                            mandatory_break = Some(*brk);
-                        }
-                    }
-                    BreakType::Allowed => allowed_break = Some(*brk),
-                }
-            } else {
-                break;
-            }
-        }
-
-        let mut best_break = mandatory_break.or(allowed_break);
-        if best_break.is_some() || !allows_soft_wrap(self.style.as_ref()) {
-            return best_break;
-        }
-
-        let can_overflow_break_word = matches!(self.style.word_break, WordBreak::BreakWord | WordBreak::Anywhere);
-        let can_overflow_break_by_wrap = self.style.overflow_wrap == OverflowWrap::BreakWord;
-
-        if can_overflow_break_word || can_overflow_break_by_wrap {
-            // Allow breaking anywhere within the word if nothing else fits
-            for (idx, _) in self.text.char_indices().skip(1) {
-                let width_at_break = self.advance_at_offset(idx);
-                if width_at_break <= max_width {
-                    best_break = Some(BreakOpportunity::allowed(idx));
-                } else {
-                    break;
-                }
-            }
-        }
-
-        best_break
+  fn compute_cluster_advances(
+    runs: &[ShapedRun],
+    text: &str,
+    fallback_font_size: f32,
+  ) -> Vec<ClusterBoundary> {
+    let text_len = text.len();
+    if text_len == 0 {
+      return Vec::new();
+    }
+    if runs.is_empty() {
+      let estimated = (text.chars().count() as f32) * fallback_font_size * 0.5;
+      return vec![ClusterBoundary {
+        byte_offset: text_len,
+        advance: estimated,
+      }];
     }
 
-    fn cluster_boundary_at_or_before(&self, byte_offset: usize) -> Option<ClusterBoundary> {
-        if self.cluster_advances.is_empty() {
-            return None;
-        }
+    let mut sorted_runs: Vec<&ShapedRun> = runs.iter().collect();
+    sorted_runs.sort_by_key(|r| r.start);
 
-        let mut idx = match self
-            .cluster_advances
-            .binary_search_by_key(&byte_offset, |c| c.byte_offset)
-        {
-            Ok(i) => i,
-            Err(i) => i.checked_sub(1)?,
-        };
+    let mut advances = Vec::new();
+    let mut cumulative = 0.0;
 
-        // If there are multiple entries for the same offset, keep the one with the largest advance
-        while idx + 1 < self.cluster_advances.len()
-            && self.cluster_advances[idx + 1].byte_offset == self.cluster_advances[idx].byte_offset
-        {
-            idx += 1;
-        }
+    for run in sorted_runs {
+      let mut cluster_widths: BTreeMap<usize, f32> = BTreeMap::new();
+      for glyph in &run.glyphs {
+        let raw_offset = run.start + glyph.cluster as usize;
+        let offset = Self::previous_char_boundary_in_text(text, raw_offset);
+        *cluster_widths.entry(offset).or_default() += glyph.x_advance;
+      }
 
-        self.cluster_advances.get(idx).cloned()
+      if cluster_widths.is_empty() {
+        // If shaping produced no glyphs, fall back to treating the entire run as a single cluster
+        cluster_widths.insert(
+          Self::previous_char_boundary_in_text(text, run.start),
+          run.advance.max(0.0),
+        );
+      }
+
+      let last_offset = *cluster_widths.keys().next_back().unwrap_or(&run.end);
+      let run_end = Self::previous_char_boundary_in_text(text, run.end);
+      if last_offset < run_end {
+        cluster_widths.entry(run_end).or_insert(0.0);
+      }
+
+      for (offset, width) in cluster_widths {
+        cumulative += width;
+        advances.push(ClusterBoundary {
+          byte_offset: offset.min(text_len),
+          advance: cumulative,
+        });
+      }
     }
 
-    fn compute_cluster_advances(runs: &[ShapedRun], text: &str, fallback_font_size: f32) -> Vec<ClusterBoundary> {
-        let text_len = text.len();
-        if text_len == 0 {
-            return Vec::new();
+    // Deduplicate by byte offset, keeping the greatest advance so that cumulative width remains monotonic
+    let mut deduped: Vec<ClusterBoundary> = Vec::new();
+    for boundary in advances {
+      if let Some(last) = deduped.last_mut() {
+        if last.byte_offset == boundary.byte_offset {
+          if boundary.advance > last.advance {
+            last.advance = boundary.advance;
+          }
+          continue;
         }
-        if runs.is_empty() {
-            let estimated = (text.chars().count() as f32) * fallback_font_size * 0.5;
-            return vec![ClusterBoundary {
-                byte_offset: text_len,
-                advance: estimated,
-            }];
-        }
-
-        let mut sorted_runs: Vec<&ShapedRun> = runs.iter().collect();
-        sorted_runs.sort_by_key(|r| r.start);
-
-        let mut advances = Vec::new();
-        let mut cumulative = 0.0;
-
-        for run in sorted_runs {
-            let mut cluster_widths: BTreeMap<usize, f32> = BTreeMap::new();
-            for glyph in &run.glyphs {
-                let raw_offset = run.start + glyph.cluster as usize;
-                let offset = Self::previous_char_boundary_in_text(text, raw_offset);
-                *cluster_widths.entry(offset).or_default() += glyph.x_advance;
-            }
-
-            if cluster_widths.is_empty() {
-                // If shaping produced no glyphs, fall back to treating the entire run as a single cluster
-                cluster_widths.insert(
-                    Self::previous_char_boundary_in_text(text, run.start),
-                    run.advance.max(0.0),
-                );
-            }
-
-            let last_offset = *cluster_widths.keys().next_back().unwrap_or(&run.end);
-            let run_end = Self::previous_char_boundary_in_text(text, run.end);
-            if last_offset < run_end {
-                cluster_widths.entry(run_end).or_insert(0.0);
-            }
-
-            for (offset, width) in cluster_widths {
-                cumulative += width;
-                advances.push(ClusterBoundary {
-                    byte_offset: offset.min(text_len),
-                    advance: cumulative,
-                });
-            }
-        }
-
-        // Deduplicate by byte offset, keeping the greatest advance so that cumulative width remains monotonic
-        let mut deduped: Vec<ClusterBoundary> = Vec::new();
-        for boundary in advances {
-            if let Some(last) = deduped.last_mut() {
-                if last.byte_offset == boundary.byte_offset {
-                    if boundary.advance > last.advance {
-                        last.advance = boundary.advance;
-                    }
-                    continue;
-                }
-            }
-            deduped.push(boundary);
-        }
-
-        if deduped.last().map(|b| b.byte_offset < text_len).unwrap_or(false) {
-            deduped.push(ClusterBoundary {
-                byte_offset: text_len,
-                advance: deduped.last().map(|b| b.advance).unwrap_or(0.0),
-            });
-        }
-
-        if deduped.is_empty() {
-            deduped.push(ClusterBoundary {
-                byte_offset: text_len,
-                advance: fallback_font_size,
-            });
-        }
-
-        deduped
+      }
+      deduped.push(boundary);
     }
 
-    fn previous_char_boundary_in_text(text: &str, offset: usize) -> usize {
-        if offset >= text.len() {
-            return text.len();
-        }
-        if text.is_char_boundary(offset) {
-            return offset;
-        }
-
-        text.char_indices()
-            .take_while(|(idx, _)| *idx < offset)
-            .map(|(idx, _)| idx)
-            .last()
-            .unwrap_or(0)
+    if deduped
+      .last()
+      .map(|b| b.byte_offset < text_len)
+      .unwrap_or(false)
+    {
+      deduped.push(ClusterBoundary {
+        byte_offset: text_len,
+        advance: deduped.last().map(|b| b.advance).unwrap_or(0.0),
+      });
     }
 
-    fn align_breaks_to_clusters(
-        breaks: Vec<BreakOpportunity>,
-        clusters: &[ClusterBoundary],
-        text_len: usize,
-    ) -> Vec<BreakOpportunity> {
-        if clusters.is_empty() || text_len == 0 {
-            return breaks;
-        }
-
-        let mut aligned: Vec<BreakOpportunity> = Vec::new();
-        for brk in breaks {
-            let clamped_offset = brk.byte_offset.min(text_len);
-            let aligned_offset = Self::cluster_offset_at_or_before(clamped_offset, clusters);
-            if let Some(offset) = aligned_offset {
-                if let Some(last) = aligned.last_mut() {
-                    if last.byte_offset == offset {
-                        if brk.break_type == BreakType::Mandatory {
-                            last.break_type = BreakType::Mandatory;
-                        }
-                        last.adds_hyphen |= brk.adds_hyphen;
-                        continue;
-                    }
-                }
-
-                aligned.push(BreakOpportunity::with_hyphen(offset, brk.break_type, brk.adds_hyphen));
-            }
-        }
-
-        aligned
+    if deduped.is_empty() {
+      deduped.push(ClusterBoundary {
+        byte_offset: text_len,
+        advance: fallback_font_size,
+      });
     }
 
-    fn cluster_offset_at_or_before(target: usize, clusters: &[ClusterBoundary]) -> Option<usize> {
-        if clusters.is_empty() {
-            return None;
-        }
+    deduped
+  }
 
-        match clusters.binary_search_by_key(&target, |c| c.byte_offset) {
-            Ok(idx) => clusters.get(idx).map(|c| c.byte_offset),
-            Err(idx) => clusters.get(idx.checked_sub(1)?).map(|c| c.byte_offset),
-        }
+  fn previous_char_boundary_in_text(text: &str, offset: usize) -> usize {
+    if offset >= text.len() {
+      return text.len();
+    }
+    if text.is_char_boundary(offset) {
+      return offset;
     }
 
-    /// Splits existing shaped runs at a cluster boundary without reshaping, preserving ligatures/glyph IDs.
-    fn split_runs_preserving_shaping(&self, split_offset: usize) -> Option<(Vec<ShapedRun>, Vec<ShapedRun>)> {
-        let mut before_runs = Vec::new();
-        let mut after_runs = Vec::new();
+    text
+      .char_indices()
+      .take_while(|(idx, _)| *idx < offset)
+      .map(|(idx, _)| idx)
+      .last()
+      .unwrap_or(0)
+  }
 
-        for run in &self.runs {
-            if split_offset <= run.start {
-                // Entire run goes to the after side
-                after_runs.push(run.clone());
-                continue;
+  fn align_breaks_to_clusters(
+    breaks: Vec<BreakOpportunity>,
+    clusters: &[ClusterBoundary],
+    text_len: usize,
+  ) -> Vec<BreakOpportunity> {
+    if clusters.is_empty() || text_len == 0 {
+      return breaks;
+    }
+
+    let mut aligned: Vec<BreakOpportunity> = Vec::new();
+    for brk in breaks {
+      let clamped_offset = brk.byte_offset.min(text_len);
+      let aligned_offset = Self::cluster_offset_at_or_before(clamped_offset, clusters);
+      if let Some(offset) = aligned_offset {
+        if let Some(last) = aligned.last_mut() {
+          if last.byte_offset == offset {
+            if brk.break_type == BreakType::Mandatory {
+              last.break_type = BreakType::Mandatory;
             }
-            if split_offset >= run.end {
-                // Entire run goes to the before side
-                before_runs.push(run.clone());
-                continue;
-            }
-
-            // Split within this run
-            let local = split_offset - run.start;
-
-            // Guard against invalid UTF-8 boundaries
-            if local > run.text.len() || !run.text.is_char_boundary(local) {
-                return None;
-            }
-
-            let left_text = run.text.get(..local)?;
-            let right_text = run.text.get(local..)?;
-
-            let mut left_glyphs = Vec::new();
-            let mut right_glyphs = Vec::new();
-
-            for glyph in &run.glyphs {
-                if (glyph.cluster as usize) < local {
-                    left_glyphs.push(*glyph);
-                } else {
-                    right_glyphs.push(*glyph);
-                }
-            }
-
-            let left_advance: f32 = left_glyphs.iter().map(|g| g.x_advance).sum();
-
-            // Adjust right glyph offsets/clusters to be relative to the split
-            for glyph in &mut right_glyphs {
-                glyph.x_offset -= left_advance;
-                glyph.cluster = glyph.cluster.saturating_sub(local as u32);
-            }
-
-            if !left_glyphs.is_empty() {
-                let mut left_run = run.clone();
-                left_run.text = left_text.to_string();
-                left_run.end = split_offset;
-                left_run.glyphs = left_glyphs;
-                left_run.advance = left_advance;
-                before_runs.push(left_run);
-            }
-
-            if !right_glyphs.is_empty() {
-                let mut right_run = run.clone();
-                right_run.text = right_text.to_string();
-                right_run.start = split_offset;
-                right_run.glyphs = right_glyphs;
-                right_run.advance = right_run.glyphs.iter().map(|g| g.x_advance).sum();
-                after_runs.push(right_run);
-            }
+            last.adds_hyphen |= brk.adds_hyphen;
+            continue;
+          }
         }
 
-        Some((before_runs, after_runs))
+        aligned.push(BreakOpportunity::with_hyphen(
+          offset,
+          brk.break_type,
+          brk.adds_hyphen,
+        ));
+      }
     }
+
+    aligned
+  }
+
+  fn cluster_offset_at_or_before(target: usize, clusters: &[ClusterBoundary]) -> Option<usize> {
+    if clusters.is_empty() {
+      return None;
+    }
+
+    match clusters.binary_search_by_key(&target, |c| c.byte_offset) {
+      Ok(idx) => clusters.get(idx).map(|c| c.byte_offset),
+      Err(idx) => clusters.get(idx.checked_sub(1)?).map(|c| c.byte_offset),
+    }
+  }
+
+  /// Splits existing shaped runs at a cluster boundary without reshaping, preserving ligatures/glyph IDs.
+  fn split_runs_preserving_shaping(
+    &self,
+    split_offset: usize,
+  ) -> Option<(Vec<ShapedRun>, Vec<ShapedRun>)> {
+    let mut before_runs = Vec::new();
+    let mut after_runs = Vec::new();
+
+    for run in &self.runs {
+      if split_offset <= run.start {
+        // Entire run goes to the after side
+        after_runs.push(run.clone());
+        continue;
+      }
+      if split_offset >= run.end {
+        // Entire run goes to the before side
+        before_runs.push(run.clone());
+        continue;
+      }
+
+      // Split within this run
+      let local = split_offset - run.start;
+
+      // Guard against invalid UTF-8 boundaries
+      if local > run.text.len() || !run.text.is_char_boundary(local) {
+        return None;
+      }
+
+      let left_text = run.text.get(..local)?;
+      let right_text = run.text.get(local..)?;
+
+      let mut left_glyphs = Vec::new();
+      let mut right_glyphs = Vec::new();
+
+      for glyph in &run.glyphs {
+        if (glyph.cluster as usize) < local {
+          left_glyphs.push(*glyph);
+        } else {
+          right_glyphs.push(*glyph);
+        }
+      }
+
+      let left_advance: f32 = left_glyphs.iter().map(|g| g.x_advance).sum();
+
+      // Adjust right glyph offsets/clusters to be relative to the split
+      for glyph in &mut right_glyphs {
+        glyph.x_offset -= left_advance;
+        glyph.cluster = glyph.cluster.saturating_sub(local as u32);
+      }
+
+      if !left_glyphs.is_empty() {
+        let mut left_run = run.clone();
+        left_run.text = left_text.to_string();
+        left_run.end = split_offset;
+        left_run.glyphs = left_glyphs;
+        left_run.advance = left_advance;
+        before_runs.push(left_run);
+      }
+
+      if !right_glyphs.is_empty() {
+        let mut right_run = run.clone();
+        right_run.text = right_text.to_string();
+        right_run.start = split_offset;
+        right_run.glyphs = right_glyphs;
+        right_run.advance = right_run.glyphs.iter().map(|g| g.x_advance).sum();
+        after_runs.push(right_run);
+      }
+    }
+
+    Some((before_runs, after_runs))
+  }
 }
 
 /// An inline box item (non-atomic, contains children)
 #[derive(Debug, Clone)]
 pub struct InlineBoxItem {
-    /// Child items within this inline box
-    pub children: Vec<InlineItem>,
+  /// Child items within this inline box
+  pub children: Vec<InlineItem>,
 
-    /// Opening edge width (left border + padding)
-    pub start_edge: f32,
+  /// Opening edge width (left border + padding)
+  pub start_edge: f32,
 
-    /// Closing edge width (right border + padding)
-    pub end_edge: f32,
+  /// Closing edge width (right border + padding)
+  pub end_edge: f32,
 
-    /// Vertical offset applied to children (padding + borders on top)
-    pub content_offset_y: f32,
+  /// Vertical offset applied to children (padding + borders on top)
+  pub content_offset_y: f32,
 
-    /// Baseline metrics for this box
-    pub metrics: BaselineMetrics,
+  /// Baseline metrics for this box
+  pub metrics: BaselineMetrics,
 
-    /// Vertical alignment
-    pub vertical_align: VerticalAlign,
+  /// Vertical alignment
+  pub vertical_align: VerticalAlign,
 
-    /// Index for fragment creation
-    pub box_index: usize,
+  /// Index for fragment creation
+  pub box_index: usize,
 
-    /// Bidi direction of this inline box
-    pub direction: Direction,
+  /// Bidi direction of this inline box
+  pub direction: Direction,
 
-    /// unicode-bidi behavior
-    pub unicode_bidi: UnicodeBidi,
+  /// unicode-bidi behavior
+  pub unicode_bidi: UnicodeBidi,
 
-    /// Style for painting backgrounds/borders
-    pub style: Arc<ComputedStyle>,
+  /// Style for painting backgrounds/borders
+  pub style: Arc<ComputedStyle>,
 }
 
 impl InlineBoxItem {
-    /// Creates a new inline box item
-    pub fn new(
-        start_edge: f32,
-        end_edge: f32,
-        content_offset_y: f32,
-        metrics: BaselineMetrics,
-        style: Arc<ComputedStyle>,
-        box_index: usize,
-        direction: Direction,
-        unicode_bidi: UnicodeBidi,
-    ) -> Self {
-        Self {
-            children: Vec::new(),
-            start_edge,
-            end_edge,
-            content_offset_y,
-            metrics,
-            vertical_align: VerticalAlign::Baseline,
-            box_index,
-            direction,
-            unicode_bidi,
-            style,
-        }
+  /// Creates a new inline box item
+  pub fn new(
+    start_edge: f32,
+    end_edge: f32,
+    content_offset_y: f32,
+    metrics: BaselineMetrics,
+    style: Arc<ComputedStyle>,
+    box_index: usize,
+    direction: Direction,
+    unicode_bidi: UnicodeBidi,
+  ) -> Self {
+    Self {
+      children: Vec::new(),
+      start_edge,
+      end_edge,
+      content_offset_y,
+      metrics,
+      vertical_align: VerticalAlign::Baseline,
+      box_index,
+      direction,
+      unicode_bidi,
+      style,
     }
+  }
 
-    /// Adds a child item
-    pub fn add_child(&mut self, child: InlineItem) {
-        self.children.push(child);
-    }
+  /// Adds a child item
+  pub fn add_child(&mut self, child: InlineItem) {
+    self.children.push(child);
+  }
 
-    /// Returns the total width of this inline box
-    pub fn width(&self) -> f32 {
-        let content_width: f32 = self.children.iter().map(|c| c.width()).sum();
-        self.start_edge + content_width + self.end_edge
-    }
+  /// Returns the total width of this inline box
+  pub fn width(&self) -> f32 {
+    let content_width: f32 = self.children.iter().map(|c| c.width()).sum();
+    self.start_edge + content_width + self.end_edge
+  }
 }
 
 /// An inline-block item (atomic inline)
 #[derive(Debug, Clone)]
 pub struct InlineBlockItem {
-    /// The laid-out fragment
-    pub fragment: FragmentNode,
+  /// The laid-out fragment
+  pub fragment: FragmentNode,
 
-    /// Width of the inline-block
-    pub width: f32,
+  /// Width of the inline-block
+  pub width: f32,
 
-    /// Height of the inline-block
-    pub height: f32,
+  /// Height of the inline-block
+  pub height: f32,
 
-    /// Horizontal margins
-    pub margin_left: f32,
-    pub margin_right: f32,
+  /// Horizontal margins
+  pub margin_left: f32,
+  pub margin_right: f32,
 
-    /// Baseline metrics
-    pub metrics: BaselineMetrics,
+  /// Baseline metrics
+  pub metrics: BaselineMetrics,
 
-    /// Vertical alignment
-    pub vertical_align: VerticalAlign,
+  /// Vertical alignment
+  pub vertical_align: VerticalAlign,
 
-    /// Bidi direction
-    pub direction: Direction,
+  /// Bidi direction
+  pub direction: Direction,
 
-    /// unicode-bidi behavior
-    pub unicode_bidi: UnicodeBidi,
+  /// unicode-bidi behavior
+  pub unicode_bidi: UnicodeBidi,
 }
 
 impl InlineBlockItem {
-    /// Creates a new inline-block item
-    pub fn new(
-        fragment: FragmentNode,
-        direction: Direction,
-        unicode_bidi: UnicodeBidi,
-        margin_left: f32,
-        margin_right: f32,
-        has_line_baseline: bool,
-    ) -> Self {
-        let width = fragment.bounds.width();
-        let height = fragment.bounds.height();
-        let mut first_baseline: Option<f32> = None;
-        let mut last_baseline: Option<f32> = None;
-        if has_line_baseline {
-            collect_line_baselines(&fragment, 0.0, &mut first_baseline, &mut last_baseline);
-        }
-
-        let chosen_baseline = if let Some(style) = fragment.style.as_ref() {
-            if matches!(style.display, Display::Table | Display::InlineTable) {
-                first_baseline.or(last_baseline)
-            } else {
-                last_baseline
-            }
-        } else {
-            last_baseline
-        };
-
-        let metrics = chosen_baseline.map_or_else(
-            || BaselineMetrics::for_replaced(height),
-            |baseline| {
-                let upper = height.max(0.0);
-                let clamped_baseline = baseline.max(0.0).min(upper);
-                let descent = (height - clamped_baseline).max(0.0);
-                BaselineMetrics::new(clamped_baseline, height, clamped_baseline, descent)
-            },
-        );
-
-        Self {
-            fragment,
-            width,
-            height,
-            margin_left,
-            margin_right,
-            metrics,
-            vertical_align: VerticalAlign::Baseline,
-            direction,
-            unicode_bidi,
-        }
+  /// Creates a new inline-block item
+  pub fn new(
+    fragment: FragmentNode,
+    direction: Direction,
+    unicode_bidi: UnicodeBidi,
+    margin_left: f32,
+    margin_right: f32,
+    has_line_baseline: bool,
+  ) -> Self {
+    let width = fragment.bounds.width();
+    let height = fragment.bounds.height();
+    let mut first_baseline: Option<f32> = None;
+    let mut last_baseline: Option<f32> = None;
+    if has_line_baseline {
+      collect_line_baselines(&fragment, 0.0, &mut first_baseline, &mut last_baseline);
     }
 
-    /// Sets the vertical alignment
-    pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
-        self.vertical_align = align;
-        self
-    }
+    let chosen_baseline = if let Some(style) = fragment.style.as_ref() {
+      if matches!(style.display, Display::Table | Display::InlineTable) {
+        first_baseline.or(last_baseline)
+      } else {
+        last_baseline
+      }
+    } else {
+      last_baseline
+    };
 
-    pub fn total_width(&self) -> f32 {
-        self.margin_left + self.width + self.margin_right
+    let metrics = chosen_baseline.map_or_else(
+      || BaselineMetrics::for_replaced(height),
+      |baseline| {
+        let upper = height.max(0.0);
+        let clamped_baseline = baseline.max(0.0).min(upper);
+        let descent = (height - clamped_baseline).max(0.0);
+        BaselineMetrics::new(clamped_baseline, height, clamped_baseline, descent)
+      },
+    );
+
+    Self {
+      fragment,
+      width,
+      height,
+      margin_left,
+      margin_right,
+      metrics,
+      vertical_align: VerticalAlign::Baseline,
+      direction,
+      unicode_bidi,
     }
+  }
+
+  /// Sets the vertical alignment
+  pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
+    self.vertical_align = align;
+    self
+  }
+
+  pub fn total_width(&self) -> f32 {
+    self.margin_left + self.width + self.margin_right
+  }
 }
 
-fn collect_line_baselines(fragment: &FragmentNode, y_offset: f32, first: &mut Option<f32>, last: &mut Option<f32>) {
-    let current_offset = y_offset + fragment.bounds.y();
-    if let Some(baseline) = fragment.baseline {
-        let absolute = current_offset + baseline;
-        if first.is_none() {
-            *first = Some(absolute);
-        }
-        *last = Some(absolute);
+fn collect_line_baselines(
+  fragment: &FragmentNode,
+  y_offset: f32,
+  first: &mut Option<f32>,
+  last: &mut Option<f32>,
+) {
+  let current_offset = y_offset + fragment.bounds.y();
+  if let Some(baseline) = fragment.baseline {
+    let absolute = current_offset + baseline;
+    if first.is_none() {
+      *first = Some(absolute);
     }
-    if let FragmentContent::Line { baseline } = fragment.content {
-        let absolute = current_offset + baseline;
-        if first.is_none() {
-            *first = Some(absolute);
-        }
-        *last = Some(absolute);
+    *last = Some(absolute);
+  }
+  if let FragmentContent::Line { baseline } = fragment.content {
+    let absolute = current_offset + baseline;
+    if first.is_none() {
+      *first = Some(absolute);
     }
-    for child in &fragment.children {
-        collect_line_baselines(child, current_offset, first, last);
-    }
+    *last = Some(absolute);
+  }
+  for child in &fragment.children {
+    collect_line_baselines(child, current_offset, first, last);
+  }
 }
 
 /// A replaced element item (img, canvas, etc.)
 #[derive(Debug, Clone)]
 pub struct ReplacedItem {
-    /// Width of the element
-    pub width: f32,
+  /// Width of the element
+  pub width: f32,
 
-    /// Height of the element
-    pub height: f32,
+  /// Height of the element
+  pub height: f32,
 
-    /// Horizontal margins
-    pub margin_left: f32,
-    pub margin_right: f32,
+  /// Horizontal margins
+  pub margin_left: f32,
+  pub margin_right: f32,
 
-    /// Baseline metrics
-    pub metrics: BaselineMetrics,
+  /// Baseline metrics
+  pub metrics: BaselineMetrics,
 
-    /// Vertical alignment
-    pub vertical_align: VerticalAlign,
+  /// Vertical alignment
+  pub vertical_align: VerticalAlign,
 
-    /// Horizontal advance used for layout (may differ for list markers)
-    pub layout_advance: f32,
+  /// Horizontal advance used for layout (may differ for list markers)
+  pub layout_advance: f32,
 
-    /// Paint offset applied at fragment creation (used for outside markers)
-    pub paint_offset: f32,
+  /// Paint offset applied at fragment creation (used for outside markers)
+  pub paint_offset: f32,
 
-    /// True if this replaced item represents a list marker
-    pub is_marker: bool,
+  /// True if this replaced item represents a list marker
+  pub is_marker: bool,
 
-    /// Original replaced type (img, video, etc.)
-    pub replaced_type: ReplacedType,
+  /// Original replaced type (img, video, etc.)
+  pub replaced_type: ReplacedType,
 
-    /// Computed style for painting
-    pub style: Arc<ComputedStyle>,
+  /// Computed style for painting
+  pub style: Arc<ComputedStyle>,
 
-    /// Bidi direction
-    pub direction: Direction,
+  /// Bidi direction
+  pub direction: Direction,
 
-    /// unicode-bidi behavior
-    pub unicode_bidi: UnicodeBidi,
+  /// unicode-bidi behavior
+  pub unicode_bidi: UnicodeBidi,
 }
 
 impl ReplacedItem {
-    /// Creates a new replaced item
-    pub fn new(
-        size: Size,
-        replaced_type: ReplacedType,
-        style: Arc<ComputedStyle>,
-        margin_left: f32,
-        margin_right: f32,
-    ) -> Self {
-        let metrics = BaselineMetrics::for_replaced(size.height);
-        Self {
-            width: size.width,
-            height: size.height,
-            margin_left,
-            margin_right,
-            metrics,
-            vertical_align: VerticalAlign::Baseline,
-            layout_advance: size.width + margin_left + margin_right,
-            paint_offset: 0.0,
-            is_marker: false,
-            replaced_type,
-            direction: style.direction,
-            unicode_bidi: style.unicode_bidi,
-            style,
-        }
+  /// Creates a new replaced item
+  pub fn new(
+    size: Size,
+    replaced_type: ReplacedType,
+    style: Arc<ComputedStyle>,
+    margin_left: f32,
+    margin_right: f32,
+  ) -> Self {
+    let metrics = BaselineMetrics::for_replaced(size.height);
+    Self {
+      width: size.width,
+      height: size.height,
+      margin_left,
+      margin_right,
+      metrics,
+      vertical_align: VerticalAlign::Baseline,
+      layout_advance: size.width + margin_left + margin_right,
+      paint_offset: 0.0,
+      is_marker: false,
+      replaced_type,
+      direction: style.direction,
+      unicode_bidi: style.unicode_bidi,
+      style,
     }
+  }
 
-    /// Sets the vertical alignment
-    pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
-        self.vertical_align = align;
-        self
-    }
+  /// Sets the vertical alignment
+  pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
+    self.vertical_align = align;
+    self
+  }
 
-    /// Marks this replaced item as a list marker and adjusts layout/paint offsets accordingly.
-    pub fn as_marker(mut self, gap: f32, position: ListStylePosition, direction: Direction) -> Self {
-        let extent = self.width + gap;
-        let sign = if direction == Direction::Rtl { 1.0 } else { -1.0 };
-        if matches!(position, ListStylePosition::Outside) {
-            self.layout_advance = 0.0;
-            self.paint_offset = sign * extent;
-        } else {
-            self.layout_advance = extent;
-            self.paint_offset = 0.0;
-        }
-        self.margin_left = 0.0;
-        self.margin_right = 0.0;
-        self.is_marker = true;
-        self
+  /// Marks this replaced item as a list marker and adjusts layout/paint offsets accordingly.
+  pub fn as_marker(mut self, gap: f32, position: ListStylePosition, direction: Direction) -> Self {
+    let extent = self.width + gap;
+    let sign = if direction == Direction::Rtl {
+      1.0
+    } else {
+      -1.0
+    };
+    if matches!(position, ListStylePosition::Outside) {
+      self.layout_advance = 0.0;
+      self.paint_offset = sign * extent;
+    } else {
+      self.layout_advance = extent;
+      self.paint_offset = 0.0;
     }
+    self.margin_left = 0.0;
+    self.margin_right = 0.0;
+    self.is_marker = true;
+    self
+  }
 
-    pub fn total_width(&self) -> f32 {
-        self.layout_advance
-    }
+  pub fn total_width(&self) -> f32 {
+    self.layout_advance
+  }
 
-    pub fn intrinsic_width(&self) -> f32 {
-        if self.is_marker {
-            self.layout_advance
-        } else {
-            self.width
-        }
+  pub fn intrinsic_width(&self) -> f32 {
+    if self.is_marker {
+      self.layout_advance
+    } else {
+      self.width
     }
+  }
 }
 
 /// A tab character that expands to the next tab stop.
 #[derive(Debug, Clone)]
 pub struct TabItem {
-    metrics: BaselineMetrics,
-    vertical_align: VerticalAlign,
-    style: Arc<ComputedStyle>,
-    tab_interval: f32,
-    resolved_width: f32,
-    direction: Direction,
-    unicode_bidi: UnicodeBidi,
-    allow_wrap: bool,
+  metrics: BaselineMetrics,
+  vertical_align: VerticalAlign,
+  style: Arc<ComputedStyle>,
+  tab_interval: f32,
+  resolved_width: f32,
+  direction: Direction,
+  unicode_bidi: UnicodeBidi,
+  allow_wrap: bool,
 }
 
 impl TabItem {
-    pub fn new(style: Arc<ComputedStyle>, metrics: BaselineMetrics, tab_interval: f32, allow_wrap: bool) -> Self {
-        let direction = style.direction;
-        let unicode_bidi = style.unicode_bidi;
-        Self {
-            metrics,
-            vertical_align: VerticalAlign::Baseline,
-            style,
-            tab_interval,
-            resolved_width: 0.0,
-            direction,
-            unicode_bidi,
-            allow_wrap,
-        }
+  pub fn new(
+    style: Arc<ComputedStyle>,
+    metrics: BaselineMetrics,
+    tab_interval: f32,
+    allow_wrap: bool,
+  ) -> Self {
+    let direction = style.direction;
+    let unicode_bidi = style.unicode_bidi;
+    Self {
+      metrics,
+      vertical_align: VerticalAlign::Baseline,
+      style,
+      tab_interval,
+      resolved_width: 0.0,
+      direction,
+      unicode_bidi,
+      allow_wrap,
     }
+  }
 
-    pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
-        self.vertical_align = align;
-        self
-    }
+  pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
+    self.vertical_align = align;
+    self
+  }
 
-    pub fn resolve_width(&mut self, start_x: f32) -> f32 {
-        if !self.tab_interval.is_finite() || self.tab_interval <= 0.0 {
-            self.resolved_width = 0.0;
-            return 0.0;
-        }
-        let remainder = start_x.rem_euclid(self.tab_interval);
-        let width = if remainder == 0.0 {
-            self.tab_interval
-        } else {
-            self.tab_interval - remainder
-        };
-        self.resolved_width = width;
-        width
+  pub fn resolve_width(&mut self, start_x: f32) -> f32 {
+    if !self.tab_interval.is_finite() || self.tab_interval <= 0.0 {
+      self.resolved_width = 0.0;
+      return 0.0;
     }
+    let remainder = start_x.rem_euclid(self.tab_interval);
+    let width = if remainder == 0.0 {
+      self.tab_interval
+    } else {
+      self.tab_interval - remainder
+    };
+    self.resolved_width = width;
+    width
+  }
 
-    pub fn width(&self) -> f32 {
-        self.used_width()
-    }
+  pub fn width(&self) -> f32 {
+    self.used_width()
+  }
 
-    pub fn interval(&self) -> f32 {
-        self.tab_interval
-    }
+  pub fn interval(&self) -> f32 {
+    self.tab_interval
+  }
 
-    pub fn style(&self) -> Arc<ComputedStyle> {
-        self.style.clone()
-    }
+  pub fn style(&self) -> Arc<ComputedStyle> {
+    self.style.clone()
+  }
 
-    pub fn metrics(&self) -> BaselineMetrics {
-        self.metrics
-    }
+  pub fn metrics(&self) -> BaselineMetrics {
+    self.metrics
+  }
 
-    pub fn allow_wrap(&self) -> bool {
-        self.allow_wrap
-    }
+  pub fn allow_wrap(&self) -> bool {
+    self.allow_wrap
+  }
 
-    pub fn set_direction(&mut self, direction: Direction) {
-        self.direction = direction;
-    }
+  pub fn set_direction(&mut self, direction: Direction) {
+    self.direction = direction;
+  }
 
-    fn used_width(&self) -> f32 {
-        if self.resolved_width > 0.0 {
-            self.resolved_width
-        } else {
-            self.tab_interval.max(0.0)
-        }
+  fn used_width(&self) -> f32 {
+    if self.resolved_width > 0.0 {
+      self.resolved_width
+    } else {
+      self.tab_interval.max(0.0)
     }
+  }
 }
 
 /// A positioned item within a line
 #[derive(Debug, Clone)]
 pub struct PositionedItem {
-    /// The inline item
-    pub item: InlineItem,
+  /// The inline item
+  pub item: InlineItem,
 
-    /// X position relative to line start
-    pub x: f32,
+  /// X position relative to line start
+  pub x: f32,
 
-    /// Y offset from line baseline (positive = down)
-    pub baseline_offset: f32,
+  /// Y offset from line baseline (positive = down)
+  pub baseline_offset: f32,
 }
 
 /// A completed line box
 #[derive(Debug, Clone)]
 pub struct Line {
-    /// Positioned items in this line
-    pub items: Vec<PositionedItem>,
+  /// Positioned items in this line
+  pub items: Vec<PositionedItem>,
 
-    /// Resolved paragraph direction for this line (LTR/RTL from bidi base level)
-    pub resolved_direction: Direction,
+  /// Resolved paragraph direction for this line (LTR/RTL from bidi base level)
+  pub resolved_direction: Direction,
 
-    /// Authored text-indent applied to this line in the inline-start direction (can be negative)
-    pub indent: f32,
+  /// Authored text-indent applied to this line in the inline-start direction (can be negative)
+  pub indent: f32,
 
-    /// Available width for this line after float shortening
-    pub available_width: f32,
+  /// Available width for this line after float shortening
+  pub available_width: f32,
 
-    /// Width of the line box (same as available width for now)
-    pub box_width: f32,
+  /// Width of the line box (same as available width for now)
+  pub box_width: f32,
 
-    /// Horizontal offset of the line box start (used when floats shorten and shift the line)
-    pub left_offset: f32,
+  /// Horizontal offset of the line box start (used when floats shorten and shift the line)
+  pub left_offset: f32,
 
-    /// Vertical offset of the line box top within the inline formatting context
-    pub y_offset: f32,
+  /// Vertical offset of the line box top within the inline formatting context
+  pub y_offset: f32,
 
-    /// Total width used by items
-    pub width: f32,
+  /// Total width used by items
+  pub width: f32,
 
-    /// Line height
-    pub height: f32,
+  /// Line height
+  pub height: f32,
 
-    /// Baseline position from top of line box
-    pub baseline: f32,
+  /// Baseline position from top of line box
+  pub baseline: f32,
 
-    /// Whether this line ends with a hard break
-    pub ends_with_hard_break: bool,
+  /// Whether this line ends with a hard break
+  pub ends_with_hard_break: bool,
 }
 
 impl Line {
-    /// Creates an empty line
-    pub fn new() -> Self {
-        Self {
-            items: Vec::new(),
-            resolved_direction: Direction::Ltr,
-            indent: 0.0,
-            available_width: 0.0,
-            box_width: 0.0,
-            left_offset: 0.0,
-            y_offset: 0.0,
-            width: 0.0,
-            height: 0.0,
-            baseline: 0.0,
-            ends_with_hard_break: false,
-        }
+  /// Creates an empty line
+  pub fn new() -> Self {
+    Self {
+      items: Vec::new(),
+      resolved_direction: Direction::Ltr,
+      indent: 0.0,
+      available_width: 0.0,
+      box_width: 0.0,
+      left_offset: 0.0,
+      y_offset: 0.0,
+      width: 0.0,
+      height: 0.0,
+      baseline: 0.0,
+      ends_with_hard_break: false,
     }
+  }
 
-    /// Returns true if the line has no items
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
+  /// Returns true if the line has no items
+  pub fn is_empty(&self) -> bool {
+    self.items.is_empty()
+  }
 }
 
 impl Default for Line {
-    fn default() -> Self {
-        Self::new()
-    }
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 /// Builder for constructing lines from inline items
 ///
 /// Handles line breaking and item positioning.
 pub struct LineBuilder<'a> {
-    /// Available width for the first line
-    first_line_width: f32,
-    /// Available width for subsequent lines
-    subsequent_line_width: f32,
-    /// Authored text-indent length (can be negative)
-    indent: f32,
-    /// Whether hanging indentation is enabled
-    indent_hanging: bool,
-    /// Whether indentation applies after forced breaks
-    indent_each_line: bool,
-    /// Whether the next line to start is a paragraph start (first or after hard break)
-    next_line_is_para_start: bool,
-    /// Float-aware line width provider
-    float_integration: Option<InlineFloatIntegration<'a>>,
-    /// Current line space when floats are present
-    current_line_space: Option<crate::layout::inline::float_integration::LineSpace>,
-    /// Accumulated y offset for lines when floats shorten width
-    current_y: f32,
-    /// Absolute y offset of this inline formatting context within the containing block
-    float_base_y: f32,
+  /// Available width for the first line
+  first_line_width: f32,
+  /// Available width for subsequent lines
+  subsequent_line_width: f32,
+  /// Authored text-indent length (can be negative)
+  indent: f32,
+  /// Whether hanging indentation is enabled
+  indent_hanging: bool,
+  /// Whether indentation applies after forced breaks
+  indent_each_line: bool,
+  /// Whether the next line to start is a paragraph start (first or after hard break)
+  next_line_is_para_start: bool,
+  /// Float-aware line width provider
+  float_integration: Option<InlineFloatIntegration<'a>>,
+  /// Current line space when floats are present
+  current_line_space: Option<crate::layout::inline::float_integration::LineSpace>,
+  /// Accumulated y offset for lines when floats shorten width
+  current_y: f32,
+  /// Absolute y offset of this inline formatting context within the containing block
+  float_base_y: f32,
 
-    /// Current line being built
-    current_line: Line,
+  /// Current line being built
+  current_line: Line,
 
-    /// Current X position
-    current_x: f32,
+  /// Current X position
+  current_x: f32,
 
-    /// Completed lines
-    lines: Vec<Line>,
+  /// Completed lines
+  lines: Vec<Line>,
 
-    /// Baseline accumulator for current line
-    baseline_acc: LineBaselineAccumulator,
+  /// Baseline accumulator for current line
+  baseline_acc: LineBaselineAccumulator,
 
-    /// Default strut metrics (from containing block)
-    strut_metrics: BaselineMetrics,
+  /// Default strut metrics (from containing block)
+  strut_metrics: BaselineMetrics,
 
-    /// Shaping pipeline for text splitting
-    shaper: ShapingPipeline,
+  /// Shaping pipeline for text splitting
+  shaper: ShapingPipeline,
 
-    /// Font context for reshaping during line breaks
-    font_context: FontContext,
+  /// Font context for reshaping during line breaks
+  font_context: FontContext,
 
-    /// Base paragraph level for bidi ordering (None = auto/first strong)
-    base_level: Option<Level>,
+  /// Base paragraph level for bidi ordering (None = auto/first strong)
+  base_level: Option<Level>,
 
-    /// Root unicode-bidi on the paragraph container.
-    root_unicode_bidi: UnicodeBidi,
-    /// Root direction on the paragraph container.
-    root_direction: Direction,
+  /// Root unicode-bidi on the paragraph container.
+  root_unicode_bidi: UnicodeBidi,
+  /// Root direction on the paragraph container.
+  root_direction: Direction,
 }
 
 impl<'a> LineBuilder<'a> {
-    fn compute_indent_for_line(&self, is_para_start: bool, is_first_line: bool) -> f32 {
-        if self.indent == 0.0 {
-            return 0.0;
-        }
-        if is_first_line {
-            if self.indent_hanging {
-                0.0
-            } else {
-                self.indent
-            }
-        } else {
-            let apply_indent = self.indent_hanging || (self.indent_each_line && is_para_start);
-            if apply_indent {
-                self.indent
-            } else {
-                0.0
-            }
-        }
+  fn compute_indent_for_line(&self, is_para_start: bool, is_first_line: bool) -> f32 {
+    if self.indent == 0.0 {
+      return 0.0;
+    }
+    if is_first_line {
+      if self.indent_hanging {
+        0.0
+      } else {
+        self.indent
+      }
+    } else {
+      let apply_indent = self.indent_hanging || (self.indent_each_line && is_para_start);
+      if apply_indent {
+        self.indent
+      } else {
+        0.0
+      }
+    }
+  }
+
+  fn start_new_line(&mut self) {
+    let is_first_line = self.lines.is_empty();
+    let para_start = self.next_line_is_para_start;
+    self.next_line_is_para_start = false;
+    let indent_for_line = self.compute_indent_for_line(para_start, is_first_line);
+    let base_width = if is_first_line {
+      self.first_line_width
+    } else {
+      self.subsequent_line_width
+    };
+
+    if let Some(integration) = self.float_integration.as_ref() {
+      let space = integration.find_line_space(
+        self.float_base_y + self.current_y,
+        LineSpaceOptions::default().line_height(self.strut_metrics.line_height),
+      );
+      self.current_line_space = Some(space);
+      self.current_line.available_width = space.width;
+      self.current_line.box_width = space.width;
+      self.current_line.left_offset = space.left_edge;
+      self.current_y = self.current_y.max((space.y - self.float_base_y).max(0.0));
+    } else {
+      self.current_line_space = None;
+      self.current_line.available_width = base_width;
+      self.current_line.box_width = base_width;
+      self.current_line.left_offset = 0.0;
+    }
+    self.current_line.indent = indent_for_line;
+  }
+
+  /// Creates a new line builder
+  pub fn new(
+    first_line_width: f32,
+    subsequent_line_width: f32,
+    start_is_para_start: bool,
+    _text_wrap: TextWrap,
+    indent: f32,
+    indent_hanging: bool,
+    indent_each_line: bool,
+    strut_metrics: BaselineMetrics,
+    shaper: ShapingPipeline,
+    font_context: FontContext,
+    base_level: Option<Level>,
+    root_unicode_bidi: UnicodeBidi,
+    root_direction: Direction,
+    float_integration: Option<InlineFloatIntegration<'a>>,
+    float_base_y: f32,
+  ) -> Self {
+    let initial_direction = if let Some(level) = base_level {
+      if level.is_rtl() {
+        Direction::Rtl
+      } else {
+        Direction::Ltr
+      }
+    } else {
+      Direction::Ltr
+    };
+    let mut builder = Self {
+      first_line_width,
+      subsequent_line_width,
+      indent,
+      indent_hanging,
+      indent_each_line,
+      next_line_is_para_start: start_is_para_start,
+      float_integration,
+      current_line_space: None,
+      current_y: 0.0,
+      float_base_y,
+      current_line: Line {
+        resolved_direction: initial_direction,
+        ..Line::new()
+      },
+      current_x: 0.0,
+      lines: Vec::new(),
+      baseline_acc: LineBaselineAccumulator::new(&strut_metrics),
+      strut_metrics,
+      shaper,
+      font_context,
+      base_level,
+      root_unicode_bidi,
+      root_direction,
+    };
+
+    builder.start_new_line();
+
+    builder
+  }
+
+  fn current_line_width(&self) -> f32 {
+    self.current_line.available_width
+  }
+
+  /// Adds an inline item to the builder
+  pub fn add_item(&mut self, item: InlineItem) {
+    let (item, item_width) = item.resolve_width_at(self.current_x);
+    let line_width = self.current_line_width();
+
+    let kind = match &item {
+      InlineItem::Text(_) => "text",
+      InlineItem::Tab(_) => "tab",
+      InlineItem::InlineBox(_) => "inline-box",
+      InlineItem::InlineBlock(_) => "inline-block",
+      InlineItem::Replaced(_) => "replaced",
+      InlineItem::Floating(_) => "floating",
+    };
+
+    if log_line_width_enabled() {
+      eprintln!(
+        "[line-add] kind={} line_width={:.2} current_x={:.2} item_width={:.2} breakable={}",
+        kind,
+        line_width,
+        self.current_x,
+        item_width,
+        item.is_breakable()
+      );
     }
 
-    fn start_new_line(&mut self) {
-        let is_first_line = self.lines.is_empty();
-        let para_start = self.next_line_is_para_start;
-        self.next_line_is_para_start = false;
-        let indent_for_line = self.compute_indent_for_line(para_start, is_first_line);
-        let base_width = if is_first_line {
-            self.first_line_width
-        } else {
-            self.subsequent_line_width
-        };
-
-        if let Some(integration) = self.float_integration.as_ref() {
-            let space = integration.find_line_space(
-                self.float_base_y + self.current_y,
-                LineSpaceOptions::default().line_height(self.strut_metrics.line_height),
-            );
-            self.current_line_space = Some(space);
-            self.current_line.available_width = space.width;
-            self.current_line.box_width = space.width;
-            self.current_line.left_offset = space.left_edge;
-            self.current_y = self.current_y.max((space.y - self.float_base_y).max(0.0));
-        } else {
-            self.current_line_space = None;
-            self.current_line.available_width = base_width;
-            self.current_line.box_width = base_width;
-            self.current_line.left_offset = 0.0;
-        }
-        self.current_line.indent = indent_for_line;
-    }
-
-    /// Creates a new line builder
-    pub fn new(
-        first_line_width: f32,
-        subsequent_line_width: f32,
-        start_is_para_start: bool,
-        _text_wrap: TextWrap,
-        indent: f32,
-        indent_hanging: bool,
-        indent_each_line: bool,
-        strut_metrics: BaselineMetrics,
-        shaper: ShapingPipeline,
-        font_context: FontContext,
-        base_level: Option<Level>,
-        root_unicode_bidi: UnicodeBidi,
-        root_direction: Direction,
-        float_integration: Option<InlineFloatIntegration<'a>>,
-        float_base_y: f32,
-    ) -> Self {
-        let initial_direction = if let Some(level) = base_level {
-            if level.is_rtl() {
-                Direction::Rtl
-            } else {
-                Direction::Ltr
-            }
-        } else {
-            Direction::Ltr
-        };
-        let mut builder = Self {
-            first_line_width,
-            subsequent_line_width,
-            indent,
-            indent_hanging,
-            indent_each_line,
-            next_line_is_para_start: start_is_para_start,
-            float_integration,
-            current_line_space: None,
-            current_y: 0.0,
-            float_base_y,
-            current_line: Line {
-                resolved_direction: initial_direction,
-                ..Line::new()
-            },
-            current_x: 0.0,
-            lines: Vec::new(),
-            baseline_acc: LineBaselineAccumulator::new(&strut_metrics),
-            strut_metrics,
-            shaper,
-            font_context,
-            base_level,
-            root_unicode_bidi,
-            root_direction,
-        };
-
-        builder.start_new_line();
-
-        builder
-    }
-
-    fn current_line_width(&self) -> f32 {
-        self.current_line.available_width
-    }
-
-    /// Adds an inline item to the builder
-    pub fn add_item(&mut self, item: InlineItem) {
-        let (item, item_width) = item.resolve_width_at(self.current_x);
-        let line_width = self.current_line_width();
-
-        let kind = match &item {
-            InlineItem::Text(_) => "text",
-            InlineItem::Tab(_) => "tab",
-            InlineItem::InlineBox(_) => "inline-box",
-            InlineItem::InlineBlock(_) => "inline-block",
-            InlineItem::Replaced(_) => "replaced",
-            InlineItem::Floating(_) => "floating",
-        };
-
-        if log_line_width_enabled() {
-            eprintln!(
-                "[line-add] kind={} line_width={:.2} current_x={:.2} item_width={:.2} breakable={}",
-                kind,
-                line_width,
-                self.current_x,
-                item_width,
-                item.is_breakable()
-            );
-        }
-
-        // Check if item fits
-        if self.current_x + item_width <= line_width {
-            // Item fits
-            self.place_item_with_width(item, item_width);
-        } else if item.is_breakable() {
-            // Try to break the item even on an empty line; oversized items should
-            // still honor break opportunities instead of overflowing the line.
-            self.add_breakable_item(item);
-        } else {
-            // Item doesn't fit and can't be broken
-            if self.current_line.is_empty() {
-                // No break possible; overflow this line
-                self.place_item_with_width(item, item_width);
-            } else {
-                self.finish_line();
-                let (resolved, width) = item.resolve_width_at(self.current_x);
-                self.place_item_with_width(resolved, width);
-            }
-        }
-    }
-
-    /// Adds a breakable item (text or inline box), handling line breaking
-    fn add_breakable_item(&mut self, item: InlineItem) {
-        if let InlineItem::Text(text_item) = item {
-            let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
-
-            if log_line_width_enabled() {
-                eprintln!(
-                    "[line-width] remaining {:.2} advance {:.2} breaks {}",
-                    remaining_width,
-                    text_item.advance_for_layout,
-                    text_item.break_opportunities.len()
-                );
-            }
-
-            let mut break_opportunity = text_item.find_break_point(remaining_width);
-            if break_opportunity.is_none() && self.current_line.is_empty() {
-                // No break fits within the remaining width, but the line is empty.
-                // Split at the earliest opportunity to avoid keeping multiple words
-                // on an overflowing line.
-                break_opportunity = text_item.break_opportunities.first().copied();
-                if break_opportunity.is_none()
-                    && allows_soft_wrap(text_item.style.as_ref())
-                    && matches!(text_item.style.word_break, WordBreak::BreakWord | WordBreak::Anywhere)
-                {
-                    if let Some((idx, _)) = text_item.text.char_indices().nth(1) {
-                        break_opportunity = Some(BreakOpportunity::allowed(idx));
-                    }
-                }
-            }
-
-            if let Some(break_opportunity) = break_opportunity {
-                // Split at break point
-                if let Some((before, after)) = text_item.split_at(
-                    break_opportunity.byte_offset,
-                    break_opportunity.adds_hyphen,
-                    &self.shaper,
-                    &self.font_context,
-                ) {
-                    // Place the part that fits
-                    if before.advance_for_layout > 0.0 {
-                        let width = before.advance_for_layout;
-                        self.place_item_with_width(InlineItem::Text(before), width);
-                    }
-
-                    // Start new line for the rest
-                    self.finish_line();
-
-                    // Add remaining text (may need further breaking)
-                    self.add_item(InlineItem::Text(after));
-                } else {
-                    // If splitting fails, fall back to placing the whole item
-                    let width = text_item.advance_for_layout;
-                    if self.current_line.is_empty() {
-                        self.place_item_with_width(InlineItem::Text(text_item), width);
-                    } else {
-                        self.finish_line();
-                        self.place_item_with_width(InlineItem::Text(text_item), width);
-                    }
-                }
-            } else {
-                // No break point found within remaining width
-                if self.current_line.is_empty() || !allows_soft_wrap(text_item.style.as_ref()) {
-                    // Wrapping is disabled or nothing is on the line; overflow in place.
-                    let width = text_item.advance_for_layout;
-                    self.place_item_with_width(InlineItem::Text(text_item), width);
-                } else {
-                    // Start new line and try again
-                    self.finish_line();
-                    self.add_item(InlineItem::Text(text_item));
-                }
-            }
-        } else if let InlineItem::InlineBox(inline_box) = item {
-            let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
-            let total_width = inline_box.width();
-
-            if total_width <= remaining_width {
-                self.place_item_with_width(InlineItem::InlineBox(inline_box), total_width);
-                return;
-            }
-
-            // If nothing has been placed yet, flatten the inline box and lay out its children so they can break.
-            if !self.current_line.is_empty() {
-                self.finish_line();
-            }
-
-            if inline_box.start_edge > 0.0 {
-                self.current_x += inline_box.start_edge;
-            }
-            for child in inline_box.children {
-                self.add_item(child);
-            }
-            if inline_box.end_edge > 0.0 {
-                self.current_x += inline_box.end_edge;
-            }
-        }
-    }
-
-    /// Places an item on the current line without breaking
-    fn place_item_with_width(&mut self, item: InlineItem, item_width: f32) {
-        let metrics = item.baseline_metrics();
-        let vertical_align = item.vertical_align();
-
-        // Calculate baseline offset
-        let baseline_offset = if vertical_align.is_line_relative() {
-            self.baseline_acc.add_line_relative(&metrics, vertical_align);
-            0.0 // Will be adjusted in finalization
-        } else {
-            // Baseline-relative alignments (e.g., middle/sub/super/text-top) depend on the
-            // parent's font metrics. The strut represents the parent inline box, so thread it
-            // through to compute x-height/ascent-based offsets correctly.
-            self.baseline_acc
-                .add_baseline_relative(&metrics, vertical_align, Some(&self.strut_metrics))
-        };
-
-        let positioned = PositionedItem {
-            item,
-            x: self.current_x,
-            baseline_offset,
-        };
-
-        self.current_x += item_width;
-        self.current_line.items.push(positioned);
-    }
-
-    /// Forces a line break (e.g., from mandatory break)
-    pub fn force_break(&mut self) {
-        self.current_line.ends_with_hard_break = true;
+    // Check if item fits
+    if self.current_x + item_width <= line_width {
+      // Item fits
+      self.place_item_with_width(item, item_width);
+    } else if item.is_breakable() {
+      // Try to break the item even on an empty line; oversized items should
+      // still honor break opportunities instead of overflowing the line.
+      self.add_breakable_item(item);
+    } else {
+      // Item doesn't fit and can't be broken
+      if self.current_line.is_empty() {
+        // No break possible; overflow this line
+        self.place_item_with_width(item, item_width);
+      } else {
         self.finish_line();
+        let (resolved, width) = item.resolve_width_at(self.current_x);
+        self.place_item_with_width(resolved, width);
+      }
     }
+  }
 
-    /// Finishes the current line and starts a new one
-    fn finish_line(&mut self) {
-        if !self.current_line.is_empty() {
-            // Calculate final line metrics
-            self.current_line.width = self.current_x;
-            self.current_line.height = self.baseline_acc.line_height();
-            self.current_line.baseline = self.baseline_acc.baseline_position();
-            self.current_line.y_offset = self.current_y;
-            let line_width = self.current_line_width();
-            self.current_line.available_width = line_width;
-            if self.current_line_space.is_some() {
-                self.current_line.box_width = self.current_line_space.map(|space| space.width).unwrap_or(line_width);
-            } else {
-                self.current_line.box_width = line_width;
-            }
+  /// Adds a breakable item (text or inline box), handling line breaking
+  fn add_breakable_item(&mut self, item: InlineItem) {
+    if let InlineItem::Text(text_item) = item {
+      let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
 
-            // Adjust Y positions for top/bottom aligned items
-            for positioned in &mut self.current_line.items {
-                let align = positioned.item.vertical_align();
-                match align {
-                    VerticalAlign::Top => {
-                        positioned.baseline_offset =
-                            positioned.item.baseline_metrics().baseline_offset - self.current_line.baseline;
-                    }
-                    VerticalAlign::Bottom => {
-                        let metrics = positioned.item.baseline_metrics();
-                        positioned.baseline_offset = self.current_line.height
-                            - metrics.height
-                            - (self.current_line.baseline - metrics.baseline_offset);
-                    }
-                    _ => {}
-                }
-            }
+      if log_line_width_enabled() {
+        eprintln!(
+          "[line-width] remaining {:.2} advance {:.2} breaks {}",
+          remaining_width,
+          text_item.advance_for_layout,
+          text_item.break_opportunities.len()
+        );
+      }
 
-            let ended_hard = self.current_line.ends_with_hard_break;
-            let finished_height = self.current_line.height;
-            self.lines.push(std::mem::take(&mut self.current_line));
-            self.current_y += finished_height;
-            self.next_line_is_para_start = ended_hard;
+      let mut break_opportunity = text_item.find_break_point(remaining_width);
+      if break_opportunity.is_none() && self.current_line.is_empty() {
+        // No break fits within the remaining width, but the line is empty.
+        // Split at the earliest opportunity to avoid keeping multiple words
+        // on an overflowing line.
+        break_opportunity = text_item.break_opportunities.first().copied();
+        if break_opportunity.is_none()
+          && allows_soft_wrap(text_item.style.as_ref())
+          && matches!(
+            text_item.style.word_break,
+            WordBreak::BreakWord | WordBreak::Anywhere
+          )
+        {
+          if let Some((idx, _)) = text_item.text.char_indices().nth(1) {
+            break_opportunity = Some(BreakOpportunity::allowed(idx));
+          }
         }
+      }
 
-        // Reset for new line
-        self.current_x = 0.0;
-        self.baseline_acc = LineBaselineAccumulator::new(&self.strut_metrics);
-        let next_direction = if let Some(level) = self.base_level {
-            if level.is_rtl() {
-                Direction::Rtl
-            } else {
-                Direction::Ltr
-            }
+      if let Some(break_opportunity) = break_opportunity {
+        // Split at break point
+        if let Some((before, after)) = text_item.split_at(
+          break_opportunity.byte_offset,
+          break_opportunity.adds_hyphen,
+          &self.shaper,
+          &self.font_context,
+        ) {
+          // Place the part that fits
+          if before.advance_for_layout > 0.0 {
+            let width = before.advance_for_layout;
+            self.place_item_with_width(InlineItem::Text(before), width);
+          }
+
+          // Start new line for the rest
+          self.finish_line();
+
+          // Add remaining text (may need further breaking)
+          self.add_item(InlineItem::Text(after));
         } else {
-            Direction::Ltr
-        };
-        self.current_line = Line {
-            resolved_direction: next_direction,
-            ..Line::new()
-        };
-        self.start_new_line();
-    }
-
-    /// Run bidi reordering across all built lines, respecting paragraph boundaries.
-    ///
-    /// The Unicode Bidi algorithm operates at paragraph scope; explicit embeddings/isolates can span
-    /// line breaks. We therefore resolve bidi across each paragraph (lines separated by hard breaks)
-    /// and then reorder each line using the paragraph-level embedding results.
-    fn reorder_lines_for_bidi(&mut self) {
-        if self.lines.is_empty() {
-            return;
+          // If splitting fails, fall back to placing the whole item
+          let width = text_item.advance_for_layout;
+          if self.current_line.is_empty() {
+            self.place_item_with_width(InlineItem::Text(text_item), width);
+          } else {
+            self.finish_line();
+            self.place_item_with_width(InlineItem::Text(text_item), width);
+          }
         }
-
-        let mut ranges = Vec::new();
-        let mut start = 0usize;
-        for (idx, line) in self.lines.iter().enumerate() {
-            if line.ends_with_hard_break {
-                ranges.push((start, idx + 1));
-                start = idx + 1;
-            }
+      } else {
+        // No break point found within remaining width
+        if self.current_line.is_empty() || !allows_soft_wrap(text_item.style.as_ref()) {
+          // Wrapping is disabled or nothing is on the line; overflow in place.
+          let width = text_item.advance_for_layout;
+          self.place_item_with_width(InlineItem::Text(text_item), width);
+        } else {
+          // Start new line and try again
+          self.finish_line();
+          self.add_item(InlineItem::Text(text_item));
         }
+      }
+    } else if let InlineItem::InlineBox(inline_box) = item {
+      let remaining_width = (self.current_line_width() - self.current_x).max(0.0);
+      let total_width = inline_box.width();
 
-        if start < self.lines.len() {
-            ranges.push((start, self.lines.len()));
-        }
+      if total_width <= remaining_width {
+        self.place_item_with_width(InlineItem::InlineBox(inline_box), total_width);
+        return;
+      }
 
-        let base_level = self.base_level;
-        let shaper = self.shaper.clone();
-        let font_context = self.font_context.clone();
-
-        for (start, end) in ranges {
-            let paragraph_level = if self.root_unicode_bidi == UnicodeBidi::Plaintext
-                || Self::paragraph_all_plaintext(&self.lines[start..end])
-            {
-                None
-            } else {
-                base_level
-            };
-            reorder_paragraph(
-                &mut self.lines[start..end],
-                paragraph_level,
-                self.root_unicode_bidi,
-                self.root_direction,
-                &shaper,
-                &font_context,
-            );
-        }
-    }
-
-    fn paragraph_all_plaintext(lines: &[Line]) -> bool {
-        let mut saw_plaintext = false;
-        let all_plain = lines.iter().all(|line| {
-            line.items
-                .iter()
-                .all(|p| Self::item_allows_plaintext(&p.item, &mut saw_plaintext))
-        });
-        all_plain && saw_plaintext
-    }
-
-    fn item_allows_plaintext(item: &InlineItem, saw_plaintext: &mut bool) -> bool {
-        use crate::style::types::UnicodeBidi;
-        match item {
-            InlineItem::Text(t) => {
-                if matches!(t.style.unicode_bidi, UnicodeBidi::Plaintext) {
-                    *saw_plaintext = true;
-                    true
-                } else {
-                    false
-                }
-            }
-            InlineItem::InlineBox(b) => {
-                if matches!(b.unicode_bidi, UnicodeBidi::Plaintext) {
-                    *saw_plaintext = true;
-                    true
-                } else {
-                    b.children.iter().all(|c| Self::item_allows_plaintext(c, saw_plaintext))
-                }
-            }
-            InlineItem::Floating(f) => {
-                if matches!(f.unicode_bidi, UnicodeBidi::Plaintext) {
-                    *saw_plaintext = true;
-                    true
-                } else {
-                    false
-                }
-            }
-            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Tab(_) => true,
-        }
-    }
-
-    /// Finishes building and returns all lines
-    pub fn finish(mut self) -> Vec<Line> {
-        // Finish any remaining line
+      // If nothing has been placed yet, flatten the inline box and lay out its children so they can break.
+      if !self.current_line.is_empty() {
         self.finish_line();
-        self.reorder_lines_for_bidi();
-        self.lines
+      }
+
+      if inline_box.start_edge > 0.0 {
+        self.current_x += inline_box.start_edge;
+      }
+      for child in inline_box.children {
+        self.add_item(child);
+      }
+      if inline_box.end_edge > 0.0 {
+        self.current_x += inline_box.end_edge;
+      }
+    }
+  }
+
+  /// Places an item on the current line without breaking
+  fn place_item_with_width(&mut self, item: InlineItem, item_width: f32) {
+    let metrics = item.baseline_metrics();
+    let vertical_align = item.vertical_align();
+
+    // Calculate baseline offset
+    let baseline_offset = if vertical_align.is_line_relative() {
+      self
+        .baseline_acc
+        .add_line_relative(&metrics, vertical_align);
+      0.0 // Will be adjusted in finalization
+    } else {
+      // Baseline-relative alignments (e.g., middle/sub/super/text-top) depend on the
+      // parent's font metrics. The strut represents the parent inline box, so thread it
+      // through to compute x-height/ascent-based offsets correctly.
+      self
+        .baseline_acc
+        .add_baseline_relative(&metrics, vertical_align, Some(&self.strut_metrics))
+    };
+
+    let positioned = PositionedItem {
+      item,
+      x: self.current_x,
+      baseline_offset,
+    };
+
+    self.current_x += item_width;
+    self.current_line.items.push(positioned);
+  }
+
+  /// Forces a line break (e.g., from mandatory break)
+  pub fn force_break(&mut self) {
+    self.current_line.ends_with_hard_break = true;
+    self.finish_line();
+  }
+
+  /// Finishes the current line and starts a new one
+  fn finish_line(&mut self) {
+    if !self.current_line.is_empty() {
+      // Calculate final line metrics
+      self.current_line.width = self.current_x;
+      self.current_line.height = self.baseline_acc.line_height();
+      self.current_line.baseline = self.baseline_acc.baseline_position();
+      self.current_line.y_offset = self.current_y;
+      let line_width = self.current_line_width();
+      self.current_line.available_width = line_width;
+      if self.current_line_space.is_some() {
+        self.current_line.box_width = self
+          .current_line_space
+          .map(|space| space.width)
+          .unwrap_or(line_width);
+      } else {
+        self.current_line.box_width = line_width;
+      }
+
+      // Adjust Y positions for top/bottom aligned items
+      for positioned in &mut self.current_line.items {
+        let align = positioned.item.vertical_align();
+        match align {
+          VerticalAlign::Top => {
+            positioned.baseline_offset =
+              positioned.item.baseline_metrics().baseline_offset - self.current_line.baseline;
+          }
+          VerticalAlign::Bottom => {
+            let metrics = positioned.item.baseline_metrics();
+            positioned.baseline_offset = self.current_line.height
+              - metrics.height
+              - (self.current_line.baseline - metrics.baseline_offset);
+          }
+          _ => {}
+        }
+      }
+
+      let ended_hard = self.current_line.ends_with_hard_break;
+      let finished_height = self.current_line.height;
+      self.lines.push(std::mem::take(&mut self.current_line));
+      self.current_y += finished_height;
+      self.next_line_is_para_start = ended_hard;
     }
 
-    /// Returns the current line width
-    pub fn current_width(&self) -> f32 {
-        self.current_x
+    // Reset for new line
+    self.current_x = 0.0;
+    self.baseline_acc = LineBaselineAccumulator::new(&self.strut_metrics);
+    let next_direction = if let Some(level) = self.base_level {
+      if level.is_rtl() {
+        Direction::Rtl
+      } else {
+        Direction::Ltr
+      }
+    } else {
+      Direction::Ltr
+    };
+    self.current_line = Line {
+      resolved_direction: next_direction,
+      ..Line::new()
+    };
+    self.start_new_line();
+  }
+
+  /// Run bidi reordering across all built lines, respecting paragraph boundaries.
+  ///
+  /// The Unicode Bidi algorithm operates at paragraph scope; explicit embeddings/isolates can span
+  /// line breaks. We therefore resolve bidi across each paragraph (lines separated by hard breaks)
+  /// and then reorder each line using the paragraph-level embedding results.
+  fn reorder_lines_for_bidi(&mut self) {
+    if self.lines.is_empty() {
+      return;
     }
 
-    /// Returns true if current line is empty
-    pub fn is_current_line_empty(&self) -> bool {
-        self.current_line.is_empty()
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+    for (idx, line) in self.lines.iter().enumerate() {
+      if line.ends_with_hard_break {
+        ranges.push((start, idx + 1));
+        start = idx + 1;
+      }
     }
+
+    if start < self.lines.len() {
+      ranges.push((start, self.lines.len()));
+    }
+
+    let base_level = self.base_level;
+    let shaper = self.shaper.clone();
+    let font_context = self.font_context.clone();
+
+    for (start, end) in ranges {
+      let paragraph_level = if self.root_unicode_bidi == UnicodeBidi::Plaintext
+        || Self::paragraph_all_plaintext(&self.lines[start..end])
+      {
+        None
+      } else {
+        base_level
+      };
+      reorder_paragraph(
+        &mut self.lines[start..end],
+        paragraph_level,
+        self.root_unicode_bidi,
+        self.root_direction,
+        &shaper,
+        &font_context,
+      );
+    }
+  }
+
+  fn paragraph_all_plaintext(lines: &[Line]) -> bool {
+    let mut saw_plaintext = false;
+    let all_plain = lines.iter().all(|line| {
+      line
+        .items
+        .iter()
+        .all(|p| Self::item_allows_plaintext(&p.item, &mut saw_plaintext))
+    });
+    all_plain && saw_plaintext
+  }
+
+  fn item_allows_plaintext(item: &InlineItem, saw_plaintext: &mut bool) -> bool {
+    use crate::style::types::UnicodeBidi;
+    match item {
+      InlineItem::Text(t) => {
+        if matches!(t.style.unicode_bidi, UnicodeBidi::Plaintext) {
+          *saw_plaintext = true;
+          true
+        } else {
+          false
+        }
+      }
+      InlineItem::InlineBox(b) => {
+        if matches!(b.unicode_bidi, UnicodeBidi::Plaintext) {
+          *saw_plaintext = true;
+          true
+        } else {
+          b.children
+            .iter()
+            .all(|c| Self::item_allows_plaintext(c, saw_plaintext))
+        }
+      }
+      InlineItem::Floating(f) => {
+        if matches!(f.unicode_bidi, UnicodeBidi::Plaintext) {
+          *saw_plaintext = true;
+          true
+        } else {
+          false
+        }
+      }
+      InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Tab(_) => true,
+    }
+  }
+
+  /// Finishes building and returns all lines
+  pub fn finish(mut self) -> Vec<Line> {
+    // Finish any remaining line
+    self.finish_line();
+    self.reorder_lines_for_bidi();
+    self.lines
+  }
+
+  /// Returns the current line width
+  pub fn current_width(&self) -> f32 {
+    self.current_x
+  }
+
+  /// Returns true if current line is empty
+  pub fn is_current_line_empty(&self) -> bool {
+    self.current_line.is_empty()
+  }
 }
 
 /// Resolve bidi at paragraph scope and reorder each line using the paragraph embedding levels.
 fn reorder_paragraph(
-    lines: &mut [Line],
-    base_level: Option<Level>,
-    root_unicode_bidi: UnicodeBidi,
-    root_direction: Direction,
-    shaper: &ShapingPipeline,
-    font_context: &FontContext,
+  lines: &mut [Line],
+  base_level: Option<Level>,
+  root_unicode_bidi: UnicodeBidi,
+  root_direction: Direction,
+  shaper: &ShapingPipeline,
+  font_context: &FontContext,
 ) {
-    if lines.is_empty() {
-        return;
-    }
+  if lines.is_empty() {
+    return;
+  }
 
-    #[derive(Clone, Copy)]
-    struct ByteMapping {
-        leaf_index: usize,
-        /// Byte offsets into the paragraph_text buffer
-        start: usize,
-        end: usize,
-        /// Byte offsets within the leaf's own text (for slicing)
-        local_start: usize,
-        local_end: usize,
-        isolate_group: Option<usize>,
-        leaf_isolate: bool,
-    }
+  #[derive(Clone, Copy)]
+  struct ByteMapping {
+    leaf_index: usize,
+    /// Byte offsets into the paragraph_text buffer
+    start: usize,
+    end: usize,
+    /// Byte offsets within the leaf's own text (for slicing)
+    local_start: usize,
+    local_end: usize,
+    isolate_group: Option<usize>,
+    leaf_isolate: bool,
+  }
 
-    #[derive(Clone, Copy)]
-    struct VisualSegment {
-        mapping: ByteMapping,
-        level: Level,
-    }
+  #[derive(Clone, Copy)]
+  struct VisualSegment {
+    mapping: ByteMapping,
+    level: Level,
+  }
 
-    let mut box_counter = 0usize;
-    let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
-    for line in lines.iter() {
-        let mut leaves = Vec::new();
-        for positioned in &line.items {
-            flatten_positioned_item(positioned, &mut Vec::new(), &mut box_counter, &mut leaves);
+  let mut box_counter = 0usize;
+  let mut line_leaves: Vec<Vec<BidiLeaf>> = Vec::with_capacity(lines.len());
+  for line in lines.iter() {
+    let mut leaves = Vec::new();
+    for positioned in &line.items {
+      flatten_positioned_item(positioned, &mut Vec::new(), &mut box_counter, &mut leaves);
+    }
+    line_leaves.push(leaves);
+  }
+
+  let paragraph_level = if let Some(level) = base_level {
+    level
+  } else {
+    let mut text = String::new();
+    for leaves in &line_leaves {
+      for leaf in leaves {
+        match &leaf.item {
+          InlineItem::Text(t) => text.push_str(&t.text),
+          InlineItem::Tab(_) => text.push('\t'),
+          _ => text.push('\u{FFFC}'),
         }
-        line_leaves.push(leaves);
+      }
     }
 
-    let paragraph_level = if let Some(level) = base_level {
-        level
+    if text.is_empty() {
+      Level::ltr()
     } else {
-        let mut text = String::new();
-        for leaves in &line_leaves {
-            for leaf in leaves {
-                match &leaf.item {
-                    InlineItem::Text(t) => text.push_str(&t.text),
-                    InlineItem::Tab(_) => text.push('\t'),
-                    _ => text.push('\u{FFFC}'),
-                }
-            }
-        }
-
-        if text.is_empty() {
-            Level::ltr()
-        } else {
-            let info = BidiInfo::new(&text, None);
-            info.paragraphs.first().map(|p| p.level).unwrap_or_else(Level::ltr)
-        }
-    };
-
-    let paragraph_direction = if paragraph_level.is_rtl() {
-        Direction::Rtl
-    } else {
-        Direction::Ltr
-    };
-    for line in lines.iter_mut() {
-        line.resolved_direction = paragraph_direction;
+      let info = BidiInfo::new(&text, None);
+      info
+        .paragraphs
+        .first()
+        .map(|p| p.level)
+        .unwrap_or_else(Level::ltr)
     }
+  };
 
-    let base_dir = paragraph_direction;
-    let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
-    let mut byte_map: Vec<ByteMapping> = Vec::new();
-    let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
-    let mut global_offset = 0usize;
-    let mut paragraph_text = String::new();
+  let paragraph_direction = if paragraph_level.is_rtl() {
+    Direction::Rtl
+  } else {
+    Direction::Ltr
+  };
+  for line in lines.iter_mut() {
+    line.resolved_direction = paragraph_direction;
+  }
 
-    for leaves in line_leaves {
-        let line_start = global_offset;
-        for leaf in leaves {
-            let mut stack: Vec<(UnicodeBidi, Direction)> = vec![(root_unicode_bidi, root_direction)];
-            stack.extend(leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
-            stack.push((leaf.item.unicode_bidi(), leaf.item.direction()));
-            let bidi_context = crate::layout::contexts::inline::explicit_bidi_context(base_dir, &stack);
+  let base_dir = paragraph_direction;
+  let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
+  let mut byte_map: Vec<ByteMapping> = Vec::new();
+  let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
+  let mut global_offset = 0usize;
+  let mut paragraph_text = String::new();
 
-            let leaf_index = paragraph_leaves.len();
-            paragraph_leaves.push(ParagraphLeaf {
-                leaf: leaf.clone(),
-                bidi_context,
+  for leaves in line_leaves {
+    let line_start = global_offset;
+    for leaf in leaves {
+      let mut stack: Vec<(UnicodeBidi, Direction)> = vec![(root_unicode_bidi, root_direction)];
+      stack.extend(leaf.box_stack.iter().map(|c| (c.unicode_bidi, c.direction)));
+      stack.push((leaf.item.unicode_bidi(), leaf.item.direction()));
+      let bidi_context = crate::layout::contexts::inline::explicit_bidi_context(base_dir, &stack);
+
+      let leaf_index = paragraph_leaves.len();
+      paragraph_leaves.push(ParagraphLeaf {
+        leaf: leaf.clone(),
+        bidi_context,
+      });
+
+      let (isolate_group, leaf_isolate) = if let Some(ctx) =
+        leaf.box_stack.iter().rev().find(|ctx| {
+          matches!(
+            ctx.unicode_bidi,
+            UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride
+          )
+        }) {
+        (Some(ctx.id), false)
+      } else if matches!(
+        leaf.item.unicode_bidi(),
+        UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride
+      ) {
+        (Some(leaf_index), true)
+      } else {
+        (None, false)
+      };
+
+      match &leaf.item {
+        InlineItem::Text(t) => {
+          for (byte_idx, ch) in t.text.char_indices() {
+            let start = paragraph_text.len();
+            paragraph_text.push(ch);
+            let end = paragraph_text.len();
+            byte_map.push(ByteMapping {
+              leaf_index,
+              start,
+              end,
+              local_start: byte_idx,
+              local_end: byte_idx + ch.len_utf8(),
+              isolate_group,
+              leaf_isolate,
             });
+            global_offset += 1;
+          }
+        }
+        InlineItem::Tab(_) => {
+          let start = paragraph_text.len();
+          paragraph_text.push('\t');
+          let end = paragraph_text.len();
+          byte_map.push(ByteMapping {
+            leaf_index,
+            start,
+            end,
+            local_start: 0,
+            local_end: 0,
+            isolate_group,
+            leaf_isolate,
+          });
+          global_offset += 1;
+        }
+        InlineItem::InlineBox(_) => {}
+        _ => {
+          let start = paragraph_text.len();
+          paragraph_text.push('\u{FFFC}');
+          let end = paragraph_text.len();
+          byte_map.push(ByteMapping {
+            leaf_index,
+            start,
+            end,
+            local_start: 0,
+            local_end: 0,
+            isolate_group,
+            leaf_isolate,
+          });
+          global_offset += 1;
+        }
+      }
+    }
+    line_ranges.push(line_start..global_offset);
+  }
 
-            let (isolate_group, leaf_isolate) = if let Some(ctx) = leaf
-                .box_stack
+  if paragraph_text.is_empty() {
+    return;
+  }
+
+  let bidi = unicode_bidi::BidiInfo::new(&paragraph_text, Some(paragraph_level));
+  let mut paragraph_levels: Vec<Level> = paragraph_text
+    .char_indices()
+    .map(|(idx, _)| bidi.levels.get(idx).copied().unwrap_or(paragraph_level))
+    .collect();
+  let _paragraph_chars: Vec<char> = paragraph_text.chars().collect();
+
+  for (idx, mapping) in byte_map.iter().enumerate() {
+    if let Some(ctx) = paragraph_leaves
+      .get(mapping.leaf_index)
+      .and_then(|p| p.bidi_context)
+    {
+      if let Some(current) = paragraph_levels.get_mut(idx) {
+        *current = ctx.level;
+      }
+    }
+  }
+
+  for (line_idx, line_range) in line_ranges.into_iter().enumerate() {
+    if line_range.is_empty() {
+      continue;
+    }
+
+    // Build atoms so isolate groups participate as single units in visual reordering.
+    #[derive(Clone, Copy)]
+    struct Atom {
+      start: usize,
+      end: usize,
+      level: Level,
+      group: Option<usize>,
+    }
+
+    let mut atoms = Vec::new();
+    let mut idx = line_range.start;
+    while idx < line_range.end {
+      let mapping = &byte_map[idx];
+      if let Some(group) = mapping.isolate_group {
+        let group_level = paragraph_levels[idx];
+        let start = idx;
+        let mut end = idx + 1;
+        while end < line_range.end && byte_map[end].isolate_group == Some(group) {
+          end += 1;
+        }
+        atoms.push(Atom {
+          start,
+          end,
+          level: group_level,
+          group: Some(group),
+        });
+        idx = end;
+      } else {
+        atoms.push(Atom {
+          start: idx,
+          end: idx + 1,
+          level: paragraph_levels[idx],
+          group: None,
+        });
+        idx += 1;
+      }
+    }
+
+    let atom_levels: Vec<Level> = atoms.iter().map(|a| a.level).collect();
+    let atom_order = unicode_bidi::BidiInfo::reorder_visual(&atom_levels);
+
+    let mut segments: Vec<VisualSegment> = Vec::new();
+    let push_segment = |mapping: &ByteMapping, level: Level, segments: &mut Vec<VisualSegment>| {
+      let leaf_override = paragraph_leaves
+        .get(mapping.leaf_index)
+        .and_then(|p| p.bidi_context)
+        .is_some_and(|ctx| ctx.override_all);
+      if leaf_override {
+        segments.push(VisualSegment {
+          mapping: *mapping,
+          level,
+        });
+        return;
+      }
+
+      if let Some(last) = segments.last_mut() {
+        let same_leaf = last.mapping.leaf_index == mapping.leaf_index && last.level == level;
+        let same_isolate_leaf = mapping.leaf_isolate
+          && last.mapping.leaf_isolate
+          && mapping.isolate_group == last.mapping.isolate_group;
+        let in_isolate = mapping.isolate_group.is_some() || last.mapping.isolate_group.is_some();
+        if same_leaf
+          && (!in_isolate || same_isolate_leaf)
+          && (mapping.start == last.mapping.end || mapping.end == last.mapping.start)
+        {
+          last.mapping.start = last.mapping.start.min(mapping.start);
+          last.mapping.end = last.mapping.end.max(mapping.end);
+          last.mapping.local_start = last.mapping.local_start.min(mapping.local_start);
+          last.mapping.local_end = last.mapping.local_end.max(mapping.local_end);
+          last.mapping.leaf_isolate = last.mapping.leaf_isolate || mapping.leaf_isolate;
+          return;
+        }
+      }
+
+      segments.push(VisualSegment {
+        mapping: *mapping,
+        level,
+      });
+    };
+
+    for atom_idx in atom_order {
+      if let Some(atom) = atoms.get(atom_idx) {
+        if atom.group.is_some() {
+          let slice = &byte_map[atom.start..atom.end];
+          let isolate_text: String = slice
+            .iter()
+            .map(|m| {
+              paragraph_text
+                .get(m.start..m.end)
+                .and_then(|s| s.chars().next())
+                .unwrap_or('\u{FFFD}')
+            })
+            .collect();
+          let (levels, reorder): (Vec<Level>, Vec<usize>) = if let Some(ctx) = paragraph_leaves
+            .get(slice.first().map(|m| m.leaf_index).unwrap_or(0))
+            .and_then(|p| p.bidi_context)
+          {
+            if ctx.override_all {
+              let levels = vec![ctx.level; slice.len()];
+              let reorder = if ctx.level.is_rtl() {
+                (0..slice.len()).rev().collect()
+              } else {
+                (0..slice.len()).collect()
+              };
+              (levels, reorder)
+            } else {
+              let levels: Vec<Level> = unicode_bidi::BidiInfo::new(&isolate_text, Some(ctx.level))
+                .levels
                 .iter()
-                .rev()
-                .find(|ctx| matches!(ctx.unicode_bidi, UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride))
-            {
-                (Some(ctx.id), false)
-            } else if matches!(
-                leaf.item.unicode_bidi(),
-                UnicodeBidi::Isolate | UnicodeBidi::IsolateOverride
-            ) {
-                (Some(leaf_index), true)
-            } else {
-                (None, false)
-            };
-
-            match &leaf.item {
-                InlineItem::Text(t) => {
-                    for (byte_idx, ch) in t.text.char_indices() {
-                        let start = paragraph_text.len();
-                        paragraph_text.push(ch);
-                        let end = paragraph_text.len();
-                        byte_map.push(ByteMapping {
-                            leaf_index,
-                            start,
-                            end,
-                            local_start: byte_idx,
-                            local_end: byte_idx + ch.len_utf8(),
-                            isolate_group,
-                            leaf_isolate,
-                        });
-                        global_offset += 1;
-                    }
-                }
-                InlineItem::Tab(_) => {
-                    let start = paragraph_text.len();
-                    paragraph_text.push('\t');
-                    let end = paragraph_text.len();
-                    byte_map.push(ByteMapping {
-                        leaf_index,
-                        start,
-                        end,
-                        local_start: 0,
-                        local_end: 0,
-                        isolate_group,
-                        leaf_isolate,
-                    });
-                    global_offset += 1;
-                }
-                InlineItem::InlineBox(_) => {}
-                _ => {
-                    let start = paragraph_text.len();
-                    paragraph_text.push('\u{FFFC}');
-                    let end = paragraph_text.len();
-                    byte_map.push(ByteMapping {
-                        leaf_index,
-                        start,
-                        end,
-                        local_start: 0,
-                        local_end: 0,
-                        isolate_group,
-                        leaf_isolate,
-                    });
-                    global_offset += 1;
-                }
+                .enumerate()
+                .filter_map(|(byte_idx, lvl)| {
+                  // levels indexed by byte; take the start of each char
+                  if isolate_text.is_char_boundary(byte_idx) {
+                    Some(*lvl)
+                  } else {
+                    None
+                  }
+                })
+                .collect();
+              let reorder = if levels.is_empty() {
+                (0..slice.len()).collect()
+              } else {
+                unicode_bidi::BidiInfo::reorder_visual(&levels)
+              };
+              (levels, reorder)
             }
-        }
-        line_ranges.push(line_start..global_offset);
-    }
+          } else {
+            (
+              (0..slice.len()).map(|_| paragraph_level).collect(),
+              (0..slice.len()).collect(),
+            )
+          };
 
-    if paragraph_text.is_empty() {
-        return;
-    }
-
-    let bidi = unicode_bidi::BidiInfo::new(&paragraph_text, Some(paragraph_level));
-    let mut paragraph_levels: Vec<Level> = paragraph_text
-        .char_indices()
-        .map(|(idx, _)| bidi.levels.get(idx).copied().unwrap_or(paragraph_level))
-        .collect();
-    let _paragraph_chars: Vec<char> = paragraph_text.chars().collect();
-
-    for (idx, mapping) in byte_map.iter().enumerate() {
-        if let Some(ctx) = paragraph_leaves.get(mapping.leaf_index).and_then(|p| p.bidi_context) {
-            if let Some(current) = paragraph_levels.get_mut(idx) {
-                *current = ctx.level;
+          for visual_pos in reorder {
+            if let Some(map_ref) = slice.get(visual_pos) {
+              let lvl = levels
+                .get(visual_pos)
+                .copied()
+                .unwrap_or_else(|| paragraph_levels[atom.start]);
+              push_segment(map_ref, lvl, &mut segments);
             }
+          }
+        } else {
+          if let Some(mapping) = byte_map.get(atom.start) {
+            let level = paragraph_levels[atom.start];
+            push_segment(mapping, level, &mut segments);
+          }
         }
+      }
     }
 
-    for (line_idx, line_range) in line_ranges.into_iter().enumerate() {
-        if line_range.is_empty() {
+    let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
+    for seg in segments {
+      if let Some(para_leaf) = paragraph_leaves.get(seg.mapping.leaf_index) {
+        let mut frag = para_leaf.leaf.clone();
+        if let InlineItem::Text(text_item) = &para_leaf.leaf.item {
+          if let Some(sliced) = slice_text_item(
+            text_item,
+            seg.mapping.local_start..seg.mapping.local_end,
+            shaper,
+            font_context,
+            base_dir,
+            para_leaf.bidi_context,
+          ) {
+            frag.item = InlineItem::Text(sliced);
+          } else {
             continue;
+          }
         }
+        visual_fragments.push(frag);
+      }
+    }
 
-        // Build atoms so isolate groups participate as single units in visual reordering.
-        #[derive(Clone, Copy)]
-        struct Atom {
-            start: usize,
-            end: usize,
-            level: Level,
-            group: Option<usize>,
+    if visual_fragments.is_empty() {
+      continue;
+    }
+
+    let mut box_positions: HashMap<usize, (usize, usize)> = HashMap::new();
+    for (vis_pos, frag) in visual_fragments.iter().enumerate() {
+      for ctx in &frag.box_stack {
+        box_positions
+          .entry(ctx.id)
+          .and_modify(|entry| entry.1 = vis_pos)
+          .or_insert((vis_pos, vis_pos));
+      }
+    }
+
+    fn coalesce_inline_boxes(items: Vec<PositionedItem>) -> Vec<PositionedItem> {
+      let mut out: Vec<PositionedItem> = Vec::new();
+      for item in items {
+        if let Some(last) = out.last_mut() {
+          if let (InlineItem::InlineBox(prev), InlineItem::InlineBox(mut curr)) =
+            (&mut last.item, item.item.clone())
+          {
+            if prev.box_index == curr.box_index {
+              prev.children.append(&mut curr.children);
+              prev.end_edge = curr.end_edge;
+              continue;
+            }
+          }
         }
+        out.push(item);
+      }
+      out
+    }
 
-        let mut atoms = Vec::new();
-        let mut idx = line_range.start;
-        while idx < line_range.end {
-            let mapping = &byte_map[idx];
-            if let Some(group) = mapping.isolate_group {
-                let group_level = paragraph_levels[idx];
-                let start = idx;
-                let mut end = idx + 1;
-                while end < line_range.end && byte_map[end].isolate_group == Some(group) {
-                    end += 1;
-                }
-                atoms.push(Atom {
-                    start,
-                    end,
-                    level: group_level,
-                    group: Some(group),
-                });
-                idx = end;
-            } else {
-                atoms.push(Atom {
-                    start: idx,
-                    end: idx + 1,
-                    level: paragraph_levels[idx],
-                    group: None,
-                });
-                idx += 1;
-            }
-        }
+    let mut reordered: Vec<PositionedItem> = Vec::new();
+    for (vis_pos, frag) in visual_fragments.into_iter().enumerate() {
+      let mut item = frag.item;
 
-        let atom_levels: Vec<Level> = atoms.iter().map(|a| a.level).collect();
-        let atom_order = unicode_bidi::BidiInfo::reorder_visual(&atom_levels);
-
-        let mut segments: Vec<VisualSegment> = Vec::new();
-        let push_segment = |mapping: &ByteMapping, level: Level, segments: &mut Vec<VisualSegment>| {
-            let leaf_override = paragraph_leaves
-                .get(mapping.leaf_index)
-                .and_then(|p| p.bidi_context)
-                .is_some_and(|ctx| ctx.override_all);
-            if leaf_override {
-                segments.push(VisualSegment {
-                    mapping: *mapping,
-                    level,
-                });
-                return;
-            }
-
-            if let Some(last) = segments.last_mut() {
-                let same_leaf = last.mapping.leaf_index == mapping.leaf_index && last.level == level;
-                let same_isolate_leaf = mapping.leaf_isolate
-                    && last.mapping.leaf_isolate
-                    && mapping.isolate_group == last.mapping.isolate_group;
-                let in_isolate = mapping.isolate_group.is_some() || last.mapping.isolate_group.is_some();
-                if same_leaf
-                    && (!in_isolate || same_isolate_leaf)
-                    && (mapping.start == last.mapping.end || mapping.end == last.mapping.start)
-                {
-                    last.mapping.start = last.mapping.start.min(mapping.start);
-                    last.mapping.end = last.mapping.end.max(mapping.end);
-                    last.mapping.local_start = last.mapping.local_start.min(mapping.local_start);
-                    last.mapping.local_end = last.mapping.local_end.max(mapping.local_end);
-                    last.mapping.leaf_isolate = last.mapping.leaf_isolate || mapping.leaf_isolate;
-                    return;
-                }
-            }
-
-            segments.push(VisualSegment {
-                mapping: *mapping,
-                level,
-            });
+      for ctx in frag.box_stack.iter().rev() {
+        let (first, last) = box_positions
+          .get(&ctx.id)
+          .copied()
+          .unwrap_or((vis_pos, vis_pos));
+        let start_edge = if vis_pos == first {
+          ctx.start_edge
+        } else {
+          0.0
         };
+        let end_edge = if vis_pos == last { ctx.end_edge } else { 0.0 };
 
-        for atom_idx in atom_order {
-            if let Some(atom) = atoms.get(atom_idx) {
-                if atom.group.is_some() {
-                    let slice = &byte_map[atom.start..atom.end];
-                    let isolate_text: String = slice
-                        .iter()
-                        .map(|m| {
-                            paragraph_text
-                                .get(m.start..m.end)
-                                .and_then(|s| s.chars().next())
-                                .unwrap_or('\u{FFFD}')
-                        })
-                        .collect();
-                    let (levels, reorder): (Vec<Level>, Vec<usize>) = if let Some(ctx) = paragraph_leaves
-                        .get(slice.first().map(|m| m.leaf_index).unwrap_or(0))
-                        .and_then(|p| p.bidi_context)
-                    {
-                        if ctx.override_all {
-                            let levels = vec![ctx.level; slice.len()];
-                            let reorder = if ctx.level.is_rtl() {
-                                (0..slice.len()).rev().collect()
-                            } else {
-                                (0..slice.len()).collect()
-                            };
-                            (levels, reorder)
-                        } else {
-                            let levels: Vec<Level> = unicode_bidi::BidiInfo::new(&isolate_text, Some(ctx.level))
-                                .levels
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(byte_idx, lvl)| {
-                                    // levels indexed by byte; take the start of each char
-                                    if isolate_text.is_char_boundary(byte_idx) {
-                                        Some(*lvl)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                            let reorder = if levels.is_empty() {
-                                (0..slice.len()).collect()
-                            } else {
-                                unicode_bidi::BidiInfo::reorder_visual(&levels)
-                            };
-                            (levels, reorder)
-                        }
-                    } else {
-                        (
-                            (0..slice.len()).map(|_| paragraph_level).collect(),
-                            (0..slice.len()).collect(),
-                        )
-                    };
+        let mut inline_box = InlineBoxItem::new(
+          start_edge,
+          end_edge,
+          ctx.content_offset_y,
+          ctx.metrics,
+          ctx.style.clone(),
+          ctx.box_index,
+          ctx.direction,
+          ctx.unicode_bidi,
+        );
+        inline_box.vertical_align = ctx.vertical_align;
+        inline_box.add_child(item);
+        item = InlineItem::InlineBox(inline_box);
+      }
 
-                    for visual_pos in reorder {
-                        if let Some(map_ref) = slice.get(visual_pos) {
-                            let lvl = levels
-                                .get(visual_pos)
-                                .copied()
-                                .unwrap_or_else(|| paragraph_levels[atom.start]);
-                            push_segment(map_ref, lvl, &mut segments);
-                        }
-                    }
-                } else {
-                    if let Some(mapping) = byte_map.get(atom.start) {
-                        let level = paragraph_levels[atom.start];
-                        push_segment(mapping, level, &mut segments);
-                    }
-                }
-            }
-        }
-
-        let mut visual_fragments: Vec<BidiLeaf> = Vec::new();
-        for seg in segments {
-            if let Some(para_leaf) = paragraph_leaves.get(seg.mapping.leaf_index) {
-                let mut frag = para_leaf.leaf.clone();
-                if let InlineItem::Text(text_item) = &para_leaf.leaf.item {
-                    if let Some(sliced) = slice_text_item(
-                        text_item,
-                        seg.mapping.local_start..seg.mapping.local_end,
-                        shaper,
-                        font_context,
-                        base_dir,
-                        para_leaf.bidi_context,
-                    ) {
-                        frag.item = InlineItem::Text(sliced);
-                    } else {
-                        continue;
-                    }
-                }
-                visual_fragments.push(frag);
-            }
-        }
-
-        if visual_fragments.is_empty() {
-            continue;
-        }
-
-        let mut box_positions: HashMap<usize, (usize, usize)> = HashMap::new();
-        for (vis_pos, frag) in visual_fragments.iter().enumerate() {
-            for ctx in &frag.box_stack {
-                box_positions
-                    .entry(ctx.id)
-                    .and_modify(|entry| entry.1 = vis_pos)
-                    .or_insert((vis_pos, vis_pos));
-            }
-        }
-
-        fn coalesce_inline_boxes(items: Vec<PositionedItem>) -> Vec<PositionedItem> {
-            let mut out: Vec<PositionedItem> = Vec::new();
-            for item in items {
-                if let Some(last) = out.last_mut() {
-                    if let (InlineItem::InlineBox(prev), InlineItem::InlineBox(mut curr)) =
-                        (&mut last.item, item.item.clone())
-                    {
-                        if prev.box_index == curr.box_index {
-                            prev.children.append(&mut curr.children);
-                            prev.end_edge = curr.end_edge;
-                            continue;
-                        }
-                    }
-                }
-                out.push(item);
-            }
-            out
-        }
-
-        let mut reordered: Vec<PositionedItem> = Vec::new();
-        for (vis_pos, frag) in visual_fragments.into_iter().enumerate() {
-            let mut item = frag.item;
-
-            for ctx in frag.box_stack.iter().rev() {
-                let (first, last) = box_positions.get(&ctx.id).copied().unwrap_or((vis_pos, vis_pos));
-                let start_edge = if vis_pos == first { ctx.start_edge } else { 0.0 };
-                let end_edge = if vis_pos == last { ctx.end_edge } else { 0.0 };
-
-                let mut inline_box = InlineBoxItem::new(
-                    start_edge,
-                    end_edge,
-                    ctx.content_offset_y,
-                    ctx.metrics,
-                    ctx.style.clone(),
-                    ctx.box_index,
-                    ctx.direction,
-                    ctx.unicode_bidi,
-                );
-                inline_box.vertical_align = ctx.vertical_align;
-                inline_box.add_child(item);
-                item = InlineItem::InlineBox(inline_box);
-            }
-
-            let positioned = PositionedItem {
-                item,
-                x: 0.0,
-                baseline_offset: frag.baseline_offset,
-            };
-            reordered.push(positioned);
-        }
-
-        let mut reordered = coalesce_inline_boxes(reordered);
-        let mut x = 0.0;
-        for positioned in &mut reordered {
-            positioned.x = x;
-            x += positioned.item.width();
-        }
-
-        let width: f32 = reordered.iter().map(|p| p.item.width()).sum();
-        let line = &mut lines[line_idx];
-        line.width = width;
-        line.items = reordered;
+      let positioned = PositionedItem {
+        item,
+        x: 0.0,
+        baseline_offset: frag.baseline_offset,
+      };
+      reordered.push(positioned);
     }
+
+    let mut reordered = coalesce_inline_boxes(reordered);
+    let mut x = 0.0;
+    for positioned in &mut reordered {
+      positioned.x = x;
+      x += positioned.item.width();
+    }
+
+    let width: f32 = reordered.iter().map(|p| p.item.width()).sum();
+    let line = &mut lines[line_idx];
+    line.width = width;
+    line.items = reordered;
+  }
 }
 
 fn slice_text_item(
-    item: &TextItem,
-    range: std::ops::Range<usize>,
-    pipeline: &ShapingPipeline,
-    font_context: &FontContext,
-    base_direction: Direction,
-    bidi_context: Option<crate::text::pipeline::ExplicitBidiContext>,
+  item: &TextItem,
+  range: std::ops::Range<usize>,
+  pipeline: &ShapingPipeline,
+  font_context: &FontContext,
+  base_direction: Direction,
+  bidi_context: Option<crate::text::pipeline::ExplicitBidiContext>,
 ) -> Option<TextItem> {
-    if range.start >= range.end || range.end > item.text.len() {
-        return None;
-    }
+  if range.start >= range.end || range.end > item.text.len() {
+    return None;
+  }
 
-    // Fast path for synthetic items used in tests that don't carry shaped runs.
-    if item.runs.is_empty() {
-        let advance_at = |byte_offset: usize| -> f32 {
-            item.cluster_advances
-                .iter()
-                .rev()
-                .find(|b| b.byte_offset <= byte_offset)
-                .map(|b| b.advance)
-                .unwrap_or(0.0)
-        };
-        let start_adv = advance_at(range.start);
-        let end_adv = advance_at(range.end);
-        let width = (end_adv - start_adv).max(0.0);
+  // Fast path for synthetic items used in tests that don't carry shaped runs.
+  if item.runs.is_empty() {
+    let advance_at = |byte_offset: usize| -> f32 {
+      item
+        .cluster_advances
+        .iter()
+        .rev()
+        .find(|b| b.byte_offset <= byte_offset)
+        .map(|b| b.advance)
+        .unwrap_or(0.0)
+    };
+    let start_adv = advance_at(range.start);
+    let end_adv = advance_at(range.end);
+    let width = (end_adv - start_adv).max(0.0);
 
-        let cluster_advances = item
-            .cluster_advances
-            .iter()
-            .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
-            .map(|b| ClusterBoundary {
-                byte_offset: b.byte_offset - range.start,
-                advance: (b.advance - start_adv).max(0.0),
-            })
-            .collect();
+    let cluster_advances = item
+      .cluster_advances
+      .iter()
+      .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
+      .map(|b| ClusterBoundary {
+        byte_offset: b.byte_offset - range.start,
+        advance: (b.advance - start_adv).max(0.0),
+      })
+      .collect();
 
-        let breaks = item
-            .break_opportunities
-            .iter()
-            .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
-            .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen))
-            .collect();
-        let forced = item
-            .forced_break_offsets
-            .iter()
-            .copied()
-            .filter(|o| *o >= range.start && *o <= range.end)
-            .map(|o| o - range.start)
-            .collect();
-
-        return Some(TextItem {
-            runs: Vec::new(),
-            advance: width,
-            advance_for_layout: if item.is_marker {
-                item.advance_for_layout.min(width)
-            } else {
-                width
-            },
-            metrics: item.metrics,
-            vertical_align: item.vertical_align,
-            break_opportunities: breaks,
-            forced_break_offsets: forced,
-            text: item.text[range.clone()].to_string(),
-            font_size: item.font_size,
-            style: item.style.clone(),
-            base_direction: item.base_direction,
-            is_marker: item.is_marker,
-            paint_offset: item.paint_offset,
-            cluster_advances,
-        });
-    }
-
-    let slice_text = &item.text[range.clone()];
-    let mut runs = pipeline
-        .shape_with_context(
-            slice_text,
-            &item.style,
-            font_context,
-            pipeline_dir_from_style(base_direction),
-            bidi_context,
-        )
-        .ok()?;
-    TextItem::apply_spacing_to_runs(
-        &mut runs,
-        slice_text,
-        item.style.letter_spacing,
-        item.style.word_spacing,
-    );
-
-    let metrics = TextItem::metrics_from_runs(&runs, item.metrics.line_height, item.font_size);
     let breaks = item
-        .break_opportunities
-        .iter()
-        .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
-        .map(|b| BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen))
-        .collect();
+      .break_opportunities
+      .iter()
+      .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
+      .map(|b| {
+        BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen)
+      })
+      .collect();
     let forced = item
-        .forced_break_offsets
-        .iter()
-        .copied()
-        .filter(|o| *o >= range.start && *o <= range.end)
-        .map(|o| o - range.start)
-        .collect();
+      .forced_break_offsets
+      .iter()
+      .copied()
+      .filter(|o| *o >= range.start && *o <= range.end)
+      .map(|o| o - range.start)
+      .collect();
 
-    let mut new_item = TextItem::new(
-        runs,
-        slice_text.to_string(),
-        metrics,
-        breaks,
-        forced,
-        item.style.clone(),
-        item.base_direction,
+    return Some(TextItem {
+      runs: Vec::new(),
+      advance: width,
+      advance_for_layout: if item.is_marker {
+        item.advance_for_layout.min(width)
+      } else {
+        width
+      },
+      metrics: item.metrics,
+      vertical_align: item.vertical_align,
+      break_opportunities: breaks,
+      forced_break_offsets: forced,
+      text: item.text[range.clone()].to_string(),
+      font_size: item.font_size,
+      style: item.style.clone(),
+      base_direction: item.base_direction,
+      is_marker: item.is_marker,
+      paint_offset: item.paint_offset,
+      cluster_advances,
+    });
+  }
+
+  let slice_text = &item.text[range.clone()];
+  let mut runs = pipeline
+    .shape_with_context(
+      slice_text,
+      &item.style,
+      font_context,
+      pipeline_dir_from_style(base_direction),
+      bidi_context,
     )
-    .with_vertical_align(item.vertical_align);
-    if item.is_marker {
-        new_item.is_marker = true;
-        new_item.paint_offset = item.paint_offset;
-        new_item.advance_for_layout = item.advance_for_layout.min(new_item.advance);
-    }
+    .ok()?;
+  TextItem::apply_spacing_to_runs(
+    &mut runs,
+    slice_text,
+    item.style.letter_spacing,
+    item.style.word_spacing,
+  );
 
-    Some(new_item)
+  let metrics = TextItem::metrics_from_runs(&runs, item.metrics.line_height, item.font_size);
+  let breaks = item
+    .break_opportunities
+    .iter()
+    .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
+    .map(|b| {
+      BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen)
+    })
+    .collect();
+  let forced = item
+    .forced_break_offsets
+    .iter()
+    .copied()
+    .filter(|o| *o >= range.start && *o <= range.end)
+    .map(|o| o - range.start)
+    .collect();
+
+  let mut new_item = TextItem::new(
+    runs,
+    slice_text.to_string(),
+    metrics,
+    breaks,
+    forced,
+    item.style.clone(),
+    item.base_direction,
+  )
+  .with_vertical_align(item.vertical_align);
+  if item.is_marker {
+    new_item.is_marker = true;
+    new_item.paint_offset = item.paint_offset;
+    new_item.advance_for_layout = item.advance_for_layout.min(new_item.advance);
+  }
+
+  Some(new_item)
 }
 
 #[derive(Clone)]
 struct BoxContext {
-    id: usize,
-    start_edge: f32,
-    end_edge: f32,
-    content_offset_y: f32,
-    metrics: BaselineMetrics,
-    vertical_align: VerticalAlign,
-    box_index: usize,
-    direction: Direction,
-    unicode_bidi: UnicodeBidi,
-    style: Arc<ComputedStyle>,
+  id: usize,
+  start_edge: f32,
+  end_edge: f32,
+  content_offset_y: f32,
+  metrics: BaselineMetrics,
+  vertical_align: VerticalAlign,
+  box_index: usize,
+  direction: Direction,
+  unicode_bidi: UnicodeBidi,
+  style: Arc<ComputedStyle>,
 }
 
 #[derive(Clone)]
 struct BidiLeaf {
-    item: InlineItem,
-    baseline_offset: f32,
-    box_stack: Vec<BoxContext>,
+  item: InlineItem,
+  baseline_offset: f32,
+  box_stack: Vec<BoxContext>,
 }
 
 #[derive(Clone)]
 struct ParagraphLeaf {
-    leaf: BidiLeaf,
-    bidi_context: Option<crate::text::pipeline::ExplicitBidiContext>,
+  leaf: BidiLeaf,
+  bidi_context: Option<crate::text::pipeline::ExplicitBidiContext>,
 }
 
 fn flatten_positioned_item(
-    positioned: &PositionedItem,
-    box_stack: &mut Vec<BoxContext>,
-    box_counter: &mut usize,
-    leaves: &mut Vec<BidiLeaf>,
+  positioned: &PositionedItem,
+  box_stack: &mut Vec<BoxContext>,
+  box_counter: &mut usize,
+  leaves: &mut Vec<BidiLeaf>,
 ) {
-    match &positioned.item {
-        InlineItem::InlineBox(inline_box) => {
-            let id = *box_counter;
-            *box_counter += 1;
-            let ctx = BoxContext {
-                id,
-                start_edge: inline_box.start_edge,
-                end_edge: inline_box.end_edge,
-                content_offset_y: inline_box.content_offset_y,
-                metrics: inline_box.metrics,
-                vertical_align: inline_box.vertical_align,
-                box_index: inline_box.box_index,
-                direction: inline_box.direction,
-                unicode_bidi: inline_box.unicode_bidi,
-                style: inline_box.style.clone(),
-            };
-            box_stack.push(ctx);
-            for child in &inline_box.children {
-                let child_positioned = PositionedItem {
-                    item: child.clone(),
-                    x: positioned.x,
-                    baseline_offset: positioned.baseline_offset,
-                };
-                flatten_positioned_item(&child_positioned, box_stack, box_counter, leaves);
-            }
-            box_stack.pop();
-        }
-        _ => {
-            leaves.push(BidiLeaf {
-                item: positioned.item.clone(),
-                baseline_offset: positioned.baseline_offset,
-                box_stack: box_stack.clone(),
-            });
-        }
+  match &positioned.item {
+    InlineItem::InlineBox(inline_box) => {
+      let id = *box_counter;
+      *box_counter += 1;
+      let ctx = BoxContext {
+        id,
+        start_edge: inline_box.start_edge,
+        end_edge: inline_box.end_edge,
+        content_offset_y: inline_box.content_offset_y,
+        metrics: inline_box.metrics,
+        vertical_align: inline_box.vertical_align,
+        box_index: inline_box.box_index,
+        direction: inline_box.direction,
+        unicode_bidi: inline_box.unicode_bidi,
+        style: inline_box.style.clone(),
+      };
+      box_stack.push(ctx);
+      for child in &inline_box.children {
+        let child_positioned = PositionedItem {
+          item: child.clone(),
+          x: positioned.x,
+          baseline_offset: positioned.baseline_offset,
+        };
+        flatten_positioned_item(&child_positioned, box_stack, box_counter, leaves);
+      }
+      box_stack.pop();
     }
+    _ => {
+      leaves.push(BidiLeaf {
+        item: positioned.item.clone(),
+        baseline_offset: positioned.baseline_offset,
+        box_stack: box_stack.clone(),
+      });
+    }
+  }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::geometry::Rect;
-    use crate::layout::contexts::inline::explicit_bidi_context;
-    use crate::style::ComputedStyle;
-    use crate::text::font_loader::FontContext;
-    use crate::text::line_break::find_break_opportunities;
-    use crate::text::pipeline::ShapingPipeline;
-    use std::sync::Arc;
-    use unicode_bidi::{level, BidiInfo, Level};
+  use super::*;
+  use crate::geometry::Rect;
+  use crate::layout::contexts::inline::explicit_bidi_context;
+  use crate::style::ComputedStyle;
+  use crate::text::font_loader::FontContext;
+  use crate::text::line_break::find_break_opportunities;
+  use crate::text::pipeline::ShapingPipeline;
+  use std::sync::Arc;
+  use unicode_bidi::level;
+  use unicode_bidi::BidiInfo;
+  use unicode_bidi::Level;
 
-    fn make_strut_metrics() -> BaselineMetrics {
-        BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
+  fn make_strut_metrics() -> BaselineMetrics {
+    BaselineMetrics::new(12.0, 16.0, 12.0, 4.0)
+  }
+
+  fn make_builder(width: f32) -> LineBuilder<'static> {
+    let strut = make_strut_metrics();
+    LineBuilder::new(
+      width,
+      width,
+      true,
+      TextWrap::Auto,
+      0.0,
+      false,
+      false,
+      strut,
+      ShapingPipeline::new(),
+      FontContext::new(),
+      Some(Level::ltr()),
+      UnicodeBidi::Normal,
+      Direction::Ltr,
+      None,
+      0.0,
+    )
+  }
+
+  fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
+    match dir {
+      Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
+      Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
     }
-
-    fn make_builder(width: f32) -> LineBuilder<'static> {
-        let strut = make_strut_metrics();
-        LineBuilder::new(
-            width,
-            width,
-            true,
-            TextWrap::Auto,
-            0.0,
-            false,
-            false,
-            strut,
-            ShapingPipeline::new(),
-            FontContext::new(),
-            Some(Level::ltr()),
-            UnicodeBidi::Normal,
-            Direction::Ltr,
-            None,
-            0.0,
-        )
-    }
-
-    fn pipeline_dir_from_style(dir: Direction) -> crate::text::pipeline::Direction {
-        match dir {
-            Direction::Ltr => crate::text::pipeline::Direction::LeftToRight,
-            Direction::Rtl => crate::text::pipeline::Direction::RightToLeft,
-        }
-    }
-
-    fn make_builder_with_base(width: f32, base: Level) -> LineBuilder<'static> {
-        let strut = make_strut_metrics();
-        LineBuilder::new(
-            width,
-            width,
-            true,
-            TextWrap::Auto,
-            0.0,
-            false,
-            false,
-            strut,
-            ShapingPipeline::new(),
-            FontContext::new(),
-            Some(base),
-            UnicodeBidi::Normal,
-            Direction::Ltr,
-            None,
-            0.0,
-        )
-    }
-
-    fn make_text_item(text: &str, advance: f32) -> TextItem {
-        make_text_item_with_bidi(text, advance, UnicodeBidi::Normal)
-    }
-
-    fn make_text_item_with_bidi(text: &str, advance: f32, ub: UnicodeBidi) -> TextItem {
-        let mut style = ComputedStyle::default();
-        style.unicode_bidi = ub;
-        let style = Arc::new(style);
-        let mut cluster_advances = Vec::new();
-        if !text.is_empty() {
-            let step = advance / text.len() as f32;
-            for i in 1..=text.len() {
-                cluster_advances.push(ClusterBoundary {
-                    byte_offset: i,
-                    advance: step * i as f32,
-                });
-            }
-        }
-        TextItem {
-            runs: Vec::new(),
-            advance,
-            advance_for_layout: advance,
-            metrics: make_strut_metrics(),
-            vertical_align: VerticalAlign::Baseline,
-            break_opportunities: find_break_opportunities(text),
-            forced_break_offsets: Vec::new(),
-            text: text.to_string(),
-            font_size: 16.0,
-            style: style.clone(),
-            base_direction: crate::style::types::Direction::Ltr,
-            is_marker: false,
-            paint_offset: 0.0,
-            cluster_advances,
-        }
-    }
-
-    #[test]
-    fn break_opportunities_stay_on_char_boundaries() {
-        let text = "‘bruises and blood’ in ‘Christy’ fights";
-
-        let style = Arc::new(ComputedStyle::default());
-        let shaper = ShapingPipeline::new();
-        let font_context = FontContext::new();
-        let mut runs = shaper.shape(text, &style, &font_context).unwrap();
-        TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
-        let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
-
-        let item = TextItem::new(
-            runs,
-            text.to_string(),
-            metrics,
-            find_break_opportunities(text),
-            Vec::new(),
-            style,
-            Direction::Ltr,
-        );
-
-        for brk in &item.break_opportunities {
-            assert!(
-                item.text.is_char_boundary(brk.byte_offset),
-                "Break at {} is not a char boundary",
-                brk.byte_offset
-            );
-            if brk.byte_offset == 0 || brk.byte_offset >= item.text.len() {
-                continue;
-            }
-
-            assert!(
-                item.split_at(brk.byte_offset, false, &shaper, &font_context).is_some(),
-                "Split failed at {}",
-                brk.byte_offset
-            );
-        }
-    }
-
-    #[test]
-    fn split_at_mid_codepoint_aligns_to_char_boundary() {
-        let text = "a😊b";
-
-        let style = Arc::new(ComputedStyle::default());
-        let shaper = ShapingPipeline::new();
-        let font_context = FontContext::new();
-        let mut runs = shaper.shape(text, &style, &font_context).unwrap();
-        TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
-        let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
-
-        let item = TextItem::new(
-            runs,
-            text.to_string(),
-            metrics,
-            find_break_opportunities(text),
-            Vec::new(),
-            style,
-            Direction::Ltr,
-        );
-
-        // Byte offset 2 is inside the emoji; split_at should clamp to the previous char boundary.
-        let (before, after) = item
-            .split_at(2, false, &shaper, &font_context)
-            .expect("split_at should succeed even at mid-codepoint offsets");
-        assert_eq!(before.text, "a");
-        assert_eq!(after.text, "😊b");
-    }
-
-    #[test]
-    fn split_at_is_safe_on_non_char_boundaries() {
-        let item = make_text_item("â€œenhancedâ€", 20.0);
-        let pipeline = ShapingPipeline::new();
-        let font_ctx = FontContext::new();
-        assert!(item.split_at(1, false, &pipeline, &font_ctx).is_none());
-    }
-
-    #[test]
-    fn test_line_builder_single_item_fits() {
-        let mut builder = make_builder(100.0);
-
-        let item = make_text_item("Hello", 50.0);
-        builder.add_item(InlineItem::Text(item));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].items.len(), 1);
-        assert!(lines[0].width <= 100.0);
-    }
-
-    #[test]
-    fn test_line_builder_multiple_items_fit() {
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-        builder.add_item(InlineItem::Text(make_text_item(" ", 5.0)));
-        builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].items.len(), 3);
-    }
-
-    #[test]
-    fn test_line_builder_item_exceeds_width() {
-        let mut builder = make_builder(80.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-        builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
-
-        let lines = builder.finish();
-        // Second item should go to new line
-        assert_eq!(lines.len(), 2);
-    }
-
-    #[test]
-    fn test_line_builder_force_break() {
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-        builder.force_break();
-        builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].ends_with_hard_break);
-    }
-
-    #[test]
-    fn test_line_builder_empty_result() {
-        let builder = make_builder(100.0);
-
-        let lines = builder.finish();
-        assert!(lines.is_empty());
-    }
-
-    #[test]
-    fn test_line_has_baseline() {
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].baseline > 0.0);
-        assert!(lines[0].height > 0.0);
-    }
-
-    #[test]
-    fn test_replaced_item() {
-        let mut builder = make_builder(200.0);
-
-        let replaced = ReplacedItem::new(
-            Size::new(100.0, 50.0),
-            ReplacedType::Image {
-                src: String::new(),
-                alt: None,
-                sizes: None,
-                srcset: Vec::new(),
-            },
-            Arc::new(ComputedStyle::default()),
-            0.0,
-            0.0,
-        );
-        builder.add_item(InlineItem::Replaced(replaced));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].items[0].item.width(), 100.0);
-    }
-
-    #[test]
-    fn test_inline_block_item() {
-        let mut builder = make_builder(200.0);
-
-        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 40.0), vec![]);
-        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0, true);
-        builder.add_item(InlineItem::InlineBlock(inline_block));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].items[0].item.width(), 80.0);
-    }
-
-    #[test]
-    fn inline_block_baseline_prefers_last_line_box() {
-        // Create an inline-block fragment that contains a line box at y=5 with baseline 8 (relative to the line box).
-        let line = FragmentNode::new_line(Rect::from_xywh(0.0, 5.0, 60.0, 10.0), 8.0, vec![]);
-        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 20.0), vec![line]);
-
-        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0, true);
-
-        // Baseline should be derived from the line (5 + 8 = 13) rather than the bottom border edge (20).
-        assert!((inline_block.metrics.baseline_offset - 13.0).abs() < 0.001);
-        assert!((inline_block.metrics.descent - 7.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn inline_block_baseline_falls_back_when_overflow_clips() {
-        // Even with a line box present, non-visible overflow forces the baseline to the bottom margin edge.
-        let line = FragmentNode::new_line(Rect::from_xywh(0.0, 2.0, 40.0, 8.0), 6.0, vec![]);
-        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 16.0), vec![line]);
-        let inline_block = InlineBlockItem::new(
-            fragment,
-            Direction::Ltr,
-            UnicodeBidi::Normal,
-            0.0,
-            0.0,
-            false, // overflow != visible
-        );
-
-        assert!((inline_block.metrics.baseline_offset - 16.0).abs() < 0.001);
-        assert!((inline_block.metrics.descent - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn inline_block_baseline_falls_back_when_no_lines() {
-        // Overflow visible but no in-flow line boxes: baseline should be the bottom edge.
-        let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 30.0, 12.0), vec![]);
-        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0, true);
-
-        assert!((inline_block.metrics.baseline_offset - 12.0).abs() < 0.001);
-        assert!((inline_block.metrics.descent - 0.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn inline_table_baseline_uses_first_row_baseline() {
-        // Simulate an inline-table fragment with two lines; baseline should come from the first line.
-        let line1 = FragmentNode::new(
-            Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
-            FragmentContent::Line { baseline: 4.0 },
-            vec![],
-        );
-        let line2 = FragmentNode::new(
-            Rect::from_xywh(0.0, 10.0, 20.0, 10.0),
-            FragmentContent::Line { baseline: 6.0 },
-            vec![],
-        );
-        let mut style = ComputedStyle::default();
-        style.display = Display::InlineTable;
-        let fragment = FragmentNode::new_with_style(
-            Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
-            FragmentContent::Block { box_id: None },
-            vec![line1, line2],
-            Arc::new(style),
-        );
-        let inline_block = InlineBlockItem::new(fragment, Direction::Ltr, UnicodeBidi::Normal, 0.0, 0.0, true);
-
-        assert!((inline_block.metrics.baseline_offset - 4.0).abs() < 0.001);
-        assert!((inline_block.metrics.descent - 16.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_overflow_on_empty_line() {
-        let mut builder = make_builder(30.0);
-
-        // Item too wide but line is empty, so it must fit
-        builder.add_item(InlineItem::Text(make_text_item("VeryLongWord", 100.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].width > 30.0); // Overflow allowed
-    }
-
-    #[test]
-    fn test_positioned_item_x_position() {
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
-        builder.add_item(InlineItem::Text(make_text_item(" ", 5.0)));
-        builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines[0].items[0].x, 0.0);
-        assert_eq!(lines[0].items[1].x, 50.0);
-        assert_eq!(lines[0].items[2].x, 55.0);
-    }
-
-    #[test]
-    fn test_text_item_break_opportunities() {
-        let item = make_text_item("Hello World Test", 160.0);
-
-        // Should have break opportunities after spaces
-        assert!(!item.break_opportunities.is_empty());
-    }
-
-    #[test]
-    fn test_vertical_align_default() {
-        let item = make_text_item("Test", 40.0);
-        assert_eq!(item.vertical_align, VerticalAlign::Baseline);
-    }
-
-    #[test]
-    fn vertical_align_middle_uses_parent_strut_metrics() {
-        let mut item = make_text_item("Test", 40.0).with_vertical_align(VerticalAlign::Middle);
-        // Give the item predictable metrics to compare against the parent strut (which has x-height 6).
-        item.metrics = BaselineMetrics::new(12.0, 16.0, 12.0, 4.0);
-
-        let mut builder = make_builder(200.0);
-        builder.add_item(InlineItem::Text(item));
-        let lines = builder.finish();
-
-        // With parent x-height 6, middle shift = 12 - 8 + 3 = 7.
-        let first = &lines[0].items[0];
-        assert!((first.baseline_offset - 7.0).abs() < 1e-3);
-    }
-
-    #[test]
-    fn test_line_default() {
-        let line = Line::default();
-        assert!(line.is_empty());
-        assert_eq!(line.width, 0.0);
-    }
-
-    #[test]
-    fn bidi_runs_use_byte_indices_for_levels() {
-        // Hebrew characters are multi-byte; the RTL byte length must not confuse run-level lookup.
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("א", 10.0)));
-        builder.add_item(InlineItem::Text(make_text_item("a", 10.0)));
-        builder.add_item(InlineItem::Text(make_text_item("b", 10.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                _ => String::new(),
-            })
-            .collect();
-
-        assert_eq!(texts, vec!["א".to_string(), "a".to_string(), "b".to_string()]);
-    }
-
-    #[test]
-    fn bidi_mixed_direction_splits_text_item() {
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("abc אבג", 70.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                _ => String::new(),
-            })
-            .collect();
-
-        assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
-    }
-
-    #[test]
-    fn bidi_plaintext_chooses_first_strong_base_direction() {
-        let mut builder = make_builder_with_base(200.0, Level::rtl());
-        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-            "abc אבג",
-            70.0,
-            UnicodeBidi::Plaintext,
-        )));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                _ => String::new(),
-            })
-            .collect();
-
-        // Base was RTL, but plaintext forces first-strong (LTR here), so visual order stays logical LTR then RTL.
-        assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
-    }
-
-    #[test]
-    fn bidi_plaintext_inline_preserves_paragraph_base_direction() {
-        let mut builder = make_builder_with_base(200.0, Level::ltr());
-        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-            "אבג",
-            30.0,
-            UnicodeBidi::Plaintext,
-        )));
-        builder.add_item(InlineItem::Text(make_text_item(" xyz", 30.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].resolved_direction, Direction::Ltr);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                _ => String::new(),
-            })
-            .collect();
-
-        assert_eq!(texts, vec!["אבג".to_string(), " xyz".to_string()]);
-    }
-
-    #[test]
-    fn bidi_plaintext_sets_base_direction_on_items() {
-        let mut items = vec![
-            InlineItem::Text(make_text_item_with_bidi("אבג", 30.0, UnicodeBidi::Plaintext)),
-            InlineItem::Tab(TabItem::new(
-                Arc::new(ComputedStyle::default()),
-                BaselineMetrics::new(10.0, 12.0, 8.0, 2.0),
-                8.0,
-                true,
-            )),
-        ];
-
-        crate::layout::contexts::inline::apply_plaintext_paragraph_direction(&mut items, Direction::Rtl);
-
-        let dir_text = match &items[0] {
-            InlineItem::Text(t) => t.base_direction,
-            _ => Direction::Ltr,
-        };
-        let dir_tab = match &items[1] {
-            InlineItem::Tab(t) => t.direction,
-            _ => Direction::Ltr,
-        };
-
-        assert_eq!(dir_text, Direction::Rtl);
-        assert_eq!(dir_tab, Direction::Rtl);
-    }
-
-    #[test]
-    fn bidi_isolate_inline_box_prevents_surrounding_reordering() {
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("ABC ", 40.0)));
-
-        let mut inline_box = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::Isolate,
-        );
-        inline_box.add_child(InlineItem::Text(make_text_item("אבג", 30.0)));
-        builder.add_item(InlineItem::InlineBox(inline_box));
-
-        builder.add_item(InlineItem::Text(make_text_item(" DEF", 40.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                InlineItem::InlineBox(b) => b
-                    .children
-                    .iter()
-                    .filter_map(|c| match c {
-                        InlineItem::Text(t) => Some(t.text.clone()),
-                        _ => None,
-                    })
-                    .collect::<String>(),
-                _ => String::new(),
-            })
-            .collect();
-
-        assert_eq!(texts, vec!["ABC ".to_string(), "גבא".to_string(), " DEF".to_string()]);
-    }
-
-    #[test]
-    fn bidi_isolate_wraps_multiple_leaves_once() {
-        let mut builder = make_builder(200.0);
-
-        let mut inline_box = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::Isolate,
-        );
-        inline_box.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
-        inline_box.add_child(InlineItem::Text(make_text_item("ג", 10.0)));
-
-        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
-        builder.add_item(InlineItem::InlineBox(inline_box));
-        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                InlineItem::InlineBox(b) => b
-                    .children
-                    .iter()
-                    .filter_map(|c| match c {
-                        InlineItem::Text(t) => Some(t.text.clone()),
-                        _ => None,
-                    })
-                    .collect::<String>(),
-                _ => String::new(),
-            })
-            .collect();
-
-        // Children stay adjacent and isolate prevents surrounding runs from interleaving; RTL order places the later
-        // child earlier in visual order.
-        assert_eq!(texts, vec!["L ".to_string(), "גבא".to_string(), " R".to_string()]);
-    }
-
-    #[test]
-    fn bidi_isolate_override_reverses_child_order() {
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("A ", 10.0)));
-
-        let mut inline_box = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::IsolateOverride,
-        );
-        inline_box.add_child(InlineItem::Text(make_text_item("a", 10.0)));
-        inline_box.add_child(InlineItem::Text(make_text_item("b", 10.0)));
-        inline_box.add_child(InlineItem::Text(make_text_item("c", 10.0)));
-        builder.add_item(InlineItem::InlineBox(inline_box));
-
-        builder.add_item(InlineItem::Text(make_text_item(" C", 10.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                InlineItem::InlineBox(b) => b
-                    .children
-                    .iter()
-                    .filter_map(|c| match c {
-                        InlineItem::Text(t) => Some(t.text.clone()),
-                        _ => None,
-                    })
-                    .collect::<String>(),
-                _ => String::new(),
-            })
-            .collect();
-
-        assert_eq!(texts, vec!["A ".to_string(), "cba".to_string(), " C".to_string()]);
-    }
-
-    #[test]
-    fn explicit_bidi_context_resets_override_on_isolate() {
-        let ctx = explicit_bidi_context(
-            Direction::Ltr,
-            &[
-                (UnicodeBidi::BidiOverride, Direction::Rtl),
-                (UnicodeBidi::Isolate, Direction::Ltr),
-            ],
-        )
-        .expect("should compute explicit context");
-        assert!(!ctx.override_all, "override should not leak past isolates");
-        assert!(ctx.level.number() % 2 == 0, "isolate should push an even level for LTR");
-    }
-
-    #[test]
-    fn explicit_bidi_context_sets_override_for_isolate_override() {
-        let ctx = explicit_bidi_context(Direction::Ltr, &[(UnicodeBidi::IsolateOverride, Direction::Ltr)])
-            .expect("should compute explicit context");
-        assert!(ctx.override_all, "isolate-override should force overriding status");
-        assert!(ctx.level.number() % 2 == 0);
-    }
-
-    #[test]
-    fn excessive_embedding_depth_is_clamped() {
-        // Build a deeply nested set of inline boxes that exceed unicode_bidi's max depth.
-        let mut inner = InlineItem::Text(make_text_item("abc", 30.0));
-        for idx in 0..(level::MAX_EXPLICIT_DEPTH as usize + 8) {
-            let mut box_item = InlineBoxItem::new(
-                0.0,
-                0.0,
-                0.0,
-                make_strut_metrics(),
-                Arc::new(ComputedStyle::default()),
-                idx,
-                Direction::Ltr,
-                UnicodeBidi::Embed,
-            );
-            box_item.add_child(inner);
-            inner = InlineItem::InlineBox(box_item);
-        }
-
-        let positioned = PositionedItem {
-            item: inner,
-            x: 0.0,
-            baseline_offset: 0.0,
-        };
-        let mut line = Line::new();
-        line.items.push(positioned);
-        let mut lines = vec![line];
-
-        reorder_paragraph(
-            &mut lines,
-            Some(Level::ltr()),
-            UnicodeBidi::Normal,
-            Direction::Ltr,
-            &ShapingPipeline::new(),
-            &FontContext::new(),
-        );
-
-        assert!(
-            !lines[0].items.is_empty(),
-            "reordering should still produce items even when depth exceeds the limit"
-        );
-        let width: f32 = lines[0].items.iter().map(|p| p.item.width()).sum();
-        assert!(width > 0.0, "items should keep their width after reordering");
-    }
-
-    fn collect_text(item: &InlineItem, out: &mut String) {
-        match item {
-            InlineItem::Text(t) => out.push_str(&t.text),
-            InlineItem::InlineBox(b) => {
-                for child in &b.children {
-                    collect_text(child, out);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    #[test]
-    fn suppressed_controls_do_not_duplicate_text() {
-        // When embeddings are suppressed (depth clamp), the logical text should remain intact.
-        let mut inner = InlineItem::Text(make_text_item("abc", 30.0));
-        for idx in 0..(level::MAX_EXPLICIT_DEPTH as usize + 8) {
-            let mut box_item = InlineBoxItem::new(
-                0.0,
-                0.0,
-                0.0,
-                make_strut_metrics(),
-                Arc::new(ComputedStyle::default()),
-                idx + 1,
-                Direction::Ltr,
-                UnicodeBidi::Embed,
-            );
-            box_item.add_child(inner);
-            inner = InlineItem::InlineBox(box_item);
-        }
-
-        let mut line = Line::new();
-        line.items.push(PositionedItem {
-            item: inner,
-            x: 0.0,
-            baseline_offset: 0.0,
+  }
+
+  fn make_builder_with_base(width: f32, base: Level) -> LineBuilder<'static> {
+    let strut = make_strut_metrics();
+    LineBuilder::new(
+      width,
+      width,
+      true,
+      TextWrap::Auto,
+      0.0,
+      false,
+      false,
+      strut,
+      ShapingPipeline::new(),
+      FontContext::new(),
+      Some(base),
+      UnicodeBidi::Normal,
+      Direction::Ltr,
+      None,
+      0.0,
+    )
+  }
+
+  fn make_text_item(text: &str, advance: f32) -> TextItem {
+    make_text_item_with_bidi(text, advance, UnicodeBidi::Normal)
+  }
+
+  fn make_text_item_with_bidi(text: &str, advance: f32, ub: UnicodeBidi) -> TextItem {
+    let mut style = ComputedStyle::default();
+    style.unicode_bidi = ub;
+    let style = Arc::new(style);
+    let mut cluster_advances = Vec::new();
+    if !text.is_empty() {
+      let step = advance / text.len() as f32;
+      for i in 1..=text.len() {
+        cluster_advances.push(ClusterBoundary {
+          byte_offset: i,
+          advance: step * i as f32,
         });
-        let mut lines = vec![line];
+      }
+    }
+    TextItem {
+      runs: Vec::new(),
+      advance,
+      advance_for_layout: advance,
+      metrics: make_strut_metrics(),
+      vertical_align: VerticalAlign::Baseline,
+      break_opportunities: find_break_opportunities(text),
+      forced_break_offsets: Vec::new(),
+      text: text.to_string(),
+      font_size: 16.0,
+      style: style.clone(),
+      base_direction: crate::style::types::Direction::Ltr,
+      is_marker: false,
+      paint_offset: 0.0,
+      cluster_advances,
+    }
+  }
 
-        reorder_paragraph(
-            &mut lines,
-            Some(Level::ltr()),
-            UnicodeBidi::Normal,
-            Direction::Ltr,
-            &ShapingPipeline::new(),
-            &FontContext::new(),
-        );
+  #[test]
+  fn break_opportunities_stay_on_char_boundaries() {
+    let text = "‘bruises and blood’ in ‘Christy’ fights";
 
-        let mut collected = String::new();
-        for item in &lines[0].items {
-            collect_text(&item.item, &mut collected);
+    let style = Arc::new(ComputedStyle::default());
+    let shaper = ShapingPipeline::new();
+    let font_context = FontContext::new();
+    let mut runs = shaper.shape(text, &style, &font_context).unwrap();
+    TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+    let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
+
+    let item = TextItem::new(
+      runs,
+      text.to_string(),
+      metrics,
+      find_break_opportunities(text),
+      Vec::new(),
+      style,
+      Direction::Ltr,
+    );
+
+    for brk in &item.break_opportunities {
+      assert!(
+        item.text.is_char_boundary(brk.byte_offset),
+        "Break at {} is not a char boundary",
+        brk.byte_offset
+      );
+      if brk.byte_offset == 0 || brk.byte_offset >= item.text.len() {
+        continue;
+      }
+
+      assert!(
+        item
+          .split_at(brk.byte_offset, false, &shaper, &font_context)
+          .is_some(),
+        "Split failed at {}",
+        brk.byte_offset
+      );
+    }
+  }
+
+  #[test]
+  fn split_at_mid_codepoint_aligns_to_char_boundary() {
+    let text = "a😊b";
+
+    let style = Arc::new(ComputedStyle::default());
+    let shaper = ShapingPipeline::new();
+    let font_context = FontContext::new();
+    let mut runs = shaper.shape(text, &style, &font_context).unwrap();
+    TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+    let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
+
+    let item = TextItem::new(
+      runs,
+      text.to_string(),
+      metrics,
+      find_break_opportunities(text),
+      Vec::new(),
+      style,
+      Direction::Ltr,
+    );
+
+    // Byte offset 2 is inside the emoji; split_at should clamp to the previous char boundary.
+    let (before, after) = item
+      .split_at(2, false, &shaper, &font_context)
+      .expect("split_at should succeed even at mid-codepoint offsets");
+    assert_eq!(before.text, "a");
+    assert_eq!(after.text, "😊b");
+  }
+
+  #[test]
+  fn split_at_is_safe_on_non_char_boundaries() {
+    let item = make_text_item("â€œenhancedâ€", 20.0);
+    let pipeline = ShapingPipeline::new();
+    let font_ctx = FontContext::new();
+    assert!(item.split_at(1, false, &pipeline, &font_ctx).is_none());
+  }
+
+  #[test]
+  fn test_line_builder_single_item_fits() {
+    let mut builder = make_builder(100.0);
+
+    let item = make_text_item("Hello", 50.0);
+    builder.add_item(InlineItem::Text(item));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].items.len(), 1);
+    assert!(lines[0].width <= 100.0);
+  }
+
+  #[test]
+  fn test_line_builder_multiple_items_fit() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
+    builder.add_item(InlineItem::Text(make_text_item(" ", 5.0)));
+    builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].items.len(), 3);
+  }
+
+  #[test]
+  fn test_line_builder_item_exceeds_width() {
+    let mut builder = make_builder(80.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
+    builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
+
+    let lines = builder.finish();
+    // Second item should go to new line
+    assert_eq!(lines.len(), 2);
+  }
+
+  #[test]
+  fn test_line_builder_force_break() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
+    builder.force_break();
+    builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 2);
+    assert!(lines[0].ends_with_hard_break);
+  }
+
+  #[test]
+  fn test_line_builder_empty_result() {
+    let builder = make_builder(100.0);
+
+    let lines = builder.finish();
+    assert!(lines.is_empty());
+  }
+
+  #[test]
+  fn test_line_has_baseline() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].baseline > 0.0);
+    assert!(lines[0].height > 0.0);
+  }
+
+  #[test]
+  fn test_replaced_item() {
+    let mut builder = make_builder(200.0);
+
+    let replaced = ReplacedItem::new(
+      Size::new(100.0, 50.0),
+      ReplacedType::Image {
+        src: String::new(),
+        alt: None,
+        sizes: None,
+        srcset: Vec::new(),
+      },
+      Arc::new(ComputedStyle::default()),
+      0.0,
+      0.0,
+    );
+    builder.add_item(InlineItem::Replaced(replaced));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].items[0].item.width(), 100.0);
+  }
+
+  #[test]
+  fn test_inline_block_item() {
+    let mut builder = make_builder(200.0);
+
+    let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 40.0), vec![]);
+    let inline_block = InlineBlockItem::new(
+      fragment,
+      Direction::Ltr,
+      UnicodeBidi::Normal,
+      0.0,
+      0.0,
+      true,
+    );
+    builder.add_item(InlineItem::InlineBlock(inline_block));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].items[0].item.width(), 80.0);
+  }
+
+  #[test]
+  fn inline_block_baseline_prefers_last_line_box() {
+    // Create an inline-block fragment that contains a line box at y=5 with baseline 8 (relative to the line box).
+    let line = FragmentNode::new_line(Rect::from_xywh(0.0, 5.0, 60.0, 10.0), 8.0, vec![]);
+    let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 80.0, 20.0), vec![line]);
+
+    let inline_block = InlineBlockItem::new(
+      fragment,
+      Direction::Ltr,
+      UnicodeBidi::Normal,
+      0.0,
+      0.0,
+      true,
+    );
+
+    // Baseline should be derived from the line (5 + 8 = 13) rather than the bottom border edge (20).
+    assert!((inline_block.metrics.baseline_offset - 13.0).abs() < 0.001);
+    assert!((inline_block.metrics.descent - 7.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn inline_block_baseline_falls_back_when_overflow_clips() {
+    // Even with a line box present, non-visible overflow forces the baseline to the bottom margin edge.
+    let line = FragmentNode::new_line(Rect::from_xywh(0.0, 2.0, 40.0, 8.0), 6.0, vec![]);
+    let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 16.0), vec![line]);
+    let inline_block = InlineBlockItem::new(
+      fragment,
+      Direction::Ltr,
+      UnicodeBidi::Normal,
+      0.0,
+      0.0,
+      false, // overflow != visible
+    );
+
+    assert!((inline_block.metrics.baseline_offset - 16.0).abs() < 0.001);
+    assert!((inline_block.metrics.descent - 0.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn inline_block_baseline_falls_back_when_no_lines() {
+    // Overflow visible but no in-flow line boxes: baseline should be the bottom edge.
+    let fragment = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 30.0, 12.0), vec![]);
+    let inline_block = InlineBlockItem::new(
+      fragment,
+      Direction::Ltr,
+      UnicodeBidi::Normal,
+      0.0,
+      0.0,
+      true,
+    );
+
+    assert!((inline_block.metrics.baseline_offset - 12.0).abs() < 0.001);
+    assert!((inline_block.metrics.descent - 0.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn inline_table_baseline_uses_first_row_baseline() {
+    // Simulate an inline-table fragment with two lines; baseline should come from the first line.
+    let line1 = FragmentNode::new(
+      Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+      FragmentContent::Line { baseline: 4.0 },
+      vec![],
+    );
+    let line2 = FragmentNode::new(
+      Rect::from_xywh(0.0, 10.0, 20.0, 10.0),
+      FragmentContent::Line { baseline: 6.0 },
+      vec![],
+    );
+    let mut style = ComputedStyle::default();
+    style.display = Display::InlineTable;
+    let fragment = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+      FragmentContent::Block { box_id: None },
+      vec![line1, line2],
+      Arc::new(style),
+    );
+    let inline_block = InlineBlockItem::new(
+      fragment,
+      Direction::Ltr,
+      UnicodeBidi::Normal,
+      0.0,
+      0.0,
+      true,
+    );
+
+    assert!((inline_block.metrics.baseline_offset - 4.0).abs() < 0.001);
+    assert!((inline_block.metrics.descent - 16.0).abs() < 0.001);
+  }
+
+  #[test]
+  fn test_overflow_on_empty_line() {
+    let mut builder = make_builder(30.0);
+
+    // Item too wide but line is empty, so it must fit
+    builder.add_item(InlineItem::Text(make_text_item("VeryLongWord", 100.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].width > 30.0); // Overflow allowed
+  }
+
+  #[test]
+  fn test_positioned_item_x_position() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("Hello", 50.0)));
+    builder.add_item(InlineItem::Text(make_text_item(" ", 5.0)));
+    builder.add_item(InlineItem::Text(make_text_item("World", 50.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines[0].items[0].x, 0.0);
+    assert_eq!(lines[0].items[1].x, 50.0);
+    assert_eq!(lines[0].items[2].x, 55.0);
+  }
+
+  #[test]
+  fn test_text_item_break_opportunities() {
+    let item = make_text_item("Hello World Test", 160.0);
+
+    // Should have break opportunities after spaces
+    assert!(!item.break_opportunities.is_empty());
+  }
+
+  #[test]
+  fn test_vertical_align_default() {
+    let item = make_text_item("Test", 40.0);
+    assert_eq!(item.vertical_align, VerticalAlign::Baseline);
+  }
+
+  #[test]
+  fn vertical_align_middle_uses_parent_strut_metrics() {
+    let mut item = make_text_item("Test", 40.0).with_vertical_align(VerticalAlign::Middle);
+    // Give the item predictable metrics to compare against the parent strut (which has x-height 6).
+    item.metrics = BaselineMetrics::new(12.0, 16.0, 12.0, 4.0);
+
+    let mut builder = make_builder(200.0);
+    builder.add_item(InlineItem::Text(item));
+    let lines = builder.finish();
+
+    // With parent x-height 6, middle shift = 12 - 8 + 3 = 7.
+    let first = &lines[0].items[0];
+    assert!((first.baseline_offset - 7.0).abs() < 1e-3);
+  }
+
+  #[test]
+  fn test_line_default() {
+    let line = Line::default();
+    assert!(line.is_empty());
+    assert_eq!(line.width, 0.0);
+  }
+
+  #[test]
+  fn bidi_runs_use_byte_indices_for_levels() {
+    // Hebrew characters are multi-byte; the RTL byte length must not confuse run-level lookup.
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("א", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("a", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("b", 10.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        _ => String::new(),
+      })
+      .collect();
+
+    assert_eq!(texts, vec![
+      "א".to_string(),
+      "a".to_string(),
+      "b".to_string()
+    ]);
+  }
+
+  #[test]
+  fn bidi_mixed_direction_splits_text_item() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("abc אבג", 70.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        _ => String::new(),
+      })
+      .collect();
+
+    assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+  }
+
+  #[test]
+  fn bidi_plaintext_chooses_first_strong_base_direction() {
+    let mut builder = make_builder_with_base(200.0, Level::rtl());
+    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+      "abc אבג",
+      70.0,
+      UnicodeBidi::Plaintext,
+    )));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        _ => String::new(),
+      })
+      .collect();
+
+    // Base was RTL, but plaintext forces first-strong (LTR here), so visual order stays logical LTR then RTL.
+    assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+  }
+
+  #[test]
+  fn bidi_plaintext_inline_preserves_paragraph_base_direction() {
+    let mut builder = make_builder_with_base(200.0, Level::ltr());
+    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+      "אבג",
+      30.0,
+      UnicodeBidi::Plaintext,
+    )));
+    builder.add_item(InlineItem::Text(make_text_item(" xyz", 30.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].resolved_direction, Direction::Ltr);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        _ => String::new(),
+      })
+      .collect();
+
+    assert_eq!(texts, vec!["אבג".to_string(), " xyz".to_string()]);
+  }
+
+  #[test]
+  fn bidi_plaintext_sets_base_direction_on_items() {
+    let mut items = vec![
+      InlineItem::Text(make_text_item_with_bidi(
+        "אבג",
+        30.0,
+        UnicodeBidi::Plaintext,
+      )),
+      InlineItem::Tab(TabItem::new(
+        Arc::new(ComputedStyle::default()),
+        BaselineMetrics::new(10.0, 12.0, 8.0, 2.0),
+        8.0,
+        true,
+      )),
+    ];
+
+    crate::layout::contexts::inline::apply_plaintext_paragraph_direction(
+      &mut items,
+      Direction::Rtl,
+    );
+
+    let dir_text = match &items[0] {
+      InlineItem::Text(t) => t.base_direction,
+      _ => Direction::Ltr,
+    };
+    let dir_tab = match &items[1] {
+      InlineItem::Tab(t) => t.direction,
+      _ => Direction::Ltr,
+    };
+
+    assert_eq!(dir_text, Direction::Rtl);
+    assert_eq!(dir_tab, Direction::Rtl);
+  }
+
+  #[test]
+  fn bidi_isolate_inline_box_prevents_surrounding_reordering() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("ABC ", 40.0)));
+
+    let mut inline_box = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::Isolate,
+    );
+    inline_box.add_child(InlineItem::Text(make_text_item("אבג", 30.0)));
+    builder.add_item(InlineItem::InlineBox(inline_box));
+
+    builder.add_item(InlineItem::Text(make_text_item(" DEF", 40.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        InlineItem::InlineBox(b) => b
+          .children
+          .iter()
+          .filter_map(|c| match c {
+            InlineItem::Text(t) => Some(t.text.clone()),
+            _ => None,
+          })
+          .collect::<String>(),
+        _ => String::new(),
+      })
+      .collect();
+
+    assert_eq!(texts, vec![
+      "ABC ".to_string(),
+      "גבא".to_string(),
+      " DEF".to_string()
+    ]);
+  }
+
+  #[test]
+  fn bidi_isolate_wraps_multiple_leaves_once() {
+    let mut builder = make_builder(200.0);
+
+    let mut inline_box = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::Isolate,
+    );
+    inline_box.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("ג", 10.0)));
+
+    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+    builder.add_item(InlineItem::InlineBox(inline_box));
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        InlineItem::InlineBox(b) => b
+          .children
+          .iter()
+          .filter_map(|c| match c {
+            InlineItem::Text(t) => Some(t.text.clone()),
+            _ => None,
+          })
+          .collect::<String>(),
+        _ => String::new(),
+      })
+      .collect();
+
+    // Children stay adjacent and isolate prevents surrounding runs from interleaving; RTL order places the later
+    // child earlier in visual order.
+    assert_eq!(texts, vec![
+      "L ".to_string(),
+      "גבא".to_string(),
+      " R".to_string()
+    ]);
+  }
+
+  #[test]
+  fn bidi_isolate_override_reverses_child_order() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("A ", 10.0)));
+
+    let mut inline_box = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::IsolateOverride,
+    );
+    inline_box.add_child(InlineItem::Text(make_text_item("a", 10.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("b", 10.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("c", 10.0)));
+    builder.add_item(InlineItem::InlineBox(inline_box));
+
+    builder.add_item(InlineItem::Text(make_text_item(" C", 10.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        InlineItem::InlineBox(b) => b
+          .children
+          .iter()
+          .filter_map(|c| match c {
+            InlineItem::Text(t) => Some(t.text.clone()),
+            _ => None,
+          })
+          .collect::<String>(),
+        _ => String::new(),
+      })
+      .collect();
+
+    assert_eq!(texts, vec![
+      "A ".to_string(),
+      "cba".to_string(),
+      " C".to_string()
+    ]);
+  }
+
+  #[test]
+  fn explicit_bidi_context_resets_override_on_isolate() {
+    let ctx = explicit_bidi_context(Direction::Ltr, &[
+      (UnicodeBidi::BidiOverride, Direction::Rtl),
+      (UnicodeBidi::Isolate, Direction::Ltr),
+    ])
+    .expect("should compute explicit context");
+    assert!(!ctx.override_all, "override should not leak past isolates");
+    assert!(
+      ctx.level.number() % 2 == 0,
+      "isolate should push an even level for LTR"
+    );
+  }
+
+  #[test]
+  fn explicit_bidi_context_sets_override_for_isolate_override() {
+    let ctx = explicit_bidi_context(Direction::Ltr, &[(
+      UnicodeBidi::IsolateOverride,
+      Direction::Ltr,
+    )])
+    .expect("should compute explicit context");
+    assert!(
+      ctx.override_all,
+      "isolate-override should force overriding status"
+    );
+    assert!(ctx.level.number() % 2 == 0);
+  }
+
+  #[test]
+  fn excessive_embedding_depth_is_clamped() {
+    // Build a deeply nested set of inline boxes that exceed unicode_bidi's max depth.
+    let mut inner = InlineItem::Text(make_text_item("abc", 30.0));
+    for idx in 0..(level::MAX_EXPLICIT_DEPTH as usize + 8) {
+      let mut box_item = InlineBoxItem::new(
+        0.0,
+        0.0,
+        0.0,
+        make_strut_metrics(),
+        Arc::new(ComputedStyle::default()),
+        idx,
+        Direction::Ltr,
+        UnicodeBidi::Embed,
+      );
+      box_item.add_child(inner);
+      inner = InlineItem::InlineBox(box_item);
+    }
+
+    let positioned = PositionedItem {
+      item: inner,
+      x: 0.0,
+      baseline_offset: 0.0,
+    };
+    let mut line = Line::new();
+    line.items.push(positioned);
+    let mut lines = vec![line];
+
+    reorder_paragraph(
+      &mut lines,
+      Some(Level::ltr()),
+      UnicodeBidi::Normal,
+      Direction::Ltr,
+      &ShapingPipeline::new(),
+      &FontContext::new(),
+    );
+
+    assert!(
+      !lines[0].items.is_empty(),
+      "reordering should still produce items even when depth exceeds the limit"
+    );
+    let width: f32 = lines[0].items.iter().map(|p| p.item.width()).sum();
+    assert!(
+      width > 0.0,
+      "items should keep their width after reordering"
+    );
+  }
+
+  fn collect_text(item: &InlineItem, out: &mut String) {
+    match item {
+      InlineItem::Text(t) => out.push_str(&t.text),
+      InlineItem::InlineBox(b) => {
+        for child in &b.children {
+          collect_text(child, out);
         }
-        assert_eq!(collected, "abc");
+      }
+      _ => {}
+    }
+  }
+
+  #[test]
+  fn suppressed_controls_do_not_duplicate_text() {
+    // When embeddings are suppressed (depth clamp), the logical text should remain intact.
+    let mut inner = InlineItem::Text(make_text_item("abc", 30.0));
+    for idx in 0..(level::MAX_EXPLICIT_DEPTH as usize + 8) {
+      let mut box_item = InlineBoxItem::new(
+        0.0,
+        0.0,
+        0.0,
+        make_strut_metrics(),
+        Arc::new(ComputedStyle::default()),
+        idx + 1,
+        Direction::Ltr,
+        UnicodeBidi::Embed,
+      );
+      box_item.add_child(inner);
+      inner = InlineItem::InlineBox(box_item);
     }
 
-    #[test]
-    fn bidi_plaintext_on_inline_box_forces_first_strong() {
-        let mut builder = make_builder_with_base(200.0, Level::rtl());
+    let mut line = Line::new();
+    line.items.push(PositionedItem {
+      item: inner,
+      x: 0.0,
+      baseline_offset: 0.0,
+    });
+    let mut lines = vec![line];
 
-        let mut inline_box = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Ltr,
-            UnicodeBidi::Plaintext,
-        );
-        inline_box.add_child(InlineItem::Text(make_text_item("abc אבג", 70.0)));
-        builder.add_item(InlineItem::InlineBox(inline_box));
+    reorder_paragraph(
+      &mut lines,
+      Some(Level::ltr()),
+      UnicodeBidi::Normal,
+      Direction::Ltr,
+      &ShapingPipeline::new(),
+      &FontContext::new(),
+    );
 
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .flat_map(|p| match &p.item {
-                InlineItem::InlineBox(b) => b
-                    .children
-                    .iter()
-                    .filter_map(|c| match c {
-                        InlineItem::Text(t) => Some(t.text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-                InlineItem::Text(t) => vec![t.text.clone()],
-                _ => vec![],
-            })
-            .collect();
+    let mut collected = String::new();
+    for item in &lines[0].items {
+      collect_text(&item.item, &mut collected);
+    }
+    assert_eq!(collected, "abc");
+  }
 
-        assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+  #[test]
+  fn bidi_plaintext_on_inline_box_forces_first_strong() {
+    let mut builder = make_builder_with_base(200.0, Level::rtl());
+
+    let mut inline_box = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Ltr,
+      UnicodeBidi::Plaintext,
+    );
+    inline_box.add_child(InlineItem::Text(make_text_item("abc אבג", 70.0)));
+    builder.add_item(InlineItem::InlineBox(inline_box));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .flat_map(|p| match &p.item {
+        InlineItem::InlineBox(b) => b
+          .children
+          .iter()
+          .filter_map(|c| match c {
+            InlineItem::Text(t) => Some(t.text.clone()),
+            _ => None,
+          })
+          .collect::<Vec<_>>(),
+        InlineItem::Text(t) => vec![t.text.clone()],
+        _ => vec![],
+      })
+      .collect();
+
+    assert_eq!(texts, vec!["abc ".to_string(), "אבג".to_string()]);
+  }
+
+  #[test]
+  fn bidi_nested_isolates_close_properly() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+
+    let mut inner = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Ltr,
+      UnicodeBidi::Isolate,
+    );
+    inner.add_child(InlineItem::Text(make_text_item("מ", 10.0)));
+
+    let mut outer = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::Isolate,
+    );
+    outer.add_child(InlineItem::InlineBox(inner));
+    outer.add_child(InlineItem::Text(make_text_item("א", 10.0)));
+
+    builder.add_item(InlineItem::InlineBox(outer));
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        InlineItem::InlineBox(b) => b
+          .children
+          .iter()
+          .filter_map(|c| match c {
+            InlineItem::Text(t) => Some(t.text.clone()),
+            InlineItem::InlineBox(inner) => Some(
+              inner
+                .children
+                .iter()
+                .filter_map(|c| match c {
+                  InlineItem::Text(t) => Some(t.text.clone()),
+                  _ => None,
+                })
+                .collect::<String>(),
+            ),
+            _ => None,
+          })
+          .collect::<String>(),
+        _ => String::new(),
+      })
+      .collect();
+
+    assert_eq!(texts, vec![
+      "L ".to_string(),
+      "אמ".to_string(),
+      " R".to_string()
+    ]);
+  }
+
+  #[test]
+  fn bidi_plaintext_isolate_keeps_paragraph_base() {
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("A ", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+      "אבג",
+      15.0,
+      UnicodeBidi::Plaintext,
+    )));
+    builder.add_item(InlineItem::Text(make_text_item(" C", 10.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        _ => String::new(),
+      })
+      .collect();
+
+    assert_eq!(texts, vec![
+      "A ".to_string(),
+      "אבג".to_string(),
+      " C".to_string()
+    ]);
+  }
+
+  #[test]
+  fn bidi_plaintext_uses_first_strong_rtl_when_text_starts_rtl() {
+    let mut builder = make_builder_with_base(200.0, Level::ltr());
+    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+      "אבג abc",
+      70.0,
+      UnicodeBidi::Plaintext,
+    )));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        _ => String::new(),
+      })
+      .collect();
+
+    // Base came from first strong RTL; visual order (left-to-right positions) places the LTR run left.
+    assert_eq!(texts, vec!["abc".to_string(), "אבג ".to_string()]);
+  }
+
+  #[test]
+  fn bidi_plaintext_paragraph_base_only_when_present() {
+    // First paragraph uses plaintext and should pick first-strong (LTR) despite RTL base.
+    let mut builder = make_builder_with_base(200.0, Level::rtl());
+    builder.add_item(InlineItem::Text(make_text_item_with_bidi(
+      "abc אבג",
+      70.0,
+      UnicodeBidi::Plaintext,
+    )));
+    builder.force_break();
+
+    // Second paragraph has no plaintext and keeps the RTL base.
+    builder.add_item(InlineItem::Text(make_text_item("abc ", 30.0)));
+    builder.add_item(InlineItem::Text(make_text_item("אבג", 30.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 2);
+
+    let para1: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        _ => String::new(),
+      })
+      .collect();
+    assert_eq!(para1, vec!["abc ".to_string(), "אבג".to_string()]);
+
+    let para2: Vec<String> = lines[1]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        _ => String::new(),
+      })
+      .collect();
+    assert_eq!(para2, vec![
+      "אבג".to_string(),
+      " ".to_string(),
+      "abc".to_string()
+    ]);
+  }
+
+  #[test]
+  fn bidi_nested_isolate_override_reorders_only_inner_scope() {
+    // Outer isolate keeps its children grouped; the inner isolate-override reverses its content.
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+
+    let mut inner = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Rtl,
+      UnicodeBidi::IsolateOverride,
+    );
+    inner.add_child(InlineItem::Text(make_text_item("x", 10.0)));
+    inner.add_child(InlineItem::Text(make_text_item("y", 10.0)));
+
+    let mut outer = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::Isolate,
+    );
+    outer.add_child(InlineItem::Text(make_text_item("a", 10.0)));
+    outer.add_child(InlineItem::InlineBox(inner));
+    outer.add_child(InlineItem::Text(make_text_item("b", 10.0)));
+
+    builder.add_item(InlineItem::InlineBox(outer));
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+
+    let texts: Vec<String> = lines[0]
+      .items
+      .iter()
+      .map(|p| match &p.item {
+        InlineItem::Text(t) => t.text.clone(),
+        InlineItem::InlineBox(b) => b
+          .children
+          .iter()
+          .filter_map(|c| match c {
+            InlineItem::Text(t) => Some(t.text.clone()),
+            InlineItem::InlineBox(inner) => Some(
+              inner
+                .children
+                .iter()
+                .filter_map(|c| match c {
+                  InlineItem::Text(t) => Some(t.text.clone()),
+                  _ => None,
+                })
+                .collect::<String>(),
+            ),
+            _ => None,
+          })
+          .collect::<String>(),
+        _ => String::new(),
+      })
+      .collect();
+
+    // Outer isolate stays a single unit; inner override reverses its content (yx).
+    assert_eq!(texts, vec![
+      "L ".to_string(),
+      "byxa".to_string(),
+      " R".to_string()
+    ]);
+  }
+
+  #[test]
+  fn bidi_isolate_override_keeps_inner_isolate_atomic() {
+    // An isolate-override should reverse its own content while keeping nested isolates grouped.
+    let mut builder = make_builder(200.0);
+
+    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+
+    let mut inner = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Ltr,
+      UnicodeBidi::Isolate,
+    );
+    inner.add_child(InlineItem::Text(make_text_item("BD", 20.0)));
+
+    let mut outer = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::IsolateOverride,
+    );
+    outer.add_child(InlineItem::Text(make_text_item("A", 10.0)));
+    outer.add_child(InlineItem::InlineBox(inner));
+    outer.add_child(InlineItem::Text(make_text_item("C", 10.0)));
+
+    builder.add_item(InlineItem::InlineBox(outer));
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+
+    let actual: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+
+    let logical = format!(
+      "L {}{}A{}BD{}C{}{} R",
+      '\u{2067}', // RLI (rtl isolate)
+      '\u{202e}', // RLO (rtl override)
+      '\u{2066}', // LRI (ltr isolate)
+      '\u{2069}', // PDI
+      '\u{202c}', // PDF
+      '\u{2069}', // PDI
+    );
+    let expected = reorder_with_controls(&logical, Some(Level::ltr()));
+    assert_eq!(actual, expected);
+  }
+
+  #[test]
+  fn bidi_override_does_not_apply_inside_isolate() {
+    let mut builder = make_builder(200.0);
+
+    let mut inner = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Ltr,
+      UnicodeBidi::Isolate,
+    );
+    inner.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+
+    let mut outer = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::BidiOverride,
+    );
+    outer.add_child(InlineItem::Text(make_text_item("a", 10.0)));
+    outer.add_child(InlineItem::InlineBox(inner));
+    outer.add_child(InlineItem::Text(make_text_item("b", 10.0)));
+
+    builder.add_item(InlineItem::InlineBox(outer));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let mut visual = String::new();
+    for positioned in &lines[0].items {
+      collect_text(&positioned.item, &mut visual);
     }
 
-    #[test]
-    fn bidi_nested_isolates_close_properly() {
-        let mut builder = make_builder(200.0);
+    let logical = "\u{202E}a\u{2066}אב\u{2069}b\u{202C}";
+    let info = BidiInfo::new(logical, Some(Level::ltr()));
+    let para = &info.paragraphs[0];
+    let expected: String = info
+      .reorder_line(para, para.range.clone())
+      .chars()
+      .filter(|c| !is_bidi_control(*c))
+      .collect();
 
-        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+    assert_eq!(visual, expected);
+  }
 
-        let mut inner = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Ltr,
-            UnicodeBidi::Isolate,
-        );
-        inner.add_child(InlineItem::Text(make_text_item("מ", 10.0)));
+  #[test]
+  fn bidi_override_parent_preserves_isolate_contents() {
+    let mut builder = make_builder(200.0);
 
-        let mut outer = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::Isolate,
-        );
-        outer.add_child(InlineItem::InlineBox(inner));
-        outer.add_child(InlineItem::Text(make_text_item("א", 10.0)));
+    let mut inner = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Ltr,
+      UnicodeBidi::Isolate,
+    );
+    inner.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
 
-        builder.add_item(InlineItem::InlineBox(outer));
-        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+    let mut outer = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::BidiOverride,
+    );
+    outer.add_child(InlineItem::Text(make_text_item("x", 10.0)));
+    outer.add_child(InlineItem::InlineBox(inner));
+    outer.add_child(InlineItem::Text(make_text_item("y", 10.0)));
 
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                InlineItem::InlineBox(b) => b
-                    .children
-                    .iter()
-                    .filter_map(|c| match c {
-                        InlineItem::Text(t) => Some(t.text.clone()),
-                        InlineItem::InlineBox(inner) => Some(
-                            inner
-                                .children
-                                .iter()
-                                .filter_map(|c| match c {
-                                    InlineItem::Text(t) => Some(t.text.clone()),
-                                    _ => None,
-                                })
-                                .collect::<String>(),
-                        ),
-                        _ => None,
-                    })
-                    .collect::<String>(),
-                _ => String::new(),
-            })
-            .collect();
+    builder.add_item(InlineItem::InlineBox(outer));
 
-        assert_eq!(texts, vec!["L ".to_string(), "אמ".to_string(), " R".to_string()]);
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let mut visual = String::new();
+    for positioned in &lines[0].items {
+      collect_text(&positioned.item, &mut visual);
     }
 
-    #[test]
-    fn bidi_plaintext_isolate_keeps_paragraph_base() {
-        let mut builder = make_builder(200.0);
+    let logical = "\u{202E}x\u{2066}אב\u{2069}y\u{202C}";
+    let info = BidiInfo::new(logical, Some(Level::ltr()));
+    let para = &info.paragraphs[0];
+    let expected: String = info
+      .reorder_line(para, para.range.clone())
+      .chars()
+      .filter(|c| !is_bidi_control(*c))
+      .collect();
 
-        builder.add_item(InlineItem::Text(make_text_item("A ", 10.0)));
-        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-            "אבג",
-            15.0,
-            UnicodeBidi::Plaintext,
-        )));
-        builder.add_item(InlineItem::Text(make_text_item(" C", 10.0)));
+    assert_eq!(visual, expected);
+  }
 
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                _ => String::new(),
-            })
-            .collect();
+  #[test]
+  fn bidi_override_allows_embed_to_reset_override() {
+    // Outer override should force RTL ordering for its direct children, but an inner
+    // unicode-bidi: embed establishes a fresh embedding level without the override so its
+    // content keeps logical order.
+    let mut builder = make_builder(200.0);
 
-        assert_eq!(texts, vec!["A ".to_string(), "אבג".to_string(), " C".to_string()]);
+    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+
+    let mut inner = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Ltr,
+      UnicodeBidi::Embed,
+    );
+    inner.add_child(InlineItem::Text(make_text_item("abc", 30.0)));
+
+    let mut outer = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::BidiOverride,
+    );
+    outer.add_child(InlineItem::Text(make_text_item("X ", 20.0)));
+    outer.add_child(InlineItem::InlineBox(inner));
+    outer.add_child(InlineItem::Text(make_text_item(" Y", 20.0)));
+
+    builder.add_item(InlineItem::InlineBox(outer));
+    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+
+    let actual: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+
+    let logical = format!(
+      "L {}X {}abc{} Y{} R",
+      '\u{202e}', // RLO
+      '\u{202a}', // LRE
+      '\u{202c}', // PDF
+      '\u{202c}'  // PDF
+    );
+    let expected = reorder_with_controls(&logical, Some(Level::ltr()));
+    assert_eq!(actual, expected);
+  }
+
+  #[test]
+  fn bidi_override_does_not_cross_paragraph_boundary() {
+    // An override in the first paragraph should not affect the following paragraph; embeds
+    // in later paragraphs should resolve independently.
+    let mut builder = make_builder(200.0);
+
+    let mut para1 = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::BidiOverride,
+    );
+    para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+    builder.add_item(InlineItem::InlineBox(para1));
+    builder.force_break();
+
+    let mut para2 = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Ltr,
+      UnicodeBidi::Embed,
+    );
+    para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
+    builder.add_item(InlineItem::InlineBox(para2));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 2);
+
+    let actual_para1: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    let expected_para1 = reorder_with_controls(
+      &format!("{}ABC{}", '\u{202e}', '\u{202c}'),
+      Some(Level::ltr()),
+    );
+    assert_eq!(actual_para1, expected_para1);
+
+    let actual_para2: String = lines[1]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    let expected_para2 = reorder_with_controls(
+      &format!("{}XYZ{}", '\u{202a}', '\u{202c}'),
+      Some(Level::ltr()),
+    );
+    assert_eq!(actual_para2, expected_para2);
+  }
+
+  #[test]
+  fn bidi_override_stops_at_forced_break() {
+    // An explicit override without a terminator should not leak across a hard break.
+    let mut builder = make_builder(200.0);
+
+    // First paragraph uses an override to reverse ABC.
+    let mut para1 = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::BidiOverride,
+    );
+    para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+    builder.add_item(InlineItem::InlineBox(para1));
+    builder.force_break();
+
+    // Second paragraph is plain LTR.
+    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 2);
+
+    let para1_text: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    let expected_para1 = reorder_with_controls(
+      &format!("{}ABC{}", '\u{202e}', '\u{202c}'),
+      Some(Level::ltr()),
+    );
+    assert_eq!(para1_text, expected_para1);
+
+    let para2_text: String = lines[1]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    assert_eq!(para2_text, "DEF".to_string());
+  }
+
+  #[test]
+  fn bidi_override_and_embed_across_paragraphs() {
+    // Paragraph 1 uses an override; paragraph 2 uses an embed. Each should reorder independently.
+    let mut builder = make_builder(200.0);
+
+    let mut para1 = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::BidiOverride,
+    );
+    para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+    builder.add_item(InlineItem::InlineBox(para1));
+    builder.force_break();
+
+    let mut para2 = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Rtl,
+      UnicodeBidi::Embed,
+    );
+    para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
+    builder.add_item(InlineItem::InlineBox(para2));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 2);
+
+    let para1_text: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    let expected_para1 = reorder_with_controls(
+      &format!("{}ABC{}", '\u{202e}', '\u{202c}'),
+      Some(Level::ltr()),
+    );
+    assert_eq!(para1_text, expected_para1);
+
+    let para2_text: String = lines[1]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    let expected_para2 = reorder_with_controls(
+      &format!("{}XYZ{}", '\u{202b}', '\u{202c}'),
+      Some(Level::ltr()),
+    );
+    assert_eq!(para2_text, expected_para2);
+  }
+
+  #[test]
+  fn bidi_override_mixed_controls_across_paragraphs() {
+    // Mixed override/embedding should not leak past a forced break; each paragraph reorders per its controls.
+    let mut builder = make_builder(200.0);
+
+    // First paragraph: RLO forces RTL, then an embedded LTR segment.
+    let mut para1 = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::BidiOverride,
+    );
+    para1.add_child(InlineItem::Text(make_text_item("AB", 20.0)));
+    para1.add_child(InlineItem::Text(make_text_item_with_bidi(
+      "cd",
+      20.0,
+      UnicodeBidi::Embed,
+    )));
+    builder.add_item(InlineItem::InlineBox(para1));
+    builder.force_break();
+
+    // Second paragraph: plain LTR embed.
+    let mut para2 = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      1,
+      Direction::Ltr,
+      UnicodeBidi::Embed,
+    );
+    para2.add_child(InlineItem::Text(make_text_item("EF", 20.0)));
+    builder.add_item(InlineItem::InlineBox(para2));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 2);
+
+    let para1_text: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    let expected_para1 = reorder_with_controls(
+      &format!(
+        "{}AB{}{}cd{}",
+        '\u{202e}', '\u{202c}', '\u{202b}', '\u{202c}'
+      ),
+      Some(Level::ltr()),
+    );
+    assert_eq!(para1_text, expected_para1);
+
+    let para2_text: String = lines[1]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    let expected_para2 = reorder_with_controls(
+      &format!("{}EF{}", '\u{202a}', '\u{202c}'),
+      Some(Level::ltr()),
+    );
+    assert_eq!(para2_text, expected_para2);
+  }
+
+  #[test]
+  fn bidi_isolate_does_not_affect_following_paragraph() {
+    // An isolate in the first paragraph should not alter the base direction of the next paragraph.
+    let mut builder = make_builder(200.0);
+
+    let mut para1 = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::Isolate,
+    );
+    para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+    builder.add_item(InlineItem::InlineBox(para1));
+    builder.force_break();
+
+    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
+
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 2);
+
+    let para1_text: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    let expected_para1 = reorder_with_controls(
+      &format!("{}ABC{}", '\u{2067}', '\u{2069}'),
+      Some(Level::ltr()),
+    );
+    assert_eq!(para1_text, expected_para1);
+
+    let para2_text: String = lines[1]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
+    assert_eq!(para2_text, "DEF".to_string());
+  }
+
+  fn nested_inline_box_with_depth(
+    depth: usize,
+    ub: UnicodeBidi,
+    direction: Direction,
+    child: InlineItem,
+  ) -> InlineItem {
+    let mut current = child;
+    for idx in 0..depth {
+      let mut inline_box = InlineBoxItem::new(
+        0.0,
+        0.0,
+        0.0,
+        make_strut_metrics(),
+        Arc::new(ComputedStyle::default()),
+        idx,
+        direction,
+        ub,
+      );
+      inline_box.add_child(current);
+      current = InlineItem::InlineBox(inline_box);
     }
+    current
+  }
 
-    #[test]
-    fn bidi_plaintext_uses_first_strong_rtl_when_text_starts_rtl() {
-        let mut builder = make_builder_with_base(200.0, Level::ltr());
-        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-            "אבג abc",
-            70.0,
-            UnicodeBidi::Plaintext,
-        )));
+  #[test]
+  fn bidi_contexts_beyond_max_depth_are_ignored() {
+    // Build a chain of isolate boxes deeper than MAX_EXPLICIT_DEPTH and ensure we still reorder safely.
+    let mut builder = make_builder_with_base(200.0, Level::ltr());
+    let deep = nested_inline_box_with_depth(
+      unicode_bidi::level::MAX_EXPLICIT_DEPTH as usize + 5,
+      UnicodeBidi::Isolate,
+      Direction::Rtl,
+      InlineItem::Text(make_text_item("abc", 30.0)),
+    );
+    builder.add_item(deep);
 
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                _ => String::new(),
-            })
-            .collect();
-
-        // Base came from first strong RTL; visual order (left-to-right positions) places the LTR run left.
-        assert_eq!(texts, vec!["abc".to_string(), "אבג ".to_string()]);
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let mut collected = String::new();
+    for positioned in &lines[0].items {
+      collect_text(&positioned.item, &mut collected);
     }
-
-    #[test]
-    fn bidi_plaintext_paragraph_base_only_when_present() {
-        // First paragraph uses plaintext and should pick first-strong (LTR) despite RTL base.
-        let mut builder = make_builder_with_base(200.0, Level::rtl());
-        builder.add_item(InlineItem::Text(make_text_item_with_bidi(
-            "abc אבג",
-            70.0,
-            UnicodeBidi::Plaintext,
-        )));
-        builder.force_break();
-
-        // Second paragraph has no plaintext and keeps the RTL base.
-        builder.add_item(InlineItem::Text(make_text_item("abc ", 30.0)));
-        builder.add_item(InlineItem::Text(make_text_item("אבג", 30.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 2);
-
-        let para1: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                _ => String::new(),
-            })
-            .collect();
-        assert_eq!(para1, vec!["abc ".to_string(), "אבג".to_string()]);
-
-        let para2: Vec<String> = lines[1]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                _ => String::new(),
-            })
-            .collect();
-        assert_eq!(para2, vec!["אבג".to_string(), " ".to_string(), "abc".to_string()]);
-    }
-
-    #[test]
-    fn bidi_nested_isolate_override_reorders_only_inner_scope() {
-        // Outer isolate keeps its children grouped; the inner isolate-override reverses its content.
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
-
-        let mut inner = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Rtl,
-            UnicodeBidi::IsolateOverride,
-        );
-        inner.add_child(InlineItem::Text(make_text_item("x", 10.0)));
-        inner.add_child(InlineItem::Text(make_text_item("y", 10.0)));
-
-        let mut outer = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::Isolate,
-        );
-        outer.add_child(InlineItem::Text(make_text_item("a", 10.0)));
-        outer.add_child(InlineItem::InlineBox(inner));
-        outer.add_child(InlineItem::Text(make_text_item("b", 10.0)));
-
-        builder.add_item(InlineItem::InlineBox(outer));
-        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-
-        let texts: Vec<String> = lines[0]
-            .items
-            .iter()
-            .map(|p| match &p.item {
-                InlineItem::Text(t) => t.text.clone(),
-                InlineItem::InlineBox(b) => b
-                    .children
-                    .iter()
-                    .filter_map(|c| match c {
-                        InlineItem::Text(t) => Some(t.text.clone()),
-                        InlineItem::InlineBox(inner) => Some(
-                            inner
-                                .children
-                                .iter()
-                                .filter_map(|c| match c {
-                                    InlineItem::Text(t) => Some(t.text.clone()),
-                                    _ => None,
-                                })
-                                .collect::<String>(),
-                        ),
-                        _ => None,
-                    })
-                    .collect::<String>(),
-                _ => String::new(),
-            })
-            .collect();
-
-        // Outer isolate stays a single unit; inner override reverses its content (yx).
-        assert_eq!(texts, vec!["L ".to_string(), "byxa".to_string(), " R".to_string()]);
-    }
-
-    #[test]
-    fn bidi_isolate_override_keeps_inner_isolate_atomic() {
-        // An isolate-override should reverse its own content while keeping nested isolates grouped.
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
-
-        let mut inner = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Ltr,
-            UnicodeBidi::Isolate,
-        );
-        inner.add_child(InlineItem::Text(make_text_item("BD", 20.0)));
-
-        let mut outer = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::IsolateOverride,
-        );
-        outer.add_child(InlineItem::Text(make_text_item("A", 10.0)));
-        outer.add_child(InlineItem::InlineBox(inner));
-        outer.add_child(InlineItem::Text(make_text_item("C", 10.0)));
-
-        builder.add_item(InlineItem::InlineBox(outer));
-        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-
-        let actual: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
-
-        let logical = format!(
-            "L {}{}A{}BD{}C{}{} R",
-            '\u{2067}', // RLI (rtl isolate)
-            '\u{202e}', // RLO (rtl override)
-            '\u{2066}', // LRI (ltr isolate)
-            '\u{2069}', // PDI
-            '\u{202c}', // PDF
-            '\u{2069}', // PDI
-        );
-        let expected = reorder_with_controls(&logical, Some(Level::ltr()));
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn bidi_override_does_not_apply_inside_isolate() {
-        let mut builder = make_builder(200.0);
-
-        let mut inner = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Ltr,
-            UnicodeBidi::Isolate,
-        );
-        inner.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
-
-        let mut outer = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::BidiOverride,
-        );
-        outer.add_child(InlineItem::Text(make_text_item("a", 10.0)));
-        outer.add_child(InlineItem::InlineBox(inner));
-        outer.add_child(InlineItem::Text(make_text_item("b", 10.0)));
-
-        builder.add_item(InlineItem::InlineBox(outer));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let mut visual = String::new();
-        for positioned in &lines[0].items {
-            collect_text(&positioned.item, &mut visual);
-        }
-
-        let logical = "\u{202E}a\u{2066}אב\u{2069}b\u{202C}";
-        let info = BidiInfo::new(logical, Some(Level::ltr()));
-        let para = &info.paragraphs[0];
-        let expected: String = info
-            .reorder_line(para, para.range.clone())
-            .chars()
-            .filter(|c| !is_bidi_control(*c))
-            .collect();
-
-        assert_eq!(visual, expected);
-    }
-
-    #[test]
-    fn bidi_override_parent_preserves_isolate_contents() {
-        let mut builder = make_builder(200.0);
-
-        let mut inner = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Ltr,
-            UnicodeBidi::Isolate,
-        );
-        inner.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
-
-        let mut outer = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::BidiOverride,
-        );
-        outer.add_child(InlineItem::Text(make_text_item("x", 10.0)));
-        outer.add_child(InlineItem::InlineBox(inner));
-        outer.add_child(InlineItem::Text(make_text_item("y", 10.0)));
-
-        builder.add_item(InlineItem::InlineBox(outer));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let mut visual = String::new();
-        for positioned in &lines[0].items {
-            collect_text(&positioned.item, &mut visual);
-        }
-
-        let logical = "\u{202E}x\u{2066}אב\u{2069}y\u{202C}";
-        let info = BidiInfo::new(logical, Some(Level::ltr()));
-        let para = &info.paragraphs[0];
-        let expected: String = info
-            .reorder_line(para, para.range.clone())
-            .chars()
-            .filter(|c| !is_bidi_control(*c))
-            .collect();
-
-        assert_eq!(visual, expected);
-    }
-
-    #[test]
-    fn bidi_override_allows_embed_to_reset_override() {
-        // Outer override should force RTL ordering for its direct children, but an inner
-        // unicode-bidi: embed establishes a fresh embedding level without the override so its
-        // content keeps logical order.
-        let mut builder = make_builder(200.0);
-
-        builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
-
-        let mut inner = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Ltr,
-            UnicodeBidi::Embed,
-        );
-        inner.add_child(InlineItem::Text(make_text_item("abc", 30.0)));
-
-        let mut outer = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::BidiOverride,
-        );
-        outer.add_child(InlineItem::Text(make_text_item("X ", 20.0)));
-        outer.add_child(InlineItem::InlineBox(inner));
-        outer.add_child(InlineItem::Text(make_text_item(" Y", 20.0)));
-
-        builder.add_item(InlineItem::InlineBox(outer));
-        builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-
-        let actual: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
-
-        let logical = format!(
-            "L {}X {}abc{} Y{} R",
-            '\u{202e}', // RLO
-            '\u{202a}', // LRE
-            '\u{202c}', // PDF
-            '\u{202c}'  // PDF
-        );
-        let expected = reorder_with_controls(&logical, Some(Level::ltr()));
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn bidi_override_does_not_cross_paragraph_boundary() {
-        // An override in the first paragraph should not affect the following paragraph; embeds
-        // in later paragraphs should resolve independently.
-        let mut builder = make_builder(200.0);
-
-        let mut para1 = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::BidiOverride,
-        );
-        para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
-        builder.add_item(InlineItem::InlineBox(para1));
-        builder.force_break();
-
-        let mut para2 = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Ltr,
-            UnicodeBidi::Embed,
-        );
-        para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
-        builder.add_item(InlineItem::InlineBox(para2));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 2);
-
-        let actual_para1: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
-        let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{202e}', '\u{202c}'), Some(Level::ltr()));
-        assert_eq!(actual_para1, expected_para1);
-
-        let actual_para2: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
-        let expected_para2 = reorder_with_controls(&format!("{}XYZ{}", '\u{202a}', '\u{202c}'), Some(Level::ltr()));
-        assert_eq!(actual_para2, expected_para2);
-    }
-
-    #[test]
-    fn bidi_override_stops_at_forced_break() {
-        // An explicit override without a terminator should not leak across a hard break.
-        let mut builder = make_builder(200.0);
-
-        // First paragraph uses an override to reverse ABC.
-        let mut para1 = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::BidiOverride,
-        );
-        para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
-        builder.add_item(InlineItem::InlineBox(para1));
-        builder.force_break();
-
-        // Second paragraph is plain LTR.
-        builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 2);
-
-        let para1_text: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
-        let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{202e}', '\u{202c}'), Some(Level::ltr()));
-        assert_eq!(para1_text, expected_para1);
-
-        let para2_text: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
-        assert_eq!(para2_text, "DEF".to_string());
-    }
-
-    #[test]
-    fn bidi_override_and_embed_across_paragraphs() {
-        // Paragraph 1 uses an override; paragraph 2 uses an embed. Each should reorder independently.
-        let mut builder = make_builder(200.0);
-
-        let mut para1 = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::BidiOverride,
-        );
-        para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
-        builder.add_item(InlineItem::InlineBox(para1));
-        builder.force_break();
-
-        let mut para2 = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Rtl,
-            UnicodeBidi::Embed,
-        );
-        para2.add_child(InlineItem::Text(make_text_item("XYZ", 30.0)));
-        builder.add_item(InlineItem::InlineBox(para2));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 2);
-
-        let para1_text: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
-        let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{202e}', '\u{202c}'), Some(Level::ltr()));
-        assert_eq!(para1_text, expected_para1);
-
-        let para2_text: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
-        let expected_para2 = reorder_with_controls(&format!("{}XYZ{}", '\u{202b}', '\u{202c}'), Some(Level::ltr()));
-        assert_eq!(para2_text, expected_para2);
-    }
-
-    #[test]
-    fn bidi_override_mixed_controls_across_paragraphs() {
-        // Mixed override/embedding should not leak past a forced break; each paragraph reorders per its controls.
-        let mut builder = make_builder(200.0);
-
-        // First paragraph: RLO forces RTL, then an embedded LTR segment.
-        let mut para1 = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::BidiOverride,
-        );
-        para1.add_child(InlineItem::Text(make_text_item("AB", 20.0)));
-        para1.add_child(InlineItem::Text(make_text_item_with_bidi(
-            "cd",
-            20.0,
-            UnicodeBidi::Embed,
-        )));
-        builder.add_item(InlineItem::InlineBox(para1));
-        builder.force_break();
-
-        // Second paragraph: plain LTR embed.
-        let mut para2 = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            1,
-            Direction::Ltr,
-            UnicodeBidi::Embed,
-        );
-        para2.add_child(InlineItem::Text(make_text_item("EF", 20.0)));
-        builder.add_item(InlineItem::InlineBox(para2));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 2);
-
-        let para1_text: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
-        let expected_para1 = reorder_with_controls(
-            &format!("{}AB{}{}cd{}", '\u{202e}', '\u{202c}', '\u{202b}', '\u{202c}'),
-            Some(Level::ltr()),
-        );
-        assert_eq!(para1_text, expected_para1);
-
-        let para2_text: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
-        let expected_para2 = reorder_with_controls(&format!("{}EF{}", '\u{202a}', '\u{202c}'), Some(Level::ltr()));
-        assert_eq!(para2_text, expected_para2);
-    }
-
-    #[test]
-    fn bidi_isolate_does_not_affect_following_paragraph() {
-        // An isolate in the first paragraph should not alter the base direction of the next paragraph.
-        let mut builder = make_builder(200.0);
-
-        let mut para1 = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::Isolate,
-        );
-        para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
-        builder.add_item(InlineItem::InlineBox(para1));
-        builder.force_break();
-
-        builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 2);
-
-        let para1_text: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
-        let expected_para1 = reorder_with_controls(&format!("{}ABC{}", '\u{2067}', '\u{2069}'), Some(Level::ltr()));
-        assert_eq!(para1_text, expected_para1);
-
-        let para2_text: String = lines[1].items.iter().map(|p| flatten_text(&p.item)).collect();
-        assert_eq!(para2_text, "DEF".to_string());
-    }
-
-    fn nested_inline_box_with_depth(
-        depth: usize,
-        ub: UnicodeBidi,
-        direction: Direction,
-        child: InlineItem,
-    ) -> InlineItem {
-        let mut current = child;
-        for idx in 0..depth {
-            let mut inline_box = InlineBoxItem::new(
-                0.0,
-                0.0,
-                0.0,
-                make_strut_metrics(),
-                Arc::new(ComputedStyle::default()),
-                idx,
-                direction,
-                ub,
-            );
-            inline_box.add_child(current);
-            current = InlineItem::InlineBox(inline_box);
-        }
-        current
-    }
-
-    #[test]
-    fn bidi_contexts_beyond_max_depth_are_ignored() {
-        // Build a chain of isolate boxes deeper than MAX_EXPLICIT_DEPTH and ensure we still reorder safely.
-        let mut builder = make_builder_with_base(200.0, Level::ltr());
-        let deep = nested_inline_box_with_depth(
-            unicode_bidi::level::MAX_EXPLICIT_DEPTH as usize + 5,
-            UnicodeBidi::Isolate,
-            Direction::Rtl,
-            InlineItem::Text(make_text_item("abc", 30.0)),
-        );
-        builder.add_item(deep);
-
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let mut collected = String::new();
-        for positioned in &lines[0].items {
-            collect_text(&positioned.item, &mut collected);
-        }
-        assert_eq!(collected, "abc");
-    }
-
-    fn reorder_with_controls(text: &str, base: Option<Level>) -> String {
-        let bidi = BidiInfo::new(text, base);
-        let para = &bidi.paragraphs[0];
-        bidi.reorder_line(para, para.range.clone())
-            .chars()
-            .filter(|c| {
-                !matches!(
-                    c,
-                    '\u{202a}' // LRE
+    assert_eq!(collected, "abc");
+  }
+
+  fn reorder_with_controls(text: &str, base: Option<Level>) -> String {
+    let bidi = BidiInfo::new(text, base);
+    let para = &bidi.paragraphs[0];
+    bidi
+      .reorder_line(para, para.range.clone())
+      .chars()
+      .filter(|c| {
+        !matches!(
+          c,
+          '\u{202a}' // LRE
                     | '\u{202b}' // RLE
                     | '\u{202c}' // PDF
                     | '\u{202d}' // LRO
@@ -4054,24 +4320,26 @@ mod tests {
                     | '\u{2067}' // RLI
                     | '\u{2068}' // FSI
                     | '\u{2069}' // PDI
-                )
-            })
-            .collect()
-    }
+        )
+      })
+      .collect()
+  }
 
-    fn flatten_text(item: &InlineItem) -> String {
-        match item {
-            InlineItem::Text(t) => t.text.clone(),
-            InlineItem::Tab(_) => "\t".to_string(),
-            InlineItem::InlineBox(b) => b.children.iter().map(flatten_text).collect(),
-            InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => String::from("\u{FFFC}"),
-        }
+  fn flatten_text(item: &InlineItem) -> String {
+    match item {
+      InlineItem::Text(t) => t.text.clone(),
+      InlineItem::Tab(_) => "\t".to_string(),
+      InlineItem::InlineBox(b) => b.children.iter().map(flatten_text).collect(),
+      InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
+        String::from("\u{FFFC}")
+      }
     }
+  }
 
-    fn is_bidi_control(c: char) -> bool {
-        matches!(
-            c,
-            '\u{202a}' // LRE
+  fn is_bidi_control(c: char) -> bool {
+    matches!(
+      c,
+      '\u{202a}' // LRE
                 | '\u{202b}' // RLE
                 | '\u{202c}' // PDF
                 | '\u{202d}' // LRO
@@ -4080,290 +4348,352 @@ mod tests {
                 | '\u{2067}' // RLI
                 | '\u{2068}' // FSI
                 | '\u{2069}' // PDI
-        )
-    }
+    )
+  }
 
-    #[test]
-    fn bidi_isolate_spans_children_as_single_context() {
-        // Logical text with a single RTL isolate containing both child segments.
-        let expected = reorder_with_controls("A \u{2067}XY\u{2069} Z", Some(Level::ltr()));
+  #[test]
+  fn bidi_isolate_spans_children_as_single_context() {
+    // Logical text with a single RTL isolate containing both child segments.
+    let expected = reorder_with_controls("A \u{2067}XY\u{2069} Z", Some(Level::ltr()));
 
-        let mut builder = make_builder(200.0);
-        builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
+    let mut builder = make_builder(200.0);
+    builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
 
-        let mut inline_box = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::Isolate,
-        );
-        inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
-        inline_box.add_child(InlineItem::Text(make_text_item("Y", 10.0)));
-        builder.add_item(InlineItem::InlineBox(inline_box));
+    let mut inline_box = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::Isolate,
+    );
+    inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("Y", 10.0)));
+    builder.add_item(InlineItem::InlineBox(inline_box));
 
-        builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));
+    builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));
 
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let actual: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let actual: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
 
-        assert_eq!(actual, expected);
-    }
+    assert_eq!(actual, expected);
+  }
 
-    #[test]
-    fn bidi_isolate_resolves_neutrals_across_children() {
-        // Single isolate should resolve neutrals using surrounding strong types inside the isolate.
-        let expected = "A באX Z".to_string();
+  #[test]
+  fn bidi_isolate_resolves_neutrals_across_children() {
+    // Single isolate should resolve neutrals using surrounding strong types inside the isolate.
+    let expected = "A באX Z".to_string();
 
-        let mut builder = make_builder(200.0);
-        builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
+    let mut builder = make_builder(200.0);
+    builder.add_item(InlineItem::Text(make_text_item("A ", 20.0)));
 
-        let mut inline_box = InlineBoxItem::new(
-            0.0,
-            0.0,
-            0.0,
-            make_strut_metrics(),
-            Arc::new(ComputedStyle::default()),
-            0,
-            Direction::Rtl,
-            UnicodeBidi::Isolate,
-        );
-        inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
-        inline_box.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
-        builder.add_item(InlineItem::InlineBox(inline_box));
+    let mut inline_box = InlineBoxItem::new(
+      0.0,
+      0.0,
+      0.0,
+      make_strut_metrics(),
+      Arc::new(ComputedStyle::default()),
+      0,
+      Direction::Rtl,
+      UnicodeBidi::Isolate,
+    );
+    inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+    builder.add_item(InlineItem::InlineBox(inline_box));
 
-        builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));
+    builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));
 
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 1);
-        let actual: String = lines[0].items.iter().map(|p| flatten_text(&p.item)).collect();
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 1);
+    let actual: String = lines[0]
+      .items
+      .iter()
+      .map(|p| flatten_text(&p.item))
+      .collect();
 
-        assert_eq!(actual, expected);
-    }
+    assert_eq!(actual, expected);
+  }
 
-    #[test]
-    fn bidi_explicit_embedding_survives_line_wrap() {
-        // Explicit embedding (RLE) without a terminator should keep later lines at the same level.
-        let mut builder = make_builder(40.0);
-        let first = "\u{202b}abc ";
-        builder.add_item(InlineItem::Text(make_text_item(first, 40.0)));
-        builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
+  #[test]
+  fn bidi_explicit_embedding_survives_line_wrap() {
+    // Explicit embedding (RLE) without a terminator should keep later lines at the same level.
+    let mut builder = make_builder(40.0);
+    let first = "\u{202b}abc ";
+    builder.add_item(InlineItem::Text(make_text_item(first, 40.0)));
+    builder.add_item(InlineItem::Text(make_text_item("DEF", 30.0)));
 
-        let lines = builder.finish();
-        assert_eq!(lines.len(), 2);
+    let lines = builder.finish();
+    assert_eq!(lines.len(), 2);
 
-        let logical = format!("{}{}", first, "DEF");
-        let bidi = BidiInfo::new(&logical, Some(Level::ltr()));
-        let para = &bidi.paragraphs[0];
-        let line_ranges = [0..first.len(), first.len()..logical.len()];
-        let expected: Vec<String> = line_ranges
-            .iter()
-            .map(|range| {
-                bidi.reorder_line(para, range.clone())
-                    .chars()
-                    .filter(|c| !is_bidi_control(*c))
-                    .collect()
-            })
-            .collect();
+    let logical = format!("{}{}", first, "DEF");
+    let bidi = BidiInfo::new(&logical, Some(Level::ltr()));
+    let para = &bidi.paragraphs[0];
+    let line_ranges = [0..first.len(), first.len()..logical.len()];
+    let expected: Vec<String> = line_ranges
+      .iter()
+      .map(|range| {
+        bidi
+          .reorder_line(para, range.clone())
+          .chars()
+          .filter(|c| !is_bidi_control(*c))
+          .collect()
+      })
+      .collect();
 
-        let actual: Vec<String> = lines
-            .iter()
-            .map(|line| {
-                line.items
-                    .iter()
-                    .map(|p| flatten_text(&p.item))
-                    .collect::<String>()
-                    .chars()
-                    .filter(|c| !is_bidi_control(*c))
-                    .collect()
-            })
-            .collect();
+    let actual: Vec<String> = lines
+      .iter()
+      .map(|line| {
+        line
+          .items
+          .iter()
+          .map(|p| flatten_text(&p.item))
+          .collect::<String>()
+          .chars()
+          .filter(|c| !is_bidi_control(*c))
+          .collect()
+      })
+      .collect();
 
-        assert_eq!(actual, expected);
-    }
+    assert_eq!(actual, expected);
+  }
 
-    #[test]
-    fn letter_spacing_increases_advance() {
-        let mut style = ComputedStyle::default();
-        let text = "abc";
-        let font_ctx = FontContext::new();
-        let pipeline = ShapingPipeline::new();
+  #[test]
+  fn letter_spacing_increases_advance() {
+    let mut style = ComputedStyle::default();
+    let text = "abc";
+    let font_ctx = FontContext::new();
+    let pipeline = ShapingPipeline::new();
 
-        let base_runs = pipeline
-            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
-            .expect("shape");
-        let base_width: f32 = base_runs.iter().map(|r| r.advance).sum();
+    let base_runs = pipeline
+      .shape_with_direction(
+        text,
+        &style,
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    let base_width: f32 = base_runs.iter().map(|r| r.advance).sum();
 
-        style.letter_spacing = 2.0;
-        let mut spaced_runs = pipeline
-            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
-            .expect("shape");
-        TextItem::apply_spacing_to_runs(&mut spaced_runs, text, style.letter_spacing, style.word_spacing);
-        let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
+    style.letter_spacing = 2.0;
+    let mut spaced_runs = pipeline
+      .shape_with_direction(
+        text,
+        &style,
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    TextItem::apply_spacing_to_runs(
+      &mut spaced_runs,
+      text,
+      style.letter_spacing,
+      style.word_spacing,
+    );
+    let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
 
-        let expected_extra = style.letter_spacing * (text.chars().count().saturating_sub(1) as f32);
-        assert!((spaced_width - base_width - expected_extra).abs() < 0.01);
-    }
+    let expected_extra = style.letter_spacing * (text.chars().count().saturating_sub(1) as f32);
+    assert!((spaced_width - base_width - expected_extra).abs() < 0.01);
+  }
 
-    #[test]
-    fn word_spacing_applies_to_spaces() {
-        let mut style = ComputedStyle::default();
-        style.letter_spacing = 1.0;
-        style.word_spacing = 3.0;
-        let text = "a b";
-        let font_ctx = FontContext::new();
-        let pipeline = ShapingPipeline::new();
+  #[test]
+  fn word_spacing_applies_to_spaces() {
+    let mut style = ComputedStyle::default();
+    style.letter_spacing = 1.0;
+    style.word_spacing = 3.0;
+    let text = "a b";
+    let font_ctx = FontContext::new();
+    let pipeline = ShapingPipeline::new();
 
-        let base_runs = pipeline
-            .shape_with_direction(
-                text,
-                &ComputedStyle::default(),
-                &font_ctx,
-                pipeline_dir_from_style(Direction::Ltr),
-            )
-            .expect("shape");
-        let base_width: f32 = base_runs.iter().map(|r| r.advance).sum();
+    let base_runs = pipeline
+      .shape_with_direction(
+        text,
+        &ComputedStyle::default(),
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    let base_width: f32 = base_runs.iter().map(|r| r.advance).sum();
 
-        let mut spaced_runs = pipeline
-            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
-            .expect("shape");
-        TextItem::apply_spacing_to_runs(&mut spaced_runs, text, style.letter_spacing, style.word_spacing);
-        let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
+    let mut spaced_runs = pipeline
+      .shape_with_direction(
+        text,
+        &style,
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    TextItem::apply_spacing_to_runs(
+      &mut spaced_runs,
+      text,
+      style.letter_spacing,
+      style.word_spacing,
+    );
+    let spaced_width: f32 = spaced_runs.iter().map(|r| r.advance).sum();
 
-        let char_gaps = text.chars().count().saturating_sub(1) as f32;
-        let space_count = text.chars().filter(|c| matches!(c, ' ' | '\u{00A0}' | '\t')).count() as f32;
-        let expected_extra = style.letter_spacing * char_gaps + style.word_spacing * space_count;
+    let char_gaps = text.chars().count().saturating_sub(1) as f32;
+    let space_count = text
+      .chars()
+      .filter(|c| matches!(c, ' ' | '\u{00A0}' | '\t'))
+      .count() as f32;
+    let expected_extra = style.letter_spacing * char_gaps + style.word_spacing * space_count;
 
-        assert!((spaced_width - base_width - expected_extra).abs() < 0.01);
-    }
+    assert!((spaced_width - base_width - expected_extra).abs() < 0.01);
+  }
 
-    #[test]
-    fn split_at_can_insert_hyphen() {
-        let font_ctx = FontContext::new();
-        let pipeline = ShapingPipeline::new();
-        let style = Arc::new(ComputedStyle::default());
+  #[test]
+  fn split_at_can_insert_hyphen() {
+    let font_ctx = FontContext::new();
+    let pipeline = ShapingPipeline::new();
+    let style = Arc::new(ComputedStyle::default());
 
-        let runs = pipeline
-            .shape_with_direction("abc", &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
-            .expect("shape");
-        let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
-        let breaks = vec![BreakOpportunity::with_hyphen(1, BreakType::Allowed, true)];
-        let item = TextItem::new(
-            runs,
-            "abc".to_string(),
-            metrics,
-            breaks,
-            Vec::new(),
-            style,
-            Direction::Ltr,
-        );
+    let runs = pipeline
+      .shape_with_direction(
+        "abc",
+        &style,
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let breaks = vec![BreakOpportunity::with_hyphen(1, BreakType::Allowed, true)];
+    let item = TextItem::new(
+      runs,
+      "abc".to_string(),
+      metrics,
+      breaks,
+      Vec::new(),
+      style,
+      Direction::Ltr,
+    );
 
-        let (before, after) = item.split_at(1, true, &pipeline, &font_ctx).expect("split succeeds");
+    let (before, after) = item
+      .split_at(1, true, &pipeline, &font_ctx)
+      .expect("split succeeds");
 
-        assert_eq!(before.text, format!("a{}", '\u{2010}'));
-        assert_eq!(after.text, "bc");
-    }
+    assert_eq!(before.text, format!("a{}", '\u{2010}'));
+    assert_eq!(after.text, "bc");
+  }
 
-    #[test]
-    fn split_at_rejects_non_char_boundary_offsets() {
-        let font_ctx = FontContext::new();
-        let pipeline = ShapingPipeline::new();
-        let style = Arc::new(ComputedStyle::default());
+  #[test]
+  fn split_at_rejects_non_char_boundary_offsets() {
+    let font_ctx = FontContext::new();
+    let pipeline = ShapingPipeline::new();
+    let style = Arc::new(ComputedStyle::default());
 
-        let text = "a😊b";
-        let runs = pipeline
-            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
-            .expect("shape");
-        let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
-        let item = TextItem::new(
-            runs,
-            text.to_string(),
-            metrics,
-            Vec::new(),
-            Vec::new(),
-            style.clone(),
-            Direction::Ltr,
-        );
+    let text = "a😊b";
+    let runs = pipeline
+      .shape_with_direction(
+        text,
+        &style,
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let item = TextItem::new(
+      runs,
+      text.to_string(),
+      metrics,
+      Vec::new(),
+      Vec::new(),
+      style.clone(),
+      Direction::Ltr,
+    );
 
-        // Offset 2 lands inside the multi-byte emoji; split_at should clamp to the previous
-        // boundary rather than panicking.
-        assert!(!text.is_char_boundary(2));
-        let (before, after) = item
-            .split_at(2, false, &pipeline, &font_ctx)
-            .expect("clamps to prior boundary");
-        assert_eq!(before.text, "a");
-        assert_eq!(after.text, "😊b");
+    // Offset 2 lands inside the multi-byte emoji; split_at should clamp to the previous
+    // boundary rather than panicking.
+    assert!(!text.is_char_boundary(2));
+    let (before, after) = item
+      .split_at(2, false, &pipeline, &font_ctx)
+      .expect("clamps to prior boundary");
+    assert_eq!(before.text, "a");
+    assert_eq!(after.text, "😊b");
 
-        // Explicit break offsets should also be rejected when they land mid-codepoint.
-        let euro_text = "€uro";
-        let euro_runs = pipeline
-            .shape_with_direction(euro_text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
-            .expect("shape");
-        let euro_metrics = TextItem::metrics_from_runs(&euro_runs, 16.0, style.font_size);
-        let breaks = vec![BreakOpportunity::new(1, BreakType::Allowed)];
-        let euro_item = TextItem::new(
-            euro_runs,
-            euro_text.to_string(),
-            euro_metrics,
-            breaks,
-            Vec::new(),
-            style,
-            Direction::Ltr,
-        );
+    // Explicit break offsets should also be rejected when they land mid-codepoint.
+    let euro_text = "€uro";
+    let euro_runs = pipeline
+      .shape_with_direction(
+        euro_text,
+        &style,
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    let euro_metrics = TextItem::metrics_from_runs(&euro_runs, 16.0, style.font_size);
+    let breaks = vec![BreakOpportunity::new(1, BreakType::Allowed)];
+    let euro_item = TextItem::new(
+      euro_runs,
+      euro_text.to_string(),
+      euro_metrics,
+      breaks,
+      Vec::new(),
+      style,
+      Direction::Ltr,
+    );
 
-        assert!(euro_item.split_at(1, false, &pipeline, &font_ctx).is_none());
-    }
+    assert!(euro_item.split_at(1, false, &pipeline, &font_ctx).is_none());
+  }
 
-    #[test]
-    fn previous_char_boundary_handles_multibyte_offsets() {
-        let text = "a😊b";
-        // Offsets that land in the middle of a multibyte codepoint should step back to its start.
-        assert_eq!(TextItem::previous_char_boundary_in_text(text, 2), 1);
-        assert_eq!(TextItem::previous_char_boundary_in_text(text, 4), 1);
+  #[test]
+  fn previous_char_boundary_handles_multibyte_offsets() {
+    let text = "a😊b";
+    // Offsets that land in the middle of a multibyte codepoint should step back to its start.
+    assert_eq!(TextItem::previous_char_boundary_in_text(text, 2), 1);
+    assert_eq!(TextItem::previous_char_boundary_in_text(text, 4), 1);
 
-        // Offsets at boundaries remain unchanged.
-        assert_eq!(TextItem::previous_char_boundary_in_text(text, 0), 0);
-        assert_eq!(TextItem::previous_char_boundary_in_text(text, 1), 1);
-        assert_eq!(TextItem::previous_char_boundary_in_text(text, 5), 5);
-    }
+    // Offsets at boundaries remain unchanged.
+    assert_eq!(TextItem::previous_char_boundary_in_text(text, 0), 0);
+    assert_eq!(TextItem::previous_char_boundary_in_text(text, 1), 1);
+    assert_eq!(TextItem::previous_char_boundary_in_text(text, 5), 5);
+  }
 
-    #[test]
-    fn previous_char_boundary_clamps_past_end() {
-        let text = "éclair";
-        assert_eq!(
-            TextItem::previous_char_boundary_in_text(text, text.len() + 10),
-            text.len()
-        );
-    }
+  #[test]
+  fn previous_char_boundary_clamps_past_end() {
+    let text = "éclair";
+    assert_eq!(
+      TextItem::previous_char_boundary_in_text(text, text.len() + 10),
+      text.len()
+    );
+  }
 
-    #[test]
-    fn split_at_handles_non_char_boundary_offsets() {
-        let font_ctx = FontContext::new();
-        let pipeline = ShapingPipeline::new();
-        let style = Arc::new(ComputedStyle::default());
-        let text = "‘bruises and blood’ in ‘Christy’ fights";
+  #[test]
+  fn split_at_handles_non_char_boundary_offsets() {
+    let font_ctx = FontContext::new();
+    let pipeline = ShapingPipeline::new();
+    let style = Arc::new(ComputedStyle::default());
+    let text = "‘bruises and blood’ in ‘Christy’ fights";
 
-        let runs = pipeline
-            .shape_with_direction(text, &style, &font_ctx, pipeline_dir_from_style(Direction::Ltr))
-            .expect("shape");
-        let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
-        let item = TextItem::new(
-            runs,
-            text.to_string(),
-            metrics,
-            Vec::new(),
-            Vec::new(),
-            style,
-            Direction::Ltr,
-        );
+    let runs = pipeline
+      .shape_with_direction(
+        text,
+        &style,
+        &font_ctx,
+        pipeline_dir_from_style(Direction::Ltr),
+      )
+      .expect("shape");
+    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let item = TextItem::new(
+      runs,
+      text.to_string(),
+      metrics,
+      Vec::new(),
+      Vec::new(),
+      style,
+      Direction::Ltr,
+    );
 
-        let (before, after) = item.split_at(22, false, &pipeline, &font_ctx).expect("split succeeds");
+    let (before, after) = item
+      .split_at(22, false, &pipeline, &font_ctx)
+      .expect("split succeeds");
 
-        assert_eq!(format!("{}{}", before.text, after.text), text);
-        assert!(after.text.starts_with('’'));
-    }
+    assert_eq!(format!("{}{}", before.text, after.text), text);
+    assert!(after.text.starts_with('’'));
+  }
 }

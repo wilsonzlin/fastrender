@@ -1,8 +1,11 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::black_box;
+use criterion::criterion_group;
+use criterion::criterion_main;
+use criterion::Criterion;
 use fastrender::FastRender;
 
 fn simple_html_benchmark(c: &mut Criterion) {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -17,14 +20,14 @@ fn simple_html_benchmark(c: &mut Criterion) {
         </html>
     "#;
 
-    c.bench_function("simple html render", |b| {
-        let mut renderer = FastRender::new().unwrap();
-        b.iter(|| renderer.render_to_png(black_box(html), 800, 600).unwrap());
-    });
+  c.bench_function("simple html render", |b| {
+    let mut renderer = FastRender::new().unwrap();
+    b.iter(|| renderer.render_to_png(black_box(html), 800, 600).unwrap());
+  });
 }
 
 fn complex_html_benchmark(c: &mut Criterion) {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -54,14 +57,14 @@ fn complex_html_benchmark(c: &mut Criterion) {
         </html>
     "#;
 
-    c.bench_function("complex html render", |b| {
-        let mut renderer = FastRender::new().unwrap();
-        b.iter(|| renderer.render_to_png(black_box(html), 1920, 1080).unwrap());
-    });
+  c.bench_function("complex html render", |b| {
+    let mut renderer = FastRender::new().unwrap();
+    b.iter(|| renderer.render_to_png(black_box(html), 1920, 1080).unwrap());
+  });
 }
 
 fn grid_layout_benchmark(c: &mut Criterion) {
-    let html = r#"
+  let html = r#"
         <html>
             <head>
                 <style>
@@ -92,16 +95,16 @@ fn grid_layout_benchmark(c: &mut Criterion) {
         </html>
     "#;
 
-    c.bench_function("grid layout render", |b| {
-        let mut renderer = FastRender::new().unwrap();
-        b.iter(|| renderer.render_to_png(black_box(html), 1200, 800).unwrap());
-    });
+  c.bench_function("grid layout render", |b| {
+    let mut renderer = FastRender::new().unwrap();
+    b.iter(|| renderer.render_to_png(black_box(html), 1200, 800).unwrap());
+  });
 }
 
 criterion_group!(
-    benches,
-    simple_html_benchmark,
-    complex_html_benchmark,
-    grid_layout_benchmark
+  benches,
+  simple_html_benchmark,
+  complex_html_benchmark,
+  grid_layout_benchmark
 );
 criterion_main!(benches);
