@@ -381,15 +381,11 @@ impl StyleSheet {
               return true;
             }
           }
-<<<<<<< HEAD
           CssRule::Page(_)
           | CssRule::Style(_)
           | CssRule::Import(_)
           | CssRule::FontFace(_)
           | CssRule::Keyframes(_) => {}
-=======
-          CssRule::Page(_) | CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
->>>>>>> 4ad3a36 (Add CSS @page parsing and pagination support)
         }
       }
       false
