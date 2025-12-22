@@ -195,6 +195,10 @@ impl<'a> BuildContext<'a> {
       }
     }
 
+    if let Some(label) = label_association_name(node, self, visited) {
+      return Some(label);
+    }
+
     if let Some(alt) = node.node.get_attribute_ref("alt") {
       let norm = normalize_whitespace(alt);
       if !norm.is_empty() {
