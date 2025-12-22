@@ -483,98 +483,13 @@ pub(crate) fn parse_transform_list(value: &str) -> Option<Vec<Transform>> {
 }
 
 fn parse_length_component(parser: &mut Parser) -> Result<Length, ()> {
-  let token = parser.next().map_err(|_| ())?;
-  match token {
-    Token::Percentage { unit_value, .. } => Ok(Length::new(*unit_value, LengthUnit::Percent)),
-    Token::Dimension {
-      value, ref unit, ..
-    } => {
-      let u = unit.to_ascii_lowercase();
-      let unit = match u.as_str() {
-        "px" => LengthUnit::Px,
-        "pt" => LengthUnit::Pt,
-        "pc" => LengthUnit::Pc,
-        "in" => LengthUnit::In,
-        "cm" => LengthUnit::Cm,
-        "mm" => LengthUnit::Mm,
-        "q" => LengthUnit::Q,
-        "em" => LengthUnit::Em,
-        "rem" => LengthUnit::Rem,
-        "ex" => LengthUnit::Ex,
-        "ch" => LengthUnit::Ch,
-        "vw" => LengthUnit::Vw,
-        "vh" => LengthUnit::Vh,
-        "vmin" => LengthUnit::Vmin,
-        "vmax" => LengthUnit::Vmax,
-        "dvw" => LengthUnit::Dvw,
-        "dvh" => LengthUnit::Dvh,
-        "dvmin" => LengthUnit::Dvmin,
-        "dvmax" => LengthUnit::Dvmax,
-        _ => return Err(()),
-      };
-      Ok(Length::new(*value, unit))
-    }
-    Token::Number { value, .. } => Ok(Length::px(*value)),
-    Token::Function(ref name)
-      if name.eq_ignore_ascii_case("calc")
-        || name.eq_ignore_ascii_case("min")
-        || name.eq_ignore_ascii_case("max")
-        || name.eq_ignore_ascii_case("clamp") =>
-    {
-      let calc = parser.parse_nested_block(parse_calc_sum).map_err(|_| ())?;
-      calc_component_to_length(calc).ok_or(())
-    }
-    _ => Err(()),
-  }
+  let component = parse_calc_sum(parser).map_err(|_| ())?;
+  calc_component_to_length_allow_number(component).ok_or(())
 }
 
-fn parse_angle_component(parser: &mut Parser) -> Result<f32, ()> {
-  let token = parser.next().map_err(|_| ())?;
-  match token {
-    Token::Dimension {
-      value, ref unit, ..
-    } => {
-      let u = unit.to_ascii_lowercase();
-      let deg = match u.as_str() {
-        "deg" => *value,
-        "grad" => *value * (360.0 / 400.0),
-        "rad" => value.to_degrees(),
-        "turn" => *value * 360.0,
-        _ => return Err(()),
-      };
-      Ok(deg)
-    }
-    Token::Number { value, .. } if *value == 0.0 => Ok(0.0),
-    Token::Function(ref name)
-      if name.eq_ignore_ascii_case("calc")
-        || name.eq_ignore_ascii_case("min")
-        || name.eq_ignore_ascii_case("max")
-        || name.eq_ignore_ascii_case("clamp") =>
-    {
-      let func = name.as_ref().to_ascii_lowercase();
-      let component = match func.as_str() {
-        "calc" => parser
-          .parse_nested_block(parse_calc_angle_sum)
-          .map_err(|_| ())?,
-        "min" => parser
-          .parse_nested_block(|block| parse_min_max_angle(block, MathFn::Min))
-          .map_err(|_| ())?,
-        "max" => parser
-          .parse_nested_block(|block| parse_min_max_angle(block, MathFn::Max))
-          .map_err(|_| ())?,
-        "clamp" => parser
-          .parse_nested_block(parse_clamp_angle)
-          .map_err(|_| ())?,
-        _ => return Err(()),
-      };
-      if component.is_angle {
-        Ok(component.value)
-      } else {
-        Err(())
-      }
-    }
-    _ => Err(()),
-  }
+pub(crate) fn parse_angle_component(parser: &mut Parser) -> Result<f32, ()> {
+  let component = parse_calc_sum(parser).map_err(|_| ())?;
+  calc_component_to_angle(component).ok_or(())
 }
 
 fn parse_translate(parser: &mut Parser) -> Result<Transform, ()> {
@@ -777,12 +692,8 @@ fn parse_perspective(parser: &mut Parser) -> Result<Transform, ()> {
 }
 
 fn parse_number_component(parser: &mut Parser) -> Result<f32, ()> {
-  let token = parser.next().map_err(|_| ())?;
-  match token {
-    Token::Number { value, .. } => Ok(*value),
-    Token::Dimension { value, .. } => Ok(*value),
-    _ => Err(()),
-  }
+  let component = parse_calc_sum(parser).map_err(|_| ())?;
+  calc_component_to_number(component).ok_or(())
 }
 
 fn is_global_keyword_str(value: &str) -> bool {
@@ -1422,16 +1333,22 @@ fn parse_radial_position(text: &str) -> Option<GradientPosition> {
     3 => {
       // x keyword [offset] y keyword
       if let Some(cx) = component_from_single(&parts[0], AxisKind::Horizontal) {
-        x = Some(component_from_keyword(cx.alignment, match parts[1] {
-          Part::Offset(len) => Some(len),
-          Part::Keyword(_, _) => None,
-        }));
+        x = Some(component_from_keyword(
+          cx.alignment,
+          match parts[1] {
+            Part::Offset(len) => Some(len),
+            Part::Keyword(_, _) => None,
+          },
+        ));
         y = component_from_single(&parts[2], AxisKind::Vertical);
       } else if let Some(cy) = component_from_single(&parts[0], AxisKind::Vertical) {
-        y = Some(component_from_keyword(cy.alignment, match parts[1] {
-          Part::Offset(len) => Some(len),
-          Part::Keyword(_, _) => None,
-        }));
+        y = Some(component_from_keyword(
+          cy.alignment,
+          match parts[1] {
+            Part::Offset(len) => Some(len),
+            Part::Keyword(_, _) => None,
+          },
+        ));
         x = component_from_single(&parts[2], AxisKind::Horizontal);
       }
     }
@@ -1592,6 +1509,13 @@ fn split_top_level_commas(input: &str) -> Vec<&str> {
   parts
 }
 
+fn parse_angle_expression(token: &str) -> Option<f32> {
+  let mut input = ParserInput::new(token);
+  let mut parser = Parser::new(&mut input);
+  let component = parser.parse_entirely(parse_calc_sum).ok()?;
+  calc_component_to_angle(component)
+}
+
 fn parse_gradient_angle(token: &str) -> Option<f32> {
   let token = token.trim();
   if token.starts_with("to ") {
@@ -1621,6 +1545,10 @@ fn parse_gradient_angle(token: &str) -> Option<f32> {
       (-1, -1) => 315.0,
       _ => 180.0,
     };
+    return Some(angle);
+  }
+
+  if let Some(angle) = parse_angle_expression(token) {
     return Some(angle);
   }
 
@@ -2226,11 +2154,12 @@ pub fn parse_length(s: &str) -> Option<Length> {
   }
 
   let lower = s.to_ascii_lowercase();
-  if lower.starts_with("calc(")
-    || lower.starts_with("min(")
-    || lower.starts_with("max(")
-    || lower.starts_with("clamp(")
-  {
+  const MATH_PREFIXES: &[&str] = &[
+    "calc(", "min(", "max(", "clamp(", "sin(", "cos(", "tan(", "asin(", "acos(", "atan(", "atan2(",
+    "pow(", "sqrt(", "hypot(", "log(", "exp(", "sign(", "abs(", "round(", "mod(", "rem(",
+    "clamped(",
+  ];
+  if MATH_PREFIXES.iter().any(|p| lower.starts_with(p)) {
     if let Some(len) = parse_function_length(s) {
       return Some(len);
     }
@@ -2271,33 +2200,45 @@ pub fn parse_length(s: &str) -> Option<Length> {
   None
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CalcDimension {
+  Number,
+  Length,
+  Angle,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum CalcComponent {
   Number(f32),
   Length(CalcLength),
+  /// Stored in degrees
+  Angle(f32),
+}
+
+impl CalcComponent {
+  fn dimension(&self) -> CalcDimension {
+    match self {
+      Self::Number(_) => CalcDimension::Number,
+      Self::Length(_) => CalcDimension::Length,
+      Self::Angle(_) => CalcDimension::Angle,
+    }
+  }
+}
+
+fn angle_from_unit(unit: &str, value: f32) -> Option<f32> {
+  match unit {
+    "deg" => Some(value),
+    "grad" => Some(value * 0.9),
+    "turn" => Some(value * 360.0),
+    "rad" => Some(value.to_degrees()),
+    _ => None,
+  }
 }
 
 fn parse_function_length(input: &str) -> Option<Length> {
   let mut parser_input = ParserInput::new(input);
   let mut parser = Parser::new(&mut parser_input);
-  let result = parser.parse_entirely(|p| match p.next()? {
-    Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
-      p.parse_nested_block(parse_calc_sum)
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
-      p.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
-      p.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => {
-      p.parse_nested_block(parse_clamp)
-    }
-    _ => Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: p.current_source_location(),
-    }),
-  });
+  let result = parser.parse_entirely(parse_calc_sum);
 
   result.ok().and_then(calc_component_to_length)
 }
@@ -2305,24 +2246,7 @@ fn parse_function_length(input: &str) -> Option<Length> {
 fn parse_function_number(input: &str) -> Option<f32> {
   let mut parser_input = ParserInput::new(input);
   let mut parser = Parser::new(&mut parser_input);
-  let result = parser.parse_entirely(|p| match p.next()? {
-    Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
-      p.parse_nested_block(parse_calc_sum)
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
-      p.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
-      p.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => {
-      p.parse_nested_block(parse_clamp)
-    }
-    _ => Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: p.current_source_location(),
-    }),
-  });
+  let result = parser.parse_entirely(parse_calc_sum);
 
   result.ok().and_then(calc_component_to_number)
 }
@@ -2338,10 +2262,21 @@ pub(crate) fn parse_calc_function_length<'i, 't>(
 }
 
 fn calc_component_to_length(component: CalcComponent) -> Option<Length> {
+  calc_component_to_length_with_numbers(component, false)
+}
+
+fn calc_component_to_length_allow_number(component: CalcComponent) -> Option<Length> {
+  calc_component_to_length_with_numbers(component, true)
+}
+
+fn calc_component_to_length_with_numbers(
+  component: CalcComponent,
+  allow_unitless: bool,
+) -> Option<Length> {
   match component {
     CalcComponent::Number(n) => {
-      if n == 0.0 {
-        Some(Length::px(0.0))
+      if n == 0.0 || allow_unitless {
+        Some(Length::px(n))
       } else {
         None
       }
@@ -2353,13 +2288,79 @@ fn calc_component_to_length(component: CalcComponent) -> Option<Length> {
         Some(Length::calc(calc))
       }
     }
+    _ => None,
   }
 }
 
 fn calc_component_to_number(component: CalcComponent) -> Option<f32> {
   match component {
     CalcComponent::Number(n) => Some(n),
-    CalcComponent::Length(_) => None,
+    _ => None,
+  }
+}
+
+fn calc_component_to_angle(component: CalcComponent) -> Option<f32> {
+  match component {
+    CalcComponent::Angle(deg) => Some(deg),
+    CalcComponent::Number(n) if n == 0.0 => Some(0.0),
+    _ => None,
+  }
+}
+
+fn all_same_dimension(values: &[CalcComponent]) -> bool {
+  values
+    .first()
+    .map(|first| values.iter().all(|v| v.dimension() == first.dimension()))
+    .unwrap_or(false)
+}
+
+fn extract_simple_length(len: &CalcLength) -> Option<(f32, LengthUnit)> {
+  if len.is_zero() {
+    return Some((0.0, LengthUnit::Px));
+  }
+  len.single_term().map(|t| (t.value, t.unit))
+}
+
+fn round_value<'i>(
+  value: f32,
+  step: f32,
+  strategy: RoundStrategy,
+  location: cssparser::SourceLocation,
+) -> Result<f32, cssparser::ParseError<'i, ()>> {
+  if step == 0.0 || !step.is_finite() || !value.is_finite() {
+    return Err(location.new_custom_error(()));
+  }
+  let step = step.abs();
+  let scaled = value / step;
+  let rounded = match strategy {
+    RoundStrategy::Nearest => scaled.round(),
+    RoundStrategy::Up => scaled.ceil(),
+    RoundStrategy::Down => scaled.floor(),
+    RoundStrategy::ToZero => scaled.trunc(),
+    RoundStrategy::AwayFromZero => {
+      if scaled.is_sign_positive() {
+        scaled.ceil()
+      } else {
+        scaled.floor()
+      }
+    }
+  };
+  let result = rounded * step;
+  if result.is_finite() {
+    Ok(result)
+  } else {
+    Err(location.new_custom_error(()))
+  }
+}
+
+fn ensure_finite<'i>(
+  value: f32,
+  location: cssparser::SourceLocation,
+) -> Result<f32, cssparser::ParseError<'i, ()>> {
+  if value.is_finite() {
+    Ok(value)
+  } else {
+    Err(location.new_custom_error(()))
   }
 }
 
@@ -2380,7 +2381,8 @@ fn parse_calc_sum<'i, 't>(
       Err(_) => break,
     };
     let right = parse_calc_product(input)?;
-    left = combine_sum(left, right, op)?;
+    let location = input.current_source_location();
+    left = combine_sum(left, right, op, location)?;
   }
   Ok(left)
 }
@@ -2402,7 +2404,8 @@ fn parse_calc_product<'i, 't>(
       Err(_) => break,
     };
     let right = parse_calc_factor(input)?;
-    left = combine_product(left, right, op)?;
+    let location = input.current_source_location();
+    left = combine_product(left, right, op, location)?;
   }
   Ok(left)
 }
@@ -2410,6 +2413,7 @@ fn parse_calc_product<'i, 't>(
 fn parse_calc_factor<'i, 't>(
   input: &mut Parser<'i, 't>,
 ) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+  let location = input.current_source_location();
   let token = input.next()?;
   match token {
     Token::Number { value, .. } => Ok(CalcComponent::Number(*value)),
@@ -2417,6 +2421,9 @@ fn parse_calc_factor<'i, 't>(
       value, ref unit, ..
     } => {
       let unit = unit.as_ref().to_ascii_lowercase();
+      if let Some(angle) = angle_from_unit(&unit, *value) {
+        return Ok(CalcComponent::Angle(angle));
+      }
       let unit = match unit.as_str() {
         "px" => LengthUnit::Px,
         "em" => LengthUnit::Em,
@@ -2437,12 +2444,7 @@ fn parse_calc_factor<'i, 't>(
         "dvh" => LengthUnit::Dvh,
         "dvmin" => LengthUnit::Dvmin,
         "dvmax" => LengthUnit::Dvmax,
-        _ => {
-          return Err(cssparser::ParseError {
-            kind: cssparser::ParseErrorKind::Custom(()),
-            location: input.current_source_location(),
-          })
-        }
+        _ => return Err(location.new_custom_error(())),
       };
       Ok(CalcComponent::Length(CalcLength::single(unit, *value)))
     }
@@ -2450,17 +2452,9 @@ fn parse_calc_factor<'i, 't>(
       LengthUnit::Percent,
       *unit_value * 100.0,
     ))),
-    Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
-      input.parse_nested_block(parse_calc_sum)
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
-      input.parse_nested_block(|block| parse_min_max(block, MathFn::Min))
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
-      input.parse_nested_block(|block| parse_min_max(block, MathFn::Max))
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => {
-      input.parse_nested_block(parse_clamp)
+    Token::Function(ref name) => {
+      let func = name.as_ref().to_ascii_lowercase();
+      parse_math_function(&func, input, location)
     }
     Token::ParenthesisBlock => input.parse_nested_block(parse_calc_sum),
     Token::Delim('+') => parse_calc_factor(input),
@@ -2469,12 +2463,10 @@ fn parse_calc_factor<'i, 't>(
       match inner {
         CalcComponent::Number(v) => Ok(CalcComponent::Number(-v)),
         CalcComponent::Length(len) => Ok(CalcComponent::Length(len.scale(-1.0))),
+        CalcComponent::Angle(v) => Ok(CalcComponent::Angle(-v)),
       }
     }
-    _ => Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: input.current_source_location(),
-    }),
+    _ => Err(location.new_custom_error(())),
   }
 }
 
@@ -2482,6 +2474,15 @@ fn parse_calc_factor<'i, 't>(
 pub(crate) enum MathFn {
   Min,
   Max,
+}
+
+#[derive(Clone, Copy)]
+enum RoundStrategy {
+  Nearest,
+  Up,
+  Down,
+  ToZero,
+  AwayFromZero,
 }
 
 pub(crate) fn parse_min_max_function_length<'i, 't>(
@@ -2520,13 +2521,10 @@ fn parse_min_max<'i, 't>(
   }
 
   if values.len() < 2 {
-    return Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: input.current_source_location(),
-    });
+    return Err(input.new_custom_error(()));
   }
 
-  reduce_components(values, func)
+  reduce_components(values, func, input.current_source_location())
 }
 
 fn parse_clamp<'i, 't>(
@@ -2544,64 +2542,53 @@ fn parse_clamp<'i, 't>(
   let max = parse_calc_sum(input)?;
 
   if !all_same_dimension(&[min, preferred, max]) {
-    return Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: input.current_source_location(),
-    });
+    return Err(input.new_custom_error(()));
   }
 
+  let location = input.current_source_location();
   match (min, preferred, max) {
     (CalcComponent::Number(a), CalcComponent::Number(b), CalcComponent::Number(c)) => {
       Ok(CalcComponent::Number(b.clamp(a, c)))
     }
-    (CalcComponent::Length(a), CalcComponent::Length(b), CalcComponent::Length(c)) => {
-      let a_term = a.single_term();
-      let b_term = b.single_term();
-      let c_term = c.single_term();
-      if let (Some(min_term), Some(pref_term), Some(max_term)) = (a_term, b_term, c_term) {
-        if min_term.unit == pref_term.unit && pref_term.unit == max_term.unit {
-          let clamped = pref_term.value.clamp(min_term.value, max_term.value);
-          return Ok(CalcComponent::Length(CalcLength::single(
-            pref_term.unit,
-            clamped,
-          )));
-        }
-      }
-      Err(cssparser::ParseError {
-        kind: cssparser::ParseErrorKind::Custom(()),
-        location: input.current_source_location(),
-      })
+    (CalcComponent::Angle(a), CalcComponent::Angle(b), CalcComponent::Angle(c)) => {
+      let upper = if c < a { a } else { c };
+      Ok(CalcComponent::Angle(b.max(a).min(upper)))
     }
-    _ => Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: input.current_source_location(),
-    }),
+    (CalcComponent::Length(a), CalcComponent::Length(b), CalcComponent::Length(c)) => {
+      let Some((min_value, unit)) = extract_simple_length(&a) else {
+        return Err(location.new_custom_error(()));
+      };
+      let Some((pref_value, pref_unit)) = extract_simple_length(&b) else {
+        return Err(location.new_custom_error(()));
+      };
+      let Some((max_value, max_unit)) = extract_simple_length(&c) else {
+        return Err(location.new_custom_error(()));
+      };
+      if unit != pref_unit || unit != max_unit {
+        return Err(location.new_custom_error(()));
+      }
+      let upper = if max_value < min_value {
+        min_value
+      } else {
+        max_value
+      };
+      let clamped = pref_value.max(min_value).min(upper);
+      Ok(CalcComponent::Length(CalcLength::single(unit, clamped)))
+    }
+    _ => Err(location.new_custom_error(())),
   }
 }
-
-fn all_same_dimension(values: &[CalcComponent]) -> bool {
-  if values.is_empty() {
-    return false;
-  }
-  let first_is_number = matches!(values[0], CalcComponent::Number(_));
-  values
-    .iter()
-    .all(|v| matches!(v, CalcComponent::Number(_)) == first_is_number)
-}
-
 fn reduce_components<'i>(
   values: Vec<CalcComponent>,
   func: MathFn,
+  location: cssparser::SourceLocation,
 ) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
   if !all_same_dimension(&values) {
-    return Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: cssparser::SourceLocation { line: 0, column: 0 },
-    });
+    return Err(location.new_custom_error(()));
   }
 
-  match values[0] {
-    CalcComponent::Number(_) => {
+  match values[0].dimension() {
+    CalcDimension::Number => {
       let init = match func {
         MathFn::Min => f32::INFINITY,
         MathFn::Max => f32::NEG_INFINITY,
@@ -2613,296 +2600,67 @@ fn reduce_components<'i>(
       });
       Ok(CalcComponent::Number(result))
     }
-    CalcComponent::Length(_) => {
+    CalcDimension::Angle => {
+      let init = match func {
+        MathFn::Min => f32::INFINITY,
+        MathFn::Max => f32::NEG_INFINITY,
+      };
+      let result = values.into_iter().fold(init, |acc, v| match (func, v) {
+        (MathFn::Min, CalcComponent::Angle(n)) => acc.min(n),
+        (MathFn::Max, CalcComponent::Angle(n)) => acc.max(n),
+        _ => acc,
+      });
+      Ok(CalcComponent::Angle(result))
+    }
+    CalcDimension::Length => {
       let mut iter = values.into_iter();
       let first = match iter.next().unwrap() {
         CalcComponent::Length(l) => l,
-        CalcComponent::Number(_) => {
-          return Err(cssparser::ParseError {
-            kind: cssparser::ParseErrorKind::Custom(()),
-            location: cssparser::SourceLocation { line: 0, column: 0 },
-          })
-        }
+        _ => return Err(location.new_custom_error(())),
       };
-      // Only support min/max when all lengths reduce to a single shared unit.
-      let first_term = first.single_term().ok_or(cssparser::ParseError {
-        kind: cssparser::ParseErrorKind::Custom(()),
-        location: cssparser::SourceLocation { line: 0, column: 0 },
-      })?;
-      let mut extremum = first_term.value;
+      let Some((mut extremum, unit)) = extract_simple_length(&first) else {
+        return Err(location.new_custom_error(()));
+      };
       for comp in iter {
         let CalcComponent::Length(calc) = comp else {
           continue;
         };
-        let Some(term) = calc.single_term() else {
-          return Err(cssparser::ParseError {
-            kind: cssparser::ParseErrorKind::Custom(()),
-            location: cssparser::SourceLocation { line: 0, column: 0 },
-          });
+        let Some((value, this_unit)) = extract_simple_length(&calc) else {
+          return Err(location.new_custom_error(()));
         };
-        if term.unit != first_term.unit {
-          return Err(cssparser::ParseError {
-            kind: cssparser::ParseErrorKind::Custom(()),
-            location: cssparser::SourceLocation { line: 0, column: 0 },
-          });
+        if this_unit != unit {
+          return Err(location.new_custom_error(()));
         }
         extremum = match func {
-          MathFn::Min => extremum.min(term.value),
-          MathFn::Max => extremum.max(term.value),
+          MathFn::Min => extremum.min(value),
+          MathFn::Max => extremum.max(value),
         };
       }
-      Ok(CalcComponent::Length(CalcLength::single(
-        first_term.unit,
-        extremum,
-      )))
+      Ok(CalcComponent::Length(CalcLength::single(unit, extremum)))
     }
   }
-}
-
-#[derive(Clone, Copy)]
-struct AngleComponent {
-  value: f32,
-  is_angle: bool,
-}
-
-fn angle_component_from_unit(unit: &str, value: f32) -> Option<AngleComponent> {
-  match unit {
-    "deg" => Some(AngleComponent {
-      value,
-      is_angle: true,
-    }),
-    "grad" => Some(AngleComponent {
-      value: value * 0.9,
-      is_angle: true,
-    }),
-    "turn" => Some(AngleComponent {
-      value: value * 360.0,
-      is_angle: true,
-    }),
-    "rad" => Some(AngleComponent {
-      value: value * (180.0 / std::f32::consts::PI),
-      is_angle: true,
-    }),
-    _ => None,
-  }
-}
-
-fn combine_angle_sum<'i>(
-  left: AngleComponent,
-  right: AngleComponent,
-  sign: f32,
-  location: cssparser::SourceLocation,
-) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
-  if left.is_angle && right.is_angle {
-    Ok(AngleComponent {
-      value: left.value + sign * right.value,
-      is_angle: true,
-    })
-  } else {
-    Err(location.new_custom_error(()))
-  }
-}
-
-fn combine_angle_product<'i>(
-  left: AngleComponent,
-  right: AngleComponent,
-  op: char,
-  location: cssparser::SourceLocation,
-) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
-  match (left.is_angle, right.is_angle, op) {
-    (true, false, '*') => Ok(AngleComponent {
-      value: left.value * right.value,
-      is_angle: true,
-    }),
-    (false, true, '*') => Ok(AngleComponent {
-      value: left.value * right.value,
-      is_angle: true,
-    }),
-    (true, false, '/') if right.value != 0.0 => Ok(AngleComponent {
-      value: left.value / right.value,
-      is_angle: true,
-    }),
-    (false, false, '*') => Ok(AngleComponent {
-      value: left.value * right.value,
-      is_angle: false,
-    }),
-    (false, false, '/') if right.value != 0.0 => Ok(AngleComponent {
-      value: left.value / right.value,
-      is_angle: false,
-    }),
-    _ => Err(location.new_custom_error(())),
-  }
-}
-
-fn parse_calc_angle_sum<'i, 't>(
-  input: &mut Parser<'i, 't>,
-) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
-  let mut left = parse_calc_angle_product(input)?;
-  loop {
-    let op = match input.try_parse(|p| match p.next()? {
-      Token::Delim('+') => Ok(1.0),
-      Token::Delim('-') => Ok(-1.0),
-      _ => Err(cssparser::ParseError {
-        kind: cssparser::ParseErrorKind::Custom(()),
-        location: p.current_source_location(),
-      }),
-    }) {
-      Ok(sign) => sign,
-      Err(_) => break,
-    };
-    let right = parse_calc_angle_product(input)?;
-    let location = input.current_source_location();
-    left = combine_angle_sum(left, right, op, location)?;
-  }
-  Ok(left)
-}
-
-fn parse_calc_angle_product<'i, 't>(
-  input: &mut Parser<'i, 't>,
-) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
-  let mut left = parse_calc_angle_factor(input)?;
-  loop {
-    let op = match input.try_parse(|p| match p.next()? {
-      Token::Delim('*') => Ok('*'),
-      Token::Delim('/') => Ok('/'),
-      _ => Err(cssparser::ParseError {
-        kind: cssparser::ParseErrorKind::Custom(()),
-        location: p.current_source_location(),
-      }),
-    }) {
-      Ok(op) => op,
-      Err(_) => break,
-    };
-    let right = parse_calc_angle_factor(input)?;
-    let location = input.current_source_location();
-    left = combine_angle_product(left, right, op, location)?;
-  }
-  Ok(left)
-}
-
-fn parse_calc_angle_factor<'i, 't>(
-  input: &mut Parser<'i, 't>,
-) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
-  let location = input.current_source_location();
-  match input.next()? {
-    Token::Number { value, .. } => Ok(AngleComponent {
-      value: *value,
-      is_angle: false,
-    }),
-    Token::Dimension {
-      value, ref unit, ..
-    } => angle_component_from_unit(&unit.to_ascii_lowercase(), *value)
-      .ok_or_else(|| location.new_custom_error(())),
-    Token::Function(ref name) if name.eq_ignore_ascii_case("calc") => {
-      input.parse_nested_block(parse_calc_angle_sum)
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("min") => {
-      input.parse_nested_block(|block| parse_min_max_angle(block, MathFn::Min))
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("max") => {
-      input.parse_nested_block(|block| parse_min_max_angle(block, MathFn::Max))
-    }
-    Token::Function(ref name) if name.eq_ignore_ascii_case("clamp") => {
-      input.parse_nested_block(parse_clamp_angle)
-    }
-    Token::ParenthesisBlock => input.parse_nested_block(parse_calc_angle_sum),
-    Token::Delim('+') => parse_calc_angle_factor(input),
-    Token::Delim('-') => {
-      let inner = parse_calc_angle_factor(input)?;
-      Ok(AngleComponent {
-        value: -inner.value,
-        is_angle: inner.is_angle,
-      })
-    }
-    _ => Err(location.new_custom_error(())),
-  }
-}
-
-fn parse_min_max_angle<'i, 't>(
-  input: &mut Parser<'i, 't>,
-  func: MathFn,
-) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
-  let mut values = Vec::new();
-  loop {
-    input.skip_whitespace();
-    values.push(parse_calc_angle_sum(input)?);
-    input.skip_whitespace();
-    if input.try_parse(|p| p.expect_comma()).is_err() {
-      break;
-    }
-  }
-
-  if values.len() < 2 || values.iter().any(|v| !v.is_angle) {
-    return Err(input.new_custom_error(()));
-  }
-
-  let init = match func {
-    MathFn::Min => f32::INFINITY,
-    MathFn::Max => f32::NEG_INFINITY,
-  };
-  let value = values.into_iter().fold(init, |acc, v| match func {
-    MathFn::Min => acc.min(v.value),
-    MathFn::Max => acc.max(v.value),
-  });
-
-  Ok(AngleComponent {
-    value,
-    is_angle: true,
-  })
-}
-
-fn parse_clamp_angle<'i, 't>(
-  input: &mut Parser<'i, 't>,
-) -> Result<AngleComponent, cssparser::ParseError<'i, ()>> {
-  input.skip_whitespace();
-  let min = parse_calc_angle_sum(input)?;
-  input.skip_whitespace();
-  input.expect_comma()?;
-  input.skip_whitespace();
-  let preferred = parse_calc_angle_sum(input)?;
-  input.skip_whitespace();
-  input.expect_comma()?;
-  input.skip_whitespace();
-  let max = parse_calc_angle_sum(input)?;
-
-  if !min.is_angle || !preferred.is_angle || !max.is_angle {
-    return Err(input.new_custom_error(()));
-  }
-
-  let upper = if max.value < min.value {
-    min.value
-  } else {
-    max.value
-  };
-  let clamped = preferred.value.max(min.value).min(upper);
-  Ok(AngleComponent {
-    value: clamped,
-    is_angle: true,
-  })
 }
 
 fn combine_sum<'i>(
   left: CalcComponent,
   right: CalcComponent,
   sign: f32,
+  location: cssparser::SourceLocation,
 ) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
   match (left, right) {
     (CalcComponent::Number(a), CalcComponent::Number(b)) => Ok(CalcComponent::Number(a + b * sign)),
+    (CalcComponent::Angle(a), CalcComponent::Angle(b)) => Ok(CalcComponent::Angle(a + b * sign)),
     (CalcComponent::Length(l), CalcComponent::Length(r)) => l
       .add_scaled(&r, sign)
       .map(CalcComponent::Length)
-      .ok_or(cssparser::ParseError {
-        kind: cssparser::ParseErrorKind::Custom(()),
-        location: cssparser::SourceLocation { line: 0, column: 0 },
-      }),
+      .ok_or_else(|| location.new_custom_error(())),
     (CalcComponent::Length(l), CalcComponent::Number(0.0)) => Ok(CalcComponent::Length(l)),
     (CalcComponent::Number(0.0), CalcComponent::Length(l)) => {
       Ok(CalcComponent::Length(l.scale(sign)))
     }
-    _ => Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: cssparser::SourceLocation { line: 0, column: 0 },
-    }),
+    (CalcComponent::Angle(a), CalcComponent::Number(0.0)) => Ok(CalcComponent::Angle(a)),
+    (CalcComponent::Number(0.0), CalcComponent::Angle(a)) => Ok(CalcComponent::Angle(a * sign)),
+    _ => Err(location.new_custom_error(())),
   }
 }
 
@@ -2910,6 +2668,7 @@ fn combine_product<'i>(
   left: CalcComponent,
   right: CalcComponent,
   op: char,
+  location: cssparser::SourceLocation,
 ) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
   match op {
     '*' => match (left, right) {
@@ -2918,28 +2677,368 @@ fn combine_product<'i>(
       | (CalcComponent::Number(n), CalcComponent::Length(l)) => {
         Ok(CalcComponent::Length(l.scale(n)))
       }
-      _ => Err(cssparser::ParseError {
-        kind: cssparser::ParseErrorKind::Custom(()),
-        location: cssparser::SourceLocation { line: 0, column: 0 },
-      }),
+      (CalcComponent::Angle(a), CalcComponent::Number(n))
+      | (CalcComponent::Number(n), CalcComponent::Angle(a)) => Ok(CalcComponent::Angle(a * n)),
+      _ => Err(location.new_custom_error(())),
     },
     '/' => match (left, right) {
-      (_, CalcComponent::Number(0.0)) => Err(cssparser::ParseError {
-        kind: cssparser::ParseErrorKind::Custom(()),
-        location: cssparser::SourceLocation { line: 0, column: 0 },
-      }),
+      (_, CalcComponent::Number(0.0)) => Err(location.new_custom_error(())),
       (CalcComponent::Number(a), CalcComponent::Number(b)) => Ok(CalcComponent::Number(a / b)),
       (CalcComponent::Length(l), CalcComponent::Number(n)) => {
         Ok(CalcComponent::Length(l.scale(1.0 / n)))
       }
-      _ => Err(cssparser::ParseError {
-        kind: cssparser::ParseErrorKind::Custom(()),
-        location: cssparser::SourceLocation { line: 0, column: 0 },
-      }),
+      (CalcComponent::Angle(a), CalcComponent::Number(n)) => Ok(CalcComponent::Angle(a / n)),
+      _ => Err(location.new_custom_error(())),
     },
-    _ => Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: cssparser::SourceLocation { line: 0, column: 0 },
+    _ => Err(location.new_custom_error(())),
+  }
+}
+
+fn expect_number<'i>(
+  component: CalcComponent,
+  location: cssparser::SourceLocation,
+) -> Result<f32, cssparser::ParseError<'i, ()>> {
+  calc_component_to_number(component).ok_or_else(|| location.new_custom_error(()))
+}
+
+fn expect_angle<'i>(
+  component: CalcComponent,
+  location: cssparser::SourceLocation,
+) -> Result<f32, cssparser::ParseError<'i, ()>> {
+  calc_component_to_angle(component).ok_or_else(|| location.new_custom_error(()))
+}
+
+fn expect_simple_length<'i>(
+  component: CalcComponent,
+  location: cssparser::SourceLocation,
+) -> Result<(f32, LengthUnit), cssparser::ParseError<'i, ()>> {
+  match component {
+    CalcComponent::Length(len) => {
+      extract_simple_length(&len).ok_or_else(|| location.new_custom_error(()))
+    }
+    _ => Err(location.new_custom_error(())),
+  }
+}
+
+fn apply_round_function<'i>(
+  value: CalcComponent,
+  step: Option<CalcComponent>,
+  strategy: RoundStrategy,
+  location: cssparser::SourceLocation,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+  match value {
+    CalcComponent::Number(v) => {
+      let step = match step {
+        Some(CalcComponent::Number(s)) => s,
+        None => 1.0,
+        _ => return Err(location.new_custom_error(())),
+      };
+      round_value(v, step, strategy, location).map(CalcComponent::Number)
+    }
+    CalcComponent::Angle(deg) => {
+      let step = match step {
+        Some(CalcComponent::Angle(s)) => s,
+        Some(CalcComponent::Number(s)) => s,
+        None => 1.0,
+        _ => return Err(location.new_custom_error(())),
+      };
+      round_value(deg, step, strategy, location).map(CalcComponent::Angle)
+    }
+    CalcComponent::Length(len) => {
+      let (value, unit) =
+        extract_simple_length(&len).ok_or_else(|| location.new_custom_error(()))?;
+      let (step_value, step_unit) = match step {
+        Some(CalcComponent::Length(step_len)) => {
+          extract_simple_length(&step_len).ok_or_else(|| location.new_custom_error(()))?
+        }
+        None => (1.0, unit),
+        _ => return Err(location.new_custom_error(())),
+      };
+      if unit != step_unit {
+        return Err(location.new_custom_error(()));
+      }
+      round_value(value, step_value, strategy, location)
+        .map(|v| CalcComponent::Length(CalcLength::single(unit, v)))
+    }
+  }
+}
+
+fn parse_round_function<'i, 't>(
+  input: &mut Parser<'i, 't>,
+  location: cssparser::SourceLocation,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+  input.skip_whitespace();
+  let strategy = input
+    .try_parse(|p| {
+      p
+        .expect_ident()
+        .map(|ident| ident.as_ref().to_ascii_lowercase())
+    })
+    .ok()
+    .and_then(|ident| match ident.as_str() {
+      "nearest" => Some(RoundStrategy::Nearest),
+      "up" => Some(RoundStrategy::Up),
+      "down" => Some(RoundStrategy::Down),
+      "to-zero" => Some(RoundStrategy::ToZero),
+      "away-from-zero" => Some(RoundStrategy::AwayFromZero),
+      _ => None,
+    });
+
+  let strategy = if let Some(s) = strategy {
+    input.skip_whitespace();
+    input.expect_comma()?;
+    s
+  } else {
+    RoundStrategy::Nearest
+  };
+
+  input.skip_whitespace();
+  let value = parse_calc_sum(input)?;
+  input.skip_whitespace();
+  let step = if input.try_parse(|p| p.expect_comma()).is_ok() {
+    input.skip_whitespace();
+    Some(parse_calc_sum(input)?)
+  } else {
+    None
+  };
+
+  apply_round_function(value, step, strategy, location)
+}
+
+fn apply_mod_rem<'i>(
+  lhs: CalcComponent,
+  rhs: CalcComponent,
+  euclidean: bool,
+  location: cssparser::SourceLocation,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+  match (lhs.dimension(), rhs.dimension()) {
+    (CalcDimension::Number, CalcDimension::Number) => {
+      let a = expect_number(lhs, location)?;
+      let b = expect_number(rhs, location)?;
+      if b == 0.0 {
+        return Err(location.new_custom_error(()));
+      }
+      let result = if euclidean { a.rem_euclid(b) } else { a % b };
+      ensure_finite(result, location).map(CalcComponent::Number)
+    }
+    (CalcDimension::Angle, CalcDimension::Angle) => {
+      let a = expect_angle(lhs, location)?;
+      let b = expect_angle(rhs, location)?;
+      if b == 0.0 {
+        return Err(location.new_custom_error(()));
+      }
+      let result = if euclidean { a.rem_euclid(b) } else { a % b };
+      ensure_finite(result, location).map(CalcComponent::Angle)
+    }
+    (CalcDimension::Length, CalcDimension::Length) => {
+      let (a, unit) = expect_simple_length(lhs, location)?;
+      let (b, other_unit) = expect_simple_length(rhs, location)?;
+      if b == 0.0 || unit != other_unit {
+        return Err(location.new_custom_error(()));
+      }
+      let result = if euclidean { a.rem_euclid(b) } else { a % b };
+      ensure_finite(result, location).map(|v| CalcComponent::Length(CalcLength::single(unit, v)))
+    }
+    _ => Err(location.new_custom_error(())),
+  }
+}
+
+fn parse_hypot_function<'i, 't>(
+  input: &mut Parser<'i, 't>,
+  location: cssparser::SourceLocation,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+  let mut values = Vec::new();
+  loop {
+    input.skip_whitespace();
+    values.push(parse_calc_sum(input)?);
+    input.skip_whitespace();
+    if input.try_parse(|p| p.expect_comma()).is_err() {
+      break;
+    }
+  }
+
+  if values.len() < 2 || !all_same_dimension(&values) {
+    return Err(location.new_custom_error(()));
+  }
+
+  match values[0].dimension() {
+    CalcDimension::Number => {
+      let mut acc: f32 = 0.0;
+      for v in values {
+        let n = expect_number(v, location)?;
+        acc = acc.hypot(n);
+      }
+      ensure_finite(acc, location).map(CalcComponent::Number)
+    }
+    CalcDimension::Angle => {
+      let mut acc: f32 = 0.0;
+      for v in values {
+        let n = expect_angle(v, location)?;
+        acc = acc.hypot(n);
+      }
+      ensure_finite(acc, location).map(CalcComponent::Angle)
+    }
+    CalcDimension::Length => {
+      let mut acc_unit: Option<LengthUnit> = None;
+      let mut acc_value: f32 = 0.0;
+      for v in values {
+        let (val, unit) = expect_simple_length(v, location)?;
+        if let Some(existing) = acc_unit {
+          if existing != unit {
+            return Err(location.new_custom_error(()));
+          }
+        } else {
+          acc_unit = Some(unit);
+        }
+        acc_value = acc_value.hypot(val);
+      }
+      let unit = acc_unit.ok_or_else(|| location.new_custom_error(()))?;
+      ensure_finite(acc_value, location).map(|v| CalcComponent::Length(CalcLength::single(unit, v)))
+    }
+  }
+}
+
+fn parse_math_function<'i, 't>(
+  func: &str,
+  input: &mut Parser<'i, 't>,
+  location: cssparser::SourceLocation,
+) -> Result<CalcComponent, cssparser::ParseError<'i, ()>> {
+  match func {
+    "calc" => input.parse_nested_block(parse_calc_sum),
+    "min" => input.parse_nested_block(|block| parse_min_max(block, MathFn::Min)),
+    "max" => input.parse_nested_block(|block| parse_min_max(block, MathFn::Max)),
+    "clamp" => input.parse_nested_block(parse_clamp),
+    "sin" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let angle = expect_angle(parse_calc_sum(block)?, location)?.to_radians();
+      ensure_finite(angle.sin(), location).map(CalcComponent::Number)
     }),
+    "cos" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let angle = expect_angle(parse_calc_sum(block)?, location)?.to_radians();
+      ensure_finite(angle.cos(), location).map(CalcComponent::Number)
+    }),
+    "tan" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let angle = expect_angle(parse_calc_sum(block)?, location)?.to_radians();
+      ensure_finite(angle.tan(), location).map(CalcComponent::Number)
+    }),
+    "asin" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = expect_number(parse_calc_sum(block)?, location)?;
+      ensure_finite(value.asin().to_degrees(), location).map(CalcComponent::Angle)
+    }),
+    "acos" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = expect_number(parse_calc_sum(block)?, location)?;
+      ensure_finite(value.acos().to_degrees(), location).map(CalcComponent::Angle)
+    }),
+    "atan" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = expect_number(parse_calc_sum(block)?, location)?;
+      ensure_finite(value.atan().to_degrees(), location).map(CalcComponent::Angle)
+    }),
+    "atan2" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let y = parse_calc_sum(block)?;
+      block.skip_whitespace();
+      block.expect_comma()?;
+      block.skip_whitespace();
+      let x = parse_calc_sum(block)?;
+      let yv = expect_number(y, location)?;
+      let xv = expect_number(x, location)?;
+      ensure_finite(yv.atan2(xv).to_degrees(), location).map(CalcComponent::Angle)
+    }),
+    "pow" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let base = parse_calc_sum(block)?;
+      block.skip_whitespace();
+      block.expect_comma()?;
+      block.skip_whitespace();
+      let exp = parse_calc_sum(block)?;
+      let base_num = expect_number(base, location)?;
+      let exp_num = expect_number(exp, location)?;
+      ensure_finite(base_num.powf(exp_num), location).map(CalcComponent::Number)
+    }),
+    "sqrt" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = expect_number(parse_calc_sum(block)?, location)?;
+      ensure_finite(value.sqrt(), location).map(CalcComponent::Number)
+    }),
+    "hypot" => input.parse_nested_block(|block| parse_hypot_function(block, location)),
+    "log" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = expect_number(parse_calc_sum(block)?, location)?;
+      block.skip_whitespace();
+      let base = if block.try_parse(|p| p.expect_comma()).is_ok() {
+        block.skip_whitespace();
+        expect_number(parse_calc_sum(block)?, location)?
+      } else {
+        std::f32::consts::E
+      };
+      if value <= 0.0 || base <= 0.0 || (base - 1.0).abs() < f32::EPSILON {
+        return Err(location.new_custom_error(()));
+      }
+      ensure_finite(value.log(base), location).map(CalcComponent::Number)
+    }),
+    "exp" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = expect_number(parse_calc_sum(block)?, location)?;
+      ensure_finite(value.exp(), location).map(CalcComponent::Number)
+    }),
+    "sign" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = parse_calc_sum(block)?;
+      match value.dimension() {
+        CalcDimension::Number => Ok(CalcComponent::Number(
+          expect_number(value, location)?.signum(),
+        )),
+        CalcDimension::Angle => Ok(CalcComponent::Number(
+          expect_angle(value, location)?.signum(),
+        )),
+        CalcDimension::Length => {
+          let (val, _) = expect_simple_length(value, location)?;
+          Ok(CalcComponent::Number(val.signum()))
+        }
+      }
+    }),
+    "abs" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = parse_calc_sum(block)?;
+      match value {
+        CalcComponent::Number(v) => Ok(CalcComponent::Number(v.abs())),
+        CalcComponent::Angle(v) => Ok(CalcComponent::Angle(v.abs())),
+        CalcComponent::Length(len) => {
+          let (v, unit) =
+            extract_simple_length(&len).ok_or_else(|| location.new_custom_error(()))?;
+          Ok(CalcComponent::Length(CalcLength::single(unit, v.abs())))
+        }
+      }
+    }),
+    "clamped" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let value = expect_number(parse_calc_sum(block)?, location)?;
+      Ok(CalcComponent::Number(value.clamp(0.0, 1.0)))
+    }),
+    "round" => input.parse_nested_block(|block| parse_round_function(block, location)),
+    "mod" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let lhs = parse_calc_sum(block)?;
+      block.skip_whitespace();
+      block.expect_comma()?;
+      block.skip_whitespace();
+      let rhs = parse_calc_sum(block)?;
+      apply_mod_rem(lhs, rhs, true, location)
+    }),
+    "rem" => input.parse_nested_block(|block| {
+      block.skip_whitespace();
+      let lhs = parse_calc_sum(block)?;
+      block.skip_whitespace();
+      block.expect_comma()?;
+      block.skip_whitespace();
+      let rhs = parse_calc_sum(block)?;
+      apply_mod_rem(lhs, rhs, false, location)
+    }),
+    _ => Err(location.new_custom_error(())),
   }
 }
