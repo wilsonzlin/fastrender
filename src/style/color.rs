@@ -25,6 +25,7 @@
 //! let color = Color::parse("red").unwrap();
 //! ```
 
+use std::f32::consts::PI;
 use std::fmt;
 
 fn srgb_to_linear_component(c: u8) -> f32 {
@@ -205,6 +206,43 @@ fn oklab_to_rgba(l: f32, a: f32, b: f32, alpha: f32) -> Rgba {
   let g = linear_to_srgb_component(g_lin);
   let b = linear_to_srgb_component(b_lin);
   Rgba::new(r, g, b, alpha)
+}
+
+fn composite_over(foreground: Rgba, background: Rgba) -> Rgba {
+  let out_a = foreground.a + background.a * (1.0 - foreground.a);
+  if out_a <= 0.0 {
+    return Rgba::TRANSPARENT;
+  }
+
+  let r =
+    (foreground.r as f32 * foreground.a + background.r as f32 * background.a * (1.0 - foreground.a))
+      / out_a;
+  let g =
+    (foreground.g as f32 * foreground.a + background.g as f32 * background.a * (1.0 - foreground.a))
+      / out_a;
+  let b =
+    (foreground.b as f32 * foreground.a + background.b as f32 * background.a * (1.0 - foreground.a))
+      / out_a;
+
+  Rgba::new(
+    r.round().clamp(0.0, 255.0) as u8,
+    g.round().clamp(0.0, 255.0) as u8,
+    b.round().clamp(0.0, 255.0) as u8,
+    out_a.clamp(0.0, 1.0),
+  )
+}
+
+fn relative_luminance(color: Rgba) -> f32 {
+  let r = srgb_to_linear_value(color.r as f32 / 255.0);
+  let g = srgb_to_linear_value(color.g as f32 / 255.0);
+  let b = srgb_to_linear_value(color.b as f32 / 255.0);
+  0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+fn contrast_ratio(foreground: Rgba, background: Rgba) -> f32 {
+  let l1 = relative_luminance(foreground).max(relative_luminance(background));
+  let l2 = relative_luminance(foreground).min(relative_luminance(background));
+  (l1 + 0.05) / (l2 + 0.05)
 }
 
 /// RGBA color representation
@@ -630,6 +668,15 @@ pub enum Color {
     space: ColorMixSpace,
   },
 
+  /// Color chosen by contrast against another color
+  Contrast {
+    against: Option<Box<Color>>,
+    options: Vec<Color>,
+  },
+
+  /// Relative color derived from a source color in another space
+  Relative(RelativeColor),
+
   /// Special keyword: currentColor
   /// Uses the current value of the 'color' property
   CurrentColor,
@@ -643,6 +690,45 @@ pub enum ColorMixSpace {
   Lch,
   Oklab,
   Oklch,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelativeColor {
+  pub base: Box<Color>,
+  pub space: RelativeColorSpace,
+  pub components: [RelativeComponent; 3],
+  pub alpha: RelativeComponent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelativeColorSpace {
+  Srgb,
+  SrgbLinear,
+  Hsl,
+  Hwb,
+  Lab,
+  Lch,
+  Oklab,
+  Oklch,
+  XyzD50,
+  XyzD65,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RelativeComponent {
+  Source,
+  Number(f32),
+  Percentage(f32),
+}
+
+impl RelativeComponent {
+  fn resolve(self, source: f32, percent_scale: f32) -> f32 {
+    match self {
+      RelativeComponent::Source => source,
+      RelativeComponent::Number(v) => v,
+      RelativeComponent::Percentage(p) => p * percent_scale,
+    }
+  }
 }
 
 impl Color {
@@ -666,6 +752,30 @@ impl Color {
       Color::Mix { components, space } => {
         mix_colors(*space, &components[0], &components[1], current_color)
       }
+      Color::Contrast { against, options } => {
+        let background = against
+          .as_ref()
+          .map(|c| c.to_rgba(current_color))
+          .unwrap_or(current_color);
+        let visible_background = composite_over(background, Rgba::WHITE);
+        if options.is_empty() {
+          return background;
+        }
+
+        let mut best = None;
+        for candidate in options {
+          let resolved = candidate.to_rgba(current_color);
+          let composited = composite_over(resolved, visible_background);
+          let ratio = contrast_ratio(composited, visible_background);
+          match best {
+            Some((_, best_ratio)) if best_ratio >= ratio => {}
+            _ => best = Some((resolved, ratio)),
+          }
+        }
+
+        best.map(|(c, _)| c).unwrap_or(visible_background)
+      }
+      Color::Relative(relative) => relative.to_rgba(current_color),
       Color::CurrentColor => current_color,
     }
   }
@@ -726,6 +836,10 @@ impl Color {
       return parse_color_mix(s);
     }
 
+    if lower.starts_with("color-contrast(") {
+      return parse_color_contrast(s);
+    }
+
     // Hex colors
     if s.starts_with('#') {
       return parse_hex(s);
@@ -747,6 +861,9 @@ impl Color {
     }
 
     if lower.starts_with("color(") {
+      if lower.starts_with("color(from") {
+        return parse_relative_color(s);
+      }
       return parse_color_function(s);
     }
 
@@ -773,6 +890,24 @@ impl Color {
   }
 }
 
+impl RelativeColor {
+  fn to_rgba(&self, current_color: Rgba) -> Rgba {
+    let base = self.base.to_rgba(current_color);
+    let (source_channels, source_alpha) = rgba_to_relative_space(self.space, base);
+
+    let mut channels = [0.0; 3];
+    for (idx, output) in channels.iter_mut().enumerate() {
+      *output = self.components[idx].resolve(
+        source_channels[idx],
+        relative_percent_scale(self.space, idx),
+      );
+    }
+
+    let alpha = self.alpha.resolve(source_alpha, 1.0).clamp(0.0, 1.0);
+    relative_space_to_rgba(self.space, channels, alpha)
+  }
+}
+
 impl From<Rgba> for Color {
   fn from(rgba: Rgba) -> Self {
     Color::Rgba(rgba)
@@ -791,6 +926,8 @@ impl fmt::Display for Color {
       Color::Rgba(rgba) => write!(f, "{}", rgba),
       Color::Hsla(hsla) => write!(f, "{}", hsla),
       Color::Mix { .. } => write!(f, "color-mix(...)"),
+      Color::Contrast { .. } => write!(f, "color-contrast(...)"),
+      Color::Relative(_) => write!(f, "color(...)"),
       Color::CurrentColor => write!(f, "currentColor"),
     }
   }
@@ -1522,6 +1659,474 @@ fn color_function_to_rgba(
       let a = c * h.cos();
       let b = c * h.sin();
       Ok(oklab_to_rgba(l, a, b, alpha))
+    }
+  }
+}
+
+fn split_on_top_level_keyword<'a>(input: &'a str, keyword: &str) -> Option<(&'a str, &'a str)> {
+  let mut paren = 0i32;
+  let mut bracket = 0i32;
+  let mut brace = 0i32;
+  let mut in_string: Option<char> = None;
+  let mut escape = false;
+  let lower = input.to_ascii_lowercase();
+  let key_lower = keyword.to_ascii_lowercase();
+
+  let is_ident_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+
+  let mut iter = input.char_indices();
+  while let Some((idx, ch)) = iter.next() {
+    if escape {
+      escape = false;
+      continue;
+    }
+    if let Some(q) = in_string {
+      if ch == '\\' {
+        escape = true;
+      } else if ch == q {
+        in_string = None;
+      }
+      continue;
+    }
+    match ch {
+      '"' | '\'' => {
+        in_string = Some(ch);
+        continue;
+      }
+      '(' => paren += 1,
+      ')' => paren -= 1,
+      '[' => bracket += 1,
+      ']' => bracket -= 1,
+      '{' => brace += 1,
+      '}' => brace -= 1,
+      _ => {}
+    }
+
+    if paren == 0 && bracket == 0 && brace == 0 && lower[idx..].starts_with(&key_lower) {
+      let before_char = input[..idx].chars().rev().next();
+      let after_char = input[idx + keyword.len()..].chars().next();
+      if before_char.map_or(true, |c| !is_ident_char(c))
+        && after_char.map_or(true, |c| !is_ident_char(c))
+      {
+        let before = input[..idx].trim_end();
+        let after = input[idx + keyword.len()..].trim_start();
+        return Some((before, after));
+      }
+    }
+  }
+  None
+}
+
+fn parse_color_contrast(input: &str) -> Result<Color, ColorParseError> {
+  let inner = input
+    .strip_prefix("color-contrast(")
+    .and_then(|rest| rest.strip_suffix(')'))
+    .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?
+    .trim();
+
+  let (against_part, options_part) =
+    if let Some((before, after)) = split_on_top_level_keyword(inner, "vs") {
+      (before.trim(), after.trim())
+    } else {
+      ("", inner)
+    };
+
+  let mut options = Vec::new();
+  for part in split_top_level_commas(options_part) {
+    if part.is_empty() {
+      continue;
+    }
+    options.push(Color::parse(part)?);
+  }
+
+  if options.is_empty() {
+    return Err(ColorParseError::InvalidFormat(input.to_string()));
+  }
+
+  let against = if against_part.is_empty() {
+    None
+  } else {
+    Some(Box::new(Color::parse(against_part)?))
+  };
+
+  Ok(Color::Contrast { against, options })
+}
+
+fn split_relative_color_source(input: &str) -> Option<(String, String)> {
+  let mut depth = 0i32;
+  let mut last_space: Option<usize> = None;
+  for (idx, ch) in input.char_indices() {
+    match ch {
+      '(' => depth += 1,
+      ')' => depth -= 1,
+      c if c.is_whitespace() && depth == 0 => last_space = last_space.or(Some(idx)),
+      _ => {
+        if let Some(space_idx) = last_space {
+          let after = input[idx..].trim_start();
+          let first_token = after
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .next()
+            .unwrap_or("");
+          if parse_relative_color_space(first_token).is_ok() {
+            let before = input[..space_idx].trim_end();
+            return Some((before.to_string(), after.to_string()));
+          }
+        }
+        last_space = None;
+      }
+    }
+  }
+  None
+}
+
+fn parse_relative_color(input: &str) -> Result<Color, ColorParseError> {
+  let inner = input
+    .strip_prefix("color(")
+    .and_then(|rest| rest.strip_suffix(')'))
+    .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?
+    .trim();
+
+  if !inner.to_ascii_lowercase().starts_with("from") {
+    return Err(ColorParseError::InvalidFormat(input.to_string()));
+  }
+  let body = inner[4..].trim_start();
+  let (source_str, rest) = split_relative_color_source(body)
+    .ok_or_else(|| ColorParseError::InvalidFormat(input.to_string()))?;
+
+  let source_color = Color::parse(&source_str)?;
+
+  let mut parser_input = cssparser::ParserInput::new(&rest);
+  let mut parser = cssparser::Parser::new(&mut parser_input);
+  parser.skip_whitespace();
+  let space_ident = parser
+    .next()
+    .map_err(|_| ColorParseError::InvalidFormat(input.to_string()))?;
+  let space_name = match space_ident {
+    cssparser::Token::Ident(ref ident) => ident.as_ref(),
+    other => return Err(ColorParseError::InvalidComponent(format!("{:?}", other))),
+  };
+  let space = parse_relative_color_space(space_name)?;
+
+  let mut components_vec = Vec::new();
+  for idx in 0..3 {
+    parser.skip_whitespace();
+    components_vec.push(parse_relative_component(&mut parser, space, idx)?);
+  }
+
+  parser.skip_whitespace();
+  let alpha = if parser.try_parse(|p| p.expect_delim('/')).is_ok() {
+    parser.skip_whitespace();
+    parse_relative_component(&mut parser, space, 3)?
+  } else {
+    RelativeComponent::Source
+  };
+
+  parser.skip_whitespace();
+  if !parser.is_exhausted() {
+    return Err(ColorParseError::InvalidFormat(input.to_string()));
+  }
+
+  let components: [RelativeComponent; 3] = components_vec
+    .try_into()
+    .map_err(|_| ColorParseError::InvalidFormat(input.to_string()))?;
+
+  Ok(Color::Relative(RelativeColor {
+    base: Box::new(source_color),
+    space,
+    components,
+    alpha,
+  }))
+}
+
+fn parse_relative_color_space(name: &str) -> Result<RelativeColorSpace, ColorParseError> {
+  match name.to_ascii_lowercase().as_str() {
+    "srgb" => Ok(RelativeColorSpace::Srgb),
+    "srgb-linear" => Ok(RelativeColorSpace::SrgbLinear),
+    "hsl" => Ok(RelativeColorSpace::Hsl),
+    "hwb" => Ok(RelativeColorSpace::Hwb),
+    "lab" => Ok(RelativeColorSpace::Lab),
+    "lch" => Ok(RelativeColorSpace::Lch),
+    "oklab" => Ok(RelativeColorSpace::Oklab),
+    "oklch" => Ok(RelativeColorSpace::Oklch),
+    "xyz" | "xyz-d65" => Ok(RelativeColorSpace::XyzD65),
+    "xyz-d50" => Ok(RelativeColorSpace::XyzD50),
+    other => Err(ColorParseError::InvalidComponent(other.to_string())),
+  }
+}
+
+fn parse_relative_component(
+  parser: &mut cssparser::Parser<'_, '_>,
+  space: RelativeColorSpace,
+  index: usize,
+) -> Result<RelativeComponent, ColorParseError> {
+  use cssparser::Token;
+  let token = parser
+    .next()
+    .map_err(|_| ColorParseError::InvalidFormat("relative color".to_string()))?;
+  match token {
+    Token::Ident(ref ident)
+      if ident.eq_ignore_ascii_case("none")
+        || relative_component_matches_name(space, index, ident.as_ref())
+        || (index == 3 && ident.eq_ignore_ascii_case("alpha")) =>
+    {
+      Ok(RelativeComponent::Source)
+    }
+    Token::Number { value, .. } => Ok(RelativeComponent::Number(*value)),
+    Token::Percentage { unit_value, .. } => Ok(RelativeComponent::Percentage(*unit_value)),
+    ref hue @ Token::Dimension { .. } if relative_component_is_hue(space, index) => {
+      Ok(RelativeComponent::Number(parse_hue_token(hue)?))
+    }
+    Token::Function(ref name) if name.as_ref().eq_ignore_ascii_case("calc") => {
+      let value = parser
+        .parse_nested_block(|p| {
+          p.skip_whitespace();
+          let result = match p.next()? {
+            Token::Number { value, .. } => Ok(RelativeComponent::Number(*value)),
+            Token::Percentage { unit_value, .. } => Ok(RelativeComponent::Percentage(*unit_value)),
+            other => Err(ColorParseError::InvalidComponent(format!("{:?}", other))),
+          };
+          result.map_err(|e| p.new_custom_error(e))
+        })
+        .map_err(|e| match e.kind {
+          cssparser::ParseErrorKind::Custom(c) => c,
+          _ => ColorParseError::InvalidFormat("calc".to_string()),
+        })?;
+      Ok(value)
+    }
+    other => Err(ColorParseError::InvalidComponent(format!("{:?}", other))),
+  }
+}
+
+fn relative_component_is_hue(space: RelativeColorSpace, index: usize) -> bool {
+  matches!(
+    (space, index),
+    (RelativeColorSpace::Hsl, 0)
+      | (RelativeColorSpace::Hwb, 0)
+      | (RelativeColorSpace::Lch, 2)
+      | (RelativeColorSpace::Oklch, 2)
+  )
+}
+
+fn relative_component_matches_name(space: RelativeColorSpace, index: usize, ident: &str) -> bool {
+  let ident = ident.to_ascii_lowercase();
+  match space {
+    RelativeColorSpace::Srgb | RelativeColorSpace::SrgbLinear => match index {
+      0 => ident == "r",
+      1 => ident == "g",
+      2 => ident == "b",
+      _ => false,
+    },
+    RelativeColorSpace::Hsl => match index {
+      0 => ident == "h",
+      1 => ident == "s",
+      2 => ident == "l",
+      _ => false,
+    },
+    RelativeColorSpace::Hwb => match index {
+      0 => ident == "h",
+      1 => ident == "w" || ident == "whiteness",
+      2 => ident == "b" || ident == "blackness",
+      _ => false,
+    },
+    RelativeColorSpace::Lab => match index {
+      0 => ident == "l",
+      1 => ident == "a",
+      2 => ident == "b",
+      _ => false,
+    },
+    RelativeColorSpace::Lch => match index {
+      0 => ident == "l",
+      1 => ident == "c",
+      2 => ident == "h",
+      _ => false,
+    },
+    RelativeColorSpace::Oklab => match index {
+      0 => ident == "l",
+      1 => ident == "a",
+      2 => ident == "b",
+      _ => false,
+    },
+    RelativeColorSpace::Oklch => match index {
+      0 => ident == "l",
+      1 => ident == "c",
+      2 => ident == "h",
+      _ => false,
+    },
+    RelativeColorSpace::XyzD50 | RelativeColorSpace::XyzD65 => match index {
+      0 => ident == "x",
+      1 => ident == "y",
+      2 => ident == "z",
+      _ => false,
+    },
+  }
+}
+
+fn relative_percent_scale(space: RelativeColorSpace, index: usize) -> f32 {
+  match space {
+    RelativeColorSpace::Srgb | RelativeColorSpace::SrgbLinear => 1.0,
+    RelativeColorSpace::Hsl => {
+      if index == 0 {
+        360.0
+      } else {
+        100.0
+      }
+    }
+    RelativeColorSpace::Hwb => {
+      if index == 0 { 360.0 } else { 1.0 }
+    }
+    RelativeColorSpace::Lab => 100.0,
+    RelativeColorSpace::Lch => match index {
+      0 | 1 => 100.0,
+      _ => 360.0,
+    },
+    RelativeColorSpace::Oklab => 1.0,
+    RelativeColorSpace::Oklch => {
+      if index == 2 { 360.0 } else { 1.0 }
+    }
+    RelativeColorSpace::XyzD50 | RelativeColorSpace::XyzD65 => 1.0,
+  }
+}
+
+fn rgba_to_hwb(color: Rgba) -> (f32, f32, f32, f32) {
+  let r = color.r as f32 / 255.0;
+  let g = color.g as f32 / 255.0;
+  let b = color.b as f32 / 255.0;
+  let max = r.max(g).max(b);
+  let min = r.min(g).min(b);
+  let h = color.to_hsla().h;
+  let w = min;
+  let bl = 1.0 - max;
+  (h, w, bl, color.a)
+}
+
+fn rgba_to_relative_space(space: RelativeColorSpace, color: Rgba) -> ([f32; 3], f32) {
+  match space {
+    RelativeColorSpace::Srgb => (
+      [
+        color.r as f32 / 255.0,
+        color.g as f32 / 255.0,
+        color.b as f32 / 255.0,
+      ],
+      color.a,
+    ),
+    RelativeColorSpace::SrgbLinear => (
+      [
+        srgb_to_linear_component(color.r),
+        srgb_to_linear_component(color.g),
+        srgb_to_linear_component(color.b),
+      ],
+      color.a,
+    ),
+    RelativeColorSpace::Hsl => {
+      let hsl = color.to_hsla();
+      ([hsl.h, hsl.s, hsl.l], hsl.a)
+    }
+    RelativeColorSpace::Hwb => {
+      let (h, w, b, a) = rgba_to_hwb(color);
+      ([h, w, b], a)
+    }
+    RelativeColorSpace::Lab => {
+      let (l, a, b, alpha) = rgba_to_lab(color);
+      ([l, a, b], alpha)
+    }
+    RelativeColorSpace::Lch => {
+      let (l, a, b, alpha) = rgba_to_lab(color);
+      let c = (a * a + b * b).sqrt();
+      let h = normalize_hue(b.atan2(a) * 180.0 / PI);
+      ([l, c, h], alpha)
+    }
+    RelativeColorSpace::Oklab => {
+      let (l, a, b, alpha) = rgba_to_oklab(color);
+      ([l, a, b], alpha)
+    }
+    RelativeColorSpace::Oklch => {
+      let (l, a, b, alpha) = rgba_to_oklab(color);
+      let c = (a * a + b * b).sqrt();
+      let h = normalize_hue(b.atan2(a) * 180.0 / PI);
+      ([l, c, h], alpha)
+    }
+    RelativeColorSpace::XyzD65 => {
+      let r = srgb_to_linear_component(color.r);
+      let g = srgb_to_linear_component(color.g);
+      let b = srgb_to_linear_component(color.b);
+      let (x, y, z) = linear_rgb_to_xyz_d65(r, g, b);
+      ([x, y, z], color.a)
+    }
+    RelativeColorSpace::XyzD50 => {
+      let r = srgb_to_linear_component(color.r);
+      let g = srgb_to_linear_component(color.g);
+      let b = srgb_to_linear_component(color.b);
+      let (x, y, z) = linear_rgb_to_xyz_d65(r, g, b);
+      let (xd50, yd50, zd50) = xyz_d65_to_d50(x, y, z);
+      ([xd50, yd50, zd50], color.a)
+    }
+  }
+}
+
+fn relative_space_to_rgba(space: RelativeColorSpace, values: [f32; 3], alpha: f32) -> Rgba {
+  let alpha = alpha.clamp(0.0, 1.0);
+  match space {
+    RelativeColorSpace::Srgb => Rgba::new(
+      (values[0].clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8,
+      (values[1].clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8,
+      (values[2].clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8,
+      alpha,
+    ),
+    RelativeColorSpace::SrgbLinear => Rgba::new(
+      linear_to_srgb_component(values[0]),
+      linear_to_srgb_component(values[1]),
+      linear_to_srgb_component(values[2]),
+      alpha,
+    ),
+    RelativeColorSpace::Hsl => Hsla::new(values[0], values[1], values[2], alpha).to_rgba(),
+    RelativeColorSpace::Hwb => hwb_to_rgba(values[0], values[1], values[2], alpha),
+    RelativeColorSpace::Lab => lab_to_rgba(values[0], values[1], values[2], alpha),
+    RelativeColorSpace::Lch => {
+      let h_rad = normalize_hue(values[2]).to_radians();
+      let a = values[1] * h_rad.cos();
+      let b = values[1] * h_rad.sin();
+      lab_to_rgba(values[0], a, b, alpha)
+    }
+    RelativeColorSpace::Oklab => {
+      let l = if values[0] > 1.0 {
+        values[0] / 100.0
+      } else {
+        values[0]
+      }
+      .clamp(0.0, 1.0);
+      oklab_to_rgba(l, values[1], values[2], alpha)
+    }
+    RelativeColorSpace::Oklch => {
+      let l = if values[0] > 1.0 {
+        values[0] / 100.0
+      } else {
+        values[0]
+      }
+      .clamp(0.0, 1.0);
+      let c = values[1].max(0.0);
+      let h = normalize_hue(values[2]).to_radians();
+      let a = c * h.cos();
+      let b = c * h.sin();
+      oklab_to_rgba(l, a, b, alpha)
+    }
+    RelativeColorSpace::XyzD65 => {
+      let (r, g, b) = xyz_d65_to_linear_rgb(values[0], values[1], values[2]);
+      Rgba::new(
+        linear_to_srgb_component(r),
+        linear_to_srgb_component(g),
+        linear_to_srgb_component(b),
+        alpha,
+      )
+    }
+    RelativeColorSpace::XyzD50 => {
+      let (x, y, z) = xyz_d50_to_d65(values[0], values[1], values[2]);
+      let (r, g, b) = xyz_d65_to_linear_rgb(x, y, z);
+      Rgba::new(
+        linear_to_srgb_component(r),
+        linear_to_srgb_component(g),
+        linear_to_srgb_component(b),
+        alpha,
+      )
     }
   }
 }
@@ -2306,6 +2911,52 @@ mod tests {
       .unwrap()
       .to_rgba(Rgba::BLACK);
     assert!(green_rec2020.g > green_rec2020.r && green_rec2020.g > green_rec2020.b);
+  }
+
+  #[test]
+  fn color_contrast_chooses_highest_ratio() {
+    let color = Color::parse("color-contrast(white, black)").expect("parsed contrast");
+    let chosen = color.to_rgba(Rgba::RED);
+    assert_eq!(chosen, Rgba::BLACK);
+  }
+
+  #[test]
+  fn color_contrast_with_explicit_reference() {
+    let color = Color::parse("color-contrast(blue vs white, black)").expect("parsed contrast");
+    let chosen = color.to_rgba(Rgba::BLACK);
+    assert_eq!(chosen, Rgba::WHITE);
+  }
+
+  #[test]
+  fn color_contrast_considers_alpha_compositing() {
+    let color = Color::parse("color-contrast(white vs rgba(0 0 0 / 0.5), black)")
+      .expect("parsed contrast");
+    let chosen = color.to_rgba(Rgba::BLACK);
+    assert_eq!(chosen, Rgba::BLACK);
+  }
+
+  #[test]
+  fn relative_color_from_current_color_copies_channels() {
+    let color = Color::parse("color(from currentColor srgb r g b / 50%)").unwrap();
+    let rgba = color.to_rgba(Rgba::new(10, 20, 30, 1.0));
+    assert_eq!(rgba, Rgba::new(10, 20, 30, 0.5));
+  }
+
+  #[test]
+  fn relative_color_cross_space_adjusts_lightness() {
+    let color = Color::parse("color(from rgb(255 0 0) hsl h s 40%)").unwrap();
+    let expected = Hsla::new(0.0, 100.0, 40.0, 1.0).to_rgba();
+    assert_eq!(color.to_rgba(Rgba::BLACK), expected);
+  }
+
+  #[test]
+  fn relative_color_handles_lch_like_spaces() {
+    let derived = Color::parse("color(from lab(60% 30 40) lch l c 270)").unwrap();
+    let expected = Color::parse("lch(60% 50 270)").unwrap().to_rgba(Rgba::BLACK);
+    let resolved = derived.to_rgba(Rgba::BLACK);
+    assert!((resolved.r as i32 - expected.r as i32).abs() <= 2);
+    assert!((resolved.g as i32 - expected.g as i32).abs() <= 2);
+    assert!((resolved.b as i32 - expected.b as i32).abs() <= 2);
   }
 
   #[test]
