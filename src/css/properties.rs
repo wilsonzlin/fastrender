@@ -273,6 +273,8 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "padding-left",
   "padding-right",
   "padding-top",
+  "perspective",
+  "perspective-origin",
   "pointer-events",
   "place-content",
   "place-items",

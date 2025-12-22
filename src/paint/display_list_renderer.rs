@@ -45,6 +45,7 @@ use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::TransformItem;
+use crate::paint::display_list::Transform3D;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
@@ -740,6 +741,21 @@ impl DisplayListRenderer {
       return 0.0;
     }
     v * self.scale
+  }
+
+  fn to_skia_transform(&self, transform: &Transform3D) -> Transform {
+    let affine = transform
+      .to_2d()
+      .unwrap_or_else(|| transform.approximate_2d());
+
+    Transform::from_row(
+      affine.a,
+      affine.b,
+      affine.c,
+      affine.d,
+      self.ds_len(affine.e),
+      self.ds_len(affine.f),
+    )
   }
 
   #[inline]
@@ -2061,14 +2077,7 @@ impl DisplayListRenderer {
 
         let mut combined_transform = self.canvas.transform();
         if let Some(matrix) = item.transform.as_ref() {
-          let t = Transform::from_row(
-            matrix.a,
-            matrix.b,
-            matrix.c,
-            matrix.d,
-            self.ds_len(matrix.e),
-            self.ds_len(matrix.f),
-          );
+          let t = self.to_skia_transform(matrix);
           combined_transform = combined_transform.post_concat(t);
         }
 
@@ -2997,14 +3006,7 @@ impl DisplayListRenderer {
 
   fn push_transform(&mut self, transform: &TransformItem) {
     self.canvas.save();
-    let matrix = Transform::from_row(
-      transform.transform.a,
-      transform.transform.b,
-      transform.transform.c,
-      transform.transform.d,
-      transform.transform.e * self.scale,
-      transform.transform.f * self.scale,
-    );
+    let matrix = self.to_skia_transform(&transform.transform);
     let combined = self.canvas.transform().post_concat(matrix);
     self.canvas.set_transform(combined);
   }
@@ -3869,7 +3871,7 @@ mod tests {
   use crate::paint::display_list::TextEmphasis;
   use crate::paint::display_list::TextItem;
   use crate::paint::display_list::TextShadowItem;
-  use crate::paint::display_list::Transform2D;
+  use crate::paint::display_list::Transform3D;
   use crate::paint::display_list_builder::DisplayListBuilder;
   use crate::style::color::Rgba;
   use crate::style::types::BorderImageSlice;
@@ -4113,14 +4115,7 @@ mod tests {
     let renderer = DisplayListRenderer::new(20, 10, Rgba::WHITE, FontContext::new()).unwrap();
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushTransform(TransformItem {
-      transform: Transform2D {
-        a: 1.0,
-        b: 0.0,
-        c: 0.0,
-        d: 1.0,
-        e: 10.0,
-        f: 0.0,
-      },
+      transform: Transform3D::translate(10.0, 0.0, 0.0),
     }));
     list.push(DisplayItem::FillRect(FillRectItem {
       rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
@@ -5083,14 +5078,7 @@ mod tests {
       bounds: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
       mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
       is_isolated: false,
-      transform: Some(crate::paint::display_list::Transform2D {
-        a: 1.0,
-        b: 0.0,
-        c: 0.0,
-        d: 1.0,
-        e: 2.0,
-        f: 1.0,
-      }),
+      transform: Some(Transform3D::translate(2.0, 1.0, 0.0)),
       filters: Vec::new(),
       backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
       radii: BorderRadii::ZERO,

@@ -1370,7 +1370,10 @@ impl FormattingContext for GridFormattingContext {
       } else {
         None
       };
-      let cb = if box_node.style.position.is_positioned() {
+      let establishes_cb = box_node.style.position.is_positioned()
+        || !box_node.style.transform.is_empty()
+        || box_node.style.perspective.is_some();
+      let cb = if establishes_cb {
         crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
           padding_rect,
           self.viewport_size,

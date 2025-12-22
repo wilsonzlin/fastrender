@@ -451,6 +451,10 @@ pub fn creates_stacking_context(
     return true;
   }
 
+  if style.perspective.is_some() {
+    return true;
+  }
+
   // 6b. Has CSS filter (filter list is non-empty)
   if !style.filter.is_empty() {
     return true;
@@ -562,6 +566,10 @@ pub fn get_stacking_context_reason(
 
   if !style.transform.is_empty() {
     return Some(StackingContextReason::Transform);
+  }
+
+  if style.perspective.is_some() {
+    return Some(StackingContextReason::Perspective);
   }
 
   if !style.filter.is_empty() {

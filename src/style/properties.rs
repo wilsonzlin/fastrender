@@ -2944,6 +2944,8 @@ fn apply_property_from_source(
     "transform" => styles.transform = source.transform.clone(),
     "transform-box" => styles.transform_box = source.transform_box,
     "transform-style" => styles.transform_style = source.transform_style,
+    "perspective" => styles.perspective = source.perspective,
+    "perspective-origin" => styles.perspective_origin = source.perspective_origin,
     "backface-visibility" => styles.backface_visibility = source.backface_visibility,
     "filter" => styles.filter = source.filter.clone(),
     "backdrop-filter" => styles.backdrop_filter = source.backdrop_filter.clone(),
@@ -7107,6 +7109,20 @@ pub fn apply_declaration_with_base(
         if let Some(value) = parse_transform_style(kw) {
           styles.transform_style = value;
         }
+      }
+    }
+    "perspective" => match &resolved_value {
+      PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
+        styles.perspective = None;
+      }
+      PropertyValue::Length(len) if len.value > 0.0 && !len.unit.is_percentage() => {
+        styles.perspective = Some(len.clone());
+      }
+      _ => {}
+    },
+    "perspective-origin" => {
+      if let Some(origin) = parse_transform_origin(&resolved_value) {
+        styles.perspective_origin = origin;
       }
     }
     "backface-visibility" => {

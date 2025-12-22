@@ -967,8 +967,222 @@ pub struct OpacityItem {
 /// Transform
 #[derive(Debug, Clone)]
 pub struct TransformItem {
-  /// Transform matrix (2D affine transform)
-  pub transform: Transform2D,
+  /// Transform matrix (3D, column-major order)
+  pub transform: Transform3D,
+}
+
+/// 3D transform matrix stored in column-major order
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Transform3D {
+  /// Column-major 4x4 matrix
+  pub m: [f32; 16],
+}
+
+impl Transform3D {
+  /// Identity transform (no transformation)
+  pub const IDENTITY: Self = Self {
+    m: [
+      1.0, 0.0, 0.0, 0.0, // column 1
+      0.0, 1.0, 0.0, 0.0, // column 2
+      0.0, 0.0, 1.0, 0.0, // column 3
+      0.0, 0.0, 0.0, 1.0, // column 4
+    ],
+  };
+
+  /// Create identity transform
+  pub const fn identity() -> Self {
+    Self::IDENTITY
+  }
+
+  /// Check if this is the identity transform
+  pub fn is_identity(&self) -> bool {
+    const EPS: f32 = 1e-6;
+    self
+      .m
+      .iter()
+      .zip(Self::IDENTITY.m.iter())
+      .all(|(a, b)| (a - b).abs() < EPS)
+  }
+
+  /// Multiply two transforms (concatenate)
+  ///
+  /// The result represents applying `other` first, then `self`.
+  pub fn multiply(&self, other: &Transform3D) -> Transform3D {
+    let mut out = [0.0_f32; 16];
+    for row in 0..4 {
+      for col in 0..4 {
+        out[col * 4 + row] =
+          self.m[0 * 4 + row] * other.m[col * 4 + 0]
+            + self.m[1 * 4 + row] * other.m[col * 4 + 1]
+            + self.m[2 * 4 + row] * other.m[col * 4 + 2]
+            + self.m[3 * 4 + row] * other.m[col * 4 + 3];
+      }
+    }
+    Transform3D { m: out }
+  }
+
+  /// Create translation transform
+  pub fn translate(x: f32, y: f32, z: f32) -> Self {
+    let mut m = Self::IDENTITY.m;
+    m[12] = x;
+    m[13] = y;
+    m[14] = z;
+    Self { m }
+  }
+
+  /// Create scale transform
+  pub fn scale(sx: f32, sy: f32, sz: f32) -> Self {
+    let mut m = Self::IDENTITY.m;
+    m[0] = sx;
+    m[5] = sy;
+    m[10] = sz;
+    Self { m }
+  }
+
+  /// Create rotation transform around the X axis (angle in radians)
+  pub fn rotate_x(angle: f32) -> Self {
+    let sin = angle.sin();
+    let cos = angle.cos();
+    let mut m = Self::IDENTITY.m;
+    m[5] = cos;
+    m[6] = sin;
+    m[9] = -sin;
+    m[10] = cos;
+    Self { m }
+  }
+
+  /// Create rotation transform around the Y axis (angle in radians)
+  pub fn rotate_y(angle: f32) -> Self {
+    let sin = angle.sin();
+    let cos = angle.cos();
+    let mut m = Self::IDENTITY.m;
+    m[0] = cos;
+    m[2] = -sin;
+    m[8] = sin;
+    m[10] = cos;
+    Self { m }
+  }
+
+  /// Create rotation transform around the Z axis (angle in radians)
+  pub fn rotate_z(angle: f32) -> Self {
+    let sin = angle.sin();
+    let cos = angle.cos();
+    let mut m = Self::IDENTITY.m;
+    m[0] = cos;
+    m[1] = sin;
+    m[4] = -sin;
+    m[5] = cos;
+    Self { m }
+  }
+
+  /// Create skew transform along X and Y (angles in radians)
+  pub fn skew(ax: f32, ay: f32) -> Self {
+    let mut m = Self::IDENTITY.m;
+    m[1] = ay.tan();
+    m[4] = ax.tan();
+    Self { m }
+  }
+
+  /// Create perspective transform with the given distance
+  pub fn perspective(distance: f32) -> Self {
+    let mut m = Self::IDENTITY.m;
+    if distance.abs() > f32::EPSILON {
+      m[11] = -1.0 / distance;
+    }
+    Self { m }
+  }
+
+  /// Create a transform from a 2D matrix
+  pub fn from_2d(t: &Transform2D) -> Self {
+    let mut m = Self::IDENTITY.m;
+    m[0] = t.a;
+    m[1] = t.b;
+    m[4] = t.c;
+    m[5] = t.d;
+    m[12] = t.e;
+    m[13] = t.f;
+    Self { m }
+  }
+
+  /// Transform a point (x, y, z, 1.0). Returns (x, y, z, w).
+  pub fn transform_point(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32, f32) {
+    let tx = self.m[0] * x + self.m[4] * y + self.m[8] * z + self.m[12];
+    let ty = self.m[1] * x + self.m[5] * y + self.m[9] * z + self.m[13];
+    let tz = self.m[2] * x + self.m[6] * y + self.m[10] * z + self.m[14];
+    let tw = self.m[3] * x + self.m[7] * y + self.m[11] * z + self.m[15];
+    (tx, ty, tz, tw)
+  }
+
+  /// Transform a direction vector using the linear part of the matrix (ignoring translation)
+  pub fn transform_direction(&self, x: f32, y: f32, z: f32) -> [f32; 3] {
+    let tx = self.m[0] * x + self.m[4] * y + self.m[8] * z;
+    let ty = self.m[1] * x + self.m[5] * y + self.m[9] * z;
+    let tz = self.m[2] * x + self.m[6] * y + self.m[10] * z;
+    [tx, ty, tz]
+  }
+
+  /// Attempt to extract a 2D affine transform if the matrix is 2D-compatible
+  pub fn to_2d(&self) -> Option<Transform2D> {
+    const EPS: f32 = 1e-6;
+    if (self.m[2]).abs() > EPS
+      || (self.m[3]).abs() > EPS
+      || (self.m[6]).abs() > EPS
+      || (self.m[7]).abs() > EPS
+      || (self.m[8]).abs() > EPS
+      || (self.m[9]).abs() > EPS
+      || (self.m[11]).abs() > EPS
+      || (self.m[14]).abs() > EPS
+      || (self.m[10] - 1.0).abs() > EPS
+      || (self.m[15] - 1.0).abs() > EPS
+    {
+      return None;
+    }
+
+    Some(Transform2D {
+      a: self.m[0],
+      b: self.m[1],
+      c: self.m[4],
+      d: self.m[5],
+      e: self.m[12],
+      f: self.m[13],
+    })
+  }
+
+  /// Approximate this 3D transform as a 2D affine transform by projecting basis vectors
+  pub fn approximate_2d(&self) -> Transform2D {
+    let project = |x: f32, y: f32, m: &Transform3D| -> Option<(f32, f32)> {
+      let (tx, ty, _tz, tw) = m.transform_point(x, y, 0.0);
+      if tw.abs() < 1e-6 {
+        None
+      } else {
+        Some((tx / tw, ty / tw))
+      }
+    };
+
+    let p0 = project(0.0, 0.0, self).unwrap_or((0.0, 0.0));
+    let p1 = project(1.0, 0.0, self).unwrap_or((1.0, 0.0));
+    let p2 = project(0.0, 1.0, self).unwrap_or((0.0, 1.0));
+
+    let dx1 = (p1.0 - p0.0, p1.1 - p0.1);
+    let dx2 = (p2.0 - p0.0, p2.1 - p0.1);
+
+    Transform2D {
+      a: dx1.0,
+      b: dx1.1,
+      c: dx2.0,
+      d: dx2.1,
+      e: p0.0,
+      f: p0.1,
+    }
+  }
+
+  /// Transform an axis-aligned rectangle using a 2D projection of this matrix.
+  pub fn transform_rect(&self, rect: Rect) -> Rect {
+    self
+      .to_2d()
+      .unwrap_or_else(|| self.approximate_2d())
+      .transform_rect(rect)
+  }
 }
 
 /// 2D affine transform matrix
@@ -1243,7 +1457,7 @@ pub struct StackingContextItem {
   pub is_isolated: bool,
 
   /// Optional transform applied to this stacking context
-  pub transform: Option<Transform2D>,
+  pub transform: Option<Transform3D>,
 
   /// Resolved filter() list applied to this context
   pub filters: Vec<ResolvedFilter>,
@@ -1813,7 +2027,7 @@ mod tests {
     assert!(DisplayItem::PushOpacity(OpacityItem { opacity: 0.5 }).is_stack_operation());
     assert!(DisplayItem::PopOpacity.is_stack_operation());
     assert!(DisplayItem::PushTransform(TransformItem {
-      transform: Transform2D::identity()
+      transform: Transform3D::identity()
     })
     .is_stack_operation());
     assert!(DisplayItem::PopTransform.is_stack_operation());

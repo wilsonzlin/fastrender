@@ -32,6 +32,7 @@ use fastrender::StackingContextItem;
 use fastrender::StrokeRectItem;
 use fastrender::StrokeRoundedRectItem;
 use fastrender::Transform2D;
+use fastrender::Transform3D;
 use fastrender::TransformItem;
 use std::sync::Arc;
 
@@ -350,7 +351,7 @@ fn test_remove_noop_opacity() {
 fn test_remove_noop_transform() {
   let mut list = DisplayList::new();
   list.push(DisplayItem::PushTransform(TransformItem {
-    transform: Transform2D::IDENTITY,
+    transform: Transform3D::IDENTITY,
   }));
   list.push(make_fill_rect(0.0, 0.0, 100.0, 100.0, Rgba::RED));
   list.push(DisplayItem::PopTransform);
@@ -382,7 +383,7 @@ fn test_remove_noop_blend_mode() {
 fn test_keep_non_identity_transform() {
   let mut list = DisplayList::new();
   list.push(DisplayItem::PushTransform(TransformItem {
-    transform: Transform2D::translate(10.0, 10.0),
+    transform: Transform3D::translate(10.0, 10.0, 0.0),
   }));
   list.push(make_fill_rect(0.0, 0.0, 100.0, 100.0, Rgba::RED));
   list.push(DisplayItem::PopTransform);
@@ -764,7 +765,7 @@ fn transform_keeps_clipped_content_from_being_culled() {
   }));
   // Transform could reposition content relative to the viewport, so the optimizer should not drop it.
   list.push(DisplayItem::PushTransform(TransformItem {
-    transform: Transform2D::translate(-450.0, -450.0),
+    transform: Transform3D::translate(-450.0, -450.0, 0.0),
   }));
   list.push(make_fill_rect(500.0, 500.0, 20.0, 20.0, Rgba::RED));
   list.push(DisplayItem::PopTransform);
@@ -991,7 +992,7 @@ fn offscreen_filtered_stacking_context_is_culled() {
 fn transforms_keep_children_from_being_culled() {
   let mut list = DisplayList::new();
   list.push(DisplayItem::PushTransform(TransformItem {
-    transform: Transform2D::translate(150.0, 0.0),
+    transform: Transform3D::translate(150.0, 0.0, 0.0),
   }));
   list.push(make_fill_rect(-120.0, 0.0, 10.0, 10.0, Rgba::RED));
   list.push(DisplayItem::PopTransform);

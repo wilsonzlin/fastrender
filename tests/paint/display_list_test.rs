@@ -59,6 +59,7 @@ use fastrender::Rgba;
 use fastrender::StrokeRectItem;
 use fastrender::StrokeRoundedRectItem;
 use fastrender::Transform2D;
+use fastrender::Transform3D;
 use fastrender::TransformItem;
 use std::sync::Arc;
 
@@ -1314,7 +1315,7 @@ fn test_push_pop_transform() {
   let mut list = DisplayList::new();
 
   list.push(DisplayItem::PushTransform(TransformItem {
-    transform: Transform2D::translate(100.0, 50.0),
+    transform: Transform3D::from_2d(&Transform2D::translate(100.0, 50.0)),
   }));
 
   list.push(DisplayItem::FillRect(FillRectItem {
@@ -1682,12 +1683,12 @@ fn test_nested_transforms() {
 
   // Outer transform
   list.push(DisplayItem::PushTransform(TransformItem {
-    transform: Transform2D::translate(100.0, 100.0),
+    transform: Transform3D::from_2d(&Transform2D::translate(100.0, 100.0)),
   }));
 
   // Inner transform
   list.push(DisplayItem::PushTransform(TransformItem {
-    transform: Transform2D::scale(2.0, 2.0),
+    transform: Transform3D::from_2d(&Transform2D::scale(2.0, 2.0)),
   }));
 
   list.push(DisplayItem::FillRect(FillRectItem {

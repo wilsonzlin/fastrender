@@ -997,6 +997,9 @@ impl BlockFormattingContext {
     let mut inline_buffer: Vec<BoxNode> = Vec::new();
     let mut positioned_children: Vec<PositionedCandidate> = Vec::new();
     let collapse_with_parent_top = should_collapse_with_first_child(&parent.style);
+    let establishes_positioned_cb = parent.style.position.is_positioned()
+      || !parent.style.transform.is_empty()
+      || parent.style.perspective.is_some();
     if !collapse_with_parent_top {
       margin_ctx.mark_content_encountered();
     }
@@ -1392,10 +1395,14 @@ impl BlockFormattingContext {
         let static_position = Some(Point::new(static_x, static_y));
         let source = match child.style.position {
           Position::Fixed => {
-            ContainingBlockSource::Explicit(ContainingBlock::viewport(self.viewport_size))
+            if establishes_positioned_cb {
+              ContainingBlockSource::ParentPadding
+            } else {
+              ContainingBlockSource::Explicit(ContainingBlock::viewport(self.viewport_size))
+            }
           }
           Position::Absolute => {
-            if parent.style.position.is_positioned() {
+            if establishes_positioned_cb {
               ContainingBlockSource::ParentPadding
             } else {
               ContainingBlockSource::Explicit(*nearest_positioned_cb)
@@ -2638,19 +2645,43 @@ impl FormattingContext for BlockFormattingContext {
       child_height_space,
     );
 
-    let initial_cb = self.nearest_positioned_cb;
+    let padding_origin = Point::new(
+      computed_width.border_left + computed_width.padding_left,
+      border_top + padding_top,
+    );
+    let content_height_base = resolved_height.unwrap_or(0.0).max(0.0);
+    let padding_size = Size::new(
+      computed_width.content_width + computed_width.padding_left + computed_width.padding_right,
+      content_height_base + padding_top + padding_bottom,
+    );
+    let cb_block_base = resolved_height.map(|h| h.max(0.0) + padding_top + padding_bottom);
+    let establishes_positioned_cb = style.position.is_positioned()
+      || !style.transform.is_empty()
+      || style.perspective.is_some();
+    let nearest_cb = if establishes_positioned_cb {
+      ContainingBlock::with_viewport_and_bases(
+        Rect::new(padding_origin, padding_size),
+        self.viewport_size,
+        Some(padding_size.width),
+        cb_block_base,
+      )
+    } else {
+      self.nearest_positioned_cb
+    };
+
     let mut child_ctx = self.clone();
     child_ctx.flex_item_mode = false;
+    child_ctx.nearest_positioned_cb = nearest_cb;
     let use_columns = Self::is_multicol_container(style);
     let (mut child_fragments, mut content_height, positioned_children) = if use_columns {
       child_ctx.layout_multicolumn(
         box_node,
         &child_constraints,
-        &initial_cb,
+        &nearest_cb,
         computed_width.content_width,
       )?
     } else {
-      child_ctx.layout_children(box_node, &child_constraints, &initial_cb)?
+      child_ctx.layout_children(box_node, &child_constraints, &nearest_cb)?
     };
     if style.containment.size {
       content_height = 0.0;

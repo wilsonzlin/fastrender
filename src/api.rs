@@ -2813,6 +2813,9 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
   hash_transforms(&style.transform, &mut h);
   hash_enum_discriminant(&style.transform_box, &mut h);
   hash_enum_discriminant(&style.transform_style, &mut h);
+  hash_option_length(&style.perspective, &mut h);
+  hash_length(&style.perspective_origin.x, &mut h);
+  hash_length(&style.perspective_origin.y, &mut h);
   hash_enum_discriminant(&style.backface_visibility, &mut h);
   h.finish()
 }

@@ -29,7 +29,6 @@
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
-use crate::css::types::Transform as CssTransform;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
@@ -75,6 +74,7 @@ use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform2D;
+use crate::paint::display_list::Transform3D;
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::stacking::StackingContext;
@@ -315,9 +315,6 @@ impl DisplayListBuilder {
       ) {
         return;
       }
-      if Self::backface_culled(style) {
-        return;
-      }
     }
 
     let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
@@ -336,6 +333,15 @@ impl DisplayListBuilder {
       ),
       fragment.bounds.size,
     );
+
+    if let Some(style) = fragment.style.as_deref() {
+      if Self::backface_culled(style, absolute_rect, self.viewport) {
+        if push_opacity {
+          self.pop_opacity();
+        }
+        return;
+      }
+    }
 
     if let Some(style) = fragment.style.as_deref() {
       self.emit_box_shadows_from_style(absolute_rect, style, false);
@@ -382,9 +388,6 @@ impl DisplayListBuilder {
       ) {
         return;
       }
-      if Self::backface_culled(style) {
-        return;
-      }
     }
 
     let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
@@ -400,6 +403,15 @@ impl DisplayListBuilder {
       ),
       fragment.bounds.size,
     );
+
+    if let Some(style) = fragment.style.as_deref() {
+      if Self::backface_culled(style, absolute_rect, self.viewport) {
+        if push_opacity {
+          self.pop_opacity();
+        }
+        return;
+      }
+    }
 
     if let Some(style) = fragment.style.as_deref() {
       self.emit_background_from_style(absolute_rect, style);
@@ -1596,58 +1608,26 @@ impl DisplayListBuilder {
     side.width > 0.0 && Self::border_style_visible(side.style) && !side.color.is_transparent()
   }
 
-  fn backface_culled(style: &ComputedStyle) -> bool {
+  fn backface_culled(
+    style: &ComputedStyle,
+    bounds: Rect,
+    viewport: Option<(f32, f32)>,
+  ) -> bool {
     if !matches!(style.backface_visibility, BackfaceVisibility::Hidden) {
       return false;
     }
-    if style.transform.is_empty() {
-      return false;
-    }
 
-    let mut normal = [0.0_f32, 0.0_f32, 1.0_f32];
-    for t in &style.transform {
-      match t {
-        CssTransform::RotateX(deg) => {
-          let rad = deg.to_radians();
-          let cos = rad.cos();
-          let sin = rad.sin();
-          let ny = normal[1] * cos - normal[2] * sin;
-          let nz = normal[1] * sin + normal[2] * cos;
-          normal[1] = ny;
-          normal[2] = nz;
-        }
-        CssTransform::RotateY(deg) => {
-          let rad = deg.to_radians();
-          let cos = rad.cos();
-          let sin = rad.sin();
-          let nx = normal[0] * cos + normal[2] * sin;
-          let nz = -normal[0] * sin + normal[2] * cos;
-          normal[0] = nx;
-          normal[2] = nz;
-        }
-        CssTransform::Rotate3d(x, y, z, deg) => {
-          let len = (x * x + y * y + z * z).sqrt();
-          if len > f32::EPSILON {
-            let ax = *x / len;
-            let ay = *y / len;
-            let az = *z / len;
-            let rad = deg.to_radians();
-            let cos = rad.cos();
-            let sin = rad.sin();
-            let dot = ax * normal[0] + ay * normal[1] + az * normal[2];
-            let cross = [
-              ay * normal[2] - az * normal[1],
-              az * normal[0] - ax * normal[2],
-              ax * normal[1] - ay * normal[0],
-            ];
-            normal[0] = normal[0] * cos + cross[0] * sin + ax * dot * (1.0 - cos);
-            normal[1] = normal[1] * cos + cross[1] * sin + ay * dot * (1.0 - cos);
-            normal[2] = normal[2] * cos + cross[2] * sin + az * dot * (1.0 - cos);
-          }
-        }
-        _ => {}
-      }
-    }
+    let Some(transform) = Self::build_transform(style, bounds, viewport) else {
+      return false;
+    };
+
+    let ux = transform.transform_direction(1.0, 0.0, 0.0);
+    let uy = transform.transform_direction(0.0, 1.0, 0.0);
+    let normal = [
+      ux[1] * uy[2] - ux[2] * uy[1],
+      ux[2] * uy[0] - ux[0] * uy[2],
+      ux[0] * uy[1] - ux[1] * uy[0],
+    ];
 
     normal[2] < 0.0
   }
@@ -1656,16 +1636,27 @@ impl DisplayListBuilder {
     style: &ComputedStyle,
     bounds: Rect,
     viewport: Option<(f32, f32)>,
-  ) -> Option<Transform2D> {
-    if style.transform.is_empty() {
-      return None;
-    }
-
+  ) -> Option<Transform3D> {
     let reference = Self::transform_reference_box(style, bounds, viewport);
     let percentage_width = reference.width();
     let percentage_height = reference.height();
 
-    let mut ts = Transform2D::identity();
+    let resolved_perspective = style.perspective.as_ref().and_then(|len| {
+      len.resolve_with_context(
+        Some(percentage_width),
+        viewport.map(|v| v.0).unwrap_or(0.0),
+        viewport.map(|v| v.1).unwrap_or(0.0),
+        style.font_size,
+        style.root_font_size,
+      )
+      .filter(|v| *v > 0.0)
+    });
+
+    if style.transform.is_empty() && resolved_perspective.is_none() {
+      return None;
+    }
+
+    let mut ts = Transform3D::identity();
     const EPS: f32 = 1e-6;
     for component in &style.transform {
       let next = match component {
@@ -1682,7 +1673,7 @@ impl DisplayListBuilder {
             style.root_font_size,
             percentage_height,
           );
-          Transform2D::translate(tx, ty)
+          Transform3D::translate(tx, ty, 0.0)
         }
         crate::css::types::Transform::TranslateX(x) => {
           let tx = Self::resolve_transform_length(
@@ -1691,7 +1682,7 @@ impl DisplayListBuilder {
             style.root_font_size,
             percentage_width,
           );
-          Transform2D::translate(tx, 0.0)
+          Transform3D::translate(tx, 0.0, 0.0)
         }
         crate::css::types::Transform::TranslateY(y) => {
           let ty = Self::resolve_transform_length(
@@ -1700,10 +1691,14 @@ impl DisplayListBuilder {
             style.root_font_size,
             percentage_height,
           );
-          Transform2D::translate(0.0, ty)
+          Transform3D::translate(0.0, ty, 0.0)
         }
-        crate::css::types::Transform::TranslateZ(_) => Transform2D::identity(),
-        crate::css::types::Transform::Translate3d(x, y, _) => {
+        crate::css::types::Transform::TranslateZ(z) => Transform3D::translate(
+          0.0,
+          0.0,
+          Self::resolve_transform_length(z, style.font_size, style.root_font_size, percentage_width),
+        ),
+        crate::css::types::Transform::Translate3d(x, y, z) => {
           let tx = Self::resolve_transform_length(
             x,
             style.font_size,
@@ -1716,81 +1711,79 @@ impl DisplayListBuilder {
             style.root_font_size,
             percentage_height,
           );
-          Transform2D::translate(tx, ty)
+          let tz = Self::resolve_transform_length(
+            z,
+            style.font_size,
+            style.root_font_size,
+            percentage_width,
+          );
+          Transform3D::translate(tx, ty, tz)
         }
-        crate::css::types::Transform::Scale(sx, sy) => Transform2D::scale(*sx, *sy),
-        crate::css::types::Transform::ScaleX(sx) => Transform2D::scale(*sx, 1.0),
-        crate::css::types::Transform::ScaleY(sy) => Transform2D::scale(1.0, *sy),
-        crate::css::types::Transform::ScaleZ(_) => Transform2D::identity(),
-        crate::css::types::Transform::Scale3d(sx, sy, _) => Transform2D::scale(*sx, *sy),
-        crate::css::types::Transform::Rotate(deg) => Transform2D::rotate(*deg),
-        crate::css::types::Transform::RotateZ(deg) => Transform2D::rotate(*deg),
-        crate::css::types::Transform::RotateX(_) => Transform2D::identity(),
-        crate::css::types::Transform::RotateY(_) => Transform2D::identity(),
+        crate::css::types::Transform::Scale(sx, sy) => Transform3D::scale(*sx, *sy, 1.0),
+        crate::css::types::Transform::ScaleX(sx) => Transform3D::scale(*sx, 1.0, 1.0),
+        crate::css::types::Transform::ScaleY(sy) => Transform3D::scale(1.0, *sy, 1.0),
+        crate::css::types::Transform::ScaleZ(sz) => Transform3D::scale(1.0, 1.0, *sz),
+        crate::css::types::Transform::Scale3d(sx, sy, sz) => Transform3D::scale(*sx, *sy, *sz),
+        crate::css::types::Transform::Rotate(deg)
+        | crate::css::types::Transform::RotateZ(deg) => Transform3D::rotate_z(deg.to_radians()),
+        crate::css::types::Transform::RotateX(deg) => Transform3D::rotate_x(deg.to_radians()),
+        crate::css::types::Transform::RotateY(deg) => Transform3D::rotate_y(deg.to_radians()),
         crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
-          if (*x).abs() < EPS && (*y).abs() < EPS && (*z).abs() > EPS {
-            let sign = if *z >= 0.0 { 1.0 } else { -1.0 };
-            Transform2D::rotate(*deg * sign)
+          let len = (x * x + y * y + z * z).sqrt();
+          if len < EPS {
+            Transform3D::identity()
           } else {
-            Transform2D::identity()
-          }
-        }
-        crate::css::types::Transform::SkewX(deg) => Transform2D::skew(deg.to_radians().tan(), 0.0),
-        crate::css::types::Transform::SkewY(deg) => Transform2D::skew(0.0, deg.to_radians().tan()),
-        crate::css::types::Transform::Skew(ax, ay) => {
-          Transform2D::skew(ax.to_radians().tan(), ay.to_radians().tan())
-        }
-        crate::css::types::Transform::Perspective(_) => Transform2D::identity(),
-        crate::css::types::Transform::Matrix(a, b, c, d, e, f) => Transform2D {
-          a: *a,
-          b: *b,
-          c: *c,
-          d: *d,
-          e: *e,
-          f: *f,
-        },
-        crate::css::types::Transform::Matrix3d(values) => {
-          let m11 = values[0];
-          let m12 = values[1];
-          let m13 = values[2];
-          let m14 = values[3];
-          let m21 = values[4];
-          let m22 = values[5];
-          let m23 = values[6];
-          let m24 = values[7];
-          let m31 = values[8];
-          let m32 = values[9];
-          let m33 = values[10];
-          let m34 = values[11];
-          let m41 = values[12];
-          let m42 = values[13];
-          let m43 = values[14];
-          let m44 = values[15];
+            let ax = *x / len;
+            let ay = *y / len;
+            let az = *z / len;
+            let angle = deg.to_radians();
+            let (s, c) = angle.sin_cos();
+            let t = 1.0 - c;
 
-          let compatible_2d = m13.abs() < EPS
-            && m14.abs() < EPS
-            && m23.abs() < EPS
-            && m24.abs() < EPS
-            && m31.abs() < EPS
-            && m32.abs() < EPS
-            && (m33 - 1.0).abs() < EPS
-            && m34.abs() < EPS
-            && m43.abs() < EPS
-            && (m44 - 1.0).abs() < EPS;
+            let m00 = t * ax * ax + c;
+            let m01 = t * ax * ay + s * az;
+            let m02 = t * ax * az - s * ay;
+            let m10 = t * ax * ay - s * az;
+            let m11 = t * ay * ay + c;
+            let m12 = t * ay * az + s * ax;
+            let m20 = t * ax * az + s * ay;
+            let m21 = t * ay * az - s * ax;
+            let m22 = t * az * az + c;
 
-          if compatible_2d {
-            Transform2D {
-              a: m11,
-              b: m12,
-              c: m21,
-              d: m22,
-              e: m41,
-              f: m42,
+            Transform3D {
+              m: [
+                m00, m10, m20, 0.0, // column 1
+                m01, m11, m21, 0.0, // column 2
+                m02, m12, m22, 0.0, // column 3
+                0.0, 0.0, 0.0, 1.0, // column 4
+              ],
             }
-          } else {
-            Transform2D::identity()
           }
         }
+        crate::css::types::Transform::SkewX(deg) => Transform3D::skew(deg.to_radians(), 0.0),
+        crate::css::types::Transform::SkewY(deg) => Transform3D::skew(0.0, deg.to_radians()),
+        crate::css::types::Transform::Skew(ax, ay) => {
+          Transform3D::skew(ax.to_radians(), ay.to_radians())
+        }
+        crate::css::types::Transform::Perspective(len) => Transform3D::perspective(
+          Self::resolve_transform_length(
+            len,
+            style.font_size,
+            style.root_font_size,
+            percentage_width,
+          ),
+        ),
+        crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
+          Transform3D::from_2d(&Transform2D {
+            a: *a,
+            b: *b,
+            c: *c,
+            d: *d,
+            e: *e,
+            f: *f,
+          })
+        }
+        crate::css::types::Transform::Matrix3d(values) => Transform3D { m: *values },
       };
       ts = ts.multiply(&next);
     }
@@ -1809,9 +1802,36 @@ impl DisplayListBuilder {
     );
     let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
-    let translate_to_origin = Transform2D::translate(origin.x, origin.y);
-    let translate_back = Transform2D::translate(-origin.x, -origin.y);
-    Some(translate_to_origin.multiply(&ts).multiply(&translate_back))
+    let mut final_matrix = Transform3D::translate(origin.x, origin.y, 0.0)
+      .multiply(&ts)
+      .multiply(&Transform3D::translate(-origin.x, -origin.y, 0.0));
+
+    if let Some(perspective) = resolved_perspective {
+      let po_x = Self::resolve_transform_length(
+        &style.perspective_origin.x,
+        style.font_size,
+        style.root_font_size,
+        percentage_width,
+      );
+      let po_y = Self::resolve_transform_length(
+        &style.perspective_origin.y,
+        style.font_size,
+        style.root_font_size,
+        percentage_height,
+      );
+      let perspective_origin = Point::new(reference.x() + po_x, reference.y() + po_y);
+      let perspective_matrix = Transform3D::translate(
+        perspective_origin.x,
+        perspective_origin.y,
+        0.0,
+      )
+      .multiply(&Transform3D::perspective(perspective))
+      .multiply(&Transform3D::translate(-perspective_origin.x, -perspective_origin.y, 0.0));
+
+      final_matrix = final_matrix.multiply(&perspective_matrix);
+    }
+
+    Some(final_matrix)
   }
 
   fn resolve_transform_length(
@@ -5381,6 +5401,7 @@ mod tests {
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
     let transform =
       DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+    let transform = transform.to_2d().expect("2d transform");
 
     assert!((transform.e - 85.0).abs() < 1e-3);
     assert!((transform.f).abs() < 1e-3);
@@ -5401,6 +5422,7 @@ mod tests {
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
     let transform =
       DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+    let transform = transform.to_2d().expect("2d transform");
 
     assert!((transform.e + 15.0).abs() < 1e-3);
     assert!((transform.f).abs() < 1e-3);
@@ -5422,10 +5444,47 @@ mod tests {
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
     let transform =
       DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+    let transform = transform.to_2d().expect("2d transform");
 
     // 50% of 200 = 100; 2em at 10px = 20 -> total 120.
     assert!((transform.e - 120.0).abs() < 1e-3);
     assert!((transform.f).abs() < 1e-3);
+  }
+
+  #[test]
+  fn matrix3d_transform_preserves_values() {
+    let mut style = ComputedStyle::default();
+    let values = [
+      1.0, 0.0, 0.0, 0.0, // column 1
+      0.0, 1.0, 0.0, 0.0, // column 2
+      0.0, 0.0, 1.0, 0.0, // column 3
+      5.0, 6.0, 0.0, 1.0, // translation
+    ];
+    style.transform.push(Transform::Matrix3d(values));
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+    let transform =
+      DisplayListBuilder::build_transform(&style, bounds, None).expect("matrix3d should build");
+
+    assert_eq!(transform.m[12], 5.0);
+    assert_eq!(transform.m[13], 6.0);
+    assert_eq!(transform.m[15], 1.0);
+    let affine = transform.to_2d().expect("matrix3d translation stays affine");
+    assert!((affine.e - 5.0).abs() < 1e-6);
+    assert!((affine.f - 6.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn perspective_property_builds_transform() {
+    let mut style = ComputedStyle::default();
+    style.perspective = Some(Length::px(500.0));
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let transform =
+      DisplayListBuilder::build_transform(&style, bounds, None).expect("perspective builds");
+
+    assert!(transform.to_2d().is_none(), "perspective should keep 3d components");
+    assert!((transform.m[11] + 1.0 / 500.0).abs() < 1e-6);
   }
 
   #[test]
@@ -5482,5 +5541,25 @@ mod tests {
       list.is_empty(),
       "backface hidden element should not emit display items"
     );
+  }
+
+  #[test]
+  fn backface_hidden_with_perspective_still_culls() {
+    let mut style = ComputedStyle::default();
+    style.backface_visibility = BackfaceVisibility::Hidden;
+    style.perspective = Some(Length::px(400.0));
+    style.transform.push(Transform::RotateX(190.0));
+    style.background_color = Rgba::BLACK;
+
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+      vec![],
+      Arc::new(style),
+    );
+
+    let builder = DisplayListBuilder::new();
+    let list = builder.build(&fragment);
+
+    assert!(list.is_empty(), "backface should be culled with perspective");
   }
 }
