@@ -15,6 +15,8 @@ use fastrender::geometry::Rect;
 use fastrender::geometry::Size;
 use fastrender::layout::engine::LayoutConfig;
 use fastrender::layout::engine::LayoutEngine;
+use fastrender::paint::display_list::Transform2D;
+use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::stacking::creates_stacking_context;
 use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
@@ -560,6 +562,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut fragments_abs: Vec<(Rect, &FragmentNode)> = Vec::new();
   collect_fragments_abs(&fragment_tree.root, scroll_offset, &mut fragments_abs);
 
+  let mut fragments_by_box: HashMap<usize, Vec<(Rect, &FragmentNode)>> = HashMap::new();
+  let mut transformed: Vec<(Rect, &FragmentNode, Option<Transform2D>)> = Vec::new();
+
   let mut text_count = 0;
   let mut block_count = 0;
   let mut line_count = 0;
@@ -588,6 +593,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       FragmentContent::Replaced { .. } => replaced_count += 1,
       FragmentContent::Inline { .. } => {}
     }
+
+    if let Some(box_id) = fragment_box_id(frag) {
+      fragments_by_box
+        .entry(box_id)
+        .or_default()
+        .push((*abs, *frag));
+    }
+    if let Some(style) = frag.style.as_deref() {
+      if !style.transform.is_empty() {
+        let matrix = DisplayListBuilder::debug_resolve_transform(
+          style,
+          Rect::from_xywh(abs.x(), abs.y(), abs.width(), abs.height()),
+          Some((viewport_w as f32, viewport_h as f32)),
+        );
+        transformed.push((*abs, *frag, matrix));
+      }
+    }
   }
 
   println!(
@@ -595,6 +617,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     text_count, block_count, line_count, replaced_count
   );
   println!("bbox [{minx:.1},{miny:.1}] -> [{maxx:.1},{maxy:.1}]");
+
+  let mut split_boxes: Vec<_> = fragments_by_box
+    .iter()
+    .filter(|(_, frags)| frags.len() > 1)
+    .collect();
+  split_boxes.sort_by_key(|(id, _)| **id);
+  println!(
+    "boxes with multiple fragments (column breaks/lines/pages): {}",
+    split_boxes.len()
+  );
+  for (idx, (box_id, frags)) in split_boxes.iter().enumerate().take(8) {
+    let label = box_debug
+      .get(box_id)
+      .cloned()
+      .unwrap_or_else(|| format!("box {box_id}"));
+    let ranges: Vec<String> = frags
+      .iter()
+      .map(|(rect, frag)| {
+        let extra = match &frag.content {
+          FragmentContent::Inline { fragment_index, .. } => {
+            format!(" fragment_index={fragment_index}")
+          }
+          _ => String::new(),
+        };
+        format!(
+          "({:.1},{:.1},{:.1},{:.1}){}",
+          rect.x(),
+          rect.y(),
+          rect.width(),
+          rect.height(),
+          extra
+        )
+      })
+      .collect();
+    println!("  #{idx}: box_id={} {} -> [{}]", box_id, label, ranges.join(" | "));
+  }
+
+  println!("fragments with transforms: {}", transformed.len());
+  for (idx, (abs, frag, matrix)) in transformed.iter().enumerate().take(8) {
+    let label = label_fragment(frag, *abs, &box_debug);
+    if let Some(m) = matrix {
+      println!(
+        "  #{idx}: {} matrix=[{:.3} {:.3} {:.3}; {:.3} {:.3} {:.3}]",
+        label, m.a, m.c, m.e, m.b, m.d, m.f
+      );
+    } else {
+      println!("  #{idx}: {} matrix=<unresolved>", label);
+    }
+  }
+
+  let mut column_boxes = Vec::new();
+  let mut spanning_cells = Vec::new();
+  collect_column_info(&box_tree.root, &mut column_boxes, &mut spanning_cells);
+  if !column_boxes.is_empty() {
+    println!("table columns/colgroups: {}", column_boxes.len());
+    for (idx, (id, display, span, dbg)) in column_boxes.iter().enumerate().take(8) {
+      println!("  #{idx}: id={} display={:?} span={} {}", id, display, span, dbg);
+    }
+  }
+  if !spanning_cells.is_empty() {
+    println!("table cells with spans: {}", spanning_cells.len());
+    for (idx, (id, colspan, rowspan, dbg)) in spanning_cells.iter().enumerate().take(8) {
+      println!(
+        "  cell#{idx}: id={} colspan={} rowspan={} {}",
+        id, colspan, rowspan, dbg
+      );
+    }
+  }
   // Optional viewport-overlap stats to understand what appears in the initial viewport.
   let log_viewport = env::var("FASTR_LOG_VIEWPORT_OVERLAP")
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
@@ -1622,13 +1712,31 @@ fn walk_styled<F: FnMut(&ComputedStyle, &dom::DomNode)>(node: &StyledNode, f: &m
 }
 
 fn collect_box_debug(node: &BoxNode, out: &mut HashMap<usize, String>) {
-  if let Some(info) = &node.debug_info {
-    out.insert(node.id, format!("{info}"));
-  } else {
-    out.insert(node.id, format!("{:?}", node.box_type));
-  }
+  out.insert(node.id, format_debug_info(node));
   for child in &node.children {
     collect_box_debug(child, out);
+  }
+}
+
+fn format_debug_info(node: &BoxNode) -> String {
+  if let Some(info) = &node.debug_info {
+    let mut label = info.to_selector();
+    let mut spans = Vec::new();
+    if info.colspan > 1 {
+      spans.push(format!("colspan={}", info.colspan));
+    }
+    if info.rowspan > 1 {
+      spans.push(format!("rowspan={}", info.rowspan));
+    }
+    if info.column_span > 1 {
+      spans.push(format!("column-span={}", info.column_span));
+    }
+    if !spans.is_empty() {
+      label.push_str(&format!(" ({})", spans.join(" ")));
+    }
+    label
+  } else {
+    format!("{:?}", node.box_type)
   }
 }
 
@@ -1636,6 +1744,38 @@ fn collect_box_styles(node: &BoxNode, out: &mut HashMap<usize, std::sync::Arc<Co
   out.insert(node.id, node.style.clone());
   for child in &node.children {
     collect_box_styles(child, out);
+  }
+}
+
+fn collect_column_info(
+  node: &BoxNode,
+  columns: &mut Vec<(usize, Display, usize, String)>,
+  spanning_cells: &mut Vec<(usize, usize, usize, String)>,
+) {
+  let display = node.style.display;
+  if matches!(display, Display::TableColumn | Display::TableColumnGroup) {
+    let span = node
+      .debug_info
+      .as_ref()
+      .map(|d| d.column_span)
+      .unwrap_or(1);
+    columns.push((node.id, display, span, format_debug_info(node)));
+  }
+  if matches!(display, Display::TableCell) {
+    if let Some(info) = node.debug_info.as_ref() {
+      if info.colspan > 1 || info.rowspan > 1 {
+        spanning_cells.push((
+          node.id,
+          info.colspan.max(1),
+          info.rowspan.max(1),
+          format_debug_info(node),
+        ));
+      }
+    }
+  }
+
+  for child in &node.children {
+    collect_column_info(child, columns, spanning_cells);
   }
 }
 
@@ -1880,6 +2020,16 @@ fn label_fragment(
     }
   }
   label
+}
+
+fn fragment_box_id(fragment: &FragmentNode) -> Option<usize> {
+  match &fragment.content {
+    FragmentContent::Block { box_id }
+    | FragmentContent::Inline { box_id, .. }
+    | FragmentContent::Text { box_id, .. }
+    | FragmentContent::Replaced { box_id, .. } => *box_id,
+    FragmentContent::Line { .. } => None,
+  }
 }
 
 fn find_first_skinny(

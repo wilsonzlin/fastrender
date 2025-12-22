@@ -1828,6 +1828,15 @@ impl DisplayListBuilder {
     Some(final_matrix)
   }
 
+  /// Exposes transform resolution for debugging/inspection tools.
+  pub fn debug_resolve_transform(
+    style: &ComputedStyle,
+    bounds: Rect,
+    viewport: Option<(f32, f32)>,
+  ) -> Option<Transform2D> {
+    Self::build_transform(style, bounds, viewport)
+  }
+
   fn resolve_transform_length(
     len: &Length,
     font_size: f32,
