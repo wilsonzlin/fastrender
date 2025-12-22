@@ -1395,6 +1395,11 @@ fn is_inherited_property(name: &str) -> bool {
       | "word-spacing"
       | "white-space"
       | "line-break"
+      | "break-before"
+      | "break-after"
+      | "break-inside"
+      | "widows"
+      | "orphans"
       | "tab-size"
       | "hyphens"
       | "word-break"
@@ -2800,6 +2805,11 @@ fn apply_property_from_source(
     "word-spacing" => styles.word_spacing = source.word_spacing,
     "white-space" => styles.white_space = source.white_space,
     "line-break" => styles.line_break = source.line_break,
+    "break-before" => styles.break_before = source.break_before,
+    "break-after" => styles.break_after = source.break_after,
+    "break-inside" => styles.break_inside = source.break_inside,
+    "widows" => styles.widows = source.widows,
+    "orphans" => styles.orphans = source.orphans,
     "tab-size" => styles.tab_size = source.tab_size.clone(),
     "hyphens" => styles.hyphens = source.hyphens,
     "word-break" => styles.word_break = source.word_break,
@@ -6259,6 +6269,42 @@ pub fn apply_declaration_with_base(
           "anywhere" => LineBreak::Anywhere,
           _ => styles.line_break,
         };
+      }
+    }
+    "break-before" | "break-after" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        let value = match kw.as_str() {
+          "auto" => BreakBetween::Auto,
+          "avoid" => BreakBetween::Avoid,
+          "always" => BreakBetween::Always,
+          "column" => BreakBetween::Column,
+          "page" => BreakBetween::Page,
+          _ => BreakBetween::Auto,
+        };
+        if decl.property == "break-before" {
+          styles.break_before = value;
+        } else {
+          styles.break_after = value;
+        }
+      }
+    }
+    "break-inside" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        styles.break_inside = match kw.as_str() {
+          "auto" => BreakInside::Auto,
+          "avoid" => BreakInside::Avoid,
+          _ => styles.break_inside,
+        };
+      }
+    }
+    "widows" => {
+      if let PropertyValue::Number(n) = &resolved_value {
+        styles.widows = n.max(1.0).floor() as usize;
+      }
+    }
+    "orphans" => {
+      if let PropertyValue::Number(n) = &resolved_value {
+        styles.orphans = n.max(1.0).floor() as usize;
       }
     }
     "tab-size" => match &resolved_value {

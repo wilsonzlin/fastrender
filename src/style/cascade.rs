@@ -2001,6 +2001,9 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
   styles.visibility = parent.visibility;
   styles.white_space = parent.white_space;
   styles.line_break = parent.line_break;
+  // widows and orphans inherit per CSS 2.1.
+  styles.widows = parent.widows;
+  styles.orphans = parent.orphans;
   styles.tab_size = parent.tab_size;
   styles.caption_side = parent.caption_side;
   styles.empty_cells = parent.empty_cells;
