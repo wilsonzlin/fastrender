@@ -35,6 +35,11 @@ These are emitted by the paint pipeline:
 - `FASTR_INTRINSIC_STATS=1` – intrinsic sizing cache stats.
 - `FASTR_LAYOUT_CACHE_STATS=1` – layout cache stats (intrinsic cache hits/misses and pass counts).
 
+## Parallelism tuning
+
+- `FASTR_DISPLAY_LIST_PARALLEL=0|1` – enable/disable Rayon fan-out while building display lists (default enabled).
+- `FASTR_DISPLAY_LIST_PARALLEL_MIN=<N>` – fragment-count threshold before the builder fans out (default 32).
+
 ## Media query overrides
 
 These override user-preference media queries (and are also settable via CLI flags on the render binaries):

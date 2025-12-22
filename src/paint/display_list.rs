@@ -1624,6 +1624,12 @@ impl DisplayList {
     self.items.extend(items);
   }
 
+  /// Appends another display list onto this one, preserving order and invalidating bounds.
+  pub fn append(&mut self, mut other: DisplayList) {
+    self.bounds = None;
+    self.items.append(&mut other.items);
+  }
+
   /// Get the display items
   pub fn items(&self) -> &[DisplayItem] {
     &self.items

@@ -73,6 +73,7 @@ use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
+use rayon::prelude::*;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
@@ -465,24 +466,52 @@ fn apply_backdrop_filters(
       &radii.clamped(bounds.width(), bounds.height()),
       Rgba::new(255, 255, 255, 1.0),
     );
-    for (dst, m) in region.pixels_mut().iter_mut().zip(mask.pixels()) {
-      let alpha = m.alpha();
-      if alpha == 255 {
-        continue;
+    let mask_pixels = mask.pixels();
+    let pixel_count = mask_pixels.len();
+    if pixel_count > 2048 {
+      region
+        .pixels_mut()
+        .par_iter_mut()
+        .zip(mask_pixels.par_iter())
+        .for_each(|(dst, m)| {
+          let alpha = m.alpha();
+          if alpha == 255 {
+            return;
+          }
+          if alpha == 0 {
+            *dst = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+            return;
+          }
+          let scale = alpha as f32 / 255.0;
+          let premultiply = |v: u8| ((v as f32 * scale).round().clamp(0.0, 255.0)) as u8;
+          *dst = tiny_skia::PremultipliedColorU8::from_rgba(
+            premultiply(dst.red()),
+            premultiply(dst.green()),
+            premultiply(dst.blue()),
+            premultiply(dst.alpha()),
+          )
+          .unwrap_or(*dst);
+        });
+    } else {
+      for (dst, m) in region.pixels_mut().iter_mut().zip(mask_pixels.iter()) {
+        let alpha = m.alpha();
+        if alpha == 255 {
+          continue;
+        }
+        if alpha == 0 {
+          *dst = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
+          continue;
+        }
+        let scale = alpha as f32 / 255.0;
+        let premultiply = |v: u8| ((v as f32 * scale).round().clamp(0.0, 255.0)) as u8;
+        *dst = tiny_skia::PremultipliedColorU8::from_rgba(
+          premultiply(dst.red()),
+          premultiply(dst.green()),
+          premultiply(dst.blue()),
+          premultiply(dst.alpha()),
+        )
+        .unwrap_or(*dst);
       }
-      if alpha == 0 {
-        *dst = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-        continue;
-      }
-      let scale = alpha as f32 / 255.0;
-      let premultiply = |v: u8| ((v as f32 * scale).round().clamp(0.0, 255.0)) as u8;
-      *dst = tiny_skia::PremultipliedColorU8::from_rgba(
-        premultiply(dst.red()),
-        premultiply(dst.green()),
-        premultiply(dst.blue()),
-        premultiply(dst.alpha()),
-      )
-      .unwrap_or(*dst);
     }
   }
 
@@ -590,49 +619,70 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
   let original = pixmap.clone();
   let src = original.pixels();
   let dst = pixmap.pixels_mut();
+  let row_len = width as usize;
 
-  for y in 0..height {
-    for x in 0..width {
-      let mut agg = if expand { [0u8; 4] } else { [255u8; 4] };
-      for dy in -radius..=radius {
-        for dx in -radius..=radius {
-          let ny = (y + dy).clamp(0, height - 1);
-          let nx = (x + dx).clamp(0, width - 1);
-          let idx = (ny as usize) * (width as usize) + nx as usize;
-          let px = src[idx];
-          if expand {
-            agg[0] = agg[0].max(px.red());
-            agg[1] = agg[1].max(px.green());
-            agg[2] = agg[2].max(px.blue());
-            agg[3] = agg[3].max(px.alpha());
-          } else {
-            agg[0] = agg[0].min(px.red());
-            agg[1] = agg[1].min(px.green());
-            agg[2] = agg[2].min(px.blue());
-            agg[3] = agg[3].min(px.alpha());
-          }
+  dst.par_iter_mut().enumerate().for_each(|(idx, dst_px)| {
+    let y = (idx / row_len) as i32;
+    let x = (idx % row_len) as i32;
+    let mut agg = if expand { [0u8; 4] } else { [255u8; 4] };
+    for dy in -radius..=radius {
+      for dx in -radius..=radius {
+        let ny = (y + dy).clamp(0, height - 1);
+        let nx = (x + dx).clamp(0, width - 1);
+        let sample_idx = (ny as usize) * row_len + nx as usize;
+        let px = src[sample_idx];
+        if expand {
+          agg[0] = agg[0].max(px.red());
+          agg[1] = agg[1].max(px.green());
+          agg[2] = agg[2].max(px.blue());
+          agg[3] = agg[3].max(px.alpha());
+        } else {
+          agg[0] = agg[0].min(px.red());
+          agg[1] = agg[1].min(px.green());
+          agg[2] = agg[2].min(px.blue());
+          agg[3] = agg[3].min(px.alpha());
         }
       }
-      let idx = (y as usize) * (width as usize) + x as usize;
-      dst[idx] = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
-        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     }
-  }
+    *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
+      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  });
 }
 
-fn apply_color_filter(pixmap: &mut Pixmap, f: impl Fn((u8, u8, u8), f32) -> ((u8, u8, u8), f32)) {
-  for pixel in pixmap.pixels_mut() {
-    let a = pixel.alpha() as f32 / 255.0;
-    let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
-    let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
-    let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
-    *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
-      premultiply(c.0),
-      premultiply(c.1),
-      premultiply(c.2),
-      final_a,
-    )
-    .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+fn apply_color_filter(
+  pixmap: &mut Pixmap,
+  f: impl Fn((u8, u8, u8), f32) -> ((u8, u8, u8), f32) + Send + Sync,
+) {
+  let pixels = pixmap.pixels_mut();
+  let threshold = 2048;
+  if pixels.len() > threshold {
+    pixels.par_iter_mut().for_each(|pixel| {
+      let a = pixel.alpha() as f32 / 255.0;
+      let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
+      let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
+      let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
+      *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
+        premultiply(c.0),
+        premultiply(c.1),
+        premultiply(c.2),
+        final_a,
+      )
+      .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+    });
+  } else {
+    for pixel in pixels.iter_mut() {
+      let a = pixel.alpha() as f32 / 255.0;
+      let (c, a2) = f((pixel.red(), pixel.green(), pixel.blue()), a);
+      let final_a = (a2 * 255.0).round().clamp(0.0, 255.0) as u8;
+      let premultiply = |v: u8| ((v as f32 * a2).round().clamp(0.0, 255.0)) as u8;
+      *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
+        premultiply(c.0),
+        premultiply(c.1),
+        premultiply(c.2),
+        final_a,
+      )
+      .unwrap_or_else(|| tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+    }
   }
 }
 
@@ -1078,10 +1128,13 @@ impl DisplayListRenderer {
       .stops
       .iter()
       .map(|s| {
-        (s.position, crate::style::color::Rgba {
-          a: s.color.a * opacity,
-          ..s.color
-        })
+        (
+          s.position,
+          crate::style::color::Rgba {
+            a: s.color.a * opacity,
+            ..s.color
+          },
+        )
       })
       .collect();
     if stops.is_empty() {
@@ -1989,59 +2042,63 @@ impl DisplayListRenderer {
     let dst_pixels = target.pixels_mut();
     let opacity = opacity.clamp(0.0, 1.0);
 
-    for y in 0..height {
-      let src_row = &src_pixels[y * src_stride..y * src_stride + width];
-      let dst_row = &mut dst_pixels[y * dst_stride..y * dst_stride + width];
-      for (src_px, dst_px) in src_row.iter().zip(dst_row.iter_mut()) {
-        let raw_sa = src_px.alpha() as f32 / 255.0;
-        if raw_sa == 0.0 || opacity == 0.0 {
-          continue;
+    dst_pixels
+      .par_chunks_mut(dst_stride)
+      .zip(src_pixels.par_chunks(src_stride))
+      .take(height)
+      .for_each(|(dst_row, src_row)| {
+        let src_slice = &src_row[..width];
+        let dst_slice = &mut dst_row[..width];
+        for (src_px, dst_px) in src_slice.iter().zip(dst_slice.iter_mut()) {
+          let raw_sa = src_px.alpha() as f32 / 255.0;
+          if raw_sa == 0.0 || opacity == 0.0 {
+            continue;
+          }
+          let sa = (raw_sa * opacity).clamp(0.0, 1.0);
+          let da = dst_px.alpha() as f32 / 255.0;
+
+          let src_rgb = if raw_sa > 0.0 {
+            (
+              (src_px.red() as f32 / 255.0) / raw_sa,
+              (src_px.green() as f32 / 255.0) / raw_sa,
+              (src_px.blue() as f32 / 255.0) / raw_sa,
+            )
+          } else {
+            (0.0, 0.0, 0.0)
+          };
+
+          let dst_rgb = if da > 0.0 {
+            (
+              (dst_px.red() as f32 / 255.0) / da,
+              (dst_px.green() as f32 / 255.0) / da,
+              (dst_px.blue() as f32 / 255.0) / da,
+            )
+          } else {
+            (0.0, 0.0, 0.0)
+          };
+
+          let blended_rgb = apply_hsl_blend(mode, src_rgb, dst_rgb);
+
+          let out_a = sa + da * (1.0 - sa);
+          let out_rgb = if out_a > 0.0 {
+            (
+              (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
+              (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
+              (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
+            )
+          } else {
+            (0.0, 0.0, 0.0)
+          };
+
+          let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+          let scale = out_a;
+          let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+          let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+          let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+          *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
         }
-        let sa = (raw_sa * opacity).clamp(0.0, 1.0);
-        let da = dst_px.alpha() as f32 / 255.0;
-
-        let src_rgb = if raw_sa > 0.0 {
-          (
-            (src_px.red() as f32 / 255.0) / raw_sa,
-            (src_px.green() as f32 / 255.0) / raw_sa,
-            (src_px.blue() as f32 / 255.0) / raw_sa,
-          )
-        } else {
-          (0.0, 0.0, 0.0)
-        };
-
-        let dst_rgb = if da > 0.0 {
-          (
-            (dst_px.red() as f32 / 255.0) / da,
-            (dst_px.green() as f32 / 255.0) / da,
-            (dst_px.blue() as f32 / 255.0) / da,
-          )
-        } else {
-          (0.0, 0.0, 0.0)
-        };
-
-        let blended_rgb = apply_hsl_blend(mode, src_rgb, dst_rgb);
-
-        let out_a = sa + da * (1.0 - sa);
-        let out_rgb = if out_a > 0.0 {
-          (
-            (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
-            (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
-            (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
-          )
-        } else {
-          (0.0, 0.0, 0.0)
-        };
-
-        let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-        let scale = out_a;
-        let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-        let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-        let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-        *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
-          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-      }
-    }
+      });
 
     Ok(())
   }
@@ -4687,13 +4744,16 @@ mod tests {
 
   #[test]
   fn filter_outset_accumulates_drop_shadow_offsets() {
-    let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::DropShadow {
-      offset_x: -4.0,
-      offset_y: 3.0,
-      blur_radius: 1.0,
-      spread: 0.0,
-      color: Rgba::BLACK,
-    }];
+    let filters = vec![
+      ResolvedFilter::Blur(2.0),
+      ResolvedFilter::DropShadow {
+        offset_x: -4.0,
+        offset_y: 3.0,
+        blur_radius: 1.0,
+        spread: 0.0,
+        color: Rgba::BLACK,
+      },
+    ];
     let (l, t, r, b) = filter_outset(&filters, 1.0);
     assert!(
       (l - 13.0).abs() < 0.01

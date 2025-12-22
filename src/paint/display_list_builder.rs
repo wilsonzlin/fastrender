@@ -126,6 +126,7 @@ use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+use rayon::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -141,6 +142,8 @@ pub struct DisplayListBuilder {
   font_ctx: FontContext,
   shaper: ShapingPipeline,
   device_pixel_ratio: f32,
+  parallel_enabled: bool,
+  parallel_min: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -148,6 +151,18 @@ struct BackgroundRects {
   border: Rect,
   padding: Rect,
   content: Rect,
+}
+
+fn parallel_config_from_env() -> (bool, usize) {
+  let enabled = std::env::var("FASTR_DISPLAY_LIST_PARALLEL")
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(true);
+  let min = std::env::var("FASTR_DISPLAY_LIST_PARALLEL_MIN")
+    .ok()
+    .and_then(|v| v.parse::<usize>().ok())
+    .filter(|v| *v > 0)
+    .unwrap_or(32);
+  (enabled, min)
 }
 
 impl DisplayListBuilder {
@@ -179,6 +194,7 @@ impl DisplayListBuilder {
 
   /// Creates a new display list builder
   pub fn new() -> Self {
+    let (parallel_enabled, parallel_min) = parallel_config_from_env();
     Self {
       list: DisplayList::new(),
       image_cache: Some(ImageCache::new()),
@@ -186,11 +202,14 @@ impl DisplayListBuilder {
       font_ctx: FontContext::new(),
       shaper: ShapingPipeline::new(),
       device_pixel_ratio: 1.0,
+      parallel_enabled,
+      parallel_min,
     }
   }
 
   /// Creates a display list builder backed by an image cache to rasterize replaced images.
   pub fn with_image_cache(image_cache: ImageCache) -> Self {
+    let (parallel_enabled, parallel_min) = parallel_config_from_env();
     Self {
       list: DisplayList::new(),
       image_cache: Some(image_cache),
@@ -198,6 +217,8 @@ impl DisplayListBuilder {
       font_ctx: FontContext::new(),
       shaper: ShapingPipeline::new(),
       device_pixel_ratio: 1.0,
+      parallel_enabled,
+      parallel_min,
     }
   }
 
@@ -1831,14 +1852,65 @@ impl DisplayListBuilder {
   }
 
   fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point) {
+    if self.should_parallelize(fragments.len()) {
+      let mut partials: Vec<(usize, DisplayList)> = fragments
+        .par_iter()
+        .enumerate()
+        .map(|(idx, fragment)| {
+          let mut builder = self.fork();
+          builder.build_fragment(fragment, offset);
+          (idx, builder.list)
+        })
+        .collect();
+      partials.sort_by_key(|(idx, _)| *idx);
+      for (_, list) in partials {
+        self.list.append(list);
+      }
+      return;
+    }
+
     for fragment in fragments {
       self.build_fragment(fragment, offset);
     }
   }
 
   fn emit_fragment_list_shallow(&mut self, fragments: &[FragmentNode], offset: Point) {
+    if self.should_parallelize(fragments.len()) {
+      let mut partials: Vec<(usize, DisplayList)> = fragments
+        .par_iter()
+        .enumerate()
+        .map(|(idx, fragment)| {
+          let mut builder = self.fork();
+          builder.build_fragment_shallow(fragment, offset);
+          (idx, builder.list)
+        })
+        .collect();
+      partials.sort_by_key(|(idx, _)| *idx);
+      for (_, list) in partials {
+        self.list.append(list);
+      }
+      return;
+    }
+
     for fragment in fragments {
       self.build_fragment_shallow(fragment, offset);
+    }
+  }
+
+  fn should_parallelize(&self, len: usize) -> bool {
+    self.parallel_enabled && len >= self.parallel_min && rayon::current_num_threads() > 1
+  }
+
+  fn fork(&self) -> DisplayListBuilder {
+    DisplayListBuilder {
+      list: DisplayList::new(),
+      image_cache: self.image_cache.clone(),
+      viewport: self.viewport,
+      font_ctx: self.font_ctx.clone(),
+      shaper: self.shaper.clone(),
+      device_pixel_ratio: self.device_pixel_ratio,
+      parallel_enabled: self.parallel_enabled,
+      parallel_min: self.parallel_min,
     }
   }
 
@@ -4268,6 +4340,37 @@ mod tests {
     } else {
       panic!("Expected Text item");
     }
+  }
+
+  #[test]
+  fn parallel_builder_matches_sequential_output() {
+    std::env::set_var("FASTR_DISPLAY_LIST_PARALLEL_MIN", "1");
+    std::env::set_var("FASTR_DISPLAY_LIST_PARALLEL", "1");
+
+    let child1 = create_text_fragment(0.0, 0.0, 20.0, 10.0, "One");
+    let child2 = create_text_fragment(0.0, 10.0, 20.0, 10.0, "Two");
+    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 20.0), vec![child1, child2]);
+
+    let parallel = DisplayListBuilder::new().build(&root);
+
+    std::env::set_var("FASTR_DISPLAY_LIST_PARALLEL", "0");
+    let sequential = DisplayListBuilder::new().build(&root);
+
+    std::env::remove_var("FASTR_DISPLAY_LIST_PARALLEL_MIN");
+    std::env::remove_var("FASTR_DISPLAY_LIST_PARALLEL");
+
+    assert_eq!(parallel.len(), sequential.len());
+    let parallel_debug: Vec<String> = parallel
+      .items()
+      .iter()
+      .map(|item| format!("{:?}", item))
+      .collect();
+    let sequential_debug: Vec<String> = sequential
+      .items()
+      .iter()
+      .map(|item| format!("{:?}", item))
+      .collect();
+    assert_eq!(parallel_debug, sequential_debug);
   }
 
   #[test]

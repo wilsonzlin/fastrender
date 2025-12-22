@@ -27,5 +27,6 @@ These env vars are read in the rendering binaries (`render_pages`, `fetch_and_re
   - `FASTR_FLEX_PROFILE_HIST=1`
 - `FASTR_INTRINSIC_STATS=1` — reports intrinsic sizing cache hits/misses/lookups after layout.
 - `FASTR_LAYOUT_CACHE_STATS=1` — reports layout cache stats (intrinsic cache hits/misses, layout pass count).
+- `FASTR_DISPLAY_LIST_PARALLEL_MIN=<N>` — lowers the display list parallel fan-out threshold when debugging determinism or forcing rayon paths in tests.
 
 All profiling logs are best run in release builds to reflect real performance.
