@@ -203,6 +203,7 @@ pub mod resource;
 pub use api::FastRender;
 pub use api::FastRenderBuilder;
 pub use api::FastRenderConfig;
+pub use compat::CompatProfile;
 pub use api::Pixmap;
 pub use api::RenderDiagnostics;
 pub use api::RenderOptions;
