@@ -20,6 +20,8 @@ use super::types::FontFaceStyle;
 use super::types::ImportRule;
 use super::types::LayerRule;
 use super::types::MediaRule;
+use super::types::Keyframe;
+use super::types::KeyframesRule;
 use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
@@ -166,6 +168,7 @@ fn parse_rule<'i, 't>(
         "supports" => parse_supports_rule(p),
         "layer" => parse_layer_rule(p),
         "font-face" => parse_font_face_rule(p),
+        "keyframes" | "-webkit-keyframes" => parse_keyframes_rule(p),
         _ => {
           skip_at_rule(p);
           Ok(None)
@@ -862,6 +865,87 @@ fn parse_font_face_descriptors<'i, 't>(
   }
 
   Ok(Some(face))
+}
+
+fn parse_keyframes_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  parser.skip_whitespace();
+  let name = match parser.next_including_whitespace() {
+    Ok(Token::Ident(id)) => id.to_string(),
+    Ok(Token::QuotedString(s)) => s.to_string(),
+    _ => return Ok(None),
+  };
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
+
+  let frames = parser.parse_nested_block(|nested| parse_keyframe_list(nested))?;
+  Ok(Some(CssRule::Keyframes(KeyframesRule { name, keyframes: frames })))
+}
+
+fn parse_keyframe_list<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Vec<Keyframe>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let mut frames = Vec::new();
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+      break;
+    }
+
+    match parse_single_keyframe(parser)? {
+      Some(mut list) => frames.append(&mut list),
+      None => break,
+    }
+  }
+
+  frames.sort_by(|a, b| a
+    .offset
+    .partial_cmp(&b.offset)
+    .unwrap_or(std::cmp::Ordering::Equal));
+  Ok(frames)
+}
+
+fn parse_single_keyframe<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<Vec<Keyframe>>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let mut offsets: Vec<f32> = Vec::new();
+
+  loop {
+    match parser.next_including_whitespace() {
+      Ok(Token::Percentage { unit_value, .. }) => offsets.push(unit_value.clamp(0.0, 1.0)),
+      Ok(Token::Ident(id)) => match id.to_ascii_lowercase().as_str() {
+        "from" => offsets.push(0.0),
+        "to" => offsets.push(1.0),
+        _ => {}
+      },
+      Ok(Token::Comma) => {}
+      Ok(Token::CurlyBracketBlock) => {
+        if offsets.is_empty() {
+          return Ok(None);
+        }
+        let declarations = parser.parse_nested_block(|nested| {
+          parse_declaration_list(nested).map_err(|_| {
+            nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+              "declaration".into(),
+            ))
+          })
+        })?;
+        let mut frames = Vec::new();
+        for offset in offsets {
+          frames.push(Keyframe {
+            offset,
+            declarations: declarations.clone(),
+          });
+        }
+        return Ok(Some(frames));
+      }
+      Ok(_) => {}
+      Err(_) => return Ok(None),
+    }
+  }
 }
 
 fn parse_font_face_family(value: &str) -> Option<String> {

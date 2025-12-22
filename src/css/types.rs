@@ -233,6 +233,22 @@ impl StyleSheet {
     result
   }
 
+  /// Collects all @keyframes rules that apply to the current media context.
+  pub fn collect_keyframes(&self, media_ctx: &MediaContext) -> Vec<KeyframesRule> {
+    self.collect_keyframes_with_cache(media_ctx, None)
+  }
+
+  /// Collects @keyframes rules using an optional media-query cache for reuse.
+  pub fn collect_keyframes_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+  ) -> Vec<KeyframesRule> {
+    let mut result = Vec::new();
+    collect_keyframes_recursive(&self.rules, media_ctx, cache, &mut result);
+    result
+  }
+
   /// Resolve @import rules by fetching external stylesheets and inlining their rules.
   ///
   /// Imports are processed in order; only imports whose media lists match the provided
@@ -289,7 +305,7 @@ impl StyleSheet {
               return true;
             }
           }
-          CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+          CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) | CssRule::Keyframes(_) => {}
         }
       }
       false
@@ -372,6 +388,7 @@ fn collect_rules_recursive<'a>(
       CssRule::Import(_) => {
         // Imports are resolved before collection; nothing to add here.
       }
+      CssRule::Keyframes(_) => {}
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           for name in &layer_rule.names {
@@ -456,6 +473,43 @@ fn collect_font_faces_recursive(
         collect_font_faces_recursive(&layer_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
       CssRule::Style(_) | CssRule::Import(_) => {}
+      CssRule::Keyframes(_) => {}
+    }
+  }
+}
+
+fn collect_keyframes_recursive(
+  rules: &[CssRule],
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+  out: &mut Vec<KeyframesRule>,
+) {
+  let mut cache = cache;
+  for rule in rules {
+    match rule {
+      CssRule::Keyframes(kf) => out.push(kf.clone()),
+      CssRule::Media(media_rule) => {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+          collect_keyframes_recursive(&media_rule.rules, media_ctx, cache.as_deref_mut(), out);
+        }
+      }
+      CssRule::Container(container_rule) => {
+        if media_ctx.evaluate_with_cache(&container_rule.query, cache.as_deref_mut()) {
+          collect_keyframes_recursive(&container_rule.rules, media_ctx, cache.as_deref_mut(), out);
+        }
+      }
+      CssRule::Supports(supports_rule) => {
+        if supports_rule.condition.matches() {
+          collect_keyframes_recursive(&supports_rule.rules, media_ctx, cache.as_deref_mut(), out);
+        }
+      }
+      CssRule::Layer(layer_rule) => {
+        if layer_rule.rules.is_empty() {
+          continue;
+        }
+        collect_keyframes_recursive(&layer_rule.rules, media_ctx, cache.as_deref_mut(), out);
+      }
+      CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
     }
   }
 }
@@ -742,6 +796,8 @@ pub enum CssRule {
   Layer(LayerRule),
   /// A @font-face rule defining a downloadable font.
   FontFace(FontFaceRule),
+  /// A @keyframes rule defining animated keyframes.
+  Keyframes(KeyframesRule),
 }
 
 /// A @media rule containing conditional rules
@@ -861,6 +917,24 @@ impl Default for FontFaceRule {
   }
 }
 
+/// A keyframe selector with declarations at a specific offset.
+#[derive(Debug, Clone)]
+pub struct Keyframe {
+  /// Normalized offset in the 0-1 range.
+  pub offset: f32,
+  /// Declarations that apply at this offset.
+  pub declarations: Vec<Declaration>,
+}
+
+/// A @keyframes rule with a name and associated keyframes.
+#[derive(Debug, Clone)]
+pub struct KeyframesRule {
+  /// Animation name referenced by animation-name.
+  pub name: String,
+  /// Ordered list of keyframes.
+  pub keyframes: Vec<Keyframe>,
+}
+
 /// A single font source in `src`.
 #[derive(Debug, Clone)]
 pub enum FontFaceSource {
@@ -917,7 +991,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
 
   for rule in rules {
     match rule {
-      CssRule::Style(_) | CssRule::Media(_) => out.push(rule.clone()),
+      CssRule::Style(_) | CssRule::Media(_) | CssRule::Keyframes(_) => out.push(rule.clone()),
       CssRule::Container(container_rule) => {
         let mut resolved_children = Vec::new();
         resolve_rules(

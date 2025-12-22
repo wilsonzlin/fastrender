@@ -874,6 +874,116 @@ impl Default for ScrollSnapStop {
   }
 }
 
+/// Axis selection for scroll/view timelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimelineAxis {
+  Block,
+  Inline,
+  X,
+  Y,
+}
+
+impl Default for TimelineAxis {
+  fn default() -> Self {
+    TimelineAxis::Block
+  }
+}
+
+/// Offset used to start or end a scroll timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimelineOffset {
+  /// Automatic offset (0 for start, scroll range for end)
+  Auto,
+  /// Explicit length/percentage value
+  Length(crate::style::values::Length),
+  /// Percentage expressed directly (0-100)
+  Percentage(f32),
+}
+
+impl Default for TimelineOffset {
+  fn default() -> Self {
+    TimelineOffset::Auto
+  }
+}
+
+/// A scroll-driven timeline definition.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ScrollTimeline {
+  /// Optional timeline name.
+  pub name: Option<String>,
+  /// Axis that drives the timeline (block/inline/x/y).
+  pub axis: TimelineAxis,
+  /// Offset where the timeline starts.
+  pub start: TimelineOffset,
+  /// Offset where the timeline ends.
+  pub end: TimelineOffset,
+}
+
+/// A view-driven timeline tied to a target element.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ViewTimeline {
+  /// Optional timeline name.
+  pub name: Option<String>,
+  /// Axis used for visibility tracking.
+  pub axis: TimelineAxis,
+}
+
+/// Reference to a timeline used by an animation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnimationTimeline {
+  /// Default time-based timeline.
+  Auto,
+  /// No timeline; animation disabled.
+  None,
+  /// Named timeline reference.
+  Named(String),
+}
+
+impl Default for AnimationTimeline {
+  fn default() -> Self {
+    AnimationTimeline::Auto
+  }
+}
+
+/// Phases available for view timelines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewTimelinePhase {
+  Entry,
+  Cross,
+  Exit,
+}
+
+/// Offset for animation-range.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RangeOffset {
+  /// Position expressed as normalized progress (0-1) on the timeline.
+  Progress(f32),
+  /// Position based on a view-timeline phase plus optional adjustment.
+  View(ViewTimelinePhase, f32),
+}
+
+impl Default for RangeOffset {
+  fn default() -> Self {
+    RangeOffset::Progress(0.0)
+  }
+}
+
+/// Start/end offsets for an animation on a timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimationRange {
+  pub start: RangeOffset,
+  pub end: RangeOffset,
+}
+
+impl Default for AnimationRange {
+  fn default() -> Self {
+    AnimationRange {
+      start: RangeOffset::Progress(0.0),
+      end: RangeOffset::Progress(1.0),
+    }
+  }
+}
+
 /// CSS `scrollbar-gutter`
 ///
 /// Controls whether scroll containers reserve space for scrollbars, and whether

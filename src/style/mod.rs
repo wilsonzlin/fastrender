@@ -37,6 +37,8 @@ use types::AlignContent;
 use types::AlignItems;
 use types::Appearance;
 use types::AspectRatio;
+use types::AnimationRange;
+use types::AnimationTimeline;
 use types::BackfaceVisibility;
 use types::BackgroundAttachment;
 use types::BackgroundBox;
@@ -119,6 +121,7 @@ use types::ScrollSnapType;
 use types::ScrollbarColor;
 use types::ScrollbarGutter;
 use types::ScrollbarWidth;
+use types::ScrollTimeline;
 use types::TabSize;
 use types::TableLayout;
 use types::TextAlign;
@@ -143,6 +146,7 @@ use types::TransformBox;
 use types::TransformOrigin;
 use types::TransformStyle;
 use types::UnicodeBidi;
+use types::ViewTimeline;
 use types::UserSelect;
 use types::VerticalAlign;
 use types::WhiteSpace;
@@ -377,6 +381,16 @@ pub struct ComputedStyle {
   pub touch_action: TouchAction,
   pub scrollbar_width: ScrollbarWidth,
   pub scrollbar_color: ScrollbarColor,
+  /// Scroll timeline definitions declared on this element.
+  pub scroll_timelines: Vec<ScrollTimeline>,
+  /// View timeline definitions declared on this element.
+  pub view_timelines: Vec<ViewTimeline>,
+  /// Timelines bound to animations on this element.
+  pub animation_timelines: Vec<AnimationTimeline>,
+  /// Ranges for animations along their timelines.
+  pub animation_ranges: Vec<AnimationRange>,
+  /// Names of animations applied to this element.
+  pub animation_names: Vec<String>,
   pub top: Option<Length>,
   pub right: Option<Length>,
   pub bottom: Option<Length>,
@@ -681,6 +695,11 @@ impl Default for ComputedStyle {
       touch_action: TouchAction::auto(),
       scrollbar_width: ScrollbarWidth::Auto,
       scrollbar_color: ScrollbarColor::Auto,
+      scroll_timelines: Vec::new(),
+      view_timelines: Vec::new(),
+      animation_timelines: Vec::new(),
+      animation_ranges: Vec::new(),
+      animation_names: Vec::new(),
       top: None,
       right: None,
       bottom: None,

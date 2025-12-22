@@ -816,6 +816,192 @@ fn parse_scroll_snap_align_keywords(parts: &[String]) -> Option<ScrollSnapAlignm
   })
 }
 
+fn parse_timeline_axis(token: &str) -> Option<TimelineAxis> {
+  match token {
+    "block" => Some(TimelineAxis::Block),
+    "inline" => Some(TimelineAxis::Inline),
+    "x" => Some(TimelineAxis::X),
+    "y" => Some(TimelineAxis::Y),
+    _ => None,
+  }
+}
+
+fn parse_percentage(token: &str) -> Option<f32> {
+  let trimmed = token.trim();
+  let pct = trimmed.strip_suffix('%')?;
+  pct.trim().parse::<f32>().ok()
+}
+
+fn parse_progress_value(token: &str) -> Option<f32> {
+  if let Some(pct) = parse_percentage(token) {
+    return Some(pct / 100.0);
+  }
+  token.trim().parse::<f32>().ok()
+}
+
+fn parse_view_phase(token: &str) -> Option<ViewTimelinePhase> {
+  match token {
+    "entry" => Some(ViewTimelinePhase::Entry),
+    "exit" => Some(ViewTimelinePhase::Exit),
+    "cross" => Some(ViewTimelinePhase::Cross),
+    _ => None,
+  }
+}
+
+fn parse_timeline_offset_token(token: &str) -> Option<TimelineOffset> {
+  if token.eq_ignore_ascii_case("auto") {
+    return Some(TimelineOffset::Auto);
+  }
+  if let Some(len) = parse_length(token) {
+    return Some(TimelineOffset::Length(len));
+  }
+  if let Some(pct) = parse_percentage(token) {
+    return Some(TimelineOffset::Percentage(pct));
+  }
+  None
+}
+
+fn parse_scroll_timeline_list(raw: &str) -> Vec<ScrollTimeline> {
+  let mut timelines = Vec::new();
+  for part in raw.split(',') {
+    let tokens: Vec<&str> = part.split_whitespace().collect();
+    if tokens.is_empty() {
+      continue;
+    }
+    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("none") {
+      return Vec::new();
+    }
+    let mut name: Option<String> = None;
+    let mut axis = TimelineAxis::Block;
+    let mut offsets: Vec<TimelineOffset> = Vec::new();
+    for token in tokens {
+      let lower = token.to_ascii_lowercase();
+      if let Some(ax) = parse_timeline_axis(&lower) {
+        axis = ax;
+        continue;
+      }
+      if let Some(offset) = parse_timeline_offset_token(token) {
+        offsets.push(offset);
+        continue;
+      }
+      if name.is_none() {
+        name = Some(token.to_string());
+      }
+    }
+    let start = offsets.get(0).cloned().unwrap_or_default();
+    let end = offsets.get(1).cloned().unwrap_or(TimelineOffset::Auto);
+    timelines.push(ScrollTimeline {
+      name,
+      axis,
+      start,
+      end,
+    });
+  }
+  timelines
+}
+
+fn parse_view_timeline_list(raw: &str) -> Vec<ViewTimeline> {
+  let mut timelines = Vec::new();
+  for part in raw.split(',') {
+    let tokens: Vec<&str> = part.split_whitespace().collect();
+    if tokens.is_empty() {
+      continue;
+    }
+    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("none") {
+      return Vec::new();
+    }
+    let mut name: Option<String> = None;
+    let mut axis = TimelineAxis::Block;
+    for token in tokens {
+      let lower = token.to_ascii_lowercase();
+      if let Some(ax) = parse_timeline_axis(&lower) {
+        axis = ax;
+        continue;
+      }
+      if name.is_none() {
+        name = Some(token.to_string());
+      }
+    }
+    timelines.push(ViewTimeline { name, axis });
+  }
+  timelines
+}
+
+fn parse_animation_timeline_list(raw: &str) -> Vec<AnimationTimeline> {
+  let mut timelines = Vec::new();
+  for part in raw.split(',') {
+    let trimmed = part.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let timeline = match lower.as_str() {
+      "auto" => AnimationTimeline::Auto,
+      "none" => AnimationTimeline::None,
+      _ => AnimationTimeline::Named(trimmed.to_string()),
+    };
+    timelines.push(timeline);
+  }
+  if timelines.iter().any(|t| matches!(t, AnimationTimeline::None)) {
+    return timelines
+      .into_iter()
+      .filter(|t| !matches!(t, AnimationTimeline::None))
+      .collect();
+  }
+  timelines
+}
+
+fn parse_animation_names(raw: &str) -> Vec<String> {
+  let mut names = Vec::new();
+  for part in raw.split(',') {
+    let trimmed = part.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+    if trimmed.eq_ignore_ascii_case("none") {
+      return Vec::new();
+    }
+    names.push(trimmed.to_string());
+  }
+  names
+}
+
+fn parse_range_offset(tokens: &[&str]) -> Option<(RangeOffset, usize)> {
+  if tokens.is_empty() {
+    return None;
+  }
+  let lower = tokens[0].to_ascii_lowercase();
+  if let Some(phase) = parse_view_phase(&lower) {
+    if tokens.len() >= 2 {
+      if let Some(progress) = parse_progress_value(tokens[1]) {
+        return Some((RangeOffset::View(phase, progress), 2));
+      }
+    }
+    return Some((RangeOffset::View(phase, 0.0), 1));
+  }
+  if let Some(progress) = parse_progress_value(tokens[0]) {
+    return Some((RangeOffset::Progress(progress), 1));
+  }
+  None
+}
+
+fn parse_animation_range_list(raw: &str) -> Vec<AnimationRange> {
+  let mut ranges = Vec::new();
+  for part in raw.split(',') {
+    let tokens: Vec<&str> = part.split_whitespace().collect();
+    if tokens.is_empty() {
+      continue;
+    }
+    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("none") {
+      return Vec::new();
+    }
+    let (start, consumed_start) = parse_range_offset(&tokens).unwrap_or((RangeOffset::Progress(0.0), 0));
+    let (end, _) = parse_range_offset(&tokens[consumed_start..]).unwrap_or((RangeOffset::Progress(1.0), 0));
+    ranges.push(AnimationRange { start, end });
+  }
+  ranges
+}
+
 fn parse_touch_action_keywords(tokens: &[String]) -> Option<TouchAction> {
   if tokens.is_empty() {
     return None;
@@ -2706,6 +2892,11 @@ fn apply_property_from_source(
     "scroll-snap-type" => styles.scroll_snap_type = source.scroll_snap_type,
     "scroll-snap-align" => styles.scroll_snap_align = source.scroll_snap_align,
     "scroll-snap-stop" => styles.scroll_snap_stop = source.scroll_snap_stop,
+    "scroll-timeline" => styles.scroll_timelines = source.scroll_timelines.clone(),
+    "view-timeline" => styles.view_timelines = source.view_timelines.clone(),
+    "animation-timeline" => styles.animation_timelines = source.animation_timelines.clone(),
+    "animation-range" => styles.animation_ranges = source.animation_ranges.clone(),
+    "animation-name" => styles.animation_names = source.animation_names.clone(),
     "scroll-padding" => {
       styles.scroll_padding_top = source.scroll_padding_top;
       styles.scroll_padding_right = source.scroll_padding_right;
@@ -6612,6 +6803,21 @@ pub fn apply_declaration_with_base(
           _ => styles.scroll_snap_stop,
         };
       }
+    }
+    "scroll-timeline" => {
+      styles.scroll_timelines = parse_scroll_timeline_list(&decl.raw_value);
+    }
+    "view-timeline" => {
+      styles.view_timelines = parse_view_timeline_list(&decl.raw_value);
+    }
+    "animation-timeline" => {
+      styles.animation_timelines = parse_animation_timeline_list(&decl.raw_value);
+    }
+    "animation-range" => {
+      styles.animation_ranges = parse_animation_range_list(&decl.raw_value);
+    }
+    "animation-name" => {
+      styles.animation_names = parse_animation_names(&decl.raw_value);
     }
     "scrollbar-gutter" => {
       let mut stable = false;
