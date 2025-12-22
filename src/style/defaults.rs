@@ -61,7 +61,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
       }
 
       // Replaced elements: keep them inline by default
-      "img" | "video" | "audio" | "canvas" | "svg" => Display::Inline,
+      "img" | "video" | "audio" | "canvas" | "svg" | "math" => Display::Inline,
 
       // Hidden elements (display: none - not rendered)
       "head" | "style" | "script" | "meta" | "link" | "title" | "template" => Display::None,
@@ -138,6 +138,15 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
       "img" | "video" | "audio" | "canvas" | "svg" | "iframe" => {
         // Responsive default: limit replaced elements to their containing block
         styles.max_width = Some(Length::percent(100.0));
+      }
+      "math" => {
+        // Prefer math fonts when available and honor display="block" attribute
+        styles.font_family = vec!["math".to_string(), "serif".to_string()];
+        if let Some(display) = node.get_attribute("display") {
+          if display.eq_ignore_ascii_case("block") {
+            styles.display = Display::Block;
+          }
+        }
       }
       _ => {}
     }

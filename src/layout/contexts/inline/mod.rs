@@ -100,6 +100,7 @@ use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::box_tree::ReplacedBox;
+use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use baseline::compute_line_height_with_metrics_viewport;
@@ -2452,16 +2453,30 @@ impl InlineFormattingContext {
 
     let va = self.convert_vertical_align(style.vertical_align, style.font_size, line_height);
 
-    Ok(
-      ReplacedItem::new(
-        Size::new(box_width, box_height),
-        replaced_box.replaced_type.clone(),
-        box_node.style.clone(),
-        margin_left,
-        margin_right,
-      )
-      .with_vertical_align(va),
+    let mut item = ReplacedItem::new(
+      Size::new(box_width, box_height),
+      replaced_box.replaced_type.clone(),
+      box_node.style.clone(),
+      margin_left,
+      margin_right,
     )
+    .with_vertical_align(va);
+
+    if let ReplacedType::Math(math) = &replaced_box.replaced_type {
+      if let Some(layout) = &math.layout {
+        let content_scale_y = if layout.height > 0.0 {
+          size.height / layout.height
+        } else {
+          1.0
+        };
+        let baseline = layout.baseline * content_scale_y + padding_top + border_top;
+        let ascent = baseline;
+        let descent = (box_height - baseline).max(0.0);
+        item = item.with_metrics(BaselineMetrics::new(baseline, box_height, ascent, descent));
+      }
+    }
+
+    Ok(item)
   }
 
   /// Builds lines from inline items

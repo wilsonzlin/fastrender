@@ -36,6 +36,7 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::layout::utils::resolve_font_relative_length;
+use crate::math::MathFragment;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BlendModeItem;
@@ -122,6 +123,7 @@ use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
+use crate::tree::box_tree::MathReplaced;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
@@ -2211,6 +2213,12 @@ impl DisplayListBuilder {
           }
         }
 
+        if let ReplacedType::Math(math) = replaced_type {
+          if self.emit_math_layout(math, fragment, rect) {
+            return;
+          }
+        }
+
         let media_ctx = self.viewport.map(|(w, h)| {
           crate::style::media::MediaContext::screen(w, h)
             .with_device_pixel_ratio(self.device_pixel_ratio)
@@ -3898,6 +3906,79 @@ impl DisplayListBuilder {
         .or(fragment.style.as_deref());
       let _ = self.emit_text_with_style(label_text, label_style_ref, label_rect);
     }
+  }
+
+  fn emit_math_layout(&mut self, math: &MathReplaced, fragment: &FragmentNode, rect: Rect) -> bool {
+    let Some(layout) = math.layout.as_ref() else {
+      return false;
+    };
+    if layout.width <= 0.0 || layout.height <= 0.0 {
+      return false;
+    }
+
+    let style = fragment.style.as_deref();
+    let color = style.map(|s| s.color).unwrap_or(Rgba::BLACK);
+    let shadows = Self::text_shadows_from_style(style);
+    let scale_x = if layout.width > 0.0 {
+      rect.width() / layout.width
+    } else {
+      1.0
+    };
+    let scale_y = if layout.height > 0.0 {
+      rect.height() / layout.height
+    } else {
+      1.0
+    };
+    let scale = ((scale_x + scale_y) * 0.5).clamp(0.01, 64.0);
+
+    for frag in &layout.fragments {
+      match frag {
+        MathFragment::Glyph { origin, run } => {
+          let mut scaled = run.clone();
+          scaled.font_size *= scale;
+          scaled.advance *= scale;
+          scaled.baseline_shift *= scale;
+          scaled.synthetic_bold *= scale;
+          scaled.scale *= scale;
+          for glyph in &mut scaled.glyphs {
+            glyph.x_offset *= scale;
+            glyph.y_offset *= scale;
+            glyph.x_advance *= scale;
+            glyph.y_advance *= scale;
+          }
+          let origin_x = rect.x() + origin.x * scale;
+          let origin_y = rect.y() + origin.y * scale;
+          let glyphs = self.glyphs_from_run(&scaled, origin_x, origin_y);
+          let font_id = self.font_id_from_run(&scaled);
+
+          self.list.push(DisplayItem::Text(TextItem {
+            origin: Point::new(origin_x, origin_y),
+            glyphs,
+            color,
+            shadows: shadows.clone(),
+            font_size: scaled.font_size,
+            advance_width: scaled.advance,
+            font_id: Some(font_id),
+            synthetic_bold: scaled.synthetic_bold,
+            synthetic_oblique: scaled.synthetic_oblique,
+            emphasis: None,
+            decorations: Vec::new(),
+          }));
+        }
+        MathFragment::Rule(rule_rect) => {
+          let x = rect.x() + rule_rect.x() * scale_x;
+          let y = rect.y() + rule_rect.y() * scale_y;
+          let w = rule_rect.width() * scale_x;
+          let h = rule_rect.height() * scale_y;
+          self.list.push(DisplayItem::FillRect(FillRectItem {
+            rect: Rect::from_xywh(x, y, w, h),
+            color,
+          }));
+        }
+      }
+    }
+
+    true
   }
 
   fn resolved_accent_color(style: &ComputedStyle) -> Rgba {

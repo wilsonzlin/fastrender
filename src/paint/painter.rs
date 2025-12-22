@@ -626,6 +626,22 @@ impl Painter {
     alt: Option<&str>,
     viewport: Size,
   ) {
+    if let ReplacedType::Math(math) = &mut replaced_box.replaced_type {
+      if math.layout.is_none() {
+        let layout = crate::math::layout_mathml(&math.root, style, &self.font_ctx);
+        math.layout = Some(Arc::new(layout));
+      }
+      if replaced_box.intrinsic_size.is_none() {
+        if let Some(layout) = &math.layout {
+          replaced_box.intrinsic_size = Some(layout.size());
+          if layout.height > 0.0 {
+            replaced_box.aspect_ratio = Some(layout.width / layout.height);
+          }
+        }
+      }
+      return;
+    }
+
     let replaced_type_snapshot = replaced_box.replaced_type.clone();
     match replaced_type_snapshot {
       ReplacedType::FormControl(control) => {
@@ -813,6 +829,7 @@ impl Painter {
           replaced_box.aspect_ratio = Some(300.0 / 32.0);
         }
       }
+      ReplacedType::Math(_) => {}
       ReplacedType::Iframe { .. } => {}
     }
   }

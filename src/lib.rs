@@ -175,6 +175,7 @@ pub mod animation;
 
 pub mod accessibility;
 pub mod layout;
+pub mod math;
 pub mod paint;
 pub mod scroll;
 pub mod style;

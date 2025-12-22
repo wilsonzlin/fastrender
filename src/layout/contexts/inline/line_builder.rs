@@ -1251,6 +1251,12 @@ impl ReplacedItem {
     }
   }
 
+  /// Overrides baseline metrics for replaced content.
+  pub fn with_metrics(mut self, metrics: BaselineMetrics) -> Self {
+    self.metrics = metrics;
+    self
+  }
+
   /// Sets the vertical alignment
   pub fn with_vertical_align(mut self, align: VerticalAlign) -> Self {
     self.vertical_align = align;

@@ -35,6 +35,7 @@ use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::MarkerContent;
+use crate::tree::box_tree::MathReplaced;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::box_tree::SizesEntry;
@@ -282,7 +283,7 @@ impl DOMNode {
     if let Some(tag) = &self.tag_name {
       matches!(
         tag.as_str(),
-        "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object" | "audio"
+        "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object" | "audio" | "math"
       )
     } else {
       false
@@ -1569,6 +1570,24 @@ fn generate_boxes_for_styled(
     return Vec::new();
   }
 
+  if let Some(tag) = styled.node.tag_name() {
+    if tag.eq_ignore_ascii_case("math") {
+      let math_root = crate::math::parse_mathml(&styled.node)
+        .unwrap_or_else(|| crate::math::MathNode::Row(Vec::new()));
+      counters.leave_scope();
+      let box_node = BoxNode::new_replaced(
+        Arc::new(styled.styles.clone()),
+        ReplacedType::Math(MathReplaced {
+          root: math_root,
+          layout: None,
+        }),
+        None,
+        None,
+      );
+      return vec![attach_debug_info(box_node, styled)];
+    }
+  }
+
   // Form controls render as replaced elements with intrinsic sizing and native painting.
   if let Some(form_control) = create_form_control_replaced(styled) {
     counters.leave_scope();
@@ -2418,7 +2437,7 @@ fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
 pub fn is_replaced_element(tag: &str) -> bool {
   matches!(
     tag.to_lowercase().as_str(),
-    "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object" | "audio"
+    "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object" | "audio" | "math"
   )
 }
 
@@ -3027,6 +3046,7 @@ mod tests {
     assert!(DOMNode::new_element("embed", style.clone(), vec![]).is_replaced_element());
     assert!(DOMNode::new_element("object", style.clone(), vec![]).is_replaced_element());
     assert!(DOMNode::new_element("audio", style.clone(), vec![]).is_replaced_element());
+    assert!(DOMNode::new_element("math", style.clone(), vec![]).is_replaced_element());
 
     // Test non-replaced elements
     assert!(!DOMNode::new_element("div", style.clone(), vec![]).is_replaced_element());

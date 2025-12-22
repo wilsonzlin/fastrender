@@ -22,6 +22,7 @@
 //! <https://www.w3.org/TR/css-display-3/>
 
 use crate::geometry::Size;
+use crate::math::MathLayout;
 use crate::style::display::FormattingContextType;
 use crate::style::types::Appearance;
 use crate::style::ComputedStyle;
@@ -171,6 +172,19 @@ pub struct ReplacedBox {
   pub aspect_ratio: Option<f32>,
 }
 
+/// MathML replaced content with cached layout.
+#[derive(Debug, Clone)]
+pub struct MathReplaced {
+  pub root: crate::math::MathNode,
+  pub layout: Option<Arc<MathLayout>>,
+}
+
+impl PartialEq for MathReplaced {
+  fn eq(&self, other: &Self) -> bool {
+    self.root == other.root
+  }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SrcsetDescriptor {
   Density(f32),
@@ -251,6 +265,9 @@ pub enum ReplacedType {
     data: String,
   },
 
+  /// MathML content
+  Math(MathReplaced),
+
   /// Native form controls (input/select/textarea/button)
   FormControl(FormControl),
 }
@@ -329,6 +346,7 @@ impl ReplacedType {
       ReplacedType::Embed { .. } => Some("embed"),
       ReplacedType::Object { .. } => Some("object"),
       ReplacedType::FormControl(_) => Some("control"),
+      ReplacedType::Math(_) => Some("math"),
       _ => None,
     }
   }
