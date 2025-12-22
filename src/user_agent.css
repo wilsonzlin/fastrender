@@ -250,6 +250,27 @@ sup {
     vertical-align: super;
 }
 
+/* Ruby layout */
+ruby {
+    display: ruby;
+    ruby-position: over;
+    ruby-align: center;
+}
+rb {
+    display: ruby-base;
+}
+rt {
+    display: ruby-text;
+    font-size: 0.5em;
+    line-height: 1;
+}
+rtc {
+    display: ruby-text-container;
+}
+rp {
+    display: none;
+}
+
 mark {
     background-color: yellow;
     color: black;

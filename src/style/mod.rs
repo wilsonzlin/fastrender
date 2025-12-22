@@ -115,6 +115,9 @@ use types::OverflowWrap;
 use types::OverscrollBehavior;
 use types::PointerEvents;
 use types::Resize;
+use types::RubyAlign;
+use types::RubyMerge;
+use types::RubyPosition;
 use types::ScrollBehavior;
 use types::ScrollSnapAlignments;
 use types::ScrollSnapStop;
@@ -604,6 +607,9 @@ pub struct ComputedStyle {
   /// None means currentColor.
   pub text_emphasis_color: Option<Rgba>,
   pub text_emphasis_position: TextEmphasisPosition,
+  pub ruby_position: RubyPosition,
+  pub ruby_align: RubyAlign,
+  pub ruby_merge: RubyMerge,
   pub text_transform: TextTransform,
   pub text_combine_upright: TextCombineUpright,
   pub text_orientation: TextOrientation,
@@ -889,6 +895,9 @@ impl Default for ComputedStyle {
       text_emphasis_style: TextEmphasisStyle::default(),
       text_emphasis_color: None,
       text_emphasis_position: TextEmphasisPosition::default(),
+      ruby_position: RubyPosition::default(),
+      ruby_align: RubyAlign::default(),
+      ruby_merge: RubyMerge::default(),
       text_transform: TextTransform::default(),
       text_combine_upright: TextCombineUpright::None,
       text_orientation: TextOrientation::Mixed,

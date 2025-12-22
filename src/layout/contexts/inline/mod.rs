@@ -63,6 +63,7 @@ use crate::layout::utils::border_size_from_box_sizing;
 use crate::layout::utils::compute_replaced_size;
 use crate::layout::utils::resolve_font_relative_length;
 use crate::layout::utils::resolve_length_with_percentage_metrics;
+use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::types::Direction;
 use crate::style::types::FontStyle;
@@ -70,8 +71,11 @@ use crate::style::types::HyphensMode;
 use crate::style::types::LineBreak;
 use crate::style::types::ListStylePosition;
 use crate::style::types::OverflowWrap;
+use crate::style::types::RubyAlign;
+use crate::style::types::RubyMerge;
 use crate::style::types::TabSize;
 use crate::style::types::TextAlign;
+use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextCombineUpright;
 use crate::style::types::TextJustify;
 use crate::style::types::TextTransform;
@@ -98,6 +102,7 @@ use crate::tree::box_tree::AnonymousBox;
 use crate::tree::box_tree::AnonymousType;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxType;
+use crate::tree::box_tree::InlineBox;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
@@ -113,6 +118,9 @@ use line_builder::Line;
 use line_builder::LineBuilder;
 use line_builder::PositionedItem;
 use line_builder::ReplacedItem;
+use line_builder::RubyItem;
+use line_builder::RubyLineSpacing;
+use line_builder::RubySegmentLayout;
 use line_builder::TabItem;
 use line_builder::TextItem;
 use std::collections::HashMap;
@@ -510,6 +518,18 @@ impl InlineFormattingContext {
           }
         },
         BoxType::Inline(_) => {
+          if matches!(child.style.display, Display::Ruby) {
+            let item = self.layout_ruby_inline_item(
+              child,
+              available_width,
+              available_height,
+              base_direction,
+              positioned_children,
+              bidi_stack,
+            )?;
+            current_items.push(item);
+            continue;
+          }
           if float {
             let metrics = self.compute_strut_metrics(&child.style);
             let va = self.convert_vertical_align(
@@ -1125,6 +1145,18 @@ impl InlineFormattingContext {
           }
         },
         BoxType::Inline(_) => {
+          if matches!(child.style.display, Display::Ruby) {
+            let item = self.layout_ruby_inline_item(
+              child,
+              available_width,
+              available_height,
+              base_direction,
+              positioned_children,
+              bidi_stack,
+            )?;
+            items.push(item);
+            continue;
+          }
           if child.style.float.is_floating() {
             // Inline-level float: collect as a floating item so it can be placed into the float context.
             let metrics = self.compute_strut_metrics(&child.style);
@@ -1770,6 +1802,622 @@ impl InlineFormattingContext {
       )
       .with_vertical_align(va),
     )
+  }
+
+  fn collect_items_for_nodes(
+    &self,
+    style: Arc<ComputedStyle>,
+    nodes: &[BoxNode],
+    available_width: f32,
+    available_height: Option<f32>,
+    base_direction: Direction,
+    positioned_children: &mut Vec<BoxNode>,
+    bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+  ) -> Result<Vec<InlineItem>, LayoutError> {
+    let container = BoxNode {
+      style,
+      box_type: BoxType::Inline(InlineBox {
+        formatting_context: None,
+      }),
+      children: nodes.to_vec(),
+      id: 0,
+      debug_info: None,
+      styled_node_id: None,
+    };
+    let mut pending_space: Option<PendingSpace> = None;
+    self.collect_inline_items_internal(
+      &container,
+      available_width,
+      available_height,
+      &mut pending_space,
+      base_direction,
+      positioned_children,
+      bidi_stack,
+      CombineBoundary::default(),
+    )
+  }
+
+  fn layout_ruby_inline_item(
+    &self,
+    box_node: &BoxNode,
+    available_width: f32,
+    available_height: Option<f32>,
+    base_direction: Direction,
+    positioned_children: &mut Vec<BoxNode>,
+    bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+  ) -> Result<InlineItem, LayoutError> {
+    #[derive(Clone)]
+    struct RubyAnnotationGroup {
+      nodes: Vec<BoxNode>,
+      style: Arc<ComputedStyle>,
+    }
+
+    #[derive(Clone)]
+    struct RubySegmentInput {
+      base: Vec<BoxNode>,
+      annotations: Vec<RubyAnnotationGroup>,
+    }
+
+    #[derive(Clone)]
+    struct AnnotationLine {
+      items: Vec<InlineItem>,
+      metrics: BaselineMetrics,
+      width: f32,
+      fallback: BaselineMetrics,
+    }
+
+    fn is_annotation_box(node: &BoxNode) -> bool {
+      matches!(node.style.display, Display::RubyText | Display::RubyTextContainer)
+    }
+
+    fn merge_segments(segments: Vec<RubySegmentInput>, merge: RubyMerge) -> Vec<RubySegmentInput> {
+      if matches!(merge, RubyMerge::Separate) || segments.len() <= 1 {
+        return segments;
+      }
+
+      let mut iter = segments.into_iter();
+      let mut current = iter.next().unwrap();
+      for mut seg in iter {
+        current.base.append(&mut seg.base);
+        if seg.annotations.is_empty() {
+          continue;
+        }
+        if current.annotations.is_empty() {
+          current.annotations = seg.annotations;
+          continue;
+        }
+        if current.annotations.len() < seg.annotations.len() {
+          let template_style = current
+            .annotations
+            .last()
+            .map(|a| a.style.clone())
+            .or_else(|| seg.annotations.first().map(|a| a.style.clone()))
+            .unwrap_or_else(|| Arc::new(ComputedStyle::default()));
+          current
+            .annotations
+            .resize_with(seg.annotations.len(), || RubyAnnotationGroup {
+              nodes: Vec::new(),
+              style: template_style.clone(),
+            });
+        }
+        for (idx, mut ann) in seg.annotations.into_iter().enumerate() {
+          current.annotations[idx].nodes.append(&mut ann.nodes);
+        }
+      }
+
+      vec![current]
+    }
+
+    fn push_annotation_line(target: &mut Option<AnnotationLine>, mut incoming: AnnotationLine) {
+      if let Some(line) = target {
+        line.items.append(&mut incoming.items);
+        line.width += incoming.width;
+        line.metrics = compute_inline_box_metrics(&line.items, 0.0, 0.0, line.fallback);
+      } else {
+        *target = Some(incoming);
+      }
+    }
+
+    let style = &box_node.style;
+    let percentage_base_px = available_width
+      .is_finite()
+      .then_some(available_width)
+      .unwrap_or(0.0);
+    let margin_left = style
+      .margin_left
+      .as_ref()
+      .map(|l| {
+        resolve_length_for_width(
+          *l,
+          percentage_base_px,
+          style,
+          &self.font_context,
+          self.viewport_size,
+        )
+      })
+      .unwrap_or(0.0);
+    let margin_right = style
+      .margin_right
+      .as_ref()
+      .map(|l| {
+        resolve_length_for_width(
+          *l,
+          percentage_base_px,
+          style,
+          &self.font_context,
+          self.viewport_size,
+        )
+      })
+      .unwrap_or(0.0);
+
+    let padding_left = resolve_length_for_width(
+      style.padding_left,
+      percentage_base_px,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let padding_right = resolve_length_for_width(
+      style.padding_right,
+      percentage_base_px,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let padding_top = resolve_length_for_width(
+      style.padding_top,
+      percentage_base_px,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let padding_bottom = resolve_length_for_width(
+      style.padding_bottom,
+      percentage_base_px,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let border_left = resolve_length_for_width(
+      style.border_left_width,
+      percentage_base_px,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let border_right = resolve_length_for_width(
+      style.border_right_width,
+      percentage_base_px,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let border_top = resolve_length_for_width(
+      style.border_top_width,
+      percentage_base_px,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    );
+    let border_bottom = resolve_length_for_width(
+      style.border_bottom_width,
+      percentage_base_px,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    );
+
+    let start_edge = padding_left + border_left;
+    let end_edge = padding_right + border_right;
+    let content_offset_y = padding_top + border_top;
+    let bottom_inset = padding_bottom + border_bottom;
+
+    let mut segments: Vec<RubySegmentInput> = Vec::new();
+    let mut current_base: Vec<BoxNode> = Vec::new();
+    let mut pending_annotations: Vec<RubyAnnotationGroup> = Vec::new();
+
+    for child in &box_node.children {
+      if is_annotation_box(child) {
+        pending_annotations.push(RubyAnnotationGroup {
+          nodes: vec![child.clone()],
+          style: child.style.clone(),
+        });
+        continue;
+      }
+
+      if !pending_annotations.is_empty() && !current_base.is_empty() {
+        segments.push(RubySegmentInput {
+          base: std::mem::take(&mut current_base),
+          annotations: std::mem::take(&mut pending_annotations),
+        });
+      }
+
+      current_base.push(child.clone());
+    }
+
+    if !current_base.is_empty() || !pending_annotations.is_empty() {
+      segments.push(RubySegmentInput {
+        base: current_base,
+        annotations: pending_annotations,
+      });
+    }
+
+    if segments.is_empty() {
+      segments.push(RubySegmentInput {
+        base: box_node.children.clone(),
+        annotations: Vec::new(),
+      });
+    }
+    let segments = merge_segments(segments, style.ruby_merge);
+
+    let strut_metrics = self.compute_strut_metrics(style);
+    let mut layouts: Vec<RubySegmentLayout> = Vec::new();
+    let mut max_baseline: f32 = 0.0;
+    let mut max_descent: f32 = 0.0;
+    let mut x_cursor: f32 = 0.0;
+    let align_mode = if matches!(style.ruby_position, crate::style::types::RubyPosition::InterCharacter)
+      && matches!(style.ruby_align, RubyAlign::Auto)
+    {
+      RubyAlign::SpaceBetween
+    } else {
+      style.ruby_align
+    };
+
+    for seg in segments {
+      let mut base_items = self.collect_items_for_nodes(
+        style.clone(),
+        &seg.base,
+        available_width,
+        available_height,
+        base_direction,
+        positioned_children,
+        bidi_stack,
+      )?;
+
+      if base_items.is_empty() && seg.annotations.is_empty() {
+        continue;
+      }
+
+      let base_width: f32 = base_items.iter().map(|i| i.width()).sum();
+      let base_metrics = compute_inline_box_metrics(&base_items, 0.0, 0.0, strut_metrics);
+
+      let mut annotation_lines: Vec<AnnotationLine> = Vec::new();
+      for ann in seg.annotations {
+        let mut items = self.collect_items_for_nodes(
+          ann.style.clone(),
+          &ann.nodes,
+          available_width,
+          available_height,
+          base_direction,
+          positioned_children,
+          bidi_stack,
+        )?;
+        if items.is_empty() {
+          continue;
+        }
+
+        if matches!(align_mode, RubyAlign::SpaceBetween | RubyAlign::SpaceAround)
+          || matches!(style.ruby_position, crate::style::types::RubyPosition::InterCharacter)
+        {
+          items = self.split_annotation_items_for_spacing(items);
+        }
+
+        let ann_fallback = self.compute_strut_metrics(&ann.style);
+        let metrics = compute_inline_box_metrics(&items, 0.0, 0.0, ann_fallback);
+        let width: f32 = items.iter().map(|i| i.width()).sum();
+        annotation_lines.push(AnnotationLine {
+          items,
+          metrics,
+          width,
+          fallback: ann_fallback,
+        });
+      }
+
+      let primary_on_top = !matches!(style.ruby_position, crate::style::types::RubyPosition::Under);
+      let mut top_line: Option<AnnotationLine> = None;
+      let mut bottom_line: Option<AnnotationLine> = None;
+
+      for (idx, line) in annotation_lines.into_iter().enumerate() {
+        let goes_top = match style.ruby_position {
+          crate::style::types::RubyPosition::Alternate => {
+            if idx % 2 == 0 {
+              primary_on_top
+            } else {
+              !primary_on_top
+            }
+          }
+          _ => {
+            if idx == 0 {
+              primary_on_top
+            } else {
+              !primary_on_top
+            }
+          }
+        };
+
+        if goes_top {
+          push_annotation_line(&mut top_line, line);
+        } else {
+          push_annotation_line(&mut bottom_line, line);
+        }
+      }
+
+      if let Some(prefer) = if top_line.is_some() && bottom_line.is_none() {
+        Some(TextEmphasisPosition::Under)
+      } else if bottom_line.is_some() && top_line.is_none() {
+        Some(TextEmphasisPosition::Over)
+      } else {
+        None
+      } {
+        self.adjust_emphasis_for_ruby(&mut base_items, Some(prefer));
+      }
+
+      let mut top_spacing: Option<RubyLineSpacing> = None;
+      let mut bottom_spacing: Option<RubyLineSpacing> = None;
+
+      let mut top_width = top_line.as_ref().map(|l| l.width).unwrap_or(0.0);
+      let mut bottom_width = bottom_line.as_ref().map(|l| l.width).unwrap_or(0.0);
+
+      let top_metrics = top_line.as_ref().map(|l| l.metrics);
+      let bottom_metrics = bottom_line.as_ref().map(|l| l.metrics);
+
+      let mut segment_width = base_width
+        .max(top_width)
+        .max(bottom_width)
+        .max(std::f32::EPSILON);
+
+      if let Some(line) = top_line.as_ref() {
+        let (spacing, adjusted_width) =
+          ruby_spacing_for_line(align_mode, segment_width, line.items.len(), top_width);
+        top_spacing = spacing;
+        top_width = adjusted_width;
+      }
+
+      if let Some(line) = bottom_line.as_ref() {
+        let (spacing, adjusted_width) = ruby_spacing_for_line(
+          align_mode,
+          segment_width,
+          line.items.len(),
+          bottom_width,
+        );
+        bottom_spacing = spacing;
+        bottom_width = adjusted_width;
+      }
+
+      segment_width = segment_width.max(top_width).max(bottom_width);
+
+      let top_height = top_metrics
+        .map(|m| m.height.max(m.baseline_offset + m.descent))
+        .unwrap_or(0.0);
+      let bottom_height = bottom_metrics
+        .map(|m| m.height.max(m.baseline_offset + m.descent))
+        .unwrap_or(0.0);
+      let base_height = base_metrics
+        .height
+        .max(base_metrics.baseline_offset + base_metrics.descent);
+      let baseline_offset = top_height + base_metrics.baseline_offset;
+      let segment_height = top_height + base_height + bottom_height;
+      let descent = (segment_height - baseline_offset).max(0.0);
+
+      let base_x = align_within(segment_width, base_width, align_mode);
+      let top_x = align_within(segment_width, top_width, align_mode);
+      let bottom_x = align_within(segment_width, bottom_width, align_mode);
+
+      let top_items = top_line.map(|l| l.items);
+      let bottom_items = bottom_line.map(|l| l.items);
+
+      layouts.push(RubySegmentLayout {
+        base_items,
+        base_metrics,
+        base_height,
+        base_width,
+        annotation_top: top_items,
+        annotation_bottom: bottom_items,
+        top_metrics,
+        bottom_metrics,
+        top_width,
+        bottom_width,
+        width: segment_width,
+        height: segment_height,
+        baseline_offset,
+        top_height,
+        bottom_height,
+        base_x,
+        top_x,
+        top_spacing,
+        bottom_x,
+        bottom_spacing,
+        offset_x: x_cursor,
+        offset_y: 0.0,
+      });
+
+      max_baseline = max_baseline.max(baseline_offset);
+      max_descent = max_descent.max(descent);
+      x_cursor += segment_width;
+    }
+
+    if layouts.is_empty() {
+      // Nothing to layout; treat as empty inline with strut metrics
+      let empty_metrics = BaselineMetrics::new(
+        strut_metrics.baseline_offset,
+        strut_metrics.height,
+        strut_metrics.ascent,
+        strut_metrics.descent,
+      );
+      let ruby_item = RubyItem {
+        segments: Vec::new(),
+        start_edge,
+        end_edge,
+        content_offset_y,
+        metrics: empty_metrics,
+        margin_left,
+        margin_right,
+        box_id: Some(box_node.id),
+        fragment_index: 0,
+        vertical_align: self.convert_vertical_align(
+          style.vertical_align,
+          style.font_size,
+          empty_metrics.line_height,
+        ),
+        direction: style.direction,
+        unicode_bidi: style.unicode_bidi,
+        style: style.clone(),
+      };
+      return Ok(InlineItem::Ruby(ruby_item));
+    }
+
+    let content_height = if max_baseline + max_descent > 0.0 {
+      max_baseline + max_descent
+    } else {
+      strut_metrics.height
+    };
+
+    let baseline_offset_total = content_offset_y + max_baseline;
+    let height = content_offset_y + content_height + bottom_inset;
+
+    for layout in &mut layouts {
+      layout.offset_y = max_baseline - layout.baseline_offset;
+    }
+
+    let metrics = BaselineMetrics {
+      baseline_offset: baseline_offset_total,
+      height,
+      ascent: baseline_offset_total,
+      descent: (height - baseline_offset_total).max(0.0),
+      line_gap: strut_metrics.line_gap,
+      line_height: height,
+      x_height: strut_metrics.x_height,
+    };
+
+    let ruby_item = RubyItem {
+      segments: layouts,
+      start_edge,
+      end_edge,
+      content_offset_y,
+      metrics,
+      margin_left,
+      margin_right,
+      box_id: Some(box_node.id),
+      fragment_index: 0,
+      vertical_align: self.convert_vertical_align(
+        style.vertical_align,
+        style.font_size,
+        metrics.line_height,
+      ),
+      direction: style.direction,
+      unicode_bidi: style.unicode_bidi,
+      style: style.clone(),
+    };
+
+    Ok(InlineItem::Ruby(ruby_item))
+  }
+
+  fn split_annotation_items_for_spacing(&self, items: Vec<InlineItem>) -> Vec<InlineItem> {
+    let mut out = Vec::new();
+    for item in items {
+      match item {
+        InlineItem::Text(t) => {
+          let parts = self.split_text_item_into_clusters(t);
+          out.extend(parts.into_iter().map(InlineItem::Text));
+        }
+        InlineItem::InlineBox(mut b) => {
+          b.children = self.split_annotation_items_for_spacing(b.children);
+          if b.start_edge.abs() < f32::EPSILON
+            && b.end_edge.abs() < f32::EPSILON
+            && b.content_offset_y.abs() < f32::EPSILON
+          {
+            out.extend(b.children.into_iter());
+          } else {
+            out.push(InlineItem::InlineBox(b));
+          }
+        }
+        other => out.push(other),
+      }
+    }
+    out
+  }
+
+  fn split_text_item_into_clusters(&self, item: TextItem) -> Vec<TextItem> {
+    let mut offsets: Vec<usize> = item
+      .cluster_byte_offsets()
+      .filter(|o| *o > 0 && *o < item.text.len())
+      .collect();
+    if offsets.is_empty() {
+      offsets = item
+        .text
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .filter(|o| *o > 0 && *o < item.text.len())
+        .collect();
+      if offsets.is_empty() {
+        return vec![item];
+      }
+    }
+    offsets.sort_unstable();
+
+    let mut parts = Vec::new();
+    let mut current = item;
+    let mut consumed = 0;
+
+    for offset in offsets {
+      if offset <= consumed {
+        continue;
+      }
+      let relative = offset - consumed;
+      if let Some((before, after)) =
+        current.split_at(relative, false, &self.pipeline, &self.font_context)
+      {
+        parts.push(before);
+        current = after;
+        consumed = offset;
+      } else {
+        break;
+      }
+    }
+
+    if !current.text.is_empty() {
+      parts.push(current);
+    }
+
+    parts
+  }
+
+  fn adjust_emphasis_for_ruby(
+    &self,
+    items: &mut [InlineItem],
+    prefer: Option<TextEmphasisPosition>,
+  ) {
+    let Some(target) = prefer else {
+      return;
+    };
+
+    for item in items {
+      match item {
+        InlineItem::Text(t) => {
+          if t.style.text_emphasis_style.is_none() {
+            continue;
+          }
+          let resolved = match t.style.text_emphasis_position {
+            TextEmphasisPosition::Auto => TextEmphasisPosition::Over,
+            other => other,
+          };
+          if resolved != target {
+            let mut style = (*t.style).clone();
+            style.text_emphasis_position = target;
+            t.style = Arc::new(style);
+          }
+        }
+        InlineItem::InlineBox(b) => {
+          self.adjust_emphasis_for_ruby(&mut b.children, prefer);
+        }
+        InlineItem::Ruby(r) => {
+          for seg in &mut r.segments {
+            self.adjust_emphasis_for_ruby(&mut seg.base_items, prefer);
+          }
+        }
+        _ => {}
+      }
+    }
   }
 
   /// Creates inline items from a text box, splitting preserved tabs into explicit tab items.
@@ -3597,6 +4245,7 @@ impl InlineFormattingContext {
           )
         }
       }
+      InlineItem::Ruby(_) => self.create_item_fragment(item, inline_pos, block_pos),
       InlineItem::InlineBlock(block_item) => {
         let mut fragment = block_item.fragment.clone();
         if inline_vertical {
@@ -3712,6 +4361,128 @@ impl InlineFormattingContext {
           children,
           box_item.style.clone(),
         )
+      }
+      InlineItem::Ruby(ruby_item) => {
+        let origin_x = x + ruby_item.margin_left;
+        let origin_y = y;
+        let mut children = Vec::new();
+
+        for segment in &ruby_item.segments {
+          let segment_x = origin_x + ruby_item.start_edge + segment.offset_x;
+          let segment_y = origin_y + ruby_item.content_offset_y + segment.offset_y;
+
+          if let Some(items) = &segment.annotation_top {
+            let spacing = segment
+              .top_spacing
+              .unwrap_or(crate::layout::contexts::inline::line_builder::RubyLineSpacing {
+                leading: 0.0,
+                gap: 0.0,
+              });
+            let mut cx = segment_x + segment.top_x + spacing.leading;
+            let mut line_children = Vec::new();
+            for (idx, child) in items.iter().enumerate() {
+              let fragment = self.create_item_fragment(child, cx, segment_y);
+              cx += child.width();
+              if spacing.gap > 0.0 && idx + 1 < items.len() {
+                cx += spacing.gap;
+              }
+              line_children.push(fragment);
+            }
+            let baseline = segment
+              .top_metrics
+              .as_ref()
+              .map(|m| m.baseline_offset)
+              .unwrap_or(0.0);
+            let mut line = FragmentNode::new(
+              Rect::from_xywh(
+                segment_x + segment.top_x,
+                segment_y,
+                segment.top_width,
+                segment.top_height,
+              ),
+              FragmentContent::Line { baseline },
+              line_children,
+            );
+            line.baseline = Some(baseline);
+            children.push(line);
+          }
+
+          let base_y = segment_y + segment.top_height;
+          let mut base_children = Vec::new();
+          let mut cx = segment_x + segment.base_x;
+          for child in &segment.base_items {
+            let fragment = self.create_item_fragment(child, cx, base_y);
+            cx += child.width();
+            base_children.push(fragment);
+          }
+          let mut base_line = FragmentNode::new(
+            Rect::from_xywh(
+              segment_x + segment.base_x,
+              base_y,
+              segment.base_width,
+              segment.base_height,
+            ),
+            FragmentContent::Line {
+              baseline: segment.base_metrics.baseline_offset,
+            },
+            base_children,
+          );
+          base_line.baseline = Some(segment.base_metrics.baseline_offset);
+          children.push(base_line);
+
+          if let Some(items) = &segment.annotation_bottom {
+            let bottom_y = base_y + segment.base_height;
+            let mut bottom_children = Vec::new();
+            let spacing = segment
+              .bottom_spacing
+              .unwrap_or(crate::layout::contexts::inline::line_builder::RubyLineSpacing {
+                leading: 0.0,
+                gap: 0.0,
+              });
+            let mut cx = segment_x + segment.bottom_x + spacing.leading;
+            for (idx, child) in items.iter().enumerate() {
+              let fragment = self.create_item_fragment(child, cx, bottom_y);
+              cx += child.width();
+              if spacing.gap > 0.0 && idx + 1 < items.len() {
+                cx += spacing.gap;
+              }
+              bottom_children.push(fragment);
+            }
+            let baseline = segment
+              .bottom_metrics
+              .as_ref()
+              .map(|m| m.baseline_offset)
+              .unwrap_or(0.0);
+            let mut bottom_line = FragmentNode::new(
+              Rect::from_xywh(
+                segment_x + segment.bottom_x,
+                bottom_y,
+                segment.bottom_width,
+                segment.bottom_height,
+              ),
+              FragmentContent::Line { baseline },
+              bottom_children,
+            );
+            bottom_line.baseline = Some(baseline);
+            children.push(bottom_line);
+          }
+        }
+
+        let bounds = Rect::from_xywh(
+          origin_x,
+          origin_y,
+          ruby_item.intrinsic_width(),
+          ruby_item.metrics.height,
+        );
+        let mut fragment = FragmentNode::new_inline_styled(
+          bounds,
+          ruby_item.box_id.unwrap_or(0),
+          children,
+          ruby_item.style.clone(),
+        );
+        fragment.fragment_index = ruby_item.fragment_index;
+        fragment.baseline = Some(ruby_item.metrics.baseline_offset);
+        fragment
       }
       InlineItem::InlineBlock(block_item) => {
         let mut fragment = block_item.fragment.clone();
@@ -3847,6 +4618,11 @@ impl InlineFormattingContext {
           tracker.add_width(block.total_width());
           tracker.break_segment();
         }
+        InlineItem::Ruby(ruby) => {
+          tracker.break_segment();
+          tracker.add_width(ruby.width());
+          tracker.break_segment();
+        }
         InlineItem::Replaced(replaced) => {
           tracker.break_segment();
           tracker.add_width(replaced.total_width());
@@ -3876,6 +4652,9 @@ impl InlineFormattingContext {
         }
         InlineItem::InlineBlock(block) => {
           tracker.add_width(block.total_width());
+        }
+        InlineItem::Ruby(ruby) => {
+          tracker.add_width(ruby.width());
         }
         InlineItem::Replaced(replaced) => {
           tracker.add_width(replaced.total_width());
@@ -4049,6 +4828,61 @@ fn horizontal_padding_and_borders(
     font_context,
     viewport,
   )
+}
+
+fn align_within(container: f32, inner: f32, align: RubyAlign) -> f32 {
+  if container <= inner {
+    return 0.0;
+  }
+  match align {
+    RubyAlign::Start => 0.0,
+    RubyAlign::Center | RubyAlign::Auto => (container - inner) / 2.0,
+    RubyAlign::SpaceBetween | RubyAlign::SpaceAround => 0.0,
+  }
+}
+
+fn ruby_spacing_for_line(
+  align: RubyAlign,
+  container_width: f32,
+  item_count: usize,
+  line_width: f32,
+) -> (Option<RubyLineSpacing>, f32) {
+  if !matches!(align, RubyAlign::SpaceBetween | RubyAlign::SpaceAround) || item_count <= 1 {
+    return (None, line_width);
+  }
+
+  let leftover = (container_width - line_width).max(0.0);
+  if leftover <= 0.0 {
+    return (None, line_width);
+  }
+
+  match align {
+    RubyAlign::SpaceBetween => {
+      let gaps = (item_count.saturating_sub(1)) as f32;
+      if gaps <= 0.0 {
+        return (None, line_width);
+      }
+      let gap = leftover / gaps;
+      (
+        Some(RubyLineSpacing {
+          leading: 0.0,
+          gap,
+        }),
+        line_width + leftover,
+      )
+    }
+    RubyAlign::SpaceAround => {
+      let gap = leftover / (item_count as f32 + 1.0);
+      (
+        Some(RubyLineSpacing {
+          leading: gap,
+          gap,
+        }),
+        line_width + leftover,
+      )
+    }
+    _ => (None, line_width),
+  }
 }
 
 fn compute_inline_box_metrics(
@@ -5979,6 +6813,7 @@ impl InlineFormattingContext {
                     b.children.len(),
                     text_child_count(&b.children)
                   ),
+                  InlineItem::Ruby(_) => "Ruby".to_string(),
                   InlineItem::InlineBlock(_) => "InlineBlock".to_string(),
                   InlineItem::Replaced(_) => "Replaced".to_string(),
                   InlineItem::Floating(_) => "Floating".to_string(),
@@ -6019,6 +6854,7 @@ impl InlineFormattingContext {
               InlineItem::Replaced(r) => {
                 format!("Replaced({:.1}x{:.1})", r.width, r.height)
               }
+              InlineItem::Ruby(r) => format!("Ruby({} segments)", r.segments.len()),
               InlineItem::Floating(_) => "Floating".to_string(),
             }
           }
@@ -6745,6 +7581,11 @@ fn first_char_of_item(item: &InlineItem) -> Option<char> {
     InlineItem::Text(t) => t.text.chars().next(),
     InlineItem::Tab(_) => Some('\t'),
     InlineItem::InlineBox(b) => b.children.iter().find_map(first_char_of_item),
+    InlineItem::Ruby(r) => r
+      .segments
+      .iter()
+      .find_map(|seg| seg.base_items.iter().find_map(first_char_of_item))
+      .or(Some(OBJECT_REPLACEMENT)),
     InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
       Some(OBJECT_REPLACEMENT)
     }
@@ -6757,6 +7598,12 @@ fn last_char_of_item(item: &InlineItem) -> Option<char> {
     InlineItem::Text(t) => t.text.chars().next_back(),
     InlineItem::Tab(_) => Some('\t'),
     InlineItem::InlineBox(b) => b.children.iter().rev().find_map(last_char_of_item),
+    InlineItem::Ruby(r) => r
+      .segments
+      .iter()
+      .rev()
+      .find_map(|seg| seg.base_items.iter().rev().find_map(last_char_of_item))
+      .or(Some(OBJECT_REPLACEMENT)),
     InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
       Some(OBJECT_REPLACEMENT)
     }
@@ -6770,6 +7617,10 @@ fn is_expandable_space(ch: char) -> bool {
 fn is_marker_item(item: &InlineItem) -> bool {
   matches!(item, InlineItem::Text(t) if t.is_marker)
     || matches!(item, InlineItem::Replaced(r) if r.is_marker)
+    || matches!(item, InlineItem::Ruby(r) if r
+      .segments
+      .iter()
+      .any(|seg| seg.base_items.iter().any(is_marker_item)))
 }
 
 fn resolve_text_align_for_line(
@@ -7150,6 +8001,13 @@ fn determine_paragraph_direction(items: &[InlineItem]) -> Option<crate::style::t
           collect_text(child, out);
         }
       }
+      InlineItem::Ruby(r) => {
+        for seg in &r.segments {
+          for child in &seg.base_items {
+            collect_text(child, out);
+          }
+        }
+      }
       InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
         out.push(OBJECT_REPLACEMENT);
       }
@@ -7329,6 +8187,18 @@ pub(crate) fn apply_plaintext_paragraph_direction(
       InlineItem::InlineBlock(b) => {
         b.direction = direction;
       }
+      InlineItem::Ruby(r) => {
+        r.direction = direction;
+        for seg in &mut r.segments {
+          apply_plaintext_paragraph_direction(&mut seg.base_items, direction);
+          if let Some(items) = &mut seg.annotation_top {
+            apply_plaintext_paragraph_direction(items, direction);
+          }
+          if let Some(items) = &mut seg.annotation_bottom {
+            apply_plaintext_paragraph_direction(items, direction);
+          }
+        }
+      }
       InlineItem::Replaced(r) => {
         r.direction = direction;
       }
@@ -7402,6 +8272,10 @@ fn item_has_interchar_opportunity(item: &InlineItem) -> bool {
       t.cluster_byte_offsets().nth(1).is_some() || t.text.chars().count() > 1
     }
     InlineItem::InlineBox(b) => b.children.iter().any(item_has_interchar_opportunity),
+    InlineItem::Ruby(r) => r
+      .segments
+      .iter()
+      .any(|seg| seg.base_items.iter().any(item_has_interchar_opportunity)),
     InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
     InlineItem::Tab(_) => false,
   }
@@ -7411,6 +8285,10 @@ fn item_has_space_boundary(item: &InlineItem) -> bool {
   match item {
     InlineItem::Text(t) => text_has_space_boundary(&t.text),
     InlineItem::InlineBox(b) => b.children.iter().any(item_has_space_boundary),
+    InlineItem::Ruby(r) => r
+      .segments
+      .iter()
+      .any(|seg| seg.base_items.iter().any(item_has_space_boundary)),
     InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
     InlineItem::Tab(_) => false,
   }
@@ -7468,6 +8346,13 @@ fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
     InlineItem::InlineBox(b) => {
       for child in &b.children {
         accumulate_scripts(child, counts);
+      }
+    }
+    InlineItem::Ruby(r) => {
+      for seg in &r.segments {
+        for child in &seg.base_items {
+          accumulate_scripts(child, counts);
+        }
       }
     }
     InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {}
@@ -8783,6 +9668,11 @@ mod tests {
         match item {
           InlineItem::Text(t) => out.push((t.text.clone(), t.advance_for_layout)),
           InlineItem::InlineBox(b) => collect_texts(&b.children, out),
+          InlineItem::Ruby(r) => {
+            for seg in &r.segments {
+              collect_texts(&seg.base_items, out);
+            }
+          }
           _ => {}
         }
       }

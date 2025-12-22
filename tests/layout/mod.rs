@@ -15,6 +15,7 @@ mod nested_absolute;
 mod noscript_layout;
 mod paged_media;
 mod render_wrap;
+mod ruby;
 mod scrollbar_gutter;
 mod shape_outside;
 mod sideways_lr_regressions;

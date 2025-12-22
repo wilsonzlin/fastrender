@@ -85,6 +85,9 @@ pub enum InlineItem {
   /// An inline-block box (atomic inline)
   InlineBlock(InlineBlockItem),
 
+  /// A ruby annotation container (ruby, ruby-base, etc.)
+  Ruby(RubyItem),
+
   /// A replaced element (img, canvas, etc.)
   Replaced(ReplacedItem),
 
@@ -100,6 +103,7 @@ impl InlineItem {
       InlineItem::Tab(t) => t.width(),
       InlineItem::InlineBox(b) => b.width(),
       InlineItem::InlineBlock(b) => b.total_width(),
+      InlineItem::Ruby(r) => r.width(),
       InlineItem::Replaced(r) => r.total_width(),
       InlineItem::Floating(_) => 0.0,
     }
@@ -112,6 +116,7 @@ impl InlineItem {
       InlineItem::Tab(t) => t.width(),
       InlineItem::InlineBox(b) => b.width(),
       InlineItem::InlineBlock(b) => b.width,
+      InlineItem::Ruby(r) => r.intrinsic_width(),
       InlineItem::Replaced(r) => r.intrinsic_width(),
       InlineItem::Floating(_) => 0.0,
     }
@@ -124,6 +129,7 @@ impl InlineItem {
       InlineItem::Tab(t) => t.metrics,
       InlineItem::InlineBox(b) => b.metrics,
       InlineItem::InlineBlock(b) => b.metrics,
+      InlineItem::Ruby(r) => r.metrics,
       InlineItem::Replaced(r) => r.metrics,
       InlineItem::Floating(f) => f.metrics,
     }
@@ -136,6 +142,7 @@ impl InlineItem {
       InlineItem::Tab(t) => t.vertical_align,
       InlineItem::InlineBox(b) => b.vertical_align,
       InlineItem::InlineBlock(b) => b.vertical_align,
+      InlineItem::Ruby(r) => r.vertical_align,
       InlineItem::Replaced(r) => r.vertical_align,
       InlineItem::Floating(f) => f.vertical_align,
     }
@@ -152,6 +159,7 @@ impl InlineItem {
       InlineItem::Tab(t) => t.direction,
       InlineItem::InlineBox(b) => b.direction,
       InlineItem::InlineBlock(b) => b.direction,
+      InlineItem::Ruby(r) => r.direction,
       InlineItem::Replaced(r) => r.direction,
       InlineItem::Floating(f) => f.direction,
     }
@@ -163,6 +171,7 @@ impl InlineItem {
       InlineItem::Tab(t) => t.unicode_bidi,
       InlineItem::InlineBox(b) => b.unicode_bidi,
       InlineItem::InlineBlock(b) => b.unicode_bidi,
+      InlineItem::Ruby(r) => r.unicode_bidi,
       InlineItem::Replaced(r) => r.unicode_bidi,
       InlineItem::Floating(f) => f.unicode_bidi,
     }
@@ -1157,6 +1166,105 @@ impl InlineBlockItem {
   }
 }
 
+/// A laid out ruby segment (base + optional annotations)
+#[derive(Debug, Clone)]
+pub struct RubySegmentLayout {
+  /// Base inline items for this segment
+  pub base_items: Vec<InlineItem>,
+  /// Optional annotation above the base
+  pub annotation_top: Option<Vec<InlineItem>>,
+  /// Optional annotation below the base
+  pub annotation_bottom: Option<Vec<InlineItem>>,
+  /// Metrics for the base line
+  pub base_metrics: BaselineMetrics,
+  /// Content height for the base line
+  pub base_height: f32,
+  /// Width of the base content
+  pub base_width: f32,
+  /// Metrics for the top annotation
+  pub top_metrics: Option<BaselineMetrics>,
+  /// Metrics for the bottom annotation
+  pub bottom_metrics: Option<BaselineMetrics>,
+  /// Width of the top annotation line
+  pub top_width: f32,
+  /// Width of the bottom annotation line
+  pub bottom_width: f32,
+  /// Total width for this segment (max of base/annotations)
+  pub width: f32,
+  /// Total height for this segment
+  pub height: f32,
+  /// Baseline offset for the base relative to the segment top
+  pub baseline_offset: f32,
+  /// Height occupied by the top annotation
+  pub top_height: f32,
+  /// Height occupied by the bottom annotation
+  pub bottom_height: f32,
+  /// Horizontal offset for the base within the segment
+  pub base_x: f32,
+  /// Horizontal offset for the top annotation
+  pub top_x: f32,
+  /// Optional spacing distribution for the top annotation line
+  pub top_spacing: Option<RubyLineSpacing>,
+  /// Horizontal offset for the bottom annotation
+  pub bottom_x: f32,
+  /// Optional spacing distribution for the bottom annotation line
+  pub bottom_spacing: Option<RubyLineSpacing>,
+  /// Horizontal offset of this segment within the ruby container
+  pub offset_x: f32,
+  /// Vertical offset applied to align baselines between segments
+  pub offset_y: f32,
+}
+
+/// Spacing distribution for ruby annotation lines when using space-between/space-around alignment.
+#[derive(Debug, Clone, Copy)]
+pub struct RubyLineSpacing {
+  /// Leading padding before the first item
+  pub leading: f32,
+  /// Gap inserted between consecutive annotation items
+  pub gap: f32,
+}
+
+/// A ruby inline item representing a <ruby> container
+#[derive(Debug, Clone)]
+pub struct RubyItem {
+  /// Segments that compose the ruby container
+  pub segments: Vec<RubySegmentLayout>,
+  /// Box start edge (padding+border)
+  pub start_edge: f32,
+  /// Box end edge (padding+border)
+  pub end_edge: f32,
+  /// Top padding/border inset
+  pub content_offset_y: f32,
+  /// Metrics for the ruby box
+  pub metrics: BaselineMetrics,
+  /// Horizontal margins
+  pub margin_left: f32,
+  pub margin_right: f32,
+  /// Optional source box id
+  pub box_id: Option<usize>,
+  /// Fragment index for split ruby boxes
+  pub fragment_index: usize,
+  /// Vertical alignment
+  pub vertical_align: VerticalAlign,
+  /// Bidi direction
+  pub direction: Direction,
+  /// unicode-bidi behavior
+  pub unicode_bidi: UnicodeBidi,
+  /// Style used for painting backgrounds/borders
+  pub style: Arc<ComputedStyle>,
+}
+
+impl RubyItem {
+  pub fn width(&self) -> f32 {
+    self.margin_left + self.intrinsic_width() + self.margin_right
+  }
+
+  pub fn intrinsic_width(&self) -> f32 {
+    let segment_width: f32 = self.segments.iter().map(|s| s.width).sum();
+    self.start_edge + segment_width + self.end_edge
+  }
+}
+
 fn collect_line_baselines(
   fragment: &FragmentNode,
   y_offset: f32,
@@ -1642,6 +1750,7 @@ impl<'a> LineBuilder<'a> {
       InlineItem::Tab(_) => "tab",
       InlineItem::InlineBox(_) => "inline-box",
       InlineItem::InlineBlock(_) => "inline-block",
+      InlineItem::Ruby(_) => "ruby",
       InlineItem::Replaced(_) => "replaced",
       InlineItem::Floating(_) => "floating",
     };
@@ -1961,6 +2070,20 @@ impl<'a> LineBuilder<'a> {
           true
         } else {
           false
+        }
+      }
+      InlineItem::Ruby(r) => {
+        if matches!(r.unicode_bidi, UnicodeBidi::Plaintext) {
+          *saw_plaintext = true;
+          true
+        } else {
+          r
+            .segments
+            .iter()
+            .all(|seg| seg
+              .base_items
+              .iter()
+              .all(|c| Self::item_allows_plaintext(c, saw_plaintext)))
         }
       }
       InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Tab(_) => true,
@@ -3105,11 +3228,10 @@ mod tests {
       })
       .collect();
 
-    assert_eq!(texts, vec![
-      "א".to_string(),
-      "a".to_string(),
-      "b".to_string()
-    ]);
+    assert_eq!(
+      texts,
+      vec!["א".to_string(), "a".to_string(), "b".to_string()]
+    );
   }
 
   #[test]
@@ -3255,11 +3377,10 @@ mod tests {
       })
       .collect();
 
-    assert_eq!(texts, vec![
-      "ABC ".to_string(),
-      "גבא".to_string(),
-      " DEF".to_string()
-    ]);
+    assert_eq!(
+      texts,
+      vec!["ABC ".to_string(), "גבא".to_string(), " DEF".to_string()]
+    );
   }
 
   #[test]
@@ -3304,11 +3425,10 @@ mod tests {
 
     // Children stay adjacent and isolate prevents surrounding runs from interleaving; RTL order places the later
     // child earlier in visual order.
-    assert_eq!(texts, vec![
-      "L ".to_string(),
-      "גבא".to_string(),
-      " R".to_string()
-    ]);
+    assert_eq!(
+      texts,
+      vec!["L ".to_string(), "גבא".to_string(), " R".to_string()]
+    );
   }
 
   #[test]
@@ -3353,19 +3473,21 @@ mod tests {
       })
       .collect();
 
-    assert_eq!(texts, vec![
-      "A ".to_string(),
-      "cba".to_string(),
-      " C".to_string()
-    ]);
+    assert_eq!(
+      texts,
+      vec!["A ".to_string(), "cba".to_string(), " C".to_string()]
+    );
   }
 
   #[test]
   fn explicit_bidi_context_resets_override_on_isolate() {
-    let ctx = explicit_bidi_context(Direction::Ltr, &[
-      (UnicodeBidi::BidiOverride, Direction::Rtl),
-      (UnicodeBidi::Isolate, Direction::Ltr),
-    ])
+    let ctx = explicit_bidi_context(
+      Direction::Ltr,
+      &[
+        (UnicodeBidi::BidiOverride, Direction::Rtl),
+        (UnicodeBidi::Isolate, Direction::Ltr),
+      ],
+    )
     .expect("should compute explicit context");
     assert!(!ctx.override_all, "override should not leak past isolates");
     assert!(
@@ -3376,10 +3498,10 @@ mod tests {
 
   #[test]
   fn explicit_bidi_context_sets_override_for_isolate_override() {
-    let ctx = explicit_bidi_context(Direction::Ltr, &[(
-      UnicodeBidi::IsolateOverride,
+    let ctx = explicit_bidi_context(
       Direction::Ltr,
-    )])
+      &[(UnicodeBidi::IsolateOverride, Direction::Ltr)],
+    )
     .expect("should compute explicit context");
     assert!(
       ctx.override_all,
@@ -3593,11 +3715,10 @@ mod tests {
       })
       .collect();
 
-    assert_eq!(texts, vec![
-      "L ".to_string(),
-      "אמ".to_string(),
-      " R".to_string()
-    ]);
+    assert_eq!(
+      texts,
+      vec!["L ".to_string(), "אמ".to_string(), " R".to_string()]
+    );
   }
 
   #[test]
@@ -3623,11 +3744,10 @@ mod tests {
       })
       .collect();
 
-    assert_eq!(texts, vec![
-      "A ".to_string(),
-      "אבג".to_string(),
-      " C".to_string()
-    ]);
+    assert_eq!(
+      texts,
+      vec!["A ".to_string(), "אבג".to_string(), " C".to_string()]
+    );
   }
 
   #[test]
@@ -3690,11 +3810,10 @@ mod tests {
         _ => String::new(),
       })
       .collect();
-    assert_eq!(para2, vec![
-      "אבג".to_string(),
-      " ".to_string(),
-      "abc".to_string()
-    ]);
+    assert_eq!(
+      para2,
+      vec!["אבג".to_string(), " ".to_string(), "abc".to_string()]
+    );
   }
 
   #[test]
@@ -3765,11 +3884,10 @@ mod tests {
       .collect();
 
     // Outer isolate stays a single unit; inner override reverses its content (yx).
-    assert_eq!(texts, vec![
-      "L ".to_string(),
-      "byxa".to_string(),
-      " R".to_string()
-    ]);
+    assert_eq!(
+      texts,
+      vec!["L ".to_string(), "byxa".to_string(), " R".to_string()]
+    );
   }
 
   #[test]
@@ -4336,6 +4454,11 @@ mod tests {
       InlineItem::Text(t) => t.text.clone(),
       InlineItem::Tab(_) => "\t".to_string(),
       InlineItem::InlineBox(b) => b.children.iter().map(flatten_text).collect(),
+      InlineItem::Ruby(r) => r
+        .segments
+        .iter()
+        .map(|seg| seg.base_items.iter().map(flatten_text).collect::<String>())
+        .collect(),
       InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
         String::from("\u{FFFC}")
       }

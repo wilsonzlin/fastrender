@@ -715,6 +715,12 @@ impl BoxGenerator {
 
       Display::Inline => BoxNode::new_inline(node.style.clone(), child_boxes),
 
+      Display::Ruby
+      | Display::RubyBase
+      | Display::RubyText
+      | Display::RubyBaseContainer
+      | Display::RubyTextContainer => BoxNode::new_inline(node.style.clone(), child_boxes),
+
       Display::InlineBlock => BoxNode::new_inline_block(
         node.style.clone(),
         FormattingContextType::Block,
@@ -1712,7 +1718,12 @@ fn generate_boxes_for_styled(
     Display::Block | Display::FlowRoot | Display::ListItem => {
       BoxNode::new_block(style, fc_type, children)
     }
-    Display::Inline => BoxNode::new_inline(style, children),
+    Display::Inline
+    | Display::Ruby
+    | Display::RubyBase
+    | Display::RubyText
+    | Display::RubyBaseContainer
+    | Display::RubyTextContainer => BoxNode::new_inline(style, children),
     Display::InlineBlock => BoxNode::new_inline_block(style, fc_type, children),
     Display::Flex | Display::InlineFlex => {
       BoxNode::new_block(style, FormattingContextType::Flex, children)

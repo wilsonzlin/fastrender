@@ -2968,6 +2968,9 @@ fn apply_property_from_source(
     "text-emphasis-style" => styles.text_emphasis_style = source.text_emphasis_style.clone(),
     "text-emphasis-color" => styles.text_emphasis_color = source.text_emphasis_color,
     "text-emphasis-position" => styles.text_emphasis_position = source.text_emphasis_position,
+    "ruby-position" => styles.ruby_position = source.ruby_position,
+    "ruby-align" => styles.ruby_align = source.ruby_align,
+    "ruby-merge" => styles.ruby_merge = source.ruby_merge,
     "text-emphasis" => {
       styles.text_emphasis_style = source.text_emphasis_style.clone();
       styles.text_emphasis_color = source.text_emphasis_color;
@@ -6312,6 +6315,39 @@ pub fn apply_declaration_with_base(
         } else {
           styles.text_emphasis_color = None;
         }
+      }
+    }
+    "ruby-position" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        styles.ruby_position = match kw.as_str() {
+          "over" => RubyPosition::Over,
+          "under" => RubyPosition::Under,
+          "inter-character" => RubyPosition::InterCharacter,
+          "alternate" => RubyPosition::Alternate,
+          _ => styles.ruby_position,
+        };
+      }
+    }
+    "ruby-align" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        styles.ruby_align = match kw.as_str() {
+          "auto" => RubyAlign::Auto,
+          "start" => RubyAlign::Start,
+          "center" => RubyAlign::Center,
+          "space-between" => RubyAlign::SpaceBetween,
+          "space-around" => RubyAlign::SpaceAround,
+          _ => styles.ruby_align,
+        };
+      }
+    }
+    "ruby-merge" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        styles.ruby_merge = match kw.as_str() {
+          "separate" => RubyMerge::Separate,
+          "collapse" => RubyMerge::Collapse,
+          "auto" => RubyMerge::Auto,
+          _ => styles.ruby_merge,
+        };
       }
     }
     "text-decoration" => {

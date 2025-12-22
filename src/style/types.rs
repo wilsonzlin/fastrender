@@ -2239,6 +2239,51 @@ impl Default for TextEmphasisPosition {
   }
 }
 
+/// ruby-position values (CSS Ruby Layout Level 1)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RubyPosition {
+  Over,
+  Under,
+  InterCharacter,
+  Alternate,
+}
+
+impl Default for RubyPosition {
+  fn default() -> Self {
+    RubyPosition::Over
+  }
+}
+
+/// ruby-align values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RubyAlign {
+  Auto,
+  Start,
+  Center,
+  SpaceBetween,
+  SpaceAround,
+}
+
+impl Default for RubyAlign {
+  fn default() -> Self {
+    RubyAlign::Auto
+  }
+}
+
+/// ruby-merge values
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RubyMerge {
+  Separate,
+  Collapse,
+  Auto,
+}
+
+impl Default for RubyMerge {
+  fn default() -> Self {
+    RubyMerge::Separate
+  }
+}
+
 /// list-style-type values
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListStyleType {

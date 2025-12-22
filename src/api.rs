@@ -2900,6 +2900,9 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
   hash_enum_discriminant(&style.text_combine_upright, &mut h);
   hash_tab_size(&style.tab_size, &mut h);
   hash_vertical_align(&style.vertical_align, &mut h);
+  hash_enum_discriminant(&style.ruby_position, &mut h);
+  hash_enum_discriminant(&style.ruby_align, &mut h);
+  hash_enum_discriminant(&style.ruby_merge, &mut h);
   style.letter_spacing.to_bits().hash(&mut h);
   style.word_spacing.to_bits().hash(&mut h);
   hash_enum_discriminant(&style.white_space, &mut h);

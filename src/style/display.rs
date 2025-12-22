@@ -63,6 +63,31 @@ pub enum Display {
   /// - Inner: flow (participates in parent's inline formatting context)
   Inline,
 
+  /// Ruby container box
+  ///
+  /// Corresponds to `display: ruby`
+  Ruby,
+
+  /// Ruby base box
+  ///
+  /// Corresponds to `display: ruby-base`
+  RubyBase,
+
+  /// Ruby text box
+  ///
+  /// Corresponds to `display: ruby-text`
+  RubyText,
+
+  /// Ruby base container
+  ///
+  /// Corresponds to `display: ruby-base-container`
+  RubyBaseContainer,
+
+  /// Ruby text container
+  ///
+  /// Corresponds to `display: ruby-text-container`
+  RubyTextContainer,
+
   /// Inline-level box that establishes block formatting context
   ///
   /// Corresponds to `display: inline-block`
@@ -238,6 +263,11 @@ impl Display {
     matches!(
       self,
       Display::Inline
+        | Display::Ruby
+        | Display::RubyBase
+        | Display::RubyText
+        | Display::RubyBaseContainer
+        | Display::RubyTextContainer
         | Display::InlineBlock
         | Display::InlineFlex
         | Display::InlineGrid
@@ -346,6 +376,11 @@ impl Display {
     match self {
       Display::None => OuterDisplay::None,
       Display::Inline
+      | Display::Ruby
+      | Display::RubyBase
+      | Display::RubyText
+      | Display::RubyBaseContainer
+      | Display::RubyTextContainer
       | Display::InlineBlock
       | Display::InlineFlex
       | Display::InlineGrid
@@ -394,6 +429,11 @@ impl Display {
       "none" => Ok(Display::None),
       "block" => Ok(Display::Block),
       "inline" => Ok(Display::Inline),
+      "ruby" => Ok(Display::Ruby),
+      "ruby-base" => Ok(Display::RubyBase),
+      "ruby-text" => Ok(Display::RubyText),
+      "ruby-base-container" => Ok(Display::RubyBaseContainer),
+      "ruby-text-container" => Ok(Display::RubyTextContainer),
       "inline-block" => Ok(Display::InlineBlock),
       "flex" => Ok(Display::Flex),
       "inline-flex" => Ok(Display::InlineFlex),
@@ -506,6 +546,11 @@ impl fmt::Display for Display {
       Display::None => write!(f, "none"),
       Display::Block => write!(f, "block"),
       Display::Inline => write!(f, "inline"),
+      Display::Ruby => write!(f, "ruby"),
+      Display::RubyBase => write!(f, "ruby-base"),
+      Display::RubyText => write!(f, "ruby-text"),
+      Display::RubyBaseContainer => write!(f, "ruby-base-container"),
+      Display::RubyTextContainer => write!(f, "ruby-text-container"),
       Display::InlineBlock => write!(f, "inline-block"),
       Display::Flex => write!(f, "flex"),
       Display::InlineFlex => write!(f, "inline-flex"),
