@@ -52,6 +52,6 @@
 - Font-display timing constants are shortened for tests (block/auto ~300ms; fallback block 100ms + 400ms swap; optional 100ms). Block/auto wait only through the block window, loads continue asynchronously, and initial shaping may use fallbacks until web fonts finish loading.
 - Scroll snapping requires providing element offsets in `ScrollState.elements`; `ScrollSnapResult.updates` lists per-container behavior. Scroll chaining processes innermost→outermost containers, honors `overscroll-behavior`, clamps to bounds, and applies snap targets during chaining.
 - Display-list masks currently handle gradient-generated sources; URL mask images remain unhandled on the display-list path.
-- Animations/selection/cursor motion path updates from pending workers are not integrated (workers 21, 29, 30, 32, 4, 7, 3 not merged).
+- Animations/selection/cursor motion path/content-visibility updates from pending workers are not integrated (workers 21, 29, 30, 32, 4, 7, 3, 13 not merged).
 - CSS math: trig/inverse trig expect angle inputs; nonlinear math on lengths requires simple single-unit lengths (unit-mismatched expressions error).
 - Inline SVG serialization inlines only document `<style>` CSS (no external/imported sheets), applies computed fonts/colors to the root, and falls back to painting foreignObject children when unsupported.
