@@ -501,8 +501,8 @@ impl AbsoluteLayout {
       (Some(l), Some(w), Some(_r)) => {
         // For LTR, ignore right value
         let x = l + margin_left + border_left + padding_left;
-        // Overconstrained case; auto margins are treated as 0 per CSS 2.1 §10.3.7.
-        (x, w, true)
+        // Overconstrained only when margins are definite; auto margins may still resolve the equation.
+        (x, w, !margin_left_auto && !margin_right_auto)
       }
 
       // Case 2: left and width specified, right is auto
@@ -683,8 +683,8 @@ impl AbsoluteLayout {
       // All three specified (overconstrained) - ignore bottom
       (Some(t), Some(h), Some(_b)) => {
         let y = t + margin_top + border_top + padding_top;
-        // Overconstrained case; auto margins become 0 per CSS 2.1 §10.6.4.
-        (y, h, true)
+        // Overconstrained only when margins are definite; auto margins may still resolve the equation.
+        (y, h, !margin_top_auto && !margin_bottom_auto)
       }
 
       // top and height specified

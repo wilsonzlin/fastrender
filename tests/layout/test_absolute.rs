@@ -777,7 +777,7 @@ fn test_absolute_vertical_auto_margins_center() {
 }
 
 #[test]
-fn test_absolute_overconstrained_auto_margins_not_centered() {
+fn test_absolute_overconstrained_with_auto_margins_centers() {
   let layout = AbsoluteLayout::new();
 
   let mut style = ComputedStyle::default();
@@ -785,7 +785,7 @@ fn test_absolute_overconstrained_auto_margins_not_centered() {
   style.left = Some(Length::px(20.0));
   style.right = Some(Length::px(30.0));
   style.width = Some(Length::px(100.0));
-  // Auto margins (None) should become 0 in overconstrained case (ignore right in LTR)
+  // Auto margins (None) should absorb remaining space even when left/right/width are specified.
   style.margin_left = None;
   style.margin_right = None;
   style.border_left_width = Length::px(0.0);
@@ -799,9 +799,9 @@ fn test_absolute_overconstrained_auto_margins_not_centered() {
 
   let result = layout.layout_absolute(&input, &cb).unwrap();
 
-  assert_eq!(result.position.x, 20.0);
-  assert_eq!(result.margins.left, 0.0);
-  assert_eq!(result.margins.right, 0.0);
+  assert!((result.position.x - 145.0).abs() < 0.001);
+  assert!((result.margins.left - 125.0).abs() < 0.001);
+  assert!((result.margins.right - 125.0).abs() < 0.001);
 }
 
 // ============================================================================
