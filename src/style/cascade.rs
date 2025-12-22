@@ -43,8 +43,8 @@ use crate::style::types::PointerEvents;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
-use crate::style::TopLayerKind;
 use crate::style::Direction;
+use crate::style::TopLayerKind;
 use cssparser::ToCss;
 use selectors::context::IncludeStartingStyle;
 use selectors::context::QuirksMode;
@@ -57,9 +57,9 @@ use selectors::parser::Selector;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -83,7 +83,10 @@ static CASCADE_PROFILE_PSEUDO_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
 
 fn attr_truthy_value(value: &str) -> bool {
-  matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "on" | "open")
+  matches!(
+    value.to_ascii_lowercase().as_str(),
+    "true" | "1" | "yes" | "on" | "open"
+  )
 }
 
 fn attr_truthy(node: &DomNode, name: &str) -> bool {
@@ -4080,14 +4083,17 @@ mod tests {
         namespace: HTML_NAMESPACE.to_string(),
         attributes: vec![],
       },
-      children: vec![summary.clone(), DomNode {
-        node_type: DomNodeType::Element {
-          tag_name: "div".to_string(),
-          namespace: HTML_NAMESPACE.to_string(),
-          attributes: vec![],
+      children: vec![
+        summary.clone(),
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "div".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![],
+          },
+          children: vec![],
         },
-        children: vec![],
-      }],
+      ],
     };
     let details_open_with_content = DomNode {
       node_type: DomNodeType::Element {
@@ -4320,10 +4326,10 @@ mod tests {
     };
 
     let styled = apply_styles(&q, &StyleSheet::new());
-    assert_eq!(styled.styles.quotes, vec![
-      ("“".into(), "”".into()),
-      ("‘".into(), "’".into())
-    ]);
+    assert_eq!(
+      styled.styles.quotes,
+      vec![("“".into(), "”".into()), ("‘".into(), "’".into())]
+    );
   }
 
   #[test]
@@ -5258,10 +5264,13 @@ mod tests {
     let styled = apply_styles(&dom, &StyleSheet::new());
     match &styled.styles.will_change {
       WillChange::Hints(hints) => {
-        assert_eq!(hints, &vec![
-          WillChangeHint::Property("transform".to_string()),
-          WillChangeHint::Property("opacity".to_string())
-        ]);
+        assert_eq!(
+          hints,
+          &vec![
+            WillChangeHint::Property("transform".to_string()),
+            WillChangeHint::Property("opacity".to_string())
+          ]
+        );
       }
       WillChange::Auto => panic!("expected hints, got Auto"),
     }
@@ -6769,12 +6778,10 @@ mod tests {
           node_type: DomNodeType::Element {
             tag_name: "p".to_string(),
             namespace: HTML_NAMESPACE.to_string(),
-            attributes: vec![
-              (
-                "style".to_string(),
-                "background-color: color-contrast(white, black);".to_string(),
-              ),
-            ],
+            attributes: vec![(
+              "style".to_string(),
+              "background-color: color-contrast(white, black);".to_string(),
+            )],
           },
           children: vec![],
         },
@@ -6782,12 +6789,10 @@ mod tests {
           node_type: DomNodeType::Element {
             tag_name: "span".to_string(),
             namespace: HTML_NAMESPACE.to_string(),
-            attributes: vec![
-              (
-                "style".to_string(),
-                "color: blue; border-color: color(from currentColor hsl h s 25%);".to_string(),
-              ),
-            ],
+            attributes: vec![(
+              "style".to_string(),
+              "color: blue; border-color: color(from currentColor hsl h s 25%);".to_string(),
+            )],
           },
           children: vec![],
         },

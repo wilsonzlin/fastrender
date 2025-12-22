@@ -7,6 +7,7 @@
 //! Errors are collected and returned alongside the parsed stylesheet.
 
 use super::properties::parse_property_value;
+use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
 use super::types::ContainerRule;
 use super::types::CssParseError;
@@ -18,21 +19,21 @@ use super::types::FontFaceRule;
 use super::types::FontFaceSource;
 use super::types::FontFaceStyle;
 use super::types::ImportRule;
-use super::types::LayerRule;
-use super::types::MediaRule;
 use super::types::Keyframe;
 use super::types::KeyframesRule;
+use super::types::LayerRule;
+use super::types::MediaRule;
 use super::types::PageMarginArea;
 use super::types::PageMarginRule;
 use super::types::PagePseudoClass;
 use super::types::PageRule;
 use super::types::PageSelector;
 use super::types::ScrollTimelineName;
-use super::types::ViewTimelineName;
 use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
+use super::types::ViewTimelineName;
 use crate::dom::DomNode;
 use crate::error::Result;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
@@ -93,7 +94,7 @@ fn parse_stylesheet_collecting_errors(css: &str) -> CssParseResult {
   let mut parser = Parser::new(&mut input);
   let mut errors = Vec::new();
 
-  let rules = parse_rule_list_collecting(&mut parser, &mut errors);
+  let rules = parse_rule_list_collecting(&mut parser, &mut errors, None);
 
   CssParseResult::with_errors(StyleSheet { rules }, errors)
 }
@@ -102,6 +103,7 @@ fn parse_stylesheet_collecting_errors(css: &str) -> CssParseResult {
 fn parse_rule_list_collecting<'i, 't>(
   parser: &mut Parser<'i, 't>,
   errors: &mut Vec<CssParseError>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> Vec<CssRule> {
   let mut rules = Vec::new();
 
@@ -111,7 +113,7 @@ fn parse_rule_list_collecting<'i, 't>(
       break;
     }
 
-    match parse_rule(parser) {
+    match parse_rule(parser, parent_selectors) {
       Ok(Some(rule)) => {
         rules.push(rule);
       }
@@ -136,9 +138,17 @@ fn parse_rule_list_collecting<'i, 't>(
 /// Used for parsing nested rule lists inside @media and @layer blocks
 fn parse_rule_list<'i, 't>(parser: &mut Parser<'i, 't>) -> Vec<CssRule> {
   let mut errors = Vec::new();
-  parse_rule_list_collecting(parser, &mut errors)
+  parse_rule_list_collecting(parser, &mut errors, None)
   // Errors from nested rules are discarded here
   // In the future, we could pass down the error collector
+}
+
+fn parse_rule_list_with_context<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
+) -> Vec<CssRule> {
+  let mut errors = Vec::new();
+  parse_rule_list_collecting(parser, &mut errors, parent_selectors)
 }
 
 /// Recover from a parse error by skipping to the next rule
@@ -160,6 +170,7 @@ fn recover_from_error<'i, 't>(parser: &mut Parser<'i, 't>) {
 /// Parse a single CSS rule (style rule or @-rule)
 fn parse_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   parser.skip_whitespace();
 
@@ -171,10 +182,10 @@ fn parse_rule<'i, 't>(
       let kw_str = kw.to_string();
       match kw_str.as_str() {
         "import" => parse_import_rule(p),
-        "media" => parse_media_rule(p),
-        "container" => parse_container_rule(p),
-        "supports" => parse_supports_rule(p),
-        "layer" => parse_layer_rule(p),
+        "media" => parse_media_rule(p, parent_selectors),
+        "container" => parse_container_rule(p, parent_selectors),
+        "supports" => parse_supports_rule(p, parent_selectors),
+        "layer" => parse_layer_rule(p, parent_selectors),
         "page" => parse_page_rule(p),
         "counter-style" => parse_counter_style_rule(p),
         "font-face" => parse_font_face_rule(p),
@@ -195,7 +206,7 @@ fn parse_rule<'i, 't>(
   }
 
   // Parse style rule
-  parse_style_rule(parser).map(|opt| opt.map(CssRule::Style))
+  parse_style_rule(parser, parent_selectors).map(|opt| opt.map(CssRule::Style))
 }
 
 /// Parse an @import rule
@@ -249,6 +260,7 @@ fn parse_import_rule<'i, 't>(
 /// Parse a @media rule
 fn parse_media_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   // Collect tokens as strings until we hit the {
   let mut query_parts = Vec::new();
@@ -298,7 +310,10 @@ fn parse_media_rule<'i, 't>(
 
   // Parse the nested rules from the block we already matched
   let nested_rules = parser.parse_nested_block(|nested_parser| {
-    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested_parser))
+    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
+      nested_parser,
+      parent_selectors,
+    ))
   })?;
 
   Ok(Some(CssRule::Media(MediaRule {
@@ -310,6 +325,7 @@ fn parse_media_rule<'i, 't>(
 /// Parse a @container rule (size queries only; name is optional and stored for future use).
 fn parse_container_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   // Collect tokens forming the prelude (optional name + query) up to the block.
   let mut prelude_parts = Vec::new();
@@ -377,7 +393,10 @@ fn parse_container_rule<'i, 't>(
   })?;
 
   let nested_rules = parser.parse_nested_block(|nested_parser| {
-    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested_parser))
+    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
+      nested_parser,
+      parent_selectors,
+    ))
   })?;
 
   if !query.is_size_query() {
@@ -395,6 +414,7 @@ fn parse_container_rule<'i, 't>(
 /// Parse a @supports rule
 fn parse_supports_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   // Collect the prelude (condition) tokens until the block begins.
   let mut prelude = String::new();
@@ -411,7 +431,10 @@ fn parse_supports_rule<'i, 't>(
 
   let condition = parse_supports_prelude(&prelude);
   let rules = parser.parse_nested_block(|nested| {
-    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested))
+    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
+      nested,
+      parent_selectors,
+    ))
   })?;
   Ok(Some(CssRule::Supports(SupportsRule { condition, rules })))
 }
@@ -709,6 +732,7 @@ fn parse_declaration_condition(s: &str) -> Option<(String, String)> {
 
 fn parse_layer_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut names: Vec<Vec<String>> = Vec::new();
   let mut current: Vec<String> = Vec::new();
@@ -744,7 +768,10 @@ fn parse_layer_rule<'i, 't>(
 
   let rules = if saw_block {
     parser.parse_nested_block(|nested| {
-      Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list(nested))
+      Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
+        nested,
+        parent_selectors,
+      ))
     })?
   } else {
     Vec::new()
@@ -1027,7 +1054,10 @@ fn parse_keyframes_rule<'i, 't>(
   })?;
 
   let frames = parser.parse_nested_block(|nested| parse_keyframe_list(nested))?;
-  Ok(Some(CssRule::Keyframes(KeyframesRule { name, keyframes: frames })))
+  Ok(Some(CssRule::Keyframes(KeyframesRule {
+    name,
+    keyframes: frames,
+  })))
 }
 
 fn parse_counter_style_rule<'i, 't>(
@@ -1067,7 +1097,13 @@ fn parse_counter_style_descriptors<'i, 't>(
     let location = parser.current_source_location();
     let ident = match parser.next_including_whitespace() {
       Ok(Token::Ident(id)) => id.to_ascii_lowercase(),
-      _ => return Err(parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected ident".into()))),
+      _ => {
+        return Err(
+          parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+            "expected ident".into(),
+          )),
+        )
+      }
     };
 
     match ident.as_str() {
@@ -1100,13 +1136,21 @@ fn parse_counter_style_descriptors<'i, 't>(
         if let Ok(Token::Ident(id)) = parser.next_including_whitespace() {
           rule.fallback = Some(id.to_string());
         } else {
-          return Err(parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected ident".into())));
+          return Err(
+            parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+              "expected ident".into(),
+            )),
+          );
         }
       }
       "speak-as" => {
         rule.speak_as = Some(parse_counter_style_speak_as(parser)?);
       }
-      _ => return Err(location.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(ident.into()))),
+      _ => {
+        return Err(
+          location.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(ident.into())),
+        )
+      }
     }
 
     parser.skip_whitespace();
@@ -1269,7 +1313,11 @@ fn parse_range_descriptor(value: &str) -> Option<Vec<(i64, i64)>> {
   let mut iter = numbers.into_iter();
   while let Some(start) = iter.next() {
     let end = iter.next().unwrap_or(start);
-    let (a, b) = if start <= end { (start, end) } else { (end, start) };
+    let (a, b) = if start <= end {
+      (start, end)
+    } else {
+      (end, start)
+    };
     ranges.push((a, b));
   }
   Some(ranges)
@@ -1323,10 +1371,11 @@ fn parse_keyframe_list<'i, 't>(
     }
   }
 
-  frames.sort_by(|a, b| a
-    .offset
-    .partial_cmp(&b.offset)
-    .unwrap_or(std::cmp::Ordering::Equal));
+  frames.sort_by(|a, b| {
+    a.offset
+      .partial_cmp(&b.offset)
+      .unwrap_or(std::cmp::Ordering::Equal)
+  });
   Ok(frames)
 }
 
@@ -1619,6 +1668,176 @@ fn parse_stretch_token(token: &str) -> Option<f32> {
   }
 }
 
+fn split_selector_components(selector_text: &str) -> Vec<String> {
+  let mut parts = Vec::new();
+  let mut current = String::new();
+  let mut paren_depth = 0usize;
+  let mut bracket_depth = 0usize;
+  let mut brace_depth = 0usize;
+  let mut in_string: Option<char> = None;
+  let mut chars = selector_text.chars().peekable();
+
+  while let Some(ch) = chars.next() {
+    if let Some(q) = in_string {
+      current.push(ch);
+      if ch == '\\' {
+        if let Some(next) = chars.next() {
+          current.push(next);
+        }
+      } else if ch == q {
+        in_string = None;
+      }
+      continue;
+    }
+
+    match ch {
+      '\\' => {
+        current.push(ch);
+        if let Some(next) = chars.next() {
+          current.push(next);
+        }
+        continue;
+      }
+      '"' | '\'' => {
+        in_string = Some(ch);
+        current.push(ch);
+        continue;
+      }
+      '(' => paren_depth += 1,
+      ')' => paren_depth = paren_depth.saturating_sub(1),
+      '[' => bracket_depth += 1,
+      ']' => bracket_depth = bracket_depth.saturating_sub(1),
+      '{' => brace_depth += 1,
+      '}' => brace_depth = brace_depth.saturating_sub(1),
+      ',' if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+        if !current.trim().is_empty() {
+          parts.push(current.trim().to_string());
+        }
+        current.clear();
+        continue;
+      }
+      _ => {}
+    }
+
+    current.push(ch);
+  }
+
+  if !current.trim().is_empty() {
+    parts.push(current.trim().to_string());
+  }
+
+  parts
+}
+
+fn replace_nesting_selector(component: &str, parent: &str) -> (String, bool) {
+  let mut out = String::new();
+  let mut paren_depth = 0usize;
+  let mut bracket_depth = 0usize;
+  let mut brace_depth = 0usize;
+  let mut in_string: Option<char> = None;
+  let mut found = false;
+  let mut chars = component.chars().peekable();
+
+  while let Some(ch) = chars.next() {
+    if let Some(q) = in_string {
+      out.push(ch);
+      if ch == '\\' {
+        if let Some(next) = chars.next() {
+          out.push(next);
+        }
+      } else if ch == q {
+        in_string = None;
+      }
+      continue;
+    }
+
+    match ch {
+      '\\' => {
+        out.push(ch);
+        if let Some(next) = chars.next() {
+          out.push(next);
+        }
+        continue;
+      }
+      '"' | '\'' => {
+        in_string = Some(ch);
+        out.push(ch);
+        continue;
+      }
+      '(' => paren_depth += 1,
+      ')' => paren_depth = paren_depth.saturating_sub(1),
+      '[' => {
+        bracket_depth += 1;
+      }
+      ']' => bracket_depth = bracket_depth.saturating_sub(1),
+      '{' => brace_depth += 1,
+      '}' => brace_depth = brace_depth.saturating_sub(1),
+      '&' if bracket_depth == 0 => {
+        out.push_str(parent);
+        found = true;
+        continue;
+      }
+      _ => {}
+    }
+
+    out.push(ch);
+  }
+
+  (out, found)
+}
+
+fn combine_nested_selectors(
+  parent_selectors: &SelectorList<FastRenderSelectorImpl>,
+  nested_text: &str,
+) -> Option<SelectorList<FastRenderSelectorImpl>> {
+  let parent_strings: Vec<String> = parent_selectors
+    .slice()
+    .iter()
+    .map(|sel| sel.to_css_string())
+    .collect();
+  if parent_strings.is_empty() {
+    return None;
+  }
+
+  let components = split_selector_components(nested_text);
+  if components.is_empty() {
+    return None;
+  }
+
+  let mut combined_parts = Vec::new();
+  for comp in components {
+    if comp.is_empty() {
+      continue;
+    }
+
+    let has_ampersand = replace_nesting_selector(&comp, "").1;
+    if has_ampersand {
+      for parent in &parent_strings {
+        let (replaced, _) = replace_nesting_selector(&comp, parent);
+        combined_parts.push(replaced.trim().to_string());
+      }
+    } else {
+      for parent in &parent_strings {
+        combined_parts.push(format!("{} {}", parent, comp.trim()));
+      }
+    }
+  }
+
+  if combined_parts.is_empty() {
+    return None;
+  }
+
+  let combined = combined_parts.join(", ");
+  let mut input = ParserInput::new(&combined);
+  let mut parser = Parser::new(&mut input);
+  SelectorList::parse(
+    &PseudoClassParser,
+    &mut parser,
+    selectors::parser::ParseRelative::No,
+  )
+  .ok()
+}
+
 /// Skip an unknown @-rule
 fn skip_at_rule<'i, 't>(parser: &mut Parser<'i, 't>) {
   loop {
@@ -1635,26 +1854,108 @@ fn skip_at_rule<'i, 't>(parser: &mut Parser<'i, 't>) {
   }
 }
 
+fn parse_nested_at_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  parent_selectors: &SelectorList<FastRenderSelectorImpl>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  parser.skip_whitespace();
+  let Ok(Token::AtKeyword(kw)) = parser.next() else {
+    return Ok(None);
+  };
+  let kw_lower = kw.to_ascii_lowercase();
+  match kw_lower.as_str() {
+    "media" => parse_media_rule(parser, Some(parent_selectors)),
+    "supports" => parse_supports_rule(parser, Some(parent_selectors)),
+    "container" => parse_container_rule(parser, Some(parent_selectors)),
+    "layer" => parse_layer_rule(parser, Some(parent_selectors)),
+    "nest" => parse_nest_rule(parser, parent_selectors),
+    _ => {
+      skip_at_rule(parser);
+      Ok(None)
+    }
+  }
+}
+
+fn parse_style_block<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  parent_selectors: &SelectorList<FastRenderSelectorImpl>,
+) -> std::result::Result<(Vec<Declaration>, Vec<CssRule>), ParseError<'i, SelectorParseErrorKind<'i>>>
+{
+  let mut declarations = Vec::new();
+  let mut nested_rules = Vec::new();
+
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+      break;
+    }
+
+    if let Ok(Some(rule)) = parser.try_parse(|p| parse_nested_at_rule(p, parent_selectors)) {
+      nested_rules.push(rule);
+      continue;
+    }
+
+    if let Ok(Some(rule)) = parser.try_parse(|p| parse_style_rule(p, Some(parent_selectors))) {
+      nested_rules.push(CssRule::Style(rule));
+      continue;
+    }
+
+    if let Some(decl) = parse_declaration(parser) {
+      declarations.push(decl);
+    }
+  }
+
+  Ok((declarations, nested_rules))
+}
+
 /// Parse a style rule (selectors + declarations)
 fn parse_style_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<StyleRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  // Parse selectors
-  let selectors = parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
-    SelectorList::parse(
-      &PseudoClassParser,
-      parser,
-      selectors::parser::ParseRelative::No,
-    )
+  let start = parser.position();
+  parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+    while !parser.is_exhausted() {
+      let _ = parser.next_including_whitespace()?;
+    }
+    Ok(())
   })?;
 
-  // Parse declaration block
+  let selector_text = parser.slice_from(start).trim();
+  if selector_text.is_empty() {
+    return Ok(None);
+  }
+
+  let selectors = if let Some(parent) = parent_selectors {
+    let combined = combine_nested_selectors(parent, selector_text);
+    if combined.is_none() {
+      if parser.expect_curly_bracket_block().is_ok() {
+        let _ = parser.parse_nested_block(|nested| {
+          Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
+            nested,
+            Some(parent),
+          ))
+        });
+      }
+      return Ok(None);
+    }
+    combined.unwrap()
+  } else {
+    let mut selector_input = ParserInput::new(selector_text);
+    let mut selector_parser = Parser::new(&mut selector_input);
+    SelectorList::parse(
+      &PseudoClassParser,
+      &mut selector_parser,
+      selectors::parser::ParseRelative::No,
+    )?
+  };
+
   parser.expect_curly_bracket_block().map_err(|_| {
     parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
   })?;
 
-  let declarations = parser.parse_nested_block(|parser| {
-    parse_declaration_list(parser).map_err(|_| {
+  let (declarations, nested_rules) = parser.parse_nested_block(|parser| {
+    parse_style_block(parser, &selectors).map_err(|_| {
       parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
         "declaration".into(),
       ))
@@ -1664,7 +1965,57 @@ fn parse_style_rule<'i, 't>(
   Ok(Some(StyleRule {
     selectors,
     declarations,
+    nested_rules,
   }))
+}
+
+fn parse_nest_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  parent_selectors: &SelectorList<FastRenderSelectorImpl>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let start = parser.position();
+  parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+    while !parser.is_exhausted() {
+      let _ = parser.next_including_whitespace()?;
+    }
+    Ok(())
+  })?;
+
+  let selector_text = parser.slice_from(start).trim();
+  if selector_text.is_empty() {
+    skip_at_rule(parser);
+    return Ok(None);
+  }
+
+  let Some(selectors) = combine_nested_selectors(parent_selectors, selector_text) else {
+    if parser.expect_curly_bracket_block().is_ok() {
+      let _ = parser.parse_nested_block(|nested| {
+        Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
+          nested,
+          Some(parent_selectors),
+        ))
+      });
+    }
+    return Ok(None);
+  };
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
+
+  let (declarations, nested_rules) = parser.parse_nested_block(|nested| {
+    parse_style_block(nested, &selectors).map_err(|_| {
+      nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+        "declaration".into(),
+      ))
+    })
+  })?;
+
+  Ok(Some(CssRule::Style(StyleRule {
+    selectors,
+    declarations,
+    nested_rules,
+  })))
 }
 
 fn parse_declaration<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<Declaration> {

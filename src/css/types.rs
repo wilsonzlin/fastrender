@@ -366,6 +366,11 @@ impl StyleSheet {
       for rule in rules {
         match rule {
           CssRule::Container(_) => return true,
+          CssRule::Style(style) => {
+            if walk(&style.nested_rules) {
+              return true;
+            }
+          }
           CssRule::Media(media) => {
             if walk(&media.rules) {
               return true;
@@ -381,11 +386,7 @@ impl StyleSheet {
               return true;
             }
           }
-          CssRule::Page(_)
-          | CssRule::Style(_)
-          | CssRule::Import(_)
-          | CssRule::FontFace(_)
-          | CssRule::Keyframes(_) => {}
+          CssRule::Page(_) | CssRule::Import(_) | CssRule::FontFace(_) | CssRule::Keyframes(_) => {}
         }
       }
       false
@@ -421,6 +422,17 @@ fn collect_rules_recursive<'a>(
           layer_order,
           container_conditions: container_conditions.to_vec(),
         });
+        if !style_rule.nested_rules.is_empty() {
+          collect_rules_recursive(
+            &style_rule.nested_rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            container_conditions,
+            out,
+          );
+        }
       }
       CssRule::Media(media_rule) => {
         // Only include rules from @media blocks that match
@@ -1048,6 +1060,9 @@ pub struct ImportRule {
 pub struct StyleRule {
   pub selectors: SelectorList<FastRenderSelectorImpl>,
   pub declarations: Vec<Declaration>,
+  /// Nested rules that were authored inside this style rule's block.
+  /// These are preserved in source order so they can be flattened during collection.
+  pub nested_rules: Vec<CssRule>,
 }
 
 /// A @layer rule (blockless or with nested rules).
