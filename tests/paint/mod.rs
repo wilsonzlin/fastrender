@@ -13,6 +13,7 @@ mod rasterize_test;
 mod stacking_test;
 mod svg_inline_test;
 mod text_rasterize_test;
+mod top_layer_test;
 
 mod marker_paint_order;
 mod marker_shadow_bidi;
