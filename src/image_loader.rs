@@ -7,6 +7,8 @@ use crate::error::Error;
 use crate::error::ImageError;
 use crate::error::RenderError;
 use crate::error::Result;
+use crate::resource::CachingFetcher;
+use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchedResource;
 use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
@@ -163,7 +165,10 @@ impl ImageCache {
     Self {
       cache: Arc::new(Mutex::new(HashMap::new())),
       base_url: None,
-      fetcher: Arc::new(HttpFetcher::new()),
+      fetcher: Arc::new(CachingFetcher::with_config(
+        HttpFetcher::new(),
+        CachingFetcherConfig::default(),
+      )),
     }
   }
 
@@ -181,7 +186,10 @@ impl ImageCache {
     Self {
       cache: Arc::new(Mutex::new(HashMap::new())),
       base_url: Some(base_url),
-      fetcher: Arc::new(HttpFetcher::new()),
+      fetcher: Arc::new(CachingFetcher::with_config(
+        HttpFetcher::new(),
+        CachingFetcherConfig::default(),
+      )),
     }
   }
 
