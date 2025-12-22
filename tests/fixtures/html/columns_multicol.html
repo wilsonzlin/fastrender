@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Multi-column Layout Fixture</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #f5f7fa;
+      font: 16px/1.4 Arial, sans-serif;
+      color: #16324f;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 20px;
+      letter-spacing: 0.5px;
+    }
+
+    #columns {
+      width: 420px;
+      column-count: 3;
+      column-gap: 16px;
+      column-rule: 4px dotted #00838f;
+      padding: 8px;
+      background: #ffffff;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    }
+
+    .card {
+      height: 60px;
+      margin: 0 0 10px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, rgba(0, 131, 143, 0.9), rgba(0, 150, 136, 0.7));
+    }
+
+    .accent {
+      background: linear-gradient(135deg, #80cbc4, #009688);
+    }
+
+    p {
+      margin: 0 0 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Columns</h1>
+  <div id="columns">
+    <p>Flow content into three balanced columns with a dotted rule and a fixed gap.</p>
+    <div class="card"></div>
+    <div class="card accent"></div>
+    <p>The cards should stack top to bottom across columns before continuing to the next column.</p>
+    <div class="card"></div>
+    <div class="card accent"></div>
+    <div class="card"></div>
+  </div>
+</body>
+</html>

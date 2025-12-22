@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Transform Layers Fixture</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #fdfdfd;
+      font: 15px/1.4 "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .stage {
+      position: relative;
+      width: 380px;
+      height: 240px;
+      border: 2px solid #d2dae2;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #e8f1ff 0%, #ffffff 60%);
+      overflow: hidden;
+    }
+
+    .shape {
+      position: absolute;
+      width: 120px;
+      height: 80px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #183153;
+      font-weight: bold;
+    }
+
+    .base {
+      top: 26px;
+      left: 30px;
+      background: #d0e6ff;
+    }
+
+    .rotate {
+      top: 60px;
+      left: 140px;
+      background: #ffe0b2;
+      transform: translate(60px, 10px) rotate(-18deg);
+    }
+
+    .scale {
+      top: 130px;
+      left: 60px;
+      background: #c5e1a5;
+      transform: translate(40px, 20px) scale(0.8, 1.1);
+    }
+
+    .skew {
+      top: 140px;
+      left: 200px;
+      background: #f8bbd0;
+      transform: translate(-30px, -20px) skew(14deg, 2deg);
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="shape base">Base</div>
+    <div class="shape rotate">Rotate</div>
+    <div class="shape scale">Scale</div>
+    <div class="shape skew">Skew</div>
+  </div>
+</body>
+</html>

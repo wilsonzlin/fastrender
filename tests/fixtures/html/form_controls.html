@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Form Controls Fixture</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #fafbfc;
+      font: 15px/1.5 "Segoe UI", Arial, sans-serif;
+      color: #23374d;
+    }
+
+    form {
+      width: 420px;
+      background: #ffffff;
+      border: 1px solid #d6deeb;
+      border-radius: 10px;
+      padding: 16px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+    }
+
+    fieldset {
+      border: 1px solid #c4d2e2;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 0 0 12px;
+    }
+
+    legend {
+      padding: 0 8px;
+      font-weight: bold;
+      color: #0d47a1;
+    }
+
+    label {
+      display: block;
+      margin: 0 0 10px;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #cbd5e1;
+      box-sizing: border-box;
+      font: inherit;
+      background: #fdfefe;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+    }
+
+    .row label {
+      flex: 1;
+    }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    button {
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      color: #ffffff;
+      background: linear-gradient(135deg, #1565c0, #2196f3);
+      box-shadow: 0 2px 6px rgba(21, 101, 192, 0.3);
+    }
+
+    .secondary {
+      background: #90a4ae;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    }
+  </style>
+</head>
+<body>
+  <form>
+    <fieldset>
+      <legend>Contact</legend>
+      <div class="row">
+        <label>First name
+          <input type="text" value="Ada" aria-label="First name">
+        </label>
+        <label>Last name
+          <input type="text" value="Lovelace" aria-label="Last name">
+        </label>
+      </div>
+      <label>Email address
+        <input type="email" value="ada@example.net" aria-label="Email">
+      </label>
+      <label>Subject
+        <select aria-label="Subject">
+          <option>Bug report</option>
+          <option selected>Feature request</option>
+          <option>General feedback</option>
+        </select>
+      </label>
+      <label>Message
+        <textarea rows="3" aria-label="Message">Render forms with consistent spacing and legend alignment.</textarea>
+      </label>
+      <div class="actions">
+        <button type="submit">Send</button>
+        <button type="button" class="secondary">Cancel</button>
+      </div>
+    </fieldset>
+  </form>
+</body>
+</html>

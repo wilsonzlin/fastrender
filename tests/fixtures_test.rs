@@ -181,6 +181,7 @@ fn test_all_fixture_files_exist() {
     "table_fixed",
     "table_auto",
     "table_span",
+    "columns_multicol",
     // Floats
     "float_basic",
     "float_text_wrap",
@@ -188,6 +189,10 @@ fn test_all_fixture_files_exist() {
     // Positioned
     "positioned_relative",
     "positioned_absolute",
+    // Transforms
+    "transform_layer",
+    // Forms
+    "form_controls",
     // Text
     "text_complex_scripts",
     "text_bidi",
@@ -338,6 +343,15 @@ fn test_fixture_table_span() {
 }
 
 // =============================================================================
+// Column Layout Tests
+// =============================================================================
+
+#[test]
+fn test_fixture_columns_multicol() {
+  test_fixture("columns_multicol").expect("columns_multicol fixture should render");
+}
+
+// =============================================================================
 // Float Tests
 // =============================================================================
 
@@ -368,6 +382,24 @@ fn test_fixture_positioned_relative() {
 #[test]
 fn test_fixture_positioned_absolute() {
   test_fixture("positioned_absolute").expect("positioned_absolute fixture should render");
+}
+
+// =============================================================================
+// Transform Tests
+// =============================================================================
+
+#[test]
+fn test_fixture_transform_layer() {
+  test_fixture("transform_layer").expect("transform_layer fixture should render");
+}
+
+// =============================================================================
+// Form Tests
+// =============================================================================
+
+#[test]
+fn test_fixture_form_controls() {
+  test_fixture("form_controls").expect("form_controls fixture should render");
 }
 
 // =============================================================================
