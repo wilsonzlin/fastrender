@@ -226,7 +226,7 @@ pub struct GlyphCacheStats {
 /// The cache uses an LRU eviction policy with an optional memory budget
 /// to keep footprint predictable while still delivering reuse on text-
 /// heavy pages.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GlyphCache {
   /// Cached glyph paths
   glyphs: HashMap<GlyphCacheKey, CachedGlyph>,
@@ -246,6 +246,12 @@ pub struct GlyphCache {
   misses: u64,
   /// Number of evicted glyphs
   evictions: u64,
+}
+
+impl Default for GlyphCache {
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 impl GlyphCache {
