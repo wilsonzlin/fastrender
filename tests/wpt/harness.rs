@@ -655,11 +655,14 @@ pub fn compare_images(
   let total_pixels = (rendered_width as u64) * (rendered_height as u64);
   let mut diff_pixels = 0u64;
 
-  // Precompute allowed differing pixels for early exit if threshold provided.
-  let stop_after = max_diff_percentage.map(|max_pct| {
-    let allowed = ((max_pct / 100.0) * total_pixels as f64).ceil() as u64;
-    allowed
-  });
+  // Precompute allowed differing pixels for early exit if threshold provided and > 0.
+  let stop_after = match max_diff_percentage {
+    Some(max_pct) if max_pct > 0.0 => {
+      let allowed = ((max_pct / 100.0) * total_pixels as f64).ceil() as u64;
+      Some(allowed)
+    }
+    _ => None,
+  };
 
   let tolerance = tolerance as i16;
   let rendered_data = rendered_img.as_raw();
