@@ -17,6 +17,7 @@ mod paged_media;
 mod render_wrap;
 mod ruby;
 mod scrollbar_gutter;
+mod shadow_dom;
 mod shape_outside;
 mod sideways_lr_regressions;
 mod subgrid;

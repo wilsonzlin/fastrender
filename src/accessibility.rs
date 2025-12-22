@@ -137,7 +137,7 @@ impl<'a> BuildContext<'a> {
 
     match &node.node.node_type {
       DomNodeType::Text { content } => normalize_whitespace(content),
-      DomNodeType::Element { .. } => {
+      DomNodeType::Element { .. } | DomNodeType::Slot { .. } => {
         let tag = node
           .node
           .tag_name()
@@ -166,7 +166,7 @@ impl<'a> BuildContext<'a> {
         }
         normalize_whitespace(&parts.join(" "))
       }
-      DomNodeType::Document => {
+      DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
         let mut parts = Vec::new();
         for child in &node.children {
           let text = self.visible_text(child);
@@ -233,7 +233,7 @@ fn build_nodes<'a>(
 
   match node.node.node_type {
     DomNodeType::Text { .. } => Vec::new(),
-    DomNodeType::Document => {
+    DomNodeType::Document | DomNodeType::ShadowRoot { .. } => {
       let mut children = Vec::new();
       ancestors.push(&node.node);
       for child in &node.children {
@@ -242,7 +242,7 @@ fn build_nodes<'a>(
       ancestors.pop();
       children
     }
-    DomNodeType::Element { .. } => {
+    DomNodeType::Element { .. } | DomNodeType::Slot { .. } => {
       let mut children = Vec::new();
       ancestors.push(&node.node);
       for child in &node.children {

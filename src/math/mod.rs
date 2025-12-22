@@ -151,7 +151,10 @@ fn normalized_text(node: &DomNode, preserve_space: bool) -> Option<String> {
 fn collect_text(node: &DomNode, out: &mut String) {
   match &node.node_type {
     DomNodeType::Text { content } => out.push_str(content),
-    DomNodeType::Element { .. } | DomNodeType::Document => {
+    DomNodeType::Element { .. }
+    | DomNodeType::Slot { .. }
+    | DomNodeType::Document
+    | DomNodeType::ShadowRoot { .. } => {
       for child in &node.children {
         collect_text(child, out);
       }

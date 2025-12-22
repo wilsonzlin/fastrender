@@ -32,6 +32,12 @@ pub const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 pub const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 pub const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShadowRootMode {
+  Open,
+  Closed,
+}
+
 #[derive(Debug, Clone)]
 pub struct DomNode {
   pub node_type: DomNodeType,
@@ -41,6 +47,13 @@ pub struct DomNode {
 #[derive(Debug, Clone)]
 pub enum DomNodeType {
   Document,
+  ShadowRoot {
+    mode: ShadowRootMode,
+  },
+  Slot {
+    namespace: String,
+    attributes: Vec<(String, String)>,
+  },
   Element {
     tag_name: String,
     namespace: String,
@@ -97,7 +110,12 @@ pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
           stack.push(child);
         }
       }
-      DomNodeType::Document => {
+      DomNodeType::Slot { .. } => {
+        for child in &current.children {
+          stack.push(child);
+        }
+      }
+      DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
         for child in &current.children {
           stack.push(child);
         }
@@ -131,7 +149,12 @@ pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
           stack.push(child);
         }
       }
-      DomNodeType::Document => {
+      DomNodeType::Slot { .. } => {
+        for child in &current.children {
+          stack.push(child);
+        }
+      }
+      DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
         for child in &current.children {
           stack.push(child);
         }
@@ -164,8 +187,139 @@ pub fn parse_html(html: &str) -> Result<DomNode> {
     })?;
 
   let mut root = convert_handle_to_node(&dom.document);
+  attach_shadow_roots(&mut root);
   toggle_no_js_class(&mut root);
   Ok(root)
+}
+
+fn parse_shadow_root_mode(template: &DomNode) -> Option<ShadowRootMode> {
+  if !template
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("template"))
+    .unwrap_or(false)
+  {
+    return None;
+  }
+
+  let mode_attr = template
+    .get_attribute_ref("shadowroot")
+    .or_else(|| template.get_attribute_ref("shadowrootmode"))?;
+  match mode_attr.to_ascii_lowercase().as_str() {
+    "open" => Some(ShadowRootMode::Open),
+    "closed" => Some(ShadowRootMode::Closed),
+    _ => None,
+  }
+}
+
+fn attach_shadow_roots(node: &mut DomNode) {
+  for child in &mut node.children {
+    attach_shadow_roots(child);
+  }
+
+  if !node.is_element() {
+    return;
+  }
+
+  let mut shadow_template = None;
+  for (idx, child) in node.children.iter().enumerate() {
+    if let Some(mode) = parse_shadow_root_mode(child) {
+      shadow_template = Some((idx, mode));
+      break;
+    }
+  }
+
+  let Some((template_idx, mode)) = shadow_template else {
+    return;
+  };
+
+  let template = node.children.remove(template_idx);
+  let mut shadow_root = DomNode {
+    node_type: DomNodeType::ShadowRoot { mode },
+    children: template.children,
+  };
+
+  let light_children = std::mem::take(&mut node.children);
+  distribute_slots(&mut shadow_root, light_children);
+  node.children = vec![shadow_root];
+}
+
+fn distribute_slots(shadow_root: &mut DomNode, light_children: Vec<DomNode>) {
+  let mut available_slots: HashSet<String> = HashSet::new();
+  collect_slot_names(shadow_root, &mut available_slots);
+
+  let mut assignments: Vec<(Option<String>, DomNode)> = light_children
+    .into_iter()
+    .map(|child| {
+      let slot_name = child
+        .get_attribute_ref("slot")
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string());
+      (slot_name, child)
+    })
+    .collect();
+
+  fill_slot_tree(shadow_root, &mut assignments, &available_slots);
+}
+
+fn collect_slot_names(node: &DomNode, out: &mut HashSet<String>) {
+  if matches!(node.node_type, DomNodeType::Slot { .. }) {
+    out.insert(
+      node
+        .get_attribute_ref("name")
+        .map(|v| v.to_string())
+        .unwrap_or_default(),
+    );
+  }
+
+  for child in &node.children {
+    collect_slot_names(child, out);
+  }
+}
+
+fn take_assignments_for_slot(
+  assignments: &mut Vec<(Option<String>, DomNode)>,
+  slot_name: &str,
+  available_slots: &HashSet<String>,
+) -> Vec<DomNode> {
+  let mut taken = Vec::new();
+  let mut remaining = Vec::with_capacity(assignments.len());
+
+  for (name, node) in assignments.drain(..) {
+    let target = name.as_deref().unwrap_or("");
+    let matches = if slot_name.is_empty() {
+      name.is_none() || !available_slots.contains(target)
+    } else {
+      target == slot_name
+    };
+
+    if matches {
+      taken.push(node);
+    } else {
+      remaining.push((name, node));
+    }
+  }
+
+  *assignments = remaining;
+  taken
+}
+
+fn fill_slot_tree(
+  node: &mut DomNode,
+  assignments: &mut Vec<(Option<String>, DomNode)>,
+  available_slots: &HashSet<String>,
+) {
+  for child in &mut node.children {
+    fill_slot_tree(child, assignments, available_slots);
+  }
+
+  if matches!(node.node_type, DomNodeType::Slot { .. }) {
+    let slot_name = node.get_attribute_ref("name").unwrap_or("");
+    let assigned = take_assignments_for_slot(assignments, slot_name, available_slots);
+    if !assigned.is_empty() {
+      node.children = assigned;
+    }
+  }
 }
 
 /// Some documents bootstrap by marking the root with `no-js` and replacing it with a
@@ -227,7 +381,12 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
 
   let node_type = match &node.data {
     NodeData::Document => DomNodeType::Document,
-    NodeData::Element { name, attrs, .. } => {
+    NodeData::Element {
+      name,
+      attrs,
+      template_contents,
+      ..
+    } => {
       let tag_name = name.local.to_string();
       let namespace = name.ns.to_string();
       let attributes = attrs
@@ -236,10 +395,17 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
         .map(|attr| (attr.name.local.to_string(), attr.value.to_string()))
         .collect();
 
-      DomNodeType::Element {
-        tag_name,
-        namespace,
-        attributes,
+      if tag_name.eq_ignore_ascii_case("slot") {
+        DomNodeType::Slot {
+          namespace,
+          attributes,
+        }
+      } else {
+        DomNodeType::Element {
+          tag_name,
+          namespace,
+          attributes,
+        }
       }
     }
     NodeData::Text { contents } => {
@@ -260,12 +426,35 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
     }
   };
 
-  let mut children = node
-    .children
-    .borrow()
-    .iter()
-    .map(convert_handle_to_node)
-    .collect::<Vec<_>>();
+  let mut children: Vec<DomNode> = if let NodeData::Element {
+    name,
+    template_contents,
+    ..
+  } = &node.data
+  {
+    if name.local.as_ref().eq_ignore_ascii_case("template") {
+      template_contents
+        .children
+        .borrow()
+        .iter()
+        .map(convert_handle_to_node)
+        .collect()
+    } else {
+      node
+        .children
+        .borrow()
+        .iter()
+        .map(convert_handle_to_node)
+        .collect::<Vec<_>>()
+    }
+  } else {
+    node
+      .children
+      .borrow()
+      .iter()
+      .map(convert_handle_to_node)
+      .collect::<Vec<_>>()
+  };
 
   // HTML <wbr> elements represent optional break opportunities. Synthesize a zero-width break
   // text node so line breaking can consider the opportunity while still allowing the element to
@@ -294,6 +483,10 @@ impl DomNode {
         .iter()
         .find(|(k, _)| k.eq_ignore_ascii_case(name))
         .map(|(_, v)| v.as_str()),
+      DomNodeType::Slot { attributes, .. } => attributes
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| v.as_str()),
       _ => None,
     }
   }
@@ -305,6 +498,7 @@ impl DomNode {
   pub fn tag_name(&self) -> Option<&str> {
     match &self.node_type {
       DomNodeType::Element { tag_name, .. } => Some(tag_name),
+      DomNodeType::Slot { .. } => Some("slot"),
       _ => None,
     }
   }
@@ -312,6 +506,7 @@ impl DomNode {
   pub fn namespace(&self) -> Option<&str> {
     match &self.node_type {
       DomNodeType::Element { namespace, .. } => Some(namespace),
+      DomNodeType::Slot { namespace, .. } => Some(namespace),
       _ => None,
     }
   }
@@ -321,12 +516,18 @@ impl DomNode {
       DomNodeType::Element { attributes, .. } => {
         Box::new(attributes.iter().map(|(k, v)| (k.as_str(), v.as_str())))
       }
+      DomNodeType::Slot { attributes, .. } => {
+        Box::new(attributes.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+      }
       _ => Box::new(std::iter::empty()),
     }
   }
 
   pub fn is_element(&self) -> bool {
-    matches!(self.node_type, DomNodeType::Element { .. })
+    matches!(
+      self.node_type,
+      DomNodeType::Element { .. } | DomNodeType::Slot { .. }
+    )
   }
 
   pub fn is_text(&self) -> bool {
@@ -428,12 +629,14 @@ impl<'a> ElementRef<'a> {
   }
 
   fn node_is_inert(node: &DomNode) -> bool {
-    matches!(node.node_type, DomNodeType::Element { .. })
-      && (node.get_attribute_ref("inert").is_some()
-        || node
-          .get_attribute_ref("data-fastr-inert")
-          .map(|v| v.eq_ignore_ascii_case("true"))
-          .unwrap_or(false))
+    matches!(
+      node.node_type,
+      DomNodeType::Element { .. } | DomNodeType::Slot { .. }
+    ) && (node.get_attribute_ref("inert").is_some()
+      || node
+        .get_attribute_ref("data-fastr-inert")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false))
   }
 
   fn inert_flag(&self) -> bool {
@@ -510,6 +713,16 @@ impl<'a> ElementRef<'a> {
     node.children.iter().any(Self::node_or_descendant_has_focus)
   }
 
+  fn subtree_has_content(node: &DomNode) -> bool {
+    match node.node_type {
+      DomNodeType::Text { .. } => true,
+      DomNodeType::Element { .. }
+      | DomNodeType::Slot { .. }
+      | DomNodeType::ShadowRoot { .. }
+      | DomNodeType::Document => node.children.iter().any(Self::subtree_has_content),
+    }
+  }
+
   /// Find index of this element among sibling elements and the total number of element siblings.
   fn element_index_and_len(&self) -> Option<(usize, usize)> {
     let parent = self.parent?;
@@ -534,9 +747,9 @@ impl<'a> ElementRef<'a> {
 
   fn is_html_element(&self) -> bool {
     matches!(
-        self.node.node_type,
-        DomNodeType::Element { ref namespace, .. }
-            if namespace.is_empty() || namespace == HTML_NAMESPACE
+      self.node.node_type,
+      DomNodeType::Element { ref namespace, .. } | DomNodeType::Slot { ref namespace, .. }
+        if namespace.is_empty() || namespace == HTML_NAMESPACE
     )
   }
 
@@ -1406,10 +1619,25 @@ impl<'a> Element for ElementRef<'a> {
   }
 
   fn parent_node_is_shadow_root(&self) -> bool {
-    false // We don't support shadow DOM
+    matches!(
+      self.parent.map(|p| &p.node_type),
+      Some(DomNodeType::ShadowRoot { .. })
+    )
   }
 
   fn containing_shadow_host(&self) -> Option<Self> {
+    for (idx, ancestor) in self.all_ancestors.iter().enumerate().rev() {
+      if matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }) {
+        if idx == 0 {
+          return None;
+        }
+        let host = self.all_ancestors[idx - 1];
+        return Some(ElementRef::with_ancestors(
+          host,
+          &self.all_ancestors[..idx - 1],
+        ));
+      }
+    }
     None
   }
 
@@ -1459,7 +1687,9 @@ impl<'a> Element for ElementRef<'a> {
 
   fn is_html_element_in_html_document(&self) -> bool {
     match &self.node.node_type {
-      DomNodeType::Element { namespace, .. } => namespace.is_empty() || namespace == HTML_NAMESPACE,
+      DomNodeType::Element { namespace, .. } | DomNodeType::Slot { namespace, .. } => {
+        namespace.is_empty() || namespace == HTML_NAMESPACE
+      }
       _ => false,
     }
   }
@@ -1476,7 +1706,7 @@ impl<'a> Element for ElementRef<'a> {
 
   fn has_namespace(&self, ns: &str) -> bool {
     match &self.node.node_type {
-      DomNodeType::Element { namespace, .. } => {
+      DomNodeType::Element { namespace, .. } | DomNodeType::Slot { namespace, .. } => {
         if ns.is_empty() {
           return true;
         }
@@ -1509,6 +1739,14 @@ impl<'a> Element for ElementRef<'a> {
           a == b
         }
       }
+      (
+        DomNodeType::Slot {
+          namespace: a_ns, ..
+        },
+        DomNodeType::Slot {
+          namespace: b_ns, ..
+        },
+      ) if a_ns == b_ns => true,
       _ => false,
     }
   }
@@ -1689,7 +1927,10 @@ impl<'a> Element for ElementRef<'a> {
     match pseudo {
       // These pseudo-elements are supported for all elements; filtering
       // based on box generation happens later in the pipeline.
-      PseudoElement::Before | PseudoElement::After | PseudoElement::Marker | PseudoElement::Backdrop => true,
+      PseudoElement::Before
+      | PseudoElement::After
+      | PseudoElement::Marker
+      | PseudoElement::Backdrop => true,
     }
   }
 
@@ -1702,7 +1943,10 @@ impl<'a> Element for ElementRef<'a> {
   }
 
   fn is_html_slot_element(&self) -> bool {
-    false // No shadow DOM support
+    self
+      .node
+      .tag_name()
+      .is_some_and(|t| t.eq_ignore_ascii_case("slot"))
   }
 
   fn has_id(&self, id: &CssString, case_sensitivity: CaseSensitivity) -> bool {
@@ -1740,11 +1984,7 @@ impl<'a> Element for ElementRef<'a> {
   }
 
   fn is_empty(&self) -> bool {
-    self
-      .node
-      .children
-      .iter()
-      .all(|child| !child.is_element() && !child.is_text())
+    !self.node.children.iter().any(Self::subtree_has_content)
   }
 
   fn is_root(&self) -> bool {
