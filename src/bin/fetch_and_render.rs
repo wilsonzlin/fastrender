@@ -26,6 +26,7 @@ use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
+use fastrender::style::media::MediaType;
 use fastrender::Error;
 use fastrender::FastRender;
 use fastrender::Result;
@@ -382,7 +383,7 @@ mod tests {
                 <link rel="icon" href="/favicon.ico">
             </head><body></body></html>
         "#;
-    let urls = extract_css_links(html, "https://example.com/site/page.html");
+    let urls = extract_css_links(html, "https://example.com/site/page.html", MediaType::Screen);
     assert_eq!(urls, vec!["https://example.com/styles/a.css".to_string()]);
   }
 
@@ -1048,7 +1049,7 @@ fn render_once(
   }
 
   println!("Extracting CSS links...");
-  let mut css_links = extract_css_links(&html, &resource_base);
+  let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen);
   if let Some(limit) = css_limit {
     if css_links.len() > limit {
       css_links.truncate(limit);

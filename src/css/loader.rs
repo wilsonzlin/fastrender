@@ -747,9 +747,12 @@ fn normalize_scheme_slashes(s: &str) -> String {
 }
 
 /// Extract `<link rel="stylesheet">` URLs from an HTML document.
-pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
+pub fn extract_css_links(
+  html: &str,
+  base_url: &str,
+  media_type: crate::style::media::MediaType,
+) -> Vec<String> {
   let mut css_urls = Vec::new();
-  let mut print_only_urls = Vec::new();
   let debug = std::env::var("FASTR_LOG_CSS_LINKS").is_ok();
 
   let lower = html.to_lowercase();
@@ -766,41 +769,26 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
           eprintln!("[css] found <link>: {}", link_tag);
         }
         if let Some(media) = extract_attr_value(link_tag, "media") {
-          let media_lower = media.to_ascii_lowercase();
-          let has_screen = media_lower.contains("screen") || media_lower.contains("all");
-          let has_print = media_lower.contains("print");
+          let allowed = media_attr_allows_target(&media, media_type);
           if debug {
-            eprintln!(
-              "[css] media attr: {} (print={}, screen={})",
-              media, has_print, has_screen
-            );
+            eprintln!("[css] media attr: {} (target={:?}, allow={})", media, media_type, allowed);
           }
-          if has_print && !has_screen {
-            if let Some(href) = extract_attr_value(link_tag, "href") {
-              let href = normalize_scheme_slashes(&href);
-              if let Some(full_url) = resolve_href(base_url, &href) {
-                print_only_urls.push(full_url);
-              }
-            }
+          if !allowed {
             pos = abs_start + link_end + 1;
             continue;
           }
         } else if link_tag_lower.contains("media") {
           let has_screen = link_tag_lower.contains("screen") || link_tag_lower.contains("all");
           let has_print = link_tag_lower.contains("print");
+          let has_speech = link_tag_lower.contains("speech");
+          let allowed = media_flags_allow_target(has_screen, has_print, has_speech, media_type);
           if debug {
             eprintln!(
-              "[css] media substring in tag (no attr parsed), print={}, screen={}",
-              has_print, has_screen
+              "[css] media substring in tag (no attr parsed), print={}, screen={}, speech={}, allow={}",
+              has_print, has_screen, has_speech, allowed
             );
           }
-          if has_print && !has_screen {
-            if let Some(href) = extract_attr_value(link_tag, "href") {
-              let href = normalize_scheme_slashes(&href);
-              if let Some(full_url) = resolve_href(base_url, &href) {
-                print_only_urls.push(full_url);
-              }
-            }
+          if !allowed {
             pos = abs_start + link_end + 1;
             continue;
           }
@@ -819,10 +807,48 @@ pub fn extract_css_links(html: &str, base_url: &str) -> Vec<String> {
     }
   }
 
-  if css_urls.is_empty() && !print_only_urls.is_empty() {
-    css_urls.extend(print_only_urls);
-  }
   dedupe_links_preserving_order(css_urls)
+}
+
+fn media_attr_allows_target(value: &str, target: crate::style::media::MediaType) -> bool {
+  let value = value.trim();
+  if value.is_empty() {
+    return true;
+  }
+
+  let mut allowed = false;
+  for token in value.split(',') {
+    let t = token.trim().to_ascii_lowercase();
+    allowed |= match t.as_str() {
+      "all" => return true,
+      "screen" => {
+        matches!(target, crate::style::media::MediaType::Screen | crate::style::media::MediaType::All)
+      }
+      "print" => {
+        matches!(target, crate::style::media::MediaType::Print | crate::style::media::MediaType::All)
+      }
+      "speech" => {
+        matches!(target, crate::style::media::MediaType::Speech | crate::style::media::MediaType::All)
+      }
+      _ => false,
+    };
+  }
+
+  allowed
+}
+
+fn media_flags_allow_target(
+  has_screen: bool,
+  has_print: bool,
+  has_speech: bool,
+  target: crate::style::media::MediaType,
+) -> bool {
+  match target {
+    crate::style::media::MediaType::Screen => has_screen || (!has_print && !has_speech && !has_screen),
+    crate::style::media::MediaType::Print => has_print || (!has_screen && !has_speech && !has_print),
+    crate::style::media::MediaType::Speech => has_speech || (!has_screen && !has_print && !has_speech),
+    crate::style::media::MediaType::All => true,
+  }
 }
 
 /// Heuristic extraction of CSS URLs that appear inside inline scripts or attributes.
@@ -1123,6 +1149,7 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::style::media::MediaType;
   use tempfile;
 
   #[test]
@@ -1174,7 +1201,7 @@ mod tests {
             <link rel="alternate stylesheet" href="b.css">
             <link rel="icon" href="favicon.ico">
         "#;
-    let urls = extract_css_links(html, "https://example.com/app/index.html");
+    let urls = extract_css_links(html, "https://example.com/app/index.html", MediaType::Screen);
     assert_eq!(urls.len(), 2);
     assert!(urls.contains(&"https://example.com/styles/a.css".to_string()));
     assert!(urls.contains(&"https://example.com/app/b.css".to_string()));
@@ -1187,7 +1214,7 @@ mod tests {
             <link rel=stylesheet href=/styles/print.css media=print>
             <link rel=stylesheet href=/styles/b.css media=all>
         "#;
-    let urls = extract_css_links(html, "https://example.com/app/page.html");
+    let urls = extract_css_links(html, "https://example.com/app/page.html", MediaType::Screen);
     assert_eq!(urls, vec![
       "https://example.com/styles/a.css".to_string(),
       "https://example.com/styles/b.css".to_string(),
@@ -1199,7 +1226,7 @@ mod tests {
     let html = r#"
             <link rel="stylesheet" href="https://cdn.example.com/app.css?foo=bar\u0026baz=qux">
         "#;
-    let urls = extract_css_links(html, "https://example.com/");
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
     assert_eq!(urls, vec![
       "https://cdn.example.com/app.css?foo=bar&baz=qux".to_string()
     ]);
@@ -1237,7 +1264,7 @@ mod tests {
             <link rel="stylesheet" href="https://&/#47;&#47;cdn.example.com&#47;other.css">
             <link rel="stylesheet" href="https:////cdn.example.com////more.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/");
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
     assert_eq!(urls, vec![
       "https://cdn.example.com/main.css".to_string(),
       "https://cdn.example.com/other.css".to_string(),
@@ -1250,7 +1277,7 @@ mod tests {
     let html = r#"
             <link rel="stylesheet" href="//cdn.example.com/app.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/page");
+    let urls = extract_css_links(html, "https://example.com/page", MediaType::Screen);
     assert_eq!(urls, vec!["https://cdn.example.com/app.css".to_string()]);
 
     let resolved = resolve_href("https://example.com/page", "//cdn.example.com/app.css");
@@ -1267,7 +1294,7 @@ mod tests {
             <link rel="stylesheet" media="print, screen" href="https://cdn.example.com/both.css">
             <link rel="stylesheet" media="screen" href="https://cdn.example.com/screen.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/");
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
     assert_eq!(urls, vec![
       "https://cdn.example.com/both.css".to_string(),
       "https://cdn.example.com/screen.css".to_string(),
@@ -1354,7 +1381,7 @@ mod tests {
             <link rel="stylesheet" href="/b.css">
             <link rel="stylesheet" href="/a.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/app/index.html");
+    let urls = extract_css_links(html, "https://example.com/app/index.html", MediaType::Screen);
     assert_eq!(urls, vec![
       "https://example.com/a.css".to_string(),
       "https://example.com/b.css".to_string(),
@@ -1391,7 +1418,7 @@ mod tests {
     let html = r#"
             <link rel="stylesheet" media="print" href="/print.css">
         "#;
-    let urls = extract_css_links(html, "https://example.com/");
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
     assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
   }
 
@@ -1400,7 +1427,7 @@ mod tests {
     let html = r#"
             <link rel=stylesheet media=print href=/print.css>
         "#;
-    let urls = extract_css_links(html, "https://example.com/");
+    let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
     assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
   }
 

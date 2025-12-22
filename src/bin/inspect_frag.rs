@@ -26,6 +26,7 @@ use fastrender::style::cascade::apply_styles_with_media_and_target;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::computed::Visibility;
 use fastrender::style::display::Display;
+use fastrender::style::media::MediaType;
 use fastrender::style::media::MediaContext;
 use fastrender::style::position::Position;
 use fastrender::style::ComputedStyle;
@@ -246,7 +247,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
     .unwrap_or(true);
   if fetch_css {
-    let mut css_links = extract_css_links(&html, &resource_base);
+    let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen);
     let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
     for extra in extract_embedded_css_urls(&html, &resource_base) {
       if seen_links.insert(extra.clone()) {

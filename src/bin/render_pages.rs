@@ -26,6 +26,7 @@ use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
+use fastrender::style::media::MediaType;
 use fastrender::FastRender;
 use std::collections::HashSet;
 use std::fmt::Write;
@@ -435,7 +436,7 @@ fn main() {
           }
         }
 
-        let mut css_links = extract_css_links(&html, &resource_base);
+        let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen);
         if let Some(limit) = css_limit {
           if css_links.len() > limit {
             css_links.truncate(limit);
