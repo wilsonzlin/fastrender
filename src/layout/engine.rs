@@ -776,6 +776,7 @@ mod tests {
 
   #[test]
   fn test_engine_stats() {
+    crate::layout::formatting_context::intrinsic_cache_reset_counters();
     let engine = LayoutEngine::with_defaults();
     let stats = engine.stats();
 

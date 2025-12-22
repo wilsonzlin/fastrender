@@ -203,15 +203,22 @@ mod wpt_runner_tests {
 
   #[test]
   fn wpt_local_suite_passes() {
-    let renderer = create_test_renderer();
-    let mut runner = WptRunner::with_config(renderer, HarnessConfig::default());
+    std::thread::Builder::new()
+      .stack_size(64 * 1024 * 1024)
+      .spawn(|| {
+        let renderer = create_test_renderer();
+        let mut runner = WptRunner::with_config(renderer, HarnessConfig::default());
 
-    let results = runner.run_suite(Path::new("tests/wpt/tests"));
-    assert!(!results.is_empty());
+        let results = runner.run_suite(Path::new("tests/wpt/tests"));
+        assert!(!results.is_empty());
 
-    for result in &results {
-      assert_eq!(result.status, TestStatus::Pass, "{}", result.metadata.id);
-    }
+        for result in &results {
+          assert_eq!(result.status, TestStatus::Pass, "{}", result.metadata.id);
+        }
+      })
+      .unwrap()
+      .join()
+      .unwrap();
   }
 
   // =========================================================================
@@ -474,7 +481,8 @@ mod wpt_runner_tests {
   fn test_harness_config_default() {
     let config = HarnessConfig::default();
 
-    assert_eq!(config.test_dir, PathBuf::from("tests/wpt"));
+    assert_eq!(config.test_dir, PathBuf::from("tests/wpt/tests"));
+    assert_eq!(config.expected_dir, PathBuf::from("tests/wpt/expected"));
     assert_eq!(config.pixel_tolerance, 0);
     assert_eq!(config.max_diff_percentage, 0.0);
     assert_eq!(config.default_timeout_ms, 30000);
@@ -488,7 +496,7 @@ mod wpt_runner_tests {
     let config = HarnessConfig::with_test_dir("custom/tests");
 
     assert_eq!(config.test_dir, PathBuf::from("custom/tests"));
-    assert_eq!(config.expected_dir, PathBuf::from("custom/tests/expected"));
+    assert_eq!(config.expected_dir, PathBuf::from("custom/expected"));
   }
 
   #[test]

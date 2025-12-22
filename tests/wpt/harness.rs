@@ -526,7 +526,7 @@ pub struct HarnessConfig {
 impl Default for HarnessConfig {
   fn default() -> Self {
     Self {
-      test_dir: PathBuf::from("tests/wpt"),
+      test_dir: PathBuf::from("tests/wpt/tests"),
       expected_dir: PathBuf::from("tests/wpt/expected"),
       output_dir: PathBuf::from("target/wpt-output"),
       save_rendered: true,
@@ -547,7 +547,10 @@ impl HarnessConfig {
   /// Creates a new configuration with custom test directory
   pub fn with_test_dir(test_dir: impl Into<PathBuf>) -> Self {
     let test_dir = test_dir.into();
-    let expected_dir = test_dir.join("expected");
+    let expected_dir = test_dir
+      .parent()
+      .map(|p| p.join("expected"))
+      .unwrap_or_else(|| test_dir.join("expected"));
     Self {
       test_dir,
       expected_dir,
