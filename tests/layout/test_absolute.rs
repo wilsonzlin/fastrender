@@ -14,8 +14,10 @@ use fastrender::geometry::Size;
 use fastrender::AbsoluteLayout;
 use fastrender::AbsoluteLayoutInput;
 use fastrender::AbsoluteLayoutResult;
+use fastrender::ComputedStyle;
 use fastrender::ContainingBlock;
 use fastrender::FragmentNode;
+use fastrender::Length;
 use fastrender::LengthOrAuto;
 use fastrender::Position;
 use fastrender::PositionedStyle;
@@ -661,6 +663,117 @@ fn test_should_layout_absolute() {
 
   style.position = Position::Relative;
   assert!(!AbsoluteLayout::should_layout_absolute(&style));
+}
+
+// ============================================================================
+// Auto Margin Tests
+// ============================================================================
+
+#[test]
+fn test_absolute_explicit_zero_margins_do_not_center() {
+  let layout = AbsoluteLayout::new();
+
+  let mut style = ComputedStyle::default();
+  style.position = Position::Absolute;
+  style.left = Some(Length::px(0.0));
+  style.right = Some(Length::px(0.0));
+  style.width = Some(Length::px(100.0));
+  style.margin_left = Some(Length::px(0.0));
+  style.margin_right = Some(Length::px(0.0));
+  style.border_left_width = Length::px(0.0);
+  style.border_right_width = Length::px(0.0);
+  style.border_top_width = Length::px(0.0);
+  style.border_bottom_width = Length::px(0.0);
+
+  let cb = create_cb(400.0, 200.0);
+  let positioned = layout.resolve_positioned_style(&style, &cb);
+  let input = create_input(positioned, Size::new(10.0, 10.0));
+
+  let result = layout.layout_absolute(&input, &cb).unwrap();
+
+  assert_eq!(result.position.x, 0.0);
+  assert_eq!(result.margins.left, 0.0);
+  assert_eq!(result.margins.right, 0.0);
+}
+
+#[test]
+fn test_absolute_auto_margins_center_horizontally() {
+  let layout = AbsoluteLayout::new();
+
+  let mut style = ComputedStyle::default();
+  style.position = Position::Absolute;
+  style.left = Some(Length::px(0.0));
+  style.right = Some(Length::px(0.0));
+  style.width = Some(Length::px(100.0));
+  style.margin_left = None;
+  style.margin_right = None;
+  style.border_left_width = Length::px(0.0);
+  style.border_right_width = Length::px(0.0);
+  style.border_top_width = Length::px(0.0);
+  style.border_bottom_width = Length::px(0.0);
+
+  let cb = create_cb(400.0, 200.0);
+  let positioned = layout.resolve_positioned_style(&style, &cb);
+  let input = create_input(positioned, Size::new(0.0, 0.0));
+
+  let result = layout.layout_absolute(&input, &cb).unwrap();
+
+  assert!((result.position.x - 150.0).abs() < 0.001);
+  assert!((result.margins.left - 150.0).abs() < 0.001);
+  assert!((result.margins.right - 150.0).abs() < 0.001);
+}
+
+#[test]
+fn test_absolute_single_auto_margin_takes_remaining_space() {
+  let layout = AbsoluteLayout::new();
+
+  let mut style = ComputedStyle::default();
+  style.position = Position::Absolute;
+  style.left = Some(Length::px(30.0));
+  style.right = Some(Length::px(40.0));
+  style.width = Some(Length::px(100.0));
+  style.margin_left = Some(Length::px(20.0));
+  style.margin_right = None;
+  style.border_left_width = Length::px(0.0);
+  style.border_right_width = Length::px(0.0);
+  style.border_top_width = Length::px(0.0);
+  style.border_bottom_width = Length::px(0.0);
+
+  let cb = create_cb(400.0, 200.0);
+  let positioned = layout.resolve_positioned_style(&style, &cb);
+  let input = create_input(positioned, Size::new(0.0, 0.0));
+
+  let result = layout.layout_absolute(&input, &cb).unwrap();
+
+  assert!((result.position.x - 50.0).abs() < 0.001);
+  assert!((result.margins.right - 210.0).abs() < 0.001);
+}
+
+#[test]
+fn test_absolute_vertical_auto_margins_center() {
+  let layout = AbsoluteLayout::new();
+
+  let mut style = ComputedStyle::default();
+  style.position = Position::Absolute;
+  style.top = Some(Length::px(10.0));
+  style.bottom = Some(Length::px(10.0));
+  style.height = Some(Length::px(50.0));
+  style.margin_top = None;
+  style.margin_bottom = None;
+  style.border_left_width = Length::px(0.0);
+  style.border_right_width = Length::px(0.0);
+  style.border_top_width = Length::px(0.0);
+  style.border_bottom_width = Length::px(0.0);
+
+  let cb = create_cb(200.0, 200.0);
+  let positioned = layout.resolve_positioned_style(&style, &cb);
+  let input = create_input(positioned, Size::new(0.0, 0.0));
+
+  let result = layout.layout_absolute(&input, &cb).unwrap();
+
+  assert!((result.position.y - 75.0).abs() < 0.001);
+  assert!((result.margins.top - 65.0).abs() < 0.001);
+  assert!((result.margins.bottom - 65.0).abs() < 0.001);
 }
 
 // ============================================================================
