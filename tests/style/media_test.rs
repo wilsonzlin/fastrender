@@ -6,9 +6,15 @@
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::style::media::ColorScheme;
 use fastrender::style::media::ContrastPreference;
+use fastrender::style::media::DisplayMode;
+use fastrender::style::media::LightLevel;
 use fastrender::style::media::MediaContext;
+use fastrender::style::media::MediaType;
 use fastrender::style::media::MediaQuery;
 use fastrender::style::media::MediaQueryCache;
+use fastrender::style::media::PointerCapability;
+use fastrender::style::media::Scripting;
+use fastrender::style::media::UpdateFrequency;
 use std::env;
 
 struct EnvGuard {
@@ -618,6 +624,28 @@ fn env_override_prefers_reduced_transparency() {
 }
 
 #[test]
+fn env_override_level5_features() {
+  let guard_script = EnvGuard::new("FASTR_SCRIPTING", Some("none"));
+  let guard_light = EnvGuard::new("FASTR_LIGHT_LEVEL", Some("dim"));
+  let guard_update = EnvGuard::new("FASTR_UPDATE_FREQUENCY", Some("slow"));
+  let guard_display = EnvGuard::new("FASTR_DISPLAY_MODE", Some("standalone"));
+  let guard_media = EnvGuard::new("FASTR_MEDIA_TYPE", Some("print"));
+
+  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+  assert!(matches!(ctx.scripting, Scripting::None));
+  assert!(matches!(ctx.light_level, LightLevel::Dim));
+  assert!(matches!(ctx.update_frequency, UpdateFrequency::Slow));
+  assert!(matches!(ctx.display_mode, DisplayMode::Standalone));
+  assert!(matches!(ctx.media_type, MediaType::Print));
+
+  drop(guard_script);
+  drop(guard_light);
+  drop(guard_update);
+  drop(guard_display);
+  drop(guard_media);
+}
+
+#[test]
 fn media_query_with_reduced_transparency_env_overrides_cache() {
   let guard = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("reduce"));
   let query = MediaQuery::parse("(prefers-reduced-transparency: reduce)").unwrap();
@@ -648,6 +676,40 @@ fn media_query_cache_invalidation_on_viewport_change() {
   assert!(
     !narrow.evaluate_with_cache(&query, Some(&mut cache)),
     "narrow viewport should not match"
+  );
+}
+
+#[test]
+fn media_query_cache_invalidation_on_media_type_change() {
+  let query = MediaQuery::parse("print").unwrap();
+  let mut cache = MediaQueryCache::default();
+
+  let screen = MediaContext::screen(800.0, 600.0);
+  assert!(!screen.evaluate_with_cache(&query, Some(&mut cache)));
+
+  let print_ctx = MediaContext::print(800.0, 600.0);
+  assert!(print_ctx.evaluate_with_cache(&query, Some(&mut cache)));
+}
+
+#[test]
+fn media_query_cache_invalidation_on_pointer_change() {
+  let query = MediaQuery::parse("(pointer: fine)").unwrap();
+  let mut cache = MediaQueryCache::default();
+
+  let desktop = MediaContext::screen(800.0, 600.0);
+  assert!(desktop.evaluate_with_cache(&query, Some(&mut cache)));
+
+  let mut touch_like = desktop.clone();
+  touch_like.can_hover = false;
+  touch_like.any_can_hover = false;
+  touch_like.pointer = PointerCapability::Coarse;
+  touch_like.any_pointer = PointerCapability::Coarse;
+  touch_like.any_pointer_coarse = true;
+  touch_like.any_pointer_fine = false;
+
+  assert!(
+    !touch_like.evaluate_with_cache(&query, Some(&mut cache)),
+    "cache must invalidate when pointer capabilities change"
   );
 }
 
@@ -738,6 +800,72 @@ fn pointer_and_hover_reject_invalid_values() {
   assert!(MediaQuery::parse("(pointer: 2)").is_err());
   assert!(MediaQuery::parse("(hover: sometimes)").is_err());
   assert!(MediaQuery::parse("(hover: 1)").is_err());
+}
+
+// ============================================================================
+// Media Queries Level 5 additions
+// ============================================================================
+
+#[test]
+fn media_level5_features_evaluate() {
+  let scripting_enabled = MediaContext::screen(1024.0, 768.0);
+  let scripting_none = MediaContext::screen(1024.0, 768.0).with_scripting(Scripting::None);
+  let scripting_initial =
+    MediaContext::screen(1024.0, 768.0).with_scripting(Scripting::InitialOnly);
+
+  assert!(scripting_enabled.evaluate(&MediaQuery::parse("(scripting: enabled)").unwrap()));
+  assert!(scripting_none.evaluate(&MediaQuery::parse("(scripting: none)").unwrap()));
+  assert!(scripting_initial.evaluate(&MediaQuery::parse("(scripting: initial-only)").unwrap()));
+  assert!(!scripting_enabled.evaluate(&MediaQuery::parse("(scripting: none)").unwrap()));
+
+  let fast = MediaContext::screen(800.0, 600.0);
+  let slow = fast.clone().with_update_frequency(UpdateFrequency::Slow);
+  let none = fast.clone().with_update_frequency(UpdateFrequency::None);
+
+  assert!(fast.evaluate(&MediaQuery::parse("(update: fast)").unwrap()));
+  assert!(slow.evaluate(&MediaQuery::parse("(update: slow)").unwrap()));
+  assert!(none.evaluate(&MediaQuery::parse("(update: none)").unwrap()));
+
+  let washed = MediaContext::screen(640.0, 480.0).with_light_level(LightLevel::Washed);
+  let dim = MediaContext::screen(640.0, 480.0).with_light_level(LightLevel::Dim);
+
+  assert!(washed.evaluate(&MediaQuery::parse("(light-level: washed)").unwrap()));
+  assert!(dim.evaluate(&MediaQuery::parse("(light-level: dim)").unwrap()));
+  assert!(
+    MediaContext::screen(640.0, 480.0)
+      .evaluate(&MediaQuery::parse("(light-level: normal)").unwrap())
+  );
+
+  let fullscreen = MediaContext::screen(1024.0, 768.0).with_display_mode(DisplayMode::Fullscreen);
+  let standalone = MediaContext::screen(1024.0, 768.0).with_display_mode(DisplayMode::Standalone);
+  let browser = MediaContext::screen(1024.0, 768.0);
+
+  assert!(fullscreen.evaluate(&MediaQuery::parse("(display-mode: fullscreen)").unwrap()));
+  assert!(standalone.evaluate(&MediaQuery::parse("(display-mode: standalone)").unwrap()));
+  assert!(browser.evaluate(&MediaQuery::parse("(display-mode: browser)").unwrap()));
+  assert!(!browser.evaluate(&MediaQuery::parse("(display-mode: fullscreen)").unwrap()));
+}
+
+#[test]
+fn media_level5_invalid_values_reject() {
+  assert!(MediaQuery::parse("(scripting: maybe)").is_err());
+  assert!(MediaQuery::parse("(update: fast-ish)").is_err());
+  assert!(MediaQuery::parse("(light-level: bright)").is_err());
+  assert!(MediaQuery::parse("(display-mode: kiosk)").is_err());
+}
+
+#[test]
+fn dynamic_viewport_units_in_media_queries() {
+  let query = MediaQuery::parse("(min-width: 50dvw)").unwrap();
+  let tall = MediaContext::screen(200.0, 500.0);
+  assert!(tall.evaluate(&query)); // 50dvw == 100px, width 200px
+
+  let small = MediaContext::screen(80.0, 500.0);
+  assert!(!small.evaluate(&query));
+
+  let height_query = MediaQuery::parse("(max-height: 25dvh)").unwrap();
+  let ctx = MediaContext::screen(400.0, 100.0);
+  assert!(ctx.evaluate(&height_query)); // 25dvh == 25px
 }
 
 #[test]
