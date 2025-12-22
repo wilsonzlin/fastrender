@@ -213,7 +213,14 @@ impl WptRunner {
   /// ```
   pub fn run_test(&mut self, test_path: &Path) -> TestResult {
     let start = Instant::now();
-    let metadata = TestMetadata::from_path(test_path.to_path_buf());
+    let mut metadata = TestMetadata::from_path(test_path.to_path_buf());
+
+    if metadata.test_type == TestType::Reftest && metadata.reference_path.is_none() {
+      let expected_path = self.get_expected_image_path(&metadata);
+      if expected_path.exists() {
+        metadata.test_type = TestType::Visual;
+      }
+    }
 
     // Check if test is disabled
     if metadata.disabled {

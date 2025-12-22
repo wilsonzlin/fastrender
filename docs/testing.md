@@ -25,7 +25,16 @@ This harness covers targeted style/cascade/layout regressions.
 
 - Run fixtures: `cargo test fixtures`
 - (Re)generate goldens: `UPDATE_GOLDEN=1 cargo test fixtures`
+- To refresh a single fixture (faster): `UPDATE_GOLDEN=1 cargo test test_fixture_<name> -- --exact`
+
+New columns/transform/form fixtures ship with checked-in goldens; keep these up to date when adjusting layouts.
 
 ## WPT harness (experimental)
 
 There is a small WPT-style runner under `tests/wpt/` that can execute a subset of “render and compare” style tests. It is not a full WPT integration and does not run the upstream WPT suite.
+
+Local visual tests live in `tests/wpt/tests/` with expected PNGs under `tests/wpt/expected/`. Run them via `cargo test wpt_local_suite_passes`. To refresh an expected image, re-render the matching HTML with `fetch_and_render`, e.g.:
+
+```
+cargo run --quiet --bin fetch_and_render -- --viewport 800x600 file://$PWD/tests/wpt/tests/columns/multicol-001.html tests/wpt/expected/columns/multicol-001.png
+```

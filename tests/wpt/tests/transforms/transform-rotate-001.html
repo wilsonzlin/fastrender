@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>transforms: translate/rotate/skew</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 32px;
+      background: #fbfdff;
+      font: 16px/1.4 "Helvetica Neue", Arial, sans-serif;
+    }
+
+    .scene {
+      position: relative;
+      width: 320px;
+      height: 220px;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #eef3ff 0%, #ffffff 60%);
+      border: 1px solid #d8e0f0;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+    }
+
+    .tile {
+      position: absolute;
+      width: 120px;
+      height: 70px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      color: #1b2f4b;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
+    }
+
+    .base {
+      top: 36px;
+      left: 26px;
+      background: #d6e4ff;
+    }
+
+    .translate-rotate {
+      top: 62px;
+      left: 90px;
+      background: #ffe0b2;
+      transform: translate(70px, 12px) rotate(16deg);
+    }
+
+    .skewed {
+      top: 136px;
+      left: 120px;
+      background: #c5e1a5;
+      transform: translate(-22px, 12px) skew(12deg, 3deg);
+    }
+  </style>
+</head>
+<body>
+  <div class="scene">
+    <div class="tile base">Base</div>
+    <div class="tile translate-rotate">Rotate</div>
+    <div class="tile skewed">Skew</div>
+  </div>
+</body>
+</html>

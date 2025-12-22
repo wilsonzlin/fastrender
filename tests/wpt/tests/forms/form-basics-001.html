@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>forms: basic controls</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      background: #f7f9fb;
+      font: 15px/1.5 "Segoe UI", Arial, sans-serif;
+      color: #1a2a3a;
+    }
+
+    form {
+      width: 360px;
+      background: #ffffff;
+      border: 1px solid #d5deea;
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    }
+
+    fieldset {
+      border: 1px solid #c5d3e3;
+      border-radius: 8px;
+      padding: 10px;
+    }
+
+    legend {
+      padding: 0 8px;
+      font-weight: 700;
+      color: #0d47a1;
+    }
+
+    label {
+      display: block;
+      margin: 0 0 10px;
+      font-size: 14px;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px;
+      border: 1px solid #cfd8e3;
+      border-radius: 6px;
+      font: inherit;
+      background: #fdfefe;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .row label {
+      flex: 1;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    button {
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: none;
+      font-weight: 600;
+      color: #ffffff;
+      background: linear-gradient(135deg, #1565c0, #2196f3);
+    }
+
+    .secondary {
+      background: #90a4ae;
+    }
+  </style>
+</head>
+<body>
+  <form>
+    <fieldset>
+      <legend>Form layout</legend>
+      <div class="row">
+        <label>First name
+          <input type="text" value="Grace">
+        </label>
+        <label>Last name
+          <input type="text" value="Hopper">
+        </label>
+      </div>
+      <label>Email
+        <input type="email" value="grace@example.net">
+      </label>
+      <label>Topic
+        <select>
+          <option>Bug report</option>
+          <option selected>Styling</option>
+          <option>Forms</option>
+        </select>
+      </label>
+      <label>Notes
+        <textarea rows="3">Compact form controls with legend and labels.</textarea>
+      </label>
+      <div class="buttons">
+        <button type="submit">Submit</button>
+        <button type="button" class="secondary">Reset</button>
+      </div>
+    </fieldset>
+  </form>
+</body>
+</html>

@@ -18,6 +18,7 @@ mod wpt_runner_tests {
   use super::wpt::TestType;
   use super::wpt::WptRunner;
   use super::wpt::WptRunnerBuilder;
+  use std::path::Path;
   use std::path::PathBuf;
   use std::time::Duration;
   use tempfile::TempDir;
@@ -198,6 +199,19 @@ mod wpt_runner_tests {
 
     assert_eq!(suite.total(), 2);
     assert!(suite.duration.as_nanos() > 0);
+  }
+
+  #[test]
+  fn wpt_local_suite_passes() {
+    let renderer = create_test_renderer();
+    let mut runner = WptRunner::with_config(renderer, HarnessConfig::default());
+
+    let results = runner.run_suite(Path::new("tests/wpt/tests"));
+    assert!(!results.is_empty());
+
+    for result in &results {
+      assert_eq!(result.status, TestStatus::Pass, "{}", result.metadata.id);
+    }
   }
 
   // =========================================================================
