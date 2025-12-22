@@ -34,6 +34,8 @@
 //!                 └── margin-applies-to-002.png  # Expected image
 //! ```
 
+use image::codecs::png::PngEncoder;
+use image::{ColorType, ImageEncoder, Rgba, RgbaImage};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
@@ -668,6 +670,8 @@ pub fn generate_diff_image(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use image::codecs::png::PngEncoder;
+  use image::{ColorType, ImageEncoder, Rgba, RgbaImage};
 
   #[test]
   fn test_assertion_result_pass() {
@@ -901,5 +905,80 @@ mod tests {
   fn test_harness_config_update_expected() {
     let config = HarnessConfig::default().update_expected();
     assert!(config.update_expected);
+  }
+
+  fn encode_png(image: &RgbaImage) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    PngEncoder::new(&mut buffer)
+      .write_image(image.as_raw(), image.width(), image.height(), ColorType::Rgba8)
+      .unwrap();
+    buffer
+  }
+
+  fn solid_png(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+    let image = RgbaImage::from_pixel(width, height, Rgba(color));
+    encode_png(&image)
+  }
+
+  #[test]
+  fn test_compare_images_identical() {
+    let png = solid_png(2, 2, [10, 20, 30, 255]);
+    let (diff_pixels, total_pixels, diff_percentage) = compare_images(&png, &png, 0).unwrap();
+
+    assert_eq!(diff_pixels, 0);
+    assert_eq!(total_pixels, 4);
+    assert_eq!(diff_percentage, 0.0);
+  }
+
+  #[test]
+  fn test_compare_images_single_pixel_difference() {
+    let mut rendered_img = RgbaImage::from_pixel(2, 2, Rgba([0, 0, 0, 255]));
+    rendered_img.put_pixel(1, 1, Rgba([255, 0, 0, 255]));
+
+    let expected_png = solid_png(2, 2, [0, 0, 0, 255]);
+    let rendered_png = encode_png(&rendered_img);
+
+    let (diff_pixels, total_pixels, diff_percentage) =
+      compare_images(&rendered_png, &expected_png, 0).unwrap();
+
+    assert_eq!(diff_pixels, 1);
+    assert_eq!(total_pixels, 4);
+    assert!((diff_percentage - 25.0).abs() < f64::EPSILON);
+  }
+
+  #[test]
+  fn test_compare_images_respects_tolerance() {
+    let expected_png = solid_png(1, 1, [10, 10, 10, 255]);
+
+    let mut rendered_img = RgbaImage::from_pixel(1, 1, Rgba([10, 10, 10, 255]));
+    rendered_img.put_pixel(0, 0, Rgba([12, 10, 10, 255]));
+    let rendered_png = encode_png(&rendered_img);
+
+    let (diff_pixels, _total_pixels, diff_percentage) =
+      compare_images(&rendered_png, &expected_png, 5).unwrap();
+
+    assert_eq!(diff_pixels, 0);
+    assert_eq!(diff_percentage, 0.0);
+  }
+
+  #[test]
+  fn test_compare_images_dimension_mismatch() {
+    let small = solid_png(1, 1, [0, 0, 0, 255]);
+    let large = solid_png(2, 1, [0, 0, 0, 255]);
+
+    let err = compare_images(&small, &large, 0).unwrap_err();
+    assert!(err.contains("dimensions differ"));
+  }
+
+  #[test]
+  fn test_generate_diff_image_marks_differences() {
+    let rendered = solid_png(1, 1, [255, 255, 255, 255]);
+    let expected = solid_png(1, 1, [0, 0, 0, 255]);
+
+    let diff_png = generate_diff_image(&rendered, &expected).unwrap();
+    let diff_image = decode_png(&diff_png).unwrap();
+
+    assert_eq!(diff_image.dimensions(), (1, 1));
+    assert_eq!(*diff_image.get_pixel(0, 0), Rgba([255, 0, 255, 255]));
   }
 }
