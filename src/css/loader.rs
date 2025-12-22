@@ -6,6 +6,7 @@
 //! tooling binaries so cached pages can be rendered with their real styles.
 
 use crate::error::Result;
+use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -161,124 +162,144 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
 
 /// Rewrite `url(...)` references in a CSS string to be absolute using the stylesheet's base URL.
 pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
-  #[derive(PartialEq)]
-  enum State {
-    Normal,
-    SingleString,
-    DoubleString,
-    Comment,
-  }
-
-  let mut out = String::with_capacity(css.len());
-  let mut state = State::Normal;
-  let bytes = css.as_bytes();
-  let mut i = 0usize;
-  let mut last_emit = 0usize;
-
-  while i < bytes.len() {
-    match state {
-      State::Normal => {
-        if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-          i += 2;
-          state = State::Comment;
-          continue;
-        }
-        if bytes[i] == b'\'' {
-          i += 1;
-          state = State::SingleString;
-          continue;
-        }
-        if bytes[i] == b'"' {
-          i += 1;
-          state = State::DoubleString;
-          continue;
-        }
-
-        if (bytes[i] == b'u' || bytes[i] == b'U')
-          && i + 3 < bytes.len()
-          && bytes[i + 1..].len() >= 3
-          && bytes[i + 1].eq_ignore_ascii_case(&b'r')
-          && bytes[i + 2].eq_ignore_ascii_case(&b'l')
-        {
-          let mut j = i + 3;
-          while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-            j += 1;
-          }
-          if j < bytes.len() && bytes[j] == b'(' {
-            j += 1;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-              j += 1;
-            }
-            let content_start = j;
-            let mut in_single = false;
-            let mut in_double = false;
-            while j < bytes.len() {
-              let b = bytes[j];
-              if !in_single && !in_double && b == b')' {
-                break;
-              }
-              match b {
-                b'\\' => {
-                  j += 1;
-                }
-                b'\'' if !in_double => in_single = !in_single,
-                b'"' if !in_single => in_double = !in_double,
-                _ => {}
-              }
-              j += 1;
-            }
-            if j < bytes.len() && bytes[j] == b')' {
-              let content_end = j;
-              out.push_str(&css[last_emit..i]);
-
-              let raw = css[content_start..content_end].trim();
-              let unquoted = raw.trim_matches('"').trim_matches('\'').to_string();
-              if let Some(resolved) = resolve_href(base_url, &unquoted) {
-                let _ = write!(out, "url(\"{}\")", resolved);
-              } else {
-                out.push_str(&css[i..=content_end]);
-              }
-              i = content_end + 1;
-              last_emit = i;
-              continue;
-            }
-          }
-        }
-        i += 1;
-      }
-      State::SingleString => {
-        if bytes[i] == b'\\' {
-          i += 2;
-          continue;
-        }
-        if bytes[i] == b'\'' {
-          state = State::Normal;
-        }
-        i += 1;
-      }
-      State::DoubleString => {
-        if bytes[i] == b'\\' {
-          i += 2;
-          continue;
-        }
-        if bytes[i] == b'"' {
-          state = State::Normal;
-        }
-        i += 1;
-      }
-      State::Comment => {
-        if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
-          i += 2;
-          state = State::Normal;
-        } else {
-          i += 1;
-        }
+  fn escape_url_for_css(url: &str) -> String {
+    let mut escaped = String::with_capacity(url.len());
+    for ch in url.chars() {
+      match ch {
+        '"' => escaped.push_str("\\\""),
+        '\\' => escaped.push_str("\\\\"),
+        '\n' => escaped.push_str("\\0a "),
+        '\r' => escaped.push_str("\\0d "),
+        '\t' => escaped.push_str("\\09 "),
+        _ => escaped.push(ch),
       }
     }
+    escaped
   }
 
-  out.push_str(&css[last_emit..]);
-  out
+  fn rewrite_urls_in_parser<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+    base_url: &str,
+    capacity_hint: usize,
+  ) -> String {
+    let mut out = if capacity_hint > 0 {
+      String::with_capacity(capacity_hint)
+    } else {
+      String::new()
+    };
+    let mut last_emitted = parser.position();
+
+    while !parser.is_exhausted() {
+      let token_start = parser.position();
+      let token = match parser.next_including_whitespace_and_comments() {
+        Ok(t) => t,
+        Err(_) => break,
+      };
+
+      match token {
+        Token::Url(ref url_value) => {
+          let token_text = parser.slice_from(token_start);
+          let chunk = parser.slice_from(last_emitted);
+          let prefix_len = chunk.len().saturating_sub(token_text.len());
+          out.push_str(&chunk[..prefix_len]);
+
+          if let Some(resolved) = resolve_href(base_url, url_value.as_ref()) {
+            let escaped = escape_url_for_css(&resolved);
+            out.push_str(&format!("url(\"{}\")", escaped));
+          } else {
+            out.push_str(token_text);
+          }
+
+          last_emitted = parser.position();
+        }
+        Token::Function(ref name) if name.eq_ignore_ascii_case("url") => {
+          let parse_result = parser.parse_nested_block(|nested| {
+            let start = nested.position();
+            let mut arg: Option<String> = None;
+
+            while !nested.is_exhausted() {
+              match nested.next_including_whitespace_and_comments() {
+                Ok(Token::WhiteSpace) | Ok(Token::Comment(_)) => {}
+                Ok(Token::QuotedString(s)) | Ok(Token::Url(s)) => {
+                  arg = Some(s.as_ref().to_string());
+                }
+                Ok(Token::Ident(s)) => {
+                  arg = Some(s.as_ref().to_string());
+                }
+                Ok(Token::BadUrl(_)) => {
+                  arg = None;
+                }
+                Ok(_) => {}
+                Err(_) => break,
+              }
+            }
+
+            let original_inner = nested.slice_from(start);
+            Ok((arg, original_inner.len()))
+          });
+
+          let block_text = parser.slice_from(token_start);
+          let chunk = parser.slice_from(last_emitted);
+          let prefix_len = chunk.len().saturating_sub(block_text.len());
+          out.push_str(&chunk[..prefix_len]);
+
+          if let Ok((arg, _)) = parse_result {
+            if let Some(url_arg) = arg {
+              if let Some(resolved) = resolve_href(base_url, &url_arg) {
+                let escaped = escape_url_for_css(&resolved);
+                out.push_str(&format!("url(\"{}\")", escaped));
+                last_emitted = parser.position();
+                continue;
+              }
+            }
+          }
+
+          out.push_str(block_text);
+          last_emitted = parser.position();
+        }
+        Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
+          let parse_result = parser.parse_nested_block(|nested| {
+            let start = nested.position();
+            let rewritten = rewrite_urls_in_parser(nested, base_url, 0);
+            let original = nested.slice_from(start);
+            Ok((rewritten, original.len()))
+          });
+
+          let block_text = parser.slice_from(token_start);
+          let chunk = parser.slice_from(last_emitted);
+          let prefix_len = chunk.len().saturating_sub(block_text.len());
+          out.push_str(&chunk[..prefix_len]);
+
+          if let Ok((inner_rewritten, inner_len)) = parse_result {
+            const CLOSING_LEN: usize = 1;
+            if block_text.len() >= inner_len + CLOSING_LEN {
+              let open_len = block_text.len() - inner_len - CLOSING_LEN;
+              if open_len <= block_text.len() {
+                let (open_part, _) = block_text.split_at(open_len);
+                let close_part = &block_text[block_text.len() - CLOSING_LEN..];
+                out.push_str(open_part);
+                out.push_str(&inner_rewritten);
+                out.push_str(close_part);
+                last_emitted = parser.position();
+                continue;
+              }
+            }
+          }
+
+          out.push_str(block_text);
+          last_emitted = parser.position();
+        }
+        _ => {}
+      }
+    }
+
+    out.push_str(parser.slice_from(last_emitted));
+    out
+  }
+
+  let mut input = ParserInput::new(css);
+  let mut parser = Parser::new(&mut input);
+  rewrite_urls_in_parser(&mut parser, base_url, css.len())
 }
 
 fn parse_import_target(rule: &str) -> Option<(String, String)> {
