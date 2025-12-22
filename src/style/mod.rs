@@ -53,6 +53,8 @@ use types::CaptionSide;
 use types::CaretColor;
 use types::ClipPath;
 use types::ClipRect;
+use types::ColumnFill;
+use types::ColumnSpan;
 use types::ColorSchemePreference;
 use types::ContainerType;
 use types::Containment;
@@ -481,6 +483,16 @@ pub struct ComputedStyle {
   pub(crate) grid_column_raw: Option<String>,
   pub(crate) grid_row_raw: Option<String>,
 
+  // Multi-column
+  pub column_count: Option<u32>,
+  pub column_width: Option<Length>,
+  pub column_gap: Length,
+  pub column_rule_color: Option<Rgba>,
+  pub column_rule_style: BorderStyle,
+  pub column_rule_width: Length,
+  pub column_fill: ColumnFill,
+  pub column_span: ColumnSpan,
+
   // Typography
   pub font_family: Vec<String>,
   pub font_size: f32,
@@ -738,6 +750,15 @@ impl Default for ComputedStyle {
       grid_row_end: 0,
       grid_column_raw: None,
       grid_row_raw: None,
+
+      column_count: None,
+      column_width: None,
+      column_gap: Length::em(1.0),
+      column_rule_color: None,
+      column_rule_style: BorderStyle::None,
+      column_rule_width: Length::px(3.0),
+      column_fill: ColumnFill::Balance,
+      column_span: ColumnSpan::None,
 
       font_family: vec!["serif".to_string()],
       font_size: 16.0,

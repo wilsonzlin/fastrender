@@ -2609,6 +2609,22 @@ fn apply_property_from_source(
       styles.grid_row_raw = source.grid_row_raw.clone();
       styles.grid_column_raw = source.grid_column_raw.clone();
     }
+    "column-count" => styles.column_count = source.column_count,
+    "column-width" => styles.column_width = source.column_width,
+    "column-gap" => {
+      styles.column_gap = source.column_gap;
+      styles.grid_column_gap = source.grid_column_gap;
+    }
+    "column-rule-width" => styles.column_rule_width = source.column_rule_width,
+    "column-rule-style" => styles.column_rule_style = source.column_rule_style,
+    "column-rule-color" => styles.column_rule_color = source.column_rule_color,
+    "column-rule" => {
+      styles.column_rule_width = source.column_rule_width;
+      styles.column_rule_style = source.column_rule_style;
+      styles.column_rule_color = source.column_rule_color;
+    }
+    "column-fill" => styles.column_fill = source.column_fill,
+    "column-span" => styles.column_span = source.column_span,
     "font" => {
       styles.font_style = source.font_style;
       styles.font_weight = source.font_weight;
@@ -5090,6 +5106,7 @@ pub fn apply_declaration_with_base(
         styles.grid_gap = row;
         styles.grid_row_gap = row;
         styles.grid_column_gap = column;
+        styles.column_gap = column;
       }
     }
     "grid-row-gap" | "row-gap" => {
@@ -5100,6 +5117,119 @@ pub fn apply_declaration_with_base(
     "grid-column-gap" | "column-gap" => {
       if let Some(len) = parse_single_gap_length(&resolved_value) {
         styles.grid_column_gap = len;
+        styles.column_gap = len;
+      }
+    }
+    "column-count" => match &resolved_value {
+      PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
+        styles.column_count = None;
+      }
+      PropertyValue::Number(n) if *n >= 1.0 => {
+        styles.column_count = Some(n.round().max(1.0) as u32);
+      }
+      _ => {}
+    },
+    "column-width" => match &resolved_value {
+      PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => {
+        styles.column_width = None;
+      }
+      _ => {
+        if let Some(len) = extract_length(&resolved_value) {
+          styles.column_width = Some(len);
+        }
+      }
+    },
+    "column-rule-width" => {
+      if let Some(len) = extract_length(&resolved_value) {
+        styles.column_rule_width = len;
+      }
+    }
+    "column-rule-style" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        styles.column_rule_style = parse_border_style(kw);
+      }
+    }
+    "column-rule-color" => {
+      if let Some(c) = resolve_color_value(&resolved_value) {
+        styles.column_rule_color = Some(c);
+      }
+    }
+    "column-rule" => {
+      let mut width = None;
+      let mut style_val = None;
+      let mut color = None;
+      match &resolved_value {
+        PropertyValue::Multiple(values) => {
+          for val in values {
+            match val {
+              PropertyValue::Keyword(kw) => {
+                if let Some(len) = parse_border_width_keyword(kw) {
+                  width = Some(len);
+                  continue;
+                }
+                let style_parsed = parse_border_style(kw);
+                if style_parsed != BorderStyle::None || kw.eq_ignore_ascii_case("none") {
+                  style_val = Some(style_parsed);
+                  continue;
+                }
+                if color.is_none() {
+                  if let Some(c) = resolve_color_value(&PropertyValue::Keyword(kw.clone())) {
+                    color = Some(c);
+                  }
+                }
+              }
+              PropertyValue::Length(l) => width = Some(*l),
+              PropertyValue::Color(_) => {
+                if let Some(c) = resolve_color_value(val) {
+                  color = Some(c);
+                }
+              }
+              _ => {}
+            }
+          }
+        }
+        PropertyValue::Keyword(kw) => {
+          if let Some(len) = parse_border_width_keyword(kw) {
+            width = Some(len);
+          }
+          let style_parsed = parse_border_style(kw);
+          if style_parsed != BorderStyle::None || kw.eq_ignore_ascii_case("none") {
+            style_val = Some(style_parsed);
+          }
+          if color.is_none() {
+            if let Some(c) = resolve_color_value(&resolved_value) {
+              color = Some(c);
+            }
+          }
+        }
+        _ => {}
+      }
+
+      if let Some(w) = width {
+        styles.column_rule_width = w;
+      }
+      if let Some(s) = style_val {
+        styles.column_rule_style = s;
+      }
+      if let Some(c) = color {
+        styles.column_rule_color = Some(c);
+      }
+    }
+    "column-fill" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        styles.column_fill = match kw.to_ascii_lowercase().as_str() {
+          "auto" => ColumnFill::Auto,
+          "balance" => ColumnFill::Balance,
+          _ => styles.column_fill,
+        };
+      }
+    }
+    "column-span" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        styles.column_span = match kw.to_ascii_lowercase().as_str() {
+          "all" => ColumnSpan::All,
+          _ => ColumnSpan::None,
+        };
       }
     }
     "grid-column" => {
@@ -10978,6 +11108,15 @@ fn parse_outline_width(value: &PropertyValue) -> Option<Length> {
   }
 }
 
+fn parse_border_width_keyword(kw: &str) -> Option<Length> {
+  match kw {
+    "thin" => Some(Length::px(1.0)),
+    "medium" => Some(Length::px(3.0)),
+    "thick" => Some(Length::px(5.0)),
+    _ => None,
+  }
+}
+
 fn apply_outline_shorthand(styles: &mut ComputedStyle, value: &PropertyValue) {
   // The outline shorthand resets color/style/width to their initial values
   // before applying provided tokens (offset is not part of the shorthand).
@@ -13927,6 +14066,7 @@ mod tests {
     assert_eq!(style.grid_gap, Length::px(0.0));
     assert_eq!(style.grid_row_gap, Length::px(0.0));
     assert_eq!(style.grid_column_gap, Length::px(0.0));
+    assert_eq!(style.column_gap, Length::px(0.0));
 
     let row_gap_value = parse_property_value("row-gap", "calc(0)").expect("row-gap calc(0)");
     apply_declaration(
@@ -13958,6 +14098,7 @@ mod tests {
       16.0,
     );
     assert_eq!(style.grid_column_gap, Length::px(0.0));
+    assert_eq!(style.column_gap, Length::px(0.0));
   }
 
   #[test]
@@ -14133,6 +14274,7 @@ mod tests {
 
     assert_eq!(style.grid_row_gap, Length::px(10.0));
     assert_eq!(style.grid_column_gap, Length::percent(20.0));
+    assert_eq!(style.column_gap, Length::percent(20.0));
   }
 
   #[test]
@@ -14166,6 +14308,7 @@ mod tests {
       16.0,
     );
     assert_eq!(style2.grid_column_gap, Length::percent(15.0));
+    assert_eq!(style2.column_gap, Length::percent(15.0));
   }
 
   #[test]

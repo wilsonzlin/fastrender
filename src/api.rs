@@ -2686,6 +2686,29 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
   style.grid_row_end.hash(&mut h);
   style.grid_column_raw.hash(&mut h);
   style.grid_row_raw.hash(&mut h);
+  match style.column_count {
+    Some(c) => {
+      1u8.hash(&mut h);
+      c.hash(&mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  hash_option_length(&style.column_width, &mut h);
+  hash_length(&style.column_gap, &mut h);
+  match style.column_rule_color {
+    Some(c) => {
+      1u8.hash(&mut h);
+      c.r.hash(&mut h);
+      c.g.hash(&mut h);
+      c.b.hash(&mut h);
+      c.a.to_bits().hash(&mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  hash_border_style(&style.column_rule_style, &mut h);
+  hash_length(&style.column_rule_width, &mut h);
+  hash_enum_discriminant(&style.column_fill, &mut h);
+  hash_enum_discriminant(&style.column_span, &mut h);
   hash_enum_discriminant(&style.flex_direction, &mut h);
   hash_enum_discriminant(&style.flex_wrap, &mut h);
   hash_enum_discriminant(&style.justify_content, &mut h);
@@ -3041,6 +3064,16 @@ fn diff_layout_fields(old: &ComputedStyle, new: &ComputedStyle) -> Vec<String> {
   cmp!(grid_column_end);
   cmp!(grid_row_start);
   cmp!(grid_row_end);
+  cmp!(column_count);
+  cmp!(column_width);
+  cmp!(column_gap);
+  if old.column_rule_color != new.column_rule_color {
+    out.push("column_rule_color".to_string());
+  }
+  cmp!(column_rule_style);
+  cmp!(column_rule_width);
+  cmp!(column_fill);
+  cmp!(column_span);
   cmp!(writing_mode);
   cmp!(direction);
   cmp!(unicode_bidi);

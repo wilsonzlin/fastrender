@@ -332,6 +332,32 @@ pub enum FlexWrap {
   WrapReverse,
 }
 
+/// How multi-column content is balanced across fragmentainers
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnFill {
+  Auto,
+  Balance,
+}
+
+impl Default for ColumnFill {
+  fn default() -> Self {
+    ColumnFill::Balance
+  }
+}
+
+/// Whether an element spans across all columns within a multicol container
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnSpan {
+  None,
+  All,
+}
+
+impl Default for ColumnSpan {
+  fn default() -> Self {
+    ColumnSpan::None
+  }
+}
+
 /// How replaced content is resized within its box
 ///
 /// CSS: `object-fit`

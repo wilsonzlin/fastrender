@@ -56,6 +56,9 @@ use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::float::Float;
 use crate::style::position::Position;
+use crate::style::types::BorderStyle;
+use crate::style::types::ColumnFill;
+use crate::style::types::ColumnSpan;
 use crate::style::types::Overflow;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -1819,6 +1822,280 @@ impl BlockFormattingContext {
 
     Ok((fragments, float_bottom, positioned_children))
   }
+
+  fn is_multicol_container(style: &ComputedStyle) -> bool {
+    style.column_count.unwrap_or(1) > 1 || style.column_width.is_some()
+  }
+
+  fn compute_column_geometry(
+    &self,
+    style: &ComputedStyle,
+    available_inline: f32,
+  ) -> (usize, f32, f32) {
+    let gap = resolve_length_for_width(
+      style.column_gap,
+      available_inline,
+      style,
+      &self.font_context,
+      self.viewport_size,
+    )
+    .max(0.0);
+
+    let specified_width = style.column_width.as_ref().map(|l| {
+      resolve_length_for_width(
+        *l,
+        available_inline,
+        style,
+        &self.font_context,
+        self.viewport_size,
+      )
+    });
+    let specified_count = style.column_count.unwrap_or(0).max(0);
+
+    if specified_count > 0 {
+      let count = specified_count as usize;
+      let width = ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32)
+        .max(0.0);
+      let used_width = specified_width.map(|w| w.min(width)).unwrap_or(width);
+      return (count.max(1), used_width, gap);
+    }
+
+    if let Some(spec_width) = specified_width.filter(|w| *w > 0.0) {
+      let denom = spec_width + gap;
+      let mut count = if denom > 0.0 {
+        ((available_inline + gap) / denom).floor() as usize
+      } else {
+        1
+      };
+      if count == 0 {
+        count = 1;
+      }
+      let used_width = ((available_inline - gap * (count.saturating_sub(1) as f32))
+        / count as f32)
+        .max(0.0);
+      return (count, used_width, gap);
+    }
+
+    (1, available_inline.max(0.0), gap)
+  }
+
+  fn layout_column_segment(
+    &self,
+    parent: &BoxNode,
+    children: &[BoxNode],
+    column_count: usize,
+    column_width: f32,
+    column_gap: f32,
+    available_height: AvailableSpace,
+    nearest_positioned_cb: &ContainingBlock,
+  ) -> Result<(Vec<FragmentNode>, f32, Vec<PositionedCandidate>), LayoutError> {
+    if children.is_empty() {
+      return Ok((Vec::new(), 0.0, Vec::new()));
+    }
+
+    if column_count <= 1 {
+      let mut parent_clone = parent.clone();
+      parent_clone.children = children.to_vec();
+      return self.layout_children(
+        &parent_clone,
+        &LayoutConstraints::new(AvailableSpace::Definite(column_width), available_height),
+        nearest_positioned_cb,
+      );
+    }
+
+    let mut parent_clone = parent.clone();
+    parent_clone.children = children.to_vec();
+    let column_constraints = LayoutConstraints::new(
+      AvailableSpace::Definite(column_width),
+      available_height,
+    );
+    let (flow_fragments, flow_height, flow_positioned) =
+      self.layout_children(&parent_clone, &column_constraints, nearest_positioned_cb)?;
+
+    let balanced_height = if column_count > 0 {
+      (flow_height / column_count as f32).ceil()
+    } else {
+      flow_height
+    };
+    let mut column_height = match parent.style.column_fill {
+      ColumnFill::Auto => match available_height {
+        AvailableSpace::Definite(h) => h.max(balanced_height),
+        _ => balanced_height,
+      },
+      ColumnFill::Balance => balanced_height,
+    };
+    if !column_height.is_finite() || column_height <= 0.0 {
+      column_height = flow_height.max(0.0);
+    }
+
+    let mut fragments = Vec::new();
+    let mut column_heights = vec![0.0f32; column_count.max(1)];
+    let mut prev_flow_y = 0.0;
+    let mut col_idx: usize = 0;
+    let mut col_height = 0.0;
+
+    for mut fragment in flow_fragments {
+      let delta = fragment.bounds.y() - prev_flow_y;
+      let height = fragment.bounds.height();
+      if col_height + delta + height > column_height && col_idx + 1 < column_count {
+        col_idx += 1;
+        col_height = 0.0;
+      }
+      let new_y = col_height + delta;
+      let new_x = col_idx as f32 * (column_width + column_gap) + fragment.bounds.x();
+      fragment.bounds = Rect::from_xywh(new_x, new_y, fragment.bounds.width(), height);
+      col_height = new_y + height;
+      column_heights[col_idx] = column_heights[col_idx].max(col_height);
+      prev_flow_y += delta + height;
+      fragments.push(fragment);
+    }
+
+    let mut positioned_children = Vec::new();
+    for mut positioned in flow_positioned {
+      if let Some(pos) = positioned.static_position {
+        if column_height > 0.0 {
+          let col = ((pos.y / column_height).floor() as usize).min(column_count - 1);
+          let translated = Point::new(
+            pos.x + col as f32 * (column_width + column_gap),
+            pos.y - column_height * col as f32,
+          );
+          positioned.static_position = Some(translated);
+        }
+      }
+      positioned_children.push(positioned);
+    }
+
+    let mut segment_height = column_heights.iter().copied().fold(0.0, f32::max);
+    if segment_height == 0.0 {
+      segment_height = flow_height;
+    }
+
+    if column_count > 1
+      && column_gap > 0.0
+      && !matches!(parent.style.column_rule_style, BorderStyle::None | BorderStyle::Hidden)
+    {
+      let mut rule_width = resolve_length_for_width(
+        parent.style.column_rule_width,
+        column_width,
+        &parent.style,
+        &self.font_context,
+        self.viewport_size,
+      )
+      .min(column_gap)
+      .max(0.0);
+      if rule_width > 0.0 {
+        let color = parent.style.column_rule_color.unwrap_or(parent.style.color);
+        let mut rule_style = ComputedStyle::default();
+        rule_style.background_color = color;
+        let rule_style = Arc::new(rule_style);
+        if rule_width > column_gap {
+          rule_width = column_gap;
+        }
+        for i in 1..column_count {
+          let gap_start = column_width * i as f32 + column_gap * (i as f32 - 1.0);
+          let x = gap_start + (column_gap - rule_width) / 2.0;
+          let bounds = Rect::from_xywh(x.max(0.0), 0.0, rule_width, segment_height);
+          fragments.push(FragmentNode::new_block_styled(
+            bounds,
+            Vec::new(),
+            rule_style.clone(),
+          ));
+        }
+      }
+    }
+
+    Ok((fragments, segment_height, positioned_children))
+  }
+
+  fn layout_multicolumn(
+    &self,
+    parent: &BoxNode,
+    constraints: &LayoutConstraints,
+    nearest_positioned_cb: &ContainingBlock,
+    available_inline: f32,
+  ) -> Result<(Vec<FragmentNode>, f32, Vec<PositionedCandidate>), LayoutError> {
+    let (column_count, column_width, column_gap) =
+      self.compute_column_geometry(&parent.style, available_inline);
+    if column_count <= 1 {
+      return self.layout_children(parent, constraints, nearest_positioned_cb);
+    }
+
+    let mut fragments = Vec::new();
+    let mut positioned_children = Vec::new();
+    let mut y_offset = 0.0;
+    let mut idx = 0;
+
+    while idx < parent.children.len() {
+      let next_span = parent.children[idx..]
+        .iter()
+        .position(|c| c.style.column_span == ColumnSpan::All)
+        .map(|p| p + idx);
+      let end = next_span.unwrap_or(parent.children.len());
+
+      if end > idx {
+        let (mut seg_fragments, seg_height, mut seg_positioned) = self.layout_column_segment(
+          parent,
+          &parent.children[idx..end],
+          column_count,
+          column_width,
+          column_gap,
+          constraints.available_height,
+          nearest_positioned_cb,
+        )?;
+        for frag in &mut seg_fragments {
+          frag.bounds = Rect::from_xywh(
+            frag.bounds.x(),
+            frag.bounds.y() + y_offset,
+            frag.bounds.width(),
+            frag.bounds.height(),
+          );
+        }
+        for positioned in &mut seg_positioned {
+          if let Some(pos) = positioned.static_position {
+            positioned.static_position = Some(Point::new(pos.x, pos.y + y_offset));
+          }
+        }
+        fragments.extend(seg_fragments);
+        positioned_children.extend(seg_positioned);
+        y_offset += seg_height;
+      }
+
+      if let Some(span_idx) = next_span {
+        let mut span_parent = parent.clone();
+        span_parent.children = vec![parent.children[span_idx].clone()];
+        let span_constraints = LayoutConstraints::new(
+          AvailableSpace::Definite(available_inline),
+          constraints.available_height,
+        );
+        let (mut span_fragments, span_height, mut span_positioned) = self.layout_children(
+          &span_parent,
+          &span_constraints,
+          nearest_positioned_cb,
+        )?;
+        for frag in &mut span_fragments {
+          frag.bounds = Rect::from_xywh(
+            frag.bounds.x(),
+            frag.bounds.y() + y_offset,
+            frag.bounds.width(),
+            frag.bounds.height(),
+          );
+        }
+        for positioned in &mut span_positioned {
+          if let Some(pos) = positioned.static_position {
+            positioned.static_position = Some(Point::new(pos.x, pos.y + y_offset));
+          }
+        }
+        fragments.extend(span_fragments);
+        positioned_children.extend(span_positioned);
+        y_offset += span_height;
+        idx = span_idx + 1;
+      } else {
+        break;
+      }
+    }
+
+    Ok((fragments, y_offset, positioned_children))
+  }
 }
 
 impl Default for BlockFormattingContext {
@@ -2364,8 +2641,17 @@ impl FormattingContext for BlockFormattingContext {
     let initial_cb = self.nearest_positioned_cb;
     let mut child_ctx = self.clone();
     child_ctx.flex_item_mode = false;
-    let (mut child_fragments, mut content_height, positioned_children) =
-      child_ctx.layout_children(box_node, &child_constraints, &initial_cb)?;
+    let use_columns = Self::is_multicol_container(style);
+    let (mut child_fragments, mut content_height, positioned_children) = if use_columns {
+      child_ctx.layout_multicolumn(
+        box_node,
+        &child_constraints,
+        &initial_cb,
+        computed_width.content_width,
+      )?
+    } else {
+      child_ctx.layout_children(box_node, &child_constraints, &initial_cb)?
+    };
     if style.containment.size {
       content_height = 0.0;
     }
