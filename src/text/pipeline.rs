@@ -3509,7 +3509,7 @@ mod tests {
     };
     let face = FontFaceRule {
       family: Some("Webby".to_string()),
-      sources: vec![FontFaceSource::Url(web_url.to_string())],
+      sources: vec![FontFaceSource::url(web_url.to_string())],
       ..Default::default()
     };
     ctx
@@ -3671,7 +3671,7 @@ mod tests {
     };
     let face = FontFaceRule {
       family: Some("WebMath".to_string()),
-      sources: vec![FontFaceSource::Url(font_url.to_string())],
+      sources: vec![FontFaceSource::url(font_url.to_string())],
       ..Default::default()
     };
 
@@ -3736,7 +3736,7 @@ mod tests {
     };
     let face = FontFaceRule {
       family: Some("RangeFace".to_string()),
-      sources: vec![FontFaceSource::Url(font_url.to_string())],
+      sources: vec![FontFaceSource::url(font_url.to_string())],
       unicode_ranges: vec![(0x0041, 0x005a)],
       ..Default::default()
     };

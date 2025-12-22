@@ -28,6 +28,7 @@ use crate::css::types::FontDisplay;
 use crate::css::types::FontFaceRule;
 use crate::css::types::FontFaceSource;
 use crate::css::types::FontFaceStyle;
+use crate::css::types::FontSourceFormat;
 use crate::error::Error;
 use crate::error::Result;
 use crate::resource::ResourceFetcher;
@@ -681,11 +682,11 @@ impl FontContext {
     order: usize,
     start: Instant,
   ) -> bool {
-    for source in &face.sources {
+    for source in ordered_sources(&face.sources) {
       let loaded = match source {
         FontFaceSource::Local(name) => self.load_local_face(family, name, face, order, start),
-        FontFaceSource::Url(url) => {
-          self.load_remote_face(family, url, face, base_url, order, start)
+        FontFaceSource::Url(src) => {
+          self.load_remote_face(family, &src.url, face, base_url, order, start)
         }
       };
 
@@ -1451,7 +1452,69 @@ fn fetch_font_bytes(url: &str) -> Result<(Vec<u8>, Option<String>)> {
   })
 }
 
+fn ordered_sources<'a>(sources: &'a [FontFaceSource]) -> Vec<&'a FontFaceSource> {
+  let mut ordered = Vec::new();
+  let mut idx = 0;
+
+  while idx < sources.len() {
+    match &sources[idx] {
+      FontFaceSource::Local(_) => {
+        ordered.push(&sources[idx]);
+        idx += 1;
+      }
+      FontFaceSource::Url(_) => {
+        let start = idx;
+        while idx < sources.len() && matches!(sources[idx], FontFaceSource::Url(_)) {
+          idx += 1;
+        }
+        let mut remotes: Vec<(usize, usize, &FontFaceSource)> = (start..idx)
+          .filter_map(|i| {
+            let rank = match &sources[i] {
+              FontFaceSource::Url(url) => format_support_rank(&url.format_hints),
+              _ => None,
+            }?;
+            Some((rank, i, &sources[i]))
+          })
+          .collect();
+
+        remotes.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        ordered.extend(remotes.into_iter().map(|(_, _, src)| src));
+      }
+    }
+  }
+
+  ordered
+}
+
+fn format_support_rank(hints: &[FontSourceFormat]) -> Option<usize> {
+  if hints.is_empty() {
+    return Some(3);
+  }
+
+  let mut best: Option<usize> = None;
+  for hint in hints {
+    let rank = match hint {
+      FontSourceFormat::Woff2 => Some(0),
+      FontSourceFormat::Woff => Some(1),
+      FontSourceFormat::Opentype | FontSourceFormat::Truetype | FontSourceFormat::Collection => {
+        Some(2)
+      }
+      FontSourceFormat::Unknown(_) => Some(4),
+      FontSourceFormat::EmbeddedOpenType | FontSourceFormat::Svg => None,
+    };
+
+    if let Some(rank) = rank {
+      best = Some(best.map_or(rank, |current| current.min(rank)));
+    }
+  }
+
+  best
+}
+
 fn decode_font_bytes(bytes: Vec<u8>, content_type: Option<&str>) -> Result<Vec<u8>> {
+  let content_type = content_type.map(|c| c.to_ascii_lowercase());
+  let content_type = content_type.as_deref();
+
   if bytes.starts_with(b"wOF2") || content_type.map(|c| c.contains("woff2")).unwrap_or(false) {
     return decompress_woff2(&bytes).map_err(|e| {
       Error::Font(crate::error::FontError::LoadFailed {
@@ -1637,7 +1700,7 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some(platform_family.clone()),
-      sources: vec![FontFaceSource::Url("file:///no/such/font.woff".to_string())],
+      sources: vec![FontFaceSource::url("file:///no/such/font.woff".to_string())],
       ..Default::default()
     };
     ctx
@@ -1663,13 +1726,13 @@ mod tests {
 
     let matching = FontFaceRule {
       family: Some("Match".to_string()),
-      sources: vec![FontFaceSource::Url(font_url.to_string())],
+      sources: vec![FontFaceSource::url(font_url.to_string())],
       unicode_ranges: vec![(0x0041, 0x005a)],
       ..Default::default()
     };
     let skipped = FontFaceRule {
       family: Some("Skip".to_string()),
-      sources: vec![FontFaceSource::Url(font_url.to_string())],
+      sources: vec![FontFaceSource::url(font_url.to_string())],
       unicode_ranges: vec![(0x4e00, 0x4e10)],
       ..Default::default()
     };
@@ -1706,7 +1769,7 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some("OptFace".to_string()),
-      sources: vec![FontFaceSource::Url(
+      sources: vec![FontFaceSource::url(
         "http://example.com/font.ttf".to_string(),
       )],
       display: FontDisplay::Optional,
@@ -1747,7 +1810,7 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some("LateFallback".to_string()),
-      sources: vec![FontFaceSource::Url(
+      sources: vec![FontFaceSource::url(
         "http://example.com/font.ttf".to_string(),
       )],
       display: FontDisplay::Fallback,
@@ -1783,7 +1846,7 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some("BlockFace".to_string()),
-      sources: vec![FontFaceSource::Url(
+      sources: vec![FontFaceSource::url(
         "http://example.com/font.ttf".to_string(),
       )],
       display: FontDisplay::Block,
@@ -1813,7 +1876,7 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some("Broken".to_string()),
-      sources: vec![FontFaceSource::Url(
+      sources: vec![FontFaceSource::url(
         "http://example.com/font.ttf".to_string(),
       )],
       display: FontDisplay::Swap,
@@ -1858,7 +1921,7 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some("SwapFace".to_string()),
-      sources: vec![FontFaceSource::Url(
+      sources: vec![FontFaceSource::url(
         "http://example.com/font.ttf".to_string(),
       )],
       display: FontDisplay::Swap,
@@ -1889,7 +1952,7 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some("SwapUpgrade".to_string()),
-      sources: vec![FontFaceSource::Url(
+      sources: vec![FontFaceSource::url(
         "http://example.com/font.ttf".to_string(),
       )],
       display: FontDisplay::Swap,
@@ -1939,7 +2002,7 @@ mod tests {
     };
     let face = FontFaceRule {
       family: Some("Straße".to_string()),
-      sources: vec![FontFaceSource::Url(font_url.to_string())],
+      sources: vec![FontFaceSource::url(font_url.to_string())],
       ..Default::default()
     };
 
@@ -1969,7 +2032,7 @@ mod tests {
     let faces = vec![
       FontFaceRule {
         family: Some(family.clone()),
-        sources: vec![FontFaceSource::Url(font_url.to_string())],
+        sources: vec![FontFaceSource::url(font_url.to_string())],
         style: FontFaceStyle::Oblique {
           range: Some((0.0, 10.0)),
         },
@@ -1978,7 +2041,7 @@ mod tests {
       },
       FontFaceRule {
         family: Some(family.clone()),
-        sources: vec![FontFaceSource::Url(font_url.to_string())],
+        sources: vec![FontFaceSource::url(font_url.to_string())],
         style: FontFaceStyle::Oblique {
           range: Some((20.0, 30.0)),
         },
@@ -2017,14 +2080,14 @@ mod tests {
     let faces = vec![
       FontFaceRule {
         family: Some(family.clone()),
-        sources: vec![FontFaceSource::Url(font_url.to_string())],
+        sources: vec![FontFaceSource::url(font_url.to_string())],
         style: FontFaceStyle::Normal,
         weight: (400, 400),
         ..Default::default()
       },
       FontFaceRule {
         family: Some(family.clone()),
-        sources: vec![FontFaceSource::Url(font_url.to_string())],
+        sources: vec![FontFaceSource::url(font_url.to_string())],
         style: FontFaceStyle::Oblique {
           range: Some((0.0, 20.0)),
         },
@@ -2063,14 +2126,14 @@ mod tests {
     let faces = vec![
       FontFaceRule {
         family: Some(family.clone()),
-        sources: vec![FontFaceSource::Url(font_url.to_string())],
+        sources: vec![FontFaceSource::url(font_url.to_string())],
         style: FontFaceStyle::Italic,
         weight: (400, 400),
         ..Default::default()
       },
       FontFaceRule {
         family: Some(family.clone()),
-        sources: vec![FontFaceSource::Url(font_url.to_string())],
+        sources: vec![FontFaceSource::url(font_url.to_string())],
         style: FontFaceStyle::Oblique {
           range: Some((0.0, 90.0)),
         },

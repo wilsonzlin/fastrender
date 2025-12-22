@@ -1200,13 +1200,70 @@ pub struct KeyframesRule {
   pub keyframes: Vec<Keyframe>,
 }
 
+/// Supported @font-face format() hint values.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FontSourceFormat {
+  Woff2,
+  Woff,
+  Opentype,
+  Truetype,
+  Collection,
+  EmbeddedOpenType,
+  Svg,
+  Unknown(String),
+}
+
+impl FontSourceFormat {
+  /// Construct from a raw format() hint string.
+  pub fn from_hint(hint: &str) -> Self {
+    match hint.trim().to_ascii_lowercase().as_str() {
+      "woff2" => FontSourceFormat::Woff2,
+      "woff" => FontSourceFormat::Woff,
+      "opentype" | "otf" => FontSourceFormat::Opentype,
+      "truetype" | "ttf" | "truetype-aat" => FontSourceFormat::Truetype,
+      "collection" | "ttc" => FontSourceFormat::Collection,
+      "embedded-opentype" | "eot" => FontSourceFormat::EmbeddedOpenType,
+      "svg" | "svgz" => FontSourceFormat::Svg,
+      other => FontSourceFormat::Unknown(other.to_string()),
+    }
+  }
+}
+
+/// A downloadable font source.
+#[derive(Debug, Clone)]
+pub struct FontFaceUrlSource {
+  /// The URL to fetch.
+  pub url: String,
+  /// Optional format() hints associated with the source.
+  pub format_hints: Vec<FontSourceFormat>,
+}
+
+impl FontFaceUrlSource {
+  pub fn new(url: impl Into<String>) -> Self {
+    Self {
+      url: url.into(),
+      format_hints: Vec::new(),
+    }
+  }
+}
+
 /// A single font source in `src`.
 #[derive(Debug, Clone)]
 pub enum FontFaceSource {
   /// A downloadable URL source.
-  Url(String),
+  Url(FontFaceUrlSource),
   /// A locally installed font name.
   Local(String),
+}
+
+impl FontFaceSource {
+  pub fn url(url: impl Into<String>) -> Self {
+    FontFaceSource::Url(FontFaceUrlSource::new(url))
+  }
+
+  pub fn local(name: impl Into<String>) -> Self {
+    FontFaceSource::Local(name.into())
+  }
 }
 
 /// font-display descriptor options for @font-face

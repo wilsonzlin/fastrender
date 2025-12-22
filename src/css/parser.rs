@@ -18,6 +18,8 @@ use super::types::FontDisplay;
 use super::types::FontFaceRule;
 use super::types::FontFaceSource;
 use super::types::FontFaceStyle;
+use super::types::FontFaceUrlSource;
+use super::types::FontSourceFormat;
 use super::types::ImportRule;
 use super::types::Keyframe;
 use super::types::KeyframesRule;
@@ -1646,42 +1648,94 @@ fn parse_font_face_src(value: &str) -> Vec<FontFaceSource> {
       break;
     }
 
-    if let Ok(url) = parser.try_parse(|p| p.expect_url()) {
-      sources.push(FontFaceSource::Url(url.as_ref().to_string()));
-      let _ = parser.try_parse(|p| p.expect_comma());
-      continue;
-    }
-
-    let parsed = match parser.next_including_whitespace() {
-      Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("url") => parser
-        .parse_nested_block(|p| parse_string_or_ident(p))
-        .ok()
-        .map(FontFaceSource::Url),
-      Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("local") => parser
-        .parse_nested_block(|p| parse_string_or_ident(p))
-        .ok()
-        .map(FontFaceSource::Local),
-      Ok(Token::Comma) => None,
-      Ok(_) => None,
-      Err(_) => break,
-    };
-    if let Some(src) = parsed {
+    let state = parser.state();
+    if let Some(src) = parse_font_face_src_item(&mut parser) {
       sources.push(src);
-    }
-    loop {
-      let state = parser.state();
-      match parser.next_including_whitespace() {
-        Ok(Token::Comma) | Err(_) => {
-          parser.reset(&state);
-          break;
-        }
-        _ => continue,
-      }
+    } else {
+      parser.reset(&state);
+      consume_until_comma(&mut parser);
     }
     let _ = parser.try_parse(|p| p.expect_comma());
   }
 
   sources
+}
+
+fn parse_font_face_src_item<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<FontFaceSource> {
+  if let Ok(url) = parser.try_parse(|p| p.expect_url()) {
+    let mut src = FontFaceUrlSource::new(url.as_ref().to_string());
+    src.format_hints = parse_format_hints(parser);
+    return Some(FontFaceSource::Url(src));
+  }
+
+  match parser.next_including_whitespace() {
+    Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("url") => {
+      if let Ok(url) = parser.parse_nested_block(|p| parse_string_or_ident(p)) {
+        let mut src = FontFaceUrlSource::new(url);
+        src.format_hints = parse_format_hints(parser);
+        return Some(FontFaceSource::Url(src));
+      }
+    }
+    Ok(Token::Function(f)) if f.as_ref().eq_ignore_ascii_case("local") => {
+      if let Ok(name) = parser.parse_nested_block(|p| parse_string_or_ident(p)) {
+        return Some(FontFaceSource::Local(name));
+      }
+    }
+    Ok(Token::Comma) | Err(_) => return None,
+    _ => {}
+  }
+
+  None
+}
+
+fn parse_format_hints<'i, 't>(parser: &mut Parser<'i, 't>) -> Vec<FontSourceFormat> {
+  let mut hints = Vec::new();
+  loop {
+    let state = parser.state();
+    parser.skip_whitespace();
+    let Ok(token) = parser.next_including_whitespace() else {
+      break;
+    };
+    match token {
+      Token::Function(f) if f.as_ref().eq_ignore_ascii_case("format") => {
+        if let Ok(mut parsed) = parser.parse_nested_block(|nested| parse_format_list(nested)) {
+          hints.append(&mut parsed);
+        }
+      }
+      _ => {
+        parser.reset(&state);
+        break;
+      }
+    }
+  }
+  hints
+}
+
+fn parse_format_list<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Vec<FontSourceFormat>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let mut hints = Vec::new();
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    match parser.next_including_whitespace() {
+      Ok(Token::QuotedString(s)) | Ok(Token::Ident(s)) => {
+        hints.push(FontSourceFormat::from_hint(s.as_ref()));
+        let _ = parser.try_parse(|p| p.expect_comma());
+      }
+      Err(_) => break,
+      _ => break,
+    }
+  }
+  Ok(hints)
+}
+
+fn consume_until_comma<'i, 't>(parser: &mut Parser<'i, 't>) {
+  loop {
+    match parser.next_including_whitespace() {
+      Ok(Token::Comma) | Err(_) => break,
+      _ => continue,
+    }
+  }
 }
 
 fn parse_string_or_ident<'i, 't>(
@@ -2231,6 +2285,7 @@ mod tests {
   use super::*;
   use crate::css::types::CssImportLoader;
   use crate::css::types::FontFaceStyle;
+  use crate::css::types::FontSourceFormat;
   use crate::PropertyValue;
 
   #[test]
@@ -2273,6 +2328,17 @@ mod tests {
       CssRule::FontFace(face) => {
         assert_eq!(face.family.as_deref(), Some("TestFamily"));
         assert_eq!(face.sources.len(), 2);
+        match &face.sources[0] {
+          FontFaceSource::Url(src) => {
+            assert_eq!(src.url, "fonts/test.woff2");
+            assert!(src
+              .format_hints
+              .iter()
+              .any(|hint| matches!(hint, FontSourceFormat::Woff2)));
+          }
+          other => panic!("expected url source, got {:?}", other),
+        }
+        assert!(matches!(&face.sources[1], FontFaceSource::Local(name) if name == "TestLocal"));
         assert_eq!(face.weight, (400, 700));
         assert_eq!(face.stretch, (75.0, 125.0));
         assert!(matches!(face.style, FontFaceStyle::Oblique { .. }));
