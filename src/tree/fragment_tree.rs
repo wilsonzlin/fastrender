@@ -40,6 +40,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::style::ComputedStyle;
 use crate::text::pipeline::ShapedRun;
+use crate::scroll::ScrollMetadata;
 use crate::tree::box_tree::ReplacedType;
 use std::fmt;
 use std::sync::Arc;
@@ -212,6 +213,10 @@ pub struct FragmentNode {
 
   /// Which fragmentainer (page/column) this fragment occupies.
   pub fragmentainer_index: usize,
+
+  /// Scrollable overflow area for this fragment (including descendants),
+  /// expressed in the fragment's local coordinate space.
+  pub scroll_overflow: Rect,
 }
 
 impl FragmentNode {
@@ -230,6 +235,7 @@ impl FragmentNode {
   /// assert_eq!(fragment.bounds.x(), 10.0);
   /// ```
   pub fn new(bounds: Rect, content: FragmentContent, children: Vec<FragmentNode>) -> Self {
+    let scroll_overflow = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
     Self {
       bounds,
       content,
@@ -239,6 +245,7 @@ impl FragmentNode {
       fragment_index: 0,
       fragment_count: 1,
       fragmentainer_index: 0,
+      scroll_overflow,
     }
   }
 
@@ -249,6 +256,7 @@ impl FragmentNode {
     children: Vec<FragmentNode>,
     style: Arc<ComputedStyle>,
   ) -> Self {
+    let scroll_overflow = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
     Self {
       bounds,
       content,
@@ -258,6 +266,7 @@ impl FragmentNode {
       fragment_index: 0,
       fragment_count: 1,
       fragmentainer_index: 0,
+      scroll_overflow,
     }
   }
 
@@ -523,6 +532,7 @@ impl FragmentNode {
       fragment_index: self.fragment_index,
       fragment_count: self.fragment_count,
       fragmentainer_index: self.fragmentainer_index,
+      scroll_overflow: self.scroll_overflow,
     }
   }
 
@@ -678,6 +688,9 @@ pub struct FragmentTree {
 
   /// The viewport size (may differ from root fragment bounds)
   viewport: Option<Size>,
+
+  /// Scroll snap and overflow metadata derived from layout.
+  pub scroll_metadata: Option<ScrollMetadata>,
 }
 
 impl FragmentTree {
@@ -687,6 +700,7 @@ impl FragmentTree {
       root,
       additional_fragments: Vec::new(),
       viewport: None,
+      scroll_metadata: None,
     }
   }
 
@@ -699,6 +713,7 @@ impl FragmentTree {
       root,
       additional_fragments: Vec::new(),
       viewport: Some(viewport),
+      scroll_metadata: None,
     }
   }
 
@@ -715,6 +730,7 @@ impl FragmentTree {
       root,
       additional_fragments: roots,
       viewport: Some(viewport),
+      scroll_metadata: None,
     }
   }
 
@@ -757,6 +773,17 @@ impl FragmentTree {
   /// Counts total number of fragments in the tree
   pub fn fragment_count(&self) -> usize {
     self.iter_fragments().count()
+  }
+
+  /// Ensures scroll metadata (overflow bounds and snap targets) are computed.
+  ///
+  /// Layout populates this for renderer-produced trees, but helper code and
+  /// tests that manually construct fragment trees can call this to enable
+  /// scroll snapping without re-running layout.
+  pub fn ensure_scroll_metadata(&mut self) {
+    if self.scroll_metadata.is_none() {
+      self.scroll_metadata = Some(crate::scroll::build_scroll_metadata(self));
+    }
   }
 }
 

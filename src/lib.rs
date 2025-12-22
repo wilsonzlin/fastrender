@@ -167,6 +167,7 @@
 pub mod api;
 pub mod error;
 pub mod geometry;
+pub mod scroll;
 
 // ============================================================================
 // Pipeline Modules

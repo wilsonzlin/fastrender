@@ -228,6 +228,7 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     fragment_index: node.fragment_index,
     fragment_count: node.fragment_count,
     fragmentainer_index: node.fragmentainer_index,
+    scroll_overflow: node.scroll_overflow,
   }
 }
 

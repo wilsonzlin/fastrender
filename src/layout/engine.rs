@@ -394,10 +394,14 @@ impl LayoutEngine {
 
     if let Some(options) = &self.config.fragmentation {
       let fragments = fragmentation::fragment_tree(&root_fragment, options);
-      Ok(FragmentTree::from_fragments(fragments, *icb))
+      let mut tree = FragmentTree::from_fragments(fragments, *icb);
+      tree.ensure_scroll_metadata();
+      Ok(tree)
     } else {
       // Create fragment tree with viewport size
-      Ok(FragmentTree::with_viewport(root_fragment, *icb))
+      let mut tree = FragmentTree::with_viewport(root_fragment, *icb);
+      tree.ensure_scroll_metadata();
+      Ok(tree)
     }
   }
 
