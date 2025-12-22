@@ -177,6 +177,8 @@ pub struct TestMetadata {
   /// Custom viewport size
   pub viewport_width: u32,
   pub viewport_height: u32,
+  /// Device pixel ratio for the render
+  pub device_pixel_ratio: f32,
 }
 
 impl TestMetadata {
@@ -212,6 +214,7 @@ impl TestMetadata {
       disabled_reason: None,
       viewport_width: 800,
       viewport_height: 600,
+      device_pixel_ratio: 1.0,
     }
   }
 
@@ -248,6 +251,12 @@ impl TestMetadata {
   /// Creates a new test metadata with custom timeout
   pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
     self.timeout_ms = timeout_ms;
+    self
+  }
+
+  /// Creates a new test metadata with custom device pixel ratio
+  pub fn with_device_pixel_ratio(mut self, dpr: f32) -> Self {
+    self.device_pixel_ratio = dpr;
     self
   }
 
@@ -521,6 +530,10 @@ pub struct HarnessConfig {
   pub update_expected: bool,
   /// Filter tests by name pattern
   pub filter: Option<String>,
+  /// Optional manifest path for test discovery
+  pub manifest_path: Option<PathBuf>,
+  /// Whether to emit a human-readable report
+  pub write_report: bool,
 }
 
 impl Default for HarnessConfig {
@@ -539,6 +552,8 @@ impl Default for HarnessConfig {
       workers: 4,
       update_expected: false,
       filter: None,
+      manifest_path: None,
+      write_report: true,
     }
   }
 }
@@ -594,15 +609,21 @@ impl HarnessConfig {
     self.update_expected = true;
     self
   }
+
+  /// Sets a custom manifest path for discovery
+  pub fn with_manifest(mut self, manifest: impl Into<PathBuf>) -> Self {
+    self.manifest_path = Some(manifest.into());
+    self
+  }
+
+  /// Disables report generation
+  pub fn without_report(mut self) -> Self {
+    self.write_report = false;
+    self
+  }
 }
 
-/// Compares two images and returns the difference
-///
-/// # Arguments
-///
-/// * `rendered` - The rendered image bytes (PNG)
-/// * `expected` - The expected image bytes (PNG)
-/// * `tolerance` - Per-channel tolerance (0-255)
+/// Compares two images and returns the difference metrics.
 ///
 /// # Returns
 ///
@@ -612,88 +633,15 @@ pub fn compare_images(
   expected: &[u8],
   tolerance: u8,
 ) -> Result<(u64, u64, f64), String> {
-  // Decode PNG images
-  let rendered_img =
-    decode_png(rendered).map_err(|e| format!("Failed to decode rendered image: {}", e))?;
-  let expected_img =
-    decode_png(expected).map_err(|e| format!("Failed to decode expected image: {}", e))?;
-
-  // Check dimensions match
-  if rendered_img.width != expected_img.width || rendered_img.height != expected_img.height {
-    return Err(format!(
-      "Image dimensions differ: rendered {}x{}, expected {}x{}",
-      rendered_img.width, rendered_img.height, expected_img.width, expected_img.height
-    ));
-  }
-
-  let total_pixels = (rendered_img.width * rendered_img.height) as u64;
-  let mut diff_pixels = 0u64;
-
-  // Compare pixel by pixel
-  for (r, e) in rendered_img.data.iter().zip(expected_img.data.iter()) {
-    let diff = if *r > *e { r - e } else { e - r };
-    if diff > tolerance {
-      diff_pixels += 1;
-    }
-  }
-
-  // Each pixel has 4 components (RGBA), so divide by 4
-  let diff_pixels = diff_pixels / 4;
-
-  let diff_percentage = if total_pixels == 0 {
-    0.0
-  } else {
-    (diff_pixels as f64 / total_pixels as f64) * 100.0
-  };
-
-  Ok((diff_pixels, total_pixels, diff_percentage))
-}
-
-/// Simple PNG image data structure
-struct PngImage {
-  width: u32,
-  height: u32,
-  data: Vec<u8>,
-}
-
-/// Decodes a PNG image from bytes
-fn decode_png(data: &[u8]) -> Result<PngImage, String> {
-  // Simple PNG decoding - in a real implementation, use image crate
-  // For now, we'll do a simplified check
-  if data.len() < 8 {
-    return Err("Data too short for PNG".to_string());
-  }
-
-  // Check PNG signature
-  let png_sig = [137u8, 80, 78, 71, 13, 10, 26, 10];
-  if data[..8] != png_sig {
-    return Err("Invalid PNG signature".to_string());
-  }
-
-  // For actual implementation, parse IHDR chunk for dimensions
-  // For now, use placeholder dimensions
-  // This is a simplified implementation - real code would use a PNG library
-
-  // Read IHDR chunk (starts at byte 8)
-  // Skip length (4 bytes), chunk type (4 bytes = IHDR)
-  if data.len() < 24 {
-    return Err("PNG too short to contain IHDR".to_string());
-  }
-
-  // IHDR is at offset 8 (after signature)
-  // Format: length(4) + "IHDR"(4) + width(4) + height(4) + ...
-  let width = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
-  let height = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
-
-  // For comparison purposes, we'll use the raw data after the header
-  // This is simplified - real implementation would decompress the image data
-  let data = data[33..].to_vec();
-
-  Ok(PngImage {
-    width,
-    height,
-    data,
-  })
+  fastrender::image_output::diff_png(rendered, expected, tolerance)
+    .map(|(metrics, _)| {
+      (
+        metrics.pixel_diff,
+        metrics.total_pixels,
+        metrics.diff_percentage,
+      )
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// Generates a visual diff image between two images
@@ -702,25 +650,19 @@ fn decode_png(data: &[u8]) -> Result<PngImage, String> {
 ///
 /// * `rendered` - The rendered image bytes (PNG)
 /// * `expected` - The expected image bytes (PNG)
+/// * `tolerance` - Per-channel tolerance for considering pixels different
 ///
 /// # Returns
 ///
 /// PNG bytes of the diff image where differences are highlighted
-pub fn generate_diff_image(rendered: &[u8], expected: &[u8]) -> Result<Vec<u8>, String> {
-  // This would generate an actual diff image
-  // For now, return a placeholder
-  let _rendered_img =
-    decode_png(rendered).map_err(|e| format!("Failed to decode rendered image: {}", e))?;
-  let _expected_img =
-    decode_png(expected).map_err(|e| format!("Failed to decode expected image: {}", e))?;
-
-  // In a real implementation, we would:
-  // 1. Compare pixels
-  // 2. Create a new image highlighting differences
-  // 3. Encode as PNG
-
-  // For now, return the rendered image as a placeholder
-  Ok(rendered.to_vec())
+pub fn generate_diff_image(
+  rendered: &[u8],
+  expected: &[u8],
+  tolerance: u8,
+) -> Result<Vec<u8>, String> {
+  fastrender::image_output::diff_png(rendered, expected, tolerance)
+    .map(|(_, diff)| diff)
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -801,6 +743,7 @@ mod tests {
     assert_eq!(metadata.path, path);
     assert_eq!(metadata.timeout_ms, 30000);
     assert!(!metadata.disabled);
+    assert!((metadata.device_pixel_ratio - 1.0).abs() < f32::EPSILON);
   }
 
   #[test]
@@ -814,6 +757,12 @@ mod tests {
   fn test_test_metadata_with_timeout() {
     let metadata = TestMetadata::from_path(PathBuf::from("test.html")).with_timeout(5000);
     assert_eq!(metadata.timeout_ms, 5000);
+  }
+
+  #[test]
+  fn test_test_metadata_with_dpr() {
+    let metadata = TestMetadata::from_path(PathBuf::from("test.html")).with_device_pixel_ratio(2.0);
+    assert!((metadata.device_pixel_ratio - 2.0).abs() < f32::EPSILON);
   }
 
   #[test]
@@ -922,6 +871,8 @@ mod tests {
     assert_eq!(config.max_diff_percentage, 0.0);
     assert!(!config.fail_fast);
     assert!(!config.parallel);
+    assert!(config.manifest_path.is_none());
+    assert!(config.write_report);
   }
 
   #[test]
@@ -931,7 +882,9 @@ mod tests {
       .with_max_diff(0.5)
       .fail_fast()
       .parallel(8)
-      .with_filter("css");
+      .with_filter("css")
+      .with_manifest("manifest.json")
+      .without_report();
 
     assert_eq!(config.test_dir, PathBuf::from("custom/tests"));
     assert_eq!(config.pixel_tolerance, 5);
@@ -940,6 +893,8 @@ mod tests {
     assert!(config.parallel);
     assert_eq!(config.workers, 8);
     assert_eq!(config.filter, Some("css".to_string()));
+    assert_eq!(config.manifest_path, Some(PathBuf::from("manifest.json")));
+    assert!(!config.write_report);
   }
 
   #[test]

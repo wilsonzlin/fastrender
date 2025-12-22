@@ -1654,6 +1654,15 @@ impl FastRender {
     self.image_cache.set_base_url(base);
   }
 
+  /// Overrides the device pixel ratio for subsequent renders.
+  ///
+  /// This is primarily used by test harnesses that need to vary DPR per test case.
+  pub fn set_device_pixel_ratio(&mut self, dpr: f32) {
+    if dpr.is_finite() && dpr > 0.0 {
+      self.device_pixel_ratio = dpr;
+    }
+  }
+
   /// Clears any configured base URL, leaving relative resources unresolved.
   pub fn clear_base_url(&mut self) {
     self.image_cache.clear_base_url();
@@ -4027,6 +4036,13 @@ mod tests {
       .build()
       .expect("renderer with custom dpr");
     assert!((renderer.device_pixel_ratio - 2.0).abs() < f32::EPSILON);
+  }
+
+  #[test]
+  fn setter_updates_device_pixel_ratio() {
+    let mut renderer = FastRender::new().unwrap();
+    renderer.set_device_pixel_ratio(2.5);
+    assert!((renderer.device_pixel_ratio - 2.5).abs() < f32::EPSILON);
   }
 
   #[test]

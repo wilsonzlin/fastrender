@@ -50,6 +50,9 @@ use super::harness::TestMetadata;
 use super::harness::TestResult;
 use super::harness::TestStatus;
 use super::harness::TestType;
+use rayon::prelude::*;
+use serde::Deserialize;
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -97,6 +100,45 @@ pub struct RunnerStats {
   pub skipped: usize,
   /// Total execution time
   pub total_duration: Duration,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ManifestFile {
+  tests: Vec<ManifestEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ManifestEntry {
+  path: String,
+  #[serde(default)]
+  reference: Option<String>,
+  #[serde(default)]
+  test_type: Option<String>,
+  #[serde(default)]
+  id: Option<String>,
+  #[serde(default)]
+  expected: Option<String>,
+  #[serde(default)]
+  viewport: Option<ManifestViewport>,
+  #[serde(default)]
+  timeout_ms: Option<u64>,
+  #[serde(default)]
+  disabled: Option<String>,
+  #[serde(default)]
+  dpr: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ManifestViewport {
+  width: u32,
+  height: u32,
+}
+
+#[derive(Debug, Clone)]
+struct ArtifactPaths {
+  actual: PathBuf,
+  diff: PathBuf,
+  expected: PathBuf,
 }
 
 impl RunnerStats {
@@ -212,52 +254,14 @@ impl WptRunner {
   /// }
   /// ```
   pub fn run_test(&mut self, test_path: &Path) -> TestResult {
-    let start = Instant::now();
     let mut metadata = TestMetadata::from_path(test_path.to_path_buf());
-
-    if metadata.test_type == TestType::Reftest && metadata.reference_path.is_none() {
-      let expected_path = self.get_expected_image_path(&metadata);
-      if expected_path.exists() {
-        metadata.test_type = TestType::Visual;
-      }
+    metadata.id = Self::test_id_for_path(&metadata.path, &self.config.test_dir);
+    if metadata.timeout_ms == 0 {
+      metadata.timeout_ms = self.config.default_timeout_ms;
     }
 
-    // Check if test is disabled
-    if metadata.disabled {
-      let reason = metadata
-        .disabled_reason
-        .clone()
-        .unwrap_or_else(|| "Disabled".to_string());
-      let result = TestResult::skip(metadata, reason);
-      self.stats.record(&result);
-      return result;
-    }
-
-    // Check filter
-    if let Some(ref filter) = self.config.filter {
-      if !metadata.id.contains(filter) && !test_path.to_string_lossy().contains(filter) {
-        let result = TestResult::skip(metadata, "Filtered out");
-        self.stats.record(&result);
-        return result;
-      }
-    }
-
-    // Execute based on test type
-    let result = match metadata.test_type {
-      TestType::Reftest => self.run_reftest(&metadata, start),
-      TestType::Visual => self.run_visual_test(&metadata, start),
-      TestType::Crashtest => self.run_crashtest(&metadata, start),
-      TestType::Testharness => TestResult::skip(metadata, "Testharness tests not yet supported"),
-      TestType::Manual => TestResult::skip(metadata, "Manual tests not supported"),
-    };
-
-    self.stats.record(&result);
-
-    // Save artifacts if configured
-    if self.config.save_rendered && result.rendered_image.is_some() {
-      self.save_artifact(&result);
-    }
-
+    let result = Self::execute_test(&self.config, &mut self.renderer, metadata);
+    self.record_result(&result);
     result
   }
 
@@ -281,21 +285,18 @@ impl WptRunner {
   /// );
   /// ```
   pub fn run_suite(&mut self, suite_dir: &Path) -> Vec<TestResult> {
-    let mut results = Vec::new();
+    let test_cases = self.discover_tests(suite_dir);
+    let mut results = if self.config.parallel && !self.config.fail_fast {
+      self.run_tests_parallel(test_cases)
+    } else {
+      self.run_tests_sequential(test_cases)
+    };
 
-    // Collect test files
-    let test_files = self.collect_tests(suite_dir);
-
-    for test_path in test_files {
-      let result = self.run_test(&test_path);
-      results.push(result);
-
-      // Check fail-fast
-      if self.config.fail_fast && results.last().is_some_and(|r| r.status.is_failure()) {
-        break;
-      }
+    for result in &results {
+      self.record_result(result);
     }
 
+    self.write_report(&results);
     results
   }
 
@@ -326,8 +327,168 @@ impl WptRunner {
     suite
   }
 
+  fn record_result(&mut self, result: &TestResult) {
+    self.stats.record(result);
+    if self.config.save_rendered {
+      self.save_artifact(result);
+    }
+  }
+
+  fn run_tests_sequential(&mut self, tests: Vec<TestMetadata>) -> Vec<TestResult> {
+    let mut results = Vec::with_capacity(tests.len());
+
+    for metadata in tests {
+      let result = Self::execute_test(&self.config, &mut self.renderer, metadata);
+      let should_break = self.config.fail_fast && result.status.is_failure();
+      results.push(result);
+
+      if should_break {
+        break;
+      }
+    }
+
+    results
+  }
+
+  fn run_tests_parallel(&self, tests: Vec<TestMetadata>) -> Vec<TestResult> {
+    if tests.is_empty() {
+      return Vec::new();
+    }
+
+    let config = self.config.clone();
+    let workers = config.workers.max(1);
+    let pool = rayon::ThreadPoolBuilder::new()
+      .num_threads(workers)
+      .build()
+      .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().build().unwrap());
+
+    pool.install(|| {
+      tests
+        .into_par_iter()
+        .map(|metadata| {
+          let mut renderer = match fastrender::FastRender::new() {
+            Ok(renderer) => renderer,
+            Err(e) => {
+              return TestResult::error(
+                metadata.clone(),
+                Duration::ZERO,
+                format!("Failed to initialize renderer: {e}"),
+              )
+            }
+          };
+
+          Self::execute_test(&config, &mut renderer, metadata)
+        })
+        .collect()
+    })
+  }
+
+  fn discover_tests(&self, suite_dir: &Path) -> Vec<TestMetadata> {
+    if let Some(manifest) = self.manifest_path_for_suite(suite_dir) {
+      if let Ok(entries) = self.load_manifest(&manifest, suite_dir) {
+        return entries;
+      }
+    }
+
+    self.collect_tests(suite_dir)
+  }
+
+  fn manifest_path_for_suite(&self, suite_dir: &Path) -> Option<PathBuf> {
+    if let Some(custom) = &self.config.manifest_path {
+      let path = if custom.is_absolute() {
+        custom.clone()
+      } else {
+        custom.clone()
+      };
+
+      if path.exists() {
+        return Some(path);
+      }
+    }
+
+    let candidates = [
+      Some(suite_dir.join("manifest.json")),
+      Some(suite_dir.join("manifest.toml")),
+      suite_dir.parent().map(|p| p.join("manifest.json")),
+      suite_dir.parent().map(|p| p.join("manifest.toml")),
+    ];
+
+    candidates.into_iter().flatten().find(|path| path.exists())
+  }
+
+  fn load_manifest(
+    &self,
+    manifest_path: &Path,
+    suite_dir: &Path,
+  ) -> Result<Vec<TestMetadata>, String> {
+    let data = fs::read(manifest_path)
+      .map_err(|e| format!("Failed to read manifest {:?}: {}", manifest_path, e))?;
+
+    let manifest: ManifestFile = match manifest_path.extension().and_then(|e| e.to_str()) {
+      Some("json") => serde_json::from_slice(&data)
+        .map_err(|e| format!("Failed to parse JSON manifest {:?}: {}", manifest_path, e))?,
+      Some("toml") => toml::from_slice(&data)
+        .map_err(|e| format!("Failed to parse TOML manifest {:?}: {}", manifest_path, e))?,
+      _ => {
+        return Err(format!(
+          "Unsupported manifest format for {:?}",
+          manifest_path
+        ))
+      }
+    };
+
+    let manifest_dir = manifest_path.parent().unwrap_or(Path::new("."));
+
+    Ok(
+      manifest
+        .tests
+        .into_iter()
+        .map(|entry| self.metadata_from_manifest(entry, suite_dir, manifest_dir))
+        .collect(),
+    )
+  }
+
+  fn metadata_from_manifest(
+    &self,
+    entry: ManifestEntry,
+    suite_dir: &Path,
+    manifest_dir: &Path,
+  ) -> TestMetadata {
+    let path = Self::resolve_path(manifest_dir, suite_dir, &entry.path);
+    let mut metadata = TestMetadata::from_path(path);
+
+    metadata.id = entry
+      .id
+      .unwrap_or_else(|| Self::test_id_for_path(&metadata.path, &self.config.test_dir));
+    metadata.timeout_ms = entry.timeout_ms.unwrap_or(self.config.default_timeout_ms);
+    metadata.device_pixel_ratio = entry.dpr.unwrap_or(1.0);
+
+    if let Some(viewport) = entry.viewport {
+      metadata.viewport_width = viewport.width;
+      metadata.viewport_height = viewport.height;
+    }
+
+    if let Some(reference) = entry.reference {
+      metadata.reference_path = Some(Self::resolve_path(manifest_dir, suite_dir, &reference));
+    }
+
+    if let Some(kind) = entry.test_type {
+      metadata.test_type = Self::parse_test_type_from_manifest(&kind, &metadata.path);
+    }
+
+    if let Some(expected) = entry.expected {
+      metadata.expected_status = Some(Self::parse_expected_status(&expected));
+    }
+
+    if let Some(reason) = entry.disabled {
+      metadata = metadata.disable(reason);
+    }
+
+    metadata
+  }
+
   /// Collects all test files from a directory
-  fn collect_tests(&self, dir: &Path) -> Vec<PathBuf> {
+  fn collect_tests(&self, dir: &Path) -> Vec<TestMetadata> {
     let mut tests = Vec::new();
 
     if !dir.exists() {
@@ -338,7 +499,12 @@ impl WptRunner {
       for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() && self.is_test_file(&path) {
-          tests.push(path);
+          let mut metadata = TestMetadata::from_path(path);
+          if metadata.timeout_ms == 0 {
+            metadata.timeout_ms = self.config.default_timeout_ms;
+          }
+          metadata.id = Self::test_id_for_path(&metadata.path, &self.config.test_dir);
+          tests.push(metadata);
         } else if path.is_dir() {
           // Recursively collect from subdirectories
           tests.extend(self.collect_tests(&path));
@@ -347,7 +513,7 @@ impl WptRunner {
     }
 
     // Sort for deterministic ordering
-    tests.sort();
+    tests.sort_by(|a, b| a.path.cmp(&b.path));
     tests
   }
 
@@ -379,8 +545,78 @@ impl WptRunner {
     true
   }
 
+  fn execute_test(
+    config: &HarnessConfig,
+    renderer: &mut fastrender::FastRender,
+    mut metadata: TestMetadata,
+  ) -> TestResult {
+    let start = Instant::now();
+
+    if metadata.test_type == TestType::Reftest && metadata.reference_path.is_none() {
+      let expected_path = Self::get_expected_image_path(config, &metadata);
+      if expected_path.exists() {
+        metadata.test_type = TestType::Visual;
+      }
+    }
+
+    if metadata.timeout_ms == 0 {
+      metadata.timeout_ms = config.default_timeout_ms;
+    }
+
+    // Check if test is disabled
+    if metadata.disabled {
+      let reason = metadata
+        .disabled_reason
+        .clone()
+        .unwrap_or_else(|| "Disabled".to_string());
+      return TestResult::skip(metadata, reason);
+    }
+
+    // Check filter
+    if let Some(ref filter) = config.filter {
+      if !metadata.id.contains(filter)
+        && !metadata.path.to_string_lossy().contains(filter)
+        && !metadata
+          .reference_path
+          .as_ref()
+          .is_some_and(|p| p.to_string_lossy().contains(filter))
+      {
+        return TestResult::skip(metadata, "Filtered out");
+      }
+    }
+
+    if metadata.device_pixel_ratio > 0.0 {
+      renderer.set_device_pixel_ratio(metadata.device_pixel_ratio);
+    }
+
+    let mut result = match metadata.test_type {
+      TestType::Reftest => Self::run_reftest(renderer, &metadata, config, start),
+      TestType::Visual => Self::run_visual_test(renderer, &metadata, config, start),
+      TestType::Crashtest => Self::run_crashtest(renderer, &metadata, start),
+      TestType::Testharness => {
+        TestResult::skip(metadata.clone(), "Testharness tests not yet supported")
+      }
+      TestType::Manual => TestResult::skip(metadata.clone(), "Manual tests not supported"),
+    };
+
+    // Apply timeout if execution exceeded limits
+    let timeout_limit = Duration::from_millis(metadata.timeout_ms.max(config.default_timeout_ms));
+    if result.status != TestStatus::Timeout && result.status != TestStatus::Skip {
+      if result.duration > timeout_limit {
+        result = TestResult::timeout(result.metadata.clone(), result.duration);
+      }
+    }
+
+    Self::apply_expected_outcome(result)
+  }
+
   /// Runs a reference test
-  fn run_reftest(&mut self, metadata: &TestMetadata, start: Instant) -> TestResult {
+  fn run_reftest(
+    renderer: &mut fastrender::FastRender,
+    metadata: &TestMetadata,
+    config: &HarnessConfig,
+    start: Instant,
+  ) -> TestResult {
     // Check for reference file
     let ref_path = match &metadata.reference_path {
       Some(path) => path,
@@ -414,7 +650,7 @@ impl WptRunner {
     };
 
     // Render test HTML
-    let test_image = match self.render_html(&test_html, metadata) {
+    let test_image = match Self::render_html(renderer, &test_html, metadata) {
       Ok(img) => img,
       Err(e) => {
         return TestResult::error(
@@ -426,7 +662,7 @@ impl WptRunner {
     };
 
     // Render reference HTML
-    let ref_image = match self.render_html(&ref_html, metadata) {
+    let ref_image = match Self::render_html(renderer, &ref_html, metadata) {
       Ok(img) => img,
       Err(e) => {
         return TestResult::error(
@@ -438,13 +674,18 @@ impl WptRunner {
     };
 
     // Compare images
-    self.compare_and_result(metadata, start, test_image, ref_image)
+    Self::compare_and_result(config, metadata, start, test_image, ref_image)
   }
 
   /// Runs a visual test against expected PNG
-  fn run_visual_test(&mut self, metadata: &TestMetadata, start: Instant) -> TestResult {
+  fn run_visual_test(
+    renderer: &mut fastrender::FastRender,
+    metadata: &TestMetadata,
+    config: &HarnessConfig,
+    start: Instant,
+  ) -> TestResult {
     // Find expected image
-    let expected_path = self.get_expected_image_path(metadata);
+    let expected_path = Self::get_expected_image_path(config, metadata);
 
     // Read expected image if it exists
     let expected_image = if expected_path.exists() {
@@ -458,7 +699,7 @@ impl WptRunner {
           );
         }
       }
-    } else if self.config.update_expected {
+    } else if config.update_expected {
       // Generate expected image
       None
     } else {
@@ -481,7 +722,7 @@ impl WptRunner {
       }
     };
 
-    let rendered_image = match self.render_html(&test_html, metadata) {
+    let rendered_image = match Self::render_html(renderer, &test_html, metadata) {
       Ok(img) => img,
       Err(e) => {
         return TestResult::error(
@@ -493,8 +734,8 @@ impl WptRunner {
     };
 
     // If no expected image and update mode, save and pass
-    if expected_image.is_none() && self.config.update_expected {
-      if let Err(e) = self.save_expected_image(&expected_path, &rendered_image) {
+    if expected_image.is_none() {
+      if let Err(e) = Self::save_expected_image(&expected_path, &rendered_image) {
         return TestResult::error(
           metadata.clone(),
           start.elapsed(),
@@ -505,11 +746,15 @@ impl WptRunner {
     }
 
     let expected_image = expected_image.unwrap();
-    self.compare_and_result(metadata, start, rendered_image, expected_image)
+    Self::compare_and_result(config, metadata, start, rendered_image, expected_image)
   }
 
   /// Runs a crash test
-  fn run_crashtest(&mut self, metadata: &TestMetadata, start: Instant) -> TestResult {
+  fn run_crashtest(
+    renderer: &mut fastrender::FastRender,
+    metadata: &TestMetadata,
+    start: Instant,
+  ) -> TestResult {
     // Read test HTML
     let test_html = match fs::read_to_string(&metadata.path) {
       Ok(html) => html,
@@ -523,7 +768,7 @@ impl WptRunner {
     };
 
     // Try to render - success means no crash
-    match self.render_html(&test_html, metadata) {
+    match Self::render_html(renderer, &test_html, metadata) {
       Ok(_) => TestResult::pass(metadata.clone(), start.elapsed()),
       Err(e) => {
         // Rendering failed, but didn't crash - could be expected
@@ -538,16 +783,19 @@ impl WptRunner {
   }
 
   /// Renders HTML and returns PNG bytes
-  fn render_html(&mut self, html: &str, metadata: &TestMetadata) -> Result<Vec<u8>, String> {
-    self
-      .renderer
+  fn render_html(
+    renderer: &mut fastrender::FastRender,
+    html: &str,
+    metadata: &TestMetadata,
+  ) -> Result<Vec<u8>, String> {
+    renderer
       .render_to_png(html, metadata.viewport_width, metadata.viewport_height)
       .map_err(|e| format!("Render error: {}", e))
   }
 
   /// Compares two images and creates the appropriate result
   fn compare_and_result(
-    &self,
+    config: &HarnessConfig,
     metadata: &TestMetadata,
     start: Instant,
     rendered: Vec<u8>,
@@ -555,12 +803,27 @@ impl WptRunner {
   ) -> TestResult {
     let duration = start.elapsed();
 
-    match compare_images(&rendered, &expected, self.config.pixel_tolerance) {
+    match compare_images(&rendered, &expected, config.pixel_tolerance) {
       Ok((diff_pixels, _total_pixels, diff_percentage)) => {
-        if diff_percentage <= self.config.max_diff_percentage {
+        if diff_percentage <= config.max_diff_percentage {
           TestResult::pass(metadata.clone(), duration)
             .with_images(rendered, expected)
             .with_diff(diff_pixels, diff_percentage)
+        } else if config.update_expected {
+          let expected_path = Self::get_expected_image_path(config, metadata);
+          if let Err(err) = Self::save_expected_image(&expected_path, &rendered) {
+            return TestResult::error(
+              metadata.clone(),
+              duration,
+              format!("Failed to update expected image: {err}"),
+            );
+          }
+
+          let mut result = TestResult::pass(metadata.clone(), duration)
+            .with_images(rendered, expected)
+            .with_diff(diff_pixels, diff_percentage);
+          result.message = Some("Updated expected image".to_string());
+          result
         } else {
           TestResult::fail(
             metadata.clone(),
@@ -583,42 +846,223 @@ impl WptRunner {
   }
 
   /// Gets the path for the expected image
-  fn get_expected_image_path(&self, metadata: &TestMetadata) -> PathBuf {
+  fn get_expected_image_path(config: &HarnessConfig, metadata: &TestMetadata) -> PathBuf {
     // Try to construct expected path from test path
     let relative = metadata
       .path
-      .strip_prefix(&self.config.test_dir)
+      .strip_prefix(&config.test_dir)
       .unwrap_or(&metadata.path);
 
-    let mut expected_path = self.config.expected_dir.join(relative);
+    let mut expected_path = config.expected_dir.join(relative);
     expected_path.set_extension("png");
     expected_path
   }
 
   /// Saves the expected image
-  fn save_expected_image(&self, path: &Path, image: &[u8]) -> Result<(), String> {
+  fn save_expected_image(path: &Path, image: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
       fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
     }
     fs::write(path, image).map_err(|e| format!("Failed to write image: {}", e))
   }
 
-  /// Saves test artifacts (rendered images, diffs)
-  fn save_artifact(&self, result: &TestResult) {
-    let output_dir = &self.config.output_dir;
+  fn relative_test_path(config: &HarnessConfig, metadata: &TestMetadata) -> PathBuf {
+    metadata
+      .path
+      .strip_prefix(&config.test_dir)
+      .map(|p| p.to_path_buf())
+      .unwrap_or_else(|_| metadata.path.clone())
+  }
 
-    if let Err(e) = fs::create_dir_all(output_dir) {
-      eprintln!("Failed to create output directory: {}", e);
-      return;
+  fn artifact_paths(config: &HarnessConfig, metadata: &TestMetadata) -> ArtifactPaths {
+    let relative = Self::relative_test_path(config, metadata);
+
+    let mut actual = config.output_dir.join(&relative);
+    actual.set_extension("actual.png");
+
+    let mut diff = config.output_dir.join(relative);
+    diff.set_extension("diff.png");
+
+    let expected = Self::get_expected_image_path(config, metadata);
+
+    ArtifactPaths {
+      actual,
+      diff,
+      expected,
+    }
+  }
+
+  fn resolve_path(manifest_dir: &Path, suite_dir: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+      return path;
     }
 
-    let test_id = &result.metadata.id;
+    let manifest_path = manifest_dir.join(&path);
+    if manifest_path.exists() {
+      manifest_path
+    } else {
+      suite_dir.join(path)
+    }
+  }
 
-    // Save rendered image
-    if let Some(ref rendered) = result.rendered_image {
-      let path = output_dir.join(format!("{}-rendered.png", test_id));
-      if let Err(e) = fs::write(&path, rendered) {
-        eprintln!("Failed to save rendered image: {}", e);
+  fn parse_test_type_from_manifest(value: &str, path: &Path) -> TestType {
+    match value.to_lowercase().as_str() {
+      "visual" => TestType::Visual,
+      "reftest" => TestType::Reftest,
+      "crashtest" => TestType::Crashtest,
+      "manual" => TestType::Manual,
+      "testharness" => TestType::Testharness,
+      _ => TestType::from_path(path),
+    }
+  }
+
+  fn parse_expected_status(value: &str) -> TestStatus {
+    match value.to_lowercase().as_str() {
+      "fail" => TestStatus::Fail,
+      "error" => TestStatus::Error,
+      "timeout" => TestStatus::Timeout,
+      "skip" => TestStatus::Skip,
+      _ => TestStatus::Pass,
+    }
+  }
+
+  fn apply_expected_outcome(mut result: TestResult) -> TestResult {
+    if let Some(expected) = result.metadata.expected_status {
+      if expected == result.status {
+        if expected != TestStatus::Pass {
+          result.status = TestStatus::Pass;
+          result.message = Some(format!("Expected {expected:?} matched"));
+        }
+      } else if expected == TestStatus::Fail && result.status == TestStatus::Pass {
+        return TestResult::fail(
+          result.metadata.clone(),
+          result.duration,
+          "Unexpected pass (expected failure)",
+        );
+      }
+    }
+
+    result
+  }
+
+  fn link_from_output(&self, path: &Path) -> String {
+    if let Some(rel) = pathdiff::diff_paths(path, &self.config.output_dir) {
+      rel.to_string_lossy().replace('\\', "/")
+    } else {
+      path.to_string_lossy().replace('\\', "/")
+    }
+  }
+
+  fn write_report(&self, results: &[TestResult]) -> Option<PathBuf> {
+    if !self.config.write_report {
+      return None;
+    }
+
+    let total = results.len();
+    let passed = results
+      .iter()
+      .filter(|r| r.status == TestStatus::Pass)
+      .count();
+    let failed: Vec<&TestResult> = results.iter().filter(|r| r.status.is_failure()).collect();
+
+    let mut report = String::new();
+    let _ = writeln!(report, "# WPT run summary");
+    let _ = writeln!(report, "- Total: {}", total);
+    let _ = writeln!(report, "- Passed: {}", passed);
+    let _ = writeln!(report, "- Failed/Error: {}", failed.len());
+    let _ = writeln!(report, "");
+
+    let _ = writeln!(report, "## Failures");
+    if failed.is_empty() {
+      let _ = writeln!(report, "All tests passed.");
+    } else {
+      let _ = writeln!(
+        report,
+        "| Test | Status | Expected | Actual | Diff | Message |"
+      );
+      let _ = writeln!(report, "| --- | --- | --- | --- | --- | --- |");
+      for result in failed {
+        let paths = Self::artifact_paths(&self.config, &result.metadata);
+        let expected_link = self.link_from_output(&paths.expected);
+        let actual_link = self.link_from_output(&paths.actual);
+        let diff_link = self.link_from_output(&paths.diff);
+        let message = result
+          .message
+          .as_ref()
+          .map(|m| m.replace('|', "\\|"))
+          .unwrap_or_default();
+
+        let _ = writeln!(
+          report,
+          "| {} | {} | [{}]({}) | [{}]({}) | [{}]({}) | {} |",
+          result.metadata.id,
+          result.status,
+          paths
+            .expected
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
+          expected_link,
+          paths
+            .actual
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy(),
+          actual_link,
+          paths.diff.file_name().unwrap_or_default().to_string_lossy(),
+          diff_link,
+          message,
+        );
+      }
+    }
+
+    let report_path = self.config.output_dir.join("report.md");
+    if let Some(parent) = report_path.parent() {
+      if fs::create_dir_all(parent).is_err() {
+        return None;
+      }
+    }
+
+    match fs::write(&report_path, report) {
+      Ok(_) => Some(report_path),
+      Err(_) => None,
+    }
+  }
+
+  fn test_id_for_path(path: &Path, test_root: &Path) -> String {
+    if let Ok(relative) = path.strip_prefix(test_root) {
+      let mut trimmed = relative.to_path_buf();
+      trimmed.set_extension("");
+      trimmed
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
+    } else {
+      path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown")
+        .to_string()
+    }
+  }
+
+  /// Saves test artifacts (rendered images, diffs)
+  fn save_artifact(&self, result: &TestResult) {
+    let paths = Self::artifact_paths(&self.config, &result.metadata);
+
+    if let Some(parent) = paths.actual.parent() {
+      if let Err(e) = fs::create_dir_all(parent) {
+        eprintln!("Failed to create output directory: {}", e);
+        return;
+      }
+    }
+
+    // Save rendered/actual image
+    if self.config.save_rendered {
+      if let Some(ref rendered) = result.rendered_image {
+        if let Err(e) = fs::write(&paths.actual, rendered) {
+          eprintln!("Failed to save rendered image: {}", e);
+        }
       }
     }
 
@@ -627,9 +1071,11 @@ impl WptRunner {
       if let (Some(ref rendered), Some(ref expected)) =
         (&result.rendered_image, &result.expected_image)
       {
-        if let Ok(diff) = generate_diff_image(rendered, expected) {
-          let path = output_dir.join(format!("{}-diff.png", test_id));
-          if let Err(e) = fs::write(&path, diff) {
+        if let Ok(diff) = generate_diff_image(rendered, expected, self.config.pixel_tolerance) {
+          if let Some(parent) = paths.diff.parent() {
+            let _ = fs::create_dir_all(parent);
+          }
+          if let Err(e) = fs::write(&paths.diff, diff) {
             eprintln!("Failed to save diff image: {}", e);
           }
         }
@@ -701,6 +1147,13 @@ impl WptRunnerBuilder {
     self
   }
 
+  /// Enables parallel execution with the given worker count
+  pub fn parallel(mut self, workers: usize) -> Self {
+    self.config.parallel = true;
+    self.config.workers = workers.max(1);
+    self
+  }
+
   /// Enables saving rendered images
   pub fn save_rendered(mut self) -> Self {
     self.config.save_rendered = true;
@@ -716,6 +1169,18 @@ impl WptRunnerBuilder {
   /// Enables update expected mode
   pub fn update_expected(mut self) -> Self {
     self.config.update_expected = true;
+    self
+  }
+
+  /// Sets a custom manifest path
+  pub fn manifest(mut self, manifest: impl Into<PathBuf>) -> Self {
+    self.config.manifest_path = Some(manifest.into());
+    self
+  }
+
+  /// Disables writing the Markdown report
+  pub fn no_report(mut self) -> Self {
+    self.config.write_report = false;
     self
   }
 
@@ -779,12 +1244,22 @@ mod tests {
       .tolerance(10)
       .max_diff(2.0)
       .fail_fast()
+      .parallel(3)
+      .manifest("custom/manifest.toml")
+      .no_report()
       .build();
 
     assert_eq!(runner.config().test_dir, PathBuf::from("custom/tests"));
     assert_eq!(runner.config().pixel_tolerance, 10);
     assert_eq!(runner.config().max_diff_percentage, 2.0);
     assert!(runner.config().fail_fast);
+    assert!(runner.config().parallel);
+    assert_eq!(runner.config().workers, 3);
+    assert_eq!(
+      runner.config().manifest_path,
+      Some(PathBuf::from("custom/manifest.toml"))
+    );
+    assert!(!runner.config().write_report);
   }
 
   #[test]
@@ -867,8 +1342,38 @@ mod tests {
     let tests = runner.collect_tests(temp.path());
 
     assert_eq!(tests.len(), 2);
-    assert!(tests.iter().all(|p| p.extension().unwrap() == "html"));
-    assert!(tests.iter().all(|p| !p.to_string_lossy().contains("-ref")));
+    assert!(tests.iter().all(|p| p.path.extension().unwrap() == "html"));
+    assert!(tests
+      .iter()
+      .all(|p| !p.path.to_string_lossy().contains("-ref")));
+  }
+
+  #[test]
+  fn test_manifest_discovery() {
+    let renderer = create_test_renderer();
+    let mut runner = WptRunner::new(renderer);
+
+    let suite_dir = TempDir::new().unwrap();
+    let html_path = suite_dir.path().join("sample.html");
+    std::fs::write(&html_path, "<html><body>ok</body></html>").unwrap();
+
+    let manifest = suite_dir.path().join("manifest.json");
+    std::fs::write(
+      &manifest,
+      r#"{"tests":[{"path":"sample.html","test_type":"crashtest","viewport":{"width":320,"height":240},"dpr":2.0,"timeout_ms":5000}]}"#,
+    )
+    .unwrap();
+
+    runner.config_mut().test_dir = suite_dir.path().to_path_buf();
+    runner.config_mut().output_dir = suite_dir.path().join("out");
+    runner.config_mut().output_dir = suite_dir.path().join("out");
+
+    let results = runner.run_suite(suite_dir.path());
+    assert_eq!(results.len(), 1);
+    let meta = &results[0].metadata;
+    assert_eq!(meta.viewport_width, 320);
+    assert_eq!(meta.viewport_height, 240);
+    assert!((meta.device_pixel_ratio - 2.0).abs() < f32::EPSILON);
   }
 
   #[test]
@@ -934,6 +1439,7 @@ mod tests {
     let mut runner = WptRunner::new(renderer);
 
     let temp = TempDir::new().unwrap();
+    runner.config_mut().output_dir = temp.path().join("out");
 
     // Create some test files
     std::fs::write(temp.path().join("test1.html"), "<html></html>").unwrap();
@@ -952,7 +1458,7 @@ mod tests {
     let runner = WptRunner::with_config(renderer, config);
 
     let metadata = TestMetadata::from_path(PathBuf::from("/tests/wpt/css/test.html"));
-    let expected_path = runner.get_expected_image_path(&metadata);
+    let expected_path = WptRunner::get_expected_image_path(runner.config(), &metadata);
 
     assert!(expected_path.ends_with("css/test.png"));
   }

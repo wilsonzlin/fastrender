@@ -65,6 +65,9 @@ mod wpt_runner_tests {
       .fail_fast()
       .save_rendered()
       .save_diffs()
+      .parallel(2)
+      .manifest("custom/manifest.toml")
+      .no_report()
       .build();
 
     assert_eq!(runner.config().test_dir, PathBuf::from("custom/tests"));
@@ -81,6 +84,13 @@ mod wpt_runner_tests {
     assert!(runner.config().fail_fast);
     assert!(runner.config().save_rendered);
     assert!(runner.config().save_diffs);
+    assert!(runner.config().parallel);
+    assert_eq!(runner.config().workers, 2);
+    assert_eq!(
+      runner.config().manifest_path,
+      Some(PathBuf::from("custom/manifest.toml"))
+    );
+    assert!(!runner.config().write_report);
   }
 
   #[test]
@@ -207,7 +217,12 @@ mod wpt_runner_tests {
       .stack_size(64 * 1024 * 1024)
       .spawn(|| {
         let renderer = create_test_renderer();
-        let mut runner = WptRunner::with_config(renderer, HarnessConfig::default());
+        let mut config = HarnessConfig::default();
+        if std::env::var("UPDATE_WPT_EXPECTED").is_ok() {
+          config = config.update_expected();
+        }
+
+        let mut runner = WptRunner::with_config(renderer, config);
 
         let results = runner.run_suite(Path::new("tests/wpt/tests"));
         assert!(!results.is_empty());
@@ -489,6 +504,8 @@ mod wpt_runner_tests {
     assert!(!config.fail_fast);
     assert!(!config.parallel);
     assert!(!config.update_expected);
+    assert!(config.manifest_path.is_none());
+    assert!(config.write_report);
   }
 
   #[test]
@@ -507,7 +524,9 @@ mod wpt_runner_tests {
       .fail_fast()
       .parallel(8)
       .with_filter("css")
-      .update_expected();
+      .update_expected()
+      .with_manifest("custom/manifest.toml")
+      .without_report();
 
     assert_eq!(config.pixel_tolerance, 10);
     assert_eq!(config.max_diff_percentage, 0.5);
@@ -516,6 +535,11 @@ mod wpt_runner_tests {
     assert_eq!(config.workers, 8);
     assert_eq!(config.filter, Some("css".to_string()));
     assert!(config.update_expected);
+    assert_eq!(
+      config.manifest_path,
+      Some(PathBuf::from("custom/manifest.toml"))
+    );
+    assert!(!config.write_report);
   }
 
   // =========================================================================
