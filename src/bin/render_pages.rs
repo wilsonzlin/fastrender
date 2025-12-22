@@ -89,6 +89,10 @@ struct Args {
   #[arg(long, value_delimiter = ',')]
   pages: Option<Vec<String>>,
 
+  /// Process only a deterministic shard of the cached pages (index/total, 0-based)
+  #[arg(long, value_parser = parse_shard)]
+  shard: Option<(usize, usize)>,
+
   /// Horizontal scroll offset in CSS px
   #[arg(long, default_value = "0.0")]
   scroll_x: f32,
@@ -162,6 +166,26 @@ fn parse_color_scheme(s: &str) -> Result<String, String> {
     "light" | "dark" | "no-preference" => Ok(v),
     _ => Err(format!("invalid color scheme: {s}")),
   }
+}
+
+fn parse_shard(s: &str) -> Result<(usize, usize), String> {
+  let parts: Vec<&str> = s.split('/').collect();
+  if parts.len() != 2 {
+    return Err("shard must be index/total (e.g., 0/4)".to_string());
+  }
+  let index = parts[0]
+    .parse::<usize>()
+    .map_err(|_| "invalid shard index".to_string())?;
+  let total = parts[1]
+    .parse::<usize>()
+    .map_err(|_| "invalid shard total".to_string())?;
+  if total == 0 {
+    return Err("shard total must be > 0".to_string());
+  }
+  if index >= total {
+    return Err("shard index must be < total".to_string());
+  }
+  Ok((index, total))
 }
 
 struct PageResult {
@@ -241,13 +265,13 @@ fn main() {
   fs::create_dir_all(ASSET_DIR).expect("create asset dir");
 
   // Find all cached HTML files
-  let entries: Vec<_> = match fs::read_dir(HTML_DIR) {
+  let mut entries: Vec<PathBuf> = match fs::read_dir(HTML_DIR) {
     Ok(dir) => dir
-      .filter_map(|e| e.ok())
-      .filter(|e| e.path().extension().map(|x| x == "html").unwrap_or(false))
-      .filter(|e| {
+      .filter_map(|e| e.ok().map(|e| e.path()))
+      .filter(|path| path.extension().map(|x| x == "html").unwrap_or(false))
+      .filter(|path| {
         if let Some(ref filter) = page_filter {
-          if let Some(stem_os) = e.path().file_stem() {
+          if let Some(stem_os) = path.file_stem() {
             if let Some(stem) = stem_os.to_str() {
               return filter.contains(stem);
             }
@@ -264,6 +288,17 @@ fn main() {
       std::process::exit(1);
     }
   };
+
+  entries.sort();
+
+  if let Some((index, total)) = args.shard {
+    entries = entries
+      .into_iter()
+      .enumerate()
+      .filter(|(idx, _)| idx % total == index)
+      .map(|(_, path)| path)
+      .collect();
+  }
 
   if entries.is_empty() {
     eprintln!("No cached pages in {}. Run fetch_pages first.", HTML_DIR);
@@ -283,6 +318,9 @@ fn main() {
   println!("Rendering {} pages ({} parallel)...", entries.len(), args.jobs);
   println!("User-Agent: {}", normalize_user_agent_for_log(&args.user_agent));
   println!("Accept-Language: {}", args.accept_language);
+  if let Some((index, total)) = args.shard {
+    println!("Shard: {}/{}", index, total);
+  }
   println!();
 
   let start = Instant::now();
@@ -301,9 +339,9 @@ fn main() {
   let css_limit = args.css_limit;
 
   pool.scope(|s| {
-    for entry in &entries {
+    for path in &entries {
       let results = &results;
-      let path = entry.path();
+      let path = path.clone();
       let fetcher = Arc::clone(&fetcher);
       let user_agent = args.user_agent.clone();
 

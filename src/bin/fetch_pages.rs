@@ -47,6 +47,10 @@ struct Args {
   #[arg(long, value_delimiter = ',')]
   pages: Option<Vec<String>>,
 
+  /// Process only a deterministic shard of the page set (index/total, 0-based)
+  #[arg(long, value_parser = parse_shard)]
+  shard: Option<(usize, usize)>,
+
   /// Override the User-Agent header
   #[arg(long, default_value = DEFAULT_USER_AGENT)]
   user_agent: String,
@@ -169,6 +173,9 @@ const PAGES: &[&str] = &[
   "https://developer.mozilla.org/en-US/docs/Web/CSS/writing-mode",
   "https://developer.mozilla.org/en-US/docs/Web/CSS/text-orientation",
   "https://developer.mozilla.org/en-US/docs/Web/CSS/text-combine-upright",
+  "https://developer.mozilla.org/en-US/docs/Web/CSS/transform",
+  "https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts",
+  "https://developer.mozilla.org/en-US/docs/Learn/Forms/Your_first_form",
   "https://howtogeek.com",
   "https://macrumors.com",
   "https://washingtonpost.com",
@@ -215,8 +222,11 @@ const PAGES: &[&str] = &[
   "https://slashdot.org",
 ];
 
-fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
-  PAGES
+fn selected_pages(
+  filter: Option<&HashSet<String>>,
+  shard: Option<(usize, usize)>,
+) -> Vec<&'static str> {
+  let filtered: Vec<&'static str> = PAGES
     .iter()
     .copied()
     .filter(|url| match filter {
@@ -227,7 +237,38 @@ fn selected_pages(filter: Option<&HashSet<String>>) -> Vec<&'static str> {
       }
       None => true,
     })
-    .collect()
+    .collect();
+
+  if let Some((index, total)) = shard {
+    filtered
+      .into_iter()
+      .enumerate()
+      .filter(|(idx, _)| idx % total == index)
+      .map(|(_, url)| url)
+      .collect()
+  } else {
+    filtered
+  }
+}
+
+fn parse_shard(s: &str) -> Result<(usize, usize), String> {
+  let parts: Vec<&str> = s.split('/').collect();
+  if parts.len() != 2 {
+    return Err("shard must be index/total (e.g., 0/4)".to_string());
+  }
+  let index = parts[0]
+    .parse::<usize>()
+    .map_err(|_| "invalid shard index".to_string())?;
+  let total = parts[1]
+    .parse::<usize>()
+    .map_err(|_| "invalid shard total".to_string())?;
+  if total == 0 {
+    return Err("shard total must be > 0".to_string());
+  }
+  if index >= total {
+    return Err("shard index must be < total".to_string());
+  }
+  Ok((index, total))
 }
 
 fn write_cached_html(
@@ -341,7 +382,7 @@ fn main() {
 
   fs::create_dir_all(CACHE_DIR).expect("create cache dir");
 
-  let selected = selected_pages(page_filter.as_ref());
+  let selected = selected_pages(page_filter.as_ref(), args.shard);
   if selected.is_empty() {
     if page_filter.is_some() {
       println!("No pages matched the provided filter");
@@ -383,6 +424,9 @@ fn main() {
   );
   println!("User-Agent: {}", args.user_agent);
   println!("Accept-Language: {}", args.accept_language);
+  if let Some((index, total)) = args.shard {
+    println!("Shard: {}/{}", index, total);
+  }
   if args.refresh {
     println!("--refresh: re-fetching all");
   }
@@ -526,7 +570,7 @@ mod tests {
     // Trailing slash should normalize to the same stem as the canonical URL.
     filter.insert(url_to_filename("https://example.com/"));
 
-    let selected = selected_pages(Some(&filter));
+    let selected = selected_pages(Some(&filter), None);
     assert!(selected.contains(&"https://example.com"));
   }
 
@@ -536,7 +580,7 @@ mod tests {
     filter.insert(url_to_filename("https://cnn.com"));
     filter.insert(url_to_filename("https://example.com"));
 
-    let selected = selected_pages(Some(&filter));
+    let selected = selected_pages(Some(&filter), None);
     assert!(selected.contains(&"https://cnn.com"));
     assert!(selected.contains(&"https://example.com"));
     assert!(!selected.contains(&"https://reddit.com"));
@@ -550,7 +594,7 @@ mod tests {
     ));
     filter.insert(url_to_filename("https://RUST-LANG.ORG"));
 
-    let selected = selected_pages(Some(&filter));
+    let selected = selected_pages(Some(&filter), None);
     assert_eq!(selected.len(), 2);
     assert!(selected
       .iter()
@@ -564,7 +608,7 @@ mod tests {
     // www.openstreetmap.org is in PAGES; normalization should handle the www prefix.
     filter.insert(url_to_filename("https://www.openstreetmap.org"));
 
-    let selected = selected_pages(Some(&filter));
+    let selected = selected_pages(Some(&filter), None);
     assert_eq!(selected, vec!["https://www.openstreetmap.org"]);
   }
 
@@ -576,14 +620,39 @@ mod tests {
     filter.insert(stem.clone());
     filter.insert(stem);
 
-    let selected = selected_pages(Some(&filter));
+    let selected = selected_pages(Some(&filter), None);
     assert_eq!(selected, vec!["https://rust-lang.org"]);
   }
 
   #[test]
   fn selected_pages_none_returns_all() {
-    let all = selected_pages(None);
+    let all = selected_pages(None, None);
     assert_eq!(all.len(), PAGES.len());
+  }
+
+  #[test]
+  fn selected_pages_apply_shard_evenly() {
+    let shard0 = selected_pages(None, Some((0, 3)));
+    let shard1 = selected_pages(None, Some((1, 3)));
+    let shard2 = selected_pages(None, Some((2, 3)));
+
+    assert!(!shard0.is_empty());
+    assert!(!shard1.is_empty());
+    assert!(!shard2.is_empty());
+
+    let mut combined = Vec::new();
+    combined.extend_from_slice(&shard0);
+    combined.extend_from_slice(&shard1);
+    combined.extend_from_slice(&shard2);
+
+    let mut deduped = combined.clone();
+    deduped.sort();
+    deduped.dedup();
+
+    let mut all = selected_pages(None, None);
+    all.sort();
+
+    assert_eq!(deduped, all);
   }
 
   #[test]
@@ -603,7 +672,7 @@ mod tests {
     let mut filter = HashSet::new();
     filter.insert(normalize_page_name("https://www.w3.org").unwrap());
     filter.insert(normalize_page_name("w3.org").unwrap());
-    let selected = selected_pages(Some(&filter));
+    let selected = selected_pages(Some(&filter), None);
     assert!(selected.contains(&"https://w3.org"));
     assert!(selected.contains(&"https://www.w3.org"));
   }

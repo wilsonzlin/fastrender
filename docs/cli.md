@@ -7,12 +7,14 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Purpose: fetch a curated set of real pages and cache HTML under `fetches/html/` (and metadata alongside).
 - Entry: `src/bin/fetch_pages.rs`
 - Run: `cargo run --release --bin fetch_pages -- --help`
+- Supports deterministic sharding with `--shard <index>/<total>` when splitting the page list across workers.
 
 ## `render_pages`
 
 - Purpose: render all cached HTML in `fetches/html/` to `fetches/renders/` (PNG + per-page logs + `_summary.log`).
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
+- Accepts `--shard <index>/<total>` to render a slice of the cached pages in a stable order.
 
 ## `fetch_and_render`
 
