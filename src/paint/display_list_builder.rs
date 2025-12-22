@@ -516,6 +516,9 @@ impl DisplayListBuilder {
     let root_fragment = context.fragments.first();
     let root_style = root_fragment.and_then(|f| f.style.as_deref());
     let paint_contained = root_style.map(|s| s.containment.paint).unwrap_or(false);
+    let mask_style = root_fragment
+      .and_then(|f| f.style.clone())
+      .filter(|s| s.mask_layers.iter().any(|layer| layer.image.is_some()));
     let context_bounds = Rect::from_xywh(
       context.bounds.x() + offset.x,
       context.bounds.y() + offset.y,
@@ -667,7 +670,8 @@ impl DisplayListBuilder {
       || clip_rect.is_some()
       || overflow_clip.is_some()
       || paint_contained
-      || !radii.is_zero();
+      || !radii.is_zero()
+      || mask_style.is_some();
 
     if is_root && !has_effects {
       for child in neg {
@@ -751,6 +755,7 @@ impl DisplayListBuilder {
         filters,
         backdrop_filters,
         radii,
+        mask: mask_style,
       }));
 
     for child in neg {
