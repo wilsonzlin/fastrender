@@ -8,12 +8,14 @@
 
 use crate::css::parser::parse_declarations;
 use crate::css::parser::parse_stylesheet;
+use crate::css::selectors::FastRenderSelectorImpl;
 use crate::css::selectors::PseudoElement;
 use crate::css::selectors::TextDirection;
 use crate::css::types::ContainerCondition;
 use crate::css::types::CssImportLoader;
 use crate::css::types::Declaration;
 use crate::css::types::PropertyValue;
+use crate::css::types::ScopeContext;
 use crate::css::types::StyleRule;
 use crate::css::types::StyleSheet;
 use crate::dom::resolve_first_strong_direction;
@@ -53,6 +55,7 @@ use selectors::context::VisitedHandlingMode;
 use selectors::matching::matches_selector;
 use selectors::matching::MatchingContext;
 use selectors::matching::MatchingMode;
+use selectors::Element;
 use selectors::parser::Selector;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -379,6 +382,7 @@ struct CascadeRule<'a> {
   rule: &'a StyleRule,
   layer_order: Vec<u32>,
   container_conditions: Vec<ContainerCondition>,
+  scopes: Vec<ScopeContext<'a>>,
 }
 
 /// Simple index over the rightmost compound selector to prune rule matching.
@@ -506,6 +510,12 @@ impl CandidateSet {
       }
     }
   }
+}
+
+#[derive(Clone)]
+struct ScopeMatch<'a> {
+  root: &'a DomNode,
+  ancestors: Vec<&'a DomNode>,
 }
 
 fn selector_key(selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>) -> SelectorKey {
@@ -1072,6 +1082,7 @@ pub fn apply_styles_with_media_target_and_imports_cached(
       rule: rule.rule,
       layer_order: rule.layer_order.clone(),
       container_conditions: rule.container_conditions.clone(),
+      scopes: rule.scopes.clone(),
     });
   }
   let offset = all_rules.len();
@@ -1082,6 +1093,7 @@ pub fn apply_styles_with_media_target_and_imports_cached(
       rule: rule.rule,
       layer_order: rule.layer_order.clone(),
       container_conditions: rule.container_conditions.clone(),
+      scopes: rule.scopes.clone(),
     });
   }
 
@@ -2329,6 +2341,7 @@ mod tests {
         rule: rule.rule,
         layer_order: rule.layer_order.clone(),
         container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
       })
       .collect();
 
@@ -6231,6 +6244,7 @@ mod tests {
         rule: rule.rule,
         layer_order: rule.layer_order,
         container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes,
       })
       .collect();
     let rule_index = RuleIndex::new(rule_refs);
@@ -6814,6 +6828,87 @@ mod tests {
   }
 }
 
+fn earliest_element_index<'a>(path: &[&'a DomNode]) -> usize {
+  path
+    .iter()
+    .position(|n| n.is_element())
+    .unwrap_or(path.len().saturating_sub(1))
+}
+
+fn resolve_scopes<'a>(
+  node: &'a DomNode,
+  ancestors: &[&'a DomNode],
+  scopes: &[ScopeContext<'a>],
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> Option<ScopeMatch<'a>> {
+  if scopes.is_empty() {
+    return None;
+  }
+
+  let mut path: Vec<&'a DomNode> = ancestors.to_vec();
+  path.push(node);
+
+  let mut root_index = earliest_element_index(&path);
+  let mut root = path[root_index];
+
+  for scope in scopes {
+    if !root.is_element() {
+      return None;
+    }
+    let base_ref = ElementRef::with_ancestors(root, &path[..root_index]);
+
+    if !scope.implicit_start {
+      let start_selectors = scope.start?;
+      let mut matched_root: Option<(usize, &'a DomNode)> = None;
+      for idx in (root_index..path.len()).rev() {
+        let candidate = path[idx];
+        if !candidate.is_element() {
+          continue;
+        }
+        let candidate_ref = ElementRef::with_ancestors(candidate, &path[..idx]);
+        let matches = context.nest_for_relative_selector(base_ref.opaque(), |ctx| {
+          start_selectors
+            .iter()
+            .any(|sel| matches_selector(sel, 0, None, &candidate_ref, ctx))
+        });
+        if matches {
+          matched_root = Some((idx, candidate));
+          break;
+        }
+      }
+
+      let (idx, candidate_root) = matched_root?;
+      root_index = idx;
+      root = candidate_root;
+    }
+
+    if let Some(limit_selectors) = scope.end {
+      let scope_ref = ElementRef::with_ancestors(root, &path[..root_index]);
+      for idx in (root_index + 1)..path.len() {
+        let candidate = path[idx];
+        if !candidate.is_element() {
+          continue;
+        }
+        let candidate_ref = ElementRef::with_ancestors(candidate, &path[..idx]);
+        let blocked = context.nest_for_relative_selector(scope_ref.opaque(), |ctx| {
+          limit_selectors
+            .iter()
+            .any(|sel| matches_selector(sel, 0, None, &candidate_ref, ctx))
+        });
+        if blocked {
+          return None;
+        }
+      }
+    }
+  }
+
+  let ancestors_for_root = path[..root_index].to_vec();
+  Some(ScopeMatch {
+    root,
+    ancestors: ancestors_for_root,
+  })
+}
+
 fn find_matching_rules<'a>(
   node: &DomNode,
   rules: &'a RuleIndex<'a>,
@@ -6853,6 +6948,9 @@ fn find_matching_rules<'a>(
     selectors::matching::MatchingForInvalidation::No,
   );
 
+  let mut scoped_rule_idx: Option<usize> = None;
+  let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
+
   for &selector_idx in candidates.iter() {
     let indexed = &rules.selectors[selector_idx];
     if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
@@ -6861,8 +6959,35 @@ fn find_matching_rules<'a>(
       }
     }
 
+    let scope_for_rule = if scoped_rule_idx == Some(indexed.rule_idx) {
+      scoped_match.clone()
+    } else {
+      let rule = &rules.rules[indexed.rule_idx];
+      let resolved = if rule.scopes.is_empty() {
+        Some(None)
+      } else {
+        resolve_scopes(node, ancestors, &rule.scopes, &mut context).map(Some)
+      };
+      scoped_rule_idx = Some(indexed.rule_idx);
+      scoped_match = resolved.clone();
+      resolved
+    };
+
+    let Some(scope_for_rule) = scope_for_rule else {
+      continue;
+    };
+
     let selector = indexed.selector;
-    if matches_selector(selector, 0, None, &element_ref, &mut context) {
+    let selector_matches = if let Some(scope_root) = &scope_for_rule {
+      let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
+      context.nest_for_relative_selector(scope_ref.opaque(), |ctx| {
+        matches_selector(selector, 0, None, &element_ref, ctx)
+      })
+    } else {
+      matches_selector(selector, 0, None, &element_ref, &mut context)
+    };
+
+    if selector_matches {
       let spec = indexed.specificity;
       if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
         if spec > matches[pos].specificity {
@@ -6950,6 +7075,9 @@ fn find_pseudo_element_rules<'a>(
     selectors::matching::MatchingForInvalidation::No,
   );
 
+  let mut scoped_rule_idx: Option<usize> = None;
+  let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
+
   let mut match_candidate = |selector_idx: usize, matches: &mut Vec<MatchedRule<'a>>| -> bool {
     let indexed = &rules.pseudo_selectors[selector_idx];
     if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
@@ -6958,8 +7086,35 @@ fn find_pseudo_element_rules<'a>(
       }
     }
 
+    let scope_for_rule = if scoped_rule_idx == Some(indexed.rule_idx) {
+      scoped_match.clone()
+    } else {
+      let rule = &rules.rules[indexed.rule_idx];
+      let resolved = if rule.scopes.is_empty() {
+        Some(None)
+      } else {
+        resolve_scopes(node, ancestors, &rule.scopes, &mut context).map(Some)
+      };
+      scoped_rule_idx = Some(indexed.rule_idx);
+      scoped_match = resolved.clone();
+      resolved
+    };
+
+    let Some(scope_for_rule) = scope_for_rule else {
+      return false;
+    };
+
     let selector = indexed.selector;
-    if matches_selector(selector, 0, None, &element_ref, &mut context) {
+    let selector_matches = if let Some(scope_root) = &scope_for_rule {
+      let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
+      context.nest_for_relative_selector(scope_ref.opaque(), |ctx| {
+        matches_selector(selector, 0, None, &element_ref, ctx)
+      })
+    } else {
+      matches_selector(selector, 0, None, &element_ref, &mut context)
+    };
+
+    if selector_matches {
       let spec = indexed.specificity;
       if let Some(pos) = scratch.match_index.get(indexed.rule_idx) {
         if spec > matches[pos].specificity {

@@ -164,6 +164,8 @@ pub struct CollectedRule<'a> {
   pub layer_order: Vec<u32>,
   /// Container query conditions that must match at cascade time.
   pub container_conditions: Vec<ContainerCondition>,
+  /// Scoping contexts that constrain where the rule applies.
+  pub scopes: Vec<ScopeContext<'a>>,
 }
 
 /// Flattened @page rule with cascade-layer ordering preserved.
@@ -262,6 +264,7 @@ impl StyleSheet {
       media_ctx,
       cache,
       &mut registry,
+      &[],
       &[],
       &[],
       &mut result,
@@ -386,6 +389,11 @@ impl StyleSheet {
               return true;
             }
           }
+          CssRule::Scope(scope) => {
+            if walk(&scope.rules) {
+              return true;
+            }
+          }
           CssRule::Page(_) | CssRule::Import(_) | CssRule::FontFace(_) | CssRule::Keyframes(_) => {}
         }
       }
@@ -404,6 +412,7 @@ fn collect_rules_recursive<'a>(
   registry: &mut LayerRegistry,
   current_layer: &[u32],
   container_conditions: &[ContainerCondition],
+  current_scopes: &[ScopeContext<'a>],
   out: &mut Vec<CollectedRule<'a>>,
 ) {
   // Keep the cache binding mutable so we can call as_deref_mut() repeatedly
@@ -421,6 +430,7 @@ fn collect_rules_recursive<'a>(
           rule: style_rule,
           layer_order,
           container_conditions: container_conditions.to_vec(),
+          scopes: current_scopes.to_vec(),
         });
         if !style_rule.nested_rules.is_empty() {
           collect_rules_recursive(
@@ -444,6 +454,7 @@ fn collect_rules_recursive<'a>(
             registry,
             current_layer,
             container_conditions,
+            current_scopes,
             out,
           );
         }
@@ -461,6 +472,7 @@ fn collect_rules_recursive<'a>(
           registry,
           current_layer,
           &updated_conditions,
+          current_scopes,
           out,
         );
       }
@@ -473,6 +485,7 @@ fn collect_rules_recursive<'a>(
             registry,
             current_layer,
             container_conditions,
+            current_scopes,
             out,
           );
         }
@@ -502,6 +515,7 @@ fn collect_rules_recursive<'a>(
             registry,
             &path,
             container_conditions,
+            current_scopes,
             out,
           );
           continue;
@@ -519,10 +533,29 @@ fn collect_rules_recursive<'a>(
           registry,
           &path,
           container_conditions,
+          current_scopes,
           out,
         );
       }
       CssRule::FontFace(_) => {}
+      CssRule::Scope(scope_rule) => {
+        let mut updated_scopes = current_scopes.to_vec();
+        updated_scopes.push(ScopeContext {
+          start: scope_rule.start.as_ref().map(|s| s.slice()),
+          end: scope_rule.end.as_ref().map(|s| s.slice()),
+          implicit_start: scope_rule.start.is_none(),
+        });
+        collect_rules_recursive(
+          &scope_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          container_conditions,
+          &updated_scopes,
+          out,
+        );
+      }
     }
   }
 }
@@ -616,6 +649,16 @@ fn collect_page_rules_recursive<'a>(
       }
       CssRule::Container(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+      CssRule::Scope(scope_rule) => {
+        collect_page_rules_recursive(
+          &scope_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
     }
   }
 }
@@ -661,6 +704,9 @@ fn collect_font_faces_recursive(
       }
       CssRule::Style(_) | CssRule::Import(_) => {}
       CssRule::Keyframes(_) => {}
+      CssRule::Scope(scope_rule) => {
+        collect_font_faces_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
+      }
     }
   }
 }
@@ -697,6 +743,9 @@ fn collect_keyframes_recursive(
         collect_keyframes_recursive(&layer_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+      CssRule::Scope(scope_rule) => {
+        collect_keyframes_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
+      }
     }
   }
 }
@@ -987,6 +1036,8 @@ pub enum CssRule {
   FontFace(FontFaceRule),
   /// A @keyframes rule defining animated keyframes.
   Keyframes(KeyframesRule),
+  /// A @scope rule limiting descendant styles to a subtree.
+  Scope(ScopeRule),
 }
 
 /// A @media rule containing conditional rules
@@ -1009,6 +1060,17 @@ pub struct ContainerRule {
   pub rules: Vec<CssRule>,
 }
 
+/// A @scope rule constraining descendant style rules.
+#[derive(Debug, Clone)]
+pub struct ScopeRule {
+  /// Optional selector list defining scope roots. When omitted, the scope defaults to the parent context.
+  pub start: Option<SelectorList<FastRenderSelectorImpl>>,
+  /// Optional selector list defining scope limits.
+  pub end: Option<SelectorList<FastRenderSelectorImpl>>,
+  /// Nested rules that participate in the scope.
+  pub rules: Vec<CssRule>,
+}
+
 /// Container query condition attached to collected rules.
 #[derive(Debug, Clone)]
 pub struct ContainerCondition {
@@ -1016,6 +1078,17 @@ pub struct ContainerCondition {
   pub name: Option<String>,
   /// The parsed container query (size queries only at present).
   pub query: MediaQuery,
+}
+
+/// A scoping context attached to collected style rules.
+#[derive(Debug, Clone)]
+pub struct ScopeContext<'a> {
+  /// Optional scope-start selector list; when None, the scope defaults to the parent context.
+  pub start: Option<&'a [selectors::parser::Selector<FastRenderSelectorImpl>]>,
+  /// Optional scope-limit selector list.
+  pub end: Option<&'a [selectors::parser::Selector<FastRenderSelectorImpl>]>,
+  /// Whether the scope prelude omitted a start selector (implicit root).
+  pub implicit_start: bool,
 }
 
 /// A @supports rule containing conditional rules
@@ -1280,6 +1353,23 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
         }
       }
       CssRule::FontFace(_) => out.push(rule.clone()),
+      CssRule::Scope(scope_rule) => {
+        let mut resolved_children = Vec::new();
+        resolve_rules(
+          &scope_rule.rules,
+          loader,
+          base_url,
+          media_ctx,
+          cache.as_deref_mut(),
+          seen,
+          &mut resolved_children,
+        );
+        out.push(CssRule::Scope(ScopeRule {
+          start: scope_rule.start.clone(),
+          end: scope_rule.end.clone(),
+          rules: resolved_children,
+        }));
+      }
     }
   }
 }

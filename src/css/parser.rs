@@ -28,6 +28,7 @@ use super::types::PageMarginRule;
 use super::types::PagePseudoClass;
 use super::types::PageRule;
 use super::types::PageSelector;
+use super::types::ScopeRule;
 use super::types::ScrollTimelineName;
 use super::types::StyleRule;
 use super::types::StyleSheet;
@@ -184,6 +185,7 @@ fn parse_rule<'i, 't>(
         "import" => parse_import_rule(p),
         "media" => parse_media_rule(p, parent_selectors),
         "container" => parse_container_rule(p, parent_selectors),
+        "scope" => parse_scope_rule(p, parent_selectors),
         "supports" => parse_supports_rule(p, parent_selectors),
         "layer" => parse_layer_rule(p, parent_selectors),
         "page" => parse_page_rule(p),
@@ -407,6 +409,88 @@ fn parse_container_rule<'i, 't>(
   Ok(Some(CssRule::Container(ContainerRule {
     name,
     query,
+    rules: nested_rules,
+  })))
+}
+
+/// Parse an @scope rule with optional scope root/limit selectors.
+fn parse_scope_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let parsed =
+    parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |p| {
+      p.skip_whitespace();
+      if p.is_exhausted() {
+        return Ok((None, None));
+      }
+
+      if p.try_parse(|p2| p2.expect_ident_matching("to")).is_ok() {
+        p.skip_whitespace();
+        let end =
+          match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::Yes) {
+            Ok(list) => Some(list),
+            Err(_) => {
+              return Err(p.new_custom_error(
+                SelectorParseErrorKind::UnsupportedPseudoClassOrElement("scope".into()),
+              ))
+            }
+          };
+        p.skip_whitespace();
+        return Ok((None, end));
+      }
+
+      let start =
+        match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::Yes) {
+          Ok(list) => Some(list),
+          Err(_) => {
+            return Err(p.new_custom_error(
+              SelectorParseErrorKind::UnsupportedPseudoClassOrElement("scope".into()),
+            ))
+          }
+        };
+
+      p.skip_whitespace();
+      let end = if p.try_parse(|p2| p2.expect_ident_matching("to")).is_ok() {
+        p.skip_whitespace();
+        match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::Yes) {
+          Ok(list) => Some(list),
+          Err(_) => {
+            return Err(p.new_custom_error(
+              SelectorParseErrorKind::UnsupportedPseudoClassOrElement("scope".into()),
+            ))
+          }
+        }
+      } else {
+        None
+      };
+
+      p.skip_whitespace();
+      Ok((start, end))
+    });
+
+  let (start, end) = match parsed {
+    Ok(value) => value,
+    Err(_) => {
+      skip_at_rule(parser);
+      return Ok(None);
+    }
+  };
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
+
+  let nested_rules = parser.parse_nested_block(|nested_parser| {
+    Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
+      nested_parser,
+      parent_selectors,
+    ))
+  })?;
+
+  Ok(Some(CssRule::Scope(ScopeRule {
+    start,
+    end,
     rules: nested_rules,
   })))
 }
