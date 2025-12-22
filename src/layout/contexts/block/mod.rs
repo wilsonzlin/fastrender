@@ -2207,12 +2207,6 @@ impl FormattingContext for BlockFormattingContext {
     } else {
       constraints.available_height
     };
-    let _block_space_layout = if inline_is_horizontal {
-      constraints.available_height
-    } else {
-      constraints.available_width
-    };
-    let _ = _block_space_layout;
     let inline_viewport = if inline_is_horizontal {
       self.viewport_size.width
     } else {
