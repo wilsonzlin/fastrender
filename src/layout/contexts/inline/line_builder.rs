@@ -2077,13 +2077,12 @@ impl<'a> LineBuilder<'a> {
           *saw_plaintext = true;
           true
         } else {
-          r
-            .segments
-            .iter()
-            .all(|seg| seg
+          r.segments.iter().all(|seg| {
+            seg
               .base_items
               .iter()
-              .all(|c| Self::item_allows_plaintext(c, saw_plaintext)))
+              .all(|c| Self::item_allows_plaintext(c, saw_plaintext))
+          })
         }
       }
       InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Tab(_) => true,
@@ -3025,6 +3024,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
       Arc::new(ComputedStyle::default()),
       0.0,

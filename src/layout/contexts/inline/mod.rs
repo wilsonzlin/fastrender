@@ -75,8 +75,8 @@ use crate::style::types::RubyAlign;
 use crate::style::types::RubyMerge;
 use crate::style::types::TabSize;
 use crate::style::types::TextAlign;
-use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextCombineUpright;
+use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextJustify;
 use crate::style::types::TextTransform;
 use crate::style::types::TextWrap;
@@ -1867,7 +1867,10 @@ impl InlineFormattingContext {
     }
 
     fn is_annotation_box(node: &BoxNode) -> bool {
-      matches!(node.style.display, Display::RubyText | Display::RubyTextContainer)
+      matches!(
+        node.style.display,
+        Display::RubyText | Display::RubyTextContainer
+      )
     }
 
     fn merge_segments(segments: Vec<RubySegmentInput>, merge: RubyMerge) -> Vec<RubySegmentInput> {
@@ -2055,8 +2058,10 @@ impl InlineFormattingContext {
     let mut max_baseline: f32 = 0.0;
     let mut max_descent: f32 = 0.0;
     let mut x_cursor: f32 = 0.0;
-    let align_mode = if matches!(style.ruby_position, crate::style::types::RubyPosition::InterCharacter)
-      && matches!(style.ruby_align, RubyAlign::Auto)
+    let align_mode = if matches!(
+      style.ruby_position,
+      crate::style::types::RubyPosition::InterCharacter
+    ) && matches!(style.ruby_align, RubyAlign::Auto)
     {
       RubyAlign::SpaceBetween
     } else {
@@ -2097,7 +2102,10 @@ impl InlineFormattingContext {
         }
 
         if matches!(align_mode, RubyAlign::SpaceBetween | RubyAlign::SpaceAround)
-          || matches!(style.ruby_position, crate::style::types::RubyPosition::InterCharacter)
+          || matches!(
+            style.ruby_position,
+            crate::style::types::RubyPosition::InterCharacter
+          )
         {
           items = self.split_annotation_items_for_spacing(items);
         }
@@ -2113,7 +2121,10 @@ impl InlineFormattingContext {
         });
       }
 
-      let primary_on_top = !matches!(style.ruby_position, crate::style::types::RubyPosition::Under);
+      let primary_on_top = !matches!(
+        style.ruby_position,
+        crate::style::types::RubyPosition::Under
+      );
       let mut top_line: Option<AnnotationLine> = None;
       let mut bottom_line: Option<AnnotationLine> = None;
 
@@ -2174,12 +2185,8 @@ impl InlineFormattingContext {
       }
 
       if let Some(line) = bottom_line.as_ref() {
-        let (spacing, adjusted_width) = ruby_spacing_for_line(
-          align_mode,
-          segment_width,
-          line.items.len(),
-          bottom_width,
-        );
+        let (spacing, adjusted_width) =
+          ruby_spacing_for_line(align_mode, segment_width, line.items.len(), bottom_width);
         bottom_spacing = spacing;
         bottom_width = adjusted_width;
       }
@@ -3424,7 +3431,10 @@ impl InlineFormattingContext {
         if forward {
           // Include following punctuation directly attached to the letter.
           let mut trailing_end = candidate_end.unwrap();
-          let pos = graphemes.iter().position(|(g_idx, _)| *g_idx == idx).unwrap_or(0);
+          let pos = graphemes
+            .iter()
+            .position(|(g_idx, _)| *g_idx == idx)
+            .unwrap_or(0);
           for (next_idx, next_cluster) in graphemes.iter().skip(pos + 1) {
             if Self::is_whitespace_cluster(next_cluster) {
               break;
@@ -3449,11 +3459,15 @@ impl InlineFormattingContext {
     }
 
     let start = candidate_start?;
-    let mut end = candidate_end.unwrap_or_else(|| start + graphemes.last().map(|(_, g)| g.len()).unwrap_or(0));
+    let mut end =
+      candidate_end.unwrap_or_else(|| start + graphemes.last().map(|(_, g)| g.len()).unwrap_or(0));
 
     if !forward {
       // For RTL, include punctuation clusters that immediately precede the chosen letter (visually after it).
-      let pos = graphemes.iter().position(|(g_idx, _)| *g_idx == start).unwrap_or(0);
+      let pos = graphemes
+        .iter()
+        .position(|(g_idx, _)| *g_idx == start)
+        .unwrap_or(0);
       for (idx, cluster) in graphemes.iter().skip(pos + 1) {
         if Self::is_whitespace_cluster(cluster) {
           break;
@@ -3507,7 +3521,8 @@ impl InlineFormattingContext {
 
       match &child.box_type {
         BoxType::Text(text_box) => {
-          if let Some((before, letter, after)) = Self::split_first_letter(&text_box.text, direction) {
+          if let Some((before, letter, after)) = Self::split_first_letter(&text_box.text, direction)
+          {
             if !before.is_empty() {
               out.push(self.clone_text_box_with_content(child, before));
             }
@@ -3572,12 +3587,8 @@ impl InlineFormattingContext {
     let letter_style = letter_style;
 
     let mut cloned = root.clone();
-    cloned.children = self.synthesize_first_letter_children(
-      &root.children,
-      &letter_style,
-      direction,
-      &mut applied,
-    );
+    cloned.children =
+      self.synthesize_first_letter_children(&root.children, &letter_style, direction, &mut applied);
     cloned
   }
 
@@ -4372,12 +4383,12 @@ impl InlineFormattingContext {
           let segment_y = origin_y + ruby_item.content_offset_y + segment.offset_y;
 
           if let Some(items) = &segment.annotation_top {
-            let spacing = segment
-              .top_spacing
-              .unwrap_or(crate::layout::contexts::inline::line_builder::RubyLineSpacing {
+            let spacing = segment.top_spacing.unwrap_or(
+              crate::layout::contexts::inline::line_builder::RubyLineSpacing {
                 leading: 0.0,
                 gap: 0.0,
-              });
+              },
+            );
             let mut cx = segment_x + segment.top_x + spacing.leading;
             let mut line_children = Vec::new();
             for (idx, child) in items.iter().enumerate() {
@@ -4433,12 +4444,12 @@ impl InlineFormattingContext {
           if let Some(items) = &segment.annotation_bottom {
             let bottom_y = base_y + segment.base_height;
             let mut bottom_children = Vec::new();
-            let spacing = segment
-              .bottom_spacing
-              .unwrap_or(crate::layout::contexts::inline::line_builder::RubyLineSpacing {
+            let spacing = segment.bottom_spacing.unwrap_or(
+              crate::layout::contexts::inline::line_builder::RubyLineSpacing {
                 leading: 0.0,
                 gap: 0.0,
-              });
+              },
+            );
             let mut cx = segment_x + segment.bottom_x + spacing.leading;
             for (idx, child) in items.iter().enumerate() {
               let fragment = self.create_item_fragment(child, cx, bottom_y);
@@ -4864,20 +4875,14 @@ fn ruby_spacing_for_line(
       }
       let gap = leftover / gaps;
       (
-        Some(RubyLineSpacing {
-          leading: 0.0,
-          gap,
-        }),
+        Some(RubyLineSpacing { leading: 0.0, gap }),
         line_width + leftover,
       )
     }
     RubyAlign::SpaceAround => {
       let gap = leftover / (item_count as f32 + 1.0);
       (
-        Some(RubyLineSpacing {
-          leading: gap,
-          gap,
-        }),
+        Some(RubyLineSpacing { leading: gap, gap }),
         line_width + leftover,
       )
     }
@@ -6045,7 +6050,10 @@ impl InlineFormattingContext {
     min_y: f32,
     float_ctx: &mut FloatContext,
   ) -> Result<(FragmentNode, f32, f32), LayoutError> {
-    let inline_root = matches!(floating.box_node.box_type, crate::tree::box_tree::BoxType::Inline(_));
+    let inline_root = matches!(
+      floating.box_node.box_type,
+      crate::tree::box_tree::BoxType::Inline(_)
+    );
     let mut float_node = floating.box_node.clone();
     if !inline_root
       && matches!(
@@ -6056,10 +6064,14 @@ impl InlineFormattingContext {
       )
     {
       Arc::make_mut(&mut float_node.style).display = crate::style::display::Display::Block;
-      if matches!(float_node.box_type, crate::tree::box_tree::BoxType::Inline(_)) {
-        float_node.box_type = crate::tree::box_tree::BoxType::Block(crate::tree::box_tree::BlockBox {
-          formatting_context: FormattingContextType::Block,
-        });
+      if matches!(
+        float_node.box_type,
+        crate::tree::box_tree::BoxType::Inline(_)
+      ) {
+        float_node.box_type =
+          crate::tree::box_tree::BoxType::Block(crate::tree::box_tree::BlockBox {
+            formatting_context: FormattingContextType::Block,
+          });
       }
     }
 
@@ -6097,8 +6109,12 @@ impl InlineFormattingContext {
       .unwrap_or(0.0)
       .max(0.0);
 
-    let horizontal_edges =
-      horizontal_padding_and_borders(&float_node.style, percentage_base, self.viewport_size, &self.font_context);
+    let horizontal_edges = horizontal_padding_and_borders(
+      &float_node.style,
+      percentage_base,
+      self.viewport_size,
+      &self.font_context,
+    );
 
     let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
       self.font_context.clone(),
@@ -6132,9 +6148,7 @@ impl InlineFormattingContext {
           self.viewport_size,
         )
       })
-      .map(|w| {
-        border_size_from_box_sizing(w, horizontal_edges, float_node.style.box_sizing)
-      });
+      .map(|w| border_size_from_box_sizing(w, horizontal_edges, float_node.style.box_sizing));
 
     let min_width = float_node
       .style
@@ -8760,6 +8774,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -8985,6 +9000,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -9262,6 +9278,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -9742,6 +9759,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -9788,6 +9806,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -9857,6 +9876,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -9955,6 +9975,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -10000,6 +10021,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -10171,6 +10193,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: Some(Size::new(10.0, 10.0)),
         aspect_ratio: Some(1.0),
@@ -10376,6 +10399,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
       Some(Size::new(50.0, 20.0)),
       Some(50.0 / 20.0),

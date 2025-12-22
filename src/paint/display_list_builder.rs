@@ -4393,6 +4393,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
     )
   }
@@ -5010,6 +5011,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
     );
 
@@ -5062,6 +5064,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
     );
     fragment.style = Some(Arc::new(style));
@@ -5361,6 +5364,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
       },
       vec![],
@@ -5405,6 +5409,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
       },
       vec![],
@@ -5436,6 +5441,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
       },
       vec![],
@@ -5639,6 +5645,7 @@ mod tests {
           alt: Some("alt text".to_string()),
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
       },
       vec![],
@@ -5664,6 +5671,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
     );
     let builder = DisplayListBuilder::new();

@@ -9851,6 +9851,7 @@ mod tests {
           alt: Some("alt".to_string()),
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         box_id: None,
       },
@@ -9987,6 +9988,7 @@ mod tests {
           descriptor: SrcsetDescriptor::Density(2.0),
         },
       ],
+      picture_sources: Vec::new(),
     };
 
     let style = ComputedStyle::default();
@@ -10028,6 +10030,7 @@ mod tests {
           descriptor: SrcsetDescriptor::Width(300),
         },
       ],
+      picture_sources: Vec::new(),
     };
 
     let style = ComputedStyle::default();

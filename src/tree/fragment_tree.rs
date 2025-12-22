@@ -35,13 +35,13 @@
 //! assert!(fragment.contains_point(Point::new(50.0, 30.0)));
 //! ```
 
+use crate::css::types::KeyframesRule;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
-use crate::css::types::KeyframesRule;
+use crate::scroll::ScrollMetadata;
 use crate::style::ComputedStyle;
 use crate::text::pipeline::ShapedRun;
-use crate::scroll::ScrollMetadata;
 use crate::tree::box_tree::ReplacedType;
 use std::collections::HashMap;
 use std::fmt;
@@ -1043,6 +1043,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
     );
 

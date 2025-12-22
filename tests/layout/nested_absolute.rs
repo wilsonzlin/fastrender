@@ -30,12 +30,16 @@ fn nested_absolute_descendant_uses_positioned_parent_padding_block_in_block_layo
   child_style.height = Some(Length::px(10.0));
 
   let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
-  let parent = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Block, vec![
-    child,
-  ]);
-  let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-    parent,
-  ]);
+  let parent = BoxNode::new_block(
+    Arc::new(parent_style),
+    FormattingContextType::Block,
+    vec![child],
+  );
+  let root = BoxNode::new_block(
+    Arc::new(root_style),
+    FormattingContextType::Block,
+    vec![parent],
+  );
 
   let constraints = LayoutConstraints::definite(200.0, 200.0);
   let fc = BlockFormattingContext::new();
@@ -81,9 +85,11 @@ fn nested_absolute_descendant_uses_positioned_parent_padding_block_in_flex_layou
   child_style.height = Some(Length::px(8.0));
 
   let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
-  let parent = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Block, vec![
-    child,
-  ]);
+  let parent = BoxNode::new_block(
+    Arc::new(parent_style),
+    FormattingContextType::Block,
+    vec![child],
+  );
   let container = BoxNode::new_block(
     Arc::new(container_style),
     FormattingContextType::Flex,
@@ -134,14 +140,17 @@ fn replaced_absolute_with_both_insets_shrinks_to_intrinsic_in_block_layout() {
       alt: None,
       srcset: Vec::<SrcsetCandidate>::new(),
       sizes: None,
+      picture_sources: Vec::new(),
     },
     Some(Size::new(50.0, 20.0)),
     None,
   );
 
-  let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-    img,
-  ]);
+  let root = BoxNode::new_block(
+    Arc::new(root_style),
+    FormattingContextType::Block,
+    vec![img],
+  );
   let constraints = LayoutConstraints::definite(200.0, 100.0);
   let fc = BlockFormattingContext::new();
   let fragment = fc.layout(&root, &constraints).expect("block layout");
@@ -181,6 +190,7 @@ fn replaced_absolute_with_both_insets_shrinks_to_intrinsic_in_flex_layout() {
       alt: None,
       srcset: Vec::<SrcsetCandidate>::new(),
       sizes: None,
+      picture_sources: Vec::new(),
     },
     Some(Size::new(60.0, 20.0)),
     None,
