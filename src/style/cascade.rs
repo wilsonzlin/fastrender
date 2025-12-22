@@ -2156,6 +2156,7 @@ mod tests {
   use crate::dom::DomNode;
   use crate::dom::DomNodeType;
   use crate::dom::HTML_NAMESPACE;
+  use crate::style::color::Color;
   use crate::style::color::Rgba;
   use crate::style::computed::Visibility;
   use crate::style::content::ContentValue;
@@ -6640,6 +6641,58 @@ mod tests {
 
     let second = styled.children.get(1).expect("second child");
     assert_eq!(second.styles.color, Rgba::from_rgba8(255, 191, 191, 255));
+  }
+
+  #[test]
+  fn contrast_and_relative_colors_resolve_in_styles() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("style".to_string(), "color: white;".to_string())],
+      },
+      children: vec![
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "p".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              (
+                "style".to_string(),
+                "background-color: color-contrast(white, black);".to_string(),
+              ),
+            ],
+          },
+          children: vec![],
+        },
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "span".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![
+              (
+                "style".to_string(),
+                "color: blue; border-color: color(from currentColor hsl h s 25%);".to_string(),
+              ),
+            ],
+          },
+          children: vec![],
+        },
+      ],
+    };
+
+    let styled = apply_styles(&dom, &StyleSheet::new());
+    let first = styled.children.first().expect("first child");
+    assert_eq!(first.styles.background_color, Rgba::BLACK);
+
+    let second = styled.children.get(1).expect("second child");
+    let expected_border = Color::parse("color(from blue hsl h s 25%)")
+      .unwrap()
+      .to_rgba(Rgba::BLUE);
+    assert_eq!(second.styles.border_top_color, expected_border);
+    assert_eq!(second.styles.border_right_color, expected_border);
+    assert_eq!(second.styles.border_bottom_color, expected_border);
+    assert_eq!(second.styles.border_left_color, expected_border);
   }
 }
 

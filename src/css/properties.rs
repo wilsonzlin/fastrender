@@ -1932,8 +1932,26 @@ mod tests {
       }
       Color::CurrentColor => panic!("second stop should not be currentColor"),
       Color::Mix { .. } => panic!("second stop should not be a mix"),
+      _ => panic!("unexpected color variant"),
     }
     assert_eq!(stops[1].position, Some(0.90));
+  }
+
+  #[test]
+  fn gradients_accept_relative_and_contrast_colors() {
+    let value =
+      "linear-gradient(to right, color(from red srgb r g b / 50%) 0%, color-contrast(blue vs white, black) 100%)";
+    let PropertyValue::LinearGradient { stops, .. } =
+      parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+
+    assert_eq!(stops.len(), 2);
+    let first = stops[0].color.to_rgba(Rgba::BLACK);
+    assert!((first.a - 0.5).abs() < 1e-6);
+    let second = stops[1].color.to_rgba(Rgba::BLACK);
+    assert_eq!(second, Rgba::WHITE);
   }
 
   #[test]
