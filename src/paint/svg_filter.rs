@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use tiny_skia::{Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
+use rayon::prelude::*;
+use tiny_skia::{BlendMode, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
 
 static FILTER_CACHE: OnceLock<Mutex<HashMap<String, Arc<SvgFilter>>>> = OnceLock::new();
 
@@ -61,6 +62,23 @@ pub enum FilterPrimitive {
     color: Rgba,
     opacity: f32,
   },
+  Blend {
+    input1: FilterInput,
+    input2: FilterInput,
+    mode: BlendMode,
+  },
+  Morphology {
+    input: FilterInput,
+    radius: f32,
+    op: MorphologyOp,
+  },
+  ComponentTransfer {
+    input: FilterInput,
+    r: TransferFn,
+    g: TransferFn,
+    b: TransferFn,
+    a: TransferFn,
+  },
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +101,18 @@ pub enum ColorMatrixKind {
 pub enum CompositeOperator {
   Over,
   In,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum MorphologyOp {
+  Dilate,
+  Erode,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TransferFn {
+  Identity,
+  Linear { slope: f32, intercept: f32 },
 }
 
 /// Load and parse an SVG filter from a URL (including data URLs), caching the result.
@@ -140,6 +170,9 @@ fn parse_filter_definition(svg: &str, fragment: Option<&str>) -> Option<Arc<SvgF
       "fecomposite" => parse_fe_composite(&child),
       "femerge" => parse_fe_merge(&child),
       "fedropshadow" => parse_fe_drop_shadow(&child),
+      "feblend" => parse_fe_blend(&child),
+      "femorphology" => parse_fe_morphology(&child),
+      "fecomponenttransfer" => parse_fe_component_transfer(&child),
       _ => None,
     };
     if let Some(prim) = primitive {
@@ -237,6 +270,78 @@ fn parse_fe_color_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
     }
   };
   Some(FilterPrimitive::ColorMatrix { input, kind })
+}
+
+fn parse_fe_blend(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let input1 = parse_input(node.attribute("in"));
+  let input2 = parse_input(node.attribute("in2"));
+  let mode_attr = node.attribute("mode").unwrap_or("normal").to_ascii_lowercase();
+  let mode = match mode_attr.as_str() {
+    "multiply" => BlendMode::Multiply,
+    "screen" => BlendMode::Screen,
+    "darken" => BlendMode::Darken,
+    "lighten" => BlendMode::Lighten,
+    _ => BlendMode::SourceOver,
+  };
+  Some(FilterPrimitive::Blend {
+    input1,
+    input2,
+    mode,
+  })
+}
+
+fn parse_fe_morphology(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let input = parse_input(node.attribute("in"));
+  let op = match node
+    .attribute("operator")
+    .map(|s| s.eq_ignore_ascii_case("dilate"))
+    .unwrap_or(false)
+  {
+    true => MorphologyOp::Dilate,
+    false => MorphologyOp::Erode,
+  };
+  let radius = parse_number(node.attribute("radius")).abs();
+  Some(FilterPrimitive::Morphology { input, radius, op })
+}
+
+fn parse_fe_component_transfer(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let input = parse_input(node.attribute("in"));
+  let mut r = TransferFn::Identity;
+  let mut g = TransferFn::Identity;
+  let mut b = TransferFn::Identity;
+  let mut a = TransferFn::Identity;
+
+  for child in node.children().filter(|c| c.is_element()) {
+    let func = parse_transfer_fn(&child).unwrap_or(TransferFn::Identity);
+    let name = child.tag_name().name().to_ascii_lowercase();
+    match name.as_str() {
+      "fefuncr" => r = func,
+      "fefuncg" => g = func,
+      "fefuncb" => b = func,
+      "fefunca" => a = func,
+      _ => {}
+    }
+  }
+
+  Some(FilterPrimitive::ComponentTransfer { input, r, g, b, a })
+}
+
+fn parse_transfer_fn(node: &roxmltree::Node) -> Option<TransferFn> {
+  let ty = node.attribute("type").unwrap_or("identity").to_ascii_lowercase();
+  match ty.as_str() {
+    "linear" => {
+      let slope = node
+        .attribute("slope")
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(1.0);
+      let intercept = node
+        .attribute("intercept")
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(0.0);
+      Some(TransferFn::Linear { slope, intercept })
+    }
+    _ => Some(TransferFn::Identity),
+  }
 }
 
 fn parse_fe_composite(node: &roxmltree::Node) -> Option<FilterPrimitive> {
@@ -353,6 +458,27 @@ fn apply_primitive(
       opacity,
     } => resolve_input(input, source, results, current)
       .map(|img| drop_shadow_pixmap(img, *dx, *dy, *std_dev, color, *opacity)),
+    FilterPrimitive::Blend {
+      input1,
+      input2,
+      mode,
+    } => blend_pixmaps(
+      resolve_input(input1, source, results, current),
+      resolve_input(input2, source, results, current),
+      *mode,
+    ),
+    FilterPrimitive::Morphology { input, radius, op } => {
+      resolve_input(input, source, results, current).map(|mut img| {
+        apply_morphology(&mut img, *radius, *op);
+        img
+      })
+    }
+    FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
+      resolve_input(input, source, results, current).map(|mut img| {
+        apply_component_transfer(&mut img, *r, *g, *b, *a);
+        img
+      })
+    }
   }
 }
 
@@ -406,6 +532,15 @@ fn composite_pixmaps(
     CompositeOperator::In => Some(mask_with(&a, &b)),
     CompositeOperator::Over => Some(draw_over(&b, &a)),
   }
+}
+
+fn blend_pixmaps(a: Option<Pixmap>, b: Option<Pixmap>, mode: BlendMode) -> Option<Pixmap> {
+  let mut base = a?;
+  let top = b.unwrap_or_else(|| base.clone());
+  let mut paint = PixmapPaint::default();
+  paint.blend_mode = mode;
+  base.draw_pixmap(0, 0, top.as_ref(), &paint, Transform::identity(), None);
+  Some(base)
 }
 
 fn merge_inputs(
@@ -488,6 +623,85 @@ fn mask_with(src: &Pixmap, mask: &Pixmap) -> Pixmap {
     *dst = PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
   }
   out
+}
+
+fn apply_morphology(pixmap: &mut Pixmap, radius: f32, op: MorphologyOp) {
+  let radius = radius.abs().ceil() as i32;
+  if radius <= 0 {
+    return;
+  }
+  let width = pixmap.width() as i32;
+  let height = pixmap.height() as i32;
+  let original = pixmap.clone();
+  let src = original.pixels();
+  let dst = pixmap.pixels_mut();
+  let row_len = width as usize;
+
+  dst.par_iter_mut().enumerate().for_each(|(idx, dst_px)| {
+    let y = (idx / row_len) as i32;
+    let x = (idx % row_len) as i32;
+    let mut agg = match op {
+      MorphologyOp::Dilate => [0u8; 4],
+      MorphologyOp::Erode => [255u8; 4],
+    };
+    for dy in -radius..=radius {
+      for dx in -radius..=radius {
+        let ny = (y + dy).clamp(0, height - 1);
+        let nx = (x + dx).clamp(0, width - 1);
+        let sample_idx = (ny as usize) * row_len + nx as usize;
+        let px = src[sample_idx];
+        match op {
+          MorphologyOp::Dilate => {
+            agg[0] = agg[0].max(px.red());
+            agg[1] = agg[1].max(px.green());
+            agg[2] = agg[2].max(px.blue());
+            agg[3] = agg[3].max(px.alpha());
+          }
+          MorphologyOp::Erode => {
+            agg[0] = agg[0].min(px.red());
+            agg[1] = agg[1].min(px.green());
+            agg[2] = agg[2].min(px.blue());
+            agg[3] = agg[3].min(px.alpha());
+          }
+        }
+      }
+    }
+    *dst_px = PremultipliedColorU8::from_rgba(agg[0], agg[1], agg[2], agg[3])
+      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  });
+}
+
+fn apply_component_transfer(
+  pixmap: &mut Pixmap,
+  r: TransferFn,
+  g: TransferFn,
+  b: TransferFn,
+  a: TransferFn,
+) {
+  let apply = |v: f32, f: TransferFn| -> f32 {
+    match f {
+      TransferFn::Identity => v,
+      TransferFn::Linear { slope, intercept } => (slope * v + intercept).clamp(0.0, 1.0),
+    }
+  };
+
+  for px in pixmap.pixels_mut() {
+    let rf = px.red() as f32 / 255.0;
+    let gf = px.green() as f32 / 255.0;
+    let bf = px.blue() as f32 / 255.0;
+    let af = px.alpha() as f32 / 255.0;
+    let ra = apply(rf, r);
+    let ga = apply(gf, g);
+    let ba = apply(bf, b);
+    let aa = apply(af, a);
+    *px = PremultipliedColorU8::from_rgba(
+      (ra * aa * 255.0).round().clamp(0.0, 255.0) as u8,
+      (ga * aa * 255.0).round().clamp(0.0, 255.0) as u8,
+      (ba * aa * 255.0).round().clamp(0.0, 255.0) as u8,
+      (aa * 255.0).round().clamp(0.0, 255.0) as u8,
+    )
+    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  }
 }
 
 fn apply_color_matrix(pixmap: &mut Pixmap, kind: &ColorMatrixKind) {
