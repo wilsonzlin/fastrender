@@ -64,6 +64,7 @@ use crate::style::types::BorderStyle;
 use crate::style::types::ColumnFill;
 use crate::style::types::ColumnSpan;
 use crate::style::types::Overflow;
+use crate::style::types::WritingMode;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::style::PhysicalSide;
@@ -2364,7 +2365,7 @@ impl FormattingContext for BlockFormattingContext {
         Point::new(0.0, 0.0),
         Size::new(used_size.width.max(0.0), used_size.height.max(0.0)),
       );
-      return Ok(FragmentNode::new_with_style(
+      let fragment = FragmentNode::new_with_style(
         bounds,
         crate::tree::fragment_tree::FragmentContent::Replaced {
           replaced_type: replaced_box.replaced_type.clone(),
@@ -2372,7 +2373,15 @@ impl FormattingContext for BlockFormattingContext {
         },
         vec![],
         box_node.style.clone(),
-      ));
+      );
+      let converted = convert_fragment_axes(
+        fragment,
+        bounds.width(),
+        bounds.height(),
+        style.writing_mode,
+        style.direction,
+      );
+      return Ok(converted);
     }
 
     let intrinsic_width_mode = matches!(
@@ -3005,8 +3014,15 @@ impl FormattingContext for BlockFormattingContext {
         &containing_block,
       )?;
     }
+    let converted = convert_fragment_axes(
+      fragment,
+      box_width,
+      box_height,
+      style.writing_mode,
+      style.direction,
+    );
 
-    Ok(fragment)
+    Ok(converted)
   }
 
   fn compute_intrinsic_inline_size(
@@ -3228,6 +3244,67 @@ impl FormattingContext for BlockFormattingContext {
     }
     intrinsic_cache_store(box_node, mode, clamped);
     Ok(clamped)
+  }
+}
+
+fn convert_fragment_axes(
+  mut fragment: FragmentNode,
+  parent_inline_size: f32,
+  parent_block_size: f32,
+  parent_writing_mode: WritingMode,
+  parent_direction: crate::style::types::Direction,
+) -> FragmentNode {
+  let style_wm = fragment
+    .style
+    .as_ref()
+    .map(|s| s.writing_mode)
+    .unwrap_or(parent_writing_mode);
+  let dir = fragment
+    .style
+    .as_ref()
+    .map(|s| s.direction)
+    .unwrap_or(parent_direction);
+  let _inline_is_horizontal = inline_axis_is_horizontal(style_wm);
+  let block_is_horizontal = block_axis_is_horizontal(style_wm);
+  let inline_positive = inline_axis_positive(style_wm, dir);
+  let block_positive = block_axis_positive(style_wm);
+
+  let logical_inline_start = fragment.bounds.x();
+  let logical_block_start = fragment.bounds.y();
+  let inline_size = fragment.bounds.width();
+  let block_size = fragment.bounds.height();
+
+  if block_is_horizontal {
+    // Swap axes: logical block → physical x, logical inline → physical y.
+    let phys_x = if block_positive {
+      logical_block_start
+    } else {
+      parent_block_size - logical_block_start - block_size
+    };
+    let phys_y = if inline_positive {
+      logical_inline_start
+    } else {
+      parent_inline_size - logical_inline_start - inline_size
+    };
+    fragment.bounds = Rect::from_xywh(phys_x, phys_y, block_size, inline_size);
+    let child_inline = inline_size;
+    let child_block = block_size;
+    fragment.children = fragment
+      .children
+      .into_iter()
+      .map(|c| convert_fragment_axes(c, child_inline, child_block, style_wm, dir))
+      .collect();
+    fragment
+  } else {
+    // Keep axes; only recurse.
+    let child_inline = inline_size;
+    let child_block = block_size;
+    fragment.children = fragment
+      .children
+      .into_iter()
+      .map(|c| convert_fragment_axes(c, child_inline, child_block, style_wm, dir))
+      .collect();
+    fragment
   }
 }
 
@@ -3471,6 +3548,7 @@ mod tests {
   use crate::layout::formatting_context::IntrinsicSizingMode;
   use crate::style::display::Display;
   use crate::style::display::FormattingContextType;
+  use crate::style::types::WritingMode;
   use crate::style::position::Position;
   use crate::style::types::ListStylePosition;
   use crate::style::types::ListStyleType;
