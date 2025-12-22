@@ -986,7 +986,7 @@ impl FastRender {
 
     let mut dom_with_state = dom.clone();
     let modal_open = modal_dialog_present(&dom_with_state);
-    apply_top_layer_state(&mut dom_with_state, modal_open, false);
+    let _modal_present = apply_top_layer_state(&mut dom_with_state, modal_open, false);
 
     // Extract CSS from style tags
     let css_parse_start = timings_enabled.then(Instant::now);
@@ -3974,7 +3974,7 @@ fn remove_attr(attrs: &mut Vec<(String, String)>, name: &str) {
   }
 }
 
-fn apply_top_layer_state(node: &mut DomNode, modal_open: bool, inside_modal: bool) {
+fn apply_top_layer_state(node: &mut DomNode, modal_open: bool, inside_modal: bool) -> bool {
   let mut within_modal = inside_modal;
   let dialog_info = dialog_state(node);
   let has_popover = node.get_attribute_ref("popover").is_some();
@@ -3983,6 +3983,7 @@ fn apply_top_layer_state(node: &mut DomNode, modal_open: bool, inside_modal: boo
   } else {
     false
   };
+  let mut subtree_has_modal = within_modal;
 
   if let crate::dom::DomNodeType::Element { tag_name, attributes, .. } = &mut node.node_type {
     let tag_lower = tag_name.to_ascii_lowercase();
@@ -3993,6 +3994,7 @@ fn apply_top_layer_state(node: &mut DomNode, modal_open: bool, inside_modal: boo
         should_open = open;
         if modal {
           within_modal = true;
+          subtree_has_modal = true;
         }
       }
     } else if has_popover {
@@ -4006,16 +4008,23 @@ fn apply_top_layer_state(node: &mut DomNode, modal_open: bool, inside_modal: boo
         remove_attr(attributes, "open");
       }
     }
+  }
 
-    if modal_open && !within_modal {
+  let child_modal = within_modal;
+  for child in node.children.iter_mut() {
+    let child_contains_modal = apply_top_layer_state(child, modal_open, child_modal);
+    subtree_has_modal |= child_contains_modal;
+  }
+
+  if let crate::dom::DomNodeType::Element { attributes, .. } = &mut node.node_type {
+    if modal_open && !subtree_has_modal {
       set_attr(attributes, "data-fastr-inert", "true");
+    } else {
+      remove_attr(attributes, "data-fastr-inert");
     }
   }
 
-  let child_modal = within_modal || inside_modal;
-  for child in node.children.iter_mut() {
-    apply_top_layer_state(child, modal_open, child_modal);
-  }
+  subtree_has_modal
 }
 
 >>>>>>> ff188e2 (Add top-layer dialog and popover handling)
