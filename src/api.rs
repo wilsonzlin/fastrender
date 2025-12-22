@@ -57,7 +57,6 @@
 use crate::accessibility::AccessibilityNode;
 use crate::animation;
 use crate::css::encoding::decode_css_bytes;
-use crate::css::loader::absolutize_css_urls;
 use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
 use crate::dom::DomNode;
@@ -68,7 +67,6 @@ use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
-use crate::html;
 use crate::image_loader::ImageCache;
 use crate::image_output::encode_image;
 use crate::image_output::OutputFormat;
@@ -89,11 +87,7 @@ use crate::layout::profile::layout_profile_enabled;
 use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
 use crate::paint::painter::paint_tree_with_resources_scaled;
-use crate::paint::painter::paint_tree_with_resources_scaled_offset_options;
-use crate::paint::painter::PaintOptions;
-use crate::paint::painter::DEFAULT_MAX_IFRAME_DEPTH;
-use crate::resource::CachingFetcher;
-use crate::resource::CachingFetcherConfig;
+use crate::paint::painter::paint_tree_with_resources_scaled_offset;
 use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
@@ -214,12 +208,6 @@ pub struct FastRender {
 
   /// Base URL used for resolving links/targets
   base_url: Option<String>,
-
-  /// Maximum iframe nesting depth allowed during paint
-  max_iframe_depth: usize,
-
-  /// Whether to allow file:// iframe documents when parent is http(s)
-  allow_file_iframe_from_http: bool,
 }
 
 impl std::fmt::Debug for FastRender {
@@ -230,11 +218,6 @@ impl std::fmt::Debug for FastRender {
       .field("default_height", &self.default_height)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
       .field("base_url", &self.base_url)
-      .field("max_iframe_depth", &self.max_iframe_depth)
-      .field(
-        "allow_file_iframe_from_http",
-        &self.allow_file_iframe_from_http,
-      )
       .finish_non_exhaustive()
   }
 }
@@ -268,14 +251,6 @@ pub struct FastRenderConfig {
 
   /// Base URL used to resolve relative resource references (images, CSS)
   pub base_url: Option<String>,
-  /// Optional in-memory resource cache configuration. If `None`, caching is disabled.
-  pub resource_cache: Option<CachingFetcherConfig>,
-
-  /// Maximum iframe nesting depth when painting nested browsing contexts
-  pub max_iframe_depth: usize,
-
-  /// Allow http(s) parents to load file:// iframe documents when true (disabled by default)
-  pub allow_file_iframe_from_http: bool,
 }
 
 impl Default for FastRenderConfig {
@@ -286,9 +261,6 @@ impl Default for FastRenderConfig {
       default_height: 600,
       device_pixel_ratio: 1.0,
       base_url: None,
-      resource_cache: Some(CachingFetcherConfig::default()),
-      max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
-      allow_file_iframe_from_http: false,
     }
   }
 }
@@ -363,24 +335,6 @@ impl FastRenderBuilder {
     self
   }
 
-  /// Overrides the resource cache configuration. Pass `None` to disable caching.
-  pub fn resource_cache(mut self, cache: Option<CachingFetcherConfig>) -> Self {
-    self.config.resource_cache = cache;
-    self
-  }
-
-  /// Sets the maximum iframe nesting depth. Values less than 1 disable iframe rendering.
-  pub fn max_iframe_depth(mut self, depth: usize) -> Self {
-    self.config.max_iframe_depth = depth;
-    self
-  }
-
-  /// Allows http(s) parents to load file:// iframe sources when enabled.
-  pub fn allow_file_iframe_from_http(mut self, allow: bool) -> Self {
-    self.config.allow_file_iframe_from_http = allow;
-    self
-  }
-
   /// Sets a custom resource fetcher for loading external resources (images, CSS)
   ///
   /// This allows injection of custom fetching behavior, such as caching or mocking.
@@ -441,24 +395,6 @@ impl FastRenderConfig {
   /// Sets the base URL used to resolve relative resource references.
   pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
     self.base_url = Some(url.into());
-    self
-  }
-
-  /// Configures the resource cache. Passing `None` disables caching.
-  pub fn with_resource_cache(mut self, cache: Option<CachingFetcherConfig>) -> Self {
-    self.resource_cache = cache;
-    self
-  }
-
-  /// Sets the maximum iframe nesting depth when painting nested browsing contexts.
-  pub fn with_max_iframe_depth(mut self, depth: usize) -> Self {
-    self.max_iframe_depth = depth;
-    self
-  }
-
-  /// Allows http(s) parents to load file:// iframe sources when enabled.
-  pub fn with_file_iframe_from_http(mut self, allow: bool) -> Self {
-    self.allow_file_iframe_from_http = allow;
     self
   }
 }
@@ -563,13 +499,8 @@ impl FastRender {
     config: FastRenderConfig,
     fetcher: Option<Arc<dyn ResourceFetcher>>,
   ) -> Result<Self> {
-    let base_fetcher = fetcher.unwrap_or_else(|| Arc::new(HttpFetcher::new()));
-    let fetcher: Arc<dyn ResourceFetcher> = if let Some(cache_cfg) = config.resource_cache {
-      Arc::new(CachingFetcher::with_config(base_fetcher, cache_cfg))
-    } else {
-      base_fetcher
-    };
-    let font_context = FontContext::with_resource_fetcher(Arc::clone(&fetcher));
+    let fetcher = fetcher.unwrap_or_else(|| Arc::new(HttpFetcher::new()));
+    let font_context = FontContext::new();
     let layout_config = LayoutConfig::for_viewport(Size::new(
       config.default_width as f32,
       config.default_height as f32,
@@ -591,8 +522,6 @@ impl FastRender {
       default_height: config.default_height,
       device_pixel_ratio: config.device_pixel_ratio,
       base_url: config.base_url.clone(),
-      max_iframe_depth: config.max_iframe_depth,
-      allow_file_iframe_from_http: config.allow_file_iframe_from_http,
     })
   }
 
@@ -973,16 +902,15 @@ impl FastRender {
     }
 
     let stylesheet = extract_css(dom)?;
-    let document_base = html::document_base_url(dom, self.base_url.as_deref());
     let target_fragment = self.current_target_fragment();
     let media_ctx = MediaContext::screen(width as f32, height as f32)
       .with_device_pixel_ratio(self.device_pixel_ratio)
       .with_env_overrides();
-    let import_loader = CssImportFetcher::new(document_base.clone(), Arc::clone(&self.fetcher));
+    let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
     let mut media_query_cache = MediaQueryCache::default();
     let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
       &import_loader,
-      document_base.as_deref(),
+      self.base_url.as_deref(),
       &media_ctx,
       Some(&mut media_query_cache),
     );
@@ -1060,12 +988,6 @@ impl FastRender {
     let modal_open = modal_dialog_present(&dom_with_state);
     apply_top_layer_state(&mut dom_with_state, modal_open, false);
 
-    let document_base = html::document_base_url(&dom_with_state, self.base_url.as_deref());
-    match &document_base {
-      Some(base) => self.image_cache.set_base_url(base.clone()),
-      None => self.image_cache.clear_base_url(),
-    }
-
     // Extract CSS from style tags
     let css_parse_start = timings_enabled.then(Instant::now);
     let stylesheet = extract_css(&dom_with_state)?;
@@ -1083,12 +1005,12 @@ impl FastRender {
     let media_ctx = MediaContext::screen(width as f32, height as f32)
       .with_device_pixel_ratio(self.device_pixel_ratio)
       .with_env_overrides();
-    let import_loader = CssImportFetcher::new(document_base.clone(), Arc::clone(&self.fetcher));
+    let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
     let mut media_query_cache = MediaQueryCache::default();
     let style_load_start = timings_enabled.then(Instant::now);
     let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
       &import_loader,
-      document_base.as_deref(),
+      self.base_url.as_deref(),
       &media_ctx,
       Some(&mut media_query_cache),
     );
@@ -1101,7 +1023,7 @@ impl FastRender {
     // Best-effort loading; rendering should continue even if a web font fails.
     let _ = self.font_context.load_web_fonts(
       &font_faces,
-      document_base.as_deref(),
+      self.base_url.as_deref(),
       Some(&used_codepoints),
     );
     if let Some(start) = style_load_start {
@@ -1626,12 +1548,14 @@ impl FastRender {
   /// let pixmap = renderer.paint(&fragment_tree, 800, 600)?;
   /// ```
   pub fn paint(&self, fragment_tree: &FragmentTree, width: u32, height: u32) -> Result<Pixmap> {
-    self.paint_with_offset_and_options(
+    paint_tree_with_resources_scaled(
       fragment_tree,
       width,
       height,
-      Point::ZERO,
-      self.default_paint_options(),
+      self.background_color,
+      self.font_context.clone(),
+      self.image_cache.clone(),
+      self.device_pixel_ratio,
     )
   }
 
@@ -1643,32 +1567,7 @@ impl FastRender {
     height: u32,
     offset: Point,
   ) -> Result<Pixmap> {
-    self.paint_with_offset_and_options(
-      fragment_tree,
-      width,
-      height,
-      offset,
-      self.default_paint_options(),
-    )
-  }
-
-  /// Paints a fragment tree using explicit paint options (used for nested documents).
-  pub(crate) fn paint_with_offset_and_options(
-    &self,
-    fragment_tree: &FragmentTree,
-    width: u32,
-    height: u32,
-    offset: Point,
-    mut options: PaintOptions,
-  ) -> Result<Pixmap> {
-    if options.base_url.is_none() {
-      options.base_url = self.base_url.clone();
-    }
-    options.max_iframe_depth = self.max_iframe_depth;
-    options.allow_file_iframe_from_http = self.allow_file_iframe_from_http;
-    options.fetcher = Arc::clone(&self.fetcher);
-
-    paint_tree_with_resources_scaled_offset_options(
+    paint_tree_with_resources_scaled_offset(
       fragment_tree,
       width,
       height,
@@ -1677,14 +1576,30 @@ impl FastRender {
       self.image_cache.clone(),
       self.device_pixel_ratio,
       offset,
-      options,
     )
   }
 
-  fn default_paint_options(&self) -> PaintOptions {
-    PaintOptions::new(self.base_url.clone(), Arc::clone(&self.fetcher))
-      .with_max_iframe_depth(self.max_iframe_depth)
-      .with_allow_file_iframe_from_http(self.allow_file_iframe_from_http)
+  /// Renders HTML using shared font/image resources.
+  ///
+  /// This is primarily used internally when nested rendering is needed (e.g., SVG foreignObject).
+  pub(crate) fn render_html_with_resources(
+    &self,
+    html: &str,
+    width: u32,
+    height: u32,
+    background: Rgba,
+  ) -> Result<Pixmap> {
+    render_html_with_shared_resources(
+      html,
+      width,
+      height,
+      background,
+      &self.font_context,
+      &self.image_cache,
+      Arc::clone(&self.fetcher),
+      self.base_url.clone(),
+      self.device_pixel_ratio,
+    )
   }
 
   /// Returns a reference to the font context
@@ -1717,16 +1632,6 @@ impl FastRender {
   pub fn clear_base_url(&mut self) {
     self.image_cache.clear_base_url();
     self.base_url = None;
-  }
-
-  /// Sets the maximum iframe nesting depth used during painting.
-  pub fn set_max_iframe_depth(&mut self, depth: usize) {
-    self.max_iframe_depth = depth;
-  }
-
-  /// Allows or blocks file:// iframe sources when the parent is http(s).
-  pub fn set_allow_file_iframe_from_http(&mut self, allow: bool) {
-    self.allow_file_iframe_from_http = allow;
   }
 
   /// Gets the default background color
@@ -1912,10 +1817,11 @@ impl FastRender {
 
         if needs_intrinsic || needs_ratio {
           // Inline SVG content can be rendered directly; otherwise try to load via URL/data URI.
-          let image = if content.trim_start().starts_with('<') {
-            self.image_cache.render_svg(&content)
-          } else if !content.is_empty() {
-            self.image_cache.load(&content)
+          let source = content.svg.trim_start();
+          let image = if source.starts_with('<') {
+            self.image_cache.render_svg(&content.svg)
+          } else if !content.svg.is_empty() {
+            self.image_cache.load(&content.svg)
           } else {
             Err(crate::error::Error::Image(
               crate::error::ImageError::LoadFailed {
@@ -2261,60 +2167,12 @@ impl CssImportLoader for CssImportFetcher {
     // Use the fetcher to get the bytes
     let resource = self.fetcher.fetch(&resolved)?;
 
-    // Decode CSS bytes with charset handling and absolutize any relative URLs
-    let css = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
-    Ok(absolutize_css_urls(&css, &resolved))
+    // Decode CSS bytes with charset handling
+    Ok(decode_css_bytes(
+      &resource.bytes,
+      resource.content_type.as_deref(),
+    ))
   }
-}
-
-/// Render a document string to a pixmap using explicit base URL and shared resources.
-pub(crate) fn render_document_to_pixmap_with_base_url(
-  html: &str,
-  viewport: Size,
-  background: Rgba,
-  base_url: Option<String>,
-  fetcher: Arc<dyn ResourceFetcher>,
-  font_ctx: FontContext,
-  mut image_cache: ImageCache,
-  device_pixel_ratio: f32,
-  mut paint_options: PaintOptions,
-) -> Result<Pixmap> {
-  if let Some(ref url) = base_url {
-    image_cache.set_base_url(url.clone());
-  } else {
-    image_cache.clear_base_url();
-  }
-
-  let layout_config =
-    LayoutConfig::for_viewport(viewport).with_identifier("iframe-document".to_string());
-  let layout_engine = LayoutEngine::with_font_context(layout_config, font_ctx.clone());
-  let target_width = viewport.width.ceil().max(1.0) as u32;
-  let target_height = viewport.height.ceil().max(1.0) as u32;
-
-  let mut renderer = FastRender {
-    font_context: font_ctx.clone(),
-    layout_engine,
-    image_cache,
-    fetcher,
-    background_color: background,
-    default_width: target_width,
-    default_height: target_height,
-    device_pixel_ratio,
-    base_url: base_url.clone(),
-    max_iframe_depth: paint_options.max_iframe_depth,
-    allow_file_iframe_from_http: paint_options.allow_file_iframe_from_http,
-  };
-
-  let dom = renderer.parse_html(html)?;
-  let mut fragment_tree = renderer.layout_document(&dom, target_width, target_height)?;
-  paint_options = paint_options.with_base_url(base_url);
-  renderer.paint_with_offset_and_options(
-    &fragment_tree,
-    target_width,
-    target_height,
-    Point::ZERO,
-    paint_options,
-  )
 }
 
 fn hash_enum_discriminant<T>(value: &T, hasher: &mut DefaultHasher) {
@@ -3741,6 +3599,38 @@ fn apply_top_layer_state(node: &mut DomNode, modal_open: bool, inside_modal: boo
 
   subtree_has_modal
 }
+
+/// Renders an HTML fragment using shared font/image resources. This is used for nested rendering
+/// such as SVG `<foreignObject>` content so we can reuse the outer renderer's caches.
+pub(crate) fn render_html_with_shared_resources(
+  html: &str,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: &FontContext,
+  image_cache: &ImageCache,
+  fetcher: Arc<dyn ResourceFetcher>,
+  base_url: Option<String>,
+  device_pixel_ratio: f32,
+) -> Result<Pixmap> {
+  let layout_config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32))
+    .with_identifier("foreignObject");
+  let layout_engine = LayoutEngine::with_font_context(layout_config, font_ctx.clone());
+  let mut renderer = FastRender {
+    font_context: font_ctx.clone(),
+    layout_engine,
+    image_cache: image_cache.clone(),
+    fetcher,
+    background_color: background,
+    default_width: width,
+    default_height: height,
+    device_pixel_ratio,
+    base_url,
+  };
+
+  renderer.render_html_internal(html, width, height, 0.0, 0.0)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -3766,13 +3656,12 @@ mod tests {
       .state
       .viewport
   }
-  use crate::resource::{FetchedResource, ResourceFetcher};
   use image::codecs::png::PngEncoder;
   use image::load_from_memory;
   use image::ColorType;
   use image::ImageEncoder;
   use image::RgbaImage;
-  use std::sync::{Arc, Mutex};
+  use std::sync::Arc;
 
   fn text_color_for(tree: &FragmentTree, needle: &str) -> Option<Rgba> {
     tree.iter_fragments().find_map(|frag| match &frag.content {
@@ -3821,42 +3710,6 @@ mod tests {
     let mut out = Vec::new();
     helper(styled, id, &mut out);
     out
-  }
-
-  #[derive(Clone, Default)]
-  struct RecordingFetcher {
-    seen: Arc<Mutex<Vec<String>>>,
-  }
-
-  impl RecordingFetcher {
-    fn new() -> Self {
-      Self::default()
-    }
-
-    fn urls(&self) -> Vec<String> {
-      self.seen.lock().unwrap().clone()
-    }
-  }
-
-  impl ResourceFetcher for RecordingFetcher {
-    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
-      self.seen.lock().unwrap().push(url.to_string());
-
-      if url.ends_with(".css") {
-        return Ok(FetchedResource::new(
-          b"body { color: rgb(10, 20, 30); }".to_vec(),
-          Some("text/css".to_string()),
-        ));
-      }
-
-      let mut data = Vec::new();
-      let mut encoder = PngEncoder::new(&mut data);
-      encoder
-        .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8)
-        .unwrap();
-
-      Ok(FetchedResource::new(data, Some("image/png".to_string())))
-    }
   }
 
   #[test]
@@ -4163,70 +4016,6 @@ mod tests {
     let styled = renderer.layout_document(&dom, 400, 200).unwrap();
     let color = text_color_for(&styled, "hello").expect("text color");
     assert_eq!(color, Rgba::rgb(9, 8, 7));
-  }
-
-  #[test]
-  fn base_href_resolves_relative_image_sources() {
-    let fetcher = RecordingFetcher::new();
-    let mut renderer = FastRender::builder()
-      .base_url("https://example.com/path/page.html")
-      .fetcher(Arc::new(fetcher.clone()))
-      .build()
-      .unwrap();
-
-    let html = r#"
-            <html>
-                <head><base href="/static/"></head>
-                <body><img src="images/pic.png"></body>
-            </html>
-        "#;
-
-    renderer.render_html(html, 200, 150).unwrap();
-    let urls = fetcher.urls();
-    assert!(
-      urls.contains(&"https://example.com/static/images/pic.png".to_string()),
-      "requested urls: {:?}",
-      urls
-    );
-    assert!(
-      !urls.contains(&"https://example.com/path/images/pic.png".to_string()),
-      "base href should override document path"
-    );
-  }
-
-  #[test]
-  fn base_href_changes_import_resolution() {
-    let fetcher = RecordingFetcher::new();
-    let mut renderer = FastRender::builder()
-      .base_url("https://example.com/path/page.html")
-      .fetcher(Arc::new(fetcher.clone()))
-      .build()
-      .unwrap();
-
-    let html = r#"
-            <html>
-                <head>
-                    <base href="/assets/">
-                    <style>@import "styles/theme.css";</style>
-                </head>
-                <body>imported</body>
-            </html>
-        "#;
-    let dom = renderer.parse_html(html).unwrap();
-    let styled = renderer.layout_document(&dom, 320, 200).unwrap();
-    let color = text_color_for(&styled, "imported").expect("imported color");
-    assert_eq!(color, Rgba::rgb(10, 20, 30));
-
-    let urls = fetcher.urls();
-    assert!(
-      urls.contains(&"https://example.com/assets/styles/theme.css".to_string()),
-      "requested urls: {:?}",
-      urls
-    );
-    assert!(
-      !urls.contains(&"https://example.com/path/styles/theme.css".to_string()),
-      "base href should change import resolution"
-    );
   }
 
   #[test]
@@ -4774,8 +4563,9 @@ mod tests {
     let mut node = BoxNode::new_replaced(
       Arc::new(ComputedStyle::default()),
       ReplacedType::Svg {
-        content: r"<svg xmlns='http://www.w3.org/2000/svg' width='20' height='12'></svg>"
-          .to_string(),
+        content: crate::tree::box_tree::SvgContent::raw(
+          r"<svg xmlns='http://www.w3.org/2000/svg' width='20' height='12'></svg>".to_string(),
+        ),
       },
       None,
       None,
@@ -4802,14 +4592,15 @@ mod tests {
   fn resolve_intrinsic_sizes_respects_preserve_aspect_ratio_none() {
     let renderer = FastRender::new().expect("init renderer");
     let mut node = BoxNode::new_replaced(
-            Arc::new(ComputedStyle::default()),
-            ReplacedType::Svg {
-                content:
-                    r"<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100' viewBox='0 0 50 100' preserveAspectRatio='none'></svg>"
-                        .to_string(),
-            },
-            None,
-            None,
+      Arc::new(ComputedStyle::default()),
+      ReplacedType::Svg {
+                content: crate::tree::box_tree::SvgContent::raw(
+                  r"<svg xmlns='http://www.w3.org/2000/svg' width='200' height='100' viewBox='0 0 50 100' preserveAspectRatio='none'></svg>"
+                    .to_string(),
+                ),
+      },
+      None,
+      None,
         );
 
     renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));
@@ -4835,7 +4626,9 @@ mod tests {
     let mut node = BoxNode::new_replaced(
       Arc::new(ComputedStyle::default()),
       ReplacedType::Svg {
-        content: r"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 100'></svg>".to_string(),
+        content: crate::tree::box_tree::SvgContent::raw(
+          r"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 50 100'></svg>".to_string(),
+        ),
       },
       None,
       None,
@@ -4854,17 +4647,17 @@ mod tests {
   fn resolve_intrinsic_sizes_ignore_stroke_bounds() {
     let renderer = FastRender::new().expect("init renderer");
     let mut node = BoxNode::new_replaced(
-            Arc::new(ComputedStyle::default()),
-            ReplacedType::Svg {
-                content: r"
+      Arc::new(ComputedStyle::default()),
+      ReplacedType::Svg {
+                content: crate::tree::box_tree::SvgContent::raw(r"
                     <svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='0 0 20 10'>
                         <rect x='0' y='0' width='20' height='10' stroke='black' stroke-width='50' fill='none'/>
                     </svg>
                 "
-                .to_string(),
-            },
-            None,
-            None,
+                .to_string()),
+      },
+      None,
+      None,
         );
 
     renderer.resolve_replaced_intrinsic_sizes(&mut node, Size::new(800.0, 600.0));

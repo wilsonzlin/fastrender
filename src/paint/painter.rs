@@ -21,22 +21,21 @@
 //! fragment's background, borders, and content. Text is rendered
 //! using the system's default font.
 
-use crate::api::render_document_to_pixmap_with_base_url;
+use crate::api::render_html_with_shared_resources;
 use crate::css;
-use crate::css::loader::absolutize_css_urls;
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
 use crate::css::types::Transform as CssTransform;
+use crate::dom;
 use crate::error::RenderError;
 use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
-use crate::html;
-use crate::html::encoding::decode_html_bytes;
 use crate::image_loader::CachedImage;
 use crate::image_loader::ImageCache;
+use crate::layout;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::utils::resolve_font_relative_length;
@@ -51,12 +50,13 @@ use crate::paint::stacking::creates_stacking_context;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
-use crate::resource::allow_file_iframe_from_http_parent;
-use crate::resource::ResourceFetcher;
+use crate::style;
 #[cfg(test)]
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::display::Display;
+use crate::style::media::MediaContext;
+use crate::style::media::MediaQueryCache;
 use crate::style::position::Position;
 use crate::style::types::AccentColor;
 use crate::style::types::Appearance;
@@ -76,8 +76,10 @@ use crate::style::types::BorderImageSource;
 use crate::style::types::BorderImageWidthValue;
 use crate::style::types::BorderStyle as CssBorderStyle;
 use crate::style::types::ClipComponent;
+use crate::style::types::Direction;
 use crate::style::types::FilterColor;
 use crate::style::types::FilterFunction;
+use crate::style::types::FontStyle as CssFontStyle;
 use crate::style::types::ImageOrientation;
 use crate::style::types::ImageRendering;
 use crate::style::types::MixBlendMode;
@@ -89,6 +91,7 @@ use crate::style::types::TextDecorationSkipInk;
 use crate::style::types::TextDecorationStyle;
 use crate::style::types::TextDecorationThickness;
 use crate::style::types::TransformBox;
+use crate::style::types::WritingMode;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
@@ -99,17 +102,23 @@ use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree;
+use crate::tree::box_tree::ForeignObjectInfo;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
+use crate::tree::box_tree::SvgContent;
 use crate::tree::box_tree::{FormControl, FormControlKind};
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use base64::Engine;
 use encoding_rs::Encoding;
+use image::ImageEncoder;
+use image::codecs::png::PngEncoder;
+use image::ColorType;
 use percent_encoding::percent_decode;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -154,8 +163,6 @@ pub struct Painter {
   image_cache: ImageCache,
   /// Cache of shaped runs keyed by style and text to avoid reshaping identical content during paint
   text_shape_cache: Arc<Mutex<HashMap<TextCacheKey, Vec<ShapedRun>>>>,
-  /// Options that control nested browsing context rendering
-  paint_options: PaintOptions,
 }
 
 #[derive(Default)]
@@ -170,59 +177,6 @@ struct PaintStats {
   replaced: (usize, f64),
   outline: (usize, f64),
   stacking: (usize, f64),
-}
-
-/// Default maximum iframe nesting depth when rendering nested browsing contexts.
-pub const DEFAULT_MAX_IFRAME_DEPTH: usize = 2;
-
-/// Painting-time options that need to propagate into nested documents (iframes).
-#[derive(Clone)]
-pub struct PaintOptions {
-  pub base_url: Option<String>,
-  pub fetcher: Arc<dyn ResourceFetcher>,
-  pub max_iframe_depth: usize,
-  pub iframe_depth: usize,
-  pub allow_file_iframe_from_http: bool,
-  pub iframe_html_cache: Arc<Mutex<HashMap<String, Arc<String>>>>,
-}
-
-impl PaintOptions {
-  pub fn new(base_url: Option<String>, fetcher: Arc<dyn ResourceFetcher>) -> Self {
-    Self {
-      base_url,
-      fetcher,
-      max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
-      iframe_depth: 0,
-      allow_file_iframe_from_http: false,
-      iframe_html_cache: Arc::new(Mutex::new(HashMap::new())),
-    }
-  }
-
-  pub fn for_image_cache(cache: &ImageCache) -> Self {
-    Self::new(cache.base_url(), Arc::clone(cache.fetcher()))
-  }
-
-  pub fn with_max_iframe_depth(mut self, depth: usize) -> Self {
-    self.max_iframe_depth = depth;
-    self
-  }
-
-  pub fn with_allow_file_iframe_from_http(mut self, allow: bool) -> Self {
-    self.allow_file_iframe_from_http = allow;
-    self
-  }
-
-  pub fn with_base_url(mut self, base: Option<String>) -> Self {
-    self.base_url = base;
-    self
-  }
-
-  pub fn child_with_base(&self, base: Option<String>) -> Self {
-    let mut next = self.clone();
-    next.iframe_depth = next.iframe_depth.saturating_add(1);
-    next.base_url = base;
-    next
-  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -639,26 +593,11 @@ impl Painter {
   }
 
   fn resolve_replaced_intrinsic_sizes(&self, node: &mut tree::box_tree::BoxNode, viewport: Size) {
-    self.resolve_replaced_intrinsic_sizes_with_cache(node, viewport, &self.image_cache);
-  }
-
-  fn resolve_replaced_intrinsic_sizes_with_cache(
-    &self,
-    node: &mut tree::box_tree::BoxNode,
-    viewport: Size,
-    image_cache: &ImageCache,
-  ) {
     use tree::box_tree::BoxType;
     use tree::box_tree::MarkerContent;
     if let BoxType::Marker(marker_box) = &mut node.box_type {
       if let MarkerContent::Image(replaced) = &mut marker_box.content {
-        self.resolve_intrinsic_for_replaced(
-          replaced,
-          node.style.as_ref(),
-          None,
-          viewport,
-          image_cache,
-        );
+        self.resolve_intrinsic_for_replaced(replaced, node.style.as_ref(), None, viewport);
       }
     }
 
@@ -672,12 +611,11 @@ impl Painter {
         node.style.as_ref(),
         alt.as_deref(),
         viewport,
-        image_cache,
       );
     }
 
     for child in &mut node.children {
-      self.resolve_replaced_intrinsic_sizes_with_cache(child, viewport, image_cache);
+      self.resolve_replaced_intrinsic_sizes(child, viewport);
     }
   }
 
@@ -687,7 +625,6 @@ impl Painter {
     style: &ComputedStyle,
     alt: Option<&str>,
     viewport: Size,
-    image_cache: &ImageCache,
   ) {
     let replaced_type_snapshot = replaced_box.replaced_type.clone();
     match replaced_type_snapshot {
@@ -770,7 +707,7 @@ impl Painter {
         };
 
         if let Some(selected) = selected {
-          if let Ok(img) = image_cache.load(selected.url) {
+          if let Ok(img) = self.image_cache.load(selected.url) {
             let orientation = style.image_orientation.resolve(img.orientation, false);
             if let Some((w, h)) = img.css_dimensions(
               orientation,
@@ -803,18 +740,41 @@ impl Painter {
           }
         }
       }
-      ReplacedType::Svg { content }
-      | ReplacedType::Embed { src: content }
-      | ReplacedType::Object { data: content } => {
+      ReplacedType::Svg { content } => {
+        let needs_intrinsic = replaced_box.intrinsic_size.is_none();
+        let needs_ratio = replaced_box.aspect_ratio.is_none();
+        if !needs_intrinsic && !needs_ratio {
+          return;
+        }
+        let image = if content.svg.trim_start().starts_with('<') {
+          self.image_cache.render_svg(&content.svg)
+        } else {
+          self.image_cache.load(&content.svg)
+        };
+        if let Ok(image) = image {
+          let orientation = style.image_orientation.resolve(image.orientation, false);
+          if let Some((w, h)) =
+            image.css_dimensions(orientation, &style.image_resolution, self.scale, None)
+          {
+            if needs_intrinsic {
+              replaced_box.intrinsic_size = Some(Size::new(w, h));
+            }
+            if needs_ratio && h > 0.0 {
+              replaced_box.aspect_ratio = Some(w / h);
+            }
+          }
+        }
+      }
+      ReplacedType::Embed { src: content } | ReplacedType::Object { data: content } => {
         let needs_intrinsic = replaced_box.intrinsic_size.is_none();
         let needs_ratio = replaced_box.aspect_ratio.is_none();
         if !needs_intrinsic && !needs_ratio {
           return;
         }
         let image = if content.trim_start().starts_with('<') {
-          image_cache.render_svg(&content)
+          self.image_cache.render_svg(&content)
         } else {
-          image_cache.load(&content)
+          self.image_cache.load(&content)
         };
         if let Ok(image) = image {
           let orientation = style.image_orientation.resolve(image.orientation, false);
@@ -837,7 +797,7 @@ impl Painter {
           return;
         }
         if let Some(poster) = poster {
-          if let Ok(img) = image_cache.load(&poster) {
+          if let Ok(img) = self.image_cache.load(&poster) {
             let orientation = style.image_orientation.resolve(img.orientation, false);
             if let Some((w, h)) =
               img.css_dimensions(orientation, &style.image_resolution, self.scale, None)
@@ -912,28 +872,6 @@ impl Painter {
     image_cache: ImageCache,
     scale: f32,
   ) -> Result<Self> {
-    let options = PaintOptions::for_image_cache(&image_cache);
-    Self::with_resources_scaled_options(
-      width,
-      height,
-      background,
-      font_ctx,
-      image_cache,
-      scale,
-      options,
-    )
-  }
-
-  /// Creates a painter with explicit font/image resources, device scale, and paint options.
-  pub fn with_resources_scaled_options(
-    width: u32,
-    height: u32,
-    background: Rgba,
-    font_ctx: FontContext,
-    image_cache: ImageCache,
-    scale: f32,
-    mut paint_options: PaintOptions,
-  ) -> Result<Self> {
     let scale = if scale.is_finite() && scale > 0.0 {
       scale
     } else {
@@ -945,11 +883,6 @@ impl Painter {
       message: format!("Failed to create pixmap {}x{}", device_w, device_h),
     })?;
 
-    if paint_options.base_url.is_none() {
-      paint_options.base_url = image_cache.base_url();
-    }
-    paint_options.fetcher = Arc::clone(image_cache.fetcher());
-
     Ok(Self {
       pixmap,
       scale,
@@ -960,7 +893,6 @@ impl Painter {
       font_ctx,
       image_cache,
       text_shape_cache: Arc::new(Mutex::new(HashMap::new())),
-      paint_options,
     })
   }
 
@@ -2051,7 +1983,6 @@ impl Painter {
           font_ctx: self.font_ctx.clone(),
           image_cache: self.image_cache.clone(),
           text_shape_cache: Arc::clone(&self.text_shape_cache),
-          paint_options: self.paint_options.clone(),
         };
         for cmd in unclipped {
           base_painter.execute_command(cmd)?;
@@ -2072,7 +2003,6 @@ impl Painter {
             font_ctx: self.font_ctx.clone(),
             image_cache: self.image_cache.clone(),
             text_shape_cache: Arc::clone(&self.text_shape_cache),
-            paint_options: self.paint_options.clone(),
           };
           for cmd in clipped {
             clip_painter.execute_command(cmd)?;
@@ -2143,7 +2073,6 @@ impl Painter {
             font_ctx: self.font_ctx.clone(),
             image_cache: self.image_cache.clone(),
             text_shape_cache: Arc::clone(&self.text_shape_cache),
-            paint_options: self.paint_options.clone(),
           };
           for cmd in outline_commands {
             outline_painter.execute_command(cmd)?;
@@ -4195,20 +4124,20 @@ impl Painter {
           }
         }
       }
-      ReplacedType::Iframe { src, srcdoc } => {
-        if let Some(pixmap) = self.render_iframe(srcdoc.as_deref(), src, content_rect, style) {
-          let device_rect = self.device_rect(content_rect);
+      ReplacedType::Iframe {
+        srcdoc: Some(html),
+        src,
+      } => {
+        if let Some(pixmap) = self.render_iframe_srcdoc(html, content_rect, style) {
+          let device_x = self.device_length(content_rect.x());
+          let device_y = self.device_length(content_rect.y());
           let paint = PixmapPaint::default();
-          let dest_x = device_rect.x().floor() as i32;
-          let dest_y = device_rect.y().floor() as i32;
-          let frac_x = device_rect.x() - dest_x as f32;
-          let frac_y = device_rect.y() - dest_y as f32;
           self.pixmap.draw_pixmap(
-            dest_x,
-            dest_y,
+            device_x as i32,
+            device_y as i32,
             pixmap.as_ref(),
             &paint,
-            Transform::from_translate(frac_x, frac_y),
+            Transform::identity(),
             None,
           );
           return;
@@ -4235,9 +4164,44 @@ impl Painter {
           return;
         }
       }
-      ReplacedType::Svg { content }
-      | ReplacedType::Embed { src: content }
-      | ReplacedType::Object { data: content } => {
+      ReplacedType::Svg { content } => {
+        if self.paint_inline_svg(
+          content,
+          style,
+          content_rect.x(),
+          content_rect.y(),
+          content_rect.width(),
+          content_rect.height(),
+        ) {
+          return;
+        }
+        if self.paint_svg(
+          &content.fallback_svg,
+          style,
+          content_rect.x(),
+          content_rect.y(),
+          content_rect.width(),
+          content_rect.height(),
+        ) {
+          return;
+        }
+        if self.paint_image_from_src(
+          &content.fallback_svg,
+          style,
+          content_rect.x(),
+          content_rect.y(),
+          content_rect.width(),
+          content_rect.height(),
+        ) {
+          return;
+        }
+      }
+      ReplacedType::Embed { src: content }
+      | ReplacedType::Object { data: content }
+      | ReplacedType::Iframe {
+        src: content,
+        srcdoc: None,
+      } => {
         if self.paint_svg(
           content,
           style,
@@ -4288,6 +4252,102 @@ impl Painter {
     }
 
     self.paint_replaced_placeholder(replaced_type, style, content_rect);
+  }
+
+  fn paint_inline_svg(
+    &mut self,
+    content: &SvgContent,
+    style: Option<&ComputedStyle>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+  ) -> bool {
+    let svg_markup = if content.foreign_objects.is_empty() {
+      Some(content.svg.clone())
+    } else {
+      self.inline_svg_with_foreign_objects(content)
+    };
+
+    if let Some(svg) = svg_markup {
+      return self.paint_svg(&svg, style, x, y, width, height);
+    }
+
+    false
+  }
+
+  fn inline_svg_with_foreign_objects(&mut self, content: &SvgContent) -> Option<String> {
+    let mut svg = content.svg.clone();
+    for (idx, foreign) in content.foreign_objects.iter().enumerate() {
+      let data_url = self.render_foreign_object_data_url(foreign, &content.shared_css)?;
+      let replacement = self.foreign_object_image_tag(foreign, &data_url);
+      let placeholder = if foreign.placeholder.is_empty() {
+        format!("<!--FASTRENDER_FOREIGN_OBJECT_{}-->", idx)
+      } else {
+        foreign.placeholder.clone()
+      };
+
+      if let Some(pos) = svg.find(&placeholder) {
+        let end = pos + placeholder.len();
+        svg.replace_range(pos..end, &replacement);
+      } else {
+        svg.push_str(&replacement);
+      }
+    }
+
+    Some(svg)
+  }
+
+  fn foreign_object_image_tag(&self, info: &ForeignObjectInfo, data_url: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    parts.push(format!("x=\"{:.6}\"", info.x));
+    parts.push(format!("y=\"{:.6}\"", info.y));
+    parts.push(format!("width=\"{:.6}\"", info.width));
+    parts.push(format!("height=\"{:.6}\"", info.height));
+    if info.opacity < 1.0 {
+      parts.push(format!("opacity=\"{:.3}\"", info.opacity.clamp(0.0, 1.0)));
+    }
+
+    for (name, value) in &info.attributes {
+      if matches!(name.as_str(), "x" | "y" | "width" | "height") {
+        continue;
+      }
+      parts.push(format!("{}=\"{}\"", name, escape_attr_value(value)));
+    }
+
+    parts.push("preserveAspectRatio=\"none\"".to_string());
+    parts.push(format!("href=\"{}\"", escape_attr_value(data_url)));
+
+    format!("<image {}/>", parts.join(" "))
+  }
+
+  fn render_foreign_object_data_url(
+    &mut self,
+    info: &ForeignObjectInfo,
+    shared_css: &str,
+  ) -> Option<String> {
+    let width = info.width.max(1.0).round() as u32;
+    let height = info.height.max(1.0).round() as u32;
+    if width == 0 || height == 0 {
+      return None;
+    }
+
+    let html = build_foreign_object_document(info, shared_css);
+    let background = info.background.unwrap_or(Rgba::TRANSPARENT);
+    let pixmap = render_html_with_shared_resources(
+      &html,
+      width,
+      height,
+      background,
+      &self.font_ctx,
+      &self.image_cache,
+      Arc::clone(self.image_cache.fetcher()),
+      self.image_cache.base_url(),
+      1.0,
+    )
+    .ok()?;
+
+    pixmap_to_data_url(pixmap)
   }
 
   fn resolved_accent_color(style: &ComputedStyle) -> Rgba {
@@ -4483,130 +4543,71 @@ impl Painter {
     }
   }
 
-  fn render_iframe(
-    &self,
-    srcdoc: Option<&str>,
-    src: &str,
-    content_rect: Rect,
-    style: Option<&ComputedStyle>,
-  ) -> Option<Pixmap> {
-    let next_depth = self.paint_options.iframe_depth.saturating_add(1);
-    if next_depth > self.paint_options.max_iframe_depth {
-      return None;
-    }
-
-    if let Some(html) = srcdoc {
-      if let Some(pixmap) = self.render_iframe_srcdoc(html, content_rect, style, next_depth) {
-        return Some(pixmap);
-      }
-    }
-
-    self.render_iframe_src(src, content_rect, style, next_depth)
-  }
-
   fn render_iframe_srcdoc(
     &self,
     html: &str,
     content_rect: Rect,
     style: Option<&ComputedStyle>,
-    next_depth: usize,
-  ) -> Option<Pixmap> {
-    self.render_iframe_document(
-      html,
-      self.paint_options.base_url.clone(),
-      content_rect,
-      style,
-      next_depth,
-    )
-  }
-
-  fn render_iframe_src(
-    &self,
-    src: &str,
-    content_rect: Rect,
-    style: Option<&ComputedStyle>,
-    next_depth: usize,
-  ) -> Option<Pixmap> {
-    if src.is_empty() {
-      return None;
-    }
-
-    let resolved_src = self.image_cache.resolve_url(src);
-    if resolved_src.is_empty() {
-      return None;
-    }
-
-    if !allow_file_iframe_from_http_parent(
-      self.paint_options.base_url.as_deref(),
-      &resolved_src,
-      self.paint_options.allow_file_iframe_from_http,
-    ) {
-      return None;
-    }
-
-    let html = self.fetch_iframe_html(&resolved_src)?;
-    self.render_iframe_document(
-      html.as_ref(),
-      Some(resolved_src),
-      content_rect,
-      style,
-      next_depth,
-    )
-  }
-
-  fn fetch_iframe_html(&self, url: &str) -> Option<Arc<String>> {
-    if let Ok(cache) = self.paint_options.iframe_html_cache.lock() {
-      if let Some(html) = cache.get(url) {
-        return Some(Arc::clone(html));
-      }
-    }
-
-    let resource = self.paint_options.fetcher.fetch(url).ok()?;
-    let decoded = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
-    let html = Arc::new(decoded);
-    if let Ok(mut cache) = self.paint_options.iframe_html_cache.lock() {
-      cache.insert(url.to_string(), Arc::clone(&html));
-    }
-    Some(html)
-  }
-
-  fn render_iframe_document(
-    &self,
-    html: &str,
-    base_url: Option<String>,
-    content_rect: Rect,
-    style: Option<&ComputedStyle>,
-    next_depth: usize,
   ) -> Option<Pixmap> {
     if content_rect.width() <= 0.0 || content_rect.height() <= 0.0 {
       return None;
     }
-    if next_depth > self.paint_options.max_iframe_depth {
-      return None;
-    }
-
-    let viewport = Size::new(content_rect.width(), content_rect.height());
     let dom = dom::parse_html(html).ok()?;
-    let document_base = html::document_base_url(&dom, base_url.as_deref());
-    let mut nested_cache = self.image_cache.clone();
-    match &document_base {
-      Some(url) => nested_cache.set_base_url(url.clone()),
-      None => nested_cache.clear_base_url(),
-    }
-
-    let mut options = self.paint_options.child_with_base(document_base.clone());
-    options.iframe_depth = next_depth;
-
-    render_document_to_pixmap_with_base_url(
-      html,
-      viewport,
+    let used_codepoints = dom::collect_text_codepoints(&dom);
+    let stylesheet = css::parser::extract_css(&dom).ok()?;
+    let media_ctx = MediaContext::screen(content_rect.width(), content_rect.height())
+      .with_device_pixel_ratio(self.scale)
+      .with_env_overrides();
+    let import_loader = EmbeddedImportFetcher {
+      base_url: self.image_cache.base_url(),
+    };
+    let mut media_query_cache = MediaQueryCache::default();
+    let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
+      &import_loader,
+      self.image_cache.base_url().as_deref(),
+      &media_ctx,
+      Some(&mut media_query_cache),
+    );
+    let target_fragment = self
+      .image_cache
+      .base_url()
+      .as_ref()
+      .and_then(|url| url.split('#').nth(1))
+      .map(String::from);
+    let font_faces = resolved_stylesheet
+      .collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let _ = self.font_ctx.load_web_fonts(
+      &font_faces,
+      self.image_cache.base_url().as_deref(),
+      Some(&used_codepoints),
+    );
+    let styled_tree = style::cascade::apply_styles_with_media_target_and_imports_cached(
+      &dom,
+      &resolved_stylesheet,
+      &media_ctx,
+      target_fragment.as_deref(),
+      None,
+      None,
+      None,
+      None,
+      None,
+      Some(&mut media_query_cache),
+    );
+    let mut box_tree = tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
+    let viewport = Size::new(content_rect.width(), content_rect.height());
+    self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, viewport);
+    let config = layout::engine::LayoutConfig::for_viewport(viewport);
+    let layout_engine =
+      layout::engine::LayoutEngine::with_font_context(config, self.font_ctx.clone());
+    let fragment_tree = layout_engine.layout_tree(&box_tree).ok()?;
+    paint_tree_with_resources_scaled(
+      &fragment_tree,
+      content_rect.width().ceil() as u32,
+      content_rect.height().ceil() as u32,
       style.map(|s| s.background_color).unwrap_or(Rgba::WHITE),
-      document_base,
-      options.fetcher.clone(),
       self.font_ctx.clone(),
-      nested_cache,
+      self.image_cache.clone(),
       self.scale,
-      options,
     )
     .ok()
   }
@@ -6667,7 +6668,6 @@ impl css::types::CssImportLoader for EmbeddedImportFetcher {
       .ok_or_else(|| RenderError::InvalidParameters {
         message: format!("Cannot resolve @import URL '{}'", url),
       })?;
-    let resolved_string = resolved.to_string();
 
     match resolved.scheme() {
       "file" => {
@@ -6677,8 +6677,7 @@ impl css::types::CssImportLoader for EmbeddedImportFetcher {
             message: format!("Invalid file URL for @import: {}", resolved),
           })?;
         let bytes = std::fs::read(&path)?;
-        let css = css::encoding::decode_css_bytes(&bytes, None);
-        Ok(absolutize_css_urls(&css, &resolved_string))
+        Ok(css::encoding::decode_css_bytes(&bytes, None))
       }
       "http" | "https" => {
         let agent = ureq::Agent::config_builder()
@@ -6697,8 +6696,10 @@ impl css::types::CssImportLoader for EmbeddedImportFetcher {
         let mut body = Vec::new();
         let mut reader = response.into_body().into_reader();
         reader.read_to_end(&mut body)?;
-        let css = css::encoding::decode_css_bytes(&body, content_type.as_deref());
-        Ok(absolutize_css_urls(&css, &resolved_string))
+        Ok(css::encoding::decode_css_bytes(
+          &body,
+          content_type.as_deref(),
+        ))
       }
       _ => Err(
         RenderError::InvalidParameters {
@@ -8586,65 +8587,8 @@ pub fn paint_tree_with_resources_scaled_offset(
   scale: f32,
   offset: Point,
 ) -> Result<Pixmap> {
-  let options = PaintOptions::for_image_cache(&image_cache);
-  paint_tree_with_resources_scaled_offset_options(
-    tree,
-    width,
-    height,
-    background,
-    font_ctx,
-    image_cache,
-    scale,
-    offset,
-    options,
-  )
-}
-
-/// Paints a fragment tree using explicit paint options (for nested browsing contexts).
-pub fn paint_tree_with_resources_scaled_options(
-  tree: &FragmentTree,
-  width: u32,
-  height: u32,
-  background: Rgba,
-  font_ctx: FontContext,
-  image_cache: ImageCache,
-  scale: f32,
-  options: PaintOptions,
-) -> Result<Pixmap> {
-  paint_tree_with_resources_scaled_offset_options(
-    tree,
-    width,
-    height,
-    background,
-    font_ctx,
-    image_cache,
-    scale,
-    Point::ZERO,
-    options,
-  )
-}
-
-/// Paints a fragment tree at a device scale with an additional translation applied and custom options.
-pub fn paint_tree_with_resources_scaled_offset_options(
-  tree: &FragmentTree,
-  width: u32,
-  height: u32,
-  background: Rgba,
-  font_ctx: FontContext,
-  image_cache: ImageCache,
-  scale: f32,
-  offset: Point,
-  options: PaintOptions,
-) -> Result<Pixmap> {
-  let painter = Painter::with_resources_scaled_options(
-    width,
-    height,
-    background,
-    font_ctx,
-    image_cache,
-    scale,
-    options,
-  )?;
+  let painter =
+    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
   painter.paint_with_offset(tree, offset)
 }
 
@@ -8764,6 +8708,131 @@ fn resolve_border_image_outset(
       viewport,
     ),
   }
+}
+
+fn build_foreign_object_document(info: &ForeignObjectInfo, shared_css: &str) -> String {
+  let mut html = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\">");
+  if !shared_css.trim().is_empty() {
+    html.push_str("<style>");
+    html.push_str(shared_css);
+    html.push_str("</style>");
+  }
+  html.push_str("</head><body style=\"");
+  html.push_str(&foreign_object_body_style(info));
+  html.push_str("\">");
+  html.push_str(&info.html);
+  html.push_str("</body></html>");
+  html
+}
+
+fn foreign_object_body_style(info: &ForeignObjectInfo) -> String {
+  let mut style =
+    String::from("margin:0;padding:0;width:100%;height:100%;display:block;box-sizing:border-box;");
+  let overflow = match (info.overflow_x, info.overflow_y) {
+    (Overflow::Visible, Overflow::Visible) => "visible",
+    _ => "hidden",
+  };
+  let _ = write!(&mut style, "overflow:{};", overflow);
+
+  if let Some(bg) = info.background {
+    style.push_str("background:");
+    style.push_str(&format_css_color(bg));
+    style.push(';');
+  }
+
+  style.push_str("color:");
+  style.push_str(&format_css_color(info.style.color));
+  style.push(';');
+
+  if !info.style.font_family.is_empty() {
+    let families: Vec<String> = info
+      .style
+      .font_family
+      .iter()
+      .map(|f| {
+        if f.contains(' ') && !(f.starts_with('"') && f.ends_with('"')) {
+          format!("\"{}\"", f)
+        } else {
+          f.clone()
+        }
+      })
+      .collect();
+    style.push_str("font-family:");
+    style.push_str(&families.join(", "));
+    style.push(';');
+  }
+
+  let _ = write!(
+    &mut style,
+    "font-size:{:.2}px;font-weight:{};",
+    info.style.font_size,
+    info.style.font_weight.to_u16()
+  );
+
+  match info.style.font_style {
+    CssFontStyle::Italic => style.push_str("font-style: italic;"),
+    CssFontStyle::Oblique(Some(angle)) => {
+      let _ = write!(&mut style, "font-style: oblique {}deg;", angle);
+    }
+    CssFontStyle::Oblique(None) => style.push_str("font-style: oblique;"),
+    CssFontStyle::Normal => {}
+  }
+
+  if info.style.direction == Direction::Rtl {
+    style.push_str("direction: rtl;");
+  }
+
+  if info.style.writing_mode != WritingMode::HorizontalTb {
+    style.push_str("writing-mode:");
+    style.push_str(writing_mode_keyword(info.style.writing_mode));
+    style.push(';');
+  }
+
+  style
+}
+
+fn writing_mode_keyword(mode: WritingMode) -> &'static str {
+  match mode {
+    WritingMode::HorizontalTb => "horizontal-tb",
+    WritingMode::VerticalRl => "vertical-rl",
+    WritingMode::VerticalLr => "vertical-lr",
+    WritingMode::SidewaysRl => "sideways-rl",
+    WritingMode::SidewaysLr => "sideways-lr",
+  }
+}
+
+fn format_css_color(color: Rgba) -> String {
+  format!(
+    "rgba({},{},{},{:.3})",
+    color.r,
+    color.g,
+    color.b,
+    color.a.clamp(0.0, 1.0)
+  )
+}
+
+fn escape_attr_value(value: &str) -> String {
+  value
+    .replace('&', "&amp;")
+    .replace('<', "&lt;")
+    .replace('"', "&quot;")
+    .replace('\'', "&apos;")
+}
+
+fn pixmap_to_data_url(mut pixmap: Pixmap) -> Option<String> {
+  let width = pixmap.width();
+  let height = pixmap.height();
+  let data = pixmap.take();
+  let image = image::RgbaImage::from_raw(width, height, data)?;
+  let mut buf = Vec::new();
+  PngEncoder::new(&mut buf)
+    .write_image(image.as_raw(), width, height, ColorType::Rgba8.into())
+    .ok()?;
+
+  Some(format!(
+    "data:image/png;base64,{}",
+    base64::engine::general_purpose::STANDARD.encode(buf)
+  ))
 }
 
 #[cfg(test)]
@@ -10039,7 +10108,9 @@ mod tests {
     assert!((rects.content.height() - 12.0).abs() < 0.01);
     painter.paint_background(box_x, box_y, box_size, box_size, &style);
     painter.paint_replaced(
-      &ReplacedType::Svg { content: red_svg() },
+      &ReplacedType::Svg {
+        content: SvgContent::raw(red_svg()),
+      },
       Some(&style),
       box_x,
       box_y,
@@ -10067,7 +10138,6 @@ mod tests {
           alt: Some("alt".to_string()),
           sizes: None,
           srcset: Vec::new(),
-          picture_sources: Vec::new(),
         },
         box_id: None,
       },
@@ -10204,7 +10274,6 @@ mod tests {
           descriptor: SrcsetDescriptor::Density(2.0),
         },
       ],
-      picture_sources: Vec::new(),
     };
 
     let style = ComputedStyle::default();
@@ -10246,7 +10315,6 @@ mod tests {
           descriptor: SrcsetDescriptor::Width(300),
         },
       ],
-      picture_sources: Vec::new(),
     };
 
     let style = ComputedStyle::default();
@@ -12101,79 +12169,6 @@ mod tests {
     assert!(
       center.red() > 200 && center.green() < 50 && center.blue() < 50,
       "iframe srcdoc should paint red"
-    );
-  }
-
-  #[test]
-  fn iframe_srcdoc_takes_priority_over_src() {
-    let html = r"
-        <style>html, body { margin: 0; padding: 0; background: red; }</style>
-        ";
-    let src = "data:text/html,<style>html,body{margin:0;background:blue;}</style>";
-    let painter = Painter::new(20, 20, Rgba::WHITE).expect("painter");
-    let fragment = FragmentNode::new_with_style(
-      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-      FragmentContent::Replaced {
-        box_id: None,
-        replaced_type: ReplacedType::Iframe {
-          src: src.to_string(),
-          srcdoc: Some(html.to_string()),
-        },
-      },
-      vec![],
-      Arc::new(ComputedStyle::default()),
-    );
-    let tree = FragmentTree::new(fragment);
-    let pixmap = painter.paint(&tree).expect("paint");
-
-    let center = pixmap.pixel(5, 5).unwrap();
-    assert!(
-      center.red() > 200 && center.blue() < 80,
-      "iframe srcdoc should override src"
-    );
-  }
-
-  #[test]
-  fn iframe_respects_max_depth_limit() {
-    let inner_html =
-      "<style>html, body { margin: 0; padding: 0; background: rgb(0, 255, 0); }</style>";
-    let outer_html = format!(
-      r#"<style>html, body {{ margin: 0; padding: 0; background: rgb(0, 0, 255); }} iframe {{ width: 100%; height: 100%; border: 0; }}</style><iframe srcdoc=\"{}\"></iframe>"#,
-      inner_html.replace('"', "&quot;")
-    );
-
-    let image_cache = ImageCache::new();
-    let options = PaintOptions::for_image_cache(&image_cache).with_max_iframe_depth(1);
-    let painter = Painter::with_resources_scaled_options(
-      20,
-      20,
-      Rgba::WHITE,
-      FontContext::new(),
-      image_cache,
-      1.0,
-      options,
-    )
-    .expect("painter");
-
-    let fragment = FragmentNode::new_with_style(
-      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-      FragmentContent::Replaced {
-        box_id: None,
-        replaced_type: ReplacedType::Iframe {
-          src: String::new(),
-          srcdoc: Some(outer_html),
-        },
-      },
-      vec![],
-      Arc::new(ComputedStyle::default()),
-    );
-    let tree = FragmentTree::new(fragment);
-    let pixmap = painter.paint(&tree).expect("paint");
-
-    let center = pixmap.pixel(5, 5).unwrap();
-    assert!(
-      center.red() > 180 && center.green() > 180 && center.blue() > 180,
-      "inner iframe should be blocked by max depth"
     );
   }
 }
