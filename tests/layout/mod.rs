@@ -6,6 +6,7 @@ mod aria_hidden_layout;
 mod flex_alignment_order_test;
 mod flex_box_sizing_test;
 mod float_shrink_to_min;
+mod fragmentation;
 mod grid_box_sizing_test;
 mod multicol;
 mod inline_float_min_width;

@@ -207,7 +207,7 @@ pub use css::types::PropertyValue;
 pub use css::types::Transform;
 // Debug tools
 pub use debug::tree_printer::{
-  ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff
+  ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff,
 };
 // Error handling
 pub use error::{Error, Result};
@@ -217,7 +217,7 @@ pub use geometry::{EdgeOffsets, Point, Rect, Size};
 pub use image_output::OutputFormat;
 // Layout
 pub use layout::absolute_positioning::{
-  AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins
+  AbsoluteLayout, AbsoluteLayoutInput, AbsoluteLayoutResult, ResolvedMargins,
 };
 pub use layout::constraints::AvailableSpace;
 pub use layout::constraints::LayoutConstraints;
@@ -231,6 +231,7 @@ pub use layout::float_context::FloatContext;
 pub use layout::float_context::FloatSide;
 pub use layout::formatting_context::FormattingContext;
 pub use layout::formatting_context::IntrinsicSizingMode;
+pub use layout::fragmentation::FragmentationOptions;
 // Paint
 pub use paint::canvas::Canvas;
 pub use paint::display_list::BlendMode;
@@ -288,7 +289,8 @@ pub use style::values::LengthUnit;
 pub use style::ComputedStyle;
 // Text
 pub use text::font_db::{
-  FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb, GenericFamily, LoadedFont
+  FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb, GenericFamily,
+  LoadedFont,
 };
 pub use text::font_fallback::FallbackChain;
 pub use text::font_fallback::FallbackChainBuilder;

@@ -79,6 +79,9 @@ pub mod absolute_positioning;
 // W3.T06 - Table layout algorithm
 pub mod table;
 
+// Fragmentation / pagination helpers
+pub mod fragmentation;
+
 // Future modules (to be implemented in Wave 3+):
 // pub mod block;        // W3.T04
 // pub mod flex;         // W3.T08

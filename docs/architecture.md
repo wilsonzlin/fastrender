@@ -20,6 +20,8 @@ The main orchestration code lives in `src/api.rs` (`FastRender`).
 - Styled tree: `crate::style::cascade::StyledNode`
 - Box tree: `crate::tree::box_tree::BoxTree` / `BoxNode`
 - Fragment tree: `crate::tree::fragment_tree::FragmentTree` / `FragmentNode`
+  - Fragmentation-aware: `FragmentTree` can hold multiple root fragments when
+    pagination/columns are requested via `LayoutConfig::with_fragmentation`.
 - Display list / stacking: `crate::paint::display_list::*`, `crate::paint::stacking::*`
 
 For the most accurate view of the current flow, follow `FastRender::render_html_internal` and `FastRender::layout_document` in `src/api.rs`.

@@ -20,6 +20,8 @@ use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
+use crate::layout::fragmentation;
+use crate::layout::fragmentation::FragmentationOptions;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
@@ -65,6 +67,9 @@ pub struct LayoutConfig {
   /// When true, only changed subtrees will be re-laid out.
   pub enable_incremental: bool,
 
+  /// Optional fragmentation options for pagination/columns.
+  pub fragmentation: Option<FragmentationOptions>,
+
   /// Optional identifier for profiling/logging (e.g., page name)
   pub name: Option<String>,
 }
@@ -86,6 +91,7 @@ impl LayoutConfig {
       initial_containing_block,
       enable_cache: false,
       enable_incremental: false,
+      fragmentation: None,
       name: None,
     }
   }
@@ -107,6 +113,12 @@ impl LayoutConfig {
   /// ```
   pub fn for_viewport(viewport: Size) -> Self {
     Self::new(viewport)
+  }
+
+  /// Enables fragmentation of the resulting fragment tree.
+  pub fn with_fragmentation(mut self, fragmentation: FragmentationOptions) -> Self {
+    self.fragmentation = Some(fragmentation);
+    self
   }
 
   /// Sets an optional identifier (e.g., page name) for logging/profiling.
@@ -335,8 +347,13 @@ impl LayoutEngine {
     // Layout the root box
     let root_fragment = self.layout_subtree(&box_tree.root, &constraints)?;
 
-    // Create fragment tree with viewport size
-    Ok(FragmentTree::with_viewport(root_fragment, *icb))
+    if let Some(options) = &self.config.fragmentation {
+      let fragments = fragmentation::fragment_tree(&root_fragment, options);
+      Ok(FragmentTree::from_fragments(fragments, *icb))
+    } else {
+      // Create fragment tree with viewport size
+      Ok(FragmentTree::with_viewport(root_fragment, *icb))
+    }
   }
 
   /// Performs layout on a subtree rooted at a box node
@@ -615,9 +632,11 @@ mod tests {
     let child1 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
     let child2 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      child1, child2,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![child1, child2],
+    );
     let box_tree = BoxTree::new(root);
 
     let fragment_tree = engine.layout_tree(&box_tree).unwrap();
@@ -801,12 +820,16 @@ mod tests {
 
     // Create nested structure: Block → Flex → Block
     let inner_block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
-    let flex_container = BoxNode::new_block(default_style(), FormattingContextType::Flex, vec![
-      inner_block,
-    ]);
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      flex_container,
-    ]);
+    let flex_container = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Flex,
+      vec![inner_block],
+    );
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![flex_container],
+    );
 
     let box_tree = BoxTree::new(root);
     let fragment = engine.layout_tree(&box_tree).unwrap();
