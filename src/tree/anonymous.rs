@@ -576,7 +576,7 @@ impl AnonymousBoxCreator {
 
 /// Build a style that inherits inheritable properties from the parent while leaving
 /// non-inherited properties at their initial values.
-fn inherited_style(parent: &ComputedStyle) -> ComputedStyle {
+pub(crate) fn inherited_style(parent: &ComputedStyle) -> ComputedStyle {
   let mut style = ComputedStyle::default();
   // Typography / text
   style.font_family = parent.font_family.clone();

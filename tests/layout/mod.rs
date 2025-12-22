@@ -20,6 +20,7 @@ mod scrollbar_gutter;
 mod shape_outside;
 mod sideways_lr_regressions;
 mod subgrid;
+mod table_anonymous_inheritance;
 mod table_columns_test;
 mod test_absolute;
 mod test_baseline;
