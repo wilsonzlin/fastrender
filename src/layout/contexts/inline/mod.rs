@@ -2496,7 +2496,12 @@ impl InlineFormattingContext {
       subsequent_line_width = clamp_limit;
     }
 
-    if start_is_para_start && matches!(text_wrap, TextWrap::Balance | TextWrap::Pretty) {
+    if start_is_para_start
+      && matches!(
+        text_wrap,
+        TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable
+      )
+    {
       first_line_width = subsequent_line_width;
     }
     let float_integration = float_ctx.map(InlineFloatIntegration::new);
@@ -4617,14 +4622,17 @@ impl InlineFormattingContext {
     float_ctx: Option<&FloatContext>,
     float_base_y: f32,
   ) -> Vec<Line> {
-    let first_width = if matches!(text_wrap, TextWrap::Balance | TextWrap::Pretty) {
+    let first_width = if matches!(
+      text_wrap,
+      TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable
+    ) {
       subsequent_line_width
     } else if use_first_line_width {
       first_line_width
     } else {
       subsequent_line_width
     };
-    self.build_lines(
+    let mut lines = self.build_lines(
       items.to_vec(),
       first_width,
       subsequent_line_width,
@@ -4639,7 +4647,166 @@ impl InlineFormattingContext {
       root_unicode_bidi,
       float_ctx,
       float_base_y,
-    )
+    );
+
+    if use_first_line_width
+      && matches!(
+        text_wrap,
+        TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable
+      )
+    {
+      lines = self.rebalance_text_wrap(
+        lines,
+        items,
+        first_width,
+        subsequent_line_width,
+        text_wrap,
+        indent,
+        indent_hanging,
+        indent_each_line,
+        strut_metrics,
+        base_level,
+        root_direction,
+        root_unicode_bidi,
+        float_ctx,
+        float_base_y,
+      );
+    }
+
+    lines
+  }
+
+  fn rebalance_text_wrap(
+    &self,
+    base_lines: Vec<Line>,
+    items: &[InlineItem],
+    first_line_width: f32,
+    subsequent_line_width: f32,
+    text_wrap: TextWrap,
+    indent: f32,
+    indent_hanging: bool,
+    indent_each_line: bool,
+    strut_metrics: &BaselineMetrics,
+    base_level: Option<unicode_bidi::Level>,
+    root_direction: Direction,
+    root_unicode_bidi: UnicodeBidi,
+    float_ctx: Option<&FloatContext>,
+    float_base_y: f32,
+  ) -> Vec<Line> {
+    if base_lines.len() <= 1 {
+      return base_lines;
+    }
+
+    if let Some(ctx) = float_ctx {
+      if !ctx.is_empty() {
+        // Float-shortened lines vary in width per line; keep greedy results to avoid instability.
+        return base_lines;
+      }
+    }
+
+    let mut best_lines = base_lines;
+    let mut best_score = balance_score(&best_lines, 1.5, 1.0);
+    let target_line_count = best_lines.len();
+
+    // Stable prefers keeping breaks consistent even when the container grows slightly.
+    if matches!(text_wrap, TextWrap::Stable) {
+      let stable_factor = 0.9;
+      let candidate_width = (subsequent_line_width * stable_factor).max(1.0);
+      let stable_first = if matches!(
+        text_wrap,
+        TextWrap::Balance | TextWrap::Pretty | TextWrap::Stable
+      ) {
+        candidate_width
+      } else {
+        first_line_width
+      };
+      return self.build_lines(
+        items.to_vec(),
+        stable_first,
+        candidate_width,
+        true,
+        text_wrap,
+        indent,
+        indent_hanging,
+        indent_each_line,
+        strut_metrics,
+        base_level,
+        root_direction,
+        root_unicode_bidi,
+        float_ctx,
+        float_base_y,
+      );
+    }
+
+    let (min_factor, step, hyphen_weight, short_last_weight) = match text_wrap {
+      TextWrap::Pretty => (0.85, 0.03, 3.0, 1.5),
+      TextWrap::Balance => (0.65, 0.05, 1.5, 1.0),
+      _ => return best_lines,
+    };
+
+    let base_width = subsequent_line_width.max(1.0);
+    let average_width = mean_line_width(&best_lines).max(1.0);
+    let mut factors: Vec<f32> = Vec::new();
+    let ideal_factor = (average_width / base_width).clamp(min_factor, 1.0);
+    if ideal_factor < 0.999 {
+      factors.push(ideal_factor);
+      if ideal_factor + step < 1.0 {
+        factors.push((ideal_factor + step).min(1.0));
+      }
+    }
+
+    let mut f = 0.98f32;
+    while f > min_factor {
+      factors.push(f);
+      f -= step;
+    }
+
+    factors.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    factors.dedup_by(|a, b| (*a - *b).abs() < 0.005);
+
+    for factor in factors {
+      let candidate_width = base_width * factor;
+      if candidate_width <= 0.0 || !candidate_width.is_finite() {
+        continue;
+      }
+
+      let candidate_first = if matches!(text_wrap, TextWrap::Balance | TextWrap::Pretty) {
+        candidate_width
+      } else {
+        first_line_width
+      };
+      let candidate_lines = self.build_lines(
+        items.to_vec(),
+        candidate_first,
+        candidate_width,
+        true,
+        text_wrap,
+        indent,
+        indent_hanging,
+        indent_each_line,
+        strut_metrics,
+        base_level,
+        root_direction,
+        root_unicode_bidi,
+        float_ctx,
+        float_base_y,
+      );
+
+      if candidate_lines.len() != target_line_count {
+        if candidate_lines.len() > target_line_count {
+          break;
+        }
+        continue;
+      }
+
+      let candidate_score = balance_score(&candidate_lines, hyphen_weight, short_last_weight);
+      if candidate_score + 0.01 < best_score {
+        best_score = candidate_score;
+        best_lines = candidate_lines;
+      }
+    }
+
+    best_lines
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -6874,6 +7041,119 @@ fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
   }
 }
 
+fn line_used_width(line: &Line) -> f32 {
+  let indent = line.indent.max(0.0);
+  (line.width + indent).max(0.0)
+}
+
+fn mean_line_width(lines: &[Line]) -> f32 {
+  let mut total = 0.0;
+  let mut count = 0usize;
+  for line in lines {
+    if line.items.is_empty() {
+      continue;
+    }
+    total += line_used_width(line);
+    count += 1;
+  }
+  if count == 0 {
+    0.0
+  } else {
+    total / count as f32
+  }
+}
+
+fn paragraph_raggedness(lines: &[Line]) -> f32 {
+  if lines.is_empty() {
+    return 0.0;
+  }
+  let widths: Vec<f32> = lines.iter().map(line_used_width).collect();
+  let mean = widths.iter().sum::<f32>() / widths.len() as f32;
+  widths
+    .into_iter()
+    .map(|w| {
+      let delta = mean - w;
+      delta * delta
+    })
+    .sum()
+}
+
+fn paragraph_short_last_penalty(lines: &[Line]) -> f32 {
+  if lines.len() <= 1 {
+    return 0.0;
+  }
+  let widths: Vec<f32> = lines.iter().map(line_used_width).collect();
+  let last = *widths.last().unwrap_or(&0.0);
+  let leading_total: f32 = widths.iter().take(widths.len() - 1).sum();
+  let mean = leading_total / (widths.len() as f32 - 1.0);
+  if mean <= 0.0 {
+    return 0.0;
+  }
+  let ratio = last / mean;
+  if ratio >= 0.7 {
+    return 0.0;
+  }
+  let deficit = (0.7 - ratio) * mean;
+  deficit * deficit
+}
+
+fn inline_item_ends_with_hyphen(item: &InlineItem) -> bool {
+  match item {
+    InlineItem::Text(t) => t
+      .text
+      .chars()
+      .rev()
+      .find(|c| !c.is_whitespace())
+      .map_or(false, |c| c == '\u{2010}' || c == '\u{00AD}' || c == '-'),
+    InlineItem::InlineBox(b) => b
+      .children
+      .last()
+      .map_or(false, inline_item_ends_with_hyphen),
+    InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
+    InlineItem::Tab(_) => false,
+  }
+}
+
+fn count_hyphenated_line_ends(lines: &[Line]) -> usize {
+  lines
+    .iter()
+    .filter(|line| {
+      line
+        .items
+        .iter()
+        .rev()
+        .find(|pos| !matches!(pos.item, InlineItem::Floating(_)))
+        .map_or(false, |pos| inline_item_ends_with_hyphen(&pos.item))
+    })
+    .count()
+}
+
+fn balance_score(lines: &[Line], hyphen_weight: f32, short_last_weight: f32) -> f32 {
+  if lines.is_empty() {
+    return 0.0;
+  }
+
+  let mut score = hyphen_weight * count_hyphenated_line_ends(lines) as f32;
+
+  let mut start = 0usize;
+  while start < lines.len() {
+    let mut end = start + 1;
+    while end < lines.len() {
+      if lines[end - 1].ends_with_hard_break {
+        break;
+      }
+      end += 1;
+    }
+
+    let paragraph = &lines[start..end];
+    score += paragraph_raggedness(paragraph);
+    score += short_last_weight * paragraph_short_last_penalty(paragraph);
+    start = end;
+  }
+
+  score
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -6923,6 +7203,50 @@ mod tests {
 
   fn make_inline_container(children: Vec<BoxNode>) -> BoxNode {
     BoxNode::new_block(default_style(), FormattingContextType::Block, children)
+  }
+
+  fn append_text_content(item: &InlineItem, out: &mut String) {
+    match item {
+      InlineItem::Text(t) => out.push_str(&t.text),
+      InlineItem::InlineBox(b) => {
+        for child in &b.children {
+          append_text_content(child, out);
+        }
+      }
+      InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {}
+      InlineItem::Tab(_) => out.push('\t'),
+    }
+  }
+
+  fn line_texts(lines: &[Line]) -> Vec<String> {
+    lines
+      .iter()
+      .map(|line| {
+        let mut out = String::new();
+        for pos in &line.items {
+          append_text_content(&pos.item, &mut out);
+        }
+        out
+      })
+      .collect()
+  }
+
+  fn width_span(lines: &[Line]) -> f32 {
+    let mut min_w = f32::MAX;
+    let mut max_w: f32 = 0.0;
+    for line in lines {
+      if line.items.is_empty() {
+        continue;
+      }
+      let w = line_used_width(line);
+      min_w = min_w.min(w);
+      max_w = max_w.max(w);
+    }
+    if !min_w.is_finite() || min_w == f32::MAX {
+      0.0
+    } else {
+      max_w - min_w
+    }
   }
 
   #[test]
@@ -7038,9 +7362,11 @@ mod tests {
       container_style.clone(),
       "long content that will overflow".to_string(),
     );
-    let root = BoxNode::new_block(container_style, FormattingContextType::Block, vec![
-      marker, text,
-    ]);
+    let root = BoxNode::new_block(
+      container_style,
+      FormattingContextType::Block,
+      vec![marker, text],
+    );
 
     let constraints = LayoutConstraints::definite_width(80.0);
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -7122,9 +7448,11 @@ mod tests {
       container_style.clone(),
       "long content that will overflow".to_string(),
     );
-    let root = BoxNode::new_block(container_style, FormattingContextType::Block, vec![
-      marker, text,
-    ]);
+    let root = BoxNode::new_block(
+      container_style,
+      FormattingContextType::Block,
+      vec![marker, text],
+    );
 
     let constraints = LayoutConstraints::definite_width(80.0);
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -7197,9 +7525,11 @@ mod tests {
       container_style.clone(),
       "long content that will overflow".to_string(),
     );
-    let root = BoxNode::new_block(container_style, FormattingContextType::Block, vec![
-      marker, text,
-    ]);
+    let root = BoxNode::new_block(
+      container_style,
+      FormattingContextType::Block,
+      vec![marker, text],
+    );
 
     let constraints = LayoutConstraints::definite_width(80.0);
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -7919,14 +8249,14 @@ mod tests {
     style.text_combine_upright = TextCombineUpright::Digits(2);
     let style = Arc::new(style);
 
-    let span1 = BoxNode::new_inline(style.clone(), vec![BoxNode::new_text(
+    let span1 = BoxNode::new_inline(
       style.clone(),
-      "12".into(),
-    )]);
-    let span2 = BoxNode::new_inline(style.clone(), vec![BoxNode::new_text(
+      vec![BoxNode::new_text(style.clone(), "12".into())],
+    );
+    let span2 = BoxNode::new_inline(
       style.clone(),
-      "34".into(),
-    )]);
+      vec![BoxNode::new_text(style.clone(), "34".into())],
+    );
     let root = make_inline_container(vec![span1, span2]);
     let constraints = LayoutConstraints::definite_width(200.0);
 
@@ -7961,14 +8291,14 @@ mod tests {
     style.font_size = 16.0;
     let style = Arc::new(style);
 
-    let span1 = BoxNode::new_inline(style.clone(), vec![BoxNode::new_text(
+    let span1 = BoxNode::new_inline(
       style.clone(),
-      "12 ".into(),
-    )]);
-    let span2 = BoxNode::new_inline(style.clone(), vec![BoxNode::new_text(
+      vec![BoxNode::new_text(style.clone(), "12 ".into())],
+    );
+    let span2 = BoxNode::new_inline(
       style.clone(),
-      "34".into(),
-    )]);
+      vec![BoxNode::new_text(style.clone(), "34".into())],
+    );
     let root = make_inline_container(vec![span1, span2]);
     let constraints = LayoutConstraints::definite_width(200.0);
 
@@ -8045,9 +8375,15 @@ mod tests {
     let style = Arc::new(style);
 
     let item = ifc
-      .create_text_item_from_normalized(&style, "abc", Vec::new(), true, false, Direction::Ltr, &[
-        (UnicodeBidi::Isolate, Direction::Ltr),
-      ])
+      .create_text_item_from_normalized(
+        &style,
+        "abc",
+        Vec::new(),
+        true,
+        false,
+        Direction::Ltr,
+        &[(UnicodeBidi::Isolate, Direction::Ltr)],
+      )
       .expect("text item");
 
     assert_eq!(item.text, "abc");
@@ -8785,9 +9121,11 @@ mod tests {
     parent_style.text_indent.length = Length::px(12.0);
     let text = "word";
     let text_node = make_text_box(text);
-    let root = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Block, vec![
-      text_node,
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(parent_style),
+      FormattingContextType::Block,
+      vec![text_node],
+    );
 
     let base_item = ifc.create_text_item(&make_text_box(text), text).unwrap();
     let base_width = base_item.advance;
@@ -8818,9 +9156,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "漢字漢字\n漢".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "漢字漢字\n漢".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(400.0);
 
     let ifc = InlineFormattingContext::new();
@@ -8880,9 +9223,11 @@ mod tests {
     root_style.text_align = TextAlign::Justify;
     root_style.text_justify = TextJustify::Auto;
     root_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      make_text_box("a b\nc"),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![make_text_box("a b\nc")],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -8902,9 +9247,14 @@ mod tests {
     root_style.white_space = WhiteSpace::PreWrap;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "Latin Latin Latin 漢".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "Latin Latin Latin 漢".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -8946,13 +9296,16 @@ mod tests {
     text_style_b.color = Rgba::BLUE;
     let text_style_b = Arc::new(text_style_b);
 
-    let span1 = BoxNode::new_inline_block(text_style.clone(), FormattingContextType::Block, vec![
-      BoxNode::new_text(text_style.clone(), "漢".into()),
-    ]);
-    let span2 =
-      BoxNode::new_inline_block(text_style_b.clone(), FormattingContextType::Block, vec![
-        BoxNode::new_text(text_style_b.clone(), "字".into()),
-      ]);
+    let span1 = BoxNode::new_inline_block(
+      text_style.clone(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(text_style.clone(), "漢".into())],
+    );
+    let span2 = BoxNode::new_inline_block(
+      text_style_b.clone(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(text_style_b.clone(), "字".into())],
+    );
     let root = BoxNode::new_block(root_style, FormattingContextType::Block, vec![span1, span2]);
     let constraints = LayoutConstraints::definite_width(200.0);
 
@@ -9091,10 +9444,11 @@ mod tests {
     let before = BoxNode::new_text(default_style(), "before".to_string());
     let mut block_style = (*default_style()).clone();
     block_style.display = crate::style::display::Display::Block;
-    let block_child =
-      BoxNode::new_block(Arc::new(block_style), FormattingContextType::Block, vec![
-        make_text_box("block"),
-      ]);
+    let block_child = BoxNode::new_block(
+      Arc::new(block_style),
+      FormattingContextType::Block,
+      vec![make_text_box("block")],
+    );
     let after = BoxNode::new_text(default_style(), "after".to_string());
     let root = BoxNode::new_inline(default_style(), vec![before, block_child, after]);
     let constraints = LayoutConstraints::definite_width(200.0);
@@ -9132,10 +9486,11 @@ mod tests {
     block_style.display = crate::style::display::Display::Block;
     block_style.margin_top = Some(Length::px(10.0));
     block_style.margin_bottom = Some(Length::px(15.0));
-    let block_child =
-      BoxNode::new_block(Arc::new(block_style), FormattingContextType::Block, vec![
-        make_text_box("block"),
-      ]);
+    let block_child = BoxNode::new_block(
+      Arc::new(block_style),
+      FormattingContextType::Block,
+      vec![make_text_box("block")],
+    );
     let after = BoxNode::new_text(default_style(), "after".to_string());
     let root = BoxNode::new_inline(default_style(), vec![before, block_child, after]);
     let constraints = LayoutConstraints::definite_width(200.0);
@@ -9336,10 +9691,14 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.white_space = WhiteSpace::Normal;
     let text_style = Arc::new(style);
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(text_style.clone(), "Hello ".to_string()),
-      BoxNode::new_text(text_style.clone(), "world".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(text_style.clone(), "Hello ".to_string()),
+        BoxNode::new_text(text_style.clone(), "world".to_string()),
+      ],
+    );
     let ifc = InlineFormattingContext::new();
     let items = ifc
       .collect_inline_items(&root, 800.0, Some(800.0))
@@ -9359,14 +9718,18 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.white_space = WhiteSpace::Normal;
     let text_style = Arc::new(style);
-    let inline = BoxNode::new_inline(text_style.clone(), vec![BoxNode::new_text(
+    let inline = BoxNode::new_inline(
       text_style.clone(),
-      "world".to_string(),
-    )]);
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(text_style.clone(), "Hello ".to_string()),
-      inline,
-    ]);
+      vec![BoxNode::new_text(text_style.clone(), "world".to_string())],
+    );
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(text_style.clone(), "Hello ".to_string()),
+        inline,
+      ],
+    );
     let ifc = InlineFormattingContext::new();
     let items = ifc
       .collect_inline_items(&root, 800.0, Some(800.0))
@@ -9384,9 +9747,11 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.white_space = WhiteSpace::Normal;
     let text_style = Arc::new(style);
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(text_style, "Hello ".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(text_style, "Hello ".to_string())],
+    );
     let ifc = InlineFormattingContext::new();
     let items = ifc
       .collect_inline_items(&root, 800.0, Some(800.0))
@@ -9405,9 +9770,11 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.white_space = WhiteSpace::PreLine;
     let text_style = Arc::new(style);
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(text_style, "Hello ".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(text_style, "Hello ".to_string())],
+    );
     let ifc = InlineFormattingContext::new();
     let items = ifc
       .collect_inline_items(&root, 800.0, Some(800.0))
@@ -9438,12 +9805,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.word_break = WordBreak::BreakWord;
     text_style.white_space = WhiteSpace::Normal;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -9458,12 +9827,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.word_break = WordBreak::BreakWord;
     text_style.white_space = WhiteSpace::Nowrap;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -9479,12 +9850,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.word_break = WordBreak::Anywhere;
     text_style.white_space = WhiteSpace::Nowrap;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -9500,12 +9873,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.line_break = LineBreak::Anywhere;
     text_style.white_space = WhiteSpace::Normal;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -9937,9 +10312,14 @@ mod tests {
     text_style.direction = crate::style::types::Direction::Ltr;
     text_style.white_space = WhiteSpace::Pre;
     let text_style = Arc::new(text_style);
-    let root = BoxNode::new_block(container_style.clone(), FormattingContextType::Block, vec![
-      BoxNode::new_text(text_style.clone(), "ABC\nאבג".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      container_style.clone(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        text_style.clone(),
+        "ABC\nאבג".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
     let ifc = InlineFormattingContext::new();
 
@@ -10041,9 +10421,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.word_break = WordBreak::BreakAll;
     text_style.white_space = WhiteSpace::Normal;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style.clone()), text.to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style.clone()),
+        text.to_string(),
+      )],
+    );
     let ifc = InlineFormattingContext::new();
     let items = ifc
       .collect_inline_items(&root, 800.0, Some(800.0))
@@ -10078,9 +10463,11 @@ mod tests {
     let mut bw_style = ComputedStyle::default();
     bw_style.word_break = WordBreak::BreakWord;
     bw_style.white_space = WhiteSpace::Normal;
-    let root_bw = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(bw_style), text.to_string()),
-    ]);
+    let root_bw = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(Arc::new(bw_style), text.to_string())],
+    );
     let items_bw = ifc
       .collect_inline_items(&root_bw, 800.0, Some(800.0))
       .expect("collect items");
@@ -10105,9 +10492,14 @@ mod tests {
     let mut anywhere_style = ComputedStyle::default();
     anywhere_style.word_break = WordBreak::Anywhere;
     anywhere_style.white_space = WhiteSpace::Normal;
-    let root_anywhere = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(anywhere_style), text.to_string()),
-    ]);
+    let root_anywhere = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(anywhere_style),
+        text.to_string(),
+      )],
+    );
     let items_anywhere = ifc
       .collect_inline_items(&root_anywhere, 800.0, Some(800.0))
       .expect("collect items");
@@ -10150,14 +10542,18 @@ mod tests {
     rtl_style.unicode_bidi = crate::style::types::UnicodeBidi::Isolate;
     let rtl_style = Arc::new(rtl_style);
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
-      BoxNode::new_inline(rtl_style.clone(), vec![BoxNode::new_text(
-        rtl_style.clone(),
-        "DEF".to_string(),
-      )]),
-      BoxNode::new_text(default_style(), "\u{00A0}GHI".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
+        BoxNode::new_inline(
+          rtl_style.clone(),
+          vec![BoxNode::new_text(rtl_style.clone(), "DEF".to_string())],
+        ),
+        BoxNode::new_text(default_style(), "\u{00A0}GHI".to_string()),
+      ],
+    );
 
     let ifc = InlineFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(400.0);
@@ -10195,14 +10591,18 @@ mod tests {
     rtl_override.unicode_bidi = crate::style::types::UnicodeBidi::IsolateOverride;
     let rtl_override = Arc::new(rtl_override);
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
-      BoxNode::new_inline(rtl_override.clone(), vec![BoxNode::new_text(
-        rtl_override.clone(),
-        "DEF".to_string(),
-      )]),
-      BoxNode::new_text(default_style(), "\u{00A0}GHI".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
+        BoxNode::new_inline(
+          rtl_override.clone(),
+          vec![BoxNode::new_text(rtl_override.clone(), "DEF".to_string())],
+        ),
+        BoxNode::new_text(default_style(), "\u{00A0}GHI".to_string()),
+      ],
+    );
 
     let ifc = InlineFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(400.0);
@@ -10238,14 +10638,18 @@ mod tests {
     rtl_override.unicode_bidi = crate::style::types::UnicodeBidi::IsolateOverride;
     let rtl_override = Arc::new(rtl_override);
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(default_style(), "AAA ".to_string()),
-      BoxNode::new_inline(rtl_override.clone(), vec![BoxNode::new_text(
-        rtl_override.clone(),
-        "DEF".to_string(),
-      )]),
-      BoxNode::new_text(default_style(), " BBB".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(default_style(), "AAA ".to_string()),
+        BoxNode::new_inline(
+          rtl_override.clone(),
+          vec![BoxNode::new_text(rtl_override.clone(), "DEF".to_string())],
+        ),
+        BoxNode::new_text(default_style(), " BBB".to_string()),
+      ],
+    );
 
     let ifc = InlineFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(400.0);
@@ -10275,9 +10679,11 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.word_break = WordBreak::Anywhere; // adds anywhere breaks
     style.white_space = WhiteSpace::PreWrap; // preserves newline as mandatory
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(style), text.to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(Arc::new(style), text.to_string())],
+    );
     let ifc = InlineFormattingContext::new();
     let items = ifc
       .collect_inline_items(&root, 800.0, Some(800.0))
@@ -10308,11 +10714,15 @@ mod tests {
     rtl_style.direction = crate::style::types::Direction::Rtl;
     let rtl_style = Arc::new(rtl_style);
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
-      BoxNode::new_text(rtl_style.clone(), "אבג".to_string()),
-      BoxNode::new_text(default_style(), "\u{00A0}DEF".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
+        BoxNode::new_text(rtl_style.clone(), "אבג".to_string()),
+        BoxNode::new_text(default_style(), "\u{00A0}DEF".to_string()),
+      ],
+    );
 
     let ifc = InlineFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(400.0);
@@ -10338,12 +10748,22 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.word_break = WordBreak::BreakWord;
     text_style.white_space = WhiteSpace::Normal;
-    let breaking = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style.clone()), "longtoken".to_string()),
-    ]);
-    let normal = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(ComputedStyle::default()), "longtoken".to_string()),
-    ]);
+    let breaking = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style.clone()),
+        "longtoken".to_string(),
+      )],
+    );
+    let normal = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(ComputedStyle::default()),
+        "longtoken".to_string(),
+      )],
+    );
     let ifc = InlineFormattingContext::new();
     let breaking_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
     let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
@@ -10354,9 +10774,14 @@ mod tests {
 
     let mut anywhere_style = text_style;
     anywhere_style.word_break = WordBreak::Anywhere;
-    let anywhere = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(anywhere_style), "longtoken".to_string()),
-    ]);
+    let anywhere = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(anywhere_style),
+        "longtoken".to_string(),
+      )],
+    );
     let anywhere_min = ifc.calculate_intrinsic_width(&anywhere, IntrinsicSizingMode::MinContent);
     assert!(
       anywhere_min < normal_min * 0.75,
@@ -10369,12 +10794,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.word_break = WordBreak::Anywhere;
     text_style.white_space = WhiteSpace::Normal;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style.clone()),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -10385,12 +10812,14 @@ mod tests {
 
     let mut text_style_nowrap = text_style.clone();
     text_style_nowrap.white_space = WhiteSpace::Nowrap;
-    let nowrap_root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let nowrap_root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style_nowrap),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let fragment_nowrap = ifc.layout(&nowrap_root, &constraints).expect("layout");
     assert_eq!(
       fragment_nowrap.children.len(),
@@ -10398,12 +10827,22 @@ mod tests {
       "nowrap should suppress word-break:anywhere added breaks"
     );
 
-    let breaking = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "longtoken".to_string()),
-    ]);
-    let normal = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(ComputedStyle::default()), "longtoken".to_string()),
-    ]);
+    let breaking = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "longtoken".to_string(),
+      )],
+    );
+    let normal = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(ComputedStyle::default()),
+        "longtoken".to_string(),
+      )],
+    );
     let anywhere_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
     let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
     assert!(
@@ -10417,12 +10856,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.text_wrap = TextWrap::NoWrap;
     text_style.white_space = WhiteSpace::Normal;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -10438,9 +10879,11 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.text_wrap = TextWrap::NoWrap;
     text_style.white_space = WhiteSpace::PreWrap; // preserves newline as mandatory
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "a\nb".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(Arc::new(text_style), "a\nb".to_string())],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -10455,12 +10898,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.overflow_wrap = OverflowWrap::BreakWord;
     text_style.white_space = WhiteSpace::Normal;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -10475,12 +10920,14 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.overflow_wrap = OverflowWrap::BreakWord;
     text_style.white_space = WhiteSpace::Nowrap;
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "supercalifragilisticexpialidocious".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(40.0);
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
@@ -10496,12 +10943,22 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.overflow_wrap = OverflowWrap::BreakWord;
     text_style.white_space = WhiteSpace::Normal;
-    let breaking = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style.clone()), "longtoken".to_string()),
-    ]);
-    let normal = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(ComputedStyle::default()), "longtoken".to_string()),
-    ]);
+    let breaking = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style.clone()),
+        "longtoken".to_string(),
+      )],
+    );
+    let normal = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(ComputedStyle::default()),
+        "longtoken".to_string(),
+      )],
+    );
     let ifc = InlineFormattingContext::new();
     let breaking_min = ifc.calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent);
     let normal_min = ifc.calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent);
@@ -10767,6 +11224,323 @@ mod tests {
   }
 
   #[test]
+  fn text_wrap_balance_reduces_raggedness() {
+    let ifc = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.text_wrap = TextWrap::Balance;
+    let text = "Balancing long headings keeps the final line from looking lonely";
+    let node = BoxNode::new_text(Arc::new(style.clone()), text.to_string());
+    let items = ifc
+      .create_inline_items_for_text(&node, text, false)
+      .expect("inline items");
+    let strut = ifc.compute_strut_metrics(&style);
+
+    let balanced = ifc.layout_segment_lines(
+      &items,
+      true,
+      220.0,
+      220.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+    );
+
+    let mut auto_style = style.clone();
+    auto_style.text_wrap = TextWrap::Auto;
+    let auto = ifc.layout_segment_lines(
+      &items,
+      true,
+      220.0,
+      220.0,
+      auto_style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      auto_style.direction,
+      auto_style.unicode_bidi,
+      None,
+      0.0,
+    );
+
+    assert_eq!(balanced.len(), auto.len());
+    let balanced_score = balance_score(&balanced, 1.5, 1.0);
+    let auto_score = balance_score(&auto, 1.5, 1.0);
+    assert!(
+      balanced_score < auto_score,
+      "balanced raggedness {balanced_score} should beat auto {auto_score}"
+    );
+    assert!(
+      width_span(&balanced) < width_span(&auto),
+      "balanced lines should be closer in width"
+    );
+  }
+
+  #[test]
+  fn text_wrap_balance_evenly_distributes_cjk() {
+    let ifc = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.text_wrap = TextWrap::Balance;
+    let text = "漢字漢字漢字漢字漢字漢字漢字漢字漢字漢字";
+    let node = BoxNode::new_text(Arc::new(style.clone()), text.to_string());
+    let items = ifc
+      .create_inline_items_for_text(&node, text, false)
+      .expect("cjk items");
+    let strut = ifc.compute_strut_metrics(&style);
+
+    let balanced = ifc.layout_segment_lines(
+      &items,
+      true,
+      120.0,
+      120.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+    );
+    assert!(balanced.len() > 1, "should wrap CJK text");
+    let texts = line_texts(&balanced);
+    let min_len = texts.iter().map(|t| t.chars().count()).min().unwrap();
+    let max_len = texts.iter().map(|t| t.chars().count()).max().unwrap();
+    assert!(
+      max_len.saturating_sub(min_len) <= 1,
+      "balanced CJK lines should be even: {:?}",
+      texts
+    );
+  }
+
+  #[test]
+  fn text_wrap_balance_respects_hyphenation_opportunities() {
+    let ifc = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.text_wrap = TextWrap::Balance;
+    style.hyphens = HyphensMode::Auto;
+    let text = "hy\u{00AD}phenation examples keep wrapping tidy";
+    let node = BoxNode::new_text(Arc::new(style.clone()), text.to_string());
+    let items = ifc
+      .create_inline_items_for_text(&node, text, false)
+      .expect("hyphen items");
+    let strut = ifc.compute_strut_metrics(&style);
+    let lines = ifc.layout_segment_lines(
+      &items,
+      true,
+      140.0,
+      140.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+    );
+
+    assert!(
+      lines.iter().any(|line| {
+        line
+          .items
+          .iter()
+          .any(|pos| inline_item_ends_with_hyphen(&pos.item))
+      }),
+      "balanced lines should keep hyphenation when needed"
+    );
+
+    let mut manual = style.clone();
+    manual.hyphens = HyphensMode::None;
+    let manual_node = BoxNode::new_text(Arc::new(manual.clone()), text.to_string());
+    let manual_items = ifc
+      .create_inline_items_for_text(&manual_node, text, false)
+      .expect("manual items");
+    let manual_lines = ifc.layout_segment_lines(
+      &manual_items,
+      true,
+      140.0,
+      140.0,
+      manual.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      manual.direction,
+      manual.unicode_bidi,
+      None,
+      0.0,
+    );
+
+    assert!(
+      !manual_lines.iter().any(|line| {
+        line
+          .items
+          .iter()
+          .any(|pos| inline_item_ends_with_hyphen(&pos.item))
+      }),
+      "hyphens: none should suppress inserted hyphens"
+    );
+  }
+
+  #[test]
+  fn text_wrap_pretty_softens_short_last_line() {
+    let ifc = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.text_wrap = TextWrap::Pretty;
+    let text = "pretty wrapping nudges earlier breaks to avoid stubby ends";
+    let node = BoxNode::new_text(Arc::new(style.clone()), text.to_string());
+    let items = ifc
+      .create_inline_items_for_text(&node, text, false)
+      .expect("pretty items");
+    let strut = ifc.compute_strut_metrics(&style);
+
+    let pretty = ifc.layout_segment_lines(
+      &items,
+      true,
+      180.0,
+      180.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+    );
+
+    let mut auto_style = style.clone();
+    auto_style.text_wrap = TextWrap::Auto;
+    let auto = ifc.layout_segment_lines(
+      &items,
+      true,
+      180.0,
+      180.0,
+      auto_style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      auto_style.direction,
+      auto_style.unicode_bidi,
+      None,
+      0.0,
+    );
+
+    assert_eq!(pretty.len(), auto.len());
+    let pretty_penalty = paragraph_short_last_penalty(&pretty);
+    let auto_penalty = paragraph_short_last_penalty(&auto);
+    assert!(
+      pretty_penalty <= auto_penalty,
+      "pretty wrapping should not have a worse short-line penalty"
+    );
+  }
+
+  #[test]
+  fn text_wrap_stable_keeps_breaks_under_small_growth() {
+    let ifc = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.text_wrap = TextWrap::Stable;
+    let text = "alpha beta gamma delta epsilon zeta";
+    let node = BoxNode::new_text(Arc::new(style.clone()), text.to_string());
+    let items = ifc
+      .create_inline_items_for_text(&node, text, false)
+      .expect("stable items");
+    let strut = ifc.compute_strut_metrics(&style);
+
+    let narrow = ifc.layout_segment_lines(
+      &items,
+      true,
+      150.0,
+      150.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+    );
+    let wider = ifc.layout_segment_lines(
+      &items,
+      true,
+      170.0,
+      170.0,
+      style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      style.direction,
+      style.unicode_bidi,
+      None,
+      0.0,
+    );
+
+    let narrow_texts = line_texts(&narrow);
+    let wider_texts = line_texts(&wider);
+    assert_eq!(narrow_texts, wider_texts);
+
+    let mut auto_style = style.clone();
+    auto_style.text_wrap = TextWrap::Auto;
+    let auto_narrow = ifc.layout_segment_lines(
+      &items,
+      true,
+      150.0,
+      150.0,
+      auto_style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      auto_style.direction,
+      auto_style.unicode_bidi,
+      None,
+      0.0,
+    );
+    let auto_wide = ifc.layout_segment_lines(
+      &items,
+      true,
+      170.0,
+      170.0,
+      auto_style.text_wrap,
+      0.0,
+      false,
+      false,
+      &strut,
+      Some(unicode_bidi::Level::ltr()),
+      auto_style.direction,
+      auto_style.unicode_bidi,
+      None,
+      0.0,
+    );
+
+    assert_ne!(line_texts(&auto_narrow), line_texts(&auto_wide));
+  }
+
+  #[test]
   fn inline_float_creates_fragment_and_wraps_following_text() {
     let mut float_style = ComputedStyle::default();
     float_style.display = Display::Inline;
@@ -10913,9 +11687,11 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.font_size = 16.0;
     root_style.text_align = TextAlign::Right;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      make_text_box("hi"),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![make_text_box("hi")],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -10934,9 +11710,11 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.font_size = 16.0;
     root_style.text_align = TextAlign::Center;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      make_text_box("hi"),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![make_text_box("hi")],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -10958,9 +11736,11 @@ mod tests {
     let mut text_style = ComputedStyle::default();
     text_style.font_size = 16.0;
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "a b".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(Arc::new(text_style), "a b".to_string())],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -10988,9 +11768,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::End;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word word\nword".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word word\nword".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11010,9 +11795,11 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.direction = crate::style::types::Direction::Rtl;
     root_style.text_align = TextAlign::Start;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      make_text_box("hi"),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![make_text_box("hi")],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11029,9 +11816,11 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.direction = crate::style::types::Direction::Rtl;
     root_style.text_align = TextAlign::MatchParent;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      make_text_box("hi"),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![make_text_box("hi")],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11049,10 +11838,14 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.direction = crate::style::types::Direction::Rtl;
     let text_style = Arc::new(ComputedStyle::default());
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(text_style.clone(), "abc".to_string()),
-      BoxNode::new_text(text_style.clone(), "def".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(text_style.clone(), "abc".to_string()),
+        BoxNode::new_text(text_style.clone(), "def".to_string()),
+      ],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11078,9 +11871,14 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.unicode_bidi = crate::style::types::UnicodeBidi::Plaintext;
     root_style.text_align = TextAlign::Start;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(ComputedStyle::default()), "שלום".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(ComputedStyle::default()),
+        "שלום".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11100,9 +11898,14 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.unicode_bidi = crate::style::types::UnicodeBidi::Plaintext;
     root_style.text_align = TextAlign::Start;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(ComputedStyle::default()), "hello".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(ComputedStyle::default()),
+        "hello".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11123,9 +11926,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::Auto;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word word\nword".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word word\nword".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(60.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11146,10 +11954,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::Auto;
 
     let text_style = Arc::new(ComputedStyle::default());
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(text_style.clone(), "word ".to_string()),
-      BoxNode::new_text(text_style.clone(), "word".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(text_style.clone(), "word ".to_string()),
+        BoxNode::new_text(text_style.clone(), "word".to_string()),
+      ],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11179,9 +11991,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::Auto;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word word".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word word".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11202,9 +12019,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::Justify;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word word\nword word".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word word\nword word".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(60.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11228,9 +12050,11 @@ mod tests {
     root_style.text_align = TextAlign::Justify;
     root_style.text_align_last = crate::style::types::TextAlignLast::Auto;
     root_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      make_text_box("word word"),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![make_text_box("word word")],
+    );
     let constraints = LayoutConstraints::definite_width(200.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11254,9 +12078,14 @@ mod tests {
     root_style.white_space = WhiteSpace::PreWrap;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "one\none".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "one\none".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(100.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11284,9 +12113,14 @@ mod tests {
 
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word\nword".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word\nword".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(120.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11309,9 +12143,14 @@ mod tests {
     root_style.text_justify = TextJustify::None;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word word\nword word".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word word\nword word".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(400.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11335,9 +12174,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::Start;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "foo\nbar".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "foo\nbar".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(120.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11362,9 +12206,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::End;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "foo\nbar".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "foo\nbar".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(120.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11388,9 +12237,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::Right;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "foo\nbar".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "foo\nbar".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(120.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11414,9 +12268,14 @@ mod tests {
     root_style.text_align_last = crate::style::types::TextAlignLast::Right;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "foo bar\nbaz qux".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "foo bar\nbaz qux".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(140.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11450,9 +12309,14 @@ mod tests {
     root_style.text_align = TextAlign::JustifyAll;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word word\nword word".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word word\nword word".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(120.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11476,9 +12340,14 @@ mod tests {
     root_style.font_size = 16.0;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "first\nsecond".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "first\nsecond".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(80.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11504,9 +12373,14 @@ mod tests {
     root_style.font_size = 16.0;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word word".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word word".to_string(),
+      )],
+    );
     // Text should still fit on one line; indent shifts start without shortening available width.
     let constraints = LayoutConstraints::definite_width(150.0);
 
@@ -11527,9 +12401,14 @@ mod tests {
     root_style.font_size = 16.0;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "line one\nline two".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "line one\nline two".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(80.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11555,9 +12434,14 @@ mod tests {
     root_style.font_size = 16.0;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::Normal;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "word1 word2 word3 word4".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "word1 word2 word3 word4".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(60.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11580,9 +12464,14 @@ mod tests {
     root_style.font_size = 16.0;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "first\nsecond".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "first\nsecond".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(80.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11608,12 +12497,14 @@ mod tests {
     root_style.font_size = 16.0;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::Normal;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "longword longword longword".to_string(),
-      ),
-    ]);
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(80.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11643,9 +12534,14 @@ mod tests {
     root_style.font_size = 16.0;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(text_style), "first\nsecond".to_string()),
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "first\nsecond".to_string(),
+      )],
+    );
     let constraints = LayoutConstraints::definite_width(80.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11670,13 +12566,15 @@ mod tests {
     root_style.font_size = 16.0;
     let mut text_style = ComputedStyle::default();
     text_style.white_space = WhiteSpace::PreWrap;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
         Arc::new(text_style),
         "averyverylongwordthatshouldwrapproperly averyverylongwordthatshouldwrapproperly"
           .to_string(),
-      ),
-    ]);
+      )],
+    );
     // With a narrow width and long words, negative indent must not expand the
     // available width; expect wrap into two lines.
     let constraints = LayoutConstraints::definite_width(30.0);
@@ -11705,9 +12603,11 @@ mod tests {
     };
     let positioned = BoxNode::new_inline(positioned_style, vec![]);
     let text = BoxNode::new_text(Arc::new(text_style), "inline text".to_string());
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      positioned, text,
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![positioned, text],
+    );
     let constraints = LayoutConstraints::definite_width(120.0);
 
     let ifc = InlineFormattingContext::new();
@@ -11725,10 +12625,13 @@ mod tests {
       .children
       .iter()
       .find(|child| {
-        matches!(child.content, FragmentContent::Text {
-          is_marker: false,
-          ..
-        })
+        matches!(
+          child.content,
+          FragmentContent::Text {
+            is_marker: false,
+            ..
+          }
+        )
       })
       .map(|text| first_line.bounds.y() + text.bounds.y())
       .unwrap_or_else(|| first_line.bounds.y());
@@ -11767,10 +12670,11 @@ mod tests {
     };
     let positioned = BoxNode::new_inline(positioned_style, vec![]);
 
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      positioned,
-      inline_block,
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![positioned, inline_block],
+    );
     let constraints = LayoutConstraints::definite_width(100.0);
 
     let ifc = InlineFormattingContext::new();
@@ -12138,9 +13042,11 @@ mod tests {
     let text = "foo\nbar";
 
     let node = BoxNode::new_text(style.clone(), text.to_string());
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      node.clone()
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![node.clone()],
+    );
 
     let item = ifc.create_text_item(&node, text).unwrap();
     let width_foo = item.advance_at_offset(3);
