@@ -634,16 +634,69 @@ pub fn compare_images(
   rendered: &[u8],
   expected: &[u8],
   tolerance: u8,
+  max_diff_percentage: Option<f64>,
 ) -> Result<(u64, u64, f64), String> {
-  fastrender::image_output::diff_png(rendered, expected, tolerance)
-    .map(|(metrics, _)| {
-      (
-        metrics.pixel_diff,
-        metrics.total_pixels,
-        metrics.diff_percentage,
-      )
-    })
-    .map_err(|e| e.to_string())
+  // Decode PNG images
+  let rendered_img =
+    decode_png(rendered).map_err(|e| format!("Failed to decode rendered image: {}", e))?;
+  let expected_img =
+    decode_png(expected).map_err(|e| format!("Failed to decode expected image: {}", e))?;
+
+  // Check dimensions match
+  let (rendered_width, rendered_height) = rendered_img.dimensions();
+  let (expected_width, expected_height) = expected_img.dimensions();
+  if rendered_width != expected_width || rendered_height != expected_height {
+    return Err(format!(
+      "Image dimensions differ: rendered {}x{}, expected {}x{}",
+      rendered_width, rendered_height, expected_width, expected_height
+    ));
+  }
+
+  let total_pixels = (rendered_width as u64) * (rendered_height as u64);
+  let mut diff_pixels = 0u64;
+
+  // Precompute allowed differing pixels for early exit if threshold provided.
+  let stop_after = max_diff_percentage.map(|max_pct| {
+    let allowed = ((max_pct / 100.0) * total_pixels as f64).ceil() as u64;
+    allowed
+  });
+
+  let tolerance = tolerance as i16;
+  let rendered_data = rendered_img.as_raw();
+  let expected_data = expected_img.as_raw();
+
+  for (rendered_px, expected_px) in rendered_data
+    .chunks_exact(4)
+    .zip(expected_data.chunks_exact(4))
+  {
+    let differs = rendered_px
+      .iter()
+      .zip(expected_px.iter())
+      .any(|(&r, &e)| (r as i16 - e as i16).abs() > tolerance);
+
+    if differs {
+      diff_pixels += 1;
+
+      if let Some(limit) = stop_after {
+        if diff_pixels > limit {
+          break;
+        }
+      }
+    }
+  }
+
+  let diff_percentage = if total_pixels == 0 {
+    0.0
+  } else {
+    (diff_pixels as f64 / total_pixels as f64) * 100.0
+  };
+
+  Ok((diff_pixels, total_pixels, diff_percentage))
+}
+
+/// Decodes a PNG image from bytes into an RGBA buffer
+fn decode_png(data: &[u8]) -> Result<RgbaImage, image::ImageError> {
+  image::load_from_memory_with_format(data, image::ImageFormat::Png).map(|img| img.to_rgba8())
 }
 
 /// Generates a visual diff image between two images
@@ -923,7 +976,8 @@ mod tests {
   #[test]
   fn test_compare_images_identical() {
     let png = solid_png(2, 2, [10, 20, 30, 255]);
-    let (diff_pixels, total_pixels, diff_percentage) = compare_images(&png, &png, 0).unwrap();
+    let (diff_pixels, total_pixels, diff_percentage) =
+      compare_images(&png, &png, 0, None).unwrap();
 
     assert_eq!(diff_pixels, 0);
     assert_eq!(total_pixels, 4);
@@ -939,7 +993,7 @@ mod tests {
     let rendered_png = encode_png(&rendered_img);
 
     let (diff_pixels, total_pixels, diff_percentage) =
-      compare_images(&rendered_png, &expected_png, 0).unwrap();
+      compare_images(&rendered_png, &expected_png, 0, None).unwrap();
 
     assert_eq!(diff_pixels, 1);
     assert_eq!(total_pixels, 4);
@@ -955,7 +1009,7 @@ mod tests {
     let rendered_png = encode_png(&rendered_img);
 
     let (diff_pixels, _total_pixels, diff_percentage) =
-      compare_images(&rendered_png, &expected_png, 5).unwrap();
+      compare_images(&rendered_png, &expected_png, 5, None).unwrap();
 
     assert_eq!(diff_pixels, 0);
     assert_eq!(diff_percentage, 0.0);
@@ -966,7 +1020,7 @@ mod tests {
     let small = solid_png(1, 1, [0, 0, 0, 255]);
     let large = solid_png(2, 1, [0, 0, 0, 255]);
 
-    let err = compare_images(&small, &large, 0).unwrap_err();
+    let err = compare_images(&small, &large, 0, None).unwrap_err();
     assert!(err.contains("dimensions differ"));
   }
 
@@ -980,5 +1034,27 @@ mod tests {
 
     assert_eq!(diff_image.dimensions(), (1, 1));
     assert_eq!(*diff_image.get_pixel(0, 0), Rgba([255, 0, 255, 255]));
+  }
+
+  #[test]
+  fn test_compare_images_with_max_diff_early_exit() {
+    let expected = solid_png(3, 3, [0, 0, 0, 255]);
+
+    let mut rendered_img = RgbaImage::from_pixel(3, 3, Rgba([0, 0, 0, 255]));
+    // Flip five pixels to white
+    for &(x, y) in &[(0, 0), (1, 0), (2, 0), (0, 1), (1, 1)] {
+      rendered_img.put_pixel(x, y, Rgba([255, 255, 255, 255]));
+    }
+    let rendered = encode_png(&rendered_img);
+
+    let (full_diff, _, _) = compare_images(&rendered, &expected, 0, None).unwrap();
+    assert_eq!(full_diff, 5);
+
+    // With a 10% max diff threshold (ceil(0.1 * 9) = 1 allowed), we should early exit
+    // once we exceed the allowance. The reported diff count may be lower than the true
+    // count but must still exceed the threshold percentage.
+    let (limited_diff, _, limited_pct) = compare_images(&rendered, &expected, 0, Some(10.0)).unwrap();
+    assert!(limited_diff <= full_diff);
+    assert!(limited_pct > 10.0);
   }
 }

@@ -814,7 +814,12 @@ impl WptRunner {
   ) -> TestResult {
     let duration = start.elapsed();
 
-    match compare_images(&rendered, &expected, config.pixel_tolerance) {
+    match compare_images(
+      &rendered,
+      &expected,
+      self.config.pixel_tolerance,
+      Some(self.config.max_diff_percentage),
+    ) {
       Ok((diff_pixels, _total_pixels, diff_percentage)) => {
         if diff_percentage <= config.max_diff_percentage {
           TestResult::pass(metadata.clone(), duration)
