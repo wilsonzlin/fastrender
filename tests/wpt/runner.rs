@@ -736,7 +736,7 @@ impl WptRunner {
     };
 
     // If no expected image and update mode, save and pass
-    if expected_image.is_none() {
+    if expected_image.is_none() && config.update_expected {
       if let Err(e) = Self::save_expected_image(&expected_path, &rendered_image) {
         return TestResult::error(
           metadata.clone(),
@@ -747,7 +747,16 @@ impl WptRunner {
       return TestResult::pass(metadata.clone(), start.elapsed());
     }
 
-    let expected_image = expected_image.unwrap();
+    let expected_image = match expected_image {
+      Some(img) => img,
+      None => {
+        return TestResult::error(
+          metadata.clone(),
+          start.elapsed(),
+          format!("Expected image not found: {:?}", expected_path),
+        )
+      }
+    };
     Self::compare_and_result(config, metadata, start, rendered_image, expected_image)
   }
 

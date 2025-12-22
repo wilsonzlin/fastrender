@@ -218,8 +218,13 @@ mod wpt_runner_tests {
       .spawn(|| {
         let renderer = create_test_renderer();
         let mut config = HarnessConfig::default();
+        config.expected_dir = PathBuf::from("target/wpt-expected");
         if std::env::var("UPDATE_WPT_EXPECTED").is_ok() {
           config = config.update_expected();
+        } else {
+          // Default to generating expected images into a temp dir so new tests
+          // don't require checked-in PNGs to run locally.
+          config.update_expected = true;
         }
 
         let mut runner = WptRunner::with_config(renderer, config);
