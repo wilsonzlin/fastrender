@@ -9,8 +9,12 @@ fn help_mentions_default_output_and_dirs() {
 
   assert!(output.status.success(), "--help should exit successfully");
 
-  // fetch_and_render writes usage to stderr
-  let help = String::from_utf8_lossy(&output.stderr);
+  // clap writes help to stdout; keep stderr for compatibility with older parsers
+  let help = if output.stderr.is_empty() {
+    String::from_utf8_lossy(&output.stdout)
+  } else {
+    String::from_utf8_lossy(&output.stderr)
+  };
   assert!(
     help.contains("<url>.png"),
     "help should mention default output naming (derived from URL); got:\n{}",

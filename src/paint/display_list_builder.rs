@@ -363,6 +363,36 @@ impl DisplayListBuilder {
     );
 
     if let Some(style) = fragment.style.as_deref() {
+      if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
+        && (!style.transform.is_empty() || style.perspective.is_some())
+      {
+        if let Some(transform) = Self::build_transform(style, absolute_rect, self.viewport) {
+          if Self::backface_is_hidden(&transform) {
+            if push_opacity {
+              self.pop_opacity();
+            }
+            return;
+          }
+        }
+      }
+    }
+
+    if let Some(style) = fragment.style.as_deref() {
+      if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
+        && (!style.transform.is_empty() || style.perspective.is_some())
+      {
+        if let Some(transform) = Self::build_transform(style, absolute_rect, self.viewport) {
+          if Self::backface_is_hidden(&transform) {
+            if push_opacity {
+              self.pop_opacity();
+            }
+            return;
+          }
+        }
+      }
+    }
+
+    if let Some(style) = fragment.style.as_deref() {
       self.emit_box_shadows_from_style(absolute_rect, style, false);
       self.emit_background_from_style(absolute_rect, style);
       self.emit_box_shadows_from_style(absolute_rect, style, true);
@@ -520,6 +550,14 @@ impl DisplayListBuilder {
     let backface_visibility = root_style
       .map(|style| style.backface_visibility)
       .unwrap_or(BackfaceVisibility::Visible);
+
+    if matches!(backface_visibility, BackfaceVisibility::Hidden) {
+      if let Some(t) = transform.as_ref() {
+        if Self::backface_is_hidden(t) {
+          return;
+        }
+      }
+    }
 
     let viewport = self
       .viewport
@@ -1833,8 +1871,33 @@ impl DisplayListBuilder {
     style: &ComputedStyle,
     bounds: Rect,
     viewport: Option<(f32, f32)>,
-  ) -> Option<Transform2D> {
+  ) -> Option<Transform3D> {
     Self::build_transform(style, bounds, viewport)
+  }
+
+  fn backface_is_hidden(transform: &Transform3D) -> bool {
+    let project = |x: f32, y: f32, m: &Transform3D| -> [f32; 3] {
+      let (tx, ty, tz, tw) = m.transform_point(x, y, 0.0);
+      if tw.abs() < 1e-6 {
+        [tx, ty, tz]
+      } else {
+        [tx / tw, ty / tw, tz / tw]
+      }
+    };
+
+    let p0 = project(0.0, 0.0, transform);
+    let p1 = project(1.0, 0.0, transform);
+    let p2 = project(0.0, 1.0, transform);
+    let ux = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    let uy = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+
+    let normal = [
+      ux[1] * uy[2] - ux[2] * uy[1],
+      ux[2] * uy[0] - ux[0] * uy[2],
+      ux[0] * uy[1] - ux[1] * uy[0],
+    ];
+
+    normal[2] < 0.0
   }
 
   fn resolve_transform_length(

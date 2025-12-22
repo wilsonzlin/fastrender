@@ -201,7 +201,7 @@ fn apply_color_scheme_palette(
   let dark_background = Rgba::rgb(16, 16, 16);
   let dark_surface = Rgba::rgb(24, 24, 24);
   let dark_border = Rgba::rgb(96, 96, 96);
-  let ua_border = Rgba::rgb(204, 204, 204);
+  let ua_border = Rgba::rgb(118, 118, 118);
 
   let apply = |style: &mut ComputedStyle| {
     if is_root && style.color == ua_default_color {

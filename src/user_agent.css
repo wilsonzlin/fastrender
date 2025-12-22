@@ -309,7 +309,7 @@ input:not([type]) {
 
 input[type="submit"], input[type="button"], button {
     padding: 4px 10px;
-    background-color: rgb(245, 245, 245);
+    background-color: white;
     border: 1px solid #767676;
 }
 

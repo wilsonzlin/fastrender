@@ -46,7 +46,7 @@ struct Args {
   /// URL to fetch and render
   url: String,
 
-  /// Output file path (defaults to <url>.png)
+  /// Output file path (defaults to <url>.png); parent directories are created automatically
   output: Option<String>,
 
   /// Viewport width (deprecated, use --viewport)

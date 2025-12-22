@@ -15,7 +15,7 @@ use fastrender::geometry::Rect;
 use fastrender::geometry::Size;
 use fastrender::layout::engine::LayoutConfig;
 use fastrender::layout::engine::LayoutEngine;
-use fastrender::paint::display_list::Transform2D;
+use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::stacking::creates_stacking_context;
 use fastrender::resource::HttpFetcher;
@@ -563,7 +563,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   collect_fragments_abs(&fragment_tree.root, scroll_offset, &mut fragments_abs);
 
   let mut fragments_by_box: HashMap<usize, Vec<(Rect, &FragmentNode)>> = HashMap::new();
-  let mut transformed: Vec<(Rect, &FragmentNode, Option<Transform2D>)> = Vec::new();
+  let mut transformed: Vec<(Rect, &FragmentNode, Option<Transform3D>)> = Vec::new();
 
   let mut text_count = 0;
   let mut block_count = 0;
@@ -658,9 +658,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   for (idx, (abs, frag, matrix)) in transformed.iter().enumerate().take(8) {
     let label = label_fragment(frag, *abs, &box_debug);
     if let Some(m) = matrix {
+      let mm = &m.m;
       println!(
-        "  #{idx}: {} matrix=[{:.3} {:.3} {:.3}; {:.3} {:.3} {:.3}]",
-        label, m.a, m.c, m.e, m.b, m.d, m.f
+        "  #{idx}: {} matrix=[[{:.3} {:.3} {:.3} {:.3}] [{:.3} {:.3} {:.3} {:.3}] [{:.3} {:.3} {:.3} {:.3}] [{:.3} {:.3} {:.3} {:.3}]]",
+        label,
+        mm[0], mm[4], mm[8], mm[12],
+        mm[1], mm[5], mm[9], mm[13],
+        mm[2], mm[6], mm[10], mm[14],
+        mm[3], mm[7], mm[11], mm[15]
       );
     } else {
       println!("  #{idx}: {} matrix=<unresolved>", label);
