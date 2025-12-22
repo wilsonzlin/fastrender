@@ -191,6 +191,8 @@ fn test_all_fixture_files_exist() {
     "positioned_absolute",
     // Transforms
     "transform_layer",
+    // SVG
+    "svg_foreign_object",
     // Forms
     "form_controls",
     // Text
@@ -395,6 +397,15 @@ fn test_fixture_transform_layer() {
 }
 
 // =============================================================================
+// SVG Tests
+// =============================================================================
+
+#[test]
+fn test_fixture_svg_foreign_object() {
+  test_fixture("svg_foreign_object").expect("svg_foreign_object fixture should render");
+}
+
+// =============================================================================
 // Form Tests
 // =============================================================================
 
@@ -485,6 +496,8 @@ pub fn list_fixtures() -> Vec<&'static str> {
     // Positioned
     "positioned_relative",
     "positioned_absolute",
+    // SVG
+    "svg_foreign_object",
     "shadow_dom",
     // Text
     "text_complex_scripts",
@@ -585,6 +598,11 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "positioned_absolute",
       "Positioned",
       "position: absolute with containing blocks",
+    ),
+    (
+      "svg_foreign_object",
+      "SVG",
+      "Inline SVG with foreignObject HTML content",
     ),
     (
       "text_complex_scripts",
