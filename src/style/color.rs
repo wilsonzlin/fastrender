@@ -861,7 +861,8 @@ impl Color {
     }
 
     if lower.starts_with("color(") {
-      if lower.starts_with("color(from") {
+      let after_paren = lower.strip_prefix("color(").unwrap_or("");
+      if after_paren.trim_start().starts_with("from") {
         return parse_relative_color(s);
       }
       return parse_color_function(s);
