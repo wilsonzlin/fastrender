@@ -404,6 +404,39 @@ details:not([open]) > :not(summary) {
     display: none;
 }
 
+/* Dialogs and popovers */
+dialog {
+    display: block;
+    position: fixed;
+    inset: 0;
+    margin: auto;
+    padding: 1em;
+    border: 1px solid rgb(192, 192, 192);
+    background: white;
+    color: black;
+}
+
+dialog:not([open]) {
+    display: none;
+}
+
+dialog[data-fastr-modal="true"]::backdrop {
+    background: rgba(0, 0, 0, 0.4);
+}
+
+*:where([popover]) {
+    position: fixed;
+    inset: auto;
+    padding: 0.5em 1em;
+    border: 1px solid rgb(192, 192, 192);
+    background: white;
+    color: black;
+}
+
+*:where([popover]):not([open]) {
+    display: none;
+}
+
 /* Hidden elements - these should not be rendered */
 head, style, script, meta, link, title, template {
   display: none;

@@ -426,6 +426,11 @@ pub fn creates_stacking_context(
     return true;
   }
 
+  // Top layer elements always create their own stacking context.
+  if style.top_layer.is_some() {
+    return true;
+  }
+
   // 2. Positioned element with z-index != auto
   if is_positioned(style) && style.z_index.is_some() {
     return true;
@@ -535,7 +540,6 @@ pub fn creates_stacking_context(
   // - contain: layout/paint/strict/content
   // - will-change for stacking-context-creating properties
   // - container-type: size/inline-size
-  // - top layer elements (fullscreen, popover, dialog)
 
   false
 }
@@ -550,6 +554,10 @@ pub fn get_stacking_context_reason(
 ) -> Option<StackingContextReason> {
   if is_root {
     return Some(StackingContextReason::Root);
+  }
+
+  if style.top_layer.is_some() {
+    return Some(StackingContextReason::TopLayer);
   }
 
   if is_positioned(style) && style.z_index.is_some() {
@@ -732,7 +740,9 @@ fn build_stacking_tree_internal(
 
   if creates_context {
     // Create a new stacking context
-    let z_index = style.and_then(|s| s.z_index).unwrap_or(0);
+    let z_index = style
+      .map(|s| if s.top_layer.is_some() { i32::MAX } else { s.z_index.unwrap_or(0) })
+      .unwrap_or(0);
     let reason = style
       .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))
       .unwrap_or(StackingContextReason::Root);
@@ -878,7 +888,9 @@ where
   };
 
   if creates_context {
-    let z_index = style.and_then(|s| s.z_index).unwrap_or(0);
+    let z_index = style
+      .map(|s| if s.top_layer.is_some() { i32::MAX } else { s.z_index.unwrap_or(0) })
+      .unwrap_or(0);
     let reason = style
       .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))
       .unwrap_or(StackingContextReason::Root);

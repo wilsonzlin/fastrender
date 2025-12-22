@@ -155,6 +155,7 @@ use types::WillChange;
 use types::WordBreak;
 use types::WritingMode;
 use values::Length;
+use std::sync::Arc;
 
 // Re-export common types from values module
 // These are now public via the module system
@@ -211,6 +212,19 @@ impl Default for CornerOrders {
 pub enum LogicalAxis {
   Inline,
   Block,
+}
+
+/// Elements promoted to the top layer (dialog, popover, fullscreen).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopLayerKind {
+  Dialog { modal: bool },
+  Popover,
+}
+
+impl TopLayerKind {
+  pub fn is_modal(&self) -> bool {
+    matches!(self, TopLayerKind::Dialog { modal: true })
+  }
 }
 
 pub(crate) fn inline_axis_is_horizontal(wm: WritingMode) -> bool {
@@ -397,6 +411,12 @@ pub struct ComputedStyle {
   pub pointer_events: PointerEvents,
   pub user_select: UserSelect,
   pub touch_action: TouchAction,
+  /// Whether the element should ignore pointer/scroll/focus interaction (from inert subtree handling).
+  pub inert: bool,
+  /// Whether the element is promoted to the top layer.
+  pub top_layer: Option<TopLayerKind>,
+  /// Computed styles for the ::backdrop pseudo-element (if present).
+  pub backdrop: Option<Arc<ComputedStyle>>,
   pub scrollbar_width: ScrollbarWidth,
   pub scrollbar_color: ScrollbarColor,
   /// Scroll timeline definitions declared on this element.
@@ -713,6 +733,9 @@ impl Default for ComputedStyle {
       pointer_events: PointerEvents::Auto,
       user_select: UserSelect::Auto,
       touch_action: TouchAction::auto(),
+      inert: false,
+      top_layer: None,
+      backdrop: None,
       scrollbar_width: ScrollbarWidth::Auto,
       scrollbar_color: ScrollbarColor::Auto,
       scroll_timelines: Vec::new(),

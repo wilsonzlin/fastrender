@@ -291,6 +291,7 @@ pub use style::values::Length;
 pub use style::values::LengthOrAuto;
 pub use style::values::LengthUnit;
 pub use style::ComputedStyle;
+pub use style::TopLayerKind;
 // Text
 pub use text::font_db::{
   FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb, GenericFamily,

@@ -406,6 +406,9 @@ impl<'a> ElementRef<'a> {
   }
 
   fn active_flag(&self) -> bool {
+    if self.inert_flag() {
+      return false;
+    }
     self
       .node
       .get_attribute_ref("data-fastr-active")
@@ -414,6 +417,9 @@ impl<'a> ElementRef<'a> {
   }
 
   fn hover_flag(&self) -> bool {
+    if self.inert_flag() {
+      return false;
+    }
     self
       .node
       .get_attribute_ref("data-fastr-hover")
@@ -421,7 +427,29 @@ impl<'a> ElementRef<'a> {
       .unwrap_or(false)
   }
 
+  fn node_is_inert(node: &DomNode) -> bool {
+    matches!(node.node_type, DomNodeType::Element { .. })
+      && (node.get_attribute_ref("inert").is_some()
+        || node
+          .get_attribute_ref("data-fastr-inert")
+          .map(|v| v.eq_ignore_ascii_case("true"))
+          .unwrap_or(false))
+  }
+
+  fn inert_flag(&self) -> bool {
+    if Self::node_is_inert(self.node) {
+      return true;
+    }
+    self
+      .all_ancestors
+      .iter()
+      .any(|ancestor| Self::node_is_inert(ancestor))
+  }
+
   fn node_focus_flag(node: &DomNode) -> bool {
+    if Self::node_is_inert(node) {
+      return false;
+    }
     if let DomNodeType::Element { namespace, .. } = &node.node_type {
       if namespace == SVG_NAMESPACE {
         let focusable = node
@@ -443,10 +471,16 @@ impl<'a> ElementRef<'a> {
   }
 
   fn focus_flag(&self) -> bool {
+    if self.inert_flag() {
+      return false;
+    }
     Self::node_focus_flag(self.node)
   }
 
   fn focus_visible_flag(&self) -> bool {
+    if self.inert_flag() {
+      return false;
+    }
     if !Self::node_focus_flag(self.node) {
       return false;
     }
@@ -459,10 +493,16 @@ impl<'a> ElementRef<'a> {
   }
 
   fn subtree_contains_focus(&self) -> bool {
+    if self.inert_flag() {
+      return false;
+    }
     Self::node_or_descendant_has_focus(self.node)
   }
 
   fn node_or_descendant_has_focus(node: &DomNode) -> bool {
+    if Self::node_is_inert(node) {
+      return false;
+    }
     if Self::node_focus_flag(node) {
       return true;
     }
@@ -1649,7 +1689,7 @@ impl<'a> Element for ElementRef<'a> {
     match pseudo {
       // These pseudo-elements are supported for all elements; filtering
       // based on box generation happens later in the pipeline.
-      PseudoElement::Before | PseudoElement::After | PseudoElement::Marker => true,
+      PseudoElement::Before | PseudoElement::After | PseudoElement::Marker | PseudoElement::Backdrop => true,
     }
   }
 

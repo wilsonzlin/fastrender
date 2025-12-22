@@ -39,9 +39,11 @@ use crate::style::types::ColorSchemeEntry;
 use crate::style::types::ColorSchemePreference;
 use crate::style::types::ContainerType;
 use crate::style::types::OutlineColor;
+use crate::style::types::PointerEvents;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
+use crate::style::TopLayerKind;
 use crate::style::Direction;
 use cssparser::ToCss;
 use selectors::context::IncludeStartingStyle;
@@ -55,6 +57,7 @@ use selectors::parser::Selector;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::OnceLock;
@@ -78,6 +81,88 @@ static CASCADE_PROFILE_FIND_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_DECL_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_PSEUDO_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
+
+fn attr_truthy_value(value: &str) -> bool {
+  matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "on" | "open")
+}
+
+fn attr_truthy(node: &DomNode, name: &str) -> bool {
+  node
+    .get_attribute_ref(name)
+    .map(attr_truthy_value)
+    .unwrap_or(false)
+}
+
+fn data_fastr_open(node: &DomNode) -> Option<(bool, bool)> {
+  let value = node.get_attribute_ref("data-fastr-open")?;
+  let lower = value.to_ascii_lowercase();
+  if lower == "false" {
+    return Some((false, false));
+  }
+  if lower == "modal" {
+    return Some((true, true));
+  }
+  if attr_truthy_value(&lower) {
+    return Some((true, false));
+  }
+  None
+}
+
+fn dialog_top_layer(node: &DomNode) -> Option<TopLayerKind> {
+  if !node
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("dialog"))
+    .unwrap_or(false)
+  {
+    return None;
+  }
+
+  let mut open = node.get_attribute_ref("open").is_some();
+  let mut modal = attr_truthy(node, "data-fastr-modal");
+  if let Some((open_override, modal_override)) = data_fastr_open(node) {
+    open = open_override;
+    modal |= modal_override;
+  }
+
+  if !open {
+    return None;
+  }
+
+  Some(TopLayerKind::Dialog { modal })
+}
+
+fn popover_top_layer(node: &DomNode) -> Option<TopLayerKind> {
+  if node.get_attribute_ref("popover").is_none() {
+    return None;
+  }
+  let mut open = node.get_attribute_ref("open").is_some();
+  if let Some((open_override, _)) = data_fastr_open(node) {
+    open = open_override;
+  }
+  if open {
+    Some(TopLayerKind::Popover)
+  } else {
+    None
+  }
+}
+
+fn top_layer_kind(node: &DomNode) -> Option<TopLayerKind> {
+  dialog_top_layer(node).or_else(|| popover_top_layer(node))
+}
+
+fn explicit_inert(node: &DomNode) -> bool {
+  node.get_attribute_ref("inert").is_some() || attr_truthy(node, "data-fastr-inert")
+}
+
+fn node_is_inert(node: &DomNode, ancestors: &[&DomNode]) -> bool {
+  if !node.is_element() {
+    return false;
+  }
+  if explicit_inert(node) {
+    return true;
+  }
+  ancestors.iter().any(|a| explicit_inert(a))
+}
 
 fn cascade_profile_enabled() -> bool {
   *CASCADE_PROFILE_ENABLED.get_or_init(|| {
@@ -1504,6 +1589,32 @@ fn apply_styles_internal(
     is_root,
   );
 
+  styles.inert = node_is_inert(node, ancestors.as_slice());
+  if styles.inert {
+    styles.pointer_events = PointerEvents::None;
+  }
+  styles.top_layer = top_layer_kind(node);
+  let mut backdrop_styles = None;
+  if styles.top_layer.is_some()
+    && (styles.top_layer.map(|k| k.is_modal()).unwrap_or(false)
+      || rules.has_pseudo_rules(&PseudoElement::Backdrop))
+  {
+    backdrop_styles = compute_pseudo_element_styles(
+      node,
+      rules,
+      selector_caches,
+      scratch,
+      ancestors.as_slice(),
+      &styles,
+      &ua_styles,
+      current_root_font_size,
+      current_ua_root_font_size,
+      viewport,
+      &PseudoElement::Backdrop,
+    )
+    .map(Arc::new);
+  }
+
   // Compute pseudo-element styles
   let pseudo_start = prof.then(|| Instant::now());
   let before_styles = if rules.has_pseudo_content(&PseudoElement::Before) {
@@ -1555,6 +1666,8 @@ fn apply_styles_internal(
   if let (true, Some(start)) = (prof, pseudo_start) {
     record_pseudo_time(start.elapsed());
   }
+
+  styles.backdrop = backdrop_styles;
 
   // Recursively style children (passing current node in ancestors)
   let mut children = Vec::with_capacity(node.children.len());

@@ -949,11 +949,22 @@ impl Painter {
 
     // Build display list in stacking-context order then paint
     let mut items = Vec::new();
+    let mut top_layer_items = Vec::new();
     let collect_start = Instant::now();
-    self.collect_stacking_context(&tree.root, offset, None, true, &mut items);
+    self.collect_stacking_context(
+      &tree.root,
+      offset,
+      None,
+      true,
+      &mut items,
+      &mut top_layer_items,
+      true,
+    );
     if profiling {
       stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
     }
+    top_layer_items.reverse();
+    items.extend(top_layer_items);
     if dump_stack_enabled() {
       let total_items = items.len();
       let mut stack_items = 0;
@@ -1166,6 +1177,8 @@ impl Painter {
     parent_style: Option<&ComputedStyle>,
     is_root_context: bool,
     items: &mut Vec<DisplayCommand>,
+    top_layer_items: &mut Vec<DisplayCommand>,
+    allow_top_layer: bool,
   ) {
     let debug_fragments = dump_fragments_enabled();
     let is_root_fragment = is_root_context && parent_style.is_none();
@@ -1178,6 +1191,45 @@ impl Painter {
       }
       if is_backface_culled(style) {
         return;
+      }
+    }
+
+    let style_ref = fragment.style.as_deref();
+    if allow_top_layer {
+      if let Some(style) = style_ref {
+        if style.top_layer.is_some() {
+          if let Some(backdrop_style) = style.backdrop.as_ref() {
+            let backdrop_fragment = FragmentNode::new_block_styled(
+              Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height),
+              vec![],
+              Arc::clone(backdrop_style),
+            );
+            let mut nested_top = Vec::new();
+            self.collect_stacking_context(
+              &backdrop_fragment,
+              Point::ZERO,
+              None,
+              true,
+              top_layer_items,
+              &mut nested_top,
+              false,
+            );
+            top_layer_items.extend(nested_top);
+          }
+
+          let mut nested_top = Vec::new();
+          self.collect_stacking_context(
+            fragment,
+            offset,
+            parent_style,
+            is_root_context,
+            top_layer_items,
+            &mut nested_top,
+            false,
+          );
+          top_layer_items.extend(nested_top);
+          return;
+        }
       }
     }
 
@@ -1206,7 +1258,6 @@ impl Painter {
       );
     }
 
-    let style_ref = fragment.style.as_deref();
     let establishes_context = style_ref
       .map(|s| creates_stacking_context(s, parent_style, is_root_context))
       .unwrap_or(is_root_context);
@@ -1271,6 +1322,8 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
+          top_layer_items,
+          allow_top_layer,
         );
       }
 
@@ -1281,6 +1334,8 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
+          top_layer_items,
+          allow_top_layer,
         );
       }
       for idx in inlines {
@@ -1290,6 +1345,8 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
+          top_layer_items,
+          allow_top_layer,
         );
       }
       for idx in positioned_auto {
@@ -1299,6 +1356,8 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
+          top_layer_items,
+          allow_top_layer,
         );
       }
 
@@ -1310,6 +1369,8 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
+          top_layer_items,
+          allow_top_layer,
         );
       }
 
@@ -1321,6 +1382,8 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
+          top_layer_items,
+          allow_top_layer,
         );
       }
 
@@ -1387,6 +1450,8 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
+        top_layer_items,
+        allow_top_layer,
       );
     }
 
@@ -1399,6 +1464,8 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
+        top_layer_items,
+        allow_top_layer,
       );
     }
     for idx in inlines {
@@ -1408,6 +1475,8 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
+        top_layer_items,
+        allow_top_layer,
       );
     }
     for idx in positioned_auto {
@@ -1417,6 +1486,8 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
+        top_layer_items,
+        allow_top_layer,
       );
     }
 
@@ -1428,6 +1499,8 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
+        top_layer_items,
+        allow_top_layer,
       );
     }
 
@@ -1439,6 +1512,8 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
+        top_layer_items,
+        allow_top_layer,
       );
     }
 
@@ -9300,7 +9375,17 @@ mod tests {
 
     let painter = Painter::new(100, 10, Rgba::WHITE).expect("painter");
     let mut commands = Vec::new();
-    painter.collect_stacking_context(&root, Point::ZERO, None, true, &mut commands);
+    let mut top_layer = Vec::new();
+    painter.collect_stacking_context(
+      &root,
+      Point::ZERO,
+      None,
+      true,
+      &mut commands,
+      &mut top_layer,
+      true,
+    );
+    commands.extend(top_layer);
 
     // Background commands occur in paint order; filter child backgrounds to check ordering.
     let xs: Vec<f32> = commands
