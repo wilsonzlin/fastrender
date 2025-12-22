@@ -32,6 +32,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
 
+mod data_url;
+
 /// Normalize a page identifier (full URL or hostname) to a cache/output stem.
 ///
 /// Strips schemes and leading "www.", lowercases the host, and sanitizes for filenames.
@@ -547,7 +549,7 @@ impl HttpFetcher {
 
   /// Decode a data: URL
   fn fetch_data(&self, url: &str) -> Result<FetchedResource> {
-    decode_data_url(url)
+    data_url::decode_data_url(url)
   }
 }
 
@@ -1019,109 +1021,8 @@ fn decode_data_url(url: &str) -> Result<FetchedResource> {
     }));
   }
 
-  let rest = &url["data:".len()..];
-  let comma_pos = rest.find(',').ok_or_else(|| {
-    Error::Image(ImageError::InvalidDataUrl {
-      reason: "Missing comma in data URL".to_string(),
-    })
-  })?;
-
-  let header = &rest[..comma_pos];
-  let data = &rest[comma_pos + 1..];
-
-  // Parse header: [mediatype][;base64]
-  let is_base64 = header.ends_with(";base64") || header.contains(";base64;");
-  let media_type = header
-    .split(';')
-    .next()
-    .filter(|s| !s.is_empty() && s.contains('/'))
-    .map(|s| s.to_string());
-
-  let bytes = if is_base64 {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-      .decode(data)
-      .map_err(|e| {
-        Error::Image(ImageError::InvalidDataUrl {
-          reason: format!("Invalid base64: {}", e),
-        })
-      })?
-  } else {
-    // URL-encoded
-    percent_decode(data)?
-  };
-
-  Ok(FetchedResource::with_final_url(
-    bytes,
-    media_type,
-    Some(url.to_string()),
-  ))
+  data_url::decode_data_url(url)
 }
-
-/// Percent-decode a string to bytes
-fn percent_decode(input: &str) -> Result<Vec<u8>> {
-  let mut out = Vec::with_capacity(input.len());
-  let bytes = input.as_bytes();
-  let mut i = 0;
-
-  while i < bytes.len() {
-    if bytes[i] == b'%' {
-      if i + 2 >= bytes.len() {
-        return Err(Error::Image(ImageError::InvalidDataUrl {
-          reason: "Incomplete percent-escape".to_string(),
-        }));
-      }
-      let hi = (bytes[i + 1] as char).to_digit(16);
-      let lo = (bytes[i + 2] as char).to_digit(16);
-      match (hi, lo) {
-        (Some(hi), Some(lo)) => {
-          out.push(((hi << 4) | lo) as u8);
-          i += 3;
-        }
-        _ => {
-          return Err(Error::Image(ImageError::InvalidDataUrl {
-            reason: "Invalid percent-escape".to_string(),
-          }))
-        }
-      }
-    } else if bytes[i] == b'+' {
-      out.push(b' ');
-      i += 1;
-    } else {
-      out.push(bytes[i]);
-      i += 1;
-    }
-  }
-
-  Ok(out)
-}
-
-/// Allow fetching a target URL from a parent document, blocking http(s) → file:// by default.
-pub fn allow_file_iframe_from_http_parent(
-  parent_url: Option<&str>,
-  target_url: &str,
-  allow_file_from_http: bool,
-) -> bool {
-  if allow_file_from_http {
-    return true;
-  }
-
-  let Ok(target) = Url::parse(target_url) else {
-    return true;
-  };
-  if target.scheme() != "file" {
-    return true;
-  }
-
-  if let Some(parent) = parent_url.and_then(|p| Url::parse(p).ok()) {
-    if matches!(parent.scheme(), "http" | "https") {
-      return false;
-    }
-  }
-
-  true
-}
-
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1129,6 +1030,7 @@ pub fn allow_file_iframe_from_http_parent(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use super::data_url;
   use std::io::Read;
   use std::io::Write;
   use std::net::TcpListener;
@@ -1394,7 +1296,7 @@ mod tests {
   #[test]
   fn test_decode_data_url_base64() {
     let url = "data:image/png;base64,aGVsbG8="; // "hello" in base64
-    let resource = decode_data_url(url).unwrap();
+    let resource = data_url::decode_data_url(url).unwrap();
     assert_eq!(resource.bytes, b"hello");
     assert_eq!(resource.content_type, Some("image/png".to_string()));
   }
@@ -1402,7 +1304,7 @@ mod tests {
   #[test]
   fn test_decode_data_url_percent() {
     let url = "data:text/plain,hello%20world";
-    let resource = decode_data_url(url).unwrap();
+    let resource = data_url::decode_data_url(url).unwrap();
     assert_eq!(resource.bytes, b"hello world");
     assert_eq!(resource.content_type, Some("text/plain".to_string()));
   }
@@ -1410,9 +1312,74 @@ mod tests {
   #[test]
   fn test_decode_data_url_no_mediatype() {
     let url = "data:,hello";
-    let resource = decode_data_url(url).unwrap();
+    let resource = data_url::decode_data_url(url).unwrap();
     assert_eq!(resource.bytes, b"hello");
-    assert_eq!(resource.content_type, None);
+    assert_eq!(
+      resource.content_type,
+      Some("text/plain;charset=US-ASCII".to_string())
+    );
+  }
+
+  #[test]
+  fn data_url_default_mediatype_can_be_overridden_by_parameter() {
+    let resource = data_url::decode_data_url("data:;charset=utf-8,hi").unwrap();
+    assert_eq!(resource.bytes, b"hi");
+    assert_eq!(
+      resource.content_type,
+      Some("text/plain;charset=utf-8".to_string())
+    );
+  }
+
+  #[test]
+  fn data_url_plus_is_literal() {
+    let resource = data_url::decode_data_url("data:,a+b").unwrap();
+    assert_eq!(resource.bytes, b"a+b");
+    assert_eq!(
+      resource.content_type,
+      Some("text/plain;charset=US-ASCII".to_string())
+    );
+  }
+
+  #[test]
+  fn data_url_percent_decoding_roundtrips_hex() {
+    let resource = data_url::decode_data_url("data:text/plain,a%2Bb%20c").unwrap();
+    assert_eq!(resource.bytes, b"a+b c");
+  }
+
+  #[test]
+  fn data_url_rejects_malformed_percent_escape() {
+    let err = data_url::decode_data_url("data:text/plain,abc%2").unwrap_err();
+    assert!(matches!(
+      err,
+      Error::Image(ImageError::InvalidDataUrl { ref reason })
+        if reason.contains("Incomplete percent-escape")
+    ));
+
+    let err = data_url::decode_data_url("data:text/plain,%2G").unwrap_err();
+    assert!(matches!(
+      err,
+      Error::Image(ImageError::InvalidDataUrl { ref reason })
+        if reason.contains("Invalid percent-escape")
+    ));
+  }
+
+  #[test]
+  fn data_url_base64_is_case_insensitive_and_tolerates_whitespace() {
+    let url = "data:text/plain;BASE64,aGVs bG8=\n";
+    let resource = data_url::decode_data_url(url).unwrap();
+    assert_eq!(resource.bytes, b"hello");
+    assert_eq!(resource.content_type, Some("text/plain".to_string()));
+  }
+
+  #[test]
+  fn data_url_preserves_additional_parameters() {
+    let url = "data:text/plain;charset=UTF-8;param=value;base64,aA==";
+    let resource = data_url::decode_data_url(url).unwrap();
+    assert_eq!(resource.bytes, b"h");
+    assert_eq!(
+      resource.content_type,
+      Some("text/plain;charset=UTF-8;param=value".to_string())
+    );
   }
 
   #[test]
