@@ -94,6 +94,7 @@ use crate::text::pipeline::preferred_font_aspect;
 use crate::text::pipeline::ExplicitBidiContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
+use crate::tree::box_tree::AnonymousBox;
 use crate::tree::box_tree::AnonymousType;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxType;
@@ -120,6 +121,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use unicode_general_category::get_general_category;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Inline Formatting Context implementation
 ///
@@ -2617,6 +2620,381 @@ impl InlineFormattingContext {
     )
   }
 
+  fn first_letter_eligible(box_node: &BoxNode) -> bool {
+    if matches!(box_node.box_type, BoxType::Replaced(_)) {
+      return false;
+    }
+    use crate::style::display::Display;
+    !matches!(
+      box_node.style.display,
+      Display::InlineBlock
+        | Display::InlineTable
+        | Display::InlineFlex
+        | Display::InlineGrid
+        | Display::Table
+        | Display::TableRow
+        | Display::TableCell
+        | Display::TableRowGroup
+        | Display::TableHeaderGroup
+        | Display::TableFooterGroup
+        | Display::TableColumn
+        | Display::TableColumnGroup
+        | Display::TableCaption
+    )
+  }
+
+  fn merge_first_line_overrides(
+    &self,
+    base: &ComputedStyle,
+    first_line: &ComputedStyle,
+  ) -> ComputedStyle {
+    let mut merged = base.clone();
+    merged.color = first_line.color;
+    merged.background_color = first_line.background_color;
+    merged.background_images = first_line.background_images.clone();
+    merged.background_positions = first_line.background_positions.clone();
+    merged.background_sizes = first_line.background_sizes.clone();
+    merged.background_repeats = first_line.background_repeats.clone();
+    merged.background_attachments = first_line.background_attachments.clone();
+    merged.background_origins = first_line.background_origins.clone();
+    merged.background_clips = first_line.background_clips.clone();
+    merged.rebuild_background_layers();
+
+    merged.font_family = first_line.font_family.clone();
+    merged.font_size = first_line.font_size;
+    merged.font_weight = first_line.font_weight;
+    merged.font_style = first_line.font_style;
+    merged.font_stretch = first_line.font_stretch;
+    merged.font_variant_caps = first_line.font_variant_caps;
+    merged.font_variant_numeric = first_line.font_variant_numeric;
+    merged.font_variant_east_asian = first_line.font_variant_east_asian;
+    merged.font_variant_ligatures = first_line.font_variant_ligatures.clone();
+    merged.font_variant_alternates = first_line.font_variant_alternates.clone();
+    merged.font_feature_settings = first_line.font_feature_settings.clone();
+    merged.font_language_override = first_line.font_language_override.clone();
+    merged.font_kerning = first_line.font_kerning;
+    merged.font_variant_position = first_line.font_variant_position;
+    merged.font_synthesis = first_line.font_synthesis;
+    merged.font_variation_settings = first_line.font_variation_settings.clone();
+    merged.font_size_adjust = first_line.font_size_adjust;
+
+    merged.line_height = first_line.line_height.clone();
+    merged.letter_spacing = first_line.letter_spacing;
+    merged.word_spacing = first_line.word_spacing;
+    merged.text_transform = first_line.text_transform;
+    merged.text_decoration = first_line.text_decoration.clone();
+    merged.text_decoration_skip_ink = first_line.text_decoration_skip_ink;
+    merged.text_underline_offset = first_line.text_underline_offset;
+    merged.text_underline_position = first_line.text_underline_position;
+    merged.text_shadow = first_line.text_shadow.clone();
+    merged.text_emphasis_color = first_line.text_emphasis_color;
+    merged.text_emphasis_position = first_line.text_emphasis_position;
+    merged.text_emphasis_style = first_line.text_emphasis_style.clone();
+    merged
+  }
+
+  fn is_letter_like(cluster: &str) -> bool {
+    cluster
+      .chars()
+      .any(|c| c.is_alphabetic() || c.is_numeric() || c == '\u{00A0}')
+  }
+
+  fn is_whitespace_cluster(cluster: &str) -> bool {
+    cluster.chars().all(|c| c.is_whitespace())
+  }
+
+  fn is_punctuation_or_symbol(cluster: &str) -> bool {
+    cluster.chars().all(|c| {
+      use unicode_general_category::GeneralCategory;
+      matches!(
+        get_general_category(c),
+        GeneralCategory::ConnectorPunctuation
+          | GeneralCategory::DashPunctuation
+          | GeneralCategory::ClosePunctuation
+          | GeneralCategory::FinalPunctuation
+          | GeneralCategory::InitialPunctuation
+          | GeneralCategory::OtherPunctuation
+          | GeneralCategory::OpenPunctuation
+          | GeneralCategory::CurrencySymbol
+          | GeneralCategory::ModifierSymbol
+          | GeneralCategory::MathSymbol
+          | GeneralCategory::OtherSymbol
+      )
+    })
+  }
+
+  fn split_first_letter(text: &str, direction: Direction) -> Option<(String, String, String)> {
+    let graphemes: Vec<(usize, &str)> = text.grapheme_indices(true).collect();
+    if graphemes.is_empty() {
+      return None;
+    }
+
+    let forward = !matches!(direction, Direction::Rtl);
+    let mut iter = graphemes.clone().into_iter();
+
+    let mut candidate_start: Option<usize> = None;
+    let mut candidate_end: Option<usize> = None;
+    let mut pending_punct: Vec<(usize, &str)> = Vec::new();
+
+    while let Some((idx, cluster)) = iter.next() {
+      if Self::is_whitespace_cluster(cluster) {
+        pending_punct.clear();
+        continue;
+      }
+
+      if Self::is_punctuation_or_symbol(cluster) && candidate_start.is_none() {
+        pending_punct.push((idx, cluster));
+        continue;
+      }
+
+      if Self::is_letter_like(cluster) {
+        let mut start = idx;
+        if forward {
+          if let Some((punct_idx, _punct)) = pending_punct.first() {
+            start = *punct_idx;
+          }
+        }
+
+        candidate_start.get_or_insert(start);
+        candidate_end = Some(idx + cluster.len());
+
+        if forward {
+          // Include following punctuation directly attached to the letter.
+          let mut trailing_end = candidate_end.unwrap();
+          let pos = graphemes.iter().position(|(g_idx, _)| *g_idx == idx).unwrap_or(0);
+          for (next_idx, next_cluster) in graphemes.iter().skip(pos + 1) {
+            if Self::is_whitespace_cluster(next_cluster) {
+              break;
+            }
+            if Self::is_punctuation_or_symbol(next_cluster) {
+              trailing_end = *next_idx + next_cluster.len();
+              continue;
+            }
+            break;
+          }
+          candidate_end = Some(trailing_end);
+        } else {
+          // RTL: expand start backwards to include punctuation that follows visually (preceding logically).
+          if let Some((punct_idx, _punct)) = pending_punct.last() {
+            candidate_start = Some(*punct_idx);
+          }
+        }
+        break;
+      }
+
+      pending_punct.clear();
+    }
+
+    let start = candidate_start?;
+    let mut end = candidate_end.unwrap_or_else(|| start + graphemes.last().map(|(_, g)| g.len()).unwrap_or(0));
+
+    if !forward {
+      // For RTL, include punctuation clusters that immediately precede the chosen letter (visually after it).
+      let pos = graphemes.iter().position(|(g_idx, _)| *g_idx == start).unwrap_or(0);
+      for (idx, cluster) in graphemes.iter().skip(pos + 1) {
+        if Self::is_whitespace_cluster(cluster) {
+          break;
+        }
+        if Self::is_punctuation_or_symbol(cluster) {
+          end = (*idx + cluster.len()).max(end);
+          continue;
+        }
+        break;
+      }
+    }
+
+    if end <= start {
+      return None;
+    }
+
+    let before = if forward {
+      text[..start].to_string()
+    } else {
+      text[..start].to_string()
+    };
+    let letter = text[start..end].to_string();
+    let after = text[end..].to_string();
+    Some((before, letter, after))
+  }
+
+  fn clone_text_box_with_content(&self, node: &BoxNode, text: String) -> BoxNode {
+    let mut cloned = node.clone();
+    cloned.box_type = BoxType::Text(crate::tree::box_tree::TextBox { text });
+    cloned
+  }
+
+  fn synthesize_first_letter_children(
+    &self,
+    children: &[BoxNode],
+    letter_style: &Arc<ComputedStyle>,
+    direction: Direction,
+    applied: &mut bool,
+  ) -> Vec<BoxNode> {
+    let mut out = Vec::with_capacity(children.len());
+    for child in children {
+      if *applied {
+        out.push(child.clone());
+        continue;
+      }
+
+      if matches!(child.box_type, BoxType::Marker(_)) {
+        out.push(child.clone());
+        continue;
+      }
+
+      match &child.box_type {
+        BoxType::Text(text_box) => {
+          if let Some((before, letter, after)) = Self::split_first_letter(&text_box.text, direction) {
+            if !before.is_empty() {
+              out.push(self.clone_text_box_with_content(child, before));
+            }
+
+            let mut pseudo = BoxNode::new_inline(letter_style.clone(), vec![]);
+            pseudo.first_line_style = None;
+            pseudo.first_letter_style = None;
+            pseudo.styled_node_id = child.styled_node_id;
+            let mut letter_child = BoxNode::new_text(letter_style.clone(), letter);
+            letter_child.styled_node_id = child.styled_node_id;
+            pseudo.children.push(letter_child);
+            out.push(pseudo);
+
+            if !after.is_empty() {
+              out.push(self.clone_text_box_with_content(child, after));
+            }
+            *applied = true;
+          } else {
+            out.push(child.clone());
+          }
+        }
+        BoxType::Inline(_) => {
+          let new_children = self.synthesize_first_letter_children(
+            &child.children,
+            letter_style,
+            direction,
+            applied,
+          );
+          let mut cloned = child.clone();
+          cloned.children = new_children;
+          out.push(cloned);
+        }
+        BoxType::Anonymous(AnonymousBox {
+          anonymous_type: AnonymousType::Inline,
+        }) => {
+          let new_children = self.synthesize_first_letter_children(
+            &child.children,
+            letter_style,
+            direction,
+            applied,
+          );
+          let mut cloned = child.clone();
+          cloned.children = new_children;
+          out.push(cloned);
+        }
+        _ => {
+          out.push(child.clone());
+        }
+      }
+    }
+    out
+  }
+
+  fn inject_first_letter_pseudo(
+    &self,
+    root: &BoxNode,
+    letter_style: Arc<ComputedStyle>,
+    _first_line_style: Option<Arc<ComputedStyle>>,
+    direction: Direction,
+  ) -> BoxNode {
+    let mut applied = false;
+    let letter_style = letter_style;
+
+    let mut cloned = root.clone();
+    cloned.children = self.synthesize_first_letter_children(
+      &root.children,
+      &letter_style,
+      direction,
+      &mut applied,
+    );
+    cloned
+  }
+
+  fn apply_first_line_fragment_style(
+    &self,
+    fragment: &mut FragmentNode,
+    first_line_style: &ComputedStyle,
+    base_style: &Arc<ComputedStyle>,
+  ) {
+    let is_marker = matches!(
+      fragment.content,
+      FragmentContent::Text {
+        is_marker: true,
+        ..
+      }
+    );
+    if !is_marker {
+      let existing = fragment.style.as_ref();
+      let mut merged = if let Some(style) = existing {
+        self.merge_first_line_overrides(style, first_line_style)
+      } else {
+        first_line_style.clone()
+      };
+
+      if let Some(style) = existing {
+        if style.color != base_style.color {
+          merged.color = style.color;
+        }
+        if style.background_color != base_style.background_color {
+          merged.background_color = style.background_color;
+        }
+        if style.font_family != base_style.font_family {
+          merged.font_family = style.font_family.clone();
+        }
+        if (style.font_size - base_style.font_size).abs() > f32::EPSILON {
+          merged.font_size = style.font_size;
+        }
+        if style.font_weight != base_style.font_weight {
+          merged.font_weight = style.font_weight;
+        }
+        if style.font_style != base_style.font_style {
+          merged.font_style = style.font_style;
+        }
+        if style.font_stretch != base_style.font_stretch {
+          merged.font_stretch = style.font_stretch;
+        }
+        if style.text_transform != base_style.text_transform {
+          merged.text_transform = style.text_transform;
+        }
+        if style.line_height != base_style.line_height {
+          merged.line_height = style.line_height.clone();
+        }
+        if style.letter_spacing != base_style.letter_spacing {
+          merged.letter_spacing = style.letter_spacing;
+        }
+        if style.word_spacing != base_style.word_spacing {
+          merged.word_spacing = style.word_spacing;
+        }
+        if style.text_decoration != base_style.text_decoration {
+          merged.text_decoration = style.text_decoration.clone();
+        }
+        if style.text_shadow != base_style.text_shadow {
+          merged.text_shadow = style.text_shadow.clone();
+        }
+        if style.text_emphasis_color != base_style.text_emphasis_color {
+          merged.text_emphasis_color = style.text_emphasis_color;
+        }
+        if style.text_emphasis_style != base_style.text_emphasis_style {
+          merged.text_emphasis_style = style.text_emphasis_style.clone();
+        }
+      }
+
+      fragment.style = Some(Arc::new(merged));
+    }
+
+    for child in &mut fragment.children {
+      self.apply_first_line_fragment_style(child, first_line_style, base_style);
+    }
+  }
+
   /// Adds text item handling mandatory breaks
   fn add_text_with_mandatory_breaks(&self, builder: &mut LineBuilder, text_item: TextItem) {
     let mut remaining = text_item;
@@ -4818,9 +5196,28 @@ impl InlineFormattingContext {
     min_y: f32,
     float_ctx: &mut FloatContext,
   ) -> Result<(FragmentNode, f32, f32), LayoutError> {
+    let inline_root = matches!(floating.box_node.box_type, crate::tree::box_tree::BoxType::Inline(_));
+    let mut float_node = floating.box_node.clone();
+    if !inline_root
+      && matches!(
+        float_node.style.display,
+        crate::style::display::Display::Inline
+          | crate::style::display::Display::InlineBlock
+          | crate::style::display::Display::InlineTable
+      )
+    {
+      Arc::make_mut(&mut float_node.style).display = crate::style::display::Display::Block;
+      if matches!(float_node.box_type, crate::tree::box_tree::BoxType::Inline(_)) {
+        float_node.box_type = crate::tree::box_tree::BoxType::Block(crate::tree::box_tree::BlockBox {
+          formatting_context: FormattingContextType::Block,
+        });
+      }
+    }
+
+    debug_assert!(!float_node.children.is_empty());
+
     let percentage_base = containing_width;
-    let margin_left = floating
-      .box_node
+    let margin_left = float_node
       .style
       .margin_left
       .as_ref()
@@ -4828,15 +5225,14 @@ impl InlineFormattingContext {
         resolve_length_for_width(
           *l,
           percentage_base,
-          &floating.box_node.style,
+          &float_node.style,
           &self.font_context,
           self.viewport_size,
         )
       })
       .unwrap_or(0.0)
       .max(0.0);
-    let margin_right = floating
-      .box_node
+    let margin_right = float_node
       .style
       .margin_right
       .as_ref()
@@ -4844,7 +5240,7 @@ impl InlineFormattingContext {
         resolve_length_for_width(
           *l,
           percentage_base,
-          &floating.box_node.style,
+          &float_node.style,
           &self.font_context,
           self.viewport_size,
         )
@@ -4852,35 +5248,29 @@ impl InlineFormattingContext {
       .unwrap_or(0.0)
       .max(0.0);
 
-    let horizontal_edges = horizontal_padding_and_borders(
-      &floating.box_node.style,
-      percentage_base,
-      self.viewport_size,
-      &self.font_context,
-    );
+    let horizontal_edges =
+      horizontal_padding_and_borders(&float_node.style, percentage_base, self.viewport_size, &self.font_context);
 
     let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
       self.font_context.clone(),
       self.viewport_size,
       self.nearest_positioned_cb,
     );
-    let fc_type = floating
-      .box_node
+    let fc_type = float_node
       .formatting_context()
       .unwrap_or(FormattingContextType::Block);
     let fc = factory.create(fc_type);
     let preferred_min_content = fc
-      .compute_intrinsic_inline_size(&floating.box_node, IntrinsicSizingMode::MinContent)
+      .compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MinContent)
       .unwrap_or(0.0);
     let preferred_content = fc
-      .compute_intrinsic_inline_size(&floating.box_node, IntrinsicSizingMode::MaxContent)
+      .compute_intrinsic_inline_size(&float_node, IntrinsicSizingMode::MaxContent)
       .unwrap_or(preferred_min_content);
 
     let preferred_min = preferred_min_content + horizontal_edges;
     let preferred = preferred_content + horizontal_edges;
 
-    let specified_width = floating
-      .box_node
+    let specified_width = float_node
       .style
       .width
       .as_ref()
@@ -4888,17 +5278,16 @@ impl InlineFormattingContext {
         resolve_length_for_width(
           *l,
           percentage_base,
-          &floating.box_node.style,
+          &float_node.style,
           &self.font_context,
           self.viewport_size,
         )
       })
       .map(|w| {
-        border_size_from_box_sizing(w, horizontal_edges, floating.box_node.style.box_sizing)
+        border_size_from_box_sizing(w, horizontal_edges, float_node.style.box_sizing)
       });
 
-    let min_width = floating
-      .box_node
+    let min_width = float_node
       .style
       .min_width
       .as_ref()
@@ -4906,15 +5295,14 @@ impl InlineFormattingContext {
         resolve_length_for_width(
           *l,
           percentage_base,
-          &floating.box_node.style,
+          &float_node.style,
           &self.font_context,
           self.viewport_size,
         )
       })
-      .map(|w| border_size_from_box_sizing(w, horizontal_edges, floating.box_node.style.box_sizing))
+      .map(|w| border_size_from_box_sizing(w, horizontal_edges, float_node.style.box_sizing))
       .unwrap_or(0.0);
-    let max_width = floating
-      .box_node
+    let max_width = float_node
       .style
       .max_width
       .as_ref()
@@ -4922,12 +5310,12 @@ impl InlineFormattingContext {
         resolve_length_for_width(
           *l,
           percentage_base,
-          &floating.box_node.style,
+          &float_node.style,
           &self.font_context,
           self.viewport_size,
         )
       })
-      .map(|w| border_size_from_box_sizing(w, horizontal_edges, floating.box_node.style.box_sizing))
+      .map(|w| border_size_from_box_sizing(w, horizontal_edges, float_node.style.box_sizing))
       .unwrap_or(f32::INFINITY);
 
     let available = (containing_width - margin_left - margin_right).max(0.0);
@@ -4943,15 +5331,24 @@ impl InlineFormattingContext {
       AvailableSpace::Definite(content_width),
       AvailableSpace::Indefinite,
     );
-    let bfc = BlockFormattingContext::with_font_context_viewport_and_cb(
-      self.font_context.clone(),
-      self.viewport_size,
-      self.nearest_positioned_cb,
-    );
-    let mut fragment = bfc.layout(&floating.box_node, &child_constraints)?;
+    let mut fragment = if inline_root {
+      let ifc = InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
+        self.font_context.clone(),
+        self.viewport_size,
+        self.nearest_positioned_cb,
+        self.pipeline.clone(),
+      );
+      ifc.layout(&float_node, &child_constraints)?
+    } else {
+      let bfc = BlockFormattingContext::with_font_context_viewport_and_cb(
+        self.font_context.clone(),
+        self.viewport_size,
+        self.nearest_positioned_cb,
+      );
+      bfc.layout(&float_node, &child_constraints)?
+    };
 
-    let margin_top = floating
-      .box_node
+    let margin_top = float_node
       .style
       .margin_top
       .as_ref()
@@ -4959,15 +5356,14 @@ impl InlineFormattingContext {
         resolve_length_for_width(
           *l,
           containing_width,
-          &floating.box_node.style,
+          &float_node.style,
           &self.font_context,
           self.viewport_size,
         )
       })
       .unwrap_or(0.0)
       .max(0.0);
-    let margin_bottom = floating
-      .box_node
+    let margin_bottom = float_node
       .style
       .margin_bottom
       .as_ref()
@@ -4975,7 +5371,7 @@ impl InlineFormattingContext {
         resolve_length_for_width(
           *l,
           containing_width,
-          &floating.box_node.style,
+          &float_node.style,
           &self.font_context,
           self.viewport_size,
         )
@@ -4985,13 +5381,13 @@ impl InlineFormattingContext {
     let box_width = used_border_box;
     let float_height = margin_top + fragment.bounds.height() + margin_bottom;
 
-    let side = match floating.box_node.style.float {
+    let side = match float_node.style.float {
       crate::style::float::Float::Left => crate::layout::float_context::FloatSide::Left,
       crate::style::float::Float::Right => crate::layout::float_context::FloatSide::Right,
       crate::style::float::Float::None => unreachable!(),
     };
 
-    let cleared_y = float_ctx.compute_clearance(min_y, floating.box_node.style.clear);
+    let cleared_y = float_ctx.compute_clearance(min_y, float_node.style.clear);
     let (fx, fy) = float_ctx.compute_float_position(
       side,
       margin_left + box_width + margin_right,
@@ -5379,6 +5775,23 @@ impl InlineFormattingContext {
     float_base_y: f32,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Inline);
+    let mut transformed: Option<BoxNode> = None;
+    let box_node = if let Some(letter_style) = box_node.first_letter_style.as_ref() {
+      if Self::first_letter_eligible(box_node) {
+        let node = self.inject_first_letter_pseudo(
+          box_node,
+          letter_style.clone(),
+          box_node.first_line_style.clone(),
+          box_node.style.direction,
+        );
+        let owned = transformed.insert(node);
+        &*owned
+      } else {
+        box_node
+      }
+    } else {
+      box_node
+    };
     if dump_text_enabled() {
       static TREE_DUMP: OnceLock<AtomicUsize> = OnceLock::new();
       let tree_counter = TREE_DUMP.get_or_init(|| AtomicUsize::new(0));
@@ -5977,7 +6390,7 @@ impl InlineFormattingContext {
     };
     let lines_empty = lines.is_empty();
 
-    let line_fragments = self.create_fragments(
+    let mut line_fragments = self.create_fragments(
       lines,
       0.0,
       style.text_align,
@@ -5986,6 +6399,11 @@ impl InlineFormattingContext {
       &paragraph_info,
       inline_vertical,
     );
+    if let Some(first_line_style) = box_node.first_line_style.as_ref() {
+      if let Some(first_line) = line_fragments.first_mut() {
+        self.apply_first_line_fragment_style(first_line, first_line_style, &box_node.style);
+      }
+    }
 
     let mut merged_children = Vec::new();
     for chunk in flow_order {

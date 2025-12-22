@@ -540,6 +540,7 @@ dependencies = [
  "tiny-skia",
  "ttf-parser 0.25.1",
  "unicode-bidi",
+ "unicode-general-category",
  "unicode-linebreak",
  "unicode-script",
  "unicode-segmentation",
@@ -1977,6 +1978,12 @@ name = "unicode-ccc"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce61d488bcdc9bc8b5d1772c404828b17fc481c0a582b5581e95fb233aef503e"
+
+[[package]]
+name = "unicode-general-category"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2281c8c1d221438e373249e065ca4989c4c36952c211ff21a0ee91c44a3869e7"
 
 [[package]]
 name = "unicode-ident"
