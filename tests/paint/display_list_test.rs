@@ -1722,6 +1722,7 @@ fn test_stacking_context() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
 
   list.push(DisplayItem::FillRect(FillRectItem {

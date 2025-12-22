@@ -1492,6 +1492,9 @@ pub struct StackingContextItem {
 
   /// Border radii used for filter/backdrop clipping
   pub radii: BorderRadii,
+
+  /// Optional mask applied to this stacking context
+  pub mask: Option<std::sync::Arc<crate::style::ComputedStyle>>,
 }
 
 /// Resolved filter functions (after length resolution).

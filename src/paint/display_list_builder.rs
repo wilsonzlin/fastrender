@@ -751,6 +751,14 @@ impl DisplayListBuilder {
         filters,
         backdrop_filters,
         radii,
+        mask: root_fragment.and_then(|f| {
+          let style = f.style.as_ref()?;
+          let has_mask = style
+            .mask_layers
+            .iter()
+            .any(|layer| layer.image.as_ref().map(|img| !matches!(img, BackgroundImage::None)).unwrap_or(false));
+          has_mask.then_some(style.clone())
+        }),
       }));
 
     for child in neg {

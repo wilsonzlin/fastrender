@@ -340,6 +340,7 @@ fn mix_blend_mode_multiplies_backdrop_when_not_isolated() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
@@ -376,6 +377,7 @@ fn isolation_blocks_mix_blend_mode_backdrop() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
@@ -453,6 +455,7 @@ fn matrix3d_transforms_translate_content() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
@@ -483,6 +486,7 @@ fn perspective_depth_changes_projection_size() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
@@ -520,6 +524,7 @@ fn backface_hidden_culls_rotated_context() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
@@ -1246,6 +1251,7 @@ fn filters_apply_to_stacking_context_layer() {
     filters: vec![ResolvedFilter::Invert(1.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
@@ -1274,6 +1280,7 @@ fn opacity_filter_modulates_alpha() {
     filters: vec![ResolvedFilter::Opacity(0.5)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
@@ -1331,6 +1338,7 @@ fn backdrop_filters_modify_backdrop_region() {
     filters: Vec::new(),
     backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::PopStackingContext);
 
@@ -1418,6 +1426,7 @@ fn drop_shadow_filter_renders_shadow() {
     }],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
@@ -1450,6 +1459,7 @@ fn blur_filters_arent_clipped_by_border_radii() {
     filters: vec![ResolvedFilter::Blur(1.0)],
     backdrop_filters: Vec::new(),
     radii: BorderRadii::uniform(0.5),
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
@@ -1488,6 +1498,7 @@ fn grayscale_filter_converts_to_luma() {
     filters: vec![ResolvedFilter::Grayscale(1.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   // Pure blue content becomes luma gray (~18/255 per channel).
   list.push(DisplayItem::FillRect(FillRectItem {
@@ -1803,6 +1814,7 @@ fn backdrop_blur_samples_outside_bounds() {
     filters: Vec::new(),
     backdrop_filters: vec![ResolvedFilter::Blur(1.0)],
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::PopStackingContext);
 
@@ -1832,6 +1844,7 @@ fn filter_blur_not_clipped_to_bounds() {
     filters: vec![ResolvedFilter::Blur(1.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(1.0, 0.0, 1.0, 1.0),
@@ -1865,6 +1878,7 @@ fn filter_blur_zero_has_no_effect() {
     filters: vec![ResolvedFilter::Blur(0.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(1.0, 0.0, 1.0, 1.0),
@@ -1905,6 +1919,7 @@ fn clip_path_masks_after_filters() {
     filters: vec![ResolvedFilter::Blur(2.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::PopStackingContext);
 
@@ -1966,6 +1981,7 @@ fn blend_mode_multiply_modulates_destination() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),

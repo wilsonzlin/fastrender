@@ -54,17 +54,23 @@ use crate::style::color::Rgba;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
 use crate::style::types::BackgroundPosition;
+use crate::style::types::BackgroundRepeatKeyword;
+use crate::style::types::BackgroundSize;
+use crate::style::types::BackgroundSizeComponent;
+use crate::style::types::BackgroundSizeKeyword;
 use crate::style::types::BorderImageOutsetValue;
 use crate::style::types::BorderImageRepeat;
 use crate::style::types::BorderImageSliceValue;
 use crate::style::types::BorderImageWidth;
 use crate::style::types::BorderImageWidthValue;
 use crate::style::types::BorderStyle as CssBorderStyle;
+use crate::style::types::MaskMode;
 use crate::style::types::TextDecorationStyle;
 use crate::style::types::TextEmphasisFill;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
+use crate::style::ComputedStyle;
 #[cfg(test)]
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
@@ -74,6 +80,7 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::shaper::GlyphPosition;
 use rayon::prelude::*;
+use std::sync::Arc;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
@@ -1011,6 +1018,8 @@ struct StackingRecord {
   filters: Vec<ResolvedFilter>,
   radii: BorderRadii,
   mask_bounds: Rect,
+  mask: Option<Arc<ComputedStyle>>,
+  css_bounds: Rect,
   manual_blend: Option<BlendMode>,
   culled: bool,
 }
@@ -2181,6 +2190,138 @@ impl DisplayListRenderer {
     }
   }
 
+  fn render_mask(&self, style: &ComputedStyle, css_bounds: Rect) -> Option<Mask> {
+    let viewport = (
+      self.canvas.width() as f32 / self.scale,
+      self.canvas.height() as f32 / self.scale,
+    );
+    let rects = background_rects(css_bounds, style, Some(viewport));
+    let origin_rect_css = rects.border;
+    let clip_rect_css = rects.border;
+    if origin_rect_css.width() <= 0.0
+      || origin_rect_css.height() <= 0.0
+      || clip_rect_css.width() <= 0.0
+      || clip_rect_css.height() <= 0.0
+    {
+      return None;
+    }
+
+    let mut mask_pixmap = Pixmap::new(self.canvas.width(), self.canvas.height())?;
+
+    for layer in style.mask_layers.iter().rev() {
+      let Some(image) = &layer.image else { continue };
+
+      let (mut tile_w, mut tile_h) = compute_background_size_from_value(
+        &layer.size,
+        style.font_size,
+        style.root_font_size,
+        viewport,
+        origin_rect_css.width(),
+        origin_rect_css.height(),
+        0.0,
+        0.0,
+      );
+      if tile_w <= 0.0 || tile_h <= 0.0 {
+        continue;
+      }
+
+      let mut rounded_x = false;
+      let mut rounded_y = false;
+      if layer.repeat.x == BackgroundRepeatKeyword::Round {
+        tile_w = round_tile_length(origin_rect_css.width(), tile_w);
+        rounded_x = true;
+      }
+      if layer.repeat.y == BackgroundRepeatKeyword::Round {
+        tile_h = round_tile_length(origin_rect_css.height(), tile_h);
+        rounded_y = true;
+      }
+      if rounded_x ^ rounded_y
+        && matches!(
+          layer.size,
+          BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+        )
+      {
+        let aspect = 1.0;
+        if rounded_x {
+          tile_h = tile_w / aspect;
+        } else {
+          tile_w = tile_h * aspect;
+        }
+      }
+
+      let (offset_x, offset_y) = resolve_background_offset(
+        layer.position,
+        origin_rect_css.width(),
+        origin_rect_css.height(),
+        tile_w,
+        tile_h,
+        style.font_size,
+        style.root_font_size,
+        viewport,
+      );
+
+      let positions_x = tile_positions(
+        layer.repeat.x,
+        origin_rect_css.x(),
+        origin_rect_css.width(),
+        tile_w,
+        offset_x,
+        clip_rect_css.min_x(),
+        clip_rect_css.max_x(),
+      );
+      let positions_y = tile_positions(
+        layer.repeat.y,
+        origin_rect_css.y(),
+        origin_rect_css.height(),
+        tile_h,
+        offset_y,
+        clip_rect_css.min_y(),
+        clip_rect_css.max_y(),
+      );
+
+      let pixmap_w = tile_w.ceil().max(1.0) as u32;
+      let pixmap_h = tile_h.ceil().max(1.0) as u32;
+      let tile = match image {
+        BackgroundImage::LinearGradient { .. }
+        | BackgroundImage::RepeatingLinearGradient { .. }
+        | BackgroundImage::RadialGradient { .. }
+        | BackgroundImage::RepeatingRadialGradient { .. }
+        | BackgroundImage::ConicGradient { .. }
+        | BackgroundImage::RepeatingConicGradient { .. } => render_generated_border_image(
+          image,
+          style.color,
+          pixmap_w,
+          pixmap_h,
+          style.font_size,
+          style.root_font_size,
+          Some(viewport),
+        ),
+        BackgroundImage::Url(_) | BackgroundImage::None => None,
+      };
+      let Some(tile) = tile else { continue };
+      let Some(mask_tile) = mask_tile_from_image(&tile, layer.mode) else {
+        continue;
+      };
+
+      for ty in positions_y.iter().copied() {
+        for tx in positions_x.iter().copied() {
+          paint_mask_tile(
+            &mut mask_pixmap,
+            &mask_tile,
+            tx,
+            ty,
+            tile_w,
+            tile_h,
+            clip_rect_css,
+            self.scale,
+          );
+        }
+      }
+    }
+
+    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
+  }
+
   fn convert_stops(
     &self,
     stops: &[crate::paint::display_list::GradientStop],
@@ -2421,8 +2562,10 @@ impl DisplayListRenderer {
 
         let scaled_filters = self.ds_filters(&item.filters);
         let scaled_backdrop = self.ds_filters(&item.backdrop_filters);
-        let bounds = self.ds_rect(item.bounds);
+        let css_bounds = item.bounds;
+        let bounds = self.ds_rect(css_bounds);
         let radii = self.ds_radii(item.radii);
+        let mask = item.mask.clone();
 
         let is_isolated = item.is_isolated || !scaled_backdrop.is_empty();
         let manual_blend = if is_manual_blend(item.mix_blend_mode) && !is_isolated {
@@ -2456,7 +2599,8 @@ impl DisplayListRenderer {
             crate::paint::display_list::BlendMode::Normal
           )
           || !scaled_filters.is_empty()
-          || !scaled_backdrop.is_empty();
+          || !scaled_backdrop.is_empty()
+          || mask.is_some();
         if needs_layer {
           if manual_blend.is_some() {
             self.canvas.push_layer(1.0)?;
@@ -2476,6 +2620,8 @@ impl DisplayListRenderer {
           filters: scaled_filters,
           radii,
           mask_bounds: bounds,
+          mask,
+          css_bounds,
           manual_blend,
           culled: false,
         });
@@ -2493,6 +2639,8 @@ impl DisplayListRenderer {
             filters: Vec::new(),
             radii: BorderRadii::ZERO,
             mask_bounds: Rect::ZERO,
+            mask: None,
+            css_bounds: Rect::ZERO,
             manual_blend: None,
             culled: false,
           });
@@ -2507,6 +2655,11 @@ impl DisplayListRenderer {
         if record.needs_layer {
           if let Some(mode) = record.manual_blend {
             let (mut layer, opacity, _) = self.canvas.pop_layer_raw()?;
+            if let Some(mask_style) = record.mask.as_ref() {
+              if let Some(mask) = self.render_mask(mask_style, record.css_bounds) {
+                layer.apply_mask(&mask);
+              }
+            }
             if !record.filters.is_empty() {
               apply_filters(&mut layer, &record.filters, self.scale);
             }
@@ -2525,6 +2678,11 @@ impl DisplayListRenderer {
             }
             self.composite_manual_layer(&layer, opacity, mode)?;
           } else {
+            if let Some(mask_style) = record.mask.as_ref() {
+              if let Some(mask) = self.render_mask(mask_style, record.css_bounds) {
+                self.canvas.pixmap_mut().apply_mask(&mask);
+              }
+            }
             if !record.filters.is_empty() {
               apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
             }
@@ -2546,6 +2704,7 @@ impl DisplayListRenderer {
               self.canvas.pop_layer()?;
             }
           }
+
         } else {
           self.canvas.restore();
         }
@@ -4241,6 +4400,381 @@ fn render_generated_border_image(
   }
 }
 
+#[derive(Clone, Copy)]
+struct BackgroundRects {
+  border: Rect,
+  _padding: Rect,
+  _content: Rect,
+}
+
+fn resolve_length_for_paint(
+  len: &Length,
+  font_size: f32,
+  root_font_size: f32,
+  percentage_base: f32,
+  viewport: (f32, f32),
+) -> f32 {
+  len
+    .resolve_with_context(
+      Some(percentage_base),
+      viewport.0,
+      viewport.1,
+      font_size,
+      root_font_size,
+    )
+    .unwrap_or_else(|| {
+      if len.unit.is_absolute() {
+        len.to_px()
+      } else {
+        len.value * font_size
+      }
+    })
+}
+
+fn background_rects(rect: Rect, style: &ComputedStyle, viewport: Option<(f32, f32)>) -> BackgroundRects {
+  let base = rect.width().max(0.0);
+  let font_size = style.font_size;
+  let vp = viewport.unwrap_or((base, base));
+
+  let border_left = resolve_length_for_paint(
+    &style.border_left_width,
+    font_size,
+    style.root_font_size,
+    base,
+    vp,
+  );
+  let border_right = resolve_length_for_paint(
+    &style.border_right_width,
+    font_size,
+    style.root_font_size,
+    base,
+    vp,
+  );
+  let border_top = resolve_length_for_paint(
+    &style.border_top_width,
+    font_size,
+    style.root_font_size,
+    base,
+    vp,
+  );
+  let border_bottom = resolve_length_for_paint(
+    &style.border_bottom_width,
+    font_size,
+    style.root_font_size,
+    base,
+    vp,
+  );
+
+  let padding_left = resolve_length_for_paint(
+    &style.padding_left,
+    font_size,
+    style.root_font_size,
+    base,
+    vp,
+  );
+  let padding_right = resolve_length_for_paint(
+    &style.padding_right,
+    font_size,
+    style.root_font_size,
+    base,
+    vp,
+  );
+  let padding_top = resolve_length_for_paint(
+    &style.padding_top,
+    font_size,
+    style.root_font_size,
+    base,
+    vp,
+  );
+  let padding_bottom = resolve_length_for_paint(
+    &style.padding_bottom,
+    font_size,
+    style.root_font_size,
+    base,
+    vp,
+  );
+
+  let border = Rect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height());
+  let padding = Rect::from_xywh(
+    rect.x() + border_left,
+    rect.y() + border_top,
+    rect.width() - border_left - border_right,
+    rect.height() - border_top - border_bottom,
+  );
+  let content = Rect::from_xywh(
+    padding.x() + padding_left,
+    padding.y() + padding_top,
+    padding.width() - padding_left - padding_right,
+    padding.height() - padding_top - padding_bottom,
+  );
+
+  BackgroundRects {
+    border,
+    _padding: padding,
+    _content: content,
+  }
+}
+
+fn compute_background_size_from_value(
+  size: &BackgroundSize,
+  font_size: f32,
+  root_font_size: f32,
+  viewport: (f32, f32),
+  area_w: f32,
+  area_h: f32,
+  img_w: f32,
+  img_h: f32,
+) -> (f32, f32) {
+  let natural_w = if img_w > 0.0 { Some(img_w) } else { None };
+  let natural_h = if img_h > 0.0 { Some(img_h) } else { None };
+  let ratio = if img_w > 0.0 && img_h > 0.0 {
+    Some(img_w / img_h)
+  } else {
+    None
+  };
+
+  match size {
+    BackgroundSize::Keyword(BackgroundSizeKeyword::Cover) => {
+      if let (Some(w), Some(h)) = (natural_w, natural_h) {
+        let scale = (area_w / w).max(area_h / h);
+        (w * scale, h * scale)
+      } else {
+        (area_w.max(0.0), area_h.max(0.0))
+      }
+    }
+    BackgroundSize::Keyword(BackgroundSizeKeyword::Contain) => {
+      if let (Some(w), Some(h)) = (natural_w, natural_h) {
+        let scale = (area_w / w).min(area_h / h);
+        (w * scale, h * scale)
+      } else {
+        (area_w.max(0.0), area_h.max(0.0))
+      }
+    }
+    BackgroundSize::Explicit(x, y) => {
+      let resolve = |component: BackgroundSizeComponent, area: f32| -> Option<f32> {
+        match component {
+          BackgroundSizeComponent::Auto => None,
+          BackgroundSizeComponent::Length(len) => {
+            Some(resolve_length_for_paint(&len, font_size, root_font_size, area, viewport).max(0.0))
+          }
+        }
+      };
+
+      let resolved_x = resolve(*x, area_w);
+      let resolved_y = resolve(*y, area_h);
+
+      match (resolved_x, resolved_y) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => {
+          if let Some(r) = ratio {
+            (w, (w / r).max(0.0))
+          } else if let Some(h) = natural_h {
+            (w, h)
+          } else {
+            (w, area_h.max(0.0))
+          }
+        }
+        (None, Some(h)) => {
+          if let Some(r) = ratio {
+            ((h * r).max(0.0), h)
+          } else if let Some(w) = natural_w {
+            (w, h)
+          } else {
+            (area_w.max(0.0), h)
+          }
+        }
+        (None, None) => {
+          if let (Some(w), Some(h)) = (natural_w, natural_h) {
+            (w, h)
+          } else {
+            (area_w.max(0.0), area_h.max(0.0))
+          }
+        }
+      }
+    }
+  }
+}
+
+fn resolve_background_offset(
+  pos: BackgroundPosition,
+  area_w: f32,
+  area_h: f32,
+  tile_w: f32,
+  tile_h: f32,
+  font_size: f32,
+  root_font_size: f32,
+  viewport: (f32, f32),
+) -> (f32, f32) {
+  let resolve_axis =
+    |comp: crate::style::types::BackgroundPositionComponent, area: f32, tile: f32| -> f32 {
+      let available = area - tile;
+      let offset = resolve_length_for_paint(&comp.offset, font_size, root_font_size, available, viewport);
+      comp.alignment * available + offset
+    };
+
+  match pos {
+    BackgroundPosition::Position { x, y } => {
+      let x = resolve_axis(x, area_w, tile_w);
+      let y = resolve_axis(y, area_h, tile_h);
+      (x, y)
+    }
+  }
+}
+
+fn round_tile_length(area: f32, tile: f32) -> f32 {
+  if tile <= 0.0 || area <= 0.0 {
+    return tile;
+  }
+  let count = (area / tile).round().max(1.0);
+  area / count
+}
+
+fn tile_positions(
+  repeat: BackgroundRepeatKeyword,
+  area_start: f32,
+  area_len: f32,
+  tile_len: f32,
+  offset: f32,
+  clip_start: f32,
+  clip_end: f32,
+) -> Vec<f32> {
+  if tile_len <= 0.0 || area_len <= 0.0 {
+    return Vec::new();
+  }
+  match repeat {
+    BackgroundRepeatKeyword::NoRepeat => {
+      let start = area_start + offset;
+      if start + tile_len < clip_start || start > clip_end {
+        Vec::new()
+      } else {
+        vec![start]
+      }
+    }
+    BackgroundRepeatKeyword::Repeat => {
+      let mut positions = Vec::new();
+      let first = area_start + offset;
+      let mut cursor = first;
+      while cursor < clip_end {
+        if cursor + tile_len >= clip_start - tile_len {
+          positions.push(cursor);
+        }
+        cursor += tile_len;
+      }
+      positions
+    }
+    BackgroundRepeatKeyword::Space => {
+      let count = (area_len / tile_len).floor();
+      if count < 1.0 {
+        vec![area_start + (area_len - tile_len) * 0.5]
+      } else if count < 2.0 {
+        vec![area_start + (area_len - tile_len) * 0.5]
+      } else {
+        let spacing = (area_len - tile_len * count) / (count - 1.0);
+        let mut positions = Vec::with_capacity(count as usize);
+        let mut cursor = area_start;
+        for _ in 0..(count as usize) {
+          positions.push(cursor);
+          cursor += tile_len + spacing;
+        }
+        positions
+      }
+    }
+    BackgroundRepeatKeyword::Round => {
+      let count = (area_len / tile_len).round().max(1.0);
+      let len = area_len / count;
+      let mut positions = Vec::new();
+      let mut cursor = area_start;
+      while cursor < area_start + area_len - 1e-3 {
+        positions.push(cursor);
+        cursor += len;
+      }
+      positions
+    }
+  }
+}
+
+fn mask_value_from_pixel(pixel: &[u8], mode: MaskMode) -> u8 {
+  let a = pixel.get(3).copied().unwrap_or(0) as f32 / 255.0;
+  let value = match mode {
+    MaskMode::Alpha => a,
+    MaskMode::Luminance => {
+      if a <= 0.0 {
+        0.0
+      } else {
+        let r = pixel.get(0).copied().unwrap_or(0) as f32 / 255.0 / a;
+        let g = pixel.get(1).copied().unwrap_or(0) as f32 / 255.0 / a;
+        let b = pixel.get(2).copied().unwrap_or(0) as f32 / 255.0 / a;
+        (0.2126 * r + 0.7152 * g + 0.0722 * b) * a
+      }
+    }
+  };
+  (value * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> Option<Pixmap> {
+  let size = IntSize::from_wh(tile.width(), tile.height())?;
+  let mut data = Vec::with_capacity(tile.data().len());
+  for chunk in tile.data().chunks(4) {
+    let v = mask_value_from_pixel(chunk, mode);
+    data.extend_from_slice(&[v, v, v, v]);
+  }
+  Pixmap::from_vec(data, size)
+}
+
+fn paint_mask_tile(
+  dest: &mut Pixmap,
+  tile: &Pixmap,
+  tx: f32,
+  ty: f32,
+  tile_w: f32,
+  tile_h: f32,
+  clip_rect: Rect,
+  scale: f32,
+) {
+  if tile_w <= 0.0 || tile_h <= 0.0 {
+    return;
+  }
+  let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+  let Some(intersection) = tile_rect.intersection(clip_rect) else {
+    return;
+  };
+  if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+    return;
+  }
+
+  let device_clip = Rect::from_xywh(
+    intersection.x() * scale,
+    intersection.y() * scale,
+    intersection.width() * scale,
+    intersection.height() * scale,
+  );
+  if device_clip.width() <= 0.0 || device_clip.height() <= 0.0 {
+    return;
+  }
+  let Some(src_rect) = tiny_skia::Rect::from_xywh(
+    device_clip.x(),
+    device_clip.y(),
+    device_clip.width(),
+    device_clip.height(),
+  ) else {
+    return;
+  };
+
+  let scale_x = tile_w / tile.width() as f32;
+  let scale_y = tile_h / tile.height() as f32;
+
+  let mut paint = tiny_skia::Paint::default();
+  paint.shader = Pattern::new(
+    tile.as_ref(),
+    SpreadMode::Pad,
+    tiny_skia::FilterQuality::Bilinear,
+    1.0,
+    Transform::from_row(scale_x * scale, 0.0, 0.0, scale_y * scale, tx * scale, ty * scale),
+  );
+  paint.anti_alias = false;
+  dest.fill_rect(src_rect, &paint, Transform::identity(), None);
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -4942,6 +5476,7 @@ mod tests {
       }],
       backdrop_filters: Vec::new(),
       radii: BorderRadii::ZERO,
+            mask: None,
     }));
     list.push(DisplayItem::FillRect(FillRectItem {
       rect: Rect::from_xywh(10.0, 10.0, 20.0, 10.0),
@@ -5073,6 +5608,7 @@ mod tests {
         filters: Vec::new(),
         backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
         radii: BorderRadii::ZERO,
+            mask: None,
       },
     ));
     list.push(DisplayItem::FillRect(FillRectItem {
@@ -5451,6 +5987,7 @@ mod tests {
         filters: Vec::new(),
         backdrop_filters: Vec::new(),
         radii: BorderRadii::ZERO,
+            mask: None,
       },
     ));
     list.push(DisplayItem::PushClip(ClipItem {
@@ -5494,6 +6031,7 @@ mod tests {
       filters: Vec::new(),
       backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
       radii: BorderRadii::ZERO,
+            mask: None,
     }));
     list.push(DisplayItem::PopStackingContext);
 
@@ -5557,6 +6095,7 @@ mod tests {
         filters: Vec::new(),
         backdrop_filters: Vec::new(),
         radii: BorderRadii::ZERO,
+            mask: None,
       },
     ));
     list.push(DisplayItem::FillRect(FillRectItem {
@@ -5598,6 +6137,7 @@ mod tests {
         filters: Vec::new(),
         backdrop_filters: Vec::new(),
         radii: BorderRadii::ZERO,
+            mask: None,
       },
     ));
     list.push(DisplayItem::FillRect(FillRectItem {

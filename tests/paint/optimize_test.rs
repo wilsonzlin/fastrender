@@ -923,6 +923,7 @@ fn test_stacking_context_preserved() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(make_fill_rect(0.0, 0.0, 100.0, 100.0, Rgba::RED));
   list.push(DisplayItem::PopStackingContext);
@@ -954,6 +955,7 @@ fn stacking_context_filters_expand_cull_bounds() {
     }],
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(make_fill_rect(-10.0, 0.0, 5.0, 5.0, Rgba::RED));
   list.push(DisplayItem::PopStackingContext);
@@ -986,6 +988,7 @@ fn offscreen_filtered_stacking_context_is_culled() {
     }],
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(make_fill_rect(500.0, 500.0, 10.0, 10.0, Rgba::RED));
   list.push(DisplayItem::PopStackingContext);
