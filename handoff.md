@@ -11,6 +11,7 @@
 - Expanded scrolling: post-layout scroll snap metadata with viewport/element offsets and snap-stop tie-breaking, plus a scroll chaining model honoring `overscroll-behavior`, clamping to bounds even without snap containers, and applying snap targets during chaining.
 - Added mask-layer parsing/rendering and display-list mask application (alpha/luminance from gradients/painted images), alongside manual HSL/HSV/OKLCH/plus-darker blending, backdrop-filter isolation, and background-blend fixes across painter/display list. Inline SVG rendering now serializes styled subtrees with document `<style>` CSS, applies computed fonts/colors to roots, provides a foreignObject fallback, and covers masks/gradients/tests.
 - Expanded CSS math support: trig/exponential/log/round/mod/rem/clamped functions, shared angle parsing for calc/math across properties/gradients/transforms, and stricter unit validation.
+- Added motion path transforms with path flattening, tests, and transform ordering fixes.
 - Added shape-outside image/gradient support for float contours with extensive layout regressions.
 - Improved ::first-letter/::first-line handling with RTL-aware punctuation/graphemes, inline float handling, and cascade filtering plus tests.
 - Implemented MathML parsing/layout/paint pipeline with rendering regressions.
@@ -37,6 +38,7 @@
 - `adf2356`, `c4d899f`, `e9d5de9` (MathML parsing/layout/paint)
 - `aefb736` (CSS ruby layout/spacing)
 - `5a12b39`, `5e8bf8e` (subgrid plumbing and tests)
+- `c60291d` (motion path transforms)
 - `a9b5431`, `db17be3`, `82fb7b7`, `8ecd045` (paged media parsing/pagination/tests)
 
 ## Testing
@@ -52,6 +54,6 @@
 - Font-display timing constants are shortened for tests (block/auto ~300ms; fallback block 100ms + 400ms swap; optional 100ms). Block/auto wait only through the block window, loads continue asynchronously, and initial shaping may use fallbacks until web fonts finish loading.
 - Scroll snapping requires providing element offsets in `ScrollState.elements`; `ScrollSnapResult.updates` lists per-container behavior. Scroll chaining processes innermost→outermost containers, honors `overscroll-behavior`, clamps to bounds, and applies snap targets during chaining.
 - Display-list masks currently handle gradient-generated sources; URL mask images remain unhandled on the display-list path.
-- Animations/selection/cursor motion path/content-visibility updates from pending workers are not integrated (workers 21, 29, 30, 32, 4, 7, 3, 13 not merged).
+- Animations/selection/cursor/content-visibility updates from pending workers are not integrated (workers 21, 29, 30, 4, 7, 3, 13 not merged).
 - CSS math: trig/inverse trig expect angle inputs; nonlinear math on lengths requires simple single-unit lengths (unit-mismatched expressions error).
 - Inline SVG serialization inlines only document `<style>` CSS (no external/imported sheets), applies computed fonts/colors to the root, and falls back to painting foreignObject children when unsupported.
