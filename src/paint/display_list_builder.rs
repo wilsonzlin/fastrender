@@ -532,8 +532,20 @@ impl DisplayListBuilder {
     let (filters, backdrop_filters, radii) = root_style
       .map(|style| {
         (
-          Self::resolve_filters(&style.filter, style, self.viewport, &self.font_ctx),
-          Self::resolve_filters(&style.backdrop_filter, style, self.viewport, &self.font_ctx),
+          Self::resolve_filters(
+            &style.filter,
+            style,
+            self.viewport,
+            &self.font_ctx,
+            self.image_cache.as_ref(),
+          ),
+          Self::resolve_filters(
+            &style.backdrop_filter,
+            style,
+            self.viewport,
+            &self.font_ctx,
+            self.image_cache.as_ref(),
+          ),
           Self::resolve_border_radii(Some(style), context.bounds),
         )
       })
@@ -1346,6 +1358,7 @@ impl DisplayListBuilder {
     style: &ComputedStyle,
     viewport: Option<(f32, f32)>,
     font_ctx: &FontContext,
+    image_cache: Option<&ImageCache>,
   ) -> Vec<ResolvedFilter> {
     let viewport = viewport.unwrap_or((0.0, 0.0));
     filters
@@ -1379,6 +1392,9 @@ impl DisplayListBuilder {
         crate::style::types::FilterFunction::Opacity(v) => {
           Some(ResolvedFilter::Opacity(v.clamp(0.0, 1.0)))
         }
+        crate::style::types::FilterFunction::Url(url) => image_cache
+          .and_then(|cache| crate::paint::svg_filter::load_svg_filter(url, cache))
+          .map(ResolvedFilter::SvgFilter),
         crate::style::types::FilterFunction::DropShadow(shadow) => {
           let color = match shadow.color {
             crate::style::types::FilterColor::CurrentColor => style.color,
@@ -5558,6 +5574,7 @@ mod tests {
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
+      None,
     );
 
     match filters.first() {
@@ -5592,6 +5609,7 @@ mod tests {
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
+      None,
     );
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
@@ -5616,6 +5634,7 @@ mod tests {
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
+      None,
     );
     assert_eq!(filters.len(), 3);
     assert!(filters

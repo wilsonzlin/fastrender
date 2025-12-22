@@ -1335,6 +1335,7 @@ pub enum FilterFunction {
   Invert(f32),
   Opacity(f32),
   DropShadow(Box<FilterShadow>),
+  Url(String),
 }
 
 /// Transform origin for x/y axes

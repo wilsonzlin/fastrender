@@ -8942,6 +8942,11 @@ fn parse_filter_list(value: &PropertyValue) -> Option<Vec<FilterFunction>> {
       break;
     }
 
+    if let Ok(url) = parser.try_parse(|p| p.expect_url()) {
+      filters.push(FilterFunction::Url(url.as_ref().to_string()));
+      continue;
+    }
+
     let func_name = match parser.next() {
       Ok(Token::Function(name)) => name.as_ref().to_ascii_lowercase(),
       _ => return None,
@@ -9001,6 +9006,19 @@ fn parse_filter_function<'i, 't>(
   }
 
   match name {
+    "url" => {
+      input.skip_whitespace();
+      let url = input
+        .try_parse(|p| p.expect_url().map(|u| u.as_ref().to_string()))
+        .or_else(|_| input.try_parse(|p| p.expect_string().map(|s| s.as_ref().to_string())))
+        .or_else(|_| input.try_parse(|p| p.expect_ident_cloned().map(|s| s.to_string())))
+        .map_err(|_| input.new_custom_error(()))?;
+      input.skip_whitespace();
+      if !input.is_exhausted() {
+        return Err(input.new_custom_error(()));
+      }
+      Ok(FilterFunction::Url(url))
+    }
     "blur" => {
       input.skip_whitespace();
       let len = if input.is_exhausted() {
@@ -16813,6 +16831,16 @@ mod tests {
   fn filter_none_returns_empty_list() {
     let filters = parse_filter_list(&PropertyValue::Keyword("none".to_string())).expect("filters");
     assert!(filters.is_empty());
+  }
+
+  #[test]
+  fn parses_svg_url_filter() {
+    let filters = parse_filter_list(&PropertyValue::Keyword(
+      "url(\"filters.svg#blur\")".to_string(),
+    ))
+    .expect("filters");
+    assert_eq!(filters.len(), 1);
+    assert!(matches!(filters.first(), Some(FilterFunction::Url(url)) if url == "filters.svg#blur"));
   }
 
   #[test]

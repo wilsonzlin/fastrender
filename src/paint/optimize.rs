@@ -607,7 +607,7 @@ impl DisplayListOptimizer {
     let mut bottom: f32 = 0.0;
 
     for filter in filters {
-      match *filter {
+      match filter {
         ResolvedFilter::Blur(radius) => {
           let delta = radius.abs() * 3.0;
           left = left.max(delta);

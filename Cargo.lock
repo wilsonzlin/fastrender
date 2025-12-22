@@ -547,6 +547,7 @@ dependencies = [
  "ureq",
  "url",
  "urlencoding",
+ "usvg",
  "wuff",
 ]
 

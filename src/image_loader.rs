@@ -220,7 +220,7 @@ impl ImageCache {
   }
 
   /// Resolve a potentially relative URL to an absolute URL
-  fn resolve_url(&self, url: &str) -> String {
+  pub fn resolve_url(&self, url: &str) -> String {
     if url.is_empty() {
       return String::new();
     }

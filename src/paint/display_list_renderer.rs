@@ -498,24 +498,24 @@ fn set_paint_color(paint: &mut tiny_skia::Paint, color: &Rgba, opacity: f32) {
 
 fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
   for filter in filters {
-    match *filter {
-      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
+    match filter {
+      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
       ResolvedFilter::Brightness(amount) => {
-        apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
       }
       ResolvedFilter::Contrast(amount) => {
-        apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (apply_contrast(c, *amount), a))
       }
       ResolvedFilter::Grayscale(amount) => {
-        apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (grayscale(c, *amount), a))
       }
-      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, amount), a)),
+      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, *amount), a)),
       ResolvedFilter::Saturate(amount) => {
-        apply_color_filter(pixmap, |c, a| (saturate(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))
       }
-      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, deg), a)),
-      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, amount), a)),
-      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * amount)),
+      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a)),
+      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a)),
+      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount)),
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
@@ -528,8 +528,11 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
         offset_y * scale,
         blur_radius * scale,
         spread * scale,
-        color,
+        *color,
       ),
+      ResolvedFilter::SvgFilter(ref filter) => {
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap);
+      }
     }
   }
 }
@@ -541,9 +544,9 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
   let mut bottom: f32 = 0.0;
 
   for filter in filters {
-    match *filter {
+    match filter {
       ResolvedFilter::Blur(radius) => {
-        let delta = (radius * scale).abs() * 3.0;
+        let delta = (*radius * scale).abs() * 3.0;
         left += delta;
         right += delta;
         top += delta;
@@ -5522,6 +5525,56 @@ mod tests {
     assert!(
       l < l0 && t < t0 && r < r0 && b < b0,
       "reduced spread should shrink outsets"
+    );
+  }
+
+  #[test]
+  fn svg_filter_data_url_applies() {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><filter id='f'><feFlood flood-color='rgb(255,0,0)' flood-opacity='1' result='f'/><feComposite in='f' in2='SourceAlpha' operator='in'/></filter></svg>";
+    let data_url = format!(
+      "data:image/svg+xml;base64,{}",
+      general_purpose::STANDARD.encode(svg)
+    );
+
+    let cache = crate::image_loader::ImageCache::new();
+    let filter =
+      crate::paint::svg_filter::load_svg_filter(&data_url, &cache).expect("parsed svg filter");
+
+    let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(1.0, 1.0, 8.0, 8.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: vec![
+        ResolvedFilter::Brightness(0.0),
+        ResolvedFilter::SvgFilter(filter),
+      ],
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: Rect::from_xywh(1.0, 1.0, 8.0, 8.0),
+      color: Rgba::from_rgba8(0, 0, 255, 255),
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let center = pixel(&pixmap, 5, 5);
+    assert!(
+      center.0 > center.2,
+      "svg filter should tint output toward red"
+    );
+    assert!(
+      center.1 < center.0,
+      "red flood should dominate other channels"
     );
   }
 

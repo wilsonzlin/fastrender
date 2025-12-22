@@ -1516,6 +1516,7 @@ pub enum ResolvedFilter {
     spread: f32,
     color: Rgba,
   },
+  SvgFilter(Arc<crate::paint::svg_filter::SvgFilter>),
 }
 
 // ============================================================================
