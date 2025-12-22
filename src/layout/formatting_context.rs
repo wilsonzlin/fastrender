@@ -77,13 +77,14 @@ pub enum IntrinsicSizingMode {
 }
 
 thread_local! {
-    static INTRINSIC_INLINE_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), f32>> =
+    static INTRINSIC_INLINE_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
         RefCell::new(HashMap::new());
 }
 
 static CACHE_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
 static CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
 static CACHE_STORES: AtomicUsize = AtomicUsize::new(0);
+static CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
 static BLOCK_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 static FLEX_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 static INLINE_INTRINSIC_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -103,7 +104,13 @@ fn cache_key(
 pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) -> Option<f32> {
   CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
   let key = cache_key(node, mode)?;
-  let hit = INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow().get(&key).copied());
+  let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
+  let hit = INTRINSIC_INLINE_CACHE.with(|cache| {
+    cache
+      .borrow()
+      .get(&key)
+      .and_then(|(entry_epoch, value)| (*entry_epoch == epoch).then_some(*value))
+  });
   if hit.is_some() {
     CACHE_HITS.fetch_add(1, Ordering::Relaxed);
   }
@@ -111,9 +118,10 @@ pub(crate) fn intrinsic_cache_lookup(node: &BoxNode, mode: IntrinsicSizingMode) 
 }
 
 pub(crate) fn intrinsic_cache_store(node: &BoxNode, mode: IntrinsicSizingMode, value: f32) {
+  let epoch = CACHE_EPOCH.load(Ordering::Relaxed);
   if let Some(key) = cache_key(node, mode) {
     INTRINSIC_INLINE_CACHE.with(|cache| {
-      cache.borrow_mut().insert(key, value);
+      cache.borrow_mut().insert(key, (epoch, value));
     });
     CACHE_STORES.fetch_add(1, Ordering::Relaxed);
   }
@@ -123,6 +131,21 @@ pub(crate) fn intrinsic_cache_clear() {
   INTRINSIC_INLINE_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
+/// Sets the active intrinsic cache epoch, clearing stale entries when it changes.
+///
+/// Epochs are used instead of raw clears so callers can opt-in to cache reuse (by
+/// reusing the same epoch) or enforce invalidation (by bumping the epoch).
+pub(crate) fn intrinsic_cache_use_epoch(epoch: usize, reset_counters: bool) {
+  let previous = CACHE_EPOCH.swap(epoch.max(1), Ordering::Relaxed);
+  if previous != epoch {
+    intrinsic_cache_clear();
+  }
+  if reset_counters {
+    intrinsic_cache_reset_counters();
+  }
+}
+
+/// Returns the currently active epoch for intrinsic sizing caches.
 pub(crate) fn intrinsic_cache_reset_counters() {
   CACHE_LOOKUPS.store(0, Ordering::Relaxed);
   CACHE_HITS.store(0, Ordering::Relaxed);
@@ -465,5 +488,31 @@ mod tests {
     // Verify that our trait requires Send + Sync
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<StubFormattingContext>();
+  }
+
+  #[test]
+  fn intrinsic_cache_epoch_invalidation() {
+    intrinsic_cache_use_epoch(1, true);
+
+    let mut node = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![],
+    );
+    node.id = 1;
+
+    intrinsic_cache_store(&node, IntrinsicSizingMode::MinContent, 5.0);
+    assert_eq!(
+      intrinsic_cache_lookup(&node, IntrinsicSizingMode::MinContent),
+      Some(5.0)
+    );
+
+    intrinsic_cache_use_epoch(2, false);
+    assert_eq!(
+      intrinsic_cache_lookup(&node, IntrinsicSizingMode::MinContent),
+      None
+    );
+
+    intrinsic_cache_use_epoch(1, true);
   }
 }

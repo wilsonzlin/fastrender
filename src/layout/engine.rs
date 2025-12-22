@@ -18,6 +18,7 @@
 use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
+use crate::layout::formatting_context::intrinsic_cache_use_epoch;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation;
@@ -27,6 +28,8 @@ use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 /// Configuration for layout engine
 ///
@@ -137,9 +140,9 @@ impl Default for LayoutConfig {
 
 /// Statistics about layout operations
 ///
-/// Tracks metrics about layout performance. Currently returns zeros
-/// as caching is not yet implemented, but the API is stable for
-/// future use.
+/// Tracks metrics about layout performance. Cache hit/miss counts reflect
+/// intrinsic sizing cache usage, and `total_layouts` reports how many layout
+/// passes the engine has orchestrated.
 ///
 /// # Examples
 ///
@@ -152,10 +155,10 @@ impl Default for LayoutConfig {
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LayoutStats {
-  /// Number of cache hits (future)
+  /// Number of cache hits (intrinsic sizing cache)
   pub cache_hits: usize,
 
-  /// Number of cache misses (future)
+  /// Number of cache misses (intrinsic sizing cache)
   pub cache_misses: usize,
 
   /// Total number of layout operations performed
@@ -170,13 +173,30 @@ pub struct LayoutStats {
 /// - Style snapshot (for invalidation)
 #[derive(Debug, Default)]
 struct LayoutCache {
-  // Future: HashMap<CacheKey, CachedFragment>
-  _placeholder: (),
+  epoch: AtomicUsize,
+  runs: AtomicUsize,
 }
 
 impl LayoutCache {
   fn new() -> Self {
-    Self { _placeholder: () }
+    Self {
+      epoch: AtomicUsize::new(0),
+      runs: AtomicUsize::new(0),
+    }
+  }
+
+  fn start_run(&self, reset: bool) -> usize {
+    let epoch = if reset {
+      self.epoch.fetch_add(1, Ordering::Relaxed) + 1
+    } else {
+      self.epoch.load(Ordering::Relaxed).max(1)
+    };
+    self.runs.fetch_add(1, Ordering::Relaxed);
+    epoch
+  }
+
+  fn run_count(&self) -> usize {
+    self.runs.load(Ordering::Relaxed)
   }
 }
 
@@ -225,7 +245,7 @@ pub struct LayoutEngine {
   font_context: FontContext,
 
   /// Layout cache (placeholder for future optimization)
-  _cache: LayoutCache,
+  cache: LayoutCache,
 }
 
 impl LayoutEngine {
@@ -257,7 +277,7 @@ impl LayoutEngine {
       config,
       factory,
       font_context,
-      _cache: LayoutCache::new(),
+      cache: LayoutCache::new(),
     }
   }
 
@@ -335,6 +355,9 @@ impl LayoutEngine {
     box_tree: &BoxTree,
     reset_caches: bool,
   ) -> Result<FragmentTree, LayoutError> {
+    let epoch = self.cache.start_run(reset_caches);
+    intrinsic_cache_use_epoch(epoch, reset_caches);
+
     if reset_caches {
       // Reset any per-run caches so a fresh layout starts from a clean slate.
       self.factory.reset_caches();
@@ -516,23 +539,15 @@ impl LayoutEngine {
 
   /// Returns statistics about layout operations
   ///
-  /// Currently returns zeros as caching is not yet implemented,
-  /// but the API is stable for future use.
-  ///
-  /// # Examples
-  ///
-  /// ```
-  /// use fastrender::LayoutEngine;
-  ///
-  /// let engine = LayoutEngine::with_defaults();
-  /// let stats = engine.stats();
-  /// assert_eq!(stats.cache_hits, 0);
-  /// ```
+  /// Cache hit/miss counts reflect intrinsic sizing cache usage while
+  /// `total_layouts` reports how many layout passes have been executed.
   pub fn stats(&self) -> LayoutStats {
+    let (lookups, hits, _, _, _, _) = crate::layout::formatting_context::intrinsic_cache_stats();
+    let cache_misses = lookups.saturating_sub(hits);
     LayoutStats {
-      cache_hits: 0,
-      cache_misses: 0,
-      total_layouts: 0,
+      cache_hits: hits,
+      cache_misses,
+      total_layouts: self.cache.run_count(),
     }
   }
 

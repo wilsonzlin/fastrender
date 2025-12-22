@@ -1126,6 +1126,7 @@ impl FastRender {
     self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
     intrinsic_cache_clear();
     let report_intrinsic = std::env::var_os("FASTR_INTRINSIC_STATS").is_some();
+    let report_layout_cache = std::env::var_os("FASTR_LAYOUT_CACHE_STATS").is_some();
     if report_intrinsic {
       intrinsic_cache_reset_counters();
     }
@@ -1403,6 +1404,14 @@ impl FastRender {
                 flex_calls,
                 inline_calls
             );
+    }
+
+    if report_layout_cache {
+      let stats = self.layout_engine.stats();
+      eprintln!(
+        "layout_cache hits={} misses={} total_passes={}",
+        stats.cache_hits, stats.cache_misses, stats.total_layouts
+      );
     }
 
     Ok(fragment_tree)
@@ -4193,12 +4202,14 @@ mod tests {
     let target_id = styled_node_id_by_id(&styled_with_containers, "target").expect("target id");
     let target_ancestors = styled_ancestor_ids(&styled_with_containers, "target");
     let cond = crate::style::media::MediaQuery::parse("(width >= 500px)").unwrap();
-    let matches = cq_ctx.matches(target_id, &target_ancestors, &[
-      crate::css::types::ContainerCondition {
+    let matches = cq_ctx.matches(
+      target_id,
+      &target_ancestors,
+      &[crate::css::types::ContainerCondition {
         name: None,
         query: cond.clone(),
-      },
-    ]);
+      }],
+    );
     eprintln!("container match result: {}", matches);
     assert!(matches, "container context should match width query");
     let color = styled_color_by_id(&styled_with_containers, "target").expect("styled color");

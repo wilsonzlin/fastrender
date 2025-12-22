@@ -26,5 +26,6 @@ These env vars are read in the rendering binaries (`render_pages`, `fetch_and_re
   - `FASTR_FLEX_PROFILE_NODE_KEYS=1`
   - `FASTR_FLEX_PROFILE_HIST=1`
 - `FASTR_INTRINSIC_STATS=1` — reports intrinsic sizing cache hits/misses/lookups after layout.
+- `FASTR_LAYOUT_CACHE_STATS=1` — reports layout cache stats (intrinsic cache hits/misses, layout pass count).
 
 All profiling logs are best run in release builds to reflect real performance.

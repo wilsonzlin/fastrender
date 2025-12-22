@@ -33,6 +33,7 @@ These are emitted by the paint pipeline:
 - `FASTR_LAYOUT_PROFILE=1` – layout-context profiling.
 - `FASTR_FLEX_PROFILE=1` – flex profiling (with additional `FASTR_FLEX_PROFILE_*` knobs).
 - `FASTR_INTRINSIC_STATS=1` – intrinsic sizing cache stats.
+- `FASTR_LAYOUT_CACHE_STATS=1` – layout cache stats (intrinsic cache hits/misses and pass counts).
 
 ## Media query overrides
 
