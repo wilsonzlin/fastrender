@@ -6489,6 +6489,21 @@ pub fn apply_declaration_with_base(
         };
       }
     }
+    "page" => {
+      match &resolved_value {
+        PropertyValue::Keyword(kw) => {
+          if kw.eq_ignore_ascii_case("auto") {
+            styles.page = None;
+          } else {
+            styles.page = Some(kw.clone());
+          }
+        }
+        PropertyValue::String(s) => {
+          styles.page = Some(s.clone());
+        }
+        _ => {}
+      }
+    }
     "widows" => {
       if let PropertyValue::Number(n) = &resolved_value {
         styles.widows = n.max(1.0).floor() as usize;

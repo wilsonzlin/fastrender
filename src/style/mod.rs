@@ -400,6 +400,8 @@ pub struct ComputedStyle {
   pub break_before: BreakBetween,
   pub break_after: BreakBetween,
   pub break_inside: BreakInside,
+  /// Named page this element should be placed on (CSS `page` property).
+  pub page: Option<String>,
   /// Minimum number of lines at the bottom of a fragment
   pub widows: usize,
   /// Minimum number of lines at the top of a fragment
@@ -709,6 +711,7 @@ impl Default for ComputedStyle {
       break_before: BreakBetween::Auto,
       break_after: BreakBetween::Auto,
       break_inside: BreakInside::Auto,
+      page: None,
       widows: 2,
       orphans: 2,
       z_index: None,

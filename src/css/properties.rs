@@ -325,12 +325,17 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "transform-style",
   "transform-origin",
   "backface-visibility",
+  "bleed",
+  "marks",
+  "page",
   "unicode-bidi",
   "user-select",
   "vertical-align",
   "visibility",
   "white-space",
   "width",
+  "size",
+  "trim",
   "will-change",
   "word-break",
   "word-spacing",
@@ -876,15 +881,16 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         | "scrollbar-color"
         | "margin"
         | "padding"
-        | "border-inline"
-        | "border-inline-start"
-        | "border-inline-end"
-        | "border-block"
-        | "border-block-start"
-        | "border-block-end"
-        | "outline"
-        | "text-combine-upright"
-    )
+      | "border-inline"
+      | "border-inline-start"
+      | "border-inline-end"
+      | "border-block"
+      | "border-block-start"
+      | "border-block-end"
+      | "outline"
+      | "size"
+      | "text-combine-upright"
+  )
   {
     let mut parts = Vec::new();
     for token in tokens {
