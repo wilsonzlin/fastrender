@@ -4016,11 +4016,11 @@ fn apply_top_layer_state(node: &mut DomNode, modal_open: bool, inside_modal: boo
     subtree_has_modal |= child_contains_modal;
   }
 
-  if let crate::dom::DomNodeType::Element { attributes, .. } = &mut node.node_type {
-    if modal_open && !subtree_has_modal {
-      set_attr(attributes, "data-fastr-inert", "true");
-    } else {
-      remove_attr(attributes, "data-fastr-inert");
+  if modal_open {
+    if let crate::dom::DomNodeType::Element { attributes, .. } = &mut node.node_type {
+      if !subtree_has_modal {
+        set_attr(attributes, "data-fastr-inert", "true");
+      }
     }
   }
 
