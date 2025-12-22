@@ -975,7 +975,7 @@ mod tests {
     let rendered = solid_png(1, 1, [255, 255, 255, 255]);
     let expected = solid_png(1, 1, [0, 0, 0, 255]);
 
-    let diff_png = generate_diff_image(&rendered, &expected).unwrap();
+    let diff_png = generate_diff_image(&rendered, &expected, 0).unwrap();
     let diff_image = decode_png(&diff_png).unwrap();
 
     assert_eq!(diff_image.dimensions(), (1, 1));
