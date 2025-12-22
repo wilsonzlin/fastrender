@@ -59,12 +59,15 @@ use crate::style::types::BorderImageSliceValue;
 use crate::style::types::BorderImageWidth;
 use crate::style::types::BorderImageWidthValue;
 use crate::style::types::BorderStyle as CssBorderStyle;
+use crate::style::types::BackfaceVisibility;
 use crate::style::types::TextDecorationStyle;
 use crate::style::types::TextEmphasisFill;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::values::Length;
+#[cfg(test)]
+use crate::style::types::TransformStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
@@ -724,6 +727,8 @@ pub struct DisplayListRenderer {
   stacking_layers: Vec<StackingRecord>,
   blend_stack: Vec<Option<BlendMode>>,
   scale: f32,
+  transform_stack: Vec<Transform3D>,
+  culled_depth: usize,
 }
 
 #[derive(Debug)]
@@ -732,6 +737,7 @@ struct StackingRecord {
   filters: Vec<ResolvedFilter>,
   radii: BorderRadii,
   mask_bounds: Rect,
+  culled: bool,
 }
 
 impl DisplayListRenderer {
@@ -756,6 +762,31 @@ impl DisplayListRenderer {
       self.ds_len(affine.e),
       self.ds_len(affine.f),
     )
+  }
+
+  fn backface_is_hidden(transform: &Transform3D) -> bool {
+    let project = |x: f32, y: f32, m: &Transform3D| -> [f32; 3] {
+      let (tx, ty, tz, tw) = m.transform_point(x, y, 0.0);
+      if tw.abs() < 1e-6 {
+        [tx, ty, tz]
+      } else {
+        [tx / tw, ty / tw, tz / tw]
+      }
+    };
+
+    let p0 = project(0.0, 0.0, transform);
+    let p1 = project(1.0, 0.0, transform);
+    let p2 = project(0.0, 1.0, transform);
+    let ux = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+    let uy = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+
+    let normal = [
+      ux[1] * uy[2] - ux[2] * uy[1],
+      ux[2] * uy[0] - ux[0] * uy[2],
+      ux[0] * uy[1] - ux[1] * uy[0],
+    ];
+
+    normal[2] < 0.0
   }
 
   #[inline]
@@ -934,6 +965,8 @@ impl DisplayListRenderer {
       stacking_layers: Vec::new(),
       blend_stack: Vec::new(),
       scale,
+      transform_stack: vec![Transform3D::identity()],
+      culled_depth: 0,
     })
   }
 
@@ -2022,6 +2055,21 @@ impl DisplayListRenderer {
   }
 
   fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
+    if self.culled_depth > 0 {
+      match item {
+        DisplayItem::PushStackingContext(_) => {
+          self.culled_depth += 1;
+        }
+        DisplayItem::PopStackingContext => {
+          if self.culled_depth > 0 {
+            self.culled_depth -= 1;
+          }
+        }
+        _ => {}
+      }
+      return Ok(());
+    }
+
     match item {
       DisplayItem::FillRect(FillRectItem { rect, color }) => {
         self.canvas.draw_rect(self.ds_rect(*rect), *color)
@@ -2070,16 +2118,32 @@ impl DisplayListRenderer {
         self.render_list_marker(&scaled)?;
       }
       DisplayItem::PushStackingContext(item) => {
+        let parent_transform = *self
+          .transform_stack
+          .last()
+          .unwrap_or(&Transform3D::identity());
+        let local_transform = item.transform.unwrap_or(Transform3D::identity());
+        let combined_transform_3d = parent_transform.multiply(&local_transform);
+
+        if matches!(item.backface_visibility, BackfaceVisibility::Hidden)
+          && Self::backface_is_hidden(&combined_transform_3d)
+        {
+          self.culled_depth = 1;
+          return Ok(());
+        }
+
         let scaled_filters = self.ds_filters(&item.filters);
         let scaled_backdrop = self.ds_filters(&item.backdrop_filters);
         let bounds = self.ds_rect(item.bounds);
         let radii = self.ds_radii(item.radii);
 
         let mut combined_transform = self.canvas.transform();
-        if let Some(matrix) = item.transform.as_ref() {
-          let t = self.to_skia_transform(matrix);
+        if item.transform.is_some() {
+          let t = self.to_skia_transform(&local_transform);
           combined_transform = combined_transform.post_concat(t);
         }
+
+        self.transform_stack.push(combined_transform_3d);
 
         if !scaled_backdrop.is_empty() {
           let backdrop_bounds = transform_rect(bounds, &combined_transform);
@@ -2114,6 +2178,7 @@ impl DisplayListRenderer {
           filters: scaled_filters,
           radii,
           mask_bounds: bounds,
+          culled: false,
         });
 
         if item.transform.is_some() {
@@ -2129,7 +2194,16 @@ impl DisplayListRenderer {
             filters: Vec::new(),
             radii: BorderRadii::ZERO,
             mask_bounds: Rect::ZERO,
+            culled: false,
           });
+
+        let _ = self.transform_stack.pop();
+        if record.culled {
+          if self.culled_depth > 0 {
+            self.culled_depth -= 1;
+          }
+          return Ok(());
+        }
         if record.needs_layer {
           if !record.filters.is_empty() {
             apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
@@ -2163,8 +2237,17 @@ impl DisplayListRenderer {
       DisplayItem::PopOpacity => {
         self.canvas.pop_layer()?;
       }
-      DisplayItem::PushTransform(transform) => self.push_transform(transform),
+      DisplayItem::PushTransform(transform) => {
+        let parent = *self
+          .transform_stack
+          .last()
+          .unwrap_or(&Transform3D::identity());
+        let combined = parent.multiply(&transform.transform);
+        self.transform_stack.push(combined);
+        self.push_transform(transform);
+      }
       DisplayItem::PopTransform => {
+        let _ = self.transform_stack.pop();
         self.canvas.restore();
       }
       DisplayItem::PushBlendMode(mode) => {
@@ -4530,6 +4613,8 @@ mod tests {
       mix_blend_mode: BlendMode::Normal,
       is_isolated: false,
       transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
       filters: vec![ResolvedFilter::DropShadow {
         offset_x: 6.0,
         offset_y: 6.0,
@@ -4662,6 +4747,8 @@ mod tests {
         mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
         is_isolated: false,
         transform: None,
+        transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
         filters: Vec::new(),
         backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
         radii: BorderRadii::ZERO,
@@ -5038,6 +5125,8 @@ mod tests {
         mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
         is_isolated: false,
         transform: None,
+        transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
         filters: Vec::new(),
         backdrop_filters: Vec::new(),
         radii: BorderRadii::ZERO,
@@ -5079,6 +5168,8 @@ mod tests {
       mix_blend_mode: crate::paint::display_list::BlendMode::Normal,
       is_isolated: false,
       transform: Some(Transform3D::translate(2.0, 1.0, 0.0)),
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
       filters: Vec::new(),
       backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
       radii: BorderRadii::ZERO,
@@ -5140,6 +5231,8 @@ mod tests {
         mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
         is_isolated: false,
         transform: None,
+        transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
         filters: Vec::new(),
         backdrop_filters: Vec::new(),
         radii: BorderRadii::ZERO,
@@ -5179,6 +5272,8 @@ mod tests {
         mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
         is_isolated: false,
         transform: None,
+        transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
         filters: Vec::new(),
         backdrop_filters: Vec::new(),
         radii: BorderRadii::ZERO,

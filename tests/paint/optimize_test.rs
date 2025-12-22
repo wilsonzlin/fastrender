@@ -34,6 +34,8 @@ use fastrender::StrokeRoundedRectItem;
 use fastrender::Transform2D;
 use fastrender::Transform3D;
 use fastrender::TransformItem;
+use fastrender::style::types::BackfaceVisibility;
+use fastrender::style::types::TransformStyle;
 use std::sync::Arc;
 
 // ============================================================================
@@ -916,6 +918,8 @@ fn test_stacking_context_preserved() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
@@ -939,6 +943,8 @@ fn stacking_context_filters_expand_cull_bounds() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::DropShadow {
       offset_x: 20.0,
       offset_y: 0.0,
@@ -969,6 +975,8 @@ fn offscreen_filtered_stacking_context_is_culled() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::DropShadow {
       offset_x: 5.0,
       offset_y: 5.0,

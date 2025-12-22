@@ -106,6 +106,7 @@ use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TextUnderlineOffset;
 use crate::style::types::TextUnderlinePosition;
 use crate::style::types::TransformBox;
+use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
@@ -335,15 +336,6 @@ impl DisplayListBuilder {
     );
 
     if let Some(style) = fragment.style.as_deref() {
-      if Self::backface_culled(style, absolute_rect, self.viewport) {
-        if push_opacity {
-          self.pop_opacity();
-        }
-        return;
-      }
-    }
-
-    if let Some(style) = fragment.style.as_deref() {
       self.emit_box_shadows_from_style(absolute_rect, style, false);
       self.emit_background_from_style(absolute_rect, style);
       self.emit_box_shadows_from_style(absolute_rect, style, true);
@@ -403,15 +395,6 @@ impl DisplayListBuilder {
       ),
       fragment.bounds.size,
     );
-
-    if let Some(style) = fragment.style.as_deref() {
-      if Self::backface_culled(style, absolute_rect, self.viewport) {
-        if push_opacity {
-          self.pop_opacity();
-        }
-        return;
-      }
-    }
 
     if let Some(style) = fragment.style.as_deref() {
       self.emit_background_from_style(absolute_rect, style);
@@ -504,6 +487,12 @@ impl DisplayListBuilder {
       ));
     let transform =
       root_style.and_then(|style| Self::build_transform(style, context.bounds, self.viewport));
+    let transform_style = root_style
+      .map(|style| style.transform_style)
+      .unwrap_or(TransformStyle::Flat);
+    let backface_visibility = root_style
+      .map(|style| style.backface_visibility)
+      .unwrap_or(BackfaceVisibility::Visible);
 
     let viewport = self
       .viewport
@@ -692,6 +681,8 @@ impl DisplayListBuilder {
         mix_blend_mode,
         is_isolated,
         transform,
+        transform_style,
+        backface_visibility,
         filters,
         backdrop_filters,
         radii,
@@ -1606,30 +1597,6 @@ impl DisplayListBuilder {
 
   fn border_side_visible(side: &BorderSide) -> bool {
     side.width > 0.0 && Self::border_style_visible(side.style) && !side.color.is_transparent()
-  }
-
-  fn backface_culled(
-    style: &ComputedStyle,
-    bounds: Rect,
-    viewport: Option<(f32, f32)>,
-  ) -> bool {
-    if !matches!(style.backface_visibility, BackfaceVisibility::Hidden) {
-      return false;
-    }
-
-    let Some(transform) = Self::build_transform(style, bounds, viewport) else {
-      return false;
-    };
-
-    let ux = transform.transform_direction(1.0, 0.0, 0.0);
-    let uy = transform.transform_direction(0.0, 1.0, 0.0);
-    let normal = [
-      ux[1] * uy[2] - ux[2] * uy[1],
-      ux[2] * uy[0] - ux[0] * uy[2],
-      ux[0] * uy[1] - ux[1] * uy[0],
-    ];
-
-    normal[2] < 0.0
   }
 
   fn build_transform(

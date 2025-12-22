@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use super::util::bounding_box_for_color;
 use fastrender::css::types::ColorStop;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::BlendMode;
@@ -14,10 +15,12 @@ use fastrender::paint::display_list::FillRectItem;
 use fastrender::paint::display_list::OutlineItem;
 use fastrender::paint::display_list::ResolvedFilter;
 use fastrender::paint::display_list::StackingContextItem;
+use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list::TextDecorationItem;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Color;
+use fastrender::style::types::BackfaceVisibility;
 use fastrender::style::types::BackgroundImage;
 use fastrender::style::types::BackgroundLayer;
 use fastrender::style::types::BackgroundPosition;
@@ -36,6 +39,7 @@ use fastrender::style::types::ClipPath;
 use fastrender::style::types::FillRule;
 use fastrender::style::types::ImageRendering;
 use fastrender::style::types::ShapeRadius;
+use fastrender::style::types::TransformStyle;
 use fastrender::style::types::TextDecorationStyle;
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
@@ -186,6 +190,8 @@ fn mix_blend_mode_multiplies_backdrop_when_not_isolated() {
     mix_blend_mode: BlendMode::Multiply,
     is_isolated: false,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
@@ -220,6 +226,8 @@ fn isolation_blocks_mix_blend_mode_backdrop() {
     mix_blend_mode: BlendMode::Multiply,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
@@ -239,6 +247,107 @@ fn isolation_blocks_mix_blend_mode_backdrop() {
     (0, 0, 255, 255),
     "isolated context should composite with source-over, got {center:?}"
   );
+}
+
+#[test]
+fn matrix3d_transforms_translate_content() {
+  let renderer = DisplayListRenderer::new(20, 20, Rgba::WHITE, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: Some(Transform3D {
+      m: [
+        1.0, 0.0, 0.0, 0.0, // column 1
+        0.0, 1.0, 0.0, 0.0, // column 2
+        0.0, 0.0, 1.0, 0.0, // column 3
+        5.0, 7.0, 0.0, 1.0, // column 4 (translation)
+      ],
+    }),
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+    color: Rgba::BLACK,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+  assert_eq!(pixel(&pixmap, 5, 7), (0, 0, 0, 255));
+  assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+}
+
+#[test]
+fn perspective_depth_changes_projection_size() {
+  let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  let perspective = Transform3D::perspective(500.0).multiply(&Transform3D::translate(0.0, 0.0, 200.0));
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: Some(perspective),
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+  let Some((min_x, min_y, max_x, max_y)) = bounding_box_for_color(&pixmap, |(r, g, b, a)| {
+    a > 0 && r > g && r > b
+  }) else {
+    panic!("expected painted content");
+  };
+  let width = max_x - min_x + 1;
+  let height = max_y - min_y + 1;
+  assert!(
+    width >= 15 && height >= 15,
+    "perspective should expand projected size, got {width}x{height} from bbox ({min_x},{min_y})-({max_x},{max_y})"
+  );
+}
+
+#[test]
+fn backface_hidden_culls_rotated_context() {
+  let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: Some(Transform3D::rotate_x(std::f32::consts::PI)),
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Hidden,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+    color: Rgba::BLUE,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+  let bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| r < 250 || g < 250 || b < 250);
+  assert!(bbox.is_none(), "backface-hidden context should be culled, found {bbox:?}");
 }
 
 fn two_color_data_url() -> String {
@@ -947,6 +1056,8 @@ fn filters_apply_to_stacking_context_layer() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::Invert(1.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
@@ -973,6 +1084,8 @@ fn opacity_filter_modulates_alpha() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::Opacity(0.5)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
@@ -1028,6 +1141,8 @@ fn backdrop_filters_modify_backdrop_region() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
     backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
@@ -1052,6 +1167,8 @@ fn drop_shadow_filter_renders_shadow() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::DropShadow {
       offset_x: 1.0,
       offset_y: 0.0,
@@ -1088,6 +1205,8 @@ fn blur_filters_arent_clipped_by_border_radii() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::Blur(1.0)],
     backdrop_filters: Vec::new(),
     radii: BorderRadii::uniform(0.5),
@@ -1124,6 +1243,8 @@ fn grayscale_filter_converts_to_luma() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::Grayscale(1.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
@@ -1347,6 +1468,8 @@ fn backdrop_blur_samples_outside_bounds() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
     backdrop_filters: vec![ResolvedFilter::Blur(1.0)],
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
@@ -1374,6 +1497,8 @@ fn filter_blur_not_clipped_to_bounds() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::Blur(1.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
@@ -1405,6 +1530,8 @@ fn filter_blur_zero_has_no_effect() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::Blur(0.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
@@ -1443,6 +1570,8 @@ fn clip_path_masks_after_filters() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
     is_isolated: true,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: vec![ResolvedFilter::Blur(2.0)],
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,
@@ -1502,6 +1631,8 @@ fn blend_mode_multiply_modulates_destination() {
     mix_blend_mode: fastrender::paint::display_list::BlendMode::Multiply,
     is_isolated: false,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: fastrender::paint::display_list::BorderRadii::ZERO,

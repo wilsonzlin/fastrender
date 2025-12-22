@@ -41,6 +41,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::style::color::Rgba;
+use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
 use crate::style::types::BorderImageOutset;
 use crate::style::types::BorderImageRepeat;
@@ -48,6 +49,7 @@ use crate::style::types::BorderImageSlice;
 use crate::style::types::BorderImageWidth;
 use crate::style::types::BorderStyle as CssBorderStyle;
 use crate::style::types::ResolvedTextDecoration;
+use crate::style::types::TransformStyle;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
 use crate::text::font_db::FontStretch;
@@ -1458,6 +1460,12 @@ pub struct StackingContextItem {
 
   /// Optional transform applied to this stacking context
   pub transform: Option<Transform3D>,
+
+  /// 3D rendering context preservation
+  pub transform_style: TransformStyle,
+
+  /// Whether to render when facing away from the viewer
+  pub backface_visibility: BackfaceVisibility,
 
   /// Resolved filter() list applied to this context
   pub filters: Vec<ResolvedFilter>,

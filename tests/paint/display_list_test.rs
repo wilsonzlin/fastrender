@@ -20,6 +20,8 @@ use fastrender::style::types::BackgroundLayer;
 use fastrender::style::types::BackgroundRepeat;
 use fastrender::style::types::BorderStyle;
 use fastrender::style::types::Containment;
+use fastrender::style::types::BackfaceVisibility;
+use fastrender::style::types::TransformStyle;
 use fastrender::style::types::TextDecorationLine;
 use fastrender::style::types::TextDecorationSkipInk;
 use fastrender::style::types::TextUnderlineOffset;
@@ -1715,6 +1717,8 @@ fn test_stacking_context() {
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
