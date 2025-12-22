@@ -1,6 +1,6 @@
+use super::util::bounding_box_for_color;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use super::util::bounding_box_for_color;
 use fastrender::css::types::ColorStop;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::BlendMode;
@@ -15,8 +15,8 @@ use fastrender::paint::display_list::FillRectItem;
 use fastrender::paint::display_list::OutlineItem;
 use fastrender::paint::display_list::ResolvedFilter;
 use fastrender::paint::display_list::StackingContextItem;
-use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list::TextDecorationItem;
+use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Color;
@@ -38,9 +38,10 @@ use fastrender::style::types::BorderStyle;
 use fastrender::style::types::ClipPath;
 use fastrender::style::types::FillRule;
 use fastrender::style::types::ImageRendering;
+use fastrender::style::types::MixBlendMode;
 use fastrender::style::types::ShapeRadius;
-use fastrender::style::types::TransformStyle;
 use fastrender::style::types::TextDecorationStyle;
+use fastrender::style::types::TransformStyle;
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::fragment_tree::FragmentNode;
@@ -250,6 +251,42 @@ fn isolation_blocks_mix_blend_mode_backdrop() {
 }
 
 #[test]
+fn backdrop_filter_isolates_blend_mode() {
+  let mut list = DisplayList::new();
+  // Backdrop starts red.
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+    color: Rgba::RED,
+  }));
+
+  // Apply blur to ensure backdrop filters are present but shouldn't affect blending mode choice.
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+    mix_blend_mode: BlendMode::Multiply,
+    is_isolated: false,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: vec![ResolvedFilter::Blur(0.1)],
+    radii: BorderRadii::ZERO,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+    color: Rgba::BLUE,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+  let pixmap = renderer.render(&list).expect("render");
+
+  // Backdrop filters implicitly isolate the context, so the multiply blend should not darken.
+  assert_eq!(pixel(&pixmap, 1, 1), (0, 0, 255, 255));
+}
+
+#[test]
 fn matrix3d_transforms_translate_content() {
   let renderer = DisplayListRenderer::new(20, 20, Rgba::WHITE, FontContext::new()).unwrap();
   let mut list = DisplayList::new();
@@ -288,7 +325,8 @@ fn matrix3d_transforms_translate_content() {
 fn perspective_depth_changes_projection_size() {
   let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
   let mut list = DisplayList::new();
-  let perspective = Transform3D::perspective(500.0).multiply(&Transform3D::translate(0.0, 0.0, 200.0));
+  let perspective =
+    Transform3D::perspective(500.0).multiply(&Transform3D::translate(0.0, 0.0, 200.0));
   list.push(DisplayItem::PushStackingContext(StackingContextItem {
     z_index: 0,
     creates_stacking_context: true,
@@ -309,9 +347,9 @@ fn perspective_depth_changes_projection_size() {
   list.push(DisplayItem::PopStackingContext);
 
   let pixmap = renderer.render(&list).unwrap();
-  let Some((min_x, min_y, max_x, max_y)) = bounding_box_for_color(&pixmap, |(r, g, b, a)| {
-    a > 0 && r > g && r > b
-  }) else {
+  let Some((min_x, min_y, max_x, max_y)) =
+    bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b)
+  else {
     panic!("expected painted content");
   };
   let width = max_x - min_x + 1;
@@ -347,7 +385,10 @@ fn backface_hidden_culls_rotated_context() {
 
   let pixmap = renderer.render(&list).unwrap();
   let bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| r < 250 || g < 250 || b < 250);
-  assert!(bbox.is_none(), "backface-hidden context should be culled, found {bbox:?}");
+  assert!(
+    bbox.is_none(),
+    "backface-hidden context should be culled, found {bbox:?}"
+  );
 }
 
 fn two_color_data_url() -> String {
@@ -1157,6 +1198,61 @@ fn backdrop_filters_modify_backdrop_region() {
 }
 
 #[test]
+fn background_blend_mode_combines_multiple_layers() {
+  let mut style = fastrender::ComputedStyle::default();
+  style.background_color = Rgba::WHITE;
+
+  let top_layer = BackgroundLayer {
+    image: Some(BackgroundImage::LinearGradient {
+      angle: 0.0,
+      stops: vec![
+        ColorStop {
+          color: Color::Rgba(Rgba::GREEN),
+          position: Some(0.0),
+        },
+        ColorStop {
+          color: Color::Rgba(Rgba::GREEN),
+          position: Some(1.0),
+        },
+      ],
+    }),
+    repeat: BackgroundRepeat::no_repeat(),
+    blend_mode: MixBlendMode::Multiply,
+    ..BackgroundLayer::default()
+  };
+
+  let bottom_layer = BackgroundLayer {
+    image: Some(BackgroundImage::LinearGradient {
+      angle: 0.0,
+      stops: vec![
+        ColorStop {
+          color: Color::Rgba(Rgba::RED),
+          position: Some(0.0),
+        },
+        ColorStop {
+          color: Color::Rgba(Rgba::RED),
+          position: Some(1.0),
+        },
+      ],
+    }),
+    repeat: BackgroundRepeat::no_repeat(),
+    blend_mode: MixBlendMode::Normal,
+    ..BackgroundLayer::default()
+  };
+
+  style.set_background_layers(vec![top_layer, bottom_layer]);
+
+  let fragment =
+    FragmentNode::new_block_styled(Rect::from_xywh(0.0, 0.0, 2.0, 2.0), vec![], Arc::new(style));
+  let list = DisplayListBuilder::new().build(&fragment);
+  let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).expect("renderer");
+  let pixmap = renderer.render(&list).expect("render backgrounds");
+
+  // Green multiplied by red should produce black in the covered area.
+  assert_eq!(pixel(&pixmap, 1, 1), (0, 0, 0, 255));
+}
+
+#[test]
 fn drop_shadow_filter_renders_shadow() {
   let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
   let mut list = DisplayList::new();
@@ -1650,6 +1746,53 @@ fn blend_mode_multiply_modulates_destination() {
   assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 0, 255));
   // Outside the overlap, destination remains green.
   assert_eq!(pixel(&pixmap, 3, 3), (0, 255, 0, 255));
+}
+
+#[test]
+fn stacking_context_hsl_blend_preserves_backdrop_luminance() {
+  use fastrender::paint::display_list::BlendMode;
+
+  let dst = (60u8, 140u8, 200u8);
+  let src = (200u8, 40u8, 200u8);
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+    color: Rgba::from_rgba8(dst.0, dst.1, dst.2, 255),
+  }));
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+    mix_blend_mode: BlendMode::Hue,
+    is_isolated: false,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+    color: Rgba::from_rgba8(src.0, src.1, src.2, 255),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+  let pixmap = renderer.render(&list).expect("render");
+  let (r, g, b, _) = pixel(&pixmap, 1, 1);
+
+  let expected = blend_hue(src, dst);
+  let (eh, es, el) = rgb_to_hsl(expected.0, expected.1, expected.2);
+  assert_hsl_components(
+    (r, g, b),
+    (eh, es, el),
+    0.02,
+    0.05,
+    0.05,
+    "hue stacking blend",
+  );
 }
 
 #[test]

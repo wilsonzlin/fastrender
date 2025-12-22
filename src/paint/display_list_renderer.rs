@@ -44,13 +44,14 @@ use crate::paint::display_list::StrokeRectItem;
 use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
-use crate::paint::display_list::TransformItem;
 use crate::paint::display_list::Transform3D;
+use crate::paint::display_list::TransformItem;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
 use crate::paint::text_shadow::PathBounds;
 use crate::style::color::Rgba;
+use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
 use crate::style::types::BackgroundPosition;
 use crate::style::types::BorderImageOutsetValue;
@@ -59,15 +60,14 @@ use crate::style::types::BorderImageSliceValue;
 use crate::style::types::BorderImageWidth;
 use crate::style::types::BorderImageWidthValue;
 use crate::style::types::BorderStyle as CssBorderStyle;
-use crate::style::types::BackfaceVisibility;
 use crate::style::types::TextDecorationStyle;
 use crate::style::types::TextEmphasisFill;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisShape;
 use crate::style::types::TextEmphasisStyle;
-use crate::style::values::Length;
 #[cfg(test)]
 use crate::style::types::TransformStyle;
+use crate::style::values::Length;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
@@ -79,6 +79,7 @@ use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
 use tiny_skia::LinearGradient;
 use tiny_skia::Mask;
+use tiny_skia::MaskType;
 use tiny_skia::PathBuilder;
 use tiny_skia::Pattern;
 use tiny_skia::Pixmap;
@@ -538,6 +539,55 @@ fn apply_backdrop_filters(
   }
 }
 
+fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
+  if rect.width() <= 0.0 || rect.height() <= 0.0 {
+    return;
+  }
+
+  let width = pixmap.width();
+  let height = pixmap.height();
+  if width == 0 || height == 0 {
+    return;
+  }
+
+  let mut mask_pixmap = match Pixmap::new(width, height) {
+    Some(p) => p,
+    None => return,
+  };
+  let clamped = radii.clamped(rect.width(), rect.height());
+  let _ = fill_rounded_rect(
+    &mut mask_pixmap,
+    rect.x(),
+    rect.y(),
+    rect.width(),
+    rect.height(),
+    &clamped,
+    Rgba::new(255, 255, 255, 1.0),
+  );
+
+  let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+  pixmap.apply_mask(&mask);
+
+  // Hard-clip pixels outside the rectangle to avoid filter bleed.
+  let x0 = rect.x().floor().max(0.0) as u32;
+  let y0 = rect.y().floor().max(0.0) as u32;
+  let x1 = (rect.x() + rect.width()).ceil().min(width as f32) as u32;
+  let y1 = (rect.y() + rect.height()).ceil().min(height as f32) as u32;
+  let data = pixmap.data_mut();
+  let stride = (width as usize) * 4;
+  for y in 0..height {
+    for x in 0..width {
+      if x < x0 || x >= x1 || y < y0 || y >= y1 {
+        let idx = (y as usize * stride) + (x as usize * 4);
+        data[idx] = 0;
+        data[idx + 1] = 0;
+        data[idx + 2] = 0;
+        data[idx + 3] = 0;
+      }
+    }
+  }
+}
+
 fn apply_drop_shadow(
   pixmap: &mut Pixmap,
   offset_x: f32,
@@ -787,6 +837,7 @@ struct StackingRecord {
   filters: Vec<ResolvedFilter>,
   radii: BorderRadii,
   mask_bounds: Rect,
+  hsl_blend: Option<BlendMode>,
   culled: bool,
 }
 
@@ -2194,6 +2245,20 @@ impl DisplayListRenderer {
         let bounds = self.ds_rect(item.bounds);
         let radii = self.ds_radii(item.radii);
 
+        let is_isolated = item.is_isolated || !scaled_backdrop.is_empty();
+        let is_hsl_blend = matches!(
+          item.mix_blend_mode,
+          crate::paint::display_list::BlendMode::Hue
+            | crate::paint::display_list::BlendMode::Saturation
+            | crate::paint::display_list::BlendMode::Color
+            | crate::paint::display_list::BlendMode::Luminosity
+        );
+        let hsl_blend = if is_hsl_blend && !is_isolated {
+          Some(item.mix_blend_mode)
+        } else {
+          None
+        };
+
         let mut combined_transform = self.canvas.transform();
         if item.transform.is_some() {
           let t = self.to_skia_transform(&local_transform);
@@ -2213,7 +2278,7 @@ impl DisplayListRenderer {
           );
         }
 
-        let needs_layer = item.is_isolated
+        let needs_layer = is_isolated
           || !matches!(
             item.mix_blend_mode,
             crate::paint::display_list::BlendMode::Normal
@@ -2221,12 +2286,16 @@ impl DisplayListRenderer {
           || !scaled_filters.is_empty()
           || !scaled_backdrop.is_empty();
         if needs_layer {
-          let blend = if item.is_isolated {
-            tiny_skia::BlendMode::SourceOver
+          if hsl_blend.is_some() {
+            self.canvas.push_layer(1.0)?;
           } else {
-            map_blend_mode(item.mix_blend_mode)
-          };
-          self.canvas.push_layer_with_blend(1.0, Some(blend))?;
+            let blend = if is_isolated {
+              tiny_skia::BlendMode::SourceOver
+            } else {
+              map_blend_mode(item.mix_blend_mode)
+            };
+            self.canvas.push_layer_with_blend(1.0, Some(blend))?;
+          }
         } else {
           self.canvas.save();
         }
@@ -2235,6 +2304,7 @@ impl DisplayListRenderer {
           filters: scaled_filters,
           radii,
           mask_bounds: bounds,
+          hsl_blend,
           culled: false,
         });
 
@@ -2251,6 +2321,7 @@ impl DisplayListRenderer {
             filters: Vec::new(),
             radii: BorderRadii::ZERO,
             mask_bounds: Rect::ZERO,
+            hsl_blend: None,
             culled: false,
           });
 
@@ -2262,25 +2333,46 @@ impl DisplayListRenderer {
           return Ok(());
         }
         if record.needs_layer {
-          if !record.filters.is_empty() {
-            apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
-          }
-          if !record.radii.is_zero() || !record.filters.is_empty() {
-            let (out_l, out_t, out_r, out_b) = filter_outset(&record.filters, self.scale);
-            let clip_rect = Rect::from_xywh(
-              record.mask_bounds.x() - out_l,
-              record.mask_bounds.y() - out_t,
-              record.mask_bounds.width() + out_l + out_r,
-              record.mask_bounds.height() + out_t + out_b,
-            );
-            self.canvas.save();
-            self
-              .canvas
-              .set_clip_with_radii(clip_rect, Some(record.radii));
-            self.canvas.pop_layer()?;
-            self.canvas.restore();
+          if let Some(mode) = record.hsl_blend {
+            let (mut layer, opacity, _) = self.canvas.pop_layer_raw()?;
+            if !record.filters.is_empty() {
+              apply_filters(&mut layer, &record.filters, self.scale);
+            }
+            if !record.radii.is_zero() || !record.filters.is_empty() {
+              let (out_l, out_t, out_r, out_b) = filter_outset(&record.filters, self.scale);
+              let clip_rect = Rect::from_xywh(
+                record.mask_bounds.x() - out_l,
+                record.mask_bounds.y() - out_t,
+                record.mask_bounds.width() + out_l + out_r,
+                record.mask_bounds.height() + out_t + out_b,
+              );
+              apply_clip_mask_rect(&mut layer, clip_rect, record.radii);
+            }
+            if let Some(mask) = self.canvas.clip_mask().cloned() {
+              layer.apply_mask(&mask);
+            }
+            self.composite_hsl_layer(&layer, opacity, mode)?;
           } else {
-            self.canvas.pop_layer()?;
+            if !record.filters.is_empty() {
+              apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
+            }
+            if !record.radii.is_zero() || !record.filters.is_empty() {
+              let (out_l, out_t, out_r, out_b) = filter_outset(&record.filters, self.scale);
+              let clip_rect = Rect::from_xywh(
+                record.mask_bounds.x() - out_l,
+                record.mask_bounds.y() - out_t,
+                record.mask_bounds.width() + out_l + out_r,
+                record.mask_bounds.height() + out_t + out_b,
+              );
+              self.canvas.save();
+              self
+                .canvas
+                .set_clip_with_radii(clip_rect, Some(record.radii));
+              self.canvas.pop_layer()?;
+              self.canvas.restore();
+            } else {
+              self.canvas.pop_layer()?;
+            }
           }
         } else {
           self.canvas.restore();

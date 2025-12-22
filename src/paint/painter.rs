@@ -1438,9 +1438,6 @@ impl Painter {
     let blend_mode = style_ref
       .map(|s| s.mix_blend_mode)
       .unwrap_or(MixBlendMode::Normal);
-    let isolated = style_ref
-      .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
-      .unwrap_or(false);
     let viewport = (self.css_width, self.css_height);
     let filters = style_ref
       .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx))
@@ -1450,6 +1447,10 @@ impl Painter {
       .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx))
       .unwrap_or_default();
     let has_backdrop = !backdrop_filters.is_empty();
+    let style_isolated = style_ref
+      .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
+      .unwrap_or(false);
+    let isolated = style_isolated || has_backdrop;
     let clip = style_ref.and_then(|style| {
       // Honor overflow clipping: when overflow is hidden/scroll/clip, restrict painting to the
       // padding box. This prevents offscreen children from flooding the viewport when their
