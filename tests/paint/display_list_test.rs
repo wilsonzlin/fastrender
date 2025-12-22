@@ -13,6 +13,7 @@ use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::properties::apply_declaration;
 use fastrender::style::properties::with_image_set_dpr;
+use fastrender::style::types::BackfaceVisibility;
 use fastrender::style::types::BackgroundAttachment;
 use fastrender::style::types::BackgroundBox;
 use fastrender::style::types::BackgroundImage;
@@ -20,12 +21,11 @@ use fastrender::style::types::BackgroundLayer;
 use fastrender::style::types::BackgroundRepeat;
 use fastrender::style::types::BorderStyle;
 use fastrender::style::types::Containment;
-use fastrender::style::types::BackfaceVisibility;
-use fastrender::style::types::TransformStyle;
 use fastrender::style::types::TextDecorationLine;
 use fastrender::style::types::TextDecorationSkipInk;
 use fastrender::style::types::TextUnderlineOffset;
 use fastrender::style::types::TextUnderlinePosition;
+use fastrender::style::types::TransformStyle;
 use fastrender::style::types::WritingMode;
 use fastrender::style::values::Length;
 use fastrender::text::pipeline::Direction;
@@ -913,6 +913,8 @@ fn sideways_writing_mode_emits_vertical_text_and_decorations() {
     synthetic_bold: 0.0,
     synthetic_oblique: 0.0,
     rotation: RunRotation::None,
+    palette_index: 0,
+    variations: Vec::new(),
     scale: 1.0,
   };
 

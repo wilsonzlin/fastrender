@@ -427,6 +427,8 @@ fn test_render_shaped_run() {
     synthetic_bold: 0.0,
     synthetic_oblique: 0.0,
     rotation: RunRotation::None,
+    palette_index: 0,
+    variations: Vec::new(),
     scale: 1.0,
   };
 
@@ -482,6 +484,8 @@ fn test_render_multiple_runs() {
       synthetic_bold: 0.0,
       synthetic_oblique: 0.0,
       rotation: RunRotation::None,
+      palette_index: 0,
+      variations: Vec::new(),
       scale: 1.0,
     }
   };

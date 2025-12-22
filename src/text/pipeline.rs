@@ -791,6 +791,9 @@ pub struct FontRun {
   /// Font variation settings to apply for this run.
   pub variations: Vec<Variation>,
 
+  /// Palette index for color fonts (CPAL).
+  pub palette_index: u16,
+
   /// Optional rotation hint for vertical writing modes.
   pub rotation: RunRotation,
 
@@ -2019,6 +2022,7 @@ fn push_font_run(
     language,
     features: features.to_vec(),
     variations,
+    palette_index: 0,
     rotation: RunRotation::None,
     vertical: false,
   });
@@ -2076,6 +2080,12 @@ pub struct ShapedRun {
   pub synthetic_oblique: f32,
   /// Optional rotation to apply when painting.
   pub rotation: RunRotation,
+
+  /// Palette index for color glyph rendering.
+  pub palette_index: u16,
+
+  /// Active variation settings for the run (used for cache keys).
+  pub variations: Vec<Variation>,
 
   /// Optional additional scale factor (1.0 = none).
   pub scale: f32,
@@ -2188,6 +2198,8 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
     rotation: RunRotation::None,
+    palette_index: run.palette_index,
+    variations: run.variations.clone(),
     scale: 1.0,
   })
 }
@@ -3285,6 +3297,8 @@ mod tests {
         synthetic_bold: 0.0,
         synthetic_oblique: 0.0,
         rotation: RunRotation::None,
+        palette_index: 0,
+        variations: Vec::new(),
         scale: 1.0,
       }
     }
@@ -4112,16 +4126,14 @@ mod tests {
   fn slope_preferences_follow_css_slope_order() {
     use crate::text::font_db::FontStyle as DbStyle;
     assert_eq!(slope_preference_order(DbStyle::Normal), &[DbStyle::Normal]);
-    assert_eq!(slope_preference_order(DbStyle::Italic), &[
-      DbStyle::Italic,
-      DbStyle::Oblique,
-      DbStyle::Normal
-    ]);
-    assert_eq!(slope_preference_order(DbStyle::Oblique), &[
-      DbStyle::Oblique,
-      DbStyle::Italic,
-      DbStyle::Normal
-    ]);
+    assert_eq!(
+      slope_preference_order(DbStyle::Italic),
+      &[DbStyle::Italic, DbStyle::Oblique, DbStyle::Normal]
+    );
+    assert_eq!(
+      slope_preference_order(DbStyle::Oblique),
+      &[DbStyle::Oblique, DbStyle::Italic, DbStyle::Normal]
+    );
   }
 
   #[test]

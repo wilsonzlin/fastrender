@@ -53,17 +53,22 @@
 use crate::error::RenderError;
 use crate::error::Result;
 use crate::style::color::Rgba;
+use crate::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
 use crate::text::pipeline::ShapedRun;
+use rustybuzz::Variation;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tiny_skia::FillRule;
 use tiny_skia::Paint;
 use tiny_skia::Path;
 use tiny_skia::PathBuilder;
 use tiny_skia::Pixmap;
+use tiny_skia::PixmapPaint;
 use tiny_skia::Transform;
 
 // ============================================================================
@@ -428,6 +433,88 @@ impl GlyphCache {
   }
 }
 
+// ============================================================================
+// Color Glyph Cache
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ColorGlyphCacheKey {
+  font_ptr: usize,
+  font_index: u32,
+  glyph_id: u32,
+  font_size_hundredths: u32,
+  palette_index: u16,
+  variation_hash: u64,
+  color_signature: u32,
+}
+
+impl ColorGlyphCacheKey {
+  fn new(
+    font: &LoadedFont,
+    glyph_id: u32,
+    font_size: f32,
+    palette_index: u16,
+    variations: &[Variation],
+    color: Rgba,
+  ) -> Self {
+    Self {
+      font_ptr: Arc::as_ptr(&font.data) as usize,
+      font_index: font.index,
+      glyph_id,
+      font_size_hundredths: (font_size * 100.0) as u32,
+      palette_index,
+      variation_hash: hash_variations(variations),
+      color_signature: rgba_signature(color),
+    }
+  }
+}
+
+#[derive(Debug, Default)]
+struct ColorGlyphCache {
+  glyphs: HashMap<ColorGlyphCacheKey, ColorGlyphRaster>,
+  max_size: usize,
+}
+
+impl ColorGlyphCache {
+  fn new() -> Self {
+    Self {
+      glyphs: HashMap::new(),
+      max_size: 512,
+    }
+  }
+
+  fn get(&self, key: &ColorGlyphCacheKey) -> Option<ColorGlyphRaster> {
+    self.glyphs.get(key).cloned()
+  }
+
+  fn insert(&mut self, key: ColorGlyphCacheKey, value: ColorGlyphRaster) {
+    if self.glyphs.len() >= self.max_size {
+      self.glyphs.clear();
+    }
+    self.glyphs.insert(key, value);
+  }
+
+  fn clear(&mut self) {
+    self.glyphs.clear();
+  }
+}
+
+fn hash_variations(variations: &[Variation]) -> u64 {
+  let mut hasher = DefaultHasher::new();
+  for variation in variations {
+    format!("{:?}", variation.tag).hash(&mut hasher);
+    variation.value.to_bits().hash(&mut hasher);
+  }
+  hasher.finish()
+}
+
+fn rgba_signature(color: Rgba) -> u32 {
+  ((color.r as u32) << 24)
+    | ((color.g as u32) << 16)
+    | ((color.b as u32) << 8)
+    | color.alpha_u8() as u32
+}
+
 fn quantize_skew(skew: f32) -> i32 {
   if !skew.is_finite() {
     return 0;
@@ -512,6 +599,10 @@ fn concat_transforms(a: Transform, b: Transform) -> Transform {
 pub struct TextRasterizer {
   /// Glyph path cache
   cache: GlyphCache,
+  /// Color glyph cache
+  color_cache: ColorGlyphCache,
+  /// Renderer for color glyph formats
+  color_renderer: ColorFontRenderer,
 }
 
 impl TextRasterizer {
@@ -519,6 +610,8 @@ impl TextRasterizer {
   pub fn new() -> Self {
     Self {
       cache: GlyphCache::new(),
+      color_cache: ColorGlyphCache::new(),
+      color_renderer: ColorFontRenderer::new(),
     }
   }
 
@@ -526,6 +619,8 @@ impl TextRasterizer {
   pub fn with_cache_capacity(capacity: usize) -> Self {
     Self {
       cache: GlyphCache::with_capacity(capacity),
+      color_cache: ColorGlyphCache::new(),
+      color_renderer: ColorFontRenderer::new(),
     }
   }
 
@@ -585,7 +680,8 @@ impl TextRasterizer {
       );
     }
 
-    let scale = run.font_size * run.scale / units_per_em;
+    let font_size = run.font_size * run.scale;
+    let scale = font_size / units_per_em;
     let rotation = rotation_transform(run.rotation, x, baseline_y);
     let mut cursor_x = x;
 
@@ -595,8 +691,33 @@ impl TextRasterizer {
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + glyph.y_offset;
 
-      // Get or build glyph path
-      if let Some(cached) =
+      let color_key = ColorGlyphCacheKey::new(
+        &run.font,
+        glyph.glyph_id,
+        font_size,
+        run.palette_index,
+        &run.variations,
+        color,
+      );
+
+      let mut color_glyph = self.color_cache.get(&color_key);
+      if color_glyph.is_none() {
+        color_glyph = self.color_renderer.render(
+          &run.font,
+          glyph.glyph_id,
+          font_size,
+          run.palette_index,
+          color,
+          run.synthetic_oblique,
+        );
+        if let Some(ref rendered) = color_glyph {
+          self.color_cache.insert(color_key, rendered.clone());
+        }
+      }
+
+      if let Some(color_image) = color_glyph {
+        draw_color_glyph(pixmap, &color_image, glyph_x, glyph_y, rotation);
+      } else if let Some(cached) =
         self
           .cache
           .get_or_build(&run.font, glyph.glyph_id, run.synthetic_oblique)
@@ -710,7 +831,20 @@ impl TextRasterizer {
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + glyph.y_offset;
 
-      if let Some(cached) = self.cache.get_or_build(font, glyph.glyph_id, 0.0) {
+      let color_key = ColorGlyphCacheKey::new(font, glyph.glyph_id, font_size, 0, &[], color);
+      let mut color_glyph = self.color_cache.get(&color_key);
+      if color_glyph.is_none() {
+        color_glyph = self
+          .color_renderer
+          .render(font, glyph.glyph_id, font_size, 0, color, 0.0);
+        if let Some(ref rendered) = color_glyph {
+          self.color_cache.insert(color_key, rendered.clone());
+        }
+      }
+
+      if let Some(color_image) = color_glyph {
+        draw_color_glyph(pixmap, &color_image, glyph_x, glyph_y, None);
+      } else if let Some(cached) = self.cache.get_or_build(font, glyph.glyph_id, 0.0) {
         if let Some(path) = cached.path.as_ref() {
           let transform = glyph_transform(scale, 0.0, glyph_x, glyph_y);
           pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
@@ -728,6 +862,7 @@ impl TextRasterizer {
   /// Call this when fonts are unloaded or memory pressure is high.
   pub fn clear_cache(&mut self) {
     self.cache.clear();
+    self.color_cache.clear();
   }
 
   /// Sets the maximum number of cached glyph outlines.
@@ -743,7 +878,7 @@ impl TextRasterizer {
   /// Returns the number of cached glyph paths.
   #[inline]
   pub fn cache_size(&self) -> usize {
-    self.cache.len()
+    self.cache.len() + self.color_cache.glyphs.len()
   }
 
   /// Returns glyph cache statistics (hits/misses/evictions).
@@ -756,6 +891,21 @@ impl TextRasterizer {
   pub fn reset_cache_stats(&mut self) {
     self.cache.reset_stats();
   }
+}
+
+fn draw_color_glyph(
+  target: &mut Pixmap,
+  glyph: &ColorGlyphRaster,
+  glyph_x: f32,
+  glyph_y: f32,
+  rotation: Option<Transform>,
+) {
+  let mut paint = PixmapPaint::default();
+  let transform = rotation.unwrap_or_else(Transform::identity);
+  let dx = (glyph_x + glyph.left).round() as i32;
+  let dy = (glyph_y + glyph.top).round() as i32;
+  let pixmap_ref = glyph.image.as_ref().as_ref();
+  target.draw_pixmap(dx, dy, pixmap_ref, &paint, transform, None);
 }
 
 // ============================================================================
