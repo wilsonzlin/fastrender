@@ -14312,6 +14312,83 @@ mod tests {
   }
 
   #[test]
+  fn parses_column_properties() {
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "column-count".to_string(),
+        value: PropertyValue::Number(2.0),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "column-width".to_string(),
+        value: PropertyValue::Length(Length::px(120.0)),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "column-fill".to_string(),
+        value: PropertyValue::Keyword("auto".to_string()),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "column-span".to_string(),
+        value: PropertyValue::Keyword("all".to_string()),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "column-rule".to_string(),
+        value: PropertyValue::Multiple(vec![
+          PropertyValue::Length(Length::px(5.0)),
+          PropertyValue::Keyword("solid".to_string()),
+          PropertyValue::Color(Color::Rgba(Rgba::BLUE)),
+        ]),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(style.column_count, Some(2));
+    assert_eq!(style.column_width, Some(Length::px(120.0)));
+    assert_eq!(style.column_fill, ColumnFill::Auto);
+    assert_eq!(style.column_span, ColumnSpan::All);
+    assert_eq!(style.column_rule_style, BorderStyle::Solid);
+    assert_eq!(style.column_rule_width, Length::px(5.0));
+    assert_eq!(style.column_rule_color, Some(Rgba::BLUE));
+  }
+
+  #[test]
   fn outline_shorthand_resets_missing_parts() {
     let mut style = ComputedStyle::default();
     style.outline_style = OutlineStyle::Solid;
