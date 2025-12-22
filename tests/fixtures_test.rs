@@ -198,6 +198,7 @@ fn test_all_fixture_files_exist() {
     "text_bidi",
     "text_line_break",
     "text_overflow_vertical",
+    "shadow_dom",
   ];
 
   for name in &expected_fixtures {
@@ -422,6 +423,15 @@ fn test_fixture_text_line_break() {
 }
 
 // =============================================================================
+// Shadow DOM Tests
+// =============================================================================
+
+#[test]
+fn test_fixture_shadow_dom() {
+  test_fixture("shadow_dom").expect("shadow_dom fixture should render");
+}
+
+// =============================================================================
 // Utility tests
 // =============================================================================
 
@@ -475,6 +485,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     // Positioned
     "positioned_relative",
     "positioned_absolute",
+    "shadow_dom",
     // Text
     "text_complex_scripts",
     "text_bidi",
@@ -589,6 +600,11 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "text_line_break",
       "Text",
       "Line breaking and white-space handling",
+    ),
+    (
+      "shadow_dom",
+      "Shadow DOM",
+      "Declarative shadow DOM slotting",
     ),
   ]
 }

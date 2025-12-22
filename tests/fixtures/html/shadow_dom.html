@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Declarative Shadow DOM Fixture</title>
+    <style>
+      x-card {
+        display: block;
+        font-family: sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <x-card id="fixture-card">
+      <template shadowroot="open">
+        <style>
+          .card {
+            border: 2px solid #444;
+            padding: 12px;
+            border-radius: 8px;
+            width: 260px;
+          }
+
+          .title {
+            font-weight: 700;
+            margin-bottom: 4px;
+            color: #222;
+          }
+
+          .body {
+            color: #333;
+          }
+        </style>
+        <div class="card">
+          <div class="title"><slot name="title"></slot></div>
+          <div class="body"><slot></slot></div>
+        </div>
+      </template>
+
+      <span slot="title">Declarative Shadow DOM</span>
+      <p>This component renders shadow content and projected light DOM.</p>
+    </x-card>
+  </body>
+</html>
