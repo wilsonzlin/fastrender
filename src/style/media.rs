@@ -388,6 +388,16 @@ pub enum MediaFeature {
   /// Any pointer precision: `(any-pointer: fine)`
   AnyPointer(PointerCapability),
 
+  // Media Queries Level 5
+  /// Whether scripting is available: `(scripting: none|initial-only|enabled)`
+  Scripting(Scripting),
+  /// How frequently the output is updated: `(update: fast|slow|none)`
+  Update(UpdateFrequency),
+  /// Ambient light level: `(light-level: dim|normal|washed)`
+  LightLevel(LightLevel),
+  /// Document display mode (PWA): `(display-mode: fullscreen)`
+  DisplayMode(DisplayMode),
+
   // User preference features (Level 5)
   /// Color scheme preference: `(prefers-color-scheme: dark)`
   PrefersColorScheme(ColorScheme),
@@ -513,6 +523,10 @@ enum MediaFeatureKey {
   AnyHover(HoverCapability),
   Pointer(PointerCapability),
   AnyPointer(PointerCapability),
+  Scripting(Scripting),
+  Update(UpdateFrequency),
+  LightLevel(LightLevel),
+  DisplayMode(DisplayMode),
   PrefersColorScheme(ColorScheme),
   PrefersReducedMotion(ReducedMotion),
   PrefersContrast(ContrastPreference),
@@ -548,6 +562,13 @@ struct MediaContextFingerprint {
   device_width_bits: u32,
   device_height_bits: u32,
   device_pixel_ratio_bits: u32,
+  base_font_bits: u32,
+  can_hover: bool,
+  any_can_hover: bool,
+  pointer: PointerCapability,
+  any_pointer: PointerCapability,
+  any_pointer_coarse: bool,
+  any_pointer_fine: bool,
   prefers_reduced_motion: bool,
   prefers_reduced_transparency: bool,
   prefers_reduced_data: bool,
@@ -559,6 +580,10 @@ struct MediaContextFingerprint {
   color_depth: u32,
   color_index: u32,
   monochrome_depth: u32,
+  scripting: Scripting,
+  update: UpdateFrequency,
+  light_level: LightLevel,
+  display_mode: DisplayMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -685,6 +710,10 @@ impl From<&MediaFeature> for MediaFeatureKey {
       MediaFeature::AnyHover(cap) => MediaFeatureKey::AnyHover(*cap),
       MediaFeature::Pointer(cap) => MediaFeatureKey::Pointer(*cap),
       MediaFeature::AnyPointer(cap) => MediaFeatureKey::AnyPointer(*cap),
+      MediaFeature::Scripting(state) => MediaFeatureKey::Scripting(*state),
+      MediaFeature::Update(freq) => MediaFeatureKey::Update(*freq),
+      MediaFeature::LightLevel(level) => MediaFeatureKey::LightLevel(*level),
+      MediaFeature::DisplayMode(mode) => MediaFeatureKey::DisplayMode(*mode),
       MediaFeature::PrefersColorScheme(scheme) => MediaFeatureKey::PrefersColorScheme(*scheme),
       MediaFeature::PrefersReducedMotion(motion) => MediaFeatureKey::PrefersReducedMotion(*motion),
       MediaFeature::PrefersContrast(contrast) => MediaFeatureKey::PrefersContrast(*contrast),
@@ -979,6 +1008,28 @@ impl MediaFeature {
         let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
         let capability = PointerCapability::parse(value)?;
         Ok(MediaFeature::AnyPointer(capability))
+      }
+
+      // MQ5 additions
+      "scripting" => {
+        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let scripting = Scripting::parse(value)?;
+        Ok(MediaFeature::Scripting(scripting))
+      }
+      "update" => {
+        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let update = UpdateFrequency::parse(value)?;
+        Ok(MediaFeature::Update(update))
+      }
+      "light-level" => {
+        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let level = LightLevel::parse(value)?;
+        Ok(MediaFeature::LightLevel(level))
+      }
+      "display-mode" => {
+        let value = value.ok_or_else(|| MediaParseError::MissingValue(name.clone()))?;
+        let mode = DisplayMode::parse(value)?;
+        Ok(MediaFeature::DisplayMode(mode))
       }
 
       // User preferences
@@ -1294,6 +1345,132 @@ impl fmt::Display for PointerCapability {
   }
 }
 
+/// Scripting availability for the environment
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Scripting {
+  None,
+  InitialOnly,
+  Enabled,
+}
+
+impl Scripting {
+  pub fn parse(s: &str) -> Result<Self, MediaParseError> {
+    let s = s.trim().to_ascii_lowercase();
+    match s.as_str() {
+      "none" => Ok(Scripting::None),
+      "initial-only" => Ok(Scripting::InitialOnly),
+      "enabled" => Ok(Scripting::Enabled),
+      _ => Err(MediaParseError::InvalidScripting(s)),
+    }
+  }
+}
+
+impl fmt::Display for Scripting {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      Scripting::None => write!(f, "none"),
+      Scripting::InitialOnly => write!(f, "initial-only"),
+      Scripting::Enabled => write!(f, "enabled"),
+    }
+  }
+}
+
+/// Update frequency of the output medium
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UpdateFrequency {
+  None,
+  Slow,
+  Fast,
+}
+
+impl UpdateFrequency {
+  pub fn parse(s: &str) -> Result<Self, MediaParseError> {
+    let s = s.trim().to_ascii_lowercase();
+    match s.as_str() {
+      "none" => Ok(UpdateFrequency::None),
+      "slow" => Ok(UpdateFrequency::Slow),
+      "fast" => Ok(UpdateFrequency::Fast),
+      _ => Err(MediaParseError::InvalidUpdateFrequency(s)),
+    }
+  }
+}
+
+impl fmt::Display for UpdateFrequency {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      UpdateFrequency::None => write!(f, "none"),
+      UpdateFrequency::Slow => write!(f, "slow"),
+      UpdateFrequency::Fast => write!(f, "fast"),
+    }
+  }
+}
+
+/// Ambient light level for the device
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LightLevel {
+  Dim,
+  Normal,
+  Washed,
+}
+
+impl LightLevel {
+  pub fn parse(s: &str) -> Result<Self, MediaParseError> {
+    let s = s.trim().to_ascii_lowercase();
+    match s.as_str() {
+      "dim" => Ok(LightLevel::Dim),
+      "normal" => Ok(LightLevel::Normal),
+      "washed" => Ok(LightLevel::Washed),
+      _ => Err(MediaParseError::InvalidLightLevel(s)),
+    }
+  }
+}
+
+impl fmt::Display for LightLevel {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      LightLevel::Dim => write!(f, "dim"),
+      LightLevel::Normal => write!(f, "normal"),
+      LightLevel::Washed => write!(f, "washed"),
+    }
+  }
+}
+
+/// Display mode reported by the web app manifest
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DisplayMode {
+  Browser,
+  MinimalUi,
+  Standalone,
+  Fullscreen,
+  WindowControlsOverlay,
+}
+
+impl DisplayMode {
+  pub fn parse(s: &str) -> Result<Self, MediaParseError> {
+    let s = s.trim().to_ascii_lowercase();
+    match s.as_str() {
+      "browser" => Ok(DisplayMode::Browser),
+      "minimal-ui" => Ok(DisplayMode::MinimalUi),
+      "standalone" => Ok(DisplayMode::Standalone),
+      "fullscreen" => Ok(DisplayMode::Fullscreen),
+      "window-controls-overlay" => Ok(DisplayMode::WindowControlsOverlay),
+      _ => Err(MediaParseError::InvalidDisplayMode(s)),
+    }
+  }
+}
+
+impl fmt::Display for DisplayMode {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      DisplayMode::Browser => write!(f, "browser"),
+      DisplayMode::MinimalUi => write!(f, "minimal-ui"),
+      DisplayMode::Standalone => write!(f, "standalone"),
+      DisplayMode::Fullscreen => write!(f, "fullscreen"),
+      DisplayMode::WindowControlsOverlay => write!(f, "window-controls-overlay"),
+    }
+  }
+}
+
 /// Color scheme preference
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorScheme {
@@ -1601,6 +1778,14 @@ pub struct MediaContext {
   pub any_pointer_coarse: bool,
   /// Whether any available pointer is fine
   pub any_pointer_fine: bool,
+  /// Whether scripting is available in the environment
+  pub scripting: Scripting,
+  /// How frequently the output updates (fast/slow/none)
+  pub update_frequency: UpdateFrequency,
+  /// Ambient light level for light-level media feature
+  pub light_level: LightLevel,
+  /// PWA display mode for display-mode media feature
+  pub display_mode: DisplayMode,
   /// User's color scheme preference
   pub prefers_color_scheme: Option<ColorScheme>,
   /// User's reduced motion preference
@@ -1626,6 +1811,13 @@ impl MediaContext {
       device_width_bits: self.device_width.to_bits(),
       device_height_bits: self.device_height.to_bits(),
       device_pixel_ratio_bits: self.device_pixel_ratio.to_bits(),
+      base_font_bits: self.base_font_size.to_bits(),
+      can_hover: self.can_hover,
+      any_can_hover: self.any_can_hover,
+      pointer: self.pointer,
+      any_pointer: self.any_pointer,
+      any_pointer_coarse: self.any_pointer_coarse,
+      any_pointer_fine: self.any_pointer_fine,
       prefers_reduced_motion: self.prefers_reduced_motion,
       prefers_reduced_transparency: self.prefers_reduced_transparency,
       prefers_reduced_data: self.prefers_reduced_data,
@@ -1637,6 +1829,10 @@ impl MediaContext {
       color_depth: self.color_depth,
       color_index: self.color_index,
       monochrome_depth: self.monochrome_depth,
+      scripting: self.scripting,
+      update: self.update_frequency,
+      light_level: self.light_level,
+      display_mode: self.display_mode,
     }
   }
 
@@ -1676,6 +1872,10 @@ impl MediaContext {
       any_pointer: PointerCapability::Fine,
       any_pointer_coarse: false,
       any_pointer_fine: true,
+      scripting: Scripting::Enabled,
+      update_frequency: UpdateFrequency::Fast,
+      light_level: LightLevel::Normal,
+      display_mode: DisplayMode::Browser,
       prefers_color_scheme: Some(ColorScheme::NoPreference),
       prefers_reduced_motion: false,
       prefers_contrast: ContrastPreference::NoPreference,
@@ -1689,11 +1889,16 @@ impl MediaContext {
   /// Applies user/environment overrides for media preferences.
   ///
   /// Recognized environment variables:
+  /// - `FASTR_MEDIA_TYPE` = `screen` | `print` | `all` | `speech`
   /// - `FASTR_PREFERS_COLOR_SCHEME` = `light` | `dark` | `no-preference`
   /// - `FASTR_PREFERS_REDUCED_MOTION` = `reduce` | `no-preference` | truthy/falsy
   /// - `FASTR_PREFERS_CONTRAST` = `more`/`high` | `less`/`low` | `custom`/`forced` | `no-preference`
   /// - `FASTR_PREFERS_REDUCED_TRANSPARENCY` = `reduce` | `no-preference` | truthy/falsy
   /// - `FASTR_PREFERS_REDUCED_DATA` = `reduce` | `no-preference` | truthy/falsy
+  /// - `FASTR_SCRIPTING` = `none` | `initial-only` | `enabled` | truthy/falsy
+  /// - `FASTR_UPDATE_FREQUENCY` = `fast` | `slow` | `none`
+  /// - `FASTR_LIGHT_LEVEL` = `dim` | `normal` | `washed`
+  /// - `FASTR_DISPLAY_MODE` = `browser` | `fullscreen` | `standalone` | `minimal-ui` | `window-controls-overlay`
   /// - `FASTR_COLOR_GAMUT` = `srgb` | `p3` | `rec2020`
   /// - `FASTR_INVERTED_COLORS` = `inverted` | `none` | truthy/falsy
   /// - `FASTR_FORCED_COLORS` = `active` | `none` | truthy/falsy
@@ -1702,6 +1907,44 @@ impl MediaContext {
   /// - `FASTR_MONOCHROME_DEPTH` = integer bits for monochrome devices (e.g., 1)
   #[allow(clippy::cognitive_complexity)]
   pub fn with_env_overrides(mut self) -> Self {
+    if let Ok(value) = env::var("FASTR_MEDIA_TYPE") {
+      if let Ok(mt) = MediaType::parse(&value) {
+        self.media_type = mt;
+      }
+    }
+
+    if let Ok(value) = env::var("FASTR_SCRIPTING") {
+      match Scripting::parse(&value) {
+        Ok(script) => self.scripting = script,
+        Err(_) => {
+          let v = value.trim().to_ascii_lowercase();
+          if matches!(v.as_str(), "0" | "false" | "off" | "none") {
+            self.scripting = Scripting::None;
+          } else if matches!(v.as_str(), "1" | "true" | "yes" | "on") {
+            self.scripting = Scripting::Enabled;
+          }
+        }
+      }
+    }
+
+    if let Ok(value) = env::var("FASTR_UPDATE_FREQUENCY") {
+      if let Ok(update) = UpdateFrequency::parse(&value) {
+        self.update_frequency = update;
+      }
+    }
+
+    if let Ok(value) = env::var("FASTR_LIGHT_LEVEL") {
+      if let Ok(level) = LightLevel::parse(&value) {
+        self.light_level = level;
+      }
+    }
+
+    if let Ok(value) = env::var("FASTR_DISPLAY_MODE") {
+      if let Ok(mode) = DisplayMode::parse(&value) {
+        self.display_mode = mode;
+      }
+    }
+
     if let Ok(value) = env::var("FASTR_PREFERS_COLOR_SCHEME") {
       let v = value.trim().to_ascii_lowercase();
       self.prefers_color_scheme = match v.as_str() {
@@ -1847,6 +2090,10 @@ impl MediaContext {
       any_pointer: PointerCapability::None,
       any_pointer_coarse: false,
       any_pointer_fine: false,
+      scripting: Scripting::None,
+      update_frequency: UpdateFrequency::None,
+      light_level: LightLevel::Normal,
+      display_mode: DisplayMode::Browser,
       prefers_color_scheme: Some(ColorScheme::NoPreference),
       prefers_reduced_motion: false,
       prefers_contrast: ContrastPreference::NoPreference,
@@ -1891,6 +2138,10 @@ impl MediaContext {
       any_pointer: PointerCapability::Coarse,
       any_pointer_coarse: true,
       any_pointer_fine: false,
+      scripting: Scripting::Enabled,
+      update_frequency: UpdateFrequency::Fast,
+      light_level: LightLevel::Normal,
+      display_mode: DisplayMode::Browser,
       prefers_color_scheme: Some(ColorScheme::NoPreference),
       prefers_reduced_motion: false,
       prefers_contrast: ContrastPreference::NoPreference,
@@ -1904,6 +2155,20 @@ impl MediaContext {
   /// Sets the device pixel ratio
   pub fn with_dpr(self, dpr: f32) -> Self {
     self.with_device_pixel_ratio(dpr)
+  }
+
+  /// Sets the media type (screen/print/all/speech)
+  pub fn with_media_type(mut self, media_type: MediaType) -> Self {
+    self.media_type = media_type;
+    self
+  }
+
+  /// Sets the base font size used when resolving em/rem in queries
+  pub fn with_base_font_size(mut self, size: f32) -> Self {
+    if size.is_finite() && size > 0.0 {
+      self.base_font_size = size;
+    }
+    self
   }
 
   /// Sets the color scheme preference
@@ -1933,6 +2198,30 @@ impl MediaContext {
   /// Sets the reduced data preference
   pub fn with_reduced_data(mut self, reduce: bool) -> Self {
     self.prefers_reduced_data = reduce;
+    self
+  }
+
+  /// Sets the scripting capability for the environment
+  pub fn with_scripting(mut self, scripting: Scripting) -> Self {
+    self.scripting = scripting;
+    self
+  }
+
+  /// Sets the update frequency (fast/slow/none)
+  pub fn with_update_frequency(mut self, update: UpdateFrequency) -> Self {
+    self.update_frequency = update;
+    self
+  }
+
+  /// Sets the ambient light level
+  pub fn with_light_level(mut self, level: LightLevel) -> Self {
+    self.light_level = level;
+    self
+  }
+
+  /// Sets the PWA display mode
+  pub fn with_display_mode(mut self, mode: DisplayMode) -> Self {
+    self.display_mode = mode;
     self
   }
 
@@ -2238,6 +2527,12 @@ impl MediaContext {
         PointerCapability::Fine => self.any_pointer_fine,
       },
 
+      // MQ5
+      MediaFeature::Scripting(state) => self.scripting == *state,
+      MediaFeature::Update(freq) => self.update_frequency == *freq,
+      MediaFeature::LightLevel(level) => self.light_level == *level,
+      MediaFeature::DisplayMode(mode) => self.display_mode == *mode,
+
       // User preferences
       MediaFeature::PrefersColorScheme(scheme) => match self.prefers_color_scheme {
         Some(current) => current == *scheme,
@@ -2365,6 +2660,22 @@ impl MediaContext {
         Some(length.value / 100.0 * min_dimension)
       }
       LengthUnit::Vmax => {
+        let max_dimension = match (vw, vh) {
+          (Some(w), Some(h)) => w.max(h),
+          _ => return None,
+        };
+        Some(length.value / 100.0 * max_dimension)
+      }
+      LengthUnit::Dvw => Some(length.value / 100.0 * vw?),
+      LengthUnit::Dvh => Some(length.value / 100.0 * vh?),
+      LengthUnit::Dvmin => {
+        let min_dimension = match (vw, vh) {
+          (Some(w), Some(h)) => w.min(h),
+          _ => return None,
+        };
+        Some(length.value / 100.0 * min_dimension)
+      }
+      LengthUnit::Dvmax => {
         let max_dimension = match (vw, vh) {
           (Some(w), Some(h)) => w.max(h),
           _ => return None,
@@ -2817,6 +3128,14 @@ pub enum MediaParseError {
   InvalidReducedTransparency(String),
   /// Invalid reduced data value
   InvalidReducedData(String),
+  /// Invalid scripting value
+  InvalidScripting(String),
+  /// Invalid update frequency
+  InvalidUpdateFrequency(String),
+  /// Invalid light-level value
+  InvalidLightLevel(String),
+  /// Invalid display-mode value
+  InvalidDisplayMode(String),
   /// Invalid color-gamut value
   InvalidColorGamut(String),
   /// Invalid forced-colors value
@@ -2915,6 +3234,34 @@ impl fmt::Display for MediaParseError {
           s
         )
       }
+      MediaParseError::InvalidScripting(s) => {
+        write!(
+          f,
+          "Invalid scripting value: '{}' (expected 'none', 'initial-only', or 'enabled')",
+          s
+        )
+      }
+      MediaParseError::InvalidUpdateFrequency(s) => {
+        write!(
+          f,
+          "Invalid update frequency: '{}' (expected 'none', 'slow', or 'fast')",
+          s
+        )
+      }
+      MediaParseError::InvalidLightLevel(s) => {
+        write!(
+          f,
+          "Invalid light-level: '{}' (expected 'dim', 'normal', or 'washed')",
+          s
+        )
+      }
+      MediaParseError::InvalidDisplayMode(s) => {
+        write!(
+          f,
+          "Invalid display-mode: '{}' (expected 'browser', 'fullscreen', 'standalone', 'minimal-ui', or 'window-controls-overlay')",
+          s
+        )
+      }
       MediaParseError::InvalidColorGamut(s) => {
         write!(
           f,
@@ -2974,11 +3321,15 @@ fn parse_length(s: &str) -> Option<Length> {
     ("rem", |v| Length::rem(v)),
     ("vmin", |v| Length::new(v, LengthUnit::Vmin)),
     ("vmax", |v| Length::new(v, LengthUnit::Vmax)),
+    ("dvmin", |v| Length::new(v, LengthUnit::Dvmin)),
+    ("dvmax", |v| Length::new(v, LengthUnit::Dvmax)),
     ("px", |v| Length::px(v)),
     ("em", |v| Length::em(v)),
     ("%", |v| Length::percent(v)),
     ("vw", |v| Length::new(v, LengthUnit::Vw)),
     ("vh", |v| Length::new(v, LengthUnit::Vh)),
+    ("dvw", |v| Length::new(v, LengthUnit::Dvw)),
+    ("dvh", |v| Length::new(v, LengthUnit::Dvh)),
     ("pt", |v| Length::pt(v)),
     ("cm", |v| Length::cm(v)),
     ("mm", |v| Length::mm(v)),

@@ -78,6 +78,18 @@ pub enum LengthUnit {
   /// Viewport maximum (vmax) - 1% of larger viewport dimension
   Vmax,
 
+  /// Dynamic viewport width (dvw) - responds to UA UI changes
+  Dvw,
+
+  /// Dynamic viewport height (dvh)
+  Dvh,
+
+  /// Dynamic viewport minimum (dvmin)
+  Dvmin,
+
+  /// Dynamic viewport maximum (dvmax)
+  Dvmax,
+
   /// Percentage (%) - relative to containing block or font size
   Percent,
 
@@ -138,7 +150,11 @@ impl LengthUnit {
   /// assert!(!LengthUnit::Px.is_viewport_relative());
   /// ```
   pub fn is_viewport_relative(self) -> bool {
-    matches!(self, Self::Vw | Self::Vh | Self::Vmin | Self::Vmax)
+    matches!(
+      self,
+      Self::Vw | Self::Vh | Self::Vmin | Self::Vmax | Self::Dvw | Self::Dvh | Self::Dvmin
+        | Self::Dvmax
+    )
   }
 
   /// Returns true if this is a percentage
@@ -174,6 +190,10 @@ impl LengthUnit {
       Self::Vh => "vh",
       Self::Vmin => "vmin",
       Self::Vmax => "vmax",
+      Self::Dvw => "dvw",
+      Self::Dvh => "dvh",
+      Self::Dvmin => "dvmin",
+      Self::Dvmax => "dvmax",
       Self::Percent => "%",
       Self::Calc => "calc",
     }
@@ -926,6 +946,10 @@ impl Length {
       LengthUnit::Vh => Some((self.value / 100.0) * viewport_height),
       LengthUnit::Vmin => Some((self.value / 100.0) * viewport_width.min(viewport_height)),
       LengthUnit::Vmax => Some((self.value / 100.0) * viewport_width.max(viewport_height)),
+      LengthUnit::Dvw => Some((self.value / 100.0) * viewport_width),
+      LengthUnit::Dvh => Some((self.value / 100.0) * viewport_height),
+      LengthUnit::Dvmin => Some((self.value / 100.0) * viewport_width.min(viewport_height)),
+      LengthUnit::Dvmax => Some((self.value / 100.0) * viewport_width.max(viewport_height)),
       _ if self.unit.is_absolute() => Some(self.to_px()),
       _ => Some(self.value),
     }

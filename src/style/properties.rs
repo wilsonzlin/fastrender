@@ -9407,10 +9407,7 @@ fn resolve_font_size_length(
   if len.unit == LengthUnit::Percent {
     return Some((len.value / 100.0) * parent_font_size);
   }
-  if matches!(
-    len.unit,
-    LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax
-  ) {
+  if len.unit.is_viewport_relative() {
     return len.resolve_with_viewport(viewport.width, viewport.height);
   }
   if len.unit == LengthUnit::Ex {
@@ -9439,6 +9436,10 @@ fn length_from_token(token: &Token) -> Option<Length> {
       "vw" => Some(Length::new(*value, LengthUnit::Vw)),
       "vmin" => Some(Length::new(*value, LengthUnit::Vmin)),
       "vmax" => Some(Length::new(*value, LengthUnit::Vmax)),
+      "dvh" => Some(Length::new(*value, LengthUnit::Dvh)),
+      "dvw" => Some(Length::new(*value, LengthUnit::Dvw)),
+      "dvmin" => Some(Length::new(*value, LengthUnit::Dvmin)),
+      "dvmax" => Some(Length::new(*value, LengthUnit::Dvmax)),
       "%" => Some(Length::percent(*value)),
       _ => None,
     },
@@ -10443,6 +10444,10 @@ fn length_unit_from_str(unit: &str) -> Option<LengthUnit> {
     "vh" => Some(LengthUnit::Vh),
     "vmin" => Some(LengthUnit::Vmin),
     "vmax" => Some(LengthUnit::Vmax),
+    "dvw" => Some(LengthUnit::Dvw),
+    "dvh" => Some(LengthUnit::Dvh),
+    "dvmin" => Some(LengthUnit::Dvmin),
+    "dvmax" => Some(LengthUnit::Dvmax),
     _ => None,
   }
 }

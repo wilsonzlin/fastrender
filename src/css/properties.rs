@@ -506,6 +506,10 @@ fn parse_length_component(parser: &mut Parser) -> Result<Length, ()> {
         "vh" => LengthUnit::Vh,
         "vmin" => LengthUnit::Vmin,
         "vmax" => LengthUnit::Vmax,
+        "dvw" => LengthUnit::Dvw,
+        "dvh" => LengthUnit::Dvh,
+        "dvmin" => LengthUnit::Dvmin,
+        "dvmax" => LengthUnit::Dvmax,
         _ => return Err(()),
       };
       Ok(Length::new(*value, unit))
@@ -2009,6 +2013,10 @@ mod tests {
       ("30vh", 30.0, LengthUnit::Vh),
       ("15vmin", 15.0, LengthUnit::Vmin),
       ("40vmax", 40.0, LengthUnit::Vmax),
+      ("10dvw", 10.0, LengthUnit::Dvw),
+      ("12dvh", 12.0, LengthUnit::Dvh),
+      ("8dvmin", 8.0, LengthUnit::Dvmin),
+      ("9dvmax", 9.0, LengthUnit::Dvmax),
       ("75%", 75.0, LengthUnit::Percent),
     ];
 
@@ -2232,6 +2240,10 @@ pub fn parse_length(s: &str) -> Option<Length> {
   }
 
   for (suffix, unit) in [
+    ("dvmin", LengthUnit::Dvmin),
+    ("dvmax", LengthUnit::Dvmax),
+    ("dvw", LengthUnit::Dvw),
+    ("dvh", LengthUnit::Dvh),
     ("vmin", LengthUnit::Vmin),
     ("vmax", LengthUnit::Vmax),
     ("vw", LengthUnit::Vw),
@@ -2421,6 +2433,10 @@ fn parse_calc_factor<'i, 't>(
         "vh" => LengthUnit::Vh,
         "vmin" => LengthUnit::Vmin,
         "vmax" => LengthUnit::Vmax,
+        "dvw" => LengthUnit::Dvw,
+        "dvh" => LengthUnit::Dvh,
+        "dvmin" => LengthUnit::Dvmin,
+        "dvmax" => LengthUnit::Dvmax,
         _ => {
           return Err(cssparser::ParseError {
             kind: cssparser::ParseErrorKind::Custom(()),

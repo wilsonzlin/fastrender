@@ -486,7 +486,14 @@ fn resolve_sizes_length(
   use crate::style::values::LengthUnit;
   match length.unit {
     LengthUnit::Percent => length.resolve_against(viewport.width),
-    LengthUnit::Vw | LengthUnit::Vh | LengthUnit::Vmin | LengthUnit::Vmax => {
+    LengthUnit::Vw
+    | LengthUnit::Vh
+    | LengthUnit::Vmin
+    | LengthUnit::Vmax
+    | LengthUnit::Dvw
+    | LengthUnit::Dvh
+    | LengthUnit::Dvmin
+    | LengthUnit::Dvmax => {
       length.resolve_with_viewport(viewport.width, viewport.height)
     }
     LengthUnit::Em | LengthUnit::Rem => Some(font_size * length.value),
