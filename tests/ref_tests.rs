@@ -13,6 +13,7 @@ use r#ref::harness::RefTestConfig;
 use r#ref::harness::RefTestHarness;
 use r#ref::harness::RefTestResult;
 use r#ref::harness::RefTestResults;
+use std::path::Path;
 use std::time::Duration;
 
 // =============================================================================
@@ -404,6 +405,27 @@ fn test_ref_harness_run_ref_test_missing_html() {
 // =============================================================================
 // Integration Tests with Real Rendering
 // =============================================================================
+
+#[test]
+fn form_controls_reference_image_matches_golden() {
+  let fixture = Path::new("tests/ref/fixtures/form_controls");
+  let reference = fixture.join("reference.png");
+  let mut harness = RefTestHarness::new();
+
+  if std::env::var("UPDATE_GOLDEN").is_ok() {
+    let html = std::fs::read_to_string(fixture.join("input.html")).expect("read html");
+    harness
+      .create_reference(&html, &reference)
+      .expect("create reference image");
+  }
+
+  let result = harness.run_ref_test(fixture, &reference);
+  assert!(
+    result.passed,
+    "form control rendering regressed: {}",
+    result.summary()
+  );
+}
 
 #[test]
 fn test_ref_harness_render_and_compare_identical() {

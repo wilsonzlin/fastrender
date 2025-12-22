@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #fefefe;
+      padding: 16px;
+    }
+
+    .row {
+      margin-bottom: 12px;
+    }
+
+    .control {
+      margin-right: 12px;
+    }
+
+    .appearance-none {
+      appearance: none;
+      width: 140px;
+      height: 30px;
+      padding: 6px 8px;
+      border: 1px solid #333;
+    }
+
+    textarea.control {
+      width: 170px;
+      height: 50px;
+    }
+
+    select.control {
+      min-width: 150px;
+    }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <input class="control" value="text value">
+    <input class="control" placeholder="placeholder" data-fastr-focus="true">
+    <input class="control" type="checkbox">
+    <input class="control" type="checkbox" checked>
+    <input class="control" type="radio">
+    <input class="control" type="radio" checked>
+  </div>
+  <div class="row">
+    <select class="control">
+      <option selected>First option</option>
+      <option>Second</option>
+    </select>
+    <select class="control" disabled>
+      <option>Disabled</option>
+    </select>
+    <textarea class="control">textarea text</textarea>
+    <button class="control">Button</button>
+    <input class="control" type="submit" value="Submit">
+  </div>
+  <div class="row">
+    <input class="control" type="range" min="0" max="10" value="7">
+    <input class="control appearance-none" placeholder="Custom">
+    <input class="control" disabled value="Disabled">
+  </div>
+</body>
+</html>
