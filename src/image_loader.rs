@@ -14,11 +14,15 @@ use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
 use crate::style::types::ImageResolution;
 use crate::style::types::OrientationTransform;
+use avif_decode::Decoder as AvifDecoder;
+use avif_decode::Image as AvifImage;
 use exif;
 use image::imageops;
 use image::DynamicImage;
 use image::GenericImageView;
+use image::ImageFormat;
 use image::RgbaImage;
+use std::convert::TryFrom;
 use roxmltree::Document;
 use std::collections::HashMap;
 use std::path::Path;
@@ -346,7 +350,7 @@ impl ImageCache {
 
     // Regular image - extract EXIF metadata and decode
     let (orientation, resolution) = Self::exif_metadata(bytes);
-    image::load_from_memory(bytes)
+    Self::decode_bitmap(bytes, content_type)
       .map(|img| (img, orientation, resolution, false, None, false))
       .map_err(|e| {
         Error::Image(ImageError::DecodeFailed {
@@ -354,6 +358,159 @@ impl ImageCache {
           reason: e.to_string(),
         })
       })
+  }
+
+  fn decode_bitmap(
+    bytes: &[u8],
+    content_type: Option<&str>,
+  ) -> std::result::Result<DynamicImage, image::ImageError> {
+    let format_from_content_type = Self::format_from_content_type(content_type);
+    let sniffed_format = Self::sniff_image_format(bytes);
+    let mut last_error: Option<image::ImageError> = None;
+
+    if matches!(format_from_content_type, Some(ImageFormat::Avif))
+      || matches!(sniffed_format, Some(ImageFormat::Avif))
+    {
+      match Self::decode_avif(bytes) {
+        Ok(img) => return Ok(img),
+        Err(err) => last_error = Some(err),
+      }
+    }
+
+    if let Some(format) = format_from_content_type {
+      if format != ImageFormat::Avif {
+        match image::load_from_memory_with_format(bytes, format) {
+          Ok(img) => return Ok(img),
+          Err(err) => last_error = Some(err),
+        }
+      }
+    }
+
+    if let Some(format) = sniffed_format {
+      if Some(format) != format_from_content_type && format != ImageFormat::Avif {
+        match image::load_from_memory_with_format(bytes, format) {
+          Ok(img) => return Ok(img),
+          Err(err) => last_error = Some(err),
+        }
+      }
+    }
+
+    match image::load_from_memory(bytes) {
+      Ok(img) => Ok(img),
+      Err(err) => Err(last_error.unwrap_or(err)),
+    }
+  }
+
+  fn format_from_content_type(content_type: Option<&str>) -> Option<ImageFormat> {
+    let mime = content_type?
+      .split(';')
+      .next()
+      .map(|ct| ct.trim().to_ascii_lowercase())?;
+    ImageFormat::from_mime_type(mime)
+  }
+
+  fn sniff_image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    image::guess_format(bytes).ok()
+  }
+
+  fn decode_avif(bytes: &[u8]) -> std::result::Result<DynamicImage, image::ImageError> {
+    let decoder = AvifDecoder::from_avif(bytes).map_err(|err| Self::avif_error(err))?;
+    let image = decoder
+      .to_image()
+      .map_err(|err| Self::avif_error(err))?;
+    Self::avif_image_to_dynamic(image)
+  }
+
+  fn avif_image_to_dynamic(image: AvifImage) -> std::result::Result<DynamicImage, image::ImageError> {
+    let dimension_error = || {
+      image::ImageError::Parameter(image::error::ParameterError::from_kind(
+        image::error::ParameterErrorKind::DimensionMismatch,
+      ))
+    };
+
+    match image {
+      AvifImage::Rgb8(img) => {
+        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let mut buf = Vec::with_capacity(width as usize * height as usize * 3);
+        for px in img.buf() {
+          buf.extend_from_slice(&[px.r, px.g, px.b]);
+        }
+        image::RgbImage::from_vec(width, height, buf)
+          .map(DynamicImage::ImageRgb8)
+          .ok_or_else(dimension_error)
+      }
+      AvifImage::Rgb16(img) => {
+        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let mut buf = Vec::with_capacity(width as usize * height as usize * 3);
+        for px in img.buf() {
+          buf.extend_from_slice(&[px.r, px.g, px.b]);
+        }
+        image::ImageBuffer::from_vec(width, height, buf)
+          .map(DynamicImage::ImageRgb16)
+          .ok_or_else(dimension_error)
+      }
+      AvifImage::Rgba8(img) => {
+        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let mut buf = Vec::with_capacity(width as usize * height as usize * 4);
+        for px in img.buf() {
+          buf.extend_from_slice(&[px.r, px.g, px.b, px.a]);
+        }
+        image::RgbaImage::from_vec(width, height, buf)
+          .map(DynamicImage::ImageRgba8)
+          .ok_or_else(dimension_error)
+      }
+      AvifImage::Rgba16(img) => {
+        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let mut buf = Vec::with_capacity(width as usize * height as usize * 4);
+        for px in img.buf() {
+          buf.extend_from_slice(&[px.r, px.g, px.b, px.a]);
+        }
+        image::ImageBuffer::from_vec(width, height, buf)
+          .map(DynamicImage::ImageRgba16)
+          .ok_or_else(dimension_error)
+      }
+      AvifImage::Gray8(img) => {
+        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let mut buf = Vec::with_capacity(width as usize * height as usize);
+        for px in img.buf() {
+          buf.push(px.value());
+        }
+        image::ImageBuffer::from_vec(width, height, buf)
+          .map(DynamicImage::ImageLuma8)
+          .ok_or_else(dimension_error)
+      }
+      AvifImage::Gray16(img) => {
+        let (width, height) = Self::avif_dimensions(img.width(), img.height())?;
+        let mut buf = Vec::with_capacity(width as usize * height as usize);
+        for px in img.buf() {
+          buf.push(px.value());
+        }
+        image::ImageBuffer::from_vec(width, height, buf)
+          .map(DynamicImage::ImageLuma16)
+          .ok_or_else(dimension_error)
+      }
+    }
+  }
+
+  fn avif_dimensions(
+    width: usize,
+    height: usize,
+  ) -> std::result::Result<(u32, u32), image::ImageError> {
+    let to_u32 = |v: usize| {
+      u32::try_from(v).map_err(|_| {
+        image::ImageError::Parameter(image::error::ParameterError::from_kind(
+          image::error::ParameterErrorKind::DimensionMismatch,
+        ))
+      })
+    };
+    Ok((to_u32(width)?, to_u32(height)?))
+  }
+
+  fn avif_error(err: impl std::fmt::Display) -> image::ImageError {
+    image::ImageError::Decoding(image::error::DecodingError::new(
+      ImageFormat::Avif.into(),
+      err.to_string(),
+    ))
   }
 
   fn orientation_from_exif(value: u16) -> Option<OrientationTransform> {
@@ -917,5 +1074,64 @@ mod tests {
     // Different URL should fetch again
     let _ = cache.load("test://other.png");
     assert_eq!(fetcher.count.load(Ordering::SeqCst), 2);
+  }
+
+  struct StaticFetcher {
+    bytes: Vec<u8>,
+    content_type: Option<String>,
+  }
+
+  impl ResourceFetcher for StaticFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      Ok(FetchedResource::new(
+        self.bytes.clone(),
+        self.content_type.clone(),
+      ))
+    }
+  }
+
+  fn avif_fixture_bytes() -> Vec<u8> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .join("tests/fixtures/avif/solid.avif");
+    std::fs::read(&path).expect("read avif fixture")
+  }
+
+  fn assert_green_pixel(pixel: [u8; 4]) {
+    assert!(pixel[1] >= 180, "expected green channel, got {pixel:?}");
+    assert!(pixel[0] < 50 && pixel[2] < 50, "expected low red/blue, got {pixel:?}");
+  }
+
+  #[test]
+  fn decodes_avif_with_declared_content_type() {
+    let bytes = avif_fixture_bytes();
+    let fetcher = Arc::new(StaticFetcher {
+      bytes: bytes.clone(),
+      content_type: Some("image/avif".to_string()),
+    });
+    let cache = ImageCache::with_fetcher(fetcher);
+
+    let image = cache.load("test://avif.declared").expect("decode avif");
+    assert_eq!(image.width(), 4);
+    assert_eq!(image.height(), 4);
+
+    let pixel = image.image.to_rgba8().get_pixel(0, 0).0;
+    assert_green_pixel(pixel);
+  }
+
+  #[test]
+  fn decodes_avif_when_content_type_is_incorrect() {
+    let bytes = avif_fixture_bytes();
+    let fetcher = Arc::new(StaticFetcher {
+      bytes: bytes.clone(),
+      content_type: Some("image/png".to_string()),
+    });
+    let cache = ImageCache::with_fetcher(fetcher);
+
+    let image = cache.load("test://avif.sniff").expect("decode avif via sniffing");
+    assert_eq!(image.width(), 4);
+    assert_eq!(image.height(), 4);
+
+    let pixel = image.image.to_rgba8().get_pixel(2, 2).0;
+    assert_green_pixel(pixel);
   }
 }

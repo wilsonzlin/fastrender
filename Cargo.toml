@@ -12,6 +12,7 @@ box_generation_demo = []
 
 [dependencies]
 base64 = "0.22"
+avif-decode = { version = "1.0", default-features = false }
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4.42"
 csscolorparser = "0.6"
@@ -20,7 +21,7 @@ encoding_rs = "0.8"
 fontdb = "0.23"
 html5ever = "0.35"
 hyphenation = { version = "0.8", features = ["embed_en-us"] }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "avif"] }
 lru = "0.12"
 kamadak-exif = "0.6"
 markup5ever_rcdom = "0.35"

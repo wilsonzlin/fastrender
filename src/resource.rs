@@ -996,6 +996,7 @@ fn guess_content_type_from_path(path: &str) -> Option<String> {
     "jpg" | "jpeg" => "image/jpeg",
     "gif" => "image/gif",
     "webp" => "image/webp",
+    "avif" => "image/avif",
     "svg" => "image/svg+xml",
     "ico" => "image/x-icon",
     "bmp" => "image/bmp",
