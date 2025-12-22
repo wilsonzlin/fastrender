@@ -7006,6 +7006,44 @@ pub fn apply_declaration_with_base(
       }
     }
 
+    // Mask
+    "mask-image" => {
+      if let Some(images) = parse_background_image_list(&resolved_value) {
+        styles.mask_images = images;
+        styles.rebuild_mask_layers();
+      }
+    }
+    "mask-position" => {
+      if let Some(positions) = parse_layer_list(&resolved_value, parse_background_position) {
+        styles.mask_positions = positions;
+        styles.rebuild_mask_layers();
+      }
+    }
+    "mask-size" => {
+      if let Some(sizes) = parse_layer_list(&resolved_value, parse_background_size) {
+        styles.mask_sizes = sizes;
+        styles.rebuild_mask_layers();
+      }
+    }
+    "mask-repeat" => {
+      if let Some(repeats) = parse_layer_list(&resolved_value, parse_background_repeat) {
+        styles.mask_repeats = repeats;
+        styles.rebuild_mask_layers();
+      }
+    }
+    "mask-mode" => {
+      if let Some(modes) = parse_layer_list(&resolved_value, parse_mask_mode) {
+        styles.mask_modes = modes;
+        styles.rebuild_mask_layers();
+      }
+    }
+    "mask" => {
+      if let Some(images) = parse_background_image_list(&resolved_value) {
+        styles.mask_images = images;
+        styles.rebuild_mask_layers();
+      }
+    }
+
     // Shorthand: background
     "background" => {
       let tokens: Vec<PropertyValue> = match resolved_value {
@@ -9452,6 +9490,18 @@ fn parse_background_repeat(value: &PropertyValue) -> Option<BackgroundRepeat> {
         None
       }
     }
+    _ => None,
+  }
+}
+
+fn parse_mask_mode(value: &PropertyValue) -> Option<MaskMode> {
+  match value {
+    PropertyValue::Keyword(kw) => match kw.as_str() {
+      "alpha" => Some(MaskMode::Alpha),
+      "luminance" => Some(MaskMode::Luminance),
+      "match-source" => Some(MaskMode::Alpha),
+      _ => None,
+    },
     _ => None,
   }
 }

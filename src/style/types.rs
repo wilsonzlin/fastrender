@@ -130,6 +130,13 @@ pub enum BorderImageRepeat {
   Space,
 }
 
+/// Mask compositing mode per layer
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskMode {
+  Alpha,
+  Luminance,
+}
+
 /// Border image source
 #[derive(Debug, Clone, PartialEq)]
 pub enum BorderImageSource {
@@ -2580,6 +2587,16 @@ pub struct BackgroundLayer {
   pub blend_mode: MixBlendMode,
 }
 
+/// Single mask layer with per-layer properties.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaskLayer {
+  pub image: Option<BackgroundImage>,
+  pub position: BackgroundPosition,
+  pub size: BackgroundSize,
+  pub repeat: BackgroundRepeat,
+  pub mode: MaskMode,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipComponent {
   Auto,
@@ -2614,6 +2631,27 @@ impl Default for BackgroundLayer {
       origin: BackgroundBox::PaddingBox,
       clip: BackgroundBox::BorderBox,
       blend_mode: MixBlendMode::Normal,
+    }
+  }
+}
+
+impl Default for MaskLayer {
+  fn default() -> Self {
+    Self {
+      image: None,
+      position: BackgroundPosition::Position {
+        x: BackgroundPositionComponent {
+          alignment: 0.0,
+          offset: Length::percent(0.0),
+        },
+        y: BackgroundPositionComponent {
+          alignment: 0.0,
+          offset: Length::percent(0.0),
+        },
+      },
+      size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
+      repeat: BackgroundRepeat::repeat(),
+      mode: MaskMode::Alpha,
     }
   }
 }

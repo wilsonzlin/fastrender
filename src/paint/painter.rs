@@ -79,6 +79,8 @@ use crate::style::types::FilterColor;
 use crate::style::types::FilterFunction;
 use crate::style::types::ImageOrientation;
 use crate::style::types::ImageRendering;
+use crate::style::types::MaskLayer;
+use crate::style::types::MaskMode;
 use crate::style::types::MixBlendMode;
 use crate::style::types::ObjectFit;
 use crate::style::types::OrientationTransform;
@@ -347,6 +349,12 @@ enum ResolvedFilter {
 }
 
 #[derive(Debug, Clone)]
+struct ResolvedMask {
+  layers: Vec<MaskLayer>,
+  style: Arc<ComputedStyle>,
+}
+
+#[derive(Debug, Clone)]
 enum DisplayCommand {
   Background {
     rect: Rect,
@@ -383,6 +391,7 @@ enum DisplayCommand {
     radii: BorderRadii,
     clip: Option<(Rect, BorderRadii, bool, bool)>,
     clip_path: Option<ResolvedClipPath>,
+    mask: Option<ResolvedMask>,
     commands: Vec<DisplayCommand>,
   },
 }
@@ -1545,6 +1554,19 @@ impl Painter {
         &self.font_ctx,
       )
     });
+    let mask = fragment.style.as_ref().and_then(|style| {
+      let has_image = style.mask_layers.iter().any(|layer| {
+        layer
+          .image
+          .as_ref()
+          .map(|img| !matches!(img, BackgroundImage::None))
+          .unwrap_or(false)
+      });
+      has_image.then(|| ResolvedMask {
+        layers: style.mask_layers.clone(),
+        style: style.clone(),
+      })
+    });
     if opacity < 1.0
       || transform.is_some()
       || !matches!(blend_mode, MixBlendMode::Normal)
@@ -1553,6 +1575,7 @@ impl Painter {
       || has_backdrop
       || clip.is_some()
       || clip_path.is_some()
+      || mask.is_some()
     {
       let radii = resolve_border_radii(style_ref, abs_bounds);
       items.push(DisplayCommand::StackingContext {
@@ -1566,6 +1589,7 @@ impl Painter {
         radii,
         clip,
         clip_path,
+        mask,
         commands: local_commands,
       });
     } else {
@@ -1802,6 +1826,7 @@ impl Painter {
         radii,
         clip,
         clip_path,
+        mask,
         commands,
       } => {
         let debug_stack = dump_stack_enabled();
@@ -2028,6 +2053,16 @@ impl Painter {
             if let Some(mask) = clip_path.mask(self.scale, size) {
               layer_pixmap.apply_mask(&mask);
             }
+          }
+        }
+        if let Some(mask_info) = mask.as_ref() {
+          if let Some(mask) = self.render_mask(
+            mask_info,
+            root_rect,
+            layer_pixmap.width(),
+            layer_pixmap.height(),
+          ) {
+            layer_pixmap.apply_mask(&mask);
           }
         }
         if !outline_commands.is_empty() {
@@ -5300,6 +5335,217 @@ impl Painter {
     }
   }
 
+  fn render_mask(
+    &self,
+    mask: &ResolvedMask,
+    root_rect: Rect,
+    device_width: u32,
+    device_height: u32,
+  ) -> Option<Mask> {
+    if device_width == 0 || device_height == 0 {
+      return None;
+    }
+
+    let mut mask_pixmap = Pixmap::new(device_width, device_height)?;
+    let rects = background_rects(
+      root_rect.x(),
+      root_rect.y(),
+      root_rect.width(),
+      root_rect.height(),
+      &mask.style,
+      Some((self.css_width, self.css_height)),
+    );
+    let origin_rect_css = rects.border;
+    let clip_rect_css = rects.border;
+    if origin_rect_css.width() <= 0.0
+      || origin_rect_css.height() <= 0.0
+      || clip_rect_css.width() <= 0.0
+      || clip_rect_css.height() <= 0.0
+    {
+      return None;
+    }
+
+    for layer in mask.layers.iter().rev() {
+      let Some(image) = &layer.image else { continue };
+      let mut tile_w: f32;
+      let mut tile_h: f32;
+
+      let tile_pixmap = match image {
+        BackgroundImage::LinearGradient { .. }
+        | BackgroundImage::RepeatingLinearGradient { .. }
+        | BackgroundImage::RadialGradient { .. }
+        | BackgroundImage::RepeatingRadialGradient { .. }
+        | BackgroundImage::ConicGradient { .. }
+        | BackgroundImage::RepeatingConicGradient { .. } => {
+          let (resolved_w, resolved_h) = compute_background_size_from_value(
+            &layer.size,
+            mask.style.font_size,
+            mask.style.root_font_size,
+            (self.css_width, self.css_height),
+            origin_rect_css.width(),
+            origin_rect_css.height(),
+            0.0,
+            0.0,
+          );
+          tile_w = resolved_w;
+          tile_h = resolved_h;
+          if tile_w <= 0.0 || tile_h <= 0.0 {
+            continue;
+          }
+          let pixmap_w = tile_w.ceil().max(1.0) as u32;
+          let pixmap_h = tile_h.ceil().max(1.0) as u32;
+          self.render_generated_image(image, &mask.style, pixmap_w, pixmap_h)
+        }
+        BackgroundImage::Url(src) => {
+          let image = match self.image_cache.load(src) {
+            Ok(img) => img,
+            Err(_) => continue,
+          };
+          let orientation = mask
+            .style
+            .image_orientation
+            .resolve(image.orientation, true);
+          let (img_w_raw, img_h_raw) = image.oriented_dimensions(orientation);
+          let Some((img_w, img_h)) =
+            image.css_dimensions(orientation, &mask.style.image_resolution, self.scale, None)
+          else {
+            continue;
+          };
+          if img_w <= 0.0 || img_h <= 0.0 || img_w_raw == 0 || img_h_raw == 0 {
+            continue;
+          }
+          let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
+            Some(p) => p,
+            None => continue,
+          };
+
+          let (resolved_w, resolved_h) = compute_background_size_from_value(
+            &layer.size,
+            mask.style.font_size,
+            mask.style.root_font_size,
+            (self.css_width, self.css_height),
+            origin_rect_css.width(),
+            origin_rect_css.height(),
+            img_w,
+            img_h,
+          );
+          tile_w = resolved_w;
+          tile_h = resolved_h;
+          Some(pixmap)
+        }
+        BackgroundImage::None => continue,
+      };
+
+      if tile_w <= 0.0 || tile_h <= 0.0 {
+        continue;
+      }
+
+      let mut rounded_x = false;
+      let mut rounded_y = false;
+      if layer.repeat.x == BackgroundRepeatKeyword::Round {
+        tile_w = round_tile_length(origin_rect_css.width(), tile_w);
+        rounded_x = true;
+      }
+      if layer.repeat.y == BackgroundRepeatKeyword::Round {
+        tile_h = round_tile_length(origin_rect_css.height(), tile_h);
+        rounded_y = true;
+      }
+      if rounded_x ^ rounded_y
+        && matches!(
+          layer.size,
+          BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+        )
+      {
+        let aspect = if let Some(ref pix) = tile_pixmap {
+          if pix.height() > 0 {
+            pix.width() as f32 / pix.height() as f32
+          } else {
+            1.0
+          }
+        } else {
+          1.0
+        };
+        if rounded_x {
+          tile_h = tile_w / aspect;
+        } else {
+          tile_w = tile_h * aspect;
+        }
+      }
+
+      let (offset_x, offset_y) = resolve_background_offset(
+        layer.position,
+        origin_rect_css.width(),
+        origin_rect_css.height(),
+        tile_w,
+        tile_h,
+        mask.style.font_size,
+        mask.style.root_font_size,
+        (self.css_width, self.css_height),
+      );
+
+      let positions_x = tile_positions(
+        layer.repeat.x,
+        origin_rect_css.x(),
+        origin_rect_css.width(),
+        tile_w,
+        offset_x,
+        clip_rect_css.min_x(),
+        clip_rect_css.max_x(),
+      );
+      let positions_y = tile_positions(
+        layer.repeat.y,
+        origin_rect_css.y(),
+        origin_rect_css.height(),
+        tile_h,
+        offset_y,
+        clip_rect_css.min_y(),
+        clip_rect_css.max_y(),
+      );
+
+      let Some(tile_pixmap) = tile_pixmap else {
+        continue;
+      };
+      let Some(mask_tile) = mask_tile_from_image(&tile_pixmap, layer.mode) else {
+        continue;
+      };
+
+      for ty in positions_y.iter().copied() {
+        for tx in positions_x.iter().copied() {
+          paint_mask_tile(
+            &mut mask_pixmap,
+            &mask_tile,
+            tx,
+            ty,
+            tile_w,
+            tile_h,
+            clip_rect_css,
+            self.scale,
+          );
+        }
+      }
+    }
+
+    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
+  }
+
+  fn mask_value_from_pixel(pixel: &[u8], mode: MaskMode) -> u8 {
+    let a = pixel.get(3).copied().unwrap_or(0) as f32 / 255.0;
+    let value = match mode {
+      MaskMode::Alpha => a,
+      MaskMode::Luminance => {
+        if a <= 0.0 {
+          0.0
+        } else {
+          let r = pixel.get(0).copied().unwrap_or(0) as f32 / 255.0 / a;
+          let g = pixel.get(1).copied().unwrap_or(0) as f32 / 255.0 / a;
+          let b = pixel.get(2).copied().unwrap_or(0) as f32 / 255.0 / a;
+          (0.2126 * r + 0.7152 * g + 0.0722 * b) * a
+        }
+      }
+    };
+    (value * 255.0).round().clamp(0.0, 255.0) as u8
+  }
+
   fn paint_text_decoration(
     &mut self,
     style: &ComputedStyle,
@@ -6748,6 +6994,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         radii,
         clip,
         clip_path,
+        mask,
         commands,
       } => DisplayCommand::StackingContext {
         rect: rect.translate(offset),
@@ -6760,6 +7007,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         radii,
         clip: clip.map(|(rect, r, cx, cy)| (rect.translate(offset), r, cx, cy)),
         clip_path: clip_path.map(|cp| cp.translate(dx, dy)),
+        mask,
         commands: translate_commands(commands, dx, dy),
       },
     })
@@ -7305,6 +7553,77 @@ fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
     MixBlendMode::ColorOklch => SkiaBlendMode::Color,
     MixBlendMode::LuminosityOklch => SkiaBlendMode::Luminosity,
   }
+}
+
+fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> Option<Pixmap> {
+  let size = IntSize::from_wh(tile.width(), tile.height())?;
+  let mut data = Vec::with_capacity(tile.data().len());
+  for chunk in tile.data().chunks(4) {
+    let v = Painter::mask_value_from_pixel(chunk, mode);
+    data.extend_from_slice(&[v, v, v, v]);
+  }
+  Pixmap::from_vec(data, size)
+}
+
+fn paint_mask_tile(
+  dest: &mut Pixmap,
+  tile: &Pixmap,
+  tx: f32,
+  ty: f32,
+  tile_w: f32,
+  tile_h: f32,
+  clip_rect: Rect,
+  scale: f32,
+) {
+  if tile_w <= 0.0 || tile_h <= 0.0 {
+    return;
+  }
+  let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+  let Some(intersection) = tile_rect.intersection(clip_rect) else {
+    return;
+  };
+  if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+    return;
+  }
+
+  let device_clip = Rect::from_xywh(
+    intersection.x() * scale,
+    intersection.y() * scale,
+    intersection.width() * scale,
+    intersection.height() * scale,
+  );
+  if device_clip.width() <= 0.0 || device_clip.height() <= 0.0 {
+    return;
+  }
+  let Some(src_rect) = SkiaRect::from_xywh(
+    device_clip.x(),
+    device_clip.y(),
+    device_clip.width(),
+    device_clip.height(),
+  ) else {
+    return;
+  };
+
+  let scale_x = tile_w / tile.width() as f32;
+  let scale_y = tile_h / tile.height() as f32;
+
+  let mut paint = Paint::default();
+  paint.shader = Pattern::new(
+    tile.as_ref(),
+    SpreadMode::Pad,
+    FilterQuality::Bilinear,
+    1.0,
+    Transform::from_row(
+      scale_x * scale,
+      0.0,
+      0.0,
+      scale_y * scale,
+      tx * scale,
+      ty * scale,
+    ),
+  );
+  paint.anti_alias = false;
+  dest.fill_rect(src_rect, &paint, Transform::identity(), None);
 }
 
 fn resolve_border_radii(style: Option<&ComputedStyle>, bounds: Rect) -> BorderRadii {
@@ -8014,6 +8333,28 @@ fn compute_background_size(
   img_w: f32,
   img_h: f32,
 ) -> (f32, f32) {
+  compute_background_size_from_value(
+    &layer.size,
+    font_size,
+    root_font_size,
+    viewport,
+    area_w,
+    area_h,
+    img_w,
+    img_h,
+  )
+}
+
+fn compute_background_size_from_value(
+  size: &BackgroundSize,
+  font_size: f32,
+  root_font_size: f32,
+  viewport: (f32, f32),
+  area_w: f32,
+  area_h: f32,
+  img_w: f32,
+  img_h: f32,
+) -> (f32, f32) {
   let natural_w = if img_w > 0.0 { Some(img_w) } else { None };
   let natural_h = if img_h > 0.0 { Some(img_h) } else { None };
   let ratio = if img_w > 0.0 && img_h > 0.0 {
@@ -8022,7 +8363,7 @@ fn compute_background_size(
     None
   };
 
-  match layer.size {
+  match size {
     BackgroundSize::Keyword(BackgroundSizeKeyword::Cover) => {
       if let (Some(w), Some(h)) = (natural_w, natural_h) {
         let scale = (area_w / w).max(area_h / h);
@@ -8049,8 +8390,8 @@ fn compute_background_size(
         }
       };
 
-      let resolved_x = resolve(x, area_w);
-      let resolved_y = resolve(y, area_h);
+      let resolved_x = resolve(*x, area_w);
+      let resolved_y = resolve(*y, area_h);
 
       match (resolved_x, resolved_y) {
         (Some(w), Some(h)) => (w, h),
@@ -11346,6 +11687,7 @@ mod tests {
       radii: BorderRadii::uniform(0.5),
       clip: None,
       clip_path: None,
+      mask: None,
       commands: vec![DisplayCommand::Background {
         rect: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
         style,
@@ -11380,6 +11722,7 @@ mod tests {
       radii: BorderRadii::ZERO,
       clip: None,
       clip_path: None,
+      mask: None,
       commands: Vec::new(),
     };
 
@@ -11903,6 +12246,213 @@ mod tests {
       (255, 255, 255),
       "center should remain unfilled without border-image fill"
     );
+  }
+
+  #[test]
+  fn border_image_accepts_radial_gradients() {
+    let mut style = ComputedStyle::default();
+    style.border_top_width = Length::px(4.0);
+    style.border_right_width = Length::px(4.0);
+    style.border_bottom_width = Length::px(4.0);
+    style.border_left_width = Length::px(4.0);
+    style.border_image = BorderImage {
+      source: BorderImageSource::Image(Box::new(BackgroundImage::RadialGradient {
+        shape: crate::css::types::RadialGradientShape::Circle,
+        size: crate::css::types::RadialGradientSize::FarthestCorner,
+        position: BackgroundPosition::Position {
+          x: crate::style::types::BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: Length::percent(0.0),
+          },
+          y: crate::style::types::BackgroundPositionComponent {
+            alignment: 0.0,
+            offset: Length::percent(0.0),
+          },
+        },
+        stops: vec![
+          ColorStop {
+            position: Some(0.0),
+            color: crate::style::color::Color::Rgba(Rgba::new(255, 0, 0, 1.0)),
+          },
+          ColorStop {
+            position: Some(1.0),
+            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 255, 1.0)),
+          },
+        ],
+      })),
+      slice: BorderImageSlice {
+        top: BorderImageSliceValue::Number(1.0),
+        right: BorderImageSliceValue::Number(1.0),
+        bottom: BorderImageSliceValue::Number(1.0),
+        left: BorderImageSliceValue::Number(1.0),
+        fill: false,
+      },
+      ..BorderImage::default()
+    };
+
+    let mut painter = Painter::new(16, 16, Rgba::WHITE).expect("painter");
+    painter.fill_background();
+    painter.paint_borders(0.0, 0.0, 16.0, 16.0, &style);
+
+    let top_left = painter.pixmap.pixel(0, 0).unwrap();
+    assert!(
+      top_left.red() > top_left.blue(),
+      "radial gradient should start near red at the origin, got {:?}",
+      top_left
+    );
+    let bottom_right = painter.pixmap.pixel(15, 15).unwrap();
+    assert!(
+      bottom_right.blue() > bottom_right.red(),
+      "far corner should reach final stop (blue), got {:?}",
+      bottom_right
+    );
+  }
+
+  #[test]
+  fn border_image_accepts_conic_gradients() {
+    let mut style = ComputedStyle::default();
+    style.border_top_width = Length::px(4.0);
+    style.border_right_width = Length::px(4.0);
+    style.border_bottom_width = Length::px(4.0);
+    style.border_left_width = Length::px(4.0);
+    style.border_image = BorderImage {
+      source: BorderImageSource::Image(Box::new(BackgroundImage::ConicGradient {
+        from_angle: 0.0,
+        position: BackgroundPosition::Position {
+          x: crate::style::types::BackgroundPositionComponent {
+            alignment: 0.5,
+            offset: Length::percent(0.0),
+          },
+          y: crate::style::types::BackgroundPositionComponent {
+            alignment: 0.5,
+            offset: Length::percent(0.0),
+          },
+        },
+        stops: vec![
+          ColorStop {
+            position: Some(0.0),
+            color: crate::style::color::Color::Rgba(Rgba::new(255, 0, 0, 1.0)),
+          },
+          ColorStop {
+            position: Some(0.5),
+            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 255, 1.0)),
+          },
+        ],
+      })),
+      slice: BorderImageSlice {
+        top: BorderImageSliceValue::Number(1.0),
+        right: BorderImageSliceValue::Number(1.0),
+        bottom: BorderImageSliceValue::Number(1.0),
+        left: BorderImageSliceValue::Number(1.0),
+        fill: false,
+      },
+      ..BorderImage::default()
+    };
+
+    let mut painter = Painter::new(16, 16, Rgba::WHITE).expect("painter");
+    painter.fill_background();
+    painter.paint_borders(0.0, 0.0, 16.0, 16.0, &style);
+
+    let top = painter.pixmap.pixel(8, 0).unwrap();
+    let bottom = painter.pixmap.pixel(8, 15).unwrap();
+    assert!(
+      top.red() > top.blue(),
+      "top edge should start at first stop (red)"
+    );
+    assert!(
+      bottom.blue() > bottom.red(),
+      "conic gradient should rotate to blue by the bottom edge"
+    );
+  }
+
+  #[test]
+  fn mask_image_gradient_repeats() {
+    let mut style = ComputedStyle::default();
+    style.background_color = Rgba::new(255, 0, 0, 1.0);
+    style.set_mask_layers(vec![MaskLayer {
+      image: Some(BackgroundImage::LinearGradient {
+        angle: 90.0,
+        stops: vec![
+          ColorStop {
+            position: Some(0.0),
+            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 1.0)),
+          },
+          ColorStop {
+            position: Some(0.5),
+            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 1.0)),
+          },
+          ColorStop {
+            position: Some(0.5),
+            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 0.0)),
+          },
+          ColorStop {
+            position: Some(1.0),
+            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 0.0)),
+          },
+        ],
+      }),
+      size: BackgroundSize::Explicit(
+        BackgroundSizeComponent::Length(Length::px(4.0)),
+        BackgroundSizeComponent::Length(Length::percent(100.0)),
+      ),
+      repeat: BackgroundRepeat {
+        x: BackgroundRepeatKeyword::Repeat,
+        y: BackgroundRepeatKeyword::NoRepeat,
+      },
+      mode: MaskMode::Alpha,
+      ..MaskLayer::default()
+    }]);
+
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 12.0, 4.0),
+      vec![],
+      Arc::new(style),
+    );
+    let tree = FragmentTree::new(fragment);
+    let pixmap = paint_tree(&tree, 12, 4, Rgba::WHITE).expect("paint");
+
+    let visible = color_at(&pixmap, 1, 1);
+    let masked = color_at(&pixmap, 3, 1);
+    assert_eq!(visible.0, 255);
+    assert_eq!(visible.3, 255);
+    assert_eq!(masked, (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn mask_image_respects_luminance_mode() {
+    let mut style = ComputedStyle::default();
+    style.background_color = Rgba::new(0, 0, 255, 1.0);
+    style.set_mask_layers(vec![MaskLayer {
+      image: Some(BackgroundImage::LinearGradient {
+        angle: 90.0,
+        stops: vec![
+          ColorStop {
+            position: Some(0.0),
+            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 1.0)),
+          },
+          ColorStop {
+            position: Some(1.0),
+            color: crate::style::color::Color::Rgba(Rgba::new(255, 255, 255, 1.0)),
+          },
+        ],
+      }),
+      mode: MaskMode::Luminance,
+      repeat: BackgroundRepeat::repeat(),
+      ..MaskLayer::default()
+    }]);
+
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 12.0, 4.0),
+      vec![],
+      Arc::new(style),
+    );
+    let tree = FragmentTree::new(fragment);
+    let pixmap = paint_tree(&tree, 12, 4, Rgba::WHITE).expect("paint");
+
+    let left = color_at(&pixmap, 0, 1);
+    let right = color_at(&pixmap, 11, 1);
+    assert_eq!(left, (255, 255, 255, 255));
+    assert_eq!(right.2, 255);
   }
 
   #[test]

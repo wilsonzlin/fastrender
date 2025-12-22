@@ -55,9 +55,9 @@ use types::CaptionSide;
 use types::CaretColor;
 use types::ClipPath;
 use types::ClipRect;
+use types::ColorSchemePreference;
 use types::ColumnFill;
 use types::ColumnSpan;
-use types::ColorSchemePreference;
 use types::ContainerType;
 use types::Containment;
 use types::CursorImage;
@@ -99,6 +99,8 @@ use types::LineHeight;
 use types::ListStyleImage;
 use types::ListStylePosition;
 use types::ListStyleType;
+use types::MaskLayer;
+use types::MaskMode;
 use types::MixBlendMode;
 use types::ObjectFit;
 use types::ObjectPosition;
@@ -589,6 +591,13 @@ pub struct ComputedStyle {
   pub background_clips: Vec<BackgroundBox>,
   pub background_layers: Vec<BackgroundLayer>,
   pub background_blend_modes: Vec<MixBlendMode>,
+  /// Author-specified mask values (lists preserved for layer repetition rules)
+  pub mask_images: Vec<Option<BackgroundImage>>,
+  pub mask_positions: Vec<BackgroundPosition>,
+  pub mask_sizes: Vec<BackgroundSize>,
+  pub mask_repeats: Vec<BackgroundRepeat>,
+  pub mask_modes: Vec<MaskMode>,
+  pub mask_layers: Vec<MaskLayer>,
   pub object_fit: ObjectFit,
   pub object_position: ObjectPosition,
   pub image_resolution: ImageResolution,
@@ -646,6 +655,7 @@ pub struct ComputedStyle {
 impl Default for ComputedStyle {
   fn default() -> Self {
     let default_layer = BackgroundLayer::default();
+    let mask_default = MaskLayer::default();
     Self {
       display: Display::Inline,
       position: Position::Static,
@@ -851,6 +861,12 @@ impl Default for ComputedStyle {
       background_clips: vec![default_layer.clip],
       background_layers: vec![default_layer.clone()],
       background_blend_modes: vec![default_layer.blend_mode],
+      mask_images: vec![mask_default.image.clone()],
+      mask_positions: vec![mask_default.position.clone()],
+      mask_sizes: vec![mask_default.size.clone()],
+      mask_repeats: vec![mask_default.repeat],
+      mask_modes: vec![mask_default.mode],
+      mask_layers: vec![mask_default],
       object_fit: ObjectFit::Fill,
       object_position: ObjectPosition {
         x: types::PositionComponent::Keyword(types::PositionKeyword::Center),
@@ -983,10 +999,70 @@ impl ComputedStyle {
     self.background_layers = normalized;
   }
 
+  /// Ensure mask property lists have at least one entry.
+  fn ensure_mask_lists(&mut self) {
+    let defaults = MaskLayer::default();
+    if self.mask_images.is_empty() {
+      self.mask_images.push(defaults.image.clone());
+    }
+    if self.mask_positions.is_empty() {
+      self.mask_positions.push(defaults.position.clone());
+    }
+    if self.mask_sizes.is_empty() {
+      self.mask_sizes.push(defaults.size.clone());
+    }
+    if self.mask_repeats.is_empty() {
+      self.mask_repeats.push(defaults.repeat);
+    }
+    if self.mask_modes.is_empty() {
+      self.mask_modes.push(defaults.mode);
+    }
+  }
+
+  /// Rebuild per-layer mask data from stored lists, repeating the last value of
+  /// shorter lists and truncating longer lists to the number of mask-image layers.
+  pub fn rebuild_mask_layers(&mut self) {
+    self.ensure_mask_lists();
+    let layer_count = self.mask_images.len().max(1);
+    self.mask_layers.clear();
+    for idx in 0..layer_count {
+      let mut layer = MaskLayer::default();
+      let img_idx = self.mask_images.len().saturating_sub(1).min(idx);
+      let pos_idx = self.mask_positions.len().saturating_sub(1).min(idx);
+      let size_idx = self.mask_sizes.len().saturating_sub(1).min(idx);
+      let rep_idx = self.mask_repeats.len().saturating_sub(1).min(idx);
+      let mode_idx = self.mask_modes.len().saturating_sub(1).min(idx);
+
+      layer.image = self.mask_images[img_idx].clone();
+      layer.position = self.mask_positions[pos_idx].clone();
+      layer.size = self.mask_sizes[size_idx].clone();
+      layer.repeat = self.mask_repeats[rep_idx];
+      layer.mode = self.mask_modes[mode_idx];
+      self.mask_layers.push(layer);
+    }
+  }
+
+  /// Set mask layers directly and derive stored lists from them.
+  pub fn set_mask_layers(&mut self, layers: Vec<MaskLayer>) {
+    let default_layer = MaskLayer::default();
+    let normalized = if layers.is_empty() {
+      vec![default_layer.clone()]
+    } else {
+      layers
+    };
+    self.mask_images = normalized.iter().map(|l| l.image.clone()).collect();
+    self.mask_positions = normalized.iter().map(|l| l.position.clone()).collect();
+    self.mask_sizes = normalized.iter().map(|l| l.size.clone()).collect();
+    self.mask_repeats = normalized.iter().map(|l| l.repeat).collect();
+    self.mask_modes = normalized.iter().map(|l| l.mode).collect();
+    self.mask_layers = normalized;
+  }
+
   /// Reset background color and layer properties to their initial values.
   pub fn reset_background_to_initial(&mut self) {
     self.background_color = Rgba::TRANSPARENT;
     self.set_background_layers(vec![BackgroundLayer::default()]);
+    self.set_mask_layers(vec![MaskLayer::default()]);
   }
 }
 

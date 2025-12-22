@@ -481,6 +481,10 @@ pub fn creates_stacking_context(
     return true;
   }
 
+  if style.mask_layers.iter().any(|layer| layer.image.is_some()) {
+    return true;
+  }
+
   // 7b. Will-change on a stacking-context-creating property
   if style.will_change.creates_stacking_context() {
     return true;
@@ -562,6 +566,10 @@ pub fn get_stacking_context_reason(
 
   if style.opacity < 1.0 {
     return Some(StackingContextReason::Opacity);
+  }
+
+  if style.mask_layers.iter().any(|layer| layer.image.is_some()) {
+    return Some(StackingContextReason::Mask);
   }
 
   if !style.transform.is_empty() {
@@ -1437,9 +1445,10 @@ mod tests {
   fn test_build_stacking_tree_with_children() {
     let child1 = create_block_fragment(0.0, 0.0, 50.0, 50.0);
     let child2 = create_block_fragment(50.0, 0.0, 50.0, 50.0);
-    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![
-      child1, child2,
-    ]);
+    let root = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![child1, child2],
+    );
 
     let tree = build_stacking_tree(&root, None, true);
 
