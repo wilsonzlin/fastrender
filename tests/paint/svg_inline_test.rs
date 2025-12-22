@@ -3,7 +3,7 @@ use fastrender::dom;
 use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::media::MediaContext;
 use fastrender::tree::box_generation::generate_box_tree;
-use fastrender::tree::box_tree::{BoxNode, BoxType, ReplacedType};
+use fastrender::tree::box_tree::{BoxNode, BoxType, ReplacedType, SvgContent};
 use fastrender::FastRender;
 use resvg::tiny_skia::Pixmap;
 
@@ -13,14 +13,14 @@ fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> [u8; 4] {
   [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]
 }
 
-fn serialized_inline_svg(html: &str, width: f32, height: f32) -> Option<String> {
+fn serialized_inline_svg(html: &str, width: f32, height: f32) -> Option<SvgContent> {
   let dom = dom::parse_html(html).ok()?;
   let stylesheet = extract_css(&dom).ok()?;
   let media = MediaContext::screen(width, height);
   let styled = apply_styles_with_media(&dom, &stylesheet, &media);
   let box_tree = generate_box_tree(&styled);
 
-  fn find_svg(node: &BoxNode) -> Option<String> {
+  fn find_svg(node: &BoxNode) -> Option<SvgContent> {
     if let BoxType::Replaced(repl) = &node.box_type {
       if let ReplacedType::Svg { content } = &repl.replaced_type {
         return Some(content.clone());
@@ -91,10 +91,12 @@ fn inline_svg_renders_gradients_with_clip_and_mask() {
       "#;
 
       let serialized = serialized_inline_svg(html, 30.0, 30.0).expect("serialize svg");
-      assert!(serialized.contains("mask=\"url(#fade)\""));
+      assert!(serialized.svg.contains("mask=\"url(#fade)\""));
 
       let cache = fastrender::image_loader::ImageCache::new();
-      let svg_image = cache.render_svg(&serialized).expect("render serialized svg");
+      let svg_image = cache
+        .render_svg(&serialized.svg)
+        .expect("render serialized svg");
       let svg_rgba = svg_image.image.to_rgba8();
       let left_alpha = svg_rgba.get_pixel(8, 10)[3];
       let right_alpha = svg_rgba.get_pixel(14, 10)[3];
@@ -104,7 +106,11 @@ fn inline_svg_renders_gradients_with_clip_and_mask() {
       );
 
       let pixmap = renderer.render_html(html, 30, 30).expect("render svg");
-      assert_eq!(pixel(&pixmap, 13, 3), [0, 0, 0, 255], "transforms should offset shapes");
+      assert_eq!(
+        pixel(&pixmap, 13, 3),
+        [0, 0, 0, 255],
+        "transforms should offset shapes"
+      );
       let masked = pixel(&pixmap, 8, 10);
       let visible = pixel(&pixmap, 14, 10);
       assert_eq!(
@@ -112,8 +118,15 @@ fn inline_svg_renders_gradients_with_clip_and_mask() {
         [255, 255, 255, 255],
         "masked region should show the page background"
       );
-      assert_ne!(visible, [255, 255, 255, 255], "unmasked region should render content");
-      assert!(visible[2] > visible[0], "gradient should shift toward blue on the right");
+      assert_ne!(
+        visible,
+        [255, 255, 255, 255],
+        "unmasked region should render content"
+      );
+      assert!(
+        visible[2] > visible[0],
+        "gradient should shift toward blue on the right"
+      );
     })
     .unwrap()
     .join()
@@ -146,4 +159,46 @@ fn inline_svg_renders_foreign_object_html() {
     .unwrap()
     .join()
     .unwrap();
+}
+
+#[test]
+fn foreign_object_without_dimensions_uses_placeholder_comment() {
+  let html = r#"
+  <svg width="16" height="12" viewBox="0 0 16 12">
+    <foreignObject>
+      <div xmlns="http://www.w3.org/1999/xhtml" style="width:10px;height:12px;background: rgb(255, 0, 0);"></div>
+    </foreignObject>
+  </svg>
+  "#;
+
+  let serialized = serialized_inline_svg(html, 20.0, 20.0).expect("serialize svg");
+  assert!(
+    serialized
+      .svg
+      .contains("FASTRENDER_FOREIGN_OBJECT_UNRESOLVED"),
+    "missing dimensions should keep placeholder path"
+  );
+}
+
+#[test]
+fn foreign_object_with_dimensions_emits_marker() {
+  let html = r#"
+  <svg width="16" height="12" viewBox="0 0 16 12">
+    <foreignObject x="0" y="0" width="10" height="12">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="width:10px;height:12px;background: rgb(0, 255, 0);"></div>
+    </foreignObject>
+  </svg>
+  "#;
+
+  let serialized = serialized_inline_svg(html, 20.0, 20.0).expect("serialize svg");
+  assert!(
+    serialized.svg.contains("FASTRENDER_FOREIGN_OBJECT_0"),
+    "foreignObject should be replaced with marker for nested rendering"
+  );
+  assert!(
+    !serialized
+      .svg
+      .contains("FASTRENDER_FOREIGN_OBJECT_UNRESOLVED"),
+    "valid dimensions should avoid unresolved placeholder comments"
+  );
 }

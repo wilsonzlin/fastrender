@@ -23,9 +23,11 @@
 
 use crate::geometry::Size;
 use crate::math::MathLayout;
+use crate::style::color::Rgba;
 use crate::style::display::FormattingContextType;
 use crate::style::media::MediaQuery;
 use crate::style::types::Appearance;
+use crate::style::types::Overflow;
 use crate::style::ComputedStyle;
 use crate::tree::debug::DebugInfo;
 use std::fmt;
@@ -217,6 +219,53 @@ pub struct PictureSource {
   pub mime_type: Option<String>,
 }
 
+/// Serialized SVG content plus any inlined foreignObject metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SvgContent {
+  /// Serialized SVG markup (may include foreignObject placeholders).
+  pub svg: String,
+  /// Placeholder rendering when nested HTML rendering fails.
+  pub fallback_svg: String,
+  /// Serialized `<foreignObject>` subtrees to be rendered separately.
+  pub foreign_objects: Vec<ForeignObjectInfo>,
+  /// Document-level CSS collected while serializing the SVG subtree.
+  pub shared_css: String,
+}
+
+impl SvgContent {
+  /// Creates SVG content without any foreignObject handling.
+  pub fn raw(svg: impl Into<String>) -> Self {
+    let svg = svg.into();
+    Self {
+      svg: svg.clone(),
+      fallback_svg: svg,
+      foreign_objects: Vec::new(),
+      shared_css: String::new(),
+    }
+  }
+}
+
+/// Captured details for a `<foreignObject>` subtree that should be rendered via the HTML
+/// pipeline and injected back into the SVG during painting.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForeignObjectInfo {
+  /// Placeholder token emitted into the serialized SVG.
+  pub placeholder: String,
+  /// Original attributes (x/y/width/height/etc.).
+  pub attributes: Vec<(String, String)>,
+  pub x: f32,
+  pub y: f32,
+  pub width: f32,
+  pub height: f32,
+  pub opacity: f32,
+  pub background: Option<Rgba>,
+  pub html: String,
+  pub style: Arc<ComputedStyle>,
+  pub overflow_x: Overflow,
+  pub overflow_y: Overflow,
+}
+}
+
 /// Types of replaced elements
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplacedType {
@@ -253,7 +302,7 @@ pub enum ReplacedType {
   /// SVG embedded content
   Svg {
     /// SVG content (inline or reference)
-    content: String,
+    content: SvgContent,
   },
 
   /// Iframe (nested browsing context)
@@ -456,8 +505,8 @@ impl ReplacedType {
         ordered
       }
       ReplacedType::Video { src: _, poster } => poster.iter().cloned().collect(),
-      ReplacedType::Svg { content }
-      | ReplacedType::Embed { src: content }
+      ReplacedType::Svg { content } => vec![content.svg.clone()],
+      ReplacedType::Embed { src: content }
       | ReplacedType::Object { data: content }
       | ReplacedType::Iframe { src: content, .. } => vec![content.clone()],
       _ => Vec::new(),

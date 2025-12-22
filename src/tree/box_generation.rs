@@ -33,6 +33,7 @@ use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::box_tree::BoxType;
+use crate::tree::box_tree::ForeignObjectInfo;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::MarkerContent;
@@ -44,6 +45,7 @@ use crate::tree::box_tree::SizesEntry;
 use crate::tree::box_tree::SizesList;
 use crate::tree::box_tree::SrcsetCandidate;
 use crate::tree::box_tree::SrcsetDescriptor;
+use crate::tree::box_tree::SvgContent;
 use crate::tree::debug::DebugInfo;
 use cssparser::Parser;
 use cssparser::ParserInput;
@@ -341,7 +343,9 @@ impl DOMNode {
       }),
       "video" => Some(ReplacedType::Video { src, poster }),
       "canvas" => Some(ReplacedType::Canvas),
-      "svg" => Some(ReplacedType::Svg { content: src }),
+      "svg" => Some(ReplacedType::Svg {
+        content: SvgContent::raw(src),
+      }),
       "iframe" => Some(ReplacedType::Iframe { src, srcdoc }),
       _ => None,
     }
@@ -1404,7 +1408,7 @@ fn format_css_color(color: crate::style::color::Rgba) -> String {
   )
 }
 
-fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> String {
+fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent {
   fn merge_style_attribute(attrs: &mut Vec<(String, String)>, extra: &str) {
     if extra.trim().is_empty() {
       return;
@@ -1536,15 +1540,91 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> String {
     true
   }
 
+  fn serialize_foreign_object(
+    styled: &StyledNode,
+    attrs: &[(String, String)],
+    _document_css: &str,
+    out: &mut String,
+    fallback_out: &mut String,
+    foreign_objects: &mut Vec<ForeignObjectInfo>,
+  ) -> bool {
+    let mut x = 0.0f32;
+    let mut y = 0.0f32;
+    let mut width: Option<f32> = None;
+    let mut height: Option<f32> = None;
+    for (name, value) in attrs {
+      match name.as_str() {
+        "x" => x = parse_svg_number(value).unwrap_or(0.0),
+        "y" => y = parse_svg_number(value).unwrap_or(0.0),
+        "width" => width = parse_svg_number(value),
+        "height" => height = parse_svg_number(value),
+        _ => {}
+      }
+    }
+
+    let (width, height) = match (width, height) {
+      (Some(w), Some(h)) if w > 0.0 && h > 0.0 => (w, h),
+      _ => {
+        let placeholder = serialize_foreign_object_placeholder(styled, attrs, out);
+        let _ = serialize_foreign_object_placeholder(styled, attrs, fallback_out);
+        if placeholder {
+          return true;
+        }
+        out.push_str("<!--FASTRENDER_FOREIGN_OBJECT_UNRESOLVED-->");
+        fallback_out.push_str("<!--FASTRENDER_FOREIGN_OBJECT_UNRESOLVED-->");
+        return true;
+      }
+    };
+
+    let placeholder = format!("<!--FASTRENDER_FOREIGN_OBJECT_{}-->", foreign_objects.len());
+    out.push_str(&placeholder);
+    if !serialize_foreign_object_placeholder(styled, attrs, fallback_out) {
+      fallback_out.push_str(&placeholder);
+    }
+
+    let mut html = String::new();
+    for child in &styled.children {
+      html.push_str(&serialize_dom_subtree(&child.node));
+    }
+
+    let background = if styled.styles.background_color.a > 0.0 {
+      Some(styled.styles.background_color)
+    } else {
+      None
+    };
+
+    foreign_objects.push(ForeignObjectInfo {
+      placeholder,
+      attributes: attrs.to_vec(),
+      x,
+      y,
+      width,
+      height,
+      opacity: styled.styles.opacity,
+      background,
+      html,
+      style: Arc::new(styled.styles.clone()),
+      overflow_x: styled.styles.overflow_x,
+      overflow_y: styled.styles.overflow_y,
+    });
+
+    true
+  }
+
   fn serialize_node(
     styled: &StyledNode,
     document_css: &str,
     parent_ns: Option<&str>,
     is_root: bool,
     out: &mut String,
+    fallback_out: &mut String,
+    foreign_objects: &mut Vec<ForeignObjectInfo>,
   ) {
     match &styled.node.node_type {
-      crate::dom::DomNodeType::Text { content } => out.push_str(&escape_text(content)),
+      crate::dom::DomNodeType::Text { content } => {
+        out.push_str(&escape_text(content));
+        fallback_out.push_str(&escape_text(content));
+      }
       crate::dom::DomNodeType::Element {
         tag_name,
         namespace,
@@ -1573,48 +1653,102 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> String {
         }
 
         if tag_name.eq_ignore_ascii_case("foreignObject") {
-          if serialize_foreign_object_placeholder(styled, &attrs, out) {
+          if serialize_foreign_object(
+            styled,
+            &attrs,
+            document_css,
+            out,
+            fallback_out,
+            foreign_objects,
+          ) {
             return;
           }
         }
 
         out.push('<');
+        fallback_out.push('<');
         out.push_str(tag_name);
+        fallback_out.push_str(tag_name);
         for (name, value) in &attrs {
           out.push(' ');
+          fallback_out.push(' ');
           out.push_str(name);
+          fallback_out.push_str(name);
           out.push('=');
+          fallback_out.push('=');
           out.push('"');
+          fallback_out.push('"');
           out.push_str(&escape_attr(value));
+          fallback_out.push_str(&escape_attr(value));
           out.push('"');
+          fallback_out.push('"');
         }
         out.push('>');
+        fallback_out.push('>');
 
         if is_root && !document_css.trim().is_empty() {
           out.push_str("<style>");
           out.push_str(document_css);
           out.push_str("</style>");
+          fallback_out.push_str("<style>");
+          fallback_out.push_str(document_css);
+          fallback_out.push_str("</style>");
         }
 
         for child in &styled.children {
-          serialize_node(child, document_css, Some(current_ns.as_str()), false, out);
+          serialize_node(
+            child,
+            document_css,
+            Some(current_ns.as_str()),
+            false,
+            out,
+            fallback_out,
+            foreign_objects,
+          );
         }
 
         out.push_str("</");
+        fallback_out.push_str("</");
         out.push_str(tag_name);
+        fallback_out.push_str(tag_name);
         out.push('>');
+        fallback_out.push('>');
       }
       crate::dom::DomNodeType::Document => {
         for child in &styled.children {
-          serialize_node(child, document_css, parent_ns, false, out);
+          serialize_node(
+            child,
+            document_css,
+            parent_ns,
+            false,
+            out,
+            fallback_out,
+            foreign_objects,
+          );
         }
       }
     }
   }
 
   let mut out = String::new();
-  serialize_node(styled, document_css, None, true, &mut out);
-  out
+  let mut fallback_out = String::new();
+  let mut foreign_objects: Vec<ForeignObjectInfo> = Vec::new();
+  serialize_node(
+    styled,
+    document_css,
+    None,
+    true,
+    &mut out,
+    &mut fallback_out,
+    &mut foreign_objects,
+  );
+
+  SvgContent {
+    svg: out,
+    fallback_svg: fallback_out,
+    foreign_objects,
+    shared_css: document_css.to_string(),
+  }
 }
 
 /// Recursively generates BoxNodes from a StyledNode, honoring display: contents by
@@ -5516,7 +5650,7 @@ mod tests {
     match &svg.replaced_type {
       ReplacedType::Svg { content } => {
         assert!(
-          content.contains("<rect") && content.contains("fill=\"red\""),
+          content.svg.contains("<rect") && content.svg.contains("fill=\"red\""),
           "serialized SVG should include child elements"
         );
       }
