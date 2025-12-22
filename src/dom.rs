@@ -15,6 +15,10 @@ use markup5ever_rcdom::NodeData;
 use markup5ever_rcdom::RcDom;
 use selectors::attr::AttrSelectorOperation;
 use selectors::attr::CaseSensitivity;
+use selectors::matching::matches_selector;
+use selectors::matching::MatchingContext;
+use selectors::parser::RelativeSelector;
+use selectors::relative_selector::cache::RelativeSelectorCachedMatch;
 use selectors::Element;
 use selectors::OpaqueElement;
 use std::borrow::Borrow;
@@ -1510,6 +1514,12 @@ impl<'a> Element for ElementRef<'a> {
     _context: &mut selectors::matching::MatchingContext<Self::Impl>,
   ) -> bool {
     match pseudo {
+      PseudoClass::Has(relative) => {
+        if _context.relative_selector_anchor().is_some() {
+          return false;
+        }
+        matches_has_relative(self, relative, _context)
+      }
       PseudoClass::Root => {
         matches!(self.node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
           && self
@@ -1572,7 +1582,10 @@ impl<'a> Element for ElementRef<'a> {
       PseudoClass::AnyLink => self.is_link(),
       PseudoClass::Target => self.is_target(),
       PseudoClass::TargetWithin => self.subtree_contains_target(),
-      PseudoClass::Scope => self.all_ancestors.is_empty(),
+      PseudoClass::Scope => match _context.relative_selector_anchor() {
+        Some(anchor) => anchor == self.opaque(),
+        None => self.all_ancestors.is_empty(),
+      },
       PseudoClass::Empty => self.is_empty(),
       PseudoClass::Disabled => self.supports_disabled() && self.is_disabled(),
       PseudoClass::Enabled => self.supports_disabled() && !self.is_disabled(),
@@ -1719,6 +1732,150 @@ impl<'a> Element for ElementRef<'a> {
     // We don't use bloom filters for optimization
     true
   }
+}
+
+fn matches_has_relative(
+  anchor: &ElementRef,
+  selectors: &[RelativeSelector<FastRenderSelectorImpl>],
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> bool {
+  if selectors.is_empty() {
+    return false;
+  }
+
+  context.nest_for_relative_selector(anchor.opaque(), |ctx| {
+    for selector in selectors.iter() {
+      if let Some(cached) = ctx
+        .selector_caches
+        .relative_selector
+        .lookup(anchor.opaque(), selector)
+      {
+        if cached.matched() {
+          return true;
+        }
+        continue;
+      }
+
+      let mut ancestors: Vec<&DomNode> = anchor.all_ancestors.to_vec();
+      let matched = match_relative_selector(selector, anchor.node, &mut ancestors, ctx);
+
+      ctx.selector_caches.relative_selector.add(
+        anchor.opaque(),
+        selector,
+        if matched {
+          RelativeSelectorCachedMatch::Matched
+        } else {
+          RelativeSelectorCachedMatch::NotMatched
+        },
+      );
+
+      if matched {
+        return true;
+      }
+    }
+    false
+  })
+}
+
+fn match_relative_selector<'a>(
+  selector: &RelativeSelector<FastRenderSelectorImpl>,
+  anchor: &'a DomNode,
+  ancestors: &mut Vec<&'a DomNode>,
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> bool {
+  if !anchor.is_element() {
+    return false;
+  }
+
+  if selector.match_hint.is_descendant_direction() {
+    return match_relative_selector_descendants(selector, anchor, ancestors, context);
+  }
+
+  match_relative_selector_siblings(selector, anchor, ancestors, context)
+}
+
+fn match_relative_selector_descendants<'a>(
+  selector: &RelativeSelector<FastRenderSelectorImpl>,
+  anchor: &'a DomNode,
+  ancestors: &mut Vec<&'a DomNode>,
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> bool {
+  ancestors.push(anchor);
+  for child in anchor.children.iter().filter(|c| c.is_element()) {
+    let child_ref = ElementRef::with_ancestors(child, ancestors);
+    let mut matched = matches_selector(&selector.selector, 0, None, &child_ref, context);
+    if !matched && selector.match_hint.is_subtree() {
+      matched = match_relative_selector_subtree(selector, child, ancestors, context);
+    }
+    if matched {
+      ancestors.pop();
+      return true;
+    }
+  }
+  ancestors.pop();
+  false
+}
+
+fn match_relative_selector_siblings<'a>(
+  selector: &RelativeSelector<FastRenderSelectorImpl>,
+  anchor: &'a DomNode,
+  ancestors: &mut Vec<&'a DomNode>,
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> bool {
+  let parent = match ancestors.last().copied() {
+    Some(p) => p,
+    None => return false,
+  };
+
+  let mut seen_anchor = false;
+  for sibling in parent.children.iter().filter(|c| c.is_element()) {
+    if ptr::eq(sibling, anchor) {
+      seen_anchor = true;
+      continue;
+    }
+    if !seen_anchor {
+      continue;
+    }
+
+    let sibling_ref = ElementRef::with_ancestors(sibling, ancestors);
+    let matched = if selector.match_hint.is_subtree() {
+      match_relative_selector_subtree(selector, sibling, ancestors, context)
+    } else {
+      matches_selector(&selector.selector, 0, None, &sibling_ref, context)
+    };
+
+    if matched {
+      return true;
+    }
+
+    if selector.match_hint.is_next_sibling() {
+      break;
+    }
+  }
+
+  false
+}
+
+fn match_relative_selector_subtree<'a>(
+  selector: &RelativeSelector<FastRenderSelectorImpl>,
+  node: &'a DomNode,
+  ancestors: &mut Vec<&'a DomNode>,
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+) -> bool {
+  ancestors.push(node);
+  for child in node.children.iter().filter(|c| c.is_element()) {
+    let child_ref = ElementRef::with_ancestors(child, ancestors);
+    if matches_selector(&selector.selector, 0, None, &child_ref, context) {
+      ancestors.pop();
+      return true;
+    }
+    if match_relative_selector_subtree(selector, child, ancestors, context) {
+      ancestors.pop();
+      return true;
+    }
+  }
+  ancestors.pop();
+  false
 }
 
 #[cfg(test)]
@@ -1992,11 +2149,14 @@ mod tests {
 
   #[test]
   fn type_position_pseudos_filter_by_tag_name() {
-    let parent = element("div", vec![
-      element("span", vec![]),
-      element("em", vec![]),
-      element("span", vec![]),
-    ]);
+    let parent = element(
+      "div",
+      vec![
+        element("span", vec![]),
+        element("em", vec![]),
+        element("span", vec![]),
+      ],
+    );
     let ancestors: Vec<&DomNode> = vec![&parent];
 
     let first_span = &parent.children[0];
@@ -2049,14 +2209,17 @@ mod tests {
   #[test]
   fn lang_matches_inherit_and_prefix() {
     let child = element("p", vec![]);
-    let root = element("html", vec![DomNode {
-      node_type: DomNodeType::Element {
-        tag_name: "div".to_string(),
-        namespace: HTML_NAMESPACE.to_string(),
-        attributes: vec![("lang".to_string(), "en-US".to_string())],
-      },
-      children: vec![child],
-    }]);
+    let root = element(
+      "html",
+      vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("lang".to_string(), "en-US".to_string())],
+        },
+        children: vec![child],
+      }],
+    );
 
     let ancestors: Vec<&DomNode> = vec![&root, &root.children[0]];
     let node = &root.children[0].children[0];
@@ -2093,14 +2256,17 @@ mod tests {
   #[test]
   fn dir_matches_inherited_direction() {
     let child = element("span", vec![]);
-    let root = element("div", vec![DomNode {
-      node_type: DomNodeType::Element {
-        tag_name: "p".to_string(),
-        namespace: HTML_NAMESPACE.to_string(),
-        attributes: vec![("dir".to_string(), "rtl".to_string())],
-      },
-      children: vec![child],
-    }]);
+    let root = element(
+      "div",
+      vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "p".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("dir".to_string(), "rtl".to_string())],
+        },
+        children: vec![child],
+      }],
+    );
     let ancestors: Vec<&DomNode> = vec![&root, &root.children[0]];
     let node = &root.children[0].children[0];
 
@@ -2890,49 +3056,55 @@ mod tests {
 
   #[test]
   fn default_matches_submit_controls_and_options() {
-    let form = element("form", vec![
-      element("input", vec![]),
-      DomNode {
-        node_type: DomNodeType::Element {
-          tag_name: "button".to_string(),
-          namespace: HTML_NAMESPACE.to_string(),
-          attributes: vec![],
+    let form = element(
+      "form",
+      vec![
+        element("input", vec![]),
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "button".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![],
+          },
+          children: vec![],
         },
-        children: vec![],
-      },
-      DomNode {
-        node_type: DomNodeType::Element {
-          tag_name: "button".to_string(),
-          namespace: HTML_NAMESPACE.to_string(),
-          attributes: vec![("type".to_string(), "submit".to_string())],
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "button".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![("type".to_string(), "submit".to_string())],
+          },
+          children: vec![],
         },
-        children: vec![],
-      },
-    ]);
+      ],
+    );
     let ancestors: Vec<&DomNode> = vec![&form];
     let default_button = &form.children[1];
     let submit_button = &form.children[2];
     assert!(matches(default_button, &ancestors, &PseudoClass::Default));
     assert!(!matches(submit_button, &ancestors, &PseudoClass::Default));
 
-    let form_disabled_first = element("form", vec![
-      DomNode {
-        node_type: DomNodeType::Element {
-          tag_name: "button".to_string(),
-          namespace: HTML_NAMESPACE.to_string(),
-          attributes: vec![("disabled".to_string(), "disabled".to_string())],
+    let form_disabled_first = element(
+      "form",
+      vec![
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "button".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![("disabled".to_string(), "disabled".to_string())],
+          },
+          children: vec![],
         },
-        children: vec![],
-      },
-      DomNode {
-        node_type: DomNodeType::Element {
-          tag_name: "button".to_string(),
-          namespace: HTML_NAMESPACE.to_string(),
-          attributes: vec![],
+        DomNode {
+          node_type: DomNodeType::Element {
+            tag_name: "button".to_string(),
+            namespace: HTML_NAMESPACE.to_string(),
+            attributes: vec![],
+          },
+          children: vec![],
         },
-        children: vec![],
-      },
-    ]);
+      ],
+    );
     let ancestors: Vec<&DomNode> = vec![&form_disabled_first];
     let disabled = &form_disabled_first.children[0];
     let enabled = &form_disabled_first.children[1];

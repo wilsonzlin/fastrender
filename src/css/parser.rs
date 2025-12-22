@@ -1553,8 +1553,7 @@ mod tests {
 
   #[test]
   fn supports_selector_skips_when_selector_unsupported() {
-    // :has() is not implemented in our selector parser, so the feature query should fail.
-    let css = r"@supports selector(div:has(span)) { .skip { color: red; } }";
+    let css = r"@supports selector(div:unknown-pseudo) { .skip { color: red; } }";
     let stylesheet = parse_stylesheet(css).unwrap();
     let media = crate::style::media::MediaContext::screen(800.0, 600.0);
     let rules = stylesheet.collect_style_rules(&media);
@@ -1569,7 +1568,7 @@ mod tests {
   fn supports_selector_list_fails_when_any_selector_unsupported() {
     // A selector list that contains an unsupported selector should cause the whole selector()
     // feature query to evaluate to false per the spec.
-    let css = r"@supports selector(div, span:has(a)) { .skip { color: red; } }";
+    let css = r"@supports selector(div, span:unknown-pseudo) { .skip { color: red; } }";
     let stylesheet = parse_stylesheet(css).unwrap();
     let media = crate::style::media::MediaContext::screen(800.0, 600.0);
     let rules = stylesheet.collect_style_rules(&media);
@@ -1582,7 +1581,7 @@ mod tests {
 
   #[test]
   fn supports_not_selector_inverts_result() {
-    let css = r"@supports not selector(div:has(span)) { .ok { color: red; } }";
+    let css = r"@supports not selector(div:unknown-pseudo) { .ok { color: red; } }";
     let stylesheet = parse_stylesheet(css).unwrap();
     let media = crate::style::media::MediaContext::screen(800.0, 600.0);
     let rules = stylesheet.collect_style_rules(&media);
@@ -1590,6 +1589,19 @@ mod tests {
       rules.len(),
       1,
       "not selector(...) should invert unsupported selector result"
+    );
+  }
+
+  #[test]
+  fn supports_selector_allows_has() {
+    let css = r"@supports selector(div:has(span)) { .ok { color: red; } }";
+    let stylesheet = parse_stylesheet(css).unwrap();
+    let media = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let rules = stylesheet.collect_style_rules(&media);
+    assert_eq!(
+      rules.len(),
+      1,
+      "supported :has() selector should enable rules"
     );
   }
 

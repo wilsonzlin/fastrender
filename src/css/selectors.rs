@@ -8,7 +8,9 @@ use cssparser::Parser;
 use cssparser::ToCss;
 use cssparser::Token;
 use selectors::parser::SelectorImpl;
+use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
+use selectors::parser::{Combinator, RelativeSelector, RelativeSelectorMatchHint};
 use std::fmt;
 
 /// Direction keyword for :dir()
@@ -44,8 +46,9 @@ impl SelectorImpl for FastRenderSelectorImpl {
 // ============================================================================
 
 /// Pseudo-classes we support
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PseudoClass {
+  Has(Box<[RelativeSelector<FastRenderSelectorImpl>]>),
   Root,
   FirstChild,
   LastChild,
@@ -88,6 +91,21 @@ pub enum PseudoClass {
   Visited,
 }
 
+impl fmt::Debug for PseudoClass {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      PseudoClass::Has(relative) => {
+        let selectors: Vec<String> = relative
+          .iter()
+          .map(|sel| sel.selector.to_css_string())
+          .collect();
+        f.debug_tuple("Has").field(&selectors).finish()
+      }
+      _ => f.write_str(&self.to_css_string()),
+    }
+  }
+}
+
 impl selectors::parser::NonTSPseudoClass for PseudoClass {
   type Impl = FastRenderSelectorImpl;
 
@@ -113,6 +131,18 @@ impl ToCss for PseudoClass {
     W: fmt::Write,
   {
     match self {
+      PseudoClass::Has(selectors) => {
+        dest.write_str(":has(")?;
+        let mut first = true;
+        for rel in selectors.iter() {
+          if !first {
+            dest.write_str(", ")?;
+          }
+          first = false;
+          rel.selector.to_css(dest)?;
+        }
+        dest.write_str(")")
+      }
       PseudoClass::Root => dest.write_str(":root"),
       PseudoClass::FirstChild => dest.write_str(":first-child"),
       PseudoClass::LastChild => dest.write_str(":last-child"),
@@ -267,6 +297,20 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
   ) -> std::result::Result<PseudoClass, ParseError<'i, Self::Error>> {
     let lowered = name.to_ascii_lowercase();
     match lowered.as_str() {
+      "has" => {
+        let list = SelectorList::parse(
+          &PseudoClassParser,
+          parser,
+          selectors::parser::ParseRelative::ForHas,
+        )
+        .map_err(|_| {
+          parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+            name.clone(),
+          ))
+        })?;
+        let relative = build_relative_selectors(list);
+        Ok(PseudoClass::Has(relative))
+      }
       "nth-child" => {
         let (a, b) = parse_nth(parser).map_err(|_| {
           parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
@@ -366,6 +410,46 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
     // Enable parsing of :is() and :where() pseudo-classes
     true
   }
+}
+
+fn build_relative_selectors(
+  selector_list: SelectorList<FastRenderSelectorImpl>,
+) -> Box<[RelativeSelector<FastRenderSelectorImpl>]> {
+  selector_list
+    .slice()
+    .iter()
+    .map(|selector| {
+      let mut has_child_or_descendants = false;
+      let mut has_adjacent_or_next_siblings = false;
+      let mut iter = selector.iter_skip_relative_selector_anchor();
+
+      loop {
+        while iter.next().is_some() {}
+        match iter.next_sequence() {
+          Some(Combinator::Descendant) | Some(Combinator::Child) => {
+            has_child_or_descendants = true;
+          }
+          Some(Combinator::NextSibling) | Some(Combinator::LaterSibling) => {
+            has_adjacent_or_next_siblings = true;
+          }
+          Some(_) => {}
+          None => break,
+        }
+      }
+
+      let match_hint = RelativeSelectorMatchHint::new(
+        selector.combinator_at_parse_order(1),
+        has_child_or_descendants,
+        has_adjacent_or_next_siblings,
+      );
+
+      RelativeSelector {
+        match_hint,
+        selector: selector.clone(),
+      }
+    })
+    .collect::<Vec<_>>()
+    .into_boxed_slice()
 }
 
 /// Parse nth-child/nth-last-child expressions

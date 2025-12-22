@@ -33,9 +33,19 @@ fn supports_selector_true_for_supported_selector() {
 }
 
 #[test]
-fn supports_selector_false_for_unsupported_selector() {
+fn supports_selector_true_for_has_selector() {
   let dom = dom::parse_html(r#"<div></div>"#).unwrap();
   let css = r#"@supports selector(:has(div)) { div { display: inline; } }"#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+  let div = find_first(&styled, "div").expect("div");
+  assert_eq!(display(div), "inline");
+}
+
+#[test]
+fn supports_selector_false_for_unsupported_selector() {
+  let dom = dom::parse_html(r#"<div></div>"#).unwrap();
+  let css = r#"@supports selector(:unknown-pseudo) { div { display: inline; } }"#;
   let stylesheet = parse_stylesheet(css).unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
   let div = find_first(&styled, "div").expect("div");

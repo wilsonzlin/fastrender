@@ -638,7 +638,7 @@ fn supports_value_is_valid(property: &str, value: &str) -> bool {
 /// Determines whether a selector list is supported for @supports selector() queries.
 ///
 /// The selector is considered supported when it parses successfully with the engine's selector
-/// grammar. Selectors that use unsupported pseudo-classes/elements (e.g., :has) evaluate to false.
+/// grammar. Selectors that fail to parse evaluate to false.
 fn supports_selector_is_valid(selector_list: &str) -> bool {
   let mut input = ParserInput::new(selector_list);
   let mut parser = Parser::new(&mut input);
@@ -672,10 +672,10 @@ mod tests {
 
   #[test]
   fn supports_selector_rejects_unsupported_pseudo() {
-    let cond = SupportsCondition::Selector("div:has(span)".into());
+    let cond = SupportsCondition::Selector("div:unknown-pseudo".into());
     assert!(
       !cond.matches(),
-      ":has() is unsupported and should fail selector() queries"
+      "unsupported pseudo should fail selector() queries"
     );
   }
 
@@ -692,11 +692,11 @@ mod tests {
   }
 
   #[test]
-  fn supports_selector_rejects_has_and_accepts_supported() {
-    let unsupported = SupportsCondition::Selector("div:has(span)".into());
+  fn supports_selector_accepts_has_and_supported_selectors() {
+    let with_has = SupportsCondition::Selector("div:has(span)".into());
     assert!(
-      !unsupported.matches(),
-      ":has() is unsupported in selector() queries"
+      with_has.matches(),
+      ":has() should be supported in selector() queries"
     );
 
     let supported = SupportsCondition::Selector(".foo:nth-child(2n+1)".into());
