@@ -4,6 +4,7 @@
 - Implemented `text-wrap: balance`, `pretty`, and `stable` handling that re-runs line construction with measured width factors and raggedness scoring, penalizing hyphenated endings/short last lines. Stability uses a conservative 90% effective inline width and skips balancing when floats shorten widths; regression tests cover Latin/CJK, hyphenation on/off, pretty, and stable modes.
 - Added full parsing/resolution for `color-contrast()` (with optional `vs` reference defaulting to currentColor) using WCAG contrast with alpha compositing, plus `color(from …)` relative color syntax across srgb/srgb-linear/hsl/hwb/lab/lch/oklab/oklch/xyz with conversions, channel defaults, and currentColor-aware resolution. Tests cover unit, integration, gradients, and cascade cases.
 - Introduced an accessibility tree builder that computes implicit/explicit roles, accessible names/descriptions, state flags (focusable, disabled, required/invalid, visited/pressed, checked/selected), heading levels, and form values while skipping hidden nodes. New APIs expose the tree and JSON output, with tests covering common controls, landmarks, tables, labels, and hidden filtering.
+- Added `font-display` descriptor support with async web-font loading that respects block/swap/fallback/optional deadlines, swaps in loaded fonts while avoiding long stalls, filters by `unicode-range`, bumps font generation to invalidate shaping, and exposes pluggable fetchers plus `wait_for_pending_web_fonts`. Tests cover display phases, unicode-range filtering, block waiting, and failure fallback.
 
 ## Commits
 
@@ -19,13 +20,19 @@
 - `2a039ea` Add accessibility tree builder and API
 - `7a2085e` Add accessibility tree tests
 - `f1c0507` Add handoff summary
+- `cff1950` Support font-display and unicode-range aware web fonts
+- `71466ae` Make web fonts load asynchronously respecting block period
+- `b16d4a2` Add handoff summary
+- `bbe4a10` Add block-display sync wait and failure regression tests
+- `02fb894` Update handoff with new tests
 
 ## Testing
 
-- Not run (workers ran `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, and `cargo test accessibility_`).
+- Not run (workers ran `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, `cargo test accessibility_`, and `cargo test font_loader -- --nocapture`).
 
 ## Notes / Caveats
 
 - Fragmentation remains a post-layout pass; column-count options are not yet integrated beyond metadata/translation. Fragmentainer coordinates are offset by `(fragmentainer_size + gap) * index`.
 - Relative color `calc()` support is minimal (single numeric/percentage values only), only convertible spaces are allowed, and `color-contrast()` lacks `to` thresholds. Contrast evaluation composites transparent colors against white when selecting options.
 - Accessibility tree flattens non-semantic containers without names/roles, skips hidden nodes (`display:none`/`visibility:hidden`/`aria-hidden`/`hidden`) for inclusion and label resolution, and uses the first cascade pass (no container-query reruns).
+- Font-display timing constants are shortened for tests (block/auto ~300ms; fallback block 100ms + 400ms swap; optional 100ms). Block/auto wait only through the block window, loads continue asynchronously, and initial shaping may use fallbacks until web fonts finish loading.
