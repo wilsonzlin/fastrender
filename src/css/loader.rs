@@ -538,20 +538,32 @@ fn normalize_scheme_slashes(s: &str) -> String {
     return s.to_string();
   }
 
-  let mut out = s.to_string();
-  if let Some(pos) = out.find("://") {
-    let (scheme, rest) = out.split_at(pos + 3);
+  let mut path_end = s.len();
+  if let Some(pos) = s.find('?') {
+    path_end = path_end.min(pos);
+  }
+  if let Some(pos) = s.find('#') {
+    path_end = path_end.min(pos);
+  }
+
+  let (path, suffix) = s.split_at(path_end);
+
+  let normalized = if let Some(pos) = path.find("://") {
+    let (scheme, rest) = path.split_at(pos + 3);
     let mut trimmed = rest.trim_start_matches('/').to_string();
     while trimmed.contains("//") {
       trimmed = trimmed.replace("//", "/");
     }
-    return format!("{}{}", scheme, trimmed);
-  }
+    format!("{}{}", scheme, trimmed)
+  } else {
+    let mut out = path.to_string();
+    while out.contains("//") {
+      out = out.replace("//", "/");
+    }
+    out
+  };
 
-  while out.contains("//") {
-    out = out.replace("//", "/");
-  }
-  out
+  format!("{}{}", normalized, suffix)
 }
 
 /// Extract `<link rel="stylesheet">` URLs from an HTML document.
@@ -1351,6 +1363,23 @@ mod tests {
     let input = "//cdn.example.com//assets//img.png";
     let normalized = normalize_scheme_slashes(input);
     assert_eq!(normalized, input);
+  }
+
+  #[test]
+  fn normalize_scheme_slashes_preserves_embedded_scheme_in_query() {
+    let input = "https://example.com/?u=https://cdn.com/x//y";
+    let normalized = normalize_scheme_slashes(input);
+    assert_eq!(normalized, input);
+  }
+
+  #[test]
+  fn normalize_scheme_slashes_only_touches_path_before_query_and_fragment() {
+    let input =
+      "https:////cdn.example.com////more.css?redirect=https://cdn.example.com//next#hash=https://foo.bar//baz";
+    let normalized = normalize_scheme_slashes(input);
+    let expected =
+      "https://cdn.example.com/more.css?redirect=https://cdn.example.com//next#hash=https://foo.bar//baz";
+    assert_eq!(normalized, expected);
   }
 
   #[test]
