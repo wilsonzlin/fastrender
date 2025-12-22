@@ -4,7 +4,6 @@
 //! rasterization utilities. This path keeps the display list as the
 //! paint-time contract while still reusing the shared `FontContext`.
 
-use crate::css::types::Color;
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
@@ -4867,8 +4866,9 @@ mod tests {
   use crate::paint::display_list::TextEmphasis;
   use crate::paint::display_list::TextItem;
   use crate::paint::display_list::TextShadowItem;
-  use crate::paint::display_list::Transform3D;
-  use crate::paint::display_list_builder::DisplayListBuilder;
+use crate::paint::display_list::Transform3D;
+use crate::paint::display_list_builder::DisplayListBuilder;
+use crate::style::color::Color;
   use crate::style::color::{Color, Rgba};
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundRepeat;
