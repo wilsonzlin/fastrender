@@ -1143,6 +1143,46 @@ impl<'a> ElementRef<'a> {
     false
   }
 
+  /// Expose the disabled state for accessibility mapping.
+  pub(crate) fn accessibility_disabled(&self) -> bool {
+    self.is_disabled()
+  }
+
+  /// Expose the checked state for accessibility mapping.
+  pub(crate) fn accessibility_checked(&self) -> bool {
+    self.is_checked()
+  }
+
+  /// Expose whether an option-like element is selected.
+  pub(crate) fn accessibility_selected(&self) -> bool {
+    self.is_option_selected()
+  }
+
+  /// Expose whether the control is indeterminate (checkbox/progress).
+  pub(crate) fn accessibility_indeterminate(&self) -> bool {
+    self.is_indeterminate()
+  }
+
+  /// Expose whether the control is required.
+  pub(crate) fn accessibility_required(&self) -> bool {
+    self.is_required()
+  }
+
+  /// Expose whether the control supports constraint validation.
+  pub(crate) fn accessibility_supports_validation(&self) -> bool {
+    self.supports_validation()
+  }
+
+  /// Expose whether the control is valid according to HTML form rules.
+  pub(crate) fn accessibility_is_valid(&self) -> bool {
+    self.is_valid_control()
+  }
+
+  /// Expose control value for form controls (input/select/textarea).
+  pub(crate) fn accessibility_value(&self) -> Option<String> {
+    self.control_value()
+  }
+
   fn is_target(&self) -> bool {
     current_target_fragment()
       .as_deref()

@@ -172,6 +172,7 @@ pub mod geometry;
 // Pipeline Modules
 // ============================================================================
 
+pub mod accessibility;
 pub mod layout;
 pub mod paint;
 pub mod style;

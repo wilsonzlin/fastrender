@@ -54,6 +54,7 @@
 //! caches that are not thread-safe. For multi-threaded use, create one
 //! instance per thread.
 
+use crate::accessibility::AccessibilityNode;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
@@ -882,6 +883,67 @@ impl FastRender {
   /// ```
   pub fn parse_html(&self, html: &str) -> Result<DomNode> {
     dom::parse_html(html)
+  }
+
+  /// Computes the accessibility tree for the given document.
+  ///
+  /// This runs HTML and CSS parsing to produce a styled tree, then maps
+  /// elements to accessibility roles, names, and states. The resulting
+  /// tree is suitable for regression testing and tooling.
+  pub fn accessibility_tree(
+    &mut self,
+    dom: &DomNode,
+    width: u32,
+    height: u32,
+  ) -> Result<AccessibilityNode> {
+    if width == 0 || height == 0 {
+      return Err(Error::Render(RenderError::InvalidParameters {
+        message: "Viewport width and height must be positive".to_string(),
+      }));
+    }
+
+    let stylesheet = extract_css(dom)?;
+    let target_fragment = self.current_target_fragment();
+    let media_ctx = MediaContext::screen(width as f32, height as f32)
+      .with_device_pixel_ratio(self.device_pixel_ratio)
+      .with_env_overrides();
+    let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
+    let mut media_query_cache = MediaQueryCache::default();
+    let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
+      &import_loader,
+      self.base_url.as_deref(),
+      &media_ctx,
+      Some(&mut media_query_cache),
+    );
+    let styled_tree = apply_styles_with_media_target_and_imports_cached(
+      dom,
+      &resolved_stylesheet,
+      &media_ctx,
+      target_fragment.as_deref(),
+      None,
+      None,
+      None,
+      None,
+      None,
+      Some(&mut media_query_cache),
+    );
+
+    Ok(crate::accessibility::build_accessibility_tree(&styled_tree))
+  }
+
+  /// Convenience helper to serialize the accessibility tree to JSON.
+  pub fn accessibility_tree_json(
+    &mut self,
+    dom: &DomNode,
+    width: u32,
+    height: u32,
+  ) -> Result<String> {
+    let tree = self.accessibility_tree(dom, width, height)?;
+    serde_json::to_string_pretty(&tree).map_err(|e| {
+      Error::Render(RenderError::InvalidParameters {
+        message: format!("Failed to serialize accessibility tree: {e}"),
+      })
+    })
   }
 
   /// Lays out a document and returns the fragment tree

@@ -532,6 +532,8 @@ dependencies = [
  "roxmltree",
  "rustybuzz 0.20.1",
  "selectors",
+ "serde",
+ "serde_json",
  "taffy",
  "tempfile",
  "thiserror",

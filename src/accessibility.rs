@@ -1,0 +1,872 @@
+use crate::dom::{DomNode, DomNodeType, ElementRef};
+use crate::style::cascade::StyledNode;
+use crate::style::computed::Visibility;
+use crate::style::display::Display;
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
+
+/// Checked state for toggleable controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckState {
+  True,
+  False,
+  Mixed,
+}
+
+/// Pressed state for buttons/switches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PressedState {
+  True,
+  False,
+  Mixed,
+}
+
+/// Accessibility-related states for a node.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AccessibilityState {
+  pub focusable: bool,
+  pub disabled: bool,
+  pub required: bool,
+  pub invalid: bool,
+  pub visited: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub checked: Option<CheckState>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub selected: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub pressed: Option<PressedState>,
+}
+
+impl Default for AccessibilityState {
+  fn default() -> Self {
+    Self {
+      focusable: false,
+      disabled: false,
+      required: false,
+      invalid: false,
+      visited: false,
+      checked: None,
+      selected: None,
+      pressed: None,
+    }
+  }
+}
+
+/// A node in the exported accessibility tree.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AccessibilityNode {
+  pub role: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub name: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub description: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub value: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub level: Option<u32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub html_tag: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub id: Option<String>,
+  pub states: AccessibilityState,
+  pub children: Vec<AccessibilityNode>,
+}
+
+/// Build an accessibility tree from a styled DOM.
+pub fn build_accessibility_tree(root: &StyledNode) -> AccessibilityNode {
+  let mut hidden = HashMap::new();
+  let mut ids = HashMap::new();
+  compute_hidden_and_ids(root, false, &mut hidden, &mut ids);
+
+  let ctx = BuildContext { root, hidden, ids };
+
+  let mut ancestors: Vec<&DomNode> = Vec::new();
+  let mut children = Vec::new();
+  for child in &root.children {
+    children.extend(build_nodes(child, &ctx, &mut ancestors));
+  }
+
+  AccessibilityNode {
+    role: "document".to_string(),
+    name: None,
+    description: None,
+    value: None,
+    level: None,
+    html_tag: Some("document".to_string()),
+    id: None,
+    states: AccessibilityState::default(),
+    children,
+  }
+}
+
+/// Serialize the accessibility tree to JSON for snapshot tests.
+pub fn accessibility_tree_json(root: &StyledNode) -> serde_json::Value {
+  serde_json::to_value(build_accessibility_tree(root)).unwrap_or(serde_json::Value::Null)
+}
+
+struct BuildContext<'a> {
+  root: &'a StyledNode,
+  hidden: HashMap<usize, bool>,
+  ids: HashMap<String, usize>,
+}
+
+impl<'a> BuildContext<'a> {
+  fn is_hidden(&self, node: &StyledNode) -> bool {
+    *self.hidden.get(&node.node_id).unwrap_or(&false)
+  }
+
+  fn node_for_id(&self, id: &str) -> Option<&'a StyledNode> {
+    let node_id = self.ids.get(id)?;
+    find_node_by_id(self.root, *node_id)
+  }
+
+  fn visible_text(&self, node: &StyledNode) -> String {
+    if self.is_hidden(node) {
+      return String::new();
+    }
+
+    match &node.node.node_type {
+      DomNodeType::Text { content } => normalize_whitespace(content),
+      DomNodeType::Element { .. } => {
+        let tag = node
+          .node
+          .tag_name()
+          .map(|t| t.to_ascii_lowercase())
+          .unwrap_or_default();
+
+        if tag.eq_ignore_ascii_case("script") || tag.eq_ignore_ascii_case("style") {
+          return String::new();
+        }
+
+        if tag == "img" {
+          if let Some(alt) = node.node.get_attribute_ref("alt") {
+            let norm = normalize_whitespace(alt);
+            if !norm.is_empty() {
+              return norm;
+            }
+          }
+        }
+
+        let mut parts = Vec::new();
+        for child in &node.children {
+          let text = self.visible_text(child);
+          if !text.is_empty() {
+            parts.push(text);
+          }
+        }
+        normalize_whitespace(&parts.join(" "))
+      }
+      DomNodeType::Document => {
+        let mut parts = Vec::new();
+        for child in &node.children {
+          let text = self.visible_text(child);
+          if !text.is_empty() {
+            parts.push(text);
+          }
+        }
+        normalize_whitespace(&parts.join(" "))
+      }
+    }
+  }
+
+  fn text_alternative(&self, node: &StyledNode, visited: &mut HashSet<usize>) -> Option<String> {
+    if !visited.insert(node.node_id) || self.is_hidden(node) {
+      return None;
+    }
+
+    if let Some(label) = node.node.get_attribute_ref("aria-label") {
+      let norm = normalize_whitespace(label);
+      if !norm.is_empty() {
+        return Some(norm);
+      }
+    }
+
+    let mut labelled_by = Vec::new();
+    if let Some(attr) = node.node.get_attribute_ref("aria-labelledby") {
+      labelled_by.extend(attr.split_whitespace());
+    }
+    if !labelled_by.is_empty() {
+      let mut parts = Vec::new();
+      for id in labelled_by {
+        if let Some(target) = self.node_for_id(id) {
+          if let Some(text) = self.text_alternative(target, visited) {
+            if !text.is_empty() {
+              parts.push(text);
+            }
+          }
+        }
+      }
+      if !parts.is_empty() {
+        return Some(normalize_whitespace(&parts.join(" ")));
+      }
+    }
+
+    if let Some(alt) = node.node.get_attribute_ref("alt") {
+      let norm = normalize_whitespace(alt);
+      if !norm.is_empty() {
+        return Some(norm);
+      }
+    }
+
+    if let Some(title) = node.node.get_attribute_ref("title") {
+      let norm = normalize_whitespace(title);
+      if !norm.is_empty() {
+        return Some(norm);
+      }
+    }
+
+    let text = self.visible_text(node);
+    if text.is_empty() {
+      None
+    } else {
+      Some(text)
+    }
+  }
+}
+
+fn build_nodes<'a>(
+  node: &'a StyledNode,
+  ctx: &BuildContext<'a>,
+  ancestors: &mut Vec<&'a DomNode>,
+) -> Vec<AccessibilityNode> {
+  if ctx.is_hidden(node) {
+    return Vec::new();
+  }
+
+  match node.node.node_type {
+    DomNodeType::Text { .. } => Vec::new(),
+    DomNodeType::Document => {
+      let mut children = Vec::new();
+      ancestors.push(&node.node);
+      for child in &node.children {
+        children.extend(build_nodes(child, ctx, ancestors));
+      }
+      ancestors.pop();
+      children
+    }
+    DomNodeType::Element { .. } => {
+      let mut children = Vec::new();
+      ancestors.push(&node.node);
+      for child in &node.children {
+        children.extend(build_nodes(child, ctx, ancestors));
+      }
+      ancestors.pop();
+
+      let element_ref = ElementRef::with_ancestors(&node.node, ancestors);
+      let mut role = compute_role(&node.node);
+      let mut name = compute_name(node, ctx, role.as_deref());
+      let description = compute_description(node, ctx);
+
+      // Regions should expose only when labelled.
+      if role.as_deref() == Some("region") && name.is_none() {
+        role = None;
+      }
+
+      let aria_disabled = parse_bool_attr(&node.node, "aria-disabled");
+      let disabled = aria_disabled.unwrap_or_else(|| element_ref.accessibility_disabled());
+      let required = parse_bool_attr(&node.node, "aria-required")
+        .unwrap_or_else(|| element_ref.accessibility_required());
+      let invalid = parse_invalid(&node.node, &element_ref);
+      let checked = compute_checked(node, role.as_deref(), &element_ref);
+      let selected = compute_selected(node, role.as_deref(), &element_ref);
+      let pressed = compute_pressed(node, role.as_deref());
+      let visited =
+        role.as_deref() == Some("link") && attr_truthy(&node.node, "data-fastr-visited");
+      let focusable = compute_focusable(&node.node, role.as_deref(), disabled);
+      let value = compute_value(node, role.as_deref(), &element_ref, ctx);
+      let level = compute_level(&node.node, role.as_deref());
+
+      if name.is_none() {
+        name = fallback_name_for_role(role.as_deref(), node, ctx, &element_ref);
+      }
+
+      let states = AccessibilityState {
+        focusable,
+        disabled,
+        required,
+        invalid,
+        visited,
+        checked,
+        selected,
+        pressed,
+      };
+
+      let should_expose =
+        role.is_some() || name.is_some() || description.is_some() || value.is_some() || focusable;
+      if !should_expose {
+        return children;
+      }
+
+      let role = role.unwrap_or_else(|| "generic".to_string());
+      let html_tag = node.node.tag_name().map(|t| t.to_ascii_lowercase());
+      let id = node
+        .node
+        .get_attribute_ref("id")
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+      vec![AccessibilityNode {
+        role,
+        name,
+        description,
+        value,
+        level,
+        html_tag,
+        id,
+        states,
+        children,
+      }]
+    }
+  }
+}
+
+fn compute_hidden_and_ids(
+  node: &StyledNode,
+  ancestor_hidden: bool,
+  hidden: &mut HashMap<usize, bool>,
+  ids: &mut HashMap<String, usize>,
+) {
+  let is_hidden = ancestor_hidden || is_node_hidden(node);
+  hidden.insert(node.node_id, is_hidden);
+
+  if !is_hidden {
+    if let DomNodeType::Element { .. } = node.node.node_type {
+      if let Some(id) = node.node.get_attribute_ref("id") {
+        ids.entry(id.to_string()).or_insert(node.node_id);
+      }
+    }
+  }
+
+  for child in &node.children {
+    compute_hidden_and_ids(child, is_hidden, hidden, ids);
+  }
+}
+
+fn is_node_hidden(node: &StyledNode) -> bool {
+  let attr_hidden = match node.node.node_type {
+    DomNodeType::Element { .. } => {
+      node.node.get_attribute_ref("hidden").is_some()
+        || parse_bool_attr(&node.node, "aria-hidden").unwrap_or(false)
+    }
+    _ => false,
+  };
+
+  attr_hidden
+    || matches!(node.styles.display, Display::None)
+    || node.styles.visibility != Visibility::Visible
+}
+
+fn normalize_whitespace(input: &str) -> String {
+  let mut out = String::new();
+  let mut last_space = false;
+  for ch in input.chars() {
+    if ch.is_whitespace() {
+      if !last_space {
+        out.push(' ');
+      }
+      last_space = true;
+    } else {
+      out.push(ch);
+      last_space = false;
+    }
+  }
+  out.trim().to_string()
+}
+
+fn find_node_by_id<'a>(root: &'a StyledNode, id: usize) -> Option<&'a StyledNode> {
+  if root.node_id == id {
+    return Some(root);
+  }
+  for child in &root.children {
+    if let Some(found) = find_node_by_id(child, id) {
+      return Some(found);
+    }
+  }
+  None
+}
+
+fn compute_role(node: &DomNode) -> Option<String> {
+  if let Some(role) = node
+    .get_attribute_ref("role")
+    .map(|r| r.trim().to_ascii_lowercase())
+  {
+    if !role.is_empty() {
+      return Some(role);
+    }
+  }
+
+  let tag = node.tag_name()?.to_ascii_lowercase();
+
+  match tag.as_str() {
+    "a" => node.get_attribute_ref("href").map(|_| "link".to_string()),
+    "button" => Some("button".to_string()),
+    "summary" => Some("button".to_string()),
+    "input" => input_role(node),
+    "textarea" => Some("textbox".to_string()),
+    "select" => Some(select_role(node)),
+    "option" => Some("option".to_string()),
+    "img" => Some("img".to_string()),
+    "ul" | "ol" => Some("list".to_string()),
+    "li" => Some("listitem".to_string()),
+    "table" => Some("table".to_string()),
+    "thead" | "tbody" | "tfoot" => Some("rowgroup".to_string()),
+    "tr" => Some("row".to_string()),
+    "td" => Some("cell".to_string()),
+    "th" => header_role(node),
+    "caption" => Some("caption".to_string()),
+    "main" => Some("main".to_string()),
+    "nav" => Some("navigation".to_string()),
+    "header" => Some("banner".to_string()),
+    "footer" => Some("contentinfo".to_string()),
+    "aside" => Some("complementary".to_string()),
+    "form" => Some("form".to_string()),
+    "article" => Some("article".to_string()),
+    "section" => Some("region".to_string()),
+    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => Some("heading".to_string()),
+    _ => None,
+  }
+}
+
+fn input_role(node: &DomNode) -> Option<String> {
+  let input_type = node
+    .get_attribute_ref("type")
+    .map(|t| t.to_ascii_lowercase())
+    .unwrap_or_else(|| "text".to_string());
+
+  match input_type.as_str() {
+    "hidden" => None,
+    "checkbox" => Some("checkbox".to_string()),
+    "radio" => Some("radio".to_string()),
+    "range" => Some("slider".to_string()),
+    "number" => Some("spinbutton".to_string()),
+    "button" | "submit" | "reset" | "image" => Some("button".to_string()),
+    _ => Some("textbox".to_string()),
+  }
+}
+
+fn select_role(node: &DomNode) -> String {
+  let multiple = node.get_attribute_ref("multiple").is_some();
+  if multiple {
+    return "listbox".to_string();
+  }
+
+  if let Some(size) = node.get_attribute_ref("size") {
+    if let Ok(val) = size.parse::<i32>() {
+      if val > 1 {
+        return "listbox".to_string();
+      }
+    }
+  }
+
+  "combobox".to_string()
+}
+
+fn header_role(node: &DomNode) -> Option<String> {
+  if !node
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("th"))
+    .unwrap_or(false)
+  {
+    return None;
+  }
+  let scope = node
+    .get_attribute_ref("scope")
+    .map(|s| s.to_ascii_lowercase())
+    .unwrap_or_default();
+
+  if scope == "row" || scope == "rowgroup" {
+    Some("rowheader".to_string())
+  } else {
+    Some("columnheader".to_string())
+  }
+}
+
+fn compute_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>) -> Option<String> {
+  let mut visited = HashSet::new();
+  compute_name_internal(node, ctx, role, &mut visited)
+}
+
+fn compute_name_internal(
+  node: &StyledNode,
+  ctx: &BuildContext,
+  role: Option<&str>,
+  visited: &mut HashSet<usize>,
+) -> Option<String> {
+  if !visited.insert(node.node_id) {
+    return None;
+  }
+
+  if let Some(label) = node.node.get_attribute_ref("aria-label") {
+    let norm = normalize_whitespace(label);
+    if !norm.is_empty() {
+      return Some(norm);
+    }
+  }
+
+  let mut labelled_by = Vec::new();
+  if let Some(attr) = node.node.get_attribute_ref("aria-labelledby") {
+    labelled_by.extend(attr.split_whitespace());
+  }
+  if !labelled_by.is_empty() {
+    let mut parts = Vec::new();
+    for id in labelled_by {
+      if let Some(target) = ctx.node_for_id(id) {
+        if let Some(text) = ctx.text_alternative(target, visited) {
+          if !text.is_empty() {
+            parts.push(text);
+          }
+        }
+      }
+    }
+    if !parts.is_empty() {
+      return Some(normalize_whitespace(&parts.join(" ")));
+    }
+  }
+
+  if let Some(specific) = role_specific_name(node, ctx, role) {
+    if !specific.is_empty() {
+      return Some(specific);
+    }
+  }
+
+  if let Some(title) = node.node.get_attribute_ref("title") {
+    let norm = normalize_whitespace(title);
+    if !norm.is_empty() {
+      return Some(norm);
+    }
+  }
+
+  let text = ctx.visible_text(node);
+  if text.is_empty() {
+    None
+  } else {
+    Some(text)
+  }
+}
+
+fn role_specific_name(node: &StyledNode, ctx: &BuildContext, role: Option<&str>) -> Option<String> {
+  let tag = node
+    .node
+    .tag_name()
+    .map(|t| t.to_ascii_lowercase())?
+    .to_string();
+
+  match tag.as_str() {
+    "img" => node
+      .node
+      .get_attribute_ref("alt")
+      .map(|alt| normalize_whitespace(alt)),
+    "input" => {
+      let input_type = node
+        .node
+        .get_attribute_ref("type")
+        .map(|t| t.to_ascii_lowercase())
+        .unwrap_or_else(|| "text".to_string());
+
+      if matches!(input_type.as_str(), "button" | "submit" | "reset") {
+        return node
+          .node
+          .get_attribute_ref("value")
+          .map(normalize_whitespace)
+          .or_else(|| default_button_label(&input_type).map(|s| s.to_string()));
+      }
+
+      if input_type == "image" {
+        return node
+          .node
+          .get_attribute_ref("alt")
+          .map(normalize_whitespace)
+          .or_else(|| {
+            node
+              .node
+              .get_attribute_ref("value")
+              .map(normalize_whitespace)
+          });
+      }
+
+      None
+    }
+    "button" => {
+      let text = ctx.visible_text(node);
+      if !text.is_empty() {
+        Some(text)
+      } else {
+        node
+          .node
+          .get_attribute_ref("value")
+          .map(normalize_whitespace)
+      }
+    }
+    "option" => {
+      let text = ctx.visible_text(node);
+      if text.is_empty() {
+        None
+      } else {
+        Some(text)
+      }
+    }
+    _ => {
+      if role == Some("heading") {
+        let text = ctx.visible_text(node);
+        if !text.is_empty() {
+          return Some(text);
+        }
+      }
+      None
+    }
+  }
+}
+
+fn fallback_name_for_role(
+  role: Option<&str>,
+  node: &StyledNode,
+  ctx: &BuildContext,
+  element_ref: &ElementRef,
+) -> Option<String> {
+  match role {
+    Some("textbox") | Some("combobox") | Some("listbox") | Some("spinbutton") | Some("slider") => {
+      element_ref
+        .accessibility_value()
+        .filter(|v| !v.is_empty())
+        .map(|v| normalize_whitespace(&v))
+    }
+    Some("option") => {
+      let text = ctx.visible_text(node);
+      if text.is_empty() {
+        None
+      } else {
+        Some(text)
+      }
+    }
+    _ => None,
+  }
+}
+
+fn default_button_label(input_type: &str) -> Option<&'static str> {
+  match input_type {
+    "submit" => Some("Submit"),
+    "reset" => Some("Reset"),
+    "button" => Some("Button"),
+    _ => None,
+  }
+}
+
+fn compute_description(node: &StyledNode, ctx: &BuildContext) -> Option<String> {
+  let Some(attr) = node.node.get_attribute_ref("aria-describedby") else {
+    return None;
+  };
+
+  let mut parts = Vec::new();
+  let mut visited = HashSet::new();
+  for id in attr.split_whitespace() {
+    if let Some(target) = ctx.node_for_id(id) {
+      if let Some(text) = ctx.text_alternative(target, &mut visited) {
+        if !text.is_empty() {
+          parts.push(text);
+        }
+      }
+    }
+  }
+
+  if parts.is_empty() {
+    None
+  } else {
+    Some(normalize_whitespace(&parts.join(" ")))
+  }
+}
+
+fn compute_level(node: &DomNode, role: Option<&str>) -> Option<u32> {
+  if !matches!(role, Some("heading")) {
+    return None;
+  }
+
+  if let Some(attr) = node.get_attribute_ref("aria-level") {
+    if let Ok(level) = attr.trim().parse::<u32>() {
+      return Some(level);
+    }
+  }
+
+  let tag = node.tag_name()?.to_ascii_lowercase();
+  match tag.as_str() {
+    "h1" => Some(1),
+    "h2" => Some(2),
+    "h3" => Some(3),
+    "h4" => Some(4),
+    "h5" => Some(5),
+    "h6" => Some(6),
+    _ => None,
+  }
+}
+
+fn compute_value(
+  node: &StyledNode,
+  role: Option<&str>,
+  element_ref: &ElementRef,
+  ctx: &BuildContext,
+) -> Option<String> {
+  match role {
+    Some("textbox") | Some("combobox") | Some("listbox") | Some("spinbutton") | Some("slider") => {
+      element_ref
+        .accessibility_value()
+        .filter(|v| !v.is_empty())
+        .map(|v| normalize_whitespace(&v))
+    }
+    Some("option") => {
+      let text = ctx.visible_text(node);
+      if text.is_empty() {
+        None
+      } else {
+        Some(text)
+      }
+    }
+    _ => None,
+  }
+}
+
+fn compute_invalid(node: &DomNode, element_ref: &ElementRef) -> bool {
+  match parse_bool_attr(node, "aria-invalid") {
+    Some(value) => value,
+    None => {
+      element_ref.accessibility_supports_validation() && !element_ref.accessibility_is_valid()
+    }
+  }
+}
+
+fn compute_checked(
+  node: &StyledNode,
+  role: Option<&str>,
+  element_ref: &ElementRef,
+) -> Option<CheckState> {
+  if let Some(state) = parse_check_state(&node.node, "aria-checked") {
+    return Some(state);
+  }
+
+  if matches!(role, Some("checkbox") | Some("radio")) {
+    if element_ref.accessibility_indeterminate() {
+      return Some(CheckState::Mixed);
+    }
+    if element_ref.accessibility_checked() {
+      return Some(CheckState::True);
+    }
+    return Some(CheckState::False);
+  }
+
+  None
+}
+
+fn compute_selected(
+  node: &StyledNode,
+  role: Option<&str>,
+  element_ref: &ElementRef,
+) -> Option<bool> {
+  if let Some(selected) = parse_bool_attr(&node.node, "aria-selected") {
+    return Some(selected);
+  }
+
+  if role == Some("option") {
+    return Some(element_ref.accessibility_selected());
+  }
+
+  None
+}
+
+fn compute_pressed(node: &StyledNode, role: Option<&str>) -> Option<PressedState> {
+  if let Some(state) = parse_pressed_state(&node.node, "aria-pressed") {
+    return Some(state);
+  }
+
+  if role == Some("button") && attr_truthy(&node.node, "data-fastr-active") {
+    return Some(PressedState::True);
+  }
+
+  None
+}
+
+fn compute_focusable(node: &DomNode, role: Option<&str>, disabled: bool) -> bool {
+  if disabled {
+    return false;
+  }
+
+  if node.get_attribute_ref("tabindex").is_some() {
+    return true;
+  }
+
+  let tag = match node.tag_name() {
+    Some(t) => t.to_ascii_lowercase(),
+    None => return false,
+  };
+
+  if tag == "a" && node.get_attribute_ref("href").is_some() {
+    return true;
+  }
+
+  if matches!(tag.as_str(), "button" | "select" | "textarea") {
+    return true;
+  }
+
+  if tag == "input" {
+    let input_type = node
+      .get_attribute_ref("type")
+      .map(|t| t.to_ascii_lowercase())
+      .unwrap_or_else(|| "text".to_string());
+    return input_type != "hidden";
+  }
+
+  if tag == "option" {
+    return true;
+  }
+
+  if let Some(r) = role {
+    if matches!(r, "button" | "link" | "checkbox" | "radio" | "switch") {
+      return true;
+    }
+  }
+
+  node
+    .get_attribute_ref("contenteditable")
+    .map(|v| v.is_empty() || v.eq_ignore_ascii_case("true"))
+    .unwrap_or(false)
+}
+
+fn parse_invalid(node: &DomNode, element_ref: &ElementRef) -> bool {
+  compute_invalid(node, element_ref)
+}
+
+fn parse_bool_attr(node: &DomNode, name: &str) -> Option<bool> {
+  let value = node.get_attribute_ref(name)?;
+  let lower = value.trim().to_ascii_lowercase();
+  if lower.is_empty() {
+    return Some(true);
+  }
+  match lower.as_str() {
+    "true" | "1" => Some(true),
+    "false" | "0" => Some(false),
+    _ => Some(true),
+  }
+}
+
+fn attr_truthy(node: &DomNode, name: &str) -> bool {
+  parse_bool_attr(node, name).unwrap_or(false)
+}
+
+fn parse_check_state(node: &DomNode, name: &str) -> Option<CheckState> {
+  let value = node.get_attribute_ref(name)?;
+  match value.to_ascii_lowercase().trim() {
+    "true" | "1" => Some(CheckState::True),
+    "false" | "0" => Some(CheckState::False),
+    "mixed" => Some(CheckState::Mixed),
+    _ => None,
+  }
+}
+
+fn parse_pressed_state(node: &DomNode, name: &str) -> Option<PressedState> {
+  let value = node.get_attribute_ref(name)?;
+  match value.to_ascii_lowercase().trim() {
+    "true" | "1" => Some(PressedState::True),
+    "false" | "0" => Some(PressedState::False),
+    "mixed" => Some(PressedState::Mixed),
+    _ => None,
+  }
+}
