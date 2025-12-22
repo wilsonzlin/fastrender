@@ -571,21 +571,25 @@ impl AbsoluteLayout {
     }
 
     // Apply auto margin resolution only when both edges participate in the constraint (CSS 2.1 §10.3.7).
-    if left.is_some() && right.is_some() && specified_width.is_some() {
-      let left_edge = x - (margin_left + border_left + padding_left);
-      let remaining_without_margins =
-        cb_width - (left_edge + border_left + padding_left + width + padding_right + border_right);
+    if let (Some(left_offset), Some(right_offset), Some(_)) = (left, right, specified_width) {
+      let available_for_margins = cb_width
+        - left_offset
+        - right_offset
+        - border_left
+        - padding_left
+        - width
+        - padding_right
+        - border_right;
 
       if margin_left_auto && margin_right_auto {
-        let remaining = remaining_without_margins.max(0.0);
-        margin_left = remaining / 2.0;
-        margin_right = remaining - margin_left;
-        x = left_edge + margin_left + border_left + padding_left;
+        margin_left = available_for_margins / 2.0;
+        margin_right = available_for_margins - margin_left;
+        x = left_offset + margin_left + border_left + padding_left;
       } else if margin_left_auto {
-        margin_left = remaining_without_margins - margin_right;
-        x = left_edge + margin_left + border_left + padding_left;
+        margin_left = available_for_margins - margin_right;
+        x = left_offset + margin_left + border_left + padding_left;
       } else if margin_right_auto {
-        margin_right = remaining_without_margins - margin_left;
+        margin_right = available_for_margins - margin_left;
       }
     }
 
@@ -740,21 +744,25 @@ impl AbsoluteLayout {
       }
     }
 
-    if top.is_some() && bottom.is_some() && specified_height.is_some() {
-      let top_edge = y - (margin_top + border_top + padding_top);
-      let remaining_without_margins =
-        cb_height - (top_edge + border_top + padding_top + height + padding_bottom + border_bottom);
+    if let (Some(top_offset), Some(bottom_offset), Some(_)) = (top, bottom, specified_height) {
+      let available_for_margins = cb_height
+        - top_offset
+        - bottom_offset
+        - border_top
+        - padding_top
+        - height
+        - padding_bottom
+        - border_bottom;
 
       if margin_top_auto && margin_bottom_auto {
-        let remaining = remaining_without_margins.max(0.0);
-        margin_top = remaining / 2.0;
-        margin_bottom = remaining - margin_top;
-        y = top_edge + margin_top + border_top + padding_top;
+        margin_top = available_for_margins / 2.0;
+        margin_bottom = available_for_margins - margin_top;
+        y = top_offset + margin_top + border_top + padding_top;
       } else if margin_top_auto {
-        margin_top = remaining_without_margins - margin_bottom;
-        y = top_edge + margin_top + border_top + padding_top;
+        margin_top = available_for_margins - margin_bottom;
+        y = top_offset + margin_top + border_top + padding_top;
       } else if margin_bottom_auto {
-        margin_bottom = remaining_without_margins - margin_top;
+        margin_bottom = available_for_margins - margin_top;
       }
     }
 
@@ -800,35 +808,31 @@ impl AbsoluteLayout {
     let border_left = style.border_width.left;
     let border_right = style.border_width.right;
 
-    let total_spacing = padding_left + padding_right + border_left + border_right + width;
-    let remaining = cb_width - left - right - total_spacing;
-
-    // Check which margins are auto (represented as 0 with auto flag)
-    let margin_left_specified = style.margin.left;
-    let margin_right_specified = style.margin.right;
-
-    // For true auto margin detection, we'd need additional metadata
-    // For now, assume margin values of 0 could be auto for centering
-    if margin_left_specified == 0.0 && margin_right_specified == 0.0 {
-      // Both auto - center
-      let half_margin = (remaining / 2.0).max(0.0);
-      let x = left + half_margin + border_left + padding_left;
-      (x, half_margin, half_margin)
-    } else if margin_left_specified == 0.0 {
-      // Only left auto
-      let margin_left = (remaining - margin_right_specified).max(0.0);
-      let x = left + margin_left + border_left + padding_left;
-      (x, margin_left, margin_right_specified)
-    } else if margin_right_specified == 0.0 {
-      // Only right auto
-      let margin_right = (remaining - margin_left_specified).max(0.0);
-      let x = left + margin_left_specified + border_left + padding_left;
-      (x, margin_left_specified, margin_right)
+    let mut margin_left = if style.margin_left_auto {
+      0.0
     } else {
-      // Neither auto - use specified
-      let x = left + margin_left_specified + border_left + padding_left;
-      (x, margin_left_specified, margin_right_specified)
+      style.margin.left
+    };
+    let mut margin_right = if style.margin_right_auto {
+      0.0
+    } else {
+      style.margin.right
+    };
+
+    let available_for_margins =
+      cb_width - left - right - border_left - padding_left - width - padding_right - border_right;
+
+    if style.margin_left_auto && style.margin_right_auto {
+      margin_left = available_for_margins / 2.0;
+      margin_right = available_for_margins - margin_left;
+    } else if style.margin_left_auto {
+      margin_left = available_for_margins - margin_right;
+    } else if style.margin_right_auto {
+      margin_right = available_for_margins - margin_left;
     }
+
+    let x = left + margin_left + border_left + padding_left;
+    (x, margin_left, margin_right)
   }
 
   /// Computes centering for vertical axis
@@ -861,28 +865,31 @@ impl AbsoluteLayout {
     let border_top = style.border_width.top;
     let border_bottom = style.border_width.bottom;
 
-    let total_spacing = padding_top + padding_bottom + border_top + border_bottom + height;
-    let remaining = cb_height - top - bottom - total_spacing;
-
-    let margin_top_specified = style.margin.top;
-    let margin_bottom_specified = style.margin.bottom;
-
-    if margin_top_specified == 0.0 && margin_bottom_specified == 0.0 {
-      let half_margin = (remaining / 2.0).max(0.0);
-      let y = top + half_margin + border_top + padding_top;
-      (y, half_margin, half_margin)
-    } else if margin_top_specified == 0.0 {
-      let margin_top = (remaining - margin_bottom_specified).max(0.0);
-      let y = top + margin_top + border_top + padding_top;
-      (y, margin_top, margin_bottom_specified)
-    } else if margin_bottom_specified == 0.0 {
-      let margin_bottom = (remaining - margin_top_specified).max(0.0);
-      let y = top + margin_top_specified + border_top + padding_top;
-      (y, margin_top_specified, margin_bottom)
+    let mut margin_top = if style.margin_top_auto {
+      0.0
     } else {
-      let y = top + margin_top_specified + border_top + padding_top;
-      (y, margin_top_specified, margin_bottom_specified)
+      style.margin.top
+    };
+    let mut margin_bottom = if style.margin_bottom_auto {
+      0.0
+    } else {
+      style.margin.bottom
+    };
+
+    let available_for_margins =
+      cb_height - top - bottom - border_top - padding_top - height - padding_bottom - border_bottom;
+
+    if style.margin_top_auto && style.margin_bottom_auto {
+      margin_top = available_for_margins / 2.0;
+      margin_bottom = available_for_margins - margin_top;
+    } else if style.margin_top_auto {
+      margin_top = available_for_margins - margin_bottom;
+    } else if style.margin_bottom_auto {
+      margin_bottom = available_for_margins - margin_top;
     }
+
+    let y = top + margin_top + border_top + padding_top;
+    (y, margin_top, margin_bottom)
   }
 
   /// Creates a fragment from the layout result
@@ -1510,12 +1517,12 @@ mod tests {
 
     let result = layout.layout_absolute(&input, &cb).unwrap();
     assert!(
-      (result.position.x - 175.0).abs() < 0.001,
-      "expected centered position at x=175, got {}",
+      (result.position.x - 150.0).abs() < 0.001,
+      "expected centered position at x=150, got {}",
       result.position.x
     );
-    assert!((result.margins.left - 125.0).abs() < 0.001);
-    assert!((result.margins.right - 125.0).abs() < 0.001);
+    assert!((result.margins.left - 100.0).abs() < 0.001);
+    assert!((result.margins.right - 100.0).abs() < 0.001);
   }
 
   #[test]
@@ -1538,7 +1545,7 @@ mod tests {
       "expected left edge at 50 (30 + 20 margin), got {}",
       result.position.x
     );
-    assert!((result.margins.right - 250.0).abs() < 0.001);
+    assert!((result.margins.right - 210.0).abs() < 0.001);
   }
 
   #[test]
