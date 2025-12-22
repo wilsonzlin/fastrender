@@ -837,6 +837,8 @@ pub struct FontFaceRule {
   pub sources: Vec<FontFaceSource>,
   /// Style descriptor (normal/italic/oblique with optional angle range).
   pub style: FontFaceStyle,
+  /// Font display strategy (auto/block/swap/fallback/optional).
+  pub display: FontDisplay,
   /// Weight range expressed in CSS absolute weights.
   pub weight: (u16, u16),
   /// Stretch range in percentages.
@@ -851,6 +853,7 @@ impl Default for FontFaceRule {
       family: None,
       sources: Vec::new(),
       style: FontFaceStyle::Normal,
+      display: FontDisplay::Auto,
       weight: (400, 400),
       stretch: (100.0, 100.0),
       unicode_ranges: vec![(0, 0x10ffff)],
@@ -865,6 +868,16 @@ pub enum FontFaceSource {
   Url(String),
   /// A locally installed font name.
   Local(String),
+}
+
+/// font-display descriptor options for @font-face
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontDisplay {
+  Auto,
+  Block,
+  Swap,
+  Fallback,
+  Optional,
 }
 
 /// Font style descriptor for @font-face.

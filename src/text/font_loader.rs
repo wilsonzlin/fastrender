@@ -24,6 +24,7 @@
 //! }
 //! ```
 
+use crate::css::types::FontDisplay;
 use crate::css::types::FontFaceRule;
 use crate::css::types::FontFaceSource;
 use crate::css::types::FontFaceStyle;
@@ -49,12 +50,89 @@ use std::fs;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
+use std::time::Duration;
+use std::time::Instant;
 use ureq::Agent;
 use url::Url;
 use wuff::decompress_woff1;
 use wuff::decompress_woff2;
+
+/// Default block period used for `font-display: block/auto` before falling back.
+///
+/// The spec suggests ~3s; we use a shorter window to keep headless rendering fast
+/// while still modeling the phase changes.
+const BLOCK_PERIOD: Duration = Duration::from_millis(300);
+/// Block period for fallback/optional; after this the fallback font is used.
+const FALLBACK_BLOCK_PERIOD: Duration = Duration::from_millis(100);
+/// Swap period for `font-display: fallback` after the short block window.
+const FALLBACK_SWAP_PERIOD: Duration = Duration::from_millis(400);
+/// Optional fonts must finish within this period to be adopted.
+const OPTIONAL_BLOCK_PERIOD: Duration = Duration::from_millis(100);
+
+/// Abstraction over font byte fetching so tests can simulate slow/failed loads.
+pub trait FontFetcher: Send + Sync {
+  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)>;
+}
+
+struct DefaultFontFetcher;
+
+impl FontFetcher for DefaultFontFetcher {
+  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
+    fetch_font_bytes(url)
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadOutcome {
+  Loaded,
+  Skipped,
+}
+
+fn display_deadlines(display: FontDisplay) -> (Duration, Duration) {
+  match display {
+    FontDisplay::Auto | FontDisplay::Block => (BLOCK_PERIOD, Duration::MAX),
+    FontDisplay::Swap => (Duration::from_millis(0), Duration::MAX),
+    FontDisplay::Fallback => (
+      FALLBACK_BLOCK_PERIOD,
+      FALLBACK_BLOCK_PERIOD + FALLBACK_SWAP_PERIOD,
+    ),
+    FontDisplay::Optional => (OPTIONAL_BLOCK_PERIOD, OPTIONAL_BLOCK_PERIOD),
+  }
+}
+
+fn display_allows_use(display: FontDisplay, elapsed: Duration) -> bool {
+  let (_, swap_deadline) = display_deadlines(display);
+  elapsed <= swap_deadline
+}
+
+struct PendingTask {
+  shared: Arc<(Mutex<usize>, Condvar)>,
+}
+
+impl PendingTask {
+  fn new(shared: Arc<(Mutex<usize>, Condvar)>) -> Self {
+    if let Ok(mut guard) = shared.0.lock() {
+      *guard += 1;
+    }
+    Self { shared }
+  }
+}
+
+impl Drop for PendingTask {
+  fn drop(&mut self) {
+    let (lock, cvar) = &*self.shared;
+    if let Ok(mut guard) = lock.lock() {
+      if *guard > 0 {
+        *guard -= 1;
+      }
+      cvar.notify_all();
+    }
+  }
+}
 
 /// Font context for text operations
 ///
@@ -90,6 +168,9 @@ pub struct FontContext {
   web_fonts: Arc<RwLock<Vec<WebFontFace>>>,
   web_families: Arc<RwLock<std::collections::HashSet<String>>>,
   feature_support: Arc<RwLock<std::collections::HashMap<(usize, u32, u32), bool>>>,
+  fetcher: Arc<dyn FontFetcher>,
+  pending_async: Arc<(Mutex<usize>, Condvar)>,
+  web_used_codepoints: Arc<RwLock<Vec<u32>>>,
   generation: Arc<AtomicU64>,
 }
 
@@ -136,13 +217,7 @@ impl FontContext {
       }
     }
 
-    Self {
-      db: Arc::new(db),
-      web_fonts: Arc::new(RwLock::new(Vec::new())),
-      web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
-      feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
-      generation: Arc::new(AtomicU64::new(0)),
-    }
+    Self::with_database_and_fetcher(Arc::new(db), Arc::new(DefaultFontFetcher))
   }
 
   /// Creates a font context with a custom font database
@@ -156,26 +231,37 @@ impl FontContext {
   /// let ctx = FontContext::with_database(db);
   /// ```
   pub fn with_database(db: Arc<FontDatabase>) -> Self {
+    Self::with_database_and_fetcher(db, Arc::new(DefaultFontFetcher))
+  }
+
+  /// Creates a font context backed by a custom database and fetcher.
+  pub fn with_database_and_fetcher(db: Arc<FontDatabase>, fetcher: Arc<dyn FontFetcher>) -> Self {
     Self {
       db,
       web_fonts: Arc::new(RwLock::new(Vec::new())),
       web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
       feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
+      fetcher,
+      pending_async: Arc::new((Mutex::new(0), Condvar::new())),
+      web_used_codepoints: Arc::new(RwLock::new(Vec::new())),
       generation: Arc::new(AtomicU64::new(0)),
     }
+  }
+
+  /// Creates a font context with the system database and a custom fetcher.
+  pub fn with_fetcher(fetcher: Arc<dyn FontFetcher>) -> Self {
+    let db = FontDatabase::new();
+    Self::with_database_and_fetcher(Arc::new(db), fetcher)
   }
 
   /// Creates an empty font context (no fonts loaded)
   ///
   /// Useful for testing.
   pub fn empty() -> Self {
-    Self {
-      db: Arc::new(FontDatabase::empty()),
-      web_fonts: Arc::new(RwLock::new(Vec::new())),
-      web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
-      feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
-      generation: Arc::new(AtomicU64::new(0)),
-    }
+    Self::with_database_and_fetcher(
+      Arc::new(FontDatabase::empty()),
+      Arc::new(DefaultFontFetcher),
+    )
   }
 
   /// Gets a reference to the underlying font database
@@ -442,6 +528,9 @@ impl FontContext {
     if let Ok(mut support) = self.feature_support.write() {
       support.clear();
     }
+    if let Ok(mut used) = self.web_used_codepoints.write() {
+      used.clear();
+    }
     self.bump_generation();
   }
 
@@ -465,20 +554,25 @@ impl FontContext {
       return Ok(());
     }
 
-    let mut modified = false;
+    if let Ok(mut used) = self.web_used_codepoints.write() {
+      used.clear();
+      if let Some(cps) = used_codepoints {
+        used.extend_from_slice(cps);
+      }
+    }
+
     let filter_by_codepoints = used_codepoints.is_some();
     let used_codepoints = used_codepoints.unwrap_or(&[]);
-    let mut loaded_count = 0usize;
+    let mut started_count = 0usize;
     for (order, face) in faces.iter().enumerate() {
+      if started_count >= max_fonts {
+        break;
+      }
       let family = match &face.family {
         Some(f) => f.clone(),
         None => continue,
       };
       self.declare_web_family(&family);
-
-      if loaded_count >= max_fonts {
-        break;
-      }
 
       if filter_by_codepoints
         && (used_codepoints.is_empty()
@@ -488,27 +582,59 @@ impl FontContext {
         continue;
       }
 
-      for source in &face.sources {
-        let loaded = match source {
-          FontFaceSource::Local(name) => self.load_local_face(&family, name, face, order),
-          FontFaceSource::Url(url) => self.load_remote_face(&family, url, face, base_url, order),
-        };
+      if face.sources.is_empty() {
+        continue;
+      }
 
-        if loaded.is_ok() {
-          modified = true;
-          loaded_count += 1;
-          if loaded_count >= max_fonts {
-            break;
-          }
-          break;
-        }
+      let display = face.display;
+      if matches!(
+        display,
+        FontDisplay::Swap | FontDisplay::Fallback | FontDisplay::Optional
+      ) {
+        let face_clone = face.clone();
+        let family_clone = family.clone();
+        let base = base_url.map(|b| b.to_string());
+        let guard = PendingTask::new(self.pending_async.clone());
+        started_count += 1;
+        let ctx = self.clone();
+        std::thread::spawn(move || {
+          let _pending = guard;
+          let start = Instant::now();
+          ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
+        });
+        continue;
+      }
+
+      let start = Instant::now();
+      if self.load_face_sources(&family, face, base_url, order, start) {
+        started_count += 1;
       }
     }
-
-    if modified {
-      self.bump_generation();
-    }
     Ok(())
+  }
+
+  /// Waits for any pending asynchronous web font loads to complete.
+  ///
+  /// Returns true if all pending loads finished within the timeout.
+  pub fn wait_for_pending_web_fonts(&self, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let (lock, cvar) = &*self.pending_async;
+    let mut guard = lock.lock().unwrap();
+    loop {
+      if *guard == 0 {
+        return true;
+      }
+      let now = Instant::now();
+      if now >= deadline {
+        return false;
+      }
+      let remaining = deadline - now;
+      let (g, result) = cvar.wait_timeout(guard, remaining).unwrap();
+      guard = g;
+      if result.timed_out() && *guard > 0 {
+        return false;
+      }
+    }
   }
 
   #[inline]
@@ -524,13 +650,39 @@ impl FontContext {
       .any(|range| Self::range_matches_used(*range, used))
   }
 
+  fn load_face_sources(
+    &self,
+    family: &str,
+    face: &FontFaceRule,
+    base_url: Option<&str>,
+    order: usize,
+    start: Instant,
+  ) -> bool {
+    for source in &face.sources {
+      let loaded = match source {
+        FontFaceSource::Local(name) => self.load_local_face(family, name, face, order, start),
+        FontFaceSource::Url(url) => {
+          self.load_remote_face(family, url, face, base_url, order, start)
+        }
+      };
+
+      match loaded {
+        Ok(LoadOutcome::Loaded) => return true,
+        Ok(LoadOutcome::Skipped) => continue,
+        Err(_) => continue,
+      }
+    }
+    false
+  }
+
   fn load_local_face(
     &self,
     family: &str,
     local_name: &str,
     face: &FontFaceRule,
     order: usize,
-  ) -> Result<()> {
+    start: Instant,
+  ) -> Result<LoadOutcome> {
     let target_style = match face.style {
       FontFaceStyle::Italic => FontStyle::Italic,
       FontFaceStyle::Oblique { .. } => FontStyle::Oblique,
@@ -544,14 +696,17 @@ impl FontContext {
       FontStretch::Normal,
     ) {
       if let Some(font) = self.db.load_font(id) {
-        self.register_web_font(
-          family.to_string(),
-          Arc::clone(&font.data),
-          font.index,
-          face,
-          order,
-        );
-        return Ok(());
+        if display_allows_use(face.display, start.elapsed()) {
+          self.register_web_font(
+            family.to_string(),
+            Arc::clone(&font.data),
+            font.index,
+            face,
+            order,
+          );
+          return Ok(LoadOutcome::Loaded);
+        }
+        return Ok(LoadOutcome::Skipped);
       }
     }
     Err(Error::Font(crate::error::FontError::LoadFailed {
@@ -567,10 +722,14 @@ impl FontContext {
     face: &FontFaceRule,
     base_url: Option<&str>,
     order: usize,
-  ) -> Result<()> {
+    start: Instant,
+  ) -> Result<LoadOutcome> {
     let resolved = resolve_font_url(url, base_url);
-    let (bytes, content_type) = fetch_font_bytes(&resolved)?;
+    let (bytes, content_type) = self.fetcher.fetch(&resolved)?;
     let decoded = decode_font_bytes(bytes, content_type.as_deref())?;
+    if !display_allows_use(face.display, start.elapsed()) {
+      return Ok(LoadOutcome::Skipped);
+    }
     let data = Arc::new(decoded);
 
     let face_count = ttf_parser::fonts_in_collection(&data).unwrap_or(1);
@@ -581,7 +740,7 @@ impl FontContext {
       self.register_web_font(family.to_string(), Arc::clone(&data), idx, face, order);
     }
 
-    Ok(())
+    Ok(LoadOutcome::Loaded)
   }
 
   fn register_web_font(
@@ -602,6 +761,7 @@ impl FontContext {
       data,
       index,
       style: face.style.clone(),
+      display: face.display,
       weight: face.weight,
       stretch: face.stretch,
       order,
@@ -615,6 +775,7 @@ impl FontContext {
     if let Ok(mut guard) = self.web_fonts.write() {
       guard.push(push_face);
     }
+    self.bump_generation();
   }
 
   #[inline]
@@ -648,6 +809,11 @@ impl FontContext {
     oblique_angle: Option<f32>,
     ch: Option<char>,
   ) -> Option<LoadedFont> {
+    let used_codepoints = self
+      .web_used_codepoints
+      .read()
+      .map(|v| v.clone())
+      .unwrap_or_default();
     let faces = self.web_fonts.read().ok()?.clone();
     let desired_stretch = stretch.to_percentage();
     let mut best: Option<((u8, f32, f32, u8, (u8, f32), usize), LoadedFont)> = None;
@@ -657,6 +823,12 @@ impl FontContext {
       .iter()
       .filter(|f| case_fold(&f.family) == family_folded)
     {
+      if ch.is_none()
+        && !used_codepoints.is_empty()
+        && !Self::unicode_range_intersects_used(&face.ranges, &used_codepoints)
+      {
+        continue;
+      }
       if let Some(ch) = ch {
         if !face.supports_char(ch) {
           continue;
@@ -941,6 +1113,8 @@ pub(crate) struct WebFontFace {
   data: Arc<Vec<u8>>,
   index: u32,
   style: FontFaceStyle,
+  #[allow(dead_code)]
+  display: FontDisplay,
   weight: (u16, u16),
   stretch: (f32, f32),
   order: usize,
@@ -1339,6 +1513,10 @@ pub struct TextMeasurement {
 mod tests {
   use super::*;
   use crate::style::media::MediaContext;
+  use crate::ComputedStyle;
+  use std::sync::Arc;
+  use std::thread;
+  use std::time::Duration;
 
   fn system_font_for_char(ch: char) -> Option<(Vec<u8>, String)> {
     let db = FontDatabase::new();
@@ -1357,6 +1535,27 @@ mod tests {
     fs::write(&path, data).ok()?;
     let url = Url::from_file_path(&path).ok()?;
     Some((dir, url))
+  }
+
+  struct StubFetcher {
+    data: Vec<u8>,
+    delay: Duration,
+    fail: bool,
+  }
+
+  impl FontFetcher for StubFetcher {
+    fn fetch(&self, _url: &str) -> Result<(Vec<u8>, Option<String>)> {
+      if self.delay > Duration::ZERO {
+        thread::sleep(self.delay);
+      }
+      if self.fail {
+        return Err(Error::Font(crate::error::FontError::LoadFailed {
+          family: "stub".into(),
+          reason: "intentional failure".into(),
+        }));
+      }
+      Ok((self.data.clone(), None))
+    }
   }
 
   #[test]
@@ -1465,6 +1664,173 @@ mod tests {
     assert!(
       !ctx.has_web_faces("Skip"),
       "non-intersecting range should be skipped"
+    );
+  }
+
+  #[test]
+  fn font_display_optional_skips_slow_loads() {
+    let Some((data, fallback_family)) = system_font_for_char('A') else {
+      return;
+    };
+    let fetcher = Arc::new(StubFetcher {
+      data: data.clone(),
+      delay: Duration::from_millis(200),
+      fail: false,
+    });
+    let mut db = FontDatabase::empty();
+    db.load_font_data(data).expect("load fallback");
+    let ctx = FontContext::with_database_and_fetcher(Arc::new(db), fetcher);
+
+    let face = FontFaceRule {
+      family: Some("OptFace".to_string()),
+      sources: vec![FontFaceSource::Url(
+        "http://example.com/font.ttf".to_string(),
+      )],
+      display: FontDisplay::Optional,
+      ..Default::default()
+    };
+    ctx
+      .load_web_fonts(&[face], None, None)
+      .expect("schedule optional load");
+
+    assert!(
+      ctx.wait_for_pending_web_fonts(Duration::from_secs(1)),
+      "pending font loads should settle"
+    );
+    assert!(
+      !ctx.has_web_faces("OptFace"),
+      "optional fonts arriving after the block period should be dropped"
+    );
+
+    let families = vec!["OptFace".to_string(), fallback_family];
+    let resolved = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
+    assert!(resolved.is_some(), "fallback font should still resolve");
+    assert_ne!(resolved.unwrap().family, "OptFace");
+  }
+
+  #[test]
+  fn font_display_fallback_drops_after_swap_timeout() {
+    let Some((data, fallback_family)) = system_font_for_char('A') else {
+      return;
+    };
+    let fetcher = Arc::new(StubFetcher {
+      data: data.clone(),
+      delay: Duration::from_millis(800),
+      fail: false,
+    });
+    let mut db = FontDatabase::empty();
+    db.load_font_data(data).expect("load fallback");
+    let ctx = FontContext::with_database_and_fetcher(Arc::new(db), fetcher);
+
+    let face = FontFaceRule {
+      family: Some("LateFallback".to_string()),
+      sources: vec![FontFaceSource::Url(
+        "http://example.com/font.ttf".to_string(),
+      )],
+      display: FontDisplay::Fallback,
+      ..Default::default()
+    };
+    ctx
+      .load_web_fonts(&[face], None, None)
+      .expect("schedule fallback load");
+
+    assert!(ctx.wait_for_pending_web_fonts(Duration::from_secs(2)));
+    assert!(
+      !ctx.has_web_faces("LateFallback"),
+      "fallback fonts that finish after the swap period should stick with fallback"
+    );
+
+    let families = vec!["LateFallback".to_string(), fallback_family];
+    let resolved = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
+    assert!(resolved.is_some());
+    assert_ne!(resolved.unwrap().family, "LateFallback");
+  }
+
+  #[test]
+  fn font_display_swap_eventually_installs() {
+    let Some((data, _family)) = system_font_for_char('A') else {
+      return;
+    };
+    let fetcher = Arc::new(StubFetcher {
+      data: data.clone(),
+      delay: Duration::from_millis(200),
+      fail: false,
+    });
+    let ctx = FontContext::with_fetcher(fetcher);
+
+    let face = FontFaceRule {
+      family: Some("SwapFace".to_string()),
+      sources: vec![FontFaceSource::Url(
+        "http://example.com/font.ttf".to_string(),
+      )],
+      display: FontDisplay::Swap,
+      ..Default::default()
+    };
+    ctx
+      .load_web_fonts(&[face], None, None)
+      .expect("schedule swap load");
+
+    assert!(ctx.wait_for_pending_web_fonts(Duration::from_secs(1)));
+    assert!(ctx.has_web_faces("SwapFace"));
+  }
+
+  #[test]
+  fn swap_fonts_upgrade_after_load_without_large_jump() {
+    let Some((fallback_data, fallback_family)) = system_font_for_char('A') else {
+      return;
+    };
+    let fetcher = Arc::new(StubFetcher {
+      data: fallback_data.clone(),
+      delay: Duration::from_millis(150),
+      fail: false,
+    });
+    let mut db = FontDatabase::empty();
+    db.load_font_data(fallback_data)
+      .expect("load fallback font");
+    let ctx = FontContext::with_database_and_fetcher(Arc::new(db), fetcher);
+
+    let face = FontFaceRule {
+      family: Some("SwapUpgrade".to_string()),
+      sources: vec![FontFaceSource::Url(
+        "http://example.com/font.ttf".to_string(),
+      )],
+      display: FontDisplay::Swap,
+      ..Default::default()
+    };
+    ctx
+      .load_web_fonts(&[face], None, None)
+      .expect("schedule swap upgrade");
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["SwapUpgrade".to_string(), fallback_family.clone()];
+    style.font_size = 14.0;
+
+    let pipeline = crate::text::pipeline::ShapingPipeline::new();
+    let before = match pipeline.shape("A", &style, &ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if before.is_empty() {
+      return;
+    }
+    assert_eq!(
+      before[0].font.family, fallback_family,
+      "swap display should use fallback while the web font is pending"
+    );
+
+    assert!(ctx.wait_for_pending_web_fonts(Duration::from_secs(1)));
+    let after = match pipeline.shape("A", &style, &ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if after.is_empty() {
+      return;
+    }
+    assert_eq!(after[0].font.family, "SwapUpgrade");
+    let delta = (after[0].advance - before[0].advance).abs();
+    assert!(
+      delta < 0.5,
+      "swap upgrade should avoid large layout jumps for matching metrics"
     );
   }
 

@@ -13,6 +13,7 @@ use super::types::CssParseError;
 use super::types::CssParseResult;
 use super::types::CssRule;
 use super::types::Declaration;
+use super::types::FontDisplay;
 use super::types::FontFaceRule;
 use super::types::FontFaceSource;
 use super::types::FontFaceStyle;
@@ -841,6 +842,11 @@ fn parse_font_face_descriptors<'i, 't>(
           face.stretch = range;
         }
       }
+      "font-display" => {
+        if let Some(display) = parse_font_display(trimmed_value) {
+          face.display = display;
+        }
+      }
       "unicode-range" => {
         let ranges = parse_unicode_range_list(trimmed_value);
         if !ranges.is_empty() {
@@ -929,6 +935,17 @@ fn parse_font_face_stretch(value: &str) -> Option<(f32, f32)> {
       let (a, b) = (*a, *b);
       Some((a.min(b), a.max(b)))
     }
+    _ => None,
+  }
+}
+
+fn parse_font_display(value: &str) -> Option<FontDisplay> {
+  match value.trim().to_ascii_lowercase().as_str() {
+    "auto" => Some(FontDisplay::Auto),
+    "block" => Some(FontDisplay::Block),
+    "swap" => Some(FontDisplay::Swap),
+    "fallback" => Some(FontDisplay::Fallback),
+    "optional" => Some(FontDisplay::Optional),
     _ => None,
   }
 }
