@@ -25,3 +25,7 @@ The main orchestration code lives in `src/api.rs` (`FastRender`).
 - Display list / stacking: `crate::paint::display_list::*`, `crate::paint::stacking::*`
 
 For the most accurate view of the current flow, follow `FastRender::render_html_internal` and `FastRender::layout_document` in `src/api.rs`.
+
+## Compatibility toggles
+
+HTML parsing runs in a spec-only mode by default; FastRender does not inject JS-era bootstrap classes or other mutations. When a static render needs those compatibility shims, set `FastRenderConfig::with_dom_compat_mode(DomCompatibilityMode::Compatibility)` (or `DomParseOptions::compatibility()` for lower-level parsing). The current compatibility mode mirrors common JS-driven class flips like turning `no-js` into `js-enabled` and adding `jsl10n-visible` on `html/body`—see `docs/notes/dom-compatibility.md` for details.
