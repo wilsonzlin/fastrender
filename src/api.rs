@@ -56,6 +56,7 @@
 
 use crate::accessibility::AccessibilityNode;
 use crate::animation;
+use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::loader::absolutize_css_urls;
 use crate::css::loader::extract_css_links;
@@ -138,6 +139,7 @@ use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::ScaledMetrics;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapingPipeline;
+use crate::tree::box_generation::BoxGenerationOptions;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::box_tree::BoxType;
@@ -246,6 +248,9 @@ pub struct FastRender {
   /// Base URL used for resolving links/targets
   base_url: Option<String>,
 
+  /// Compatibility profile for opt-in site-specific behaviors
+  compat_profile: CompatProfile,
+
   /// Optional compatibility mode applied during DOM parsing
   dom_compat_mode: DomCompatibilityMode,
 }
@@ -259,6 +264,7 @@ impl std::fmt::Debug for FastRender {
       .field("device_pixel_ratio", &self.device_pixel_ratio)
       .field("apply_meta_viewport", &self.apply_meta_viewport)
       .field("base_url", &self.base_url)
+      .field("compat_profile", &self.compat_profile)
       .field("dom_compat_mode", &self.dom_compat_mode)
       .finish_non_exhaustive()
   }
@@ -303,6 +309,9 @@ pub struct FastRenderConfig {
   /// Allow http(s) parents to load file:// iframe documents when true (disabled by default)
   pub allow_file_iframe_from_http: bool,
 
+  /// Compatibility profile controlling opt-in site-specific behaviors.
+  pub compat_profile: CompatProfile,
+
   /// Optional compatibility mode used when parsing HTML.
   pub dom_compat_mode: DomCompatibilityMode,
 
@@ -321,6 +330,7 @@ impl Default for FastRenderConfig {
       resource_cache: Some(CachingFetcherConfig::default()),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
       allow_file_iframe_from_http: false,
+      compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
     }
@@ -406,6 +416,18 @@ impl FastRenderBuilder {
   /// Sets the device pixel ratio used for media queries and image-set selection.
   pub fn device_pixel_ratio(mut self, dpr: f32) -> Self {
     self.config.device_pixel_ratio = dpr;
+    self
+  }
+
+  /// Enables a specific compatibility profile.
+  pub fn compat_mode(mut self, profile: CompatProfile) -> Self {
+    self.config.compat_profile = profile;
+    self
+  }
+
+  /// Turns on site-specific compatibility hacks used for internal captures.
+  pub fn with_site_compat_hacks(mut self) -> Self {
+    self.config.compat_profile = CompatProfile::SiteCompatibility;
     self
   }
 
@@ -627,6 +649,12 @@ impl FastRenderConfig {
     self.dom_compat_mode = mode;
     self
   }
+
+  /// Sets the site compatibility profile applied during box generation.
+  pub fn compat_profile(mut self, profile: CompatProfile) -> Self {
+    self.config.compat_profile = profile;
+    self
+  }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -702,6 +730,18 @@ fn viewport_length_value(len: ViewportLength, fallback: f32) -> Option<f32> {
 fn sanitize_positive(value: Option<f32>) -> Option<f32> {
   value.filter(|v| v.is_finite() && *v > 0.0)
 }
+  /// Selects a compatibility profile. The default is spec-first rendering with no
+  /// site-specific heuristics.
+  pub fn compat_mode(mut self, profile: CompatProfile) -> Self {
+    self.compat_profile = profile;
+    self
+  }
+
+  /// Enables site-specific compatibility hacks used for internal page sets.
+  pub fn with_site_compat_hacks(mut self) -> Self {
+    self.compat_profile = CompatProfile::SiteCompatibility;
+    self
+  }
 }
 
 impl FastRender {
@@ -727,6 +767,10 @@ impl FastRender {
       .or_else(|| self.font_context.get_sans_serif())
       .and_then(|font| font.metrics().ok())
       .map(|m| m.scale(style.font_size))
+  }
+
+  fn box_generation_options(&self) -> BoxGenerationOptions {
+    BoxGenerationOptions::default().with_compat_profile(self.compat_profile)
   }
 
   /// Creates a new FastRender instance with default configuration
@@ -830,6 +874,7 @@ impl FastRender {
       pending_device_size: None,
       base_url: config.base_url.clone(),
       dom_compat_mode: config.dom_compat_mode,
+      compat_profile: config.compat_profile,
     })
   }
 
@@ -1624,8 +1669,12 @@ impl FastRender {
     }
 
     // Generate box tree
+    let box_gen_options = self.box_generation_options();
     let mut box_tree =
-      crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
+      crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+        &styled_tree,
+        &box_gen_options,
+      );
 
     // Resolve intrinsic sizes for replaced elements using the image cache
     self.resolve_replaced_intrinsic_sizes_for_media(
@@ -1989,6 +2038,11 @@ impl FastRender {
             layout_viewport,
             media_type,
           );
+            crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+              &styled_tree,
+              &box_gen_options,
+            );
+          self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
 
           intrinsic_cache_clear();
           if report_intrinsic {
@@ -4954,7 +5008,12 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
-    let mut box_tree = crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled);
+    let box_gen_options = renderer.box_generation_options();
+    let mut box_tree =
+      crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+        &styled,
+        &box_gen_options,
+      );
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -5036,7 +5095,12 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
-    let mut box_tree = crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled);
+    let box_gen_options = renderer.box_generation_options();
+    let mut box_tree =
+      crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+        &styled,
+        &box_gen_options,
+      );
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -5095,7 +5159,12 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
-    let mut box_tree = crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled);
+    let box_gen_options = renderer.box_generation_options();
+    let mut box_tree =
+      crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+        &styled,
+        &box_gen_options,
+      );
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -5147,7 +5216,12 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
-    let mut box_tree = crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled);
+    let box_gen_options = renderer.box_generation_options();
+    let mut box_tree =
+      crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+        &styled,
+        &box_gen_options,
+      );
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -5199,7 +5273,12 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
-    let mut box_tree = crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled);
+    let box_gen_options = renderer.box_generation_options();
+    let mut box_tree =
+      crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+        &styled,
+        &box_gen_options,
+      );
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();
@@ -5252,7 +5331,12 @@ mod tests {
 
     let config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
     renderer.layout_engine = LayoutEngine::with_font_context(config, renderer.font_context.clone());
-    let mut box_tree = crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled);
+    let box_gen_options = renderer.box_generation_options();
+    let mut box_tree =
+      crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+        &styled,
+        &box_gen_options,
+      );
     renderer.resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(800.0, 600.0));
     intrinsic_cache_clear();
     let fragments = renderer.layout_engine.layout_tree(&box_tree).unwrap();

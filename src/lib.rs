@@ -166,6 +166,7 @@
 
 pub mod animation;
 pub mod api;
+pub mod compat;
 pub mod error;
 pub mod geometry;
 

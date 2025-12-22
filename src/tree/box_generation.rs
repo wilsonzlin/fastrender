@@ -6,6 +6,7 @@
 //! CSS Specification: CSS 2.1 Section 9.2 - Box Generation
 //! <https://www.w3.org/TR/CSS21/visuren.html#box-gen>
 
+use crate::compat::CompatProfile;
 use crate::dom::DomNode;
 use crate::dom::DomNodeType;
 use crate::dom::HTML_NAMESPACE;
@@ -450,13 +451,51 @@ pub(crate) fn parse_sizes_length(value: &str) -> Option<Length> {
 
 use crate::style::cascade::StyledNode;
 
-fn build_box_tree_root(styled: &StyledNode) -> BoxNode {
+/// Options that control how the box tree is generated from styled DOM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxGenerationOptions {
+  /// Compatibility profile controlling whether site-specific heuristics are enabled.
+  pub compat_profile: CompatProfile,
+}
+
+impl Default for BoxGenerationOptions {
+  fn default() -> Self {
+    Self {
+      compat_profile: CompatProfile::Standards,
+    }
+  }
+}
+
+impl BoxGenerationOptions {
+  /// Creates a new options struct with defaults.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Sets the compatibility profile for box generation.
+  pub fn with_compat_profile(mut self, profile: CompatProfile) -> Self {
+    self.compat_profile = profile;
+    self
+  }
+
+  fn site_compat_hacks_enabled(&self) -> bool {
+    self.compat_profile.site_compat_hacks_enabled()
+  }
+}
+
+fn build_box_tree_root(styled: &StyledNode, options: &BoxGenerationOptions) -> BoxNode {
   let document_css = collect_document_css(styled);
   let picture_sources = collect_picture_source_map(styled);
   let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
   counters.enter_scope();
-  let mut roots =
-    generate_boxes_for_styled(styled, &mut counters, true, &document_css, &picture_sources);
+  let mut roots = generate_boxes_for_styled(
+    styled,
+    &mut counters,
+    true,
+    &document_css,
+    &picture_sources,
+    options,
+  );
   counters.leave_scope();
   match roots.len() {
     0 => BoxNode::new_block(
@@ -482,7 +521,15 @@ fn build_box_tree_root(styled: &StyledNode) -> BoxNode {
 ///
 /// A `BoxTree` containing the generated box structure
 pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
-  let root = build_box_tree_root(styled);
+  generate_box_tree_with_options(styled, &BoxGenerationOptions::default())
+}
+
+/// Generates a BoxTree from a StyledNode tree with custom options.
+pub fn generate_box_tree_with_options(
+  styled: &StyledNode,
+  options: &BoxGenerationOptions,
+) -> BoxTree {
+  let root = build_box_tree_root(styled, options);
   BoxTree::new(root)
 }
 
@@ -492,7 +539,16 @@ pub fn generate_box_tree(styled: &StyledNode) -> BoxTree {
 /// resulting tree satisfies the CSS 2.1 box-generation invariants (required for flex/grid/blocks
 /// that contain raw text to be layed out correctly).
 pub fn generate_box_tree_with_anonymous_fixup(styled: &StyledNode) -> BoxTree {
-  let root = build_box_tree_root(styled);
+  generate_box_tree_with_anonymous_fixup_with_options(styled, &BoxGenerationOptions::default())
+}
+
+/// Generates a BoxTree from a StyledNode tree, applies anonymous box fixup, and
+/// allows customizing generation behavior via options.
+pub fn generate_box_tree_with_anonymous_fixup_with_options(
+  styled: &StyledNode,
+  options: &BoxGenerationOptions,
+) -> BoxTree {
+  let root = build_box_tree_root(styled, options);
   let fixed_root = AnonymousBoxCreator::fixup_tree(root);
   BoxTree::new(fixed_root)
 }
@@ -1038,6 +1094,7 @@ fn generate_boxes_for_styled(
   _is_root: bool,
   document_css: &str,
   picture_sources: &HashMap<usize, Vec<PictureSource>>,
+  options: &BoxGenerationOptions,
 ) -> Vec<BoxNode> {
   if let Some(text) = styled.node.text_content() {
     if !text.is_empty() {
@@ -1063,15 +1120,19 @@ fn generate_boxes_for_styled(
   counters.enter_scope();
   apply_counter_properties_from_style(styled, counters);
 
+  let site_compat = options.site_compat_hacks_enabled();
+
   // Common ad placeholders that hold space even when empty: drop when they have no children/content.
-  if let Some(class_attr) = styled.node.get_attribute("class") {
-    if styled.children.is_empty()
-      && (class_attr.contains("ad-height-hold")
-        || class_attr.contains("ad__slot")
-        || class_attr.contains("should-hold-space"))
-    {
-      counters.leave_scope();
-      return Vec::new();
+  if site_compat {
+    if let Some(class_attr) = styled.node.get_attribute("class") {
+      if styled.children.is_empty()
+        && (class_attr.contains("ad-height-hold")
+          || class_attr.contains("ad__slot")
+          || class_attr.contains("should-hold-space"))
+      {
+        counters.leave_scope();
+        return Vec::new();
+      }
     }
   }
 
@@ -1149,40 +1210,43 @@ fn generate_boxes_for_styled(
   let mut idx = 0;
   while idx < styled.children.len() {
     let child = &styled.children[idx];
-    if let Some(testid) = child.node.get_attribute("data-testid") {
-      if testid == "one-nav-overlay" {
-        let overlay_hidden =
-          matches!(child.styles.visibility, Visibility::Hidden) || child.styles.opacity == 0.0;
-        if overlay_hidden {
-          // Skip the overlay and the subsequent focus-trap container when the overlay is hidden (menu closed).
-          idx += 1;
-          while idx < styled.children.len() {
-            let next = &styled.children[idx];
-            // Skip over whitespace/text nodes between the overlay and drawer.
-            if let crate::dom::DomNodeType::Text { content } = &next.node.node_type {
-              if content.trim().is_empty() {
-                idx += 1;
-                continue;
-              }
-            }
-
-            if let Some(class_attr) = next.node.get_attribute("class") {
-              if class_attr.contains("FocusTrapContainer-") {
-                for grandchild in &next.children {
-                  children.extend(generate_boxes_for_styled(
-                    grandchild,
-                    counters,
-                    false,
-                    document_css,
-                    picture_sources,
-                  ));
+    if site_compat {
+      if let Some(testid) = child.node.get_attribute("data-testid") {
+        if testid == "one-nav-overlay" {
+          let overlay_hidden =
+            matches!(child.styles.visibility, Visibility::Hidden) || child.styles.opacity == 0.0;
+          if overlay_hidden {
+            // Skip the overlay and the subsequent focus-trap container when the overlay is hidden (menu closed).
+            idx += 1;
+            while idx < styled.children.len() {
+              let next = &styled.children[idx];
+              // Skip over whitespace/text nodes between the overlay and drawer.
+              if let crate::dom::DomNodeType::Text { content } = &next.node.node_type {
+                if content.trim().is_empty() {
+                  idx += 1;
+                  continue;
                 }
-                idx += 1;
               }
+
+              if let Some(class_attr) = next.node.get_attribute("class") {
+                if class_attr.contains("FocusTrapContainer-") {
+                  for grandchild in &next.children {
+                    children.extend(generate_boxes_for_styled(
+                      grandchild,
+                      counters,
+                      false,
+                      document_css,
+                      picture_sources,
+                      options,
+                    ));
+                  }
+                  idx += 1;
+                }
+              }
+              break;
             }
-            break;
+            continue;
           }
-          continue;
         }
       }
     }
@@ -1192,6 +1256,7 @@ fn generate_boxes_for_styled(
       false,
       document_css,
       picture_sources,
+      options,
     ));
     idx += 1;
   }
