@@ -235,7 +235,11 @@ impl ToCss for PseudoElement {
 // ============================================================================
 
 /// Custom parser for pseudo-classes
-pub(crate) struct PseudoClassParser;
+/// Public parser entrypoint for selector parsing.
+///
+/// This is exposed so fuzzers and tools outside the crate can reuse the
+/// canonical parser configuration without duplicating selector setup.
+pub struct PseudoClassParser;
 
 impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
   type Error = SelectorParseErrorKind<'i>;
