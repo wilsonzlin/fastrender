@@ -269,7 +269,7 @@ fn blend_hue_hsv(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
 }
 
 fn blend_color_oklch(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
-  let (sl, sc, sh) = rgb_to_oklch(src.0, src.1, src.2);
+  let (_sl, sc, sh) = rgb_to_oklch(src.0, src.1, src.2);
   let (dl, _, _) = rgb_to_oklch(dst.0, dst.1, dst.2);
   // Hue and chroma from source, lightness from destination.
   oklch_to_rgb(dl, sc, sh)
