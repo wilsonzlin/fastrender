@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use crate::geometry::{Point, Rect, Size};
 use crate::style::types::{
-  Direction, ScrollBehavior, ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness,
-  WritingMode,
+  Direction, Overflow, OverscrollBehavior, ScrollBehavior, ScrollSnapAlign, ScrollSnapAxis,
+  ScrollSnapStop, ScrollSnapStrictness, WritingMode,
 };
 use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal, PhysicalSide};
 use crate::style::values::Length;
@@ -688,6 +688,536 @@ pub(crate) fn apply_scroll_snap(tree: &mut FragmentTree, scroll: &ScrollState) -
   ScrollSnapResult { state, updates }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollBounds {
+  pub min_x: f32,
+  pub min_y: f32,
+  pub max_x: f32,
+  pub max_y: f32,
+}
+
+impl ScrollBounds {
+  pub fn clamp(&self, scroll: Point) -> Point {
+    Point::new(
+      scroll.x.clamp(self.min_x, self.max_x),
+      scroll.y.clamp(self.min_y, self.max_y),
+    )
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+  min_x: f32,
+  min_y: f32,
+  max_x: f32,
+  max_y: f32,
+}
+
+impl Bounds {
+  fn new(rect: Rect) -> Self {
+    Self {
+      min_x: rect.min_x(),
+      min_y: rect.min_y(),
+      max_x: rect.max_x(),
+      max_y: rect.max_y(),
+    }
+  }
+
+  fn update(&mut self, rect: Rect) {
+    self.min_x = self.min_x.min(rect.min_x());
+    self.min_y = self.min_y.min(rect.min_y());
+    self.max_x = self.max_x.max(rect.max_x());
+    self.max_y = self.max_y.max(rect.max_y());
+  }
+}
+
+fn collect_bounds(node: &FragmentNode, origin: Point, bounds: &mut Bounds) {
+  let abs_rect = Rect::from_xywh(
+    origin.x,
+    origin.y,
+    node.bounds.width(),
+    node.bounds.height(),
+  );
+  bounds.update(abs_rect);
+
+  for child in &node.children {
+    let child_origin = Point::new(
+      abs_rect.x() + child.bounds.x(),
+      abs_rect.y() + child.bounds.y(),
+    );
+    collect_bounds(child, child_origin, bounds);
+  }
+}
+
+pub(crate) fn scroll_bounds_for_fragment(
+  container: &FragmentNode,
+  origin: Point,
+  viewport: Size,
+) -> ScrollBounds {
+  let mut bounds = Bounds::new(Rect::from_xywh(
+    origin.x,
+    origin.y,
+    viewport.width,
+    viewport.height,
+  ));
+  collect_bounds(container, origin, &mut bounds);
+
+  let min_x = (bounds.min_x - origin.x).min(0.0);
+  let min_y = (bounds.min_y - origin.y).min(0.0);
+  let max_x = (bounds.max_x - origin.x - viewport.width).max(min_x);
+  let max_y = (bounds.max_y - origin.y - viewport.height).max(min_y);
+
+  ScrollBounds {
+    min_x,
+    min_y,
+    max_x,
+    max_y,
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollSource {
+  User,
+  Programmatic,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollOptions {
+  pub source: ScrollSource,
+  pub simulate_overscroll: bool,
+}
+
+impl Default for ScrollOptions {
+  fn default() -> Self {
+    Self {
+      source: ScrollSource::User,
+      simulate_overscroll: false,
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScrollChainSnapInfo<'a> {
+  pub container: &'a FragmentNode,
+  pub origin: Point,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScrollChainState<'a> {
+  pub container: &'a FragmentNode,
+  pub origin: Point,
+  pub viewport: Size,
+  pub bounds: ScrollBounds,
+  pub scroll: Point,
+  pub overscroll_behavior_x: OverscrollBehavior,
+  pub overscroll_behavior_y: OverscrollBehavior,
+  pub snap: Option<ScrollChainSnapInfo<'a>>,
+}
+
+impl<'a> ScrollChainState<'a> {
+  pub fn from_fragment(
+    node: &'a FragmentNode,
+    origin: Point,
+    viewport: Size,
+    treat_as_root: bool,
+  ) -> Option<Self> {
+    let style = node.style.as_ref();
+    let overscroll_behavior_x = style
+      .map(|s| s.overscroll_behavior_x)
+      .unwrap_or(OverscrollBehavior::Auto);
+    let overscroll_behavior_y = style
+      .map(|s| s.overscroll_behavior_y)
+      .unwrap_or(OverscrollBehavior::Auto);
+    let overflow_x = style.map(|s| s.overflow_x).unwrap_or(Overflow::Visible);
+    let overflow_y = style.map(|s| s.overflow_y).unwrap_or(Overflow::Visible);
+
+    let snap = style.and_then(|s| {
+      if s.scroll_snap_type.axis != ScrollSnapAxis::None {
+        Some(ScrollChainSnapInfo { container: node, origin })
+      } else {
+        None
+      }
+    });
+
+    let is_scroll_container = treat_as_root
+      || matches!(overflow_x, Overflow::Auto | Overflow::Scroll)
+      || matches!(overflow_y, Overflow::Auto | Overflow::Scroll)
+      || snap.is_some();
+
+    if !is_scroll_container {
+      return None;
+    }
+
+    let bounds = scroll_bounds_for_fragment(node, origin, viewport);
+    Some(Self {
+      container: node,
+      origin,
+      viewport,
+      bounds,
+      scroll: Point::ZERO,
+      overscroll_behavior_x,
+      overscroll_behavior_y,
+      snap,
+    })
+  }
+}
+
+pub fn build_scroll_chain<'a>(
+  root: &'a FragmentNode,
+  viewport: Size,
+  path: &[usize],
+) -> Vec<ScrollChainState<'a>> {
+  let mut stack: Vec<(&FragmentNode, Point, Size, bool)> = Vec::new();
+  let mut current = root;
+  let mut origin = Point::new(root.bounds.x(), root.bounds.y());
+  let mut current_viewport = viewport;
+  stack.push((current, origin, current_viewport, true));
+
+  for &idx in path {
+    if let Some(child) = current.children.get(idx) {
+      origin = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
+      current_viewport = child.bounds.size;
+      stack.push((child, origin, current_viewport, false));
+      current = child;
+    } else {
+      break;
+    }
+  }
+
+  let mut out = Vec::new();
+  for (node, origin, viewport, is_root) in stack.into_iter().rev() {
+    if let Some(state) = ScrollChainState::from_fragment(node, origin, viewport, is_root) {
+      out.push(state);
+    }
+  }
+
+  out
+}
+
+#[derive(Debug, Clone)]
+pub struct ScrollChainResult {
+  pub remaining: Point,
+  pub overscroll: Vec<Point>,
+}
+
+fn apply_scroll_to_state(
+  state: &mut ScrollChainState,
+  delta: Point,
+  options: ScrollOptions,
+) -> (Point, Point) {
+  let target_x = state.scroll.x + delta.x;
+  let target_y = state.scroll.y + delta.y;
+
+  let clamped_x = target_x.clamp(state.bounds.min_x, state.bounds.max_x);
+  let clamped_y = target_y.clamp(state.bounds.min_y, state.bounds.max_y);
+
+  state.scroll = Point::new(clamped_x, clamped_y);
+
+  let overshoot_x = target_x - clamped_x;
+  let overshoot_y = target_y - clamped_y;
+
+  let propagate_x = matches!(options.source, ScrollSource::User)
+    && matches!(state.overscroll_behavior_x, OverscrollBehavior::Auto);
+  let propagate_y = matches!(options.source, ScrollSource::User)
+    && matches!(state.overscroll_behavior_y, OverscrollBehavior::Auto);
+
+  let overscroll_x = if options.simulate_overscroll
+    && !matches!(state.overscroll_behavior_x, OverscrollBehavior::None)
+  {
+    overshoot_x
+  } else {
+    0.0
+  };
+
+  let overscroll_y = if options.simulate_overscroll
+    && !matches!(state.overscroll_behavior_y, OverscrollBehavior::None)
+  {
+    overshoot_y
+  } else {
+    0.0
+  };
+
+  (
+    Point::new(
+      if propagate_x { overshoot_x } else { 0.0 },
+      if propagate_y { overshoot_y } else { 0.0 },
+    ),
+    Point::new(overscroll_x, overscroll_y),
+  )
+}
+
+pub fn apply_scroll_chain(
+  states: &mut [ScrollChainState],
+  delta: Point,
+  options: ScrollOptions,
+) -> ScrollChainResult {
+  let mut overscroll = Vec::with_capacity(states.len());
+  let mut remaining = delta;
+
+  for state in states.iter_mut() {
+    let (leftover, over) = apply_scroll_to_state(state, remaining, options);
+    remaining = leftover;
+
+    if let Some(snap) = state.snap.as_ref() {
+      if let Some(style) = snap.container.style.as_ref() {
+        state.scroll = apply_scroll_snap_for_container(
+          snap.container,
+          style,
+          state.viewport,
+          state.scroll,
+          snap.origin,
+        );
+      }
+    }
+
+    state.scroll = state.bounds.clamp(state.scroll);
+    overscroll.push(over);
+  }
+
+  ScrollChainResult { remaining, overscroll }
+}
+
+fn apply_scroll_snap_for_container(
+  container: &FragmentNode,
+  style: &ComputedStyle,
+  viewport: Size,
+  scroll: Point,
+  container_origin: Point,
+) -> Point {
+  let scroll_bounds = scroll_bounds_for_fragment(container, container_origin, viewport);
+  if style.scroll_snap_type.axis == ScrollSnapAxis::None {
+    return scroll_bounds.clamp(scroll);
+  }
+
+  let inline_vertical = is_vertical_writing_mode(style.writing_mode);
+  let (snap_x, snap_y) = snap_axis_flags(style.scroll_snap_type.axis, inline_vertical);
+  if !snap_x && !snap_y {
+    return scroll;
+  }
+
+  let padding_x = (
+    resolve_snap_length(style.scroll_padding_left, viewport.width).max(0.0),
+    resolve_snap_length(style.scroll_padding_right, viewport.width).max(0.0),
+  );
+  let padding_y = (
+    resolve_snap_length(style.scroll_padding_top, viewport.height).max(0.0),
+    resolve_snap_length(style.scroll_padding_bottom, viewport.height).max(0.0),
+  );
+  let mut targets_x = Vec::new();
+  let mut targets_y = Vec::new();
+  let mut snap_bounds = SnapBounds::default();
+  let container_offset = Point::new(-container_origin.x, -container_origin.y);
+  collect_snap_targets(
+    container,
+    container_offset,
+    inline_vertical,
+    snap_x,
+    snap_y,
+    viewport,
+    padding_x,
+    padding_y,
+    &mut snap_bounds,
+    &mut targets_x,
+    &mut targets_y,
+  );
+
+  if let Some(max_target_x) = targets_x
+    .iter()
+    .map(|(p, _)| *p)
+    .max_by(|a, b| a.partial_cmp(b).unwrap())
+  {
+    snap_bounds.max_x = snap_bounds.max_x.max(max_target_x + viewport.width);
+  }
+  if let Some(max_target_y) = targets_y
+    .iter()
+    .map(|(p, _)| *p)
+    .max_by(|a, b| a.partial_cmp(b).unwrap())
+  {
+    snap_bounds.max_y = snap_bounds.max_y.max(max_target_y + viewport.height);
+  }
+
+  let min_target_x = targets_x
+    .iter()
+    .map(|(p, _)| *p)
+    .min_by(|a, b| a.partial_cmp(b).unwrap())
+    .unwrap_or(0.0);
+  let min_target_y = targets_y
+    .iter()
+    .map(|(p, _)| *p)
+    .min_by(|a, b| a.partial_cmp(b).unwrap())
+    .unwrap_or(0.0);
+  if min_target_x > 0.0 {
+    for (p, _) in &mut targets_x {
+      *p -= min_target_x;
+    }
+    snap_bounds.max_x = (snap_bounds.max_x - min_target_x).max(0.0);
+  }
+  if min_target_y > 0.0 {
+    for (p, _) in &mut targets_y {
+      *p -= min_target_y;
+    }
+    snap_bounds.max_y = (snap_bounds.max_y - min_target_y).max(0.0);
+  }
+
+  let container_rect = Rect::from_xywh(
+    container.bounds.x() + container_offset.x,
+    container.bounds.y() + container_offset.y,
+    container.bounds.width(),
+    container.bounds.height(),
+  );
+  snap_bounds.update(container_rect);
+
+  let max_scroll_x = (snap_bounds.max_x - viewport.width).max(0.0);
+  let max_scroll_y = (snap_bounds.max_y - viewport.height).max(0.0);
+  let strictness = style.scroll_snap_type.strictness;
+  let shift_x = if min_target_x > 0.0 { min_target_x } else { 0.0 };
+  let shift_y = if min_target_y > 0.0 { min_target_y } else { 0.0 };
+
+  let snapped_x = if snap_x {
+    pick_snap_target(
+      scroll.x - shift_x,
+      max_scroll_x,
+      strictness,
+      viewport.width * 0.5,
+      &targets_x,
+    ) + shift_x
+  } else {
+    scroll.x
+  };
+  let snapped_y = if snap_y {
+    pick_snap_target(
+      scroll.y - shift_y,
+      max_scroll_y,
+      strictness,
+      viewport.height * 0.5,
+      &targets_y,
+    ) + shift_y
+  } else {
+    scroll.y
+  };
+
+  scroll_bounds.clamp(Point::new(snapped_x, snapped_y))
+}
+
+#[derive(Default, Debug)]
+pub struct SnapBounds {
+  pub max_x: f32,
+  pub max_y: f32,
+}
+
+impl SnapBounds {
+  pub fn update(&mut self, rect: Rect) {
+    self.max_x = self.max_x.max(rect.max_x());
+    self.max_y = self.max_y.max(rect.max_y());
+  }
+}
+
+pub(crate) fn collect_snap_targets(
+  node: &FragmentNode,
+  offset: Point,
+  inline_vertical: bool,
+  snap_x: bool,
+  snap_y: bool,
+  viewport: Size,
+  padding_x: (f32, f32),
+  padding_y: (f32, f32),
+  bounds: &mut SnapBounds,
+  targets_x: &mut Vec<(f32, ScrollSnapStop)>,
+  targets_y: &mut Vec<(f32, ScrollSnapStop)>,
+) {
+  let abs_bounds = Rect::from_xywh(
+    node.bounds.x() + offset.x,
+    node.bounds.y() + offset.y,
+    node.bounds.width(),
+    node.bounds.height(),
+  );
+  bounds.update(abs_bounds);
+
+  if let Some(style) = node.style.as_ref() {
+    if snap_x {
+      let margin_start = resolve_snap_length(style.scroll_margin_left, viewport.width);
+      let margin_end = resolve_snap_length(style.scroll_margin_right, viewport.width);
+      let (padding_start, padding_end) = padding_x;
+      let align_x = if inline_vertical {
+        style.scroll_snap_align.block
+      } else {
+        style.scroll_snap_align.inline
+      };
+      if let Some(pos) = snap_position(
+        align_x,
+        abs_bounds.x(),
+        abs_bounds.width(),
+        viewport.width,
+        padding_start,
+        padding_end,
+        margin_start,
+        margin_end,
+      ) {
+        targets_x.push((pos, style.scroll_snap_stop));
+      }
+    }
+    if snap_y {
+      let margin_start = resolve_snap_length(style.scroll_margin_top, viewport.height);
+      let margin_end = resolve_snap_length(style.scroll_margin_bottom, viewport.height);
+      let (padding_start, padding_end) = padding_y;
+      let align_y = if inline_vertical {
+        style.scroll_snap_align.inline
+      } else {
+        style.scroll_snap_align.block
+      };
+      if let Some(pos) = snap_position(
+        align_y,
+        abs_bounds.y(),
+        abs_bounds.height(),
+        viewport.height,
+        padding_start,
+        padding_end,
+        margin_start,
+        margin_end,
+      ) {
+        targets_y.push((pos, style.scroll_snap_stop));
+      }
+    }
+  }
+
+  let child_offset = Point::new(abs_bounds.x(), abs_bounds.y());
+  for child in &node.children {
+    collect_snap_targets(
+      child,
+      child_offset,
+      inline_vertical,
+      snap_x,
+      snap_y,
+      viewport,
+      padding_x,
+      padding_y,
+      bounds,
+      targets_x,
+      targets_y,
+    );
+  }
+}
+
+pub(crate) fn find_snap_container<'a>(
+  node: &'a FragmentNode,
+  origin: Point,
+) -> Option<(&'a FragmentNode, &'a ComputedStyle, Point)> {
+  if let Some(style) = node.style.as_ref() {
+    if style.scroll_snap_type.axis != ScrollSnapAxis::None {
+      return Some((node, style, origin));
+    }
+  }
+
+  for child in &node.children {
+    let child_origin = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
+    if let Some(found) = find_snap_container(child, child_origin) {
+      return Some(found);
+    }
+  }
+
+  None
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -820,5 +1350,153 @@ mod tests {
     let state = ScrollState::with_viewport(Point::new(70.0, 0.0));
     let snapped = apply_scroll_snap(&mut tree, &state);
     assert!((snapped.state.viewport.x - 60.0).abs() < 0.1);
+  }
+
+  fn make_vertical_nested(inner_behavior: OverscrollBehavior) -> FragmentNode {
+    let mut inner_style = ComputedStyle::default();
+    inner_style.overflow_y = Overflow::Scroll;
+    inner_style.overscroll_behavior_y = inner_behavior;
+
+    let inner_child = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 300.0), vec![]);
+    let inner = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![inner_child],
+      Arc::new(inner_style),
+    );
+
+    let mut outer_style = ComputedStyle::default();
+    outer_style.overflow_y = Overflow::Scroll;
+
+    let trailing = FragmentNode::new_block(Rect::from_xywh(0.0, 250.0, 100.0, 150.0), vec![]);
+    FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![inner, trailing],
+      Arc::new(outer_style),
+    )
+  }
+
+  #[test]
+  fn overscroll_contain_blocks_chaining() {
+    let outer = make_vertical_nested(OverscrollBehavior::Contain);
+    let mut chain = build_scroll_chain(&outer, Size::new(100.0, 100.0), &[0]);
+    let result = apply_scroll_chain(&mut chain, Point::new(0.0, 400.0), ScrollOptions::default());
+
+    assert_eq!(chain.len(), 2, "inner and outer should both participate");
+    assert!((chain[0].scroll.y - 200.0).abs() < 1e-3, "inner should clamp to max");
+    assert!(chain[1].scroll.y.abs() < 1e-3, "outer should not chain past contain");
+    assert!(result.remaining.y.abs() < 1e-3, "no scroll should leak past outer");
+  }
+
+  #[test]
+  fn overscroll_auto_chains_to_parent() {
+    let outer = make_vertical_nested(OverscrollBehavior::Auto);
+    let mut chain = build_scroll_chain(&outer, Size::new(100.0, 100.0), &[0]);
+    let result = apply_scroll_chain(&mut chain, Point::new(0.0, 400.0), ScrollOptions::default());
+
+    assert!((chain[0].scroll.y - 200.0).abs() < 1e-3, "inner should still clamp");
+    assert!(chain[1].scroll.y > 0.0, "outer should receive chained delta");
+    assert!(result.remaining.y.abs() < 1e-3, "all scroll should be consumed");
+  }
+
+  #[test]
+  fn overscroll_none_suppresses_indicator() {
+    let outer = make_vertical_nested(OverscrollBehavior::None);
+    let mut chain = build_scroll_chain(&outer, Size::new(100.0, 100.0), &[0]);
+    let mut options = ScrollOptions::default();
+    options.simulate_overscroll = true;
+    let result = apply_scroll_chain(&mut chain, Point::new(0.0, 300.0), options);
+
+    assert!(result.overscroll[0].y.abs() < 1e-3, "overscroll glow should be suppressed");
+    assert!(chain[1].scroll.y.abs() < 1e-3, "outer should not chain when none is set");
+  }
+
+  #[test]
+  fn horizontal_contain_respects_rtl_and_vertical_writing() {
+    let mut inner_style = ComputedStyle::default();
+    inner_style.overflow_x = Overflow::Scroll;
+    inner_style.overscroll_behavior_x = OverscrollBehavior::Contain;
+    inner_style.writing_mode = WritingMode::VerticalRl;
+
+    let inner_child = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 300.0, 100.0), vec![]);
+    let inner = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![inner_child],
+      Arc::new(inner_style),
+    );
+
+    let mut outer_style = ComputedStyle::default();
+    outer_style.overflow_x = Overflow::Scroll;
+    outer_style.direction = Direction::Rtl;
+
+    let sibling = FragmentNode::new_block(Rect::from_xywh(220.0, 0.0, 200.0, 100.0), vec![]);
+    let outer = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![inner, sibling],
+      Arc::new(outer_style),
+    );
+
+    let mut chain = build_scroll_chain(&outer, Size::new(100.0, 100.0), &[0]);
+    let result = apply_scroll_chain(&mut chain, Point::new(400.0, 0.0), ScrollOptions::default());
+
+    assert!((chain[0].scroll.x - 200.0).abs() < 1e-3, "inner should clamp on x");
+    assert!(chain[1].scroll.x.abs() < 1e-3, "outer should not receive chained x scroll");
+    assert!(result.remaining.x.abs() < 1e-3, "scroll should stop at contained edge");
+  }
+
+  #[test]
+  fn chained_scroll_still_snaps_outer_container() {
+    let mut inner_style = ComputedStyle::default();
+    inner_style.overflow_y = Overflow::Scroll;
+    inner_style.scroll_snap_align.block = ScrollSnapAlign::Start;
+    inner_style.scroll_snap_align.inline = ScrollSnapAlign::Start;
+
+    let inner_child = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 120.0), vec![]);
+    let inner = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![inner_child],
+      Arc::new(inner_style),
+    );
+
+    let mut snap_child_style = ComputedStyle::default();
+    snap_child_style.scroll_snap_align.block = ScrollSnapAlign::Start;
+    snap_child_style.scroll_snap_align.inline = ScrollSnapAlign::Start;
+
+    let second = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 200.0, 100.0, 200.0),
+      vec![],
+      Arc::new(snap_child_style.clone()),
+    );
+
+    let mut outer_style = ComputedStyle::default();
+    outer_style.overflow_y = Overflow::Scroll;
+    outer_style.scroll_snap_type.axis = ScrollSnapAxis::Y;
+    outer_style.scroll_snap_type.strictness = ScrollSnapStrictness::Mandatory;
+
+    let outer = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![
+        FragmentNode::new_block_styled(
+          Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+          vec![FragmentNode::new_block(
+            Rect::from_xywh(0.0, 0.0, 100.0, 120.0),
+            vec![],
+          )],
+          Arc::new(ComputedStyle {
+            scroll_snap_align: snap_child_style.scroll_snap_align,
+            overflow_y: Overflow::Scroll,
+            ..ComputedStyle::default()
+          }),
+        ),
+        inner,
+        second,
+      ],
+      Arc::new(outer_style),
+    );
+
+    let mut chain = build_scroll_chain(&outer, Size::new(100.0, 100.0), &[1]);
+    let result = apply_scroll_chain(&mut chain, Point::new(0.0, 180.0), ScrollOptions::default());
+
+    assert!(result.remaining.y.abs() < 1e-3);
+    assert!((chain[1].scroll.y - 200.0).abs() < 1e-2, "outer should snap to next item");
   }
 }

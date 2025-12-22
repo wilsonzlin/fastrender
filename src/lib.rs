@@ -167,7 +167,6 @@
 pub mod api;
 pub mod error;
 pub mod geometry;
-pub mod scroll;
 
 // ============================================================================
 // Pipeline Modules
@@ -176,6 +175,7 @@ pub mod scroll;
 pub mod accessibility;
 pub mod layout;
 pub mod paint;
+pub mod scroll;
 pub mod style;
 pub mod text;
 pub mod tree;

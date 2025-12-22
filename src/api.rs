@@ -3354,6 +3354,12 @@ fn build_styled_lookup<'a>(styled: &'a StyledNode, out: &mut HashMap<usize, *con
   }
 }
 
+pub(crate) use crate::scroll::apply_scroll_snap;
+#[cfg(test)]
+pub(crate) use crate::scroll::{
+  collect_snap_targets, find_snap_container, is_vertical_writing_mode, pick_snap_target,
+  snap_axis_flags, SnapBounds,
+};
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -3367,6 +3373,11 @@ mod tests {
     ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, WritingMode,
   };
   use crate::style::types::ImageResolution;
+  use crate::style::types::ScrollSnapAlign;
+  use crate::style::types::ScrollSnapAxis;
+  use crate::style::types::ScrollSnapStop;
+  use crate::style::types::ScrollSnapStrictness;
+  use crate::style::types::WritingMode;
   use crate::text::pipeline::ShapingPipeline;
   use crate::tree::fragment_tree::FragmentContent;
   use crate::tree::fragment_tree::FragmentTree;
