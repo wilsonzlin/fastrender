@@ -506,6 +506,7 @@ fn main() {
               .fetcher(fetcher as Arc<dyn ResourceFetcher>)
               .base_url(resource_base.clone())
               .device_pixel_ratio(device_pixel_ratio)
+              .apply_meta_viewport(true)
               .build()
               .expect("create renderer");
             renderer.render_to_png_with_scroll(

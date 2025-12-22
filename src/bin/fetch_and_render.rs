@@ -1116,6 +1116,7 @@ fn render_once(
 
   let mut renderer = FastRender::builder()
     .device_pixel_ratio(dpr)
+    .apply_meta_viewport(true)
     .fetcher(Arc::new(http_fetcher) as Arc<dyn ResourceFetcher>)
     .build()?;
   renderer.set_base_url(resource_base.clone());
