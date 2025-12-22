@@ -65,6 +65,13 @@ fn absolutize_rewrites_inside_parenthesized_blocks() {
 }
 
 #[test]
+fn absolutize_escapes_quotes_and_backslashes() {
+  let css = r#"div { background: url("images/sp\"ace\\ path.png"); }"#;
+  let out = absolutize_css_urls(css, "https://example.com/css/main.css");
+  assert!(out.contains("url(\"https://example.com/css/images/sp\\\"ace\\\\ path.png\")"));
+}
+
+#[test]
 fn absolutize_rewrites_protocol_relative_urls() {
   let css = "body { background-image: url(//cdn.example.com/bg.png); }";
   let out = absolutize_css_urls(css, "https://example.com/a.css");
