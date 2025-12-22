@@ -1649,36 +1649,23 @@ impl BlockFormattingContext {
         );
         let mut fragment = child_bfc.layout(child, &child_constraints)?;
 
-        let margin_top = child
-          .style
-          .margin_top
-          .as_ref()
-          .map(|l| {
-            resolve_length_for_width(
-              *l,
-              containing_width,
-              &child.style,
-              &self.font_context,
-              self.viewport_size,
-            )
-          })
-          .unwrap_or(0.0)
-          .max(0.0);
-        let margin_bottom = child
-          .style
-          .margin_bottom
-          .as_ref()
-          .map(|l| {
-            resolve_length_for_width(
-              *l,
-              containing_width,
-              &child.style,
-              &self.font_context,
-              self.viewport_size,
-            )
-          })
-          .unwrap_or(0.0)
-          .max(0.0);
+        let block_sides = block_axis_sides(&child.style);
+        let margin_top = resolve_margin_side(
+          &child.style,
+          block_sides.0,
+          containing_width,
+          &self.font_context,
+          self.viewport_size,
+        )
+        .max(0.0);
+        let margin_bottom = resolve_margin_side(
+          &child.style,
+          block_sides.1,
+          containing_width,
+          &self.font_context,
+          self.viewport_size,
+        )
+        .max(0.0);
         let box_width = used_border_box;
         let float_height = margin_top + fragment.bounds.height() + margin_bottom;
 
