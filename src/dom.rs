@@ -433,12 +433,16 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
   } = &node.data
   {
     if name.local.as_ref().eq_ignore_ascii_case("template") {
-      template_contents
-        .children
-        .borrow()
-        .iter()
-        .map(convert_handle_to_node)
-        .collect()
+      let borrowed = template_contents.borrow();
+      match &*borrowed {
+        Some(content) => content
+          .children
+          .borrow()
+          .iter()
+          .map(convert_handle_to_node)
+          .collect(),
+        None => Vec::new(),
+      }
     } else {
       node
         .children

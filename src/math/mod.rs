@@ -186,6 +186,16 @@ fn mathvariant_flags(node: &DomNode, default_italic: bool, default_bold: bool) -
   }
 }
 
+fn wrap_row_or_single(mut children: Vec<MathNode>) -> Option<MathNode> {
+  if children.is_empty() {
+    None
+  } else if children.len() == 1 {
+    Some(children.remove(0))
+  } else {
+    Some(MathNode::Row(children))
+  }
+}
+
 fn parse_children(node: &DomNode) -> Vec<MathNode> {
   node.children.iter().filter_map(parse_mathml).collect()
 }
@@ -222,6 +232,9 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
           bold: false,
         })
       }
+    }
+    DomNodeType::Slot { .. } | DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
+      wrap_row_or_single(parse_children(node))
     }
     DomNodeType::Element {
       tag_name,
