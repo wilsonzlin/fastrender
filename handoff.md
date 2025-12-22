@@ -10,8 +10,12 @@
 - Added parsing/matching for `:has()` using relative selectors with proper specificity and `:scope` anchoring, plus traversal support for relative combinators and feature-query reporting. Regression coverage includes combinators, `:is`/`:not` interactions, and specificity.
 - Expanded scrolling: post-layout scroll snap metadata with viewport/element offsets and snap-stop tie-breaking, plus a scroll chaining model honoring `overscroll-behavior`, clamping to bounds even without snap containers, and applying snap targets during chaining.
 - Added mask-layer parsing/rendering and display-list mask application (alpha/luminance from gradients/painted images), alongside manual HSL/HSV/OKLCH/plus-darker blending, backdrop-filter isolation, and background-blend fixes across painter/display list. Inline SVG rendering now serializes styled subtrees with document `<style>` CSS, applies computed fonts/colors to roots, provides a foreignObject fallback, and covers masks/gradients/tests.
-- Introduced scroll/view timeline animations: parsed timeline/animation-range properties, keyframe collection, timeline progress evaluation, and runtime sampling (opacity) before painting, with integration tests for scroll/view phases and sampling.
 - Expanded CSS math support: trig/exponential/log/round/mod/rem/clamped functions, shared angle parsing for calc/math across properties/gradients/transforms, and stricter unit validation.
+- Added shape-outside image/gradient support for float contours with extensive layout regressions.
+- Improved ::first-letter/::first-line handling with RTL-aware punctuation/graphemes, inline float handling, and cascade filtering plus tests.
+- Implemented MathML parsing/layout/paint pipeline with rendering regressions.
+- Implemented CSS ruby layout/spacing with regression coverage.
+- Improved subgrid style plumbing, taffy grid cloning, and added subgrid regression tests.
 
 ## Commits
 
@@ -28,12 +32,16 @@
 - `ab5fc0a`, `4602f39`, `dcbb68b` (inline SVG serialization/tests)
 - `b10cb6f`, `c49323b`, `589273b` (CSS math/trig functions and coverage)
 - `9ad0e6e`, `36a7689`, `b0983da`, `4ebc08c` (mask layers, display list masks, notes/tests)
-- `4de4b58`, `c1841c3`, `4a8078d`, `213d7af`, `43e0dc3`, `9615b63`, `032ab0a` (timeline parsing, animation runtime, render tests)
+- `bf8a1f5` (shape-outside images/gradients and tests)
+- `f84d085`, `31d74c5`, `52ace09`, `221fe1e` (first-letter/first-line handling and tests)
+- `adf2356`, `c4d899f`, `e9d5de9` (MathML parsing/layout/paint)
+- `aefb736` (CSS ruby layout/spacing)
+- `5a12b39`, `5e8bf8e` (subgrid plumbing and tests)
 - `a9b5431`, `db17be3`, `82fb7b7`, `8ecd045` (paged media parsing/pagination/tests)
 
 ## Testing
 
-- Not run here (workers ran `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, `cargo test accessibility_`, `cargo test font_loader -- --nocapture`, `cargo test media_level5_features_evaluate -- --nocapture`, `cargo test extract_css_links_skips_print_only_for_screen -- --nocapture`, `cargo test has_selector_test -- --nocapture`, `cargo test supports_selector_test -- --nocapture`, `cargo test scroll_snap -- --nocapture`, `cargo test scroll -- --nocapture`, `cargo test inline_svg`, blend regressions (`backdrop_filter_isolates_blend_mode`, `stacking_context_hsl_blend_preserves_backdrop_luminance`, `background_blend_mode_combines_multiple_layers`, `plus_darker_blend_clamps_to_black`, `hue_hsv_blend_mode_uses_source_hue`, `color_oklch_blend_uses_source_chroma_and_hue`), `cargo test --test animation_tests`, `cargo test border_image_accepts_conic_gradients`, `cargo test mask_image_gradient_repeats`, `cargo test display_list_renderer -- --nocapture`, `cargo test trig_and_math_functions_resolve_for_numbers`, and paged media layout tests.)
+- Not run here (workers ran relevant suites incl. `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, `cargo test accessibility_`, `cargo test font_loader -- --nocapture`, `cargo test media_level5_features_evaluate -- --nocapture`, `cargo test extract_css_links_skips_print_only_for_screen -- --nocapture`, `cargo test has_selector_test -- --nocapture`, `cargo test supports_selector_test -- --nocapture`, `cargo test scroll_snap -- --nocapture`, `cargo test scroll -- --nocapture`, `cargo test inline_svg`, blend regressions (`backdrop_filter_isolates_blend_mode`, `stacking_context_hsl_blend_preserves_backdrop_luminance`, `background_blend_mode_combines_multiple_layers`, `plus_darker_blend_clamps_to_black`, `hue_hsv_blend_mode_uses_source_hue`, `color_oklch_blend_uses_source_chroma_and_hue`), `cargo test border_image_accepts_conic_gradients`, `cargo test mask_image_gradient_repeats`, `cargo test display_list_renderer -- --nocapture`, `cargo test trig_and_math_functions_resolve_for_numbers`, paged media layout tests, `cargo test shape_outside -- --nocapture`, `cargo test first_letter_and_first_line_styles_apply_to_fragments --quiet` plus related first-letter/first-line tests, `cargo test --test paint_tests math_render -- --test-threads=1 --nocapture`, and `cargo test --test layout_tests` for ruby.)
 
 ## Notes / Caveats
 
@@ -44,6 +52,6 @@
 - Font-display timing constants are shortened for tests (block/auto ~300ms; fallback block 100ms + 400ms swap; optional 100ms). Block/auto wait only through the block window, loads continue asynchronously, and initial shaping may use fallbacks until web fonts finish loading.
 - Scroll snapping requires providing element offsets in `ScrollState.elements`; `ScrollSnapResult.updates` lists per-container behavior. Scroll chaining processes innermost→outermost containers, honors `overscroll-behavior`, clamps to bounds, and applies snap targets during chaining.
 - Display-list masks currently handle gradient-generated sources; URL mask images remain unhandled on the display-list path.
-- Animations currently sample opacity only; scroll timelines use viewport scroll offsets (nested container scroll positions not yet wired).
+- Animations/selection/cursor motion path updates from pending workers are not integrated (workers 21, 29, 30, 32, 4, 7, 3 not merged).
 - CSS math: trig/inverse trig expect angle inputs; nonlinear math on lengths requires simple single-unit lengths (unit-mismatched expressions error).
 - Inline SVG serialization inlines only document `<style>` CSS (no external/imported sheets), applies computed fonts/colors to the root, and falls back to painting foreignObject children when unsupported.
