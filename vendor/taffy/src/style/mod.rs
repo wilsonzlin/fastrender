@@ -485,6 +485,18 @@ pub struct Style<S: CheapCloneStr = DefaultCheapStr> {
     /// Defines the track sizing functions (widths) of the grid columns
     #[cfg(feature = "grid")]
     pub grid_template_columns: GridTrackVec<GridTemplateComponent<S>>,
+    /// Whether the row axis is a subgrid of the parent grid
+    #[cfg(feature = "grid")]
+    pub subgrid_rows: bool,
+    /// Whether the column axis is a subgrid of the parent grid
+    #[cfg(feature = "grid")]
+    pub subgrid_columns: bool,
+    /// Line names supplied on a row subgrid
+    #[cfg(feature = "grid")]
+    pub subgrid_row_names: GridTrackVec<GridTrackVec<S>>,
+    /// Line names supplied on a column subgrid
+    #[cfg(feature = "grid")]
+    pub subgrid_column_names: GridTrackVec<GridTrackVec<S>>,
     /// Defines the size of implicitly created rows
     #[cfg(feature = "grid")]
     pub grid_auto_rows: GridTrackVec<TrackSizingFunction>,
@@ -571,6 +583,14 @@ impl<S: CheapCloneStr> Style<S> {
         grid_template_rows: GridTrackVec::new(),
         #[cfg(feature = "grid")]
         grid_template_columns: GridTrackVec::new(),
+        #[cfg(feature = "grid")]
+        subgrid_rows: false,
+        #[cfg(feature = "grid")]
+        subgrid_columns: false,
+        #[cfg(feature = "grid")]
+        subgrid_row_names: GridTrackVec::new(),
+        #[cfg(feature = "grid")]
+        subgrid_column_names: GridTrackVec::new(),
         #[cfg(feature = "grid")]
         grid_template_areas: GridTrackVec::new(),
         #[cfg(feature = "grid")]
@@ -953,6 +973,34 @@ impl<S: CheapCloneStr> GridContainerStyle for Style<S> {
     fn grid_template_row_names(&self) -> Option<Self::TemplateLineNames<'_>> {
         Some(self.grid_template_row_names.iter().map(|names| names.iter()))
     }
+
+    #[inline(always)]
+    fn is_row_subgrid(&self) -> bool {
+        self.subgrid_rows
+    }
+
+    #[inline(always)]
+    fn is_column_subgrid(&self) -> bool {
+        self.subgrid_columns
+    }
+
+    #[inline(always)]
+    fn subgrid_row_names(&self) -> Option<Self::TemplateLineNames<'_>> {
+        if self.subgrid_row_names.is_empty() {
+            None
+        } else {
+            Some(self.subgrid_row_names.iter().map(|names| names.iter()))
+        }
+    }
+
+    #[inline(always)]
+    fn subgrid_column_names(&self) -> Option<Self::TemplateLineNames<'_>> {
+        if self.subgrid_column_names.is_empty() {
+            None
+        } else {
+            Some(self.subgrid_column_names.iter().map(|names| names.iter()))
+        }
+    }
 }
 
 #[cfg(feature = "grid")]
@@ -1014,6 +1062,25 @@ impl<T: GridContainerStyle> GridContainerStyle for &'_ T {
     #[inline(always)]
     fn grid_template_row_names(&self) -> Option<Self::TemplateLineNames<'_>> {
         (*self).grid_template_row_names()
+    }
+    #[inline(always)]
+    fn is_row_subgrid(&self) -> bool {
+        (*self).is_row_subgrid()
+    }
+
+    #[inline(always)]
+    fn is_column_subgrid(&self) -> bool {
+        (*self).is_column_subgrid()
+    }
+
+    #[inline(always)]
+    fn subgrid_row_names(&self) -> Option<Self::TemplateLineNames<'_>> {
+        (*self).subgrid_row_names()
+    }
+
+    #[inline(always)]
+    fn subgrid_column_names(&self) -> Option<Self::TemplateLineNames<'_>> {
+        (*self).subgrid_column_names()
     }
     #[inline(always)]
     fn grid_auto_flow(&self) -> GridAutoFlow {

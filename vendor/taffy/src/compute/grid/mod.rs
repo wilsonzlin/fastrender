@@ -2,16 +2,17 @@
 //! <https://www.w3.org/TR/css-grid-1>
 use crate::geometry::{AbsoluteAxis, AbstractAxis, InBothAbsAxis};
 use crate::geometry::{Line, Point, Rect, Size};
-use crate::style::{AlignItems, AlignSelf, AvailableSpace, Overflow, Position};
+use crate::style::{AlignItems, AlignSelf, AvailableSpace, GridTemplateComponent, LengthPercentage, Overflow, Position};
 use crate::tree::{Layout, LayoutInput, LayoutOutput, LayoutPartialTreeExt, NodeId, RunMode, SizingMode};
 use crate::util::debug::debug_log;
-use crate::util::sys::{f32_max, GridTrackVec, Vec};
+use crate::util::sys::{f32_max, GridTrackVec, Map, Vec};
 use crate::util::MaybeMath;
 use crate::util::{MaybeResolve, ResolveOrZero};
 use crate::{
     style_helpers::*, AlignContent, BoxGenerationMode, BoxSizing, CoreStyle, GridContainerStyle, GridItemStyle,
-    JustifyContent, LayoutGridContainer,
+    JustifyContent, LayoutGridContainer, Style, TrackSizingFunction,
 };
+use crate::{sys::DefaultCheapStr, tree::LayoutPartialTree};
 use alignment::{align_and_position_item, align_tracks};
 use explicit_grid::{compute_explicit_grid_size_in_axis, initialize_grid_tracks, AutoRepeatStrategy};
 use implicit_grid::compute_grid_size_estimate;
@@ -19,10 +20,327 @@ use placement::place_grid_items;
 use track_sizing::{
     determine_if_item_crosses_flexible_or_intrinsic_tracks, resolve_item_track_indexes, track_sizing_algorithm,
 };
-use types::{CellOccupancyMatrix, GridTrack, NamedLineResolver};
+use types::{CellOccupancyMatrix, GridItem, GridTrack, GridTrackKind, NamedLineResolver, TrackCounts};
+
+thread_local! {
+    static SUBGRID_OVERRIDES: std::cell::RefCell<Map<NodeId, SubgridOverride>> =
+        std::cell::RefCell::new(Map::new());
+}
+
+type Ident = DefaultCheapStr;
+
+#[derive(Clone, Debug)]
+struct SubgridAxisOverride {
+    track_sizes: Vec<f32>,
+    line_names: Vec<Vec<Ident>>, // Always using owned identifiers for line names
+    gap: f32,
+}
+
+#[derive(Clone, Debug)]
+struct SubgridOverride {
+    rows: Option<SubgridAxisOverride>,
+    columns: Option<SubgridAxisOverride>,
+}
+
+fn store_subgrid_override(node: NodeId, data: SubgridOverride) {
+    SUBGRID_OVERRIDES.with(|map| {
+        map.borrow_mut().insert(node, data);
+    });
+}
+
+fn take_subgrid_override(node: NodeId) -> Option<SubgridOverride> {
+    SUBGRID_OVERRIDES.with(|map| map.borrow_mut().remove(&node))
+}
+
+fn apply_subgrid_override(style: &mut Style, data: &SubgridOverride) {
+    if let Some(rows) = &data.rows {
+        style.subgrid_rows = true;
+        style.grid_template_rows = rows
+            .track_sizes
+            .iter()
+            .map(|size| GridTemplateComponent::Single(TrackSizingFunction::from(LengthPercentage::length(*size))))
+            .collect();
+        style.grid_template_row_names = rows.line_names.clone();
+        style.subgrid_row_names = rows.line_names.clone();
+        style.grid_auto_rows.clear();
+        style.gap.height = LengthPercentage::length(rows.gap);
+    }
+    if let Some(cols) = &data.columns {
+        style.subgrid_columns = true;
+        style.grid_template_columns = cols
+            .track_sizes
+            .iter()
+            .map(|size| GridTemplateComponent::Single(TrackSizingFunction::from(LengthPercentage::length(*size))))
+            .collect();
+        style.grid_template_column_names = cols.line_names.clone();
+        style.subgrid_column_names = cols.line_names.clone();
+        style.grid_auto_columns.clear();
+        style.gap.width = LengthPercentage::length(cols.gap);
+    }
+}
+
+fn to_ident_line_names(names: &[Vec<Ident>]) -> Vec<Vec<Ident>> {
+    names
+        .iter()
+        .map(|set| set.iter().cloned().collect())
+        .collect()
+}
+
+fn merge_line_names(base: &mut [Vec<Ident>], extra: &[Vec<Ident>]) {
+    for (i, extra_names) in extra.iter().enumerate() {
+        if let Some(target) = base.get_mut(i) {
+            target.extend(extra_names.iter().cloned());
+        }
+    }
+}
+
+fn inherited_line_names(
+    span: u16,
+    start: OriginZeroLine,
+    parent_names: &[Vec<Ident>],
+    extra: &[Vec<Ident>],
+) -> Vec<Vec<Ident>> {
+    let mut result: Vec<Vec<Ident>> = Vec::with_capacity(span as usize + 1);
+    for i in 0..=span {
+        let mut names: Vec<Ident> = Vec::new();
+        let global_index = start.0 + i as i16;
+        if global_index >= 0 {
+            if let Some(parent) = parent_names.get(global_index as usize) {
+                names.extend(parent.iter().cloned());
+            }
+        }
+        result.push(names);
+    }
+
+    merge_line_names(&mut result, extra);
+    result
+}
+
+fn collect_child_subgrid_line_names(style: &Style, rows: bool) -> Vec<Vec<Ident>> {
+    if rows {
+        to_ident_line_names(&style.subgrid_row_names)
+    } else {
+        to_ident_line_names(&style.subgrid_column_names)
+    }
+}
+
+fn collect_subgrid_virtual_items<Tree: LayoutGridContainer + LayoutPartialTree<CustomIdent = DefaultCheapStr>>(
+    tree: &mut Tree,
+    items: &[GridItem],
+    parent_style: &Style,
+    final_col_counts: TrackCounts,
+    final_row_counts: TrackCounts,
+) -> Vec<GridItem>
+{
+    let parent_row_names = to_ident_line_names(&parent_style.grid_template_row_names);
+    let parent_col_names = to_ident_line_names(&parent_style.grid_template_column_names);
+    let mut virtuals = Vec::new();
+
+    for item in items.iter() {
+        let child_style_owned = tree.clone_grid_container_style(item.node);
+        if child_style_owned.box_generation_mode() == BoxGenerationMode::None
+            || child_style_owned.position() == Position::Absolute
+        {
+            continue;
+        }
+        let child_style_ref: &Style<_> = &child_style_owned;
+        let row_subgrid = child_style_ref.is_row_subgrid();
+        let col_subgrid = child_style_ref.is_column_subgrid();
+        if !row_subgrid && !col_subgrid {
+            continue;
+        }
+
+        let row_span = item.row.span();
+        let col_span = item.column.span();
+
+        let child_row_extra = if row_subgrid {
+            collect_child_subgrid_line_names(child_style_ref, true)
+        } else {
+            Vec::new()
+        };
+        let child_col_extra = if col_subgrid {
+            collect_child_subgrid_line_names(child_style_ref, false)
+        } else {
+            Vec::new()
+        };
+
+        let row_line_names = if row_subgrid {
+            inherited_line_names(row_span, item.row.start, &parent_row_names, &child_row_extra)
+        } else {
+            to_ident_line_names(&child_style_ref.grid_template_row_names)
+        };
+        let col_line_names = if col_subgrid {
+            inherited_line_names(col_span, item.column.start, &parent_col_names, &child_col_extra)
+        } else {
+            to_ident_line_names(&child_style_ref.grid_template_column_names)
+        };
+
+        let mut row_explicit = if row_subgrid {
+            row_span
+        } else {
+            child_style_ref
+                .grid_template_rows()
+                .map(|iter| iter.count() as u16)
+                .unwrap_or(0)
+        };
+        if row_explicit == 0 {
+            row_explicit = row_line_names.len().saturating_sub(1) as u16;
+        }
+        if row_explicit == 0 {
+            row_explicit = 1;
+        }
+
+        let mut col_explicit = if col_subgrid {
+            col_span
+        } else {
+            child_style_ref
+                .grid_template_columns()
+                .map(|iter| iter.count() as u16)
+                .unwrap_or(0)
+        };
+        if col_explicit == 0 {
+            col_explicit = col_line_names.len().saturating_sub(1) as u16;
+        }
+        if col_explicit == 0 {
+            col_explicit = 1;
+        }
+
+        let line_resolver = NamedLineResolver::from_line_names(
+            row_line_names.clone(),
+            col_line_names.clone(),
+            row_explicit,
+            col_explicit,
+        );
+
+        let mut subgrid_items: Vec<GridItem> = Vec::new();
+        let row_counts = TrackCounts {
+            negative_implicit: 0,
+            explicit: row_explicit,
+            positive_implicit: 0,
+        };
+        let col_counts = TrackCounts {
+            negative_implicit: 0,
+            explicit: col_explicit,
+            positive_implicit: 0,
+        };
+        let mut cell_occupancy_matrix = CellOccupancyMatrix::with_track_counts(col_counts, row_counts);
+
+        let align_items = child_style_ref.align_items().unwrap_or(AlignItems::Stretch);
+        let justify_items = child_style_ref.justify_items().unwrap_or(AlignItems::Stretch);
+        let grid_auto_flow = child_style_ref.grid_auto_flow();
+
+        let subgrid_children_iter = || {
+            tree.child_ids(item.node)
+                .enumerate()
+                .map(|(index, child_node)| (index, child_node, tree.get_grid_child_style(child_node)))
+                .filter(|(_, _, style)| {
+                    style.box_generation_mode() != BoxGenerationMode::None && style.position() != Position::Absolute
+                })
+        };
+
+        place_grid_items(
+            &mut cell_occupancy_matrix,
+            &mut subgrid_items,
+            subgrid_children_iter,
+            grid_auto_flow,
+            align_items,
+            justify_items,
+            &line_resolver,
+        );
+
+        // Convert placements from subgrid coordinates to parent coordinates
+        for (index, mut sub_item) in subgrid_items.into_iter().enumerate() {
+            sub_item.row.start = sub_item.row.start + item.row.start;
+            sub_item.row.end = sub_item.row.end + item.row.start;
+            sub_item.column.start = sub_item.column.start + item.column.start;
+            sub_item.column.end = sub_item.column.end + item.column.start;
+            sub_item.is_virtual = true;
+            sub_item.source_order = index as u16;
+            virtuals.push(sub_item);
+        }
+    }
+
+    // Resolve track indexes for the virtual items against the parent grid counts
+    resolve_item_track_indexes(
+        &mut virtuals,
+        final_col_counts,
+        final_row_counts,
+    );
+    virtuals
+}
+
+fn record_subgrid_overrides<Tree: LayoutGridContainer + LayoutPartialTree<CustomIdent = DefaultCheapStr>>(
+    tree: &mut Tree,
+    items: &[GridItem],
+    parent_style: &Style,
+    rows: &[GridTrack],
+    columns: &[GridTrack],
+) {
+    let parent_row_names = to_ident_line_names(&parent_style.grid_template_row_names);
+    let parent_col_names = to_ident_line_names(&parent_style.grid_template_column_names);
+
+    for item in items.iter().filter(|item| !item.is_virtual) {
+        let child_style_owned = tree.clone_grid_container_style(item.node);
+        let child_style_ref: &Style<_> = &child_style_owned;
+        let row_subgrid = child_style_ref.is_row_subgrid();
+        let col_subgrid = child_style_ref.is_column_subgrid();
+        if !row_subgrid && !col_subgrid {
+            continue;
+        }
+
+        let mut rows_override = None;
+        if row_subgrid {
+            let mut track_sizes = Vec::new();
+            let mut gap = 0.0;
+            for track in rows[item.track_range_excluding_lines(AbstractAxis::Block)].iter() {
+                if track.kind == GridTrackKind::Track {
+                    track_sizes.push(track.base_size);
+                } else if gap == 0.0 {
+                    gap = track.base_size;
+                }
+            }
+            let child_extra = collect_child_subgrid_line_names(child_style_ref, true);
+            let line_names = inherited_line_names(item.row.span(), item.row.start, &parent_row_names, &child_extra);
+            rows_override = Some(SubgridAxisOverride {
+                track_sizes,
+                line_names,
+                gap,
+            });
+        }
+
+        let mut cols_override = None;
+        if col_subgrid {
+            let mut track_sizes = Vec::new();
+            let mut gap = 0.0;
+            for track in columns[item.track_range_excluding_lines(AbstractAxis::Inline)].iter() {
+                if track.kind == GridTrackKind::Track {
+                    track_sizes.push(track.base_size);
+                } else if gap == 0.0 {
+                    gap = track.base_size;
+                }
+            }
+            let child_extra = collect_child_subgrid_line_names(child_style_ref, false);
+            let line_names = inherited_line_names(item.column.span(), item.column.start, &parent_col_names, &child_extra);
+            cols_override = Some(SubgridAxisOverride {
+                track_sizes,
+                line_names,
+                gap,
+            });
+        }
+
+        if rows_override.is_some() || cols_override.is_some() {
+            store_subgrid_override(
+                item.node,
+                SubgridOverride {
+                    rows: rows_override,
+                    columns: cols_override,
+                },
+            );
+        }
+    }
+}
 
 #[cfg(feature = "detailed_layout_info")]
-use types::{GridItem, GridTrackKind, TrackCounts};
 
 pub(crate) use types::{GridCoordinate, GridLine, OriginZeroLine};
 
@@ -40,11 +358,10 @@ mod util;
 ///   - Placing items (which also resolves the implicit grid)
 ///   - Track (row/column) sizing
 ///   - Alignment & Final item placement
-pub fn compute_grid_layout<Tree: LayoutGridContainer>(
-    tree: &mut Tree,
-    node: NodeId,
-    inputs: LayoutInput,
-) -> LayoutOutput {
+pub fn compute_grid_layout<Tree>(tree: &mut Tree, node: NodeId, inputs: LayoutInput) -> LayoutOutput
+where
+    Tree: LayoutGridContainer + LayoutPartialTree<CustomIdent = DefaultCheapStr>,
+{
     let LayoutInput {
         known_dimensions,
         parent_size,
@@ -53,7 +370,11 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
         ..
     } = inputs;
 
-    let style = tree.get_grid_container_style(node);
+    let mut style_storage = tree.clone_grid_container_style(node);
+    if let Some(override_data) = take_subgrid_override(node) {
+        apply_subgrid_override(&mut style_storage, &override_data);
+    }
+    let style: &Style<_> = &style_storage;
 
     // 1. Compute "available grid space"
     // https://www.w3.org/TR/css-grid-1/#available-grid-space
@@ -240,6 +561,9 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
     let final_col_counts = *cell_occupancy_matrix.track_counts(AbsoluteAxis::Horizontal);
     let final_row_counts = *cell_occupancy_matrix.track_counts(AbsoluteAxis::Vertical);
 
+    let mut virtual_items = collect_subgrid_virtual_items(tree, &items, style, final_col_counts, final_row_counts);
+    items.append(&mut virtual_items);
+
     // 5. Initialize Tracks
     // Initialize (explicit and implicit) grid tracks (and gutters)
     // This resolves the min and max track sizing functions for all tracks and gutters
@@ -264,7 +588,7 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
     drop(grid_template_columms);
     drop(grid_auto_rows);
     drop(grid_auto_columms);
-    drop(style);
+    let _ = style;
 
     // 6. Track Sizing
 
@@ -278,7 +602,8 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
     determine_if_item_crosses_flexible_or_intrinsic_tracks(&mut items, &columns, &rows);
 
     // Determine if the grid has any baseline aligned items
-    let has_baseline_aligned_item = items.iter().any(|item| item.align_self == AlignSelf::Baseline);
+    let has_baseline_aligned_item =
+        items.iter().any(|item| !item.is_virtual && item.align_self == AlignSelf::Baseline);
 
     // Run track sizing algorithm for Inline axis
     track_sizing_algorithm(
@@ -510,6 +835,12 @@ pub fn compute_grid_layout<Tree: LayoutGridContainer>(
             );
         }
     }
+
+    // Capture subgrid overrides now that track sizes are resolved and drop virtual contributions
+    if run_mode != RunMode::ComputeSize {
+        record_subgrid_overrides(tree, &items, style, &rows, &columns);
+    }
+    items.retain(|item| !item.is_virtual);
 
     // 8. Track Alignment
 

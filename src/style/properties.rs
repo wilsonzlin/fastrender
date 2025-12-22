@@ -23,6 +23,7 @@ use crate::style::float::Float;
 use crate::style::grid::parse_grid_shorthand;
 use crate::style::grid::parse_grid_template_areas;
 use crate::style::grid::parse_grid_template_shorthand;
+use crate::style::grid::parse_subgrid_line_names;
 use crate::style::grid::parse_grid_tracks_with_names;
 use crate::style::grid::parse_track_list;
 use crate::style::grid::ParsedTracks;
@@ -2743,11 +2744,15 @@ fn apply_property_from_source(
       styles.grid_template_columns = source.grid_template_columns.clone();
       styles.grid_column_line_names = source.grid_column_line_names.clone();
       styles.grid_column_names = source.grid_column_names.clone();
+      styles.grid_column_subgrid = source.grid_column_subgrid;
+      styles.subgrid_column_line_names = source.subgrid_column_line_names.clone();
     }
     "grid-template-rows" => {
       styles.grid_template_rows = source.grid_template_rows.clone();
       styles.grid_row_line_names = source.grid_row_line_names.clone();
       styles.grid_row_names = source.grid_row_names.clone();
+      styles.grid_row_subgrid = source.grid_row_subgrid;
+      styles.subgrid_row_line_names = source.subgrid_row_line_names.clone();
     }
     "grid-template-areas" => styles.grid_template_areas = source.grid_template_areas.clone(),
     "grid-template" => {
@@ -2758,6 +2763,10 @@ fn apply_property_from_source(
       styles.grid_row_line_names = source.grid_row_line_names.clone();
       styles.grid_column_names = source.grid_column_names.clone();
       styles.grid_row_names = source.grid_row_names.clone();
+      styles.grid_column_subgrid = source.grid_column_subgrid;
+      styles.grid_row_subgrid = source.grid_row_subgrid;
+      styles.subgrid_column_line_names = source.subgrid_column_line_names.clone();
+      styles.subgrid_row_line_names = source.subgrid_row_line_names.clone();
     }
     "grid" => {
       styles.grid_template_columns = source.grid_template_columns.clone();
@@ -2773,6 +2782,10 @@ fn apply_property_from_source(
       styles.grid_row_line_names = source.grid_row_line_names.clone();
       styles.grid_column_names = source.grid_column_names.clone();
       styles.grid_row_names = source.grid_row_names.clone();
+      styles.grid_column_subgrid = source.grid_column_subgrid;
+      styles.grid_row_subgrid = source.grid_row_subgrid;
+      styles.subgrid_column_line_names = source.subgrid_column_line_names.clone();
+      styles.subgrid_row_line_names = source.subgrid_row_line_names.clone();
     }
     "grid-auto-rows" => styles.grid_auto_rows = source.grid_auto_rows.clone(),
     "grid-auto-columns" => styles.grid_auto_columns = source.grid_auto_columns.clone(),
@@ -5180,18 +5193,38 @@ pub fn apply_declaration_with_base(
     // Grid
     "grid-template-columns" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
+        if let Some(line_names) = parse_subgrid_line_names(kw) {
+          styles.grid_column_subgrid = true;
+          styles.subgrid_column_line_names = line_names.clone();
+          styles.grid_template_columns.clear();
+          styles.grid_column_line_names = line_names;
+          styles.grid_column_names.clear();
+          return;
+        }
         let (tracks, named_lines, line_names) = parse_grid_tracks_with_names(kw);
         styles.grid_template_columns = tracks;
         styles.grid_column_names = named_lines;
         styles.grid_column_line_names = line_names;
+        styles.grid_column_subgrid = false;
+        styles.subgrid_column_line_names.clear();
       }
     }
     "grid-template-rows" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
+        if let Some(line_names) = parse_subgrid_line_names(kw) {
+          styles.grid_row_subgrid = true;
+          styles.subgrid_row_line_names = line_names.clone();
+          styles.grid_template_rows.clear();
+          styles.grid_row_line_names = line_names;
+          styles.grid_row_names.clear();
+          return;
+        }
         let (tracks, named_lines, line_names) = parse_grid_tracks_with_names(kw);
         styles.grid_template_rows = tracks;
         styles.grid_row_names = named_lines;
         styles.grid_row_line_names = line_names;
+        styles.grid_row_subgrid = false;
+        styles.subgrid_row_line_names.clear();
       }
     }
     "grid-template-areas" => match &resolved_value {
@@ -5222,6 +5255,10 @@ pub fn apply_declaration_with_base(
             styles.grid_template_rows = vec![GridTrack::Auto; row_count];
             styles.grid_row_line_names = vec![Vec::new(); row_count + 1];
           }
+          styles.grid_row_subgrid = false;
+          styles.grid_column_subgrid = false;
+          styles.subgrid_row_line_names.clear();
+          styles.subgrid_column_line_names.clear();
           synthesize_area_line_names(styles);
         }
       }
@@ -5229,14 +5266,65 @@ pub fn apply_declaration_with_base(
     },
     "grid-template" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
+        if kw.to_ascii_lowercase().contains("subgrid") {
+          let mut parts = kw.split('/');
+          if let Some(row_part) = parts.next() {
+            if row_part.to_ascii_lowercase().contains("subgrid") {
+              if let Some(names) = parse_subgrid_line_names(row_part) {
+                styles.grid_row_subgrid = true;
+                styles.subgrid_row_line_names = names.clone();
+                styles.grid_row_line_names = names;
+                styles.grid_template_rows.clear();
+                styles.grid_row_names.clear();
+              }
+            } else if let Some(parsed) = parse_grid_template_shorthand(row_part) {
+              if let Some((rows, row_line_names)) = parsed.row_tracks {
+                styles.grid_template_rows = rows;
+                styles.grid_row_line_names = row_line_names;
+                styles.grid_row_subgrid = false;
+                styles.subgrid_row_line_names.clear();
+              }
+              if let Some(areas) = parsed.areas {
+                styles.grid_template_areas = areas;
+              }
+            }
+          }
+
+          if let Some(col_part) = parts.next() {
+            if col_part.to_ascii_lowercase().contains("subgrid") {
+              if let Some(names) = parse_subgrid_line_names(col_part) {
+                styles.grid_column_subgrid = true;
+                styles.subgrid_column_line_names = names.clone();
+                styles.grid_column_line_names = names;
+                styles.grid_template_columns.clear();
+                styles.grid_column_names.clear();
+              }
+            } else {
+              let ParsedTracks { tracks, line_names, .. } = parse_track_list(col_part);
+              if !tracks.is_empty() {
+                styles.grid_template_columns = tracks;
+                styles.grid_column_line_names = line_names;
+                styles.grid_column_subgrid = false;
+                styles.subgrid_column_line_names.clear();
+              }
+            }
+          }
+
+          synthesize_area_line_names(styles);
+          return;
+        }
         if let Some(parsed) = parse_grid_template_shorthand(kw) {
           if let Some((rows, row_line_names)) = parsed.row_tracks {
             styles.grid_template_rows = rows;
             styles.grid_row_line_names = row_line_names;
+            styles.grid_row_subgrid = false;
+            styles.subgrid_row_line_names.clear();
           }
           if let Some((cols, col_line_names)) = parsed.column_tracks {
             styles.grid_template_columns = cols;
             styles.grid_column_line_names = col_line_names;
+            styles.grid_column_subgrid = false;
+            styles.subgrid_column_line_names.clear();
           }
           if let Some(areas) = parsed.areas {
             styles.grid_template_areas = areas;
@@ -5254,10 +5342,14 @@ pub fn apply_declaration_with_base(
             if let Some((rows, row_names)) = template.row_tracks {
               styles.grid_template_rows = rows;
               styles.grid_row_line_names = row_names;
+              styles.grid_row_subgrid = false;
+              styles.subgrid_row_line_names.clear();
             }
             if let Some((cols, col_names)) = template.column_tracks {
               styles.grid_template_columns = cols;
               styles.grid_column_line_names = col_names;
+              styles.grid_column_subgrid = false;
+              styles.subgrid_column_line_names.clear();
             }
           }
           if let Some(rows) = parsed.auto_rows {

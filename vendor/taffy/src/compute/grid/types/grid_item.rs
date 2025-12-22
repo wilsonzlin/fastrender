@@ -15,6 +15,9 @@ pub(in super::super) struct GridItem {
     /// The id of the node that this item represents
     pub node: NodeId,
 
+    /// Whether this item is a virtual contribution (e.g., a descendant of a subgrid)
+    pub is_virtual: bool,
+
     /// The order of the item in the children array
     ///
     /// We sort the list of grid items during track sizing. This field allows us to sort back the original order
@@ -104,6 +107,7 @@ impl GridItem {
     ) -> Self {
         GridItem {
             node,
+            is_virtual: false,
             source_order,
             row: row_span,
             column: col_span,

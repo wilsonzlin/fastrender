@@ -118,6 +118,9 @@ impl GridFormattingContext {
     if !matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid) {
       return false;
     }
+    if style.grid_row_subgrid || style.grid_column_subgrid {
+      return false;
+    }
     if !style.grid_template_columns.is_empty() || !style.grid_template_rows.is_empty() {
       return false;
     }
@@ -441,11 +444,27 @@ impl GridFormattingContext {
           self.convert_grid_template(&style.grid_template_columns, style);
         taffy_style.grid_template_rows =
           self.convert_grid_template(&style.grid_template_rows, style);
+        taffy_style.subgrid_columns = style.grid_column_subgrid;
+        taffy_style.subgrid_rows = style.grid_row_subgrid;
+        if !style.subgrid_column_line_names.is_empty() {
+          taffy_style.subgrid_column_names = style.subgrid_column_line_names.clone();
+        }
+        if !style.subgrid_row_line_names.is_empty() {
+          taffy_style.subgrid_row_names = style.subgrid_row_line_names.clone();
+        }
       } else {
         taffy_style.grid_template_columns =
           self.convert_grid_template(&style.grid_template_rows, style);
         taffy_style.grid_template_rows =
           self.convert_grid_template(&style.grid_template_columns, style);
+        taffy_style.subgrid_columns = style.grid_row_subgrid;
+        taffy_style.subgrid_rows = style.grid_column_subgrid;
+        if !style.subgrid_row_line_names.is_empty() {
+          taffy_style.subgrid_column_names = style.subgrid_row_line_names.clone();
+        }
+        if !style.subgrid_column_line_names.is_empty() {
+          taffy_style.subgrid_row_names = style.subgrid_column_line_names.clone();
+        }
       }
 
       // Line names

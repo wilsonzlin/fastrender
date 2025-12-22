@@ -73,6 +73,49 @@ fn upsert_line_name_map<S: CheapCloneStr>(map: &mut Map<StrHasher<S>, Vec<u16>>,
 }
 
 impl<S: CheapCloneStr> NamedLineResolver<S> {
+    /// Create a resolver from explicit line name vectors for rows and columns
+    pub(crate) fn from_line_names(
+        row_line_names: Vec<Vec<S>>,
+        column_line_names: Vec<Vec<S>>,
+        explicit_row_count: u16,
+        explicit_column_count: u16,
+    ) -> Self {
+        let mut row_lines: Map<StrHasher<S>, Vec<u16>> = Map::new();
+        for (idx, names) in row_line_names.iter().enumerate() {
+            let line_index = (idx as u16) + 1;
+            for name in names {
+                upsert_line_name_map(&mut row_lines, name.clone(), line_index);
+            }
+        }
+
+        let mut column_lines: Map<StrHasher<S>, Vec<u16>> = Map::new();
+        for (idx, names) in column_line_names.iter().enumerate() {
+            let line_index = (idx as u16) + 1;
+            for name in names {
+                upsert_line_name_map(&mut column_lines, name.clone(), line_index);
+            }
+        }
+
+        for lines in row_lines.values_mut() {
+            lines.sort_unstable();
+            lines.dedup();
+        }
+        for lines in column_lines.values_mut() {
+            lines.sort_unstable();
+            lines.dedup();
+        }
+
+        Self {
+            area_column_count: 0,
+            area_row_count: 0,
+            explicit_column_count,
+            explicit_row_count,
+            areas: Map::new(),
+            row_lines,
+            column_lines,
+        }
+    }
+
     /// Create and initialise a new `NamedLineResolver`
     pub(crate) fn new(
         style: &impl GridContainerStyle<CustomIdent = S>,

@@ -176,6 +176,30 @@ pub trait GridContainerStyle: CoreStyle {
     /// Defines the size of implicitly created rows
     fn grid_template_row_names(&self) -> Option<Self::TemplateLineNames<'_>>;
 
+    /// Whether the grid rows are a subgrid of the parent
+    #[inline(always)]
+    fn is_row_subgrid(&self) -> bool {
+        false
+    }
+
+    /// Whether the grid columns are a subgrid of the parent
+    #[inline(always)]
+    fn is_column_subgrid(&self) -> bool {
+        false
+    }
+
+    /// Line names provided for a row subgrid
+    #[inline(always)]
+    fn subgrid_row_names(&self) -> Option<Self::TemplateLineNames<'_>> {
+        None
+    }
+
+    /// Line names provided for a column subgrid
+    #[inline(always)]
+    fn subgrid_column_names(&self) -> Option<Self::TemplateLineNames<'_>> {
+        None
+    }
+
     /// Controls how items get placed into the grid for auto-placed items
     #[inline(always)]
     fn grid_auto_flow(&self) -> GridAutoFlow {

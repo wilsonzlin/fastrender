@@ -130,7 +130,7 @@ use super::{Layout, LayoutInput, LayoutOutput, NodeId, RequestedAxis, RunMode, S
 #[cfg(feature = "detailed_layout_info")]
 use crate::debug::debug_log;
 use crate::geometry::{AbsoluteAxis, Line, Size};
-use crate::style::{AvailableSpace, CoreStyle};
+use crate::style::{AvailableSpace, CoreStyle, Style};
 #[cfg(feature = "flexbox")]
 use crate::style::{FlexboxContainerStyle, FlexboxItemStyle};
 #[cfg(feature = "grid")]
@@ -285,6 +285,12 @@ pub trait LayoutGridContainer: LayoutPartialTree {
 
     /// Get the child's styles
     fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_>;
+
+    /// Clone the container's style into an owned value
+    fn clone_grid_container_style(&self, node_id: NodeId) -> Style<Self::CustomIdent>;
+
+    /// Clone a child's style into an owned value
+    fn clone_grid_child_style(&self, child_node_id: NodeId) -> Style<Self::CustomIdent>;
 
     /// Set the node's detailed grid information
     ///

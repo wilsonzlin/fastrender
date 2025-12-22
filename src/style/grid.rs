@@ -783,6 +783,40 @@ impl<'a> TrackListParser<'a> {
   }
 }
 
+/// Parse the line-name portions of a `subgrid` track list.
+///
+/// Returns any bracketed line name lists that appear alongside the `subgrid` keyword.
+pub fn parse_subgrid_line_names(input: &str) -> Option<Vec<Vec<String>>> {
+  let mut parser = TrackListParser::new(input);
+  let mut line_names: Vec<Vec<String>> = Vec::new();
+  let mut saw_subgrid = false;
+
+  while !parser.is_eof() {
+    parser.skip_whitespace();
+    if let Some(names) = parser.consume_bracketed_names() {
+      line_names.push(names);
+      continue;
+    }
+
+    if parser.starts_with_ident("subgrid") {
+      saw_subgrid = true;
+      parser.pos += "subgrid".len();
+      continue;
+    }
+
+    // Unknown token; stop parsing.
+    break;
+  }
+
+  if !saw_subgrid {
+    return None;
+  }
+  if line_names.is_empty() {
+    line_names.push(Vec::new());
+  }
+  Some(line_names)
+}
+
 fn split_once_comma(input: &str) -> Option<(&str, &str)> {
   let mut depth: usize = 0;
   let mut i = 0;

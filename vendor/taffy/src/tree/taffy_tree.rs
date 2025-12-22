@@ -325,6 +325,7 @@ where
 impl<NodeContext, MeasureFunction> TraverseTree for TaffyView<'_, NodeContext, MeasureFunction> where
     MeasureFunction:
         FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>
+            + 'static
 {
 }
 
@@ -332,7 +333,8 @@ impl<NodeContext, MeasureFunction> TraverseTree for TaffyView<'_, NodeContext, M
 impl<NodeContext, MeasureFunction> LayoutPartialTree for TaffyView<'_, NodeContext, MeasureFunction>
 where
     MeasureFunction:
-        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>,
+        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>
+            + 'static,
 {
     type CoreContainerStyle<'a>
         = &'a Style
@@ -370,7 +372,7 @@ where
         //   - Else call the passed closure (below) to compute the result
         //
         // If there was no cache match and a new result needs to be computed then that result will be added to the cache
-        compute_cached_layout(self, node, inputs, |tree, node, inputs| {
+        compute_cached_layout(self, node, inputs, |tree: &mut Self, node, inputs| {
             let display_mode = tree.taffy.nodes[node.into()].style.display;
             let has_children = tree.child_count(node) > 0;
 
@@ -449,7 +451,8 @@ where
 impl<NodeContext, MeasureFunction> LayoutBlockContainer for TaffyView<'_, NodeContext, MeasureFunction>
 where
     MeasureFunction:
-        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>,
+        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>
+            + 'static,
 {
     type BlockContainerStyle<'a>
         = &'a Style
@@ -475,7 +478,8 @@ where
 impl<NodeContext, MeasureFunction> LayoutFlexboxContainer for TaffyView<'_, NodeContext, MeasureFunction>
 where
     MeasureFunction:
-        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>,
+        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>
+            + 'static,
 {
     type FlexboxContainerStyle<'a>
         = &'a Style
@@ -501,7 +505,8 @@ where
 impl<NodeContext, MeasureFunction> LayoutGridContainer for TaffyView<'_, NodeContext, MeasureFunction>
 where
     MeasureFunction:
-        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>,
+        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>
+            + 'static,
 {
     type GridContainerStyle<'a>
         = &'a Style
@@ -523,6 +528,16 @@ where
     }
 
     #[inline(always)]
+    fn clone_grid_container_style(&self, node_id: NodeId) -> Style {
+        self.taffy.nodes[node_id.into()].style.clone()
+    }
+
+    #[inline(always)]
+    fn clone_grid_child_style(&self, child_node_id: NodeId) -> Style {
+        self.taffy.nodes[child_node_id.into()].style.clone()
+    }
+
+    #[inline(always)]
     #[cfg(feature = "detailed_layout_info")]
     fn set_detailed_grid_info(&mut self, node_id: NodeId, detailed_grid_info: DetailedGridInfo) {
         self.taffy.nodes[node_id.into()].detailed_layout_info = DetailedLayoutInfo::Grid(Box::new(detailed_grid_info));
@@ -533,7 +548,8 @@ where
 impl<NodeContext, MeasureFunction> RoundTree for TaffyView<'_, NodeContext, MeasureFunction>
 where
     MeasureFunction:
-        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>,
+        FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>
+            + 'static,
 {
     #[inline(always)]
     fn get_unrounded_layout(&self, node: NodeId) -> Layout {
@@ -940,7 +956,8 @@ impl<NodeContext> TaffyTree<NodeContext> {
     ) -> Result<(), TaffyError>
     where
         MeasureFunction:
-            FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>,
+            FnMut(Size<Option<f32>>, Size<AvailableSpace>, NodeId, Option<&mut NodeContext>, &Style) -> Size<f32>
+                + 'static,
     {
         let use_rounding = self.config.use_rounding;
         let mut taffy_view = TaffyView {

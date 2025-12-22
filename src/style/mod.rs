@@ -528,6 +528,14 @@ pub struct ComputedStyle {
   // Grid
   pub grid_template_columns: Vec<GridTrack>,
   pub grid_template_rows: Vec<GridTrack>,
+  /// Whether grid-template-rows resolves to `subgrid`
+  pub grid_row_subgrid: bool,
+  /// Whether grid-template-columns resolves to `subgrid`
+  pub grid_column_subgrid: bool,
+  /// Author-specified line names for row subgrids
+  pub subgrid_row_line_names: Vec<Vec<String>>,
+  /// Author-specified line names for column subgrids
+  pub subgrid_column_line_names: Vec<Vec<String>>,
   /// Parsed grid-template-areas rows (None for empty cells)
   pub grid_template_areas: Vec<Vec<Option<String>>>,
   /// Sizes for implicitly created rows
@@ -548,8 +556,8 @@ pub struct ComputedStyle {
   pub grid_row_start: i32,
   pub grid_row_end: i32,
   // Raw grid-column/row values (before resolving named lines)
-  pub(crate) grid_column_raw: Option<String>,
-  pub(crate) grid_row_raw: Option<String>,
+  pub grid_column_raw: Option<String>,
+  pub grid_row_raw: Option<String>,
 
   // Multi-column
   pub column_count: Option<u32>,
@@ -828,6 +836,10 @@ impl Default for ComputedStyle {
 
       grid_template_columns: Vec::new(),
       grid_template_rows: Vec::new(),
+      grid_row_subgrid: false,
+      grid_column_subgrid: false,
+      subgrid_row_line_names: Vec::new(),
+      subgrid_column_line_names: Vec::new(),
       grid_template_areas: Vec::new(),
       grid_auto_rows: vec![GridTrack::Auto],
       grid_auto_columns: vec![GridTrack::Auto],
