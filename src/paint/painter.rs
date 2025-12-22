@@ -79,8 +79,6 @@ use crate::style::types::FilterColor;
 use crate::style::types::FilterFunction;
 use crate::style::types::ImageOrientation;
 use crate::style::types::ImageRendering;
-use crate::style::types::MaskLayer;
-use crate::style::types::MaskMode;
 use crate::style::types::MixBlendMode;
 use crate::style::types::ObjectFit;
 use crate::style::types::OrientationTransform;
@@ -346,13 +344,6 @@ enum ResolvedFilter {
     spread: f32,
     color: Rgba,
   },
-  SvgFilter(Arc<crate::paint::svg_filter::SvgFilter>),
-}
-
-#[derive(Debug, Clone)]
-struct ResolvedMask {
-  layers: Vec<MaskLayer>,
-  style: Arc<ComputedStyle>,
 }
 
 #[derive(Debug, Clone)]
@@ -392,7 +383,6 @@ enum DisplayCommand {
     radii: BorderRadii,
     clip: Option<(Rect, BorderRadii, bool, bool)>,
     clip_path: Option<ResolvedClipPath>,
-    mask: Option<ResolvedMask>,
     commands: Vec<DisplayCommand>,
   },
 }
@@ -626,22 +616,6 @@ impl Painter {
     alt: Option<&str>,
     viewport: Size,
   ) {
-    if let ReplacedType::Math(math) = &mut replaced_box.replaced_type {
-      if math.layout.is_none() {
-        let layout = crate::math::layout_mathml(&math.root, style, &self.font_ctx);
-        math.layout = Some(Arc::new(layout));
-      }
-      if replaced_box.intrinsic_size.is_none() {
-        if let Some(layout) = &math.layout {
-          replaced_box.intrinsic_size = Some(layout.size());
-          if layout.height > 0.0 {
-            replaced_box.aspect_ratio = Some(layout.width / layout.height);
-          }
-        }
-      }
-      return;
-    }
-
     let replaced_type_snapshot = replaced_box.replaced_type.clone();
     match replaced_type_snapshot {
       ReplacedType::FormControl(control) => {
@@ -829,7 +803,6 @@ impl Painter {
           replaced_box.aspect_ratio = Some(300.0 / 32.0);
         }
       }
-      ReplacedType::Math(_) => {}
       ReplacedType::Iframe { .. } => {}
     }
   }
@@ -966,22 +939,11 @@ impl Painter {
 
     // Build display list in stacking-context order then paint
     let mut items = Vec::new();
-    let mut top_layer_items = Vec::new();
     let collect_start = Instant::now();
-    self.collect_stacking_context(
-      &tree.root,
-      offset,
-      None,
-      true,
-      &mut items,
-      &mut top_layer_items,
-      true,
-    );
+    self.collect_stacking_context(&tree.root, offset, None, true, &mut items);
     if profiling {
       stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
     }
-    top_layer_items.reverse();
-    items.extend(top_layer_items);
     if dump_stack_enabled() {
       let total_items = items.len();
       let mut stack_items = 0;
@@ -1194,8 +1156,6 @@ impl Painter {
     parent_style: Option<&ComputedStyle>,
     is_root_context: bool,
     items: &mut Vec<DisplayCommand>,
-    top_layer_items: &mut Vec<DisplayCommand>,
-    allow_top_layer: bool,
   ) {
     let debug_fragments = dump_fragments_enabled();
     let is_root_fragment = is_root_context && parent_style.is_none();
@@ -1208,45 +1168,6 @@ impl Painter {
       }
       if is_backface_culled(style) {
         return;
-      }
-    }
-
-    let style_ref = fragment.style.as_deref();
-    if allow_top_layer {
-      if let Some(style) = style_ref {
-        if style.top_layer.is_some() {
-          if let Some(backdrop_style) = style.backdrop.as_ref() {
-            let backdrop_fragment = FragmentNode::new_block_styled(
-              Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height),
-              vec![],
-              Arc::clone(backdrop_style),
-            );
-            let mut nested_top = Vec::new();
-            self.collect_stacking_context(
-              &backdrop_fragment,
-              Point::ZERO,
-              None,
-              true,
-              top_layer_items,
-              &mut nested_top,
-              false,
-            );
-            top_layer_items.extend(nested_top);
-          }
-
-          let mut nested_top = Vec::new();
-          self.collect_stacking_context(
-            fragment,
-            offset,
-            parent_style,
-            is_root_context,
-            top_layer_items,
-            &mut nested_top,
-            false,
-          );
-          top_layer_items.extend(nested_top);
-          return;
-        }
       }
     }
 
@@ -1275,6 +1196,7 @@ impl Painter {
       );
     }
 
+    let style_ref = fragment.style.as_deref();
     let establishes_context = style_ref
       .map(|s| creates_stacking_context(s, parent_style, is_root_context))
       .unwrap_or(is_root_context);
@@ -1339,8 +1261,6 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
-          top_layer_items,
-          allow_top_layer,
         );
       }
 
@@ -1351,8 +1271,6 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
-          top_layer_items,
-          allow_top_layer,
         );
       }
       for idx in inlines {
@@ -1362,8 +1280,6 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
-          top_layer_items,
-          allow_top_layer,
         );
       }
       for idx in positioned_auto {
@@ -1373,8 +1289,6 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
-          top_layer_items,
-          allow_top_layer,
         );
       }
 
@@ -1386,8 +1300,6 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
-          top_layer_items,
-          allow_top_layer,
         );
       }
 
@@ -1399,8 +1311,6 @@ impl Painter {
           style_ref,
           false,
           &mut local_commands,
-          top_layer_items,
-          allow_top_layer,
         );
       }
 
@@ -1467,8 +1377,6 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
-        top_layer_items,
-        allow_top_layer,
       );
     }
 
@@ -1481,8 +1389,6 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
-        top_layer_items,
-        allow_top_layer,
       );
     }
     for idx in inlines {
@@ -1492,8 +1398,6 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
-        top_layer_items,
-        allow_top_layer,
       );
     }
     for idx in positioned_auto {
@@ -1503,8 +1407,6 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
-        top_layer_items,
-        allow_top_layer,
       );
     }
 
@@ -1516,8 +1418,6 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
-        top_layer_items,
-        allow_top_layer,
       );
     }
 
@@ -1529,46 +1429,27 @@ impl Painter {
         style_ref,
         false,
         &mut local_commands,
-        top_layer_items,
-        allow_top_layer,
       );
     }
 
+    let viewport = (self.css_width, self.css_height);
     // Wrap the stacking context if it applies an effect (opacity/transform); otherwise flatten
     let opacity = style_ref.map(|s| s.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
-    let transform = build_transform(style_ref, abs_bounds);
+    let transform = build_transform(style_ref, abs_bounds, Some(viewport));
     let blend_mode = style_ref
       .map(|s| s.mix_blend_mode)
       .unwrap_or(MixBlendMode::Normal);
-    let viewport = (self.css_width, self.css_height);
+    let isolated = style_ref
+      .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
+      .unwrap_or(false);
     let filters = style_ref
-      .map(|s| {
-        resolve_filters(
-          &s.filter,
-          s,
-          viewport,
-          &self.font_ctx,
-          Some(&self.image_cache),
-        )
-      })
+      .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx))
       .unwrap_or_default();
     let has_filters = !filters.is_empty();
     let backdrop_filters = style_ref
-      .map(|s| {
-        resolve_filters(
-          &s.backdrop_filter,
-          s,
-          viewport,
-          &self.font_ctx,
-          Some(&self.image_cache),
-        )
-      })
+      .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx))
       .unwrap_or_default();
     let has_backdrop = !backdrop_filters.is_empty();
-    let style_isolated = style_ref
-      .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
-      .unwrap_or(false);
-    let isolated = style_isolated || has_backdrop;
     let clip = style_ref.and_then(|style| {
       // Honor overflow clipping: when overflow is hidden/scroll/clip, restrict painting to the
       // padding box. This prevents offscreen children from flooding the viewport when their
@@ -1663,19 +1544,6 @@ impl Painter {
         &self.font_ctx,
       )
     });
-    let mask = fragment.style.as_ref().and_then(|style| {
-      let has_image = style.mask_layers.iter().any(|layer| {
-        layer
-          .image
-          .as_ref()
-          .map(|img| !matches!(img, BackgroundImage::None))
-          .unwrap_or(false)
-      });
-      has_image.then(|| ResolvedMask {
-        layers: style.mask_layers.clone(),
-        style: style.clone(),
-      })
-    });
     if opacity < 1.0
       || transform.is_some()
       || !matches!(blend_mode, MixBlendMode::Normal)
@@ -1684,7 +1552,6 @@ impl Painter {
       || has_backdrop
       || clip.is_some()
       || clip_path.is_some()
-      || mask.is_some()
     {
       let radii = resolve_border_radii(style_ref, abs_bounds);
       items.push(DisplayCommand::StackingContext {
@@ -1698,7 +1565,6 @@ impl Painter {
         radii,
         clip,
         clip_path,
-        mask,
         commands: local_commands,
       });
     } else {
@@ -1935,7 +1801,6 @@ impl Painter {
         radii,
         clip,
         clip_path,
-        mask,
         commands,
       } => {
         let debug_stack = dump_stack_enabled();
@@ -2164,16 +2029,6 @@ impl Painter {
             }
           }
         }
-        if let Some(mask_info) = mask.as_ref() {
-          if let Some(mask) = self.render_mask(
-            mask_info,
-            root_rect,
-            layer_pixmap.width(),
-            layer_pixmap.height(),
-          ) {
-            layer_pixmap.apply_mask(&mask);
-          }
-        }
         if !outline_commands.is_empty() {
           let mut outline_painter = Painter {
             pixmap: layer_pixmap,
@@ -2234,13 +2089,13 @@ impl Painter {
         } else {
           map_blend_mode(blend_mode)
         };
-        if is_manual_blend(blend_mode) && !isolated {
+        if is_hsl_blend(blend_mode) && !isolated {
           if let Some(mut transformed) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
             let mut paint = PixmapPaint::default();
             paint.opacity = 1.0;
             paint.blend_mode = SkiaBlendMode::SourceOver;
             transformed.draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
-            composite_manual_layer(
+            composite_hsl_layer(
               &mut self.pixmap,
               &transformed,
               opacity.min(1.0),
@@ -2660,7 +2515,7 @@ impl Painter {
     paint.shader = shader;
     paint.anti_alias = true;
 
-    if is_manual_blend(blend_mode) {
+    if is_hsl_blend(blend_mode) {
       if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
         paint.blend_mode = SkiaBlendMode::SourceOver;
         layer.fill_path(
@@ -2670,7 +2525,7 @@ impl Painter {
           Transform::identity(),
           clip_mask,
         );
-        composite_manual_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(paint_rect));
+        composite_hsl_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(paint_rect));
       } else {
         paint.blend_mode = map_blend_mode(blend_mode);
         self.pixmap.fill_path(
@@ -2828,7 +2683,7 @@ impl Painter {
     paint.shader = shader;
     paint.anti_alias = true;
 
-    if is_manual_blend(blend_mode) {
+    if is_hsl_blend(blend_mode) {
       if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
         paint.blend_mode = SkiaBlendMode::SourceOver;
         layer.fill_path(
@@ -2838,7 +2693,7 @@ impl Painter {
           Transform::identity(),
           clip_mask,
         );
-        composite_manual_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(paint_rect));
+        composite_hsl_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(paint_rect));
       } else {
         paint.blend_mode = map_blend_mode(blend_mode);
         self.pixmap.fill_path(
@@ -2923,11 +2778,11 @@ impl Painter {
       intersection.width(),
       intersection.height(),
     ) {
-      if is_manual_blend(blend_mode) {
+      if is_hsl_blend(blend_mode) {
         if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
           paint.blend_mode = SkiaBlendMode::SourceOver;
           layer.fill_rect(rect, &paint, Transform::identity(), mask);
-          composite_manual_layer(
+          composite_hsl_layer(
             &mut self.pixmap,
             &layer,
             1.0,
@@ -5444,217 +5299,6 @@ impl Painter {
     }
   }
 
-  fn render_mask(
-    &self,
-    mask: &ResolvedMask,
-    root_rect: Rect,
-    device_width: u32,
-    device_height: u32,
-  ) -> Option<Mask> {
-    if device_width == 0 || device_height == 0 {
-      return None;
-    }
-
-    let mut mask_pixmap = Pixmap::new(device_width, device_height)?;
-    let rects = background_rects(
-      root_rect.x(),
-      root_rect.y(),
-      root_rect.width(),
-      root_rect.height(),
-      &mask.style,
-      Some((self.css_width, self.css_height)),
-    );
-    let origin_rect_css = rects.border;
-    let clip_rect_css = rects.border;
-    if origin_rect_css.width() <= 0.0
-      || origin_rect_css.height() <= 0.0
-      || clip_rect_css.width() <= 0.0
-      || clip_rect_css.height() <= 0.0
-    {
-      return None;
-    }
-
-    for layer in mask.layers.iter().rev() {
-      let Some(image) = &layer.image else { continue };
-      let mut tile_w: f32;
-      let mut tile_h: f32;
-
-      let tile_pixmap = match image {
-        BackgroundImage::LinearGradient { .. }
-        | BackgroundImage::RepeatingLinearGradient { .. }
-        | BackgroundImage::RadialGradient { .. }
-        | BackgroundImage::RepeatingRadialGradient { .. }
-        | BackgroundImage::ConicGradient { .. }
-        | BackgroundImage::RepeatingConicGradient { .. } => {
-          let (resolved_w, resolved_h) = compute_background_size_from_value(
-            &layer.size,
-            mask.style.font_size,
-            mask.style.root_font_size,
-            (self.css_width, self.css_height),
-            origin_rect_css.width(),
-            origin_rect_css.height(),
-            0.0,
-            0.0,
-          );
-          tile_w = resolved_w;
-          tile_h = resolved_h;
-          if tile_w <= 0.0 || tile_h <= 0.0 {
-            continue;
-          }
-          let pixmap_w = tile_w.ceil().max(1.0) as u32;
-          let pixmap_h = tile_h.ceil().max(1.0) as u32;
-          self.render_generated_image(image, &mask.style, pixmap_w, pixmap_h)
-        }
-        BackgroundImage::Url(src) => {
-          let image = match self.image_cache.load(src) {
-            Ok(img) => img,
-            Err(_) => continue,
-          };
-          let orientation = mask
-            .style
-            .image_orientation
-            .resolve(image.orientation, true);
-          let (img_w_raw, img_h_raw) = image.oriented_dimensions(orientation);
-          let Some((img_w, img_h)) =
-            image.css_dimensions(orientation, &mask.style.image_resolution, self.scale, None)
-          else {
-            continue;
-          };
-          if img_w <= 0.0 || img_h <= 0.0 || img_w_raw == 0 || img_h_raw == 0 {
-            continue;
-          }
-          let pixmap = match Self::dynamic_image_to_pixmap(&image, orientation) {
-            Some(p) => p,
-            None => continue,
-          };
-
-          let (resolved_w, resolved_h) = compute_background_size_from_value(
-            &layer.size,
-            mask.style.font_size,
-            mask.style.root_font_size,
-            (self.css_width, self.css_height),
-            origin_rect_css.width(),
-            origin_rect_css.height(),
-            img_w,
-            img_h,
-          );
-          tile_w = resolved_w;
-          tile_h = resolved_h;
-          Some(pixmap)
-        }
-        BackgroundImage::None => continue,
-      };
-
-      if tile_w <= 0.0 || tile_h <= 0.0 {
-        continue;
-      }
-
-      let mut rounded_x = false;
-      let mut rounded_y = false;
-      if layer.repeat.x == BackgroundRepeatKeyword::Round {
-        tile_w = round_tile_length(origin_rect_css.width(), tile_w);
-        rounded_x = true;
-      }
-      if layer.repeat.y == BackgroundRepeatKeyword::Round {
-        tile_h = round_tile_length(origin_rect_css.height(), tile_h);
-        rounded_y = true;
-      }
-      if rounded_x ^ rounded_y
-        && matches!(
-          layer.size,
-          BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
-        )
-      {
-        let aspect = if let Some(ref pix) = tile_pixmap {
-          if pix.height() > 0 {
-            pix.width() as f32 / pix.height() as f32
-          } else {
-            1.0
-          }
-        } else {
-          1.0
-        };
-        if rounded_x {
-          tile_h = tile_w / aspect;
-        } else {
-          tile_w = tile_h * aspect;
-        }
-      }
-
-      let (offset_x, offset_y) = resolve_background_offset(
-        layer.position,
-        origin_rect_css.width(),
-        origin_rect_css.height(),
-        tile_w,
-        tile_h,
-        mask.style.font_size,
-        mask.style.root_font_size,
-        (self.css_width, self.css_height),
-      );
-
-      let positions_x = tile_positions(
-        layer.repeat.x,
-        origin_rect_css.x(),
-        origin_rect_css.width(),
-        tile_w,
-        offset_x,
-        clip_rect_css.min_x(),
-        clip_rect_css.max_x(),
-      );
-      let positions_y = tile_positions(
-        layer.repeat.y,
-        origin_rect_css.y(),
-        origin_rect_css.height(),
-        tile_h,
-        offset_y,
-        clip_rect_css.min_y(),
-        clip_rect_css.max_y(),
-      );
-
-      let Some(tile_pixmap) = tile_pixmap else {
-        continue;
-      };
-      let Some(mask_tile) = mask_tile_from_image(&tile_pixmap, layer.mode) else {
-        continue;
-      };
-
-      for ty in positions_y.iter().copied() {
-        for tx in positions_x.iter().copied() {
-          paint_mask_tile(
-            &mut mask_pixmap,
-            &mask_tile,
-            tx,
-            ty,
-            tile_w,
-            tile_h,
-            clip_rect_css,
-            self.scale,
-          );
-        }
-      }
-    }
-
-    Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
-  }
-
-  fn mask_value_from_pixel(pixel: &[u8], mode: MaskMode) -> u8 {
-    let a = pixel.get(3).copied().unwrap_or(0) as f32 / 255.0;
-    let value = match mode {
-      MaskMode::Alpha => a,
-      MaskMode::Luminance => {
-        if a <= 0.0 {
-          0.0
-        } else {
-          let r = pixel.get(0).copied().unwrap_or(0) as f32 / 255.0 / a;
-          let g = pixel.get(1).copied().unwrap_or(0) as f32 / 255.0 / a;
-          let b = pixel.get(2).copied().unwrap_or(0) as f32 / 255.0 / a;
-          (0.2126 * r + 0.7152 * g + 0.0722 * b) * a
-        }
-      }
-    };
-    (value * 255.0).round().clamp(0.0, 255.0) as u8
-  }
-
   fn paint_text_decoration(
     &mut self,
     style: &ComputedStyle,
@@ -6588,130 +6232,149 @@ fn transform_reference_box(style: &ComputedStyle, bounds: Rect) -> Rect {
   }
 }
 
-fn build_transform(style: Option<&ComputedStyle>, bounds: Rect) -> Option<Transform> {
+fn build_transform(
+  style: Option<&ComputedStyle>,
+  bounds: Rect,
+  viewport: Option<(f32, f32)>,
+) -> Option<Transform> {
   let style = style?;
-  if style.transform.is_empty() {
-    return None;
+
+  let mut transform_from_list: Option<Transform> = None;
+
+  if !style.transform.is_empty() {
+    let reference = transform_reference_box(style, bounds);
+    let percentage_width = reference.width();
+    let percentage_height = reference.height();
+
+    let mut ts = Transform::identity();
+    const EPS: f32 = 1e-6;
+    for component in &style.transform {
+      let next = match component {
+        crate::css::types::Transform::Translate(x, y) => {
+          let tx =
+            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+          let ty =
+            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+          Transform::from_translate(tx, ty)
+        }
+        crate::css::types::Transform::TranslateX(x) => {
+          let tx =
+            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+          Transform::from_translate(tx, 0.0)
+        }
+        crate::css::types::Transform::TranslateY(y) => {
+          let ty =
+            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+          Transform::from_translate(0.0, ty)
+        }
+        crate::css::types::Transform::TranslateZ(_) => Transform::identity(),
+        crate::css::types::Transform::Translate3d(x, y, _) => {
+          let tx =
+            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+          let ty =
+            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+          Transform::from_translate(tx, ty)
+        }
+        crate::css::types::Transform::Scale(sx, sy) => Transform::from_scale(*sx, *sy),
+        crate::css::types::Transform::ScaleX(sx) => Transform::from_scale(*sx, 1.0),
+        crate::css::types::Transform::ScaleY(sy) => Transform::from_scale(1.0, *sy),
+        crate::css::types::Transform::ScaleZ(_) => Transform::identity(),
+        crate::css::types::Transform::Scale3d(sx, sy, _) => Transform::from_scale(*sx, *sy),
+        crate::css::types::Transform::Rotate(deg) => Transform::from_rotate(*deg),
+        crate::css::types::Transform::RotateZ(deg) => Transform::from_rotate(*deg),
+        crate::css::types::Transform::RotateX(_) => Transform::identity(),
+        crate::css::types::Transform::RotateY(_) => Transform::identity(),
+        crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
+          if (*x).abs() < EPS && (*y).abs() < EPS && (*z).abs() > EPS {
+            let sign = if *z >= 0.0 { 1.0 } else { -1.0 };
+            Transform::from_rotate(*deg * sign)
+          } else {
+            Transform::identity()
+          }
+        }
+        crate::css::types::Transform::SkewX(deg) => {
+          Transform::from_skew(deg.to_radians().tan(), 0.0)
+        }
+        crate::css::types::Transform::SkewY(deg) => {
+          Transform::from_skew(0.0, deg.to_radians().tan())
+        }
+        crate::css::types::Transform::Skew(ax, ay) => {
+          Transform::from_skew(ax.to_radians().tan(), ay.to_radians().tan())
+        }
+        crate::css::types::Transform::Perspective(_) => Transform::identity(),
+        crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
+          Transform::from_row(*a, *b, *c, *d, *e, *f)
+        }
+        crate::css::types::Transform::Matrix3d(values) => {
+          let m11 = values[0];
+          let m12 = values[1];
+          let m13 = values[2];
+          let m14 = values[3];
+          let m21 = values[4];
+          let m22 = values[5];
+          let m23 = values[6];
+          let m24 = values[7];
+          let m31 = values[8];
+          let m32 = values[9];
+          let m33 = values[10];
+          let m34 = values[11];
+          let m41 = values[12];
+          let m42 = values[13];
+          let m43 = values[14];
+          let m44 = values[15];
+
+          let compatible_2d = m13.abs() < EPS
+            && m14.abs() < EPS
+            && m23.abs() < EPS
+            && m24.abs() < EPS
+            && m31.abs() < EPS
+            && m32.abs() < EPS
+            && (m33 - 1.0).abs() < EPS
+            && m34.abs() < EPS
+            && m43.abs() < EPS
+            && (m44 - 1.0).abs() < EPS;
+
+          if compatible_2d {
+            Transform::from_row(m11, m12, m21, m22, m41, m42)
+          } else {
+            Transform::identity()
+          }
+        }
+      };
+      ts = ts.pre_concat(next);
+    }
+
+    let origin_x = resolve_transform_length(
+      &style.transform_origin.x,
+      style.font_size,
+      style.root_font_size,
+      percentage_width,
+    );
+    let origin_y = resolve_transform_length(
+      &style.transform_origin.y,
+      style.font_size,
+      style.root_font_size,
+      percentage_height,
+    );
+    let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
+
+    // Apply transform around the resolved origin.
+    ts = Transform::from_translate(origin.x, origin.y)
+      .pre_concat(ts)
+      .pre_concat(Transform::from_translate(-origin.x, -origin.y));
+
+    transform_from_list = Some(ts);
   }
 
-  let reference = transform_reference_box(style, bounds);
-  let percentage_width = reference.width();
-  let percentage_height = reference.height();
+  let motion = crate::paint::motion_path::compute_motion_transform(style, bounds, viewport)
+    .map(|t| Transform::from_row(t.a, t.b, t.c, t.d, t.e, t.f));
 
-  let mut ts = Transform::identity();
-  const EPS: f32 = 1e-6;
-  for component in &style.transform {
-    let next = match component {
-      crate::css::types::Transform::Translate(x, y) => {
-        let tx =
-          resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
-        let ty =
-          resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
-        Transform::from_translate(tx, ty)
-      }
-      crate::css::types::Transform::TranslateX(x) => {
-        let tx =
-          resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
-        Transform::from_translate(tx, 0.0)
-      }
-      crate::css::types::Transform::TranslateY(y) => {
-        let ty =
-          resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
-        Transform::from_translate(0.0, ty)
-      }
-      crate::css::types::Transform::TranslateZ(_) => Transform::identity(),
-      crate::css::types::Transform::Translate3d(x, y, _) => {
-        let tx =
-          resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
-        let ty =
-          resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
-        Transform::from_translate(tx, ty)
-      }
-      crate::css::types::Transform::Scale(sx, sy) => Transform::from_scale(*sx, *sy),
-      crate::css::types::Transform::ScaleX(sx) => Transform::from_scale(*sx, 1.0),
-      crate::css::types::Transform::ScaleY(sy) => Transform::from_scale(1.0, *sy),
-      crate::css::types::Transform::ScaleZ(_) => Transform::identity(),
-      crate::css::types::Transform::Scale3d(sx, sy, _) => Transform::from_scale(*sx, *sy),
-      crate::css::types::Transform::Rotate(deg) => Transform::from_rotate(*deg),
-      crate::css::types::Transform::RotateZ(deg) => Transform::from_rotate(*deg),
-      crate::css::types::Transform::RotateX(_) => Transform::identity(),
-      crate::css::types::Transform::RotateY(_) => Transform::identity(),
-      crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
-        if (*x).abs() < EPS && (*y).abs() < EPS && (*z).abs() > EPS {
-          let sign = if *z >= 0.0 { 1.0 } else { -1.0 };
-          Transform::from_rotate(*deg * sign)
-        } else {
-          Transform::identity()
-        }
-      }
-      crate::css::types::Transform::SkewX(deg) => Transform::from_skew(deg.to_radians().tan(), 0.0),
-      crate::css::types::Transform::SkewY(deg) => Transform::from_skew(0.0, deg.to_radians().tan()),
-      crate::css::types::Transform::Skew(ax, ay) => {
-        Transform::from_skew(ax.to_radians().tan(), ay.to_radians().tan())
-      }
-      crate::css::types::Transform::Perspective(_) => Transform::identity(),
-      crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
-        Transform::from_row(*a, *b, *c, *d, *e, *f)
-      }
-      crate::css::types::Transform::Matrix3d(values) => {
-        let m11 = values[0];
-        let m12 = values[1];
-        let m13 = values[2];
-        let m14 = values[3];
-        let m21 = values[4];
-        let m22 = values[5];
-        let m23 = values[6];
-        let m24 = values[7];
-        let m31 = values[8];
-        let m32 = values[9];
-        let m33 = values[10];
-        let m34 = values[11];
-        let m41 = values[12];
-        let m42 = values[13];
-        let m43 = values[14];
-        let m44 = values[15];
-
-        let compatible_2d = m13.abs() < EPS
-          && m14.abs() < EPS
-          && m23.abs() < EPS
-          && m24.abs() < EPS
-          && m31.abs() < EPS
-          && m32.abs() < EPS
-          && (m33 - 1.0).abs() < EPS
-          && m34.abs() < EPS
-          && m43.abs() < EPS
-          && (m44 - 1.0).abs() < EPS;
-
-        if compatible_2d {
-          Transform::from_row(m11, m12, m21, m22, m41, m42)
-        } else {
-          Transform::identity()
-        }
-      }
-    };
-    ts = ts.pre_concat(next);
+  match (motion, transform_from_list) {
+    (None, None) => None,
+    (Some(motion), None) => Some(motion),
+    (None, Some(list)) => Some(list),
+    (Some(motion), Some(list)) => Some(list.pre_concat(motion)),
   }
-
-  let origin_x = resolve_transform_length(
-    &style.transform_origin.x,
-    style.font_size,
-    style.root_font_size,
-    percentage_width,
-  );
-  let origin_y = resolve_transform_length(
-    &style.transform_origin.y,
-    style.font_size,
-    style.root_font_size,
-    percentage_height,
-  );
-  let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
-
-  // Apply transform around the resolved origin.
-  ts = Transform::from_translate(origin.x, origin.y)
-    .pre_concat(ts)
-    .pre_concat(Transform::from_translate(-origin.x, -origin.y));
-
-  Some(ts)
 }
 
 fn resolve_transform_length(
@@ -7103,7 +6766,6 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         radii,
         clip,
         clip_path,
-        mask,
         commands,
       } => DisplayCommand::StackingContext {
         rect: rect.translate(offset),
@@ -7116,7 +6778,6 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         radii,
         clip: clip.map(|(rect, r, cx, cy)| (rect.translate(offset), r, cx, cy)),
         clip_path: clip_path.map(|cp| cp.translate(dx, dy)),
-        mask,
         commands: translate_commands(commands, dx, dy),
       },
     })
@@ -7168,7 +6829,6 @@ fn resolve_filters(
   style: &ComputedStyle,
   viewport: (f32, f32),
   font_ctx: &FontContext,
-  image_cache: Option<&ImageCache>,
 ) -> Vec<ResolvedFilter> {
   filters
     .iter()
@@ -7185,9 +6845,6 @@ fn resolve_filters(
       FilterFunction::HueRotate(deg) => Some(ResolvedFilter::HueRotate(*deg)),
       FilterFunction::Invert(v) => Some(ResolvedFilter::Invert(v.clamp(0.0, 1.0))),
       FilterFunction::Opacity(v) => Some(ResolvedFilter::Opacity(v.clamp(0.0, 1.0))),
-      FilterFunction::Url(url) => image_cache
-        .and_then(|cache| crate::paint::svg_filter::load_svg_filter(url, cache))
-        .map(ResolvedFilter::SvgFilter),
       FilterFunction::DropShadow(shadow) => {
         let color = match shadow.color {
           FilterColor::CurrentColor => style.color,
@@ -7234,9 +6891,9 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
   let mut bottom: f32 = 0.0;
 
   for filter in filters {
-    match filter {
+    match *filter {
       ResolvedFilter::Blur(radius) => {
-        let delta = (*radius * scale).abs() * 3.0;
+        let delta = (radius * scale).abs() * 3.0;
         left += delta;
         right += delta;
         top += delta;
@@ -7272,24 +6929,24 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
 
 fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
   for filter in filters {
-    match filter {
-      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
+    match *filter {
+      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
       ResolvedFilter::Brightness(amount) => {
-        apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
+        apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a))
       }
       ResolvedFilter::Contrast(amount) => {
-        apply_color_filter(pixmap, |c, a| (apply_contrast(c, *amount), a))
+        apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a))
       }
       ResolvedFilter::Grayscale(amount) => {
-        apply_color_filter(pixmap, |c, a| (grayscale(c, *amount), a))
+        apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a))
       }
-      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, *amount), a)),
+      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, amount), a)),
       ResolvedFilter::Saturate(amount) => {
-        apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))
+        apply_color_filter(pixmap, |c, a| (saturate(c, amount), a))
       }
-      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a)),
-      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a)),
-      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount)),
+      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, deg), a)),
+      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, amount), a)),
+      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * amount)),
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
@@ -7302,11 +6959,8 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
         offset_y * scale,
         blur_radius * scale,
         spread * scale,
-        *color,
+        color,
       ),
-      ResolvedFilter::SvgFilter(ref filter) => {
-        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap);
-      }
     }
   }
 }
@@ -7640,6 +7294,187 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
   }
 }
 
+fn is_hsl_blend(mode: MixBlendMode) -> bool {
+  matches!(
+    mode,
+    MixBlendMode::Hue | MixBlendMode::Saturation | MixBlendMode::Color | MixBlendMode::Luminosity
+  )
+}
+
+fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+  let max = r.max(g).max(b);
+  let min = r.min(g).min(b);
+  let l = (max + min) / 2.0;
+  if (max - min).abs() < f32::EPSILON {
+    return (0.0, 0.0, l);
+  }
+
+  let d = max - min;
+  let s = if l > 0.5 {
+    d / (2.0 - max - min)
+  } else {
+    d / (max + min)
+  };
+  let h = if (max - r).abs() < f32::EPSILON {
+    (g - b) / d + if g < b { 6.0 } else { 0.0 }
+  } else if (max - g).abs() < f32::EPSILON {
+    (b - r) / d + 2.0
+  } else {
+    (r - g) / d + 4.0
+  } / 6.0;
+  (h, s, l)
+}
+
+fn hue_to_rgb(p: f32, q: f32, t: f32) -> f32 {
+  let mut t = t;
+  if t < 0.0 {
+    t += 1.0;
+  }
+  if t > 1.0 {
+    t -= 1.0;
+  }
+  if t < 1.0 / 6.0 {
+    p + (q - p) * 6.0 * t
+  } else if t < 0.5 {
+    q
+  } else if t < 2.0 / 3.0 {
+    p + (q - p) * (2.0 / 3.0 - t) * 6.0
+  } else {
+    p
+  }
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+  if s <= 0.0 {
+    return (l, l, l);
+  }
+  let q = if l < 0.5 {
+    l * (1.0 + s)
+  } else {
+    l + s - l * s
+  };
+  let p = 2.0 * l - q;
+  let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+  let g = hue_to_rgb(p, q, h);
+  let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+  (r, g, b)
+}
+
+fn apply_hsl_blend(
+  mode: MixBlendMode,
+  src: (f32, f32, f32),
+  dst: (f32, f32, f32),
+) -> (f32, f32, f32) {
+  let (sh, ss, sl) = rgb_to_hsl(src.0, src.1, src.2);
+  let (dh, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
+  match mode {
+    MixBlendMode::Hue => hsl_to_rgb(sh, ds, dl),
+    MixBlendMode::Saturation => hsl_to_rgb(dh, ss, dl),
+    MixBlendMode::Color => hsl_to_rgb(sh, ss, dl),
+    MixBlendMode::Luminosity => hsl_to_rgb(dh, ds, sl),
+    _ => dst,
+  }
+}
+
+fn composite_hsl_layer(
+  dest: &mut Pixmap,
+  layer: &Pixmap,
+  opacity: f32,
+  mode: MixBlendMode,
+  area: Option<Rect>,
+) {
+  if !is_hsl_blend(mode) {
+    return;
+  }
+  let dest_width = dest.width() as usize;
+  let dest_height = dest.height() as usize;
+  let layer_width = layer.width() as usize;
+  let layer_height = layer.height() as usize;
+  if dest_width == 0 || dest_height == 0 || layer_width == 0 || layer_height == 0 {
+    return;
+  }
+
+  let max_width = dest_width.min(layer_width);
+  let max_height = dest_height.min(layer_height);
+  let (mut x0, mut y0, mut x1, mut y1) = if let Some(rect) = area {
+    let x0 = rect.min_x().floor() as i32;
+    let y0 = rect.min_y().floor() as i32;
+    let x1 = rect.max_x().ceil() as i32;
+    let y1 = rect.max_y().ceil() as i32;
+    (x0, y0, x1, y1)
+  } else {
+    (0, 0, max_width as i32, max_height as i32)
+  };
+  x0 = x0.clamp(0, max_width as i32);
+  y0 = y0.clamp(0, max_height as i32);
+  x1 = x1.clamp(0, max_width as i32);
+  y1 = y1.clamp(0, max_height as i32);
+  if x0 >= x1 || y0 >= y1 {
+    return;
+  }
+
+  let src_pixels = layer.pixels();
+  let dst_pixels = dest.pixels_mut();
+  let src_stride = layer_width;
+  let dst_stride = dest_width;
+  let opacity = opacity.clamp(0.0, 1.0);
+
+  for y in y0..y1 {
+    let yi = y as usize;
+    for x in x0..x1 {
+      let xi = x as usize;
+      let src_px = src_pixels[yi * src_stride + xi];
+      let raw_sa = src_px.alpha() as f32 / 255.0;
+      if raw_sa == 0.0 || opacity == 0.0 {
+        continue;
+      }
+      let dst_px = &mut dst_pixels[yi * dst_stride + xi];
+      let sa = (raw_sa * opacity).clamp(0.0, 1.0);
+      let da = dst_px.alpha() as f32 / 255.0;
+
+      let src_rgb = if raw_sa > 0.0 {
+        (
+          (src_px.red() as f32 / 255.0) / raw_sa,
+          (src_px.green() as f32 / 255.0) / raw_sa,
+          (src_px.blue() as f32 / 255.0) / raw_sa,
+        )
+      } else {
+        (0.0, 0.0, 0.0)
+      };
+      let dst_rgb = if da > 0.0 {
+        (
+          (dst_px.red() as f32 / 255.0) / da,
+          (dst_px.green() as f32 / 255.0) / da,
+          (dst_px.blue() as f32 / 255.0) / da,
+        )
+      } else {
+        (0.0, 0.0, 0.0)
+      };
+
+      let blended_rgb = apply_hsl_blend(mode, src_rgb, dst_rgb);
+
+      let out_a = sa + da * (1.0 - sa);
+      let out_rgb = if out_a > 0.0 {
+        (
+          (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
+          (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
+          (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
+        )
+      } else {
+        (0.0, 0.0, 0.0)
+      };
+
+      let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+      let scale = out_a;
+      let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+      let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+      let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+      *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+}
+
 fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
   match mode {
     MixBlendMode::Normal => SkiaBlendMode::SourceOver,
@@ -7659,87 +7494,7 @@ fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
     MixBlendMode::Color => SkiaBlendMode::Color,
     MixBlendMode::Luminosity => SkiaBlendMode::Luminosity,
     MixBlendMode::PlusLighter => SkiaBlendMode::Plus,
-    MixBlendMode::PlusDarker => SkiaBlendMode::Darken,
-    MixBlendMode::HueHsv => SkiaBlendMode::Hue,
-    MixBlendMode::SaturationHsv => SkiaBlendMode::Saturation,
-    MixBlendMode::ColorHsv => SkiaBlendMode::Color,
-    MixBlendMode::LuminosityHsv => SkiaBlendMode::Luminosity,
-    MixBlendMode::HueOklch => SkiaBlendMode::Hue,
-    MixBlendMode::ChromaOklch => SkiaBlendMode::Saturation,
-    MixBlendMode::ColorOklch => SkiaBlendMode::Color,
-    MixBlendMode::LuminosityOklch => SkiaBlendMode::Luminosity,
   }
-}
-
-fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> Option<Pixmap> {
-  let size = IntSize::from_wh(tile.width(), tile.height())?;
-  let mut data = Vec::with_capacity(tile.data().len());
-  for chunk in tile.data().chunks(4) {
-    let v = Painter::mask_value_from_pixel(chunk, mode);
-    data.extend_from_slice(&[v, v, v, v]);
-  }
-  Pixmap::from_vec(data, size)
-}
-
-fn paint_mask_tile(
-  dest: &mut Pixmap,
-  tile: &Pixmap,
-  tx: f32,
-  ty: f32,
-  tile_w: f32,
-  tile_h: f32,
-  clip_rect: Rect,
-  scale: f32,
-) {
-  if tile_w <= 0.0 || tile_h <= 0.0 {
-    return;
-  }
-  let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
-  let Some(intersection) = tile_rect.intersection(clip_rect) else {
-    return;
-  };
-  if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
-    return;
-  }
-
-  let device_clip = Rect::from_xywh(
-    intersection.x() * scale,
-    intersection.y() * scale,
-    intersection.width() * scale,
-    intersection.height() * scale,
-  );
-  if device_clip.width() <= 0.0 || device_clip.height() <= 0.0 {
-    return;
-  }
-  let Some(src_rect) = SkiaRect::from_xywh(
-    device_clip.x(),
-    device_clip.y(),
-    device_clip.width(),
-    device_clip.height(),
-  ) else {
-    return;
-  };
-
-  let scale_x = tile_w / tile.width() as f32;
-  let scale_y = tile_h / tile.height() as f32;
-
-  let mut paint = Paint::default();
-  paint.shader = Pattern::new(
-    tile.as_ref(),
-    SpreadMode::Pad,
-    FilterQuality::Bilinear,
-    1.0,
-    Transform::from_row(
-      scale_x * scale,
-      0.0,
-      0.0,
-      scale_y * scale,
-      tx * scale,
-      ty * scale,
-    ),
-  );
-  paint.anti_alias = false;
-  dest.fill_rect(src_rect, &paint, Transform::identity(), None);
 }
 
 fn resolve_border_radii(style: Option<&ComputedStyle>, bounds: Rect) -> BorderRadii {
@@ -7969,344 +7724,6 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
   }
 }
 
-fn is_manual_blend(mode: MixBlendMode) -> bool {
-  matches!(
-    mode,
-    MixBlendMode::Hue
-      | MixBlendMode::Saturation
-      | MixBlendMode::Color
-      | MixBlendMode::Luminosity
-      | MixBlendMode::HueHsv
-      | MixBlendMode::SaturationHsv
-      | MixBlendMode::ColorHsv
-      | MixBlendMode::LuminosityHsv
-      | MixBlendMode::HueOklch
-      | MixBlendMode::ChromaOklch
-      | MixBlendMode::ColorOklch
-      | MixBlendMode::LuminosityOklch
-      | MixBlendMode::PlusDarker
-  )
-}
-
-fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-  let max = r.max(g).max(b);
-  let min = r.min(g).min(b);
-  let l = (max + min) / 2.0;
-  if (max - min).abs() < f32::EPSILON {
-    return (0.0, 0.0, l);
-  }
-
-  let d = max - min;
-  let s = if l > 0.5 {
-    d / (2.0 - max - min)
-  } else {
-    d / (max + min)
-  };
-  let h = if (max - r).abs() < f32::EPSILON {
-    (g - b) / d + if g < b { 6.0 } else { 0.0 }
-  } else if (max - g).abs() < f32::EPSILON {
-    (b - r) / d + 2.0
-  } else {
-    (r - g) / d + 4.0
-  } / 6.0;
-  (h, s, l)
-}
-
-fn hue_to_rgb(p: f32, q: f32, t: f32) -> f32 {
-  let mut t = t;
-  if t < 0.0 {
-    t += 1.0;
-  }
-  if t > 1.0 {
-    t -= 1.0;
-  }
-  if t < 1.0 / 6.0 {
-    p + (q - p) * 6.0 * t
-  } else if t < 0.5 {
-    q
-  } else if t < 2.0 / 3.0 {
-    p + (q - p) * (2.0 / 3.0 - t) * 6.0
-  } else {
-    p
-  }
-}
-
-fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
-  if s <= 0.0 {
-    return (l, l, l);
-  }
-  let q = if l < 0.5 {
-    l * (1.0 + s)
-  } else {
-    l + s - l * s
-  };
-  let p = 2.0 * l - q;
-  let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
-  let g = hue_to_rgb(p, q, h);
-  let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
-  (r, g, b)
-}
-
-fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-  let max = r.max(g).max(b);
-  let min = r.min(g).min(b);
-  let v = max;
-  let d = max - min;
-  if d.abs() < f32::EPSILON {
-    return (0.0, 0.0, v);
-  }
-  let s = if max > 0.0 { d / max } else { 0.0 };
-  let h = if (max - r).abs() < f32::EPSILON {
-    (g - b) / d + if g < b { 6.0 } else { 0.0 }
-  } else if (max - g).abs() < f32::EPSILON {
-    (b - r) / d + 2.0
-  } else {
-    (r - g) / d + 4.0
-  } / 6.0;
-  (h, s, v)
-}
-
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
-  if s <= 0.0 {
-    return (v, v, v);
-  }
-  let hh = (h * 6.0) % 6.0;
-  let i = hh.floor();
-  let f = hh - i;
-  let p = v * (1.0 - s);
-  let q = v * (1.0 - s * f);
-  let t = v * (1.0 - s * (1.0 - f));
-  match i as i32 {
-    0 => (v, t, p),
-    1 => (q, v, p),
-    2 => (p, v, t),
-    3 => (p, q, v),
-    4 => (t, p, v),
-    _ => (v, p, q),
-  }
-}
-
-fn srgb_to_linear(v: f32) -> f32 {
-  if v <= 0.04045 {
-    v / 12.92
-  } else {
-    ((v + 0.055) / 1.055).powf(2.4)
-  }
-}
-
-fn linear_to_srgb(v: f32) -> f32 {
-  if v <= 0.0031308 {
-    v * 12.92
-  } else {
-    1.055 * v.powf(1.0 / 2.4) - 0.055
-  }
-}
-
-fn linear_srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-  let l = 0.412_221_46 * r + 0.536_332_54 * g + 0.051_445_996 * b;
-  let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
-  let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
-
-  let l_ = l.cbrt();
-  let m_ = m.cbrt();
-  let s_ = s.cbrt();
-
-  let l_ok = 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_;
-  let a_ok = 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_;
-  let b_ok = 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_;
-  (l_ok, a_ok, b_ok)
-}
-
-fn oklab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
-  let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
-  let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
-  let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
-
-  let l3 = l_.powf(3.0);
-  let m3 = m_.powf(3.0);
-  let s3 = s_.powf(3.0);
-
-  let r = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
-  let g = -1.268_438_ * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
-  let b = 0.004_421_97 * l3 - 0.703_418_6 * m3 + 1.698_594_8 * s3;
-  (r, g, b)
-}
-
-fn rgb_to_oklch(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-  let (l, a, bb) = linear_srgb_to_oklab(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b));
-  let c = (a * a + bb * bb).sqrt();
-  let h = bb.atan2(a).to_degrees().rem_euclid(360.0);
-  (l, c, h)
-}
-
-fn oklch_to_rgb(l: f32, c: f32, h: f32) -> (f32, f32, f32) {
-  let hr = h.to_radians();
-  let a = c * hr.cos();
-  let b = c * hr.sin();
-  let (r_lin, g_lin, b_lin) = oklab_to_linear_srgb(l, a, b);
-  (
-    linear_to_srgb(r_lin).clamp(0.0, 1.0),
-    linear_to_srgb(g_lin).clamp(0.0, 1.0),
-    linear_to_srgb(b_lin).clamp(0.0, 1.0),
-  )
-}
-
-fn apply_manual_blend(
-  mode: MixBlendMode,
-  src: (f32, f32, f32),
-  dst: (f32, f32, f32),
-) -> (f32, f32, f32) {
-  match mode {
-    MixBlendMode::Hue
-    | MixBlendMode::Saturation
-    | MixBlendMode::Color
-    | MixBlendMode::Luminosity => {
-      let (sh, ss, sl) = rgb_to_hsl(src.0, src.1, src.2);
-      let (dh, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
-      match mode {
-        MixBlendMode::Hue => hsl_to_rgb(sh, ds, dl),
-        MixBlendMode::Saturation => hsl_to_rgb(dh, ss, dl),
-        MixBlendMode::Color => hsl_to_rgb(sh, ss, dl),
-        MixBlendMode::Luminosity => hsl_to_rgb(dh, ds, sl),
-        _ => dst,
-      }
-    }
-    MixBlendMode::HueHsv
-    | MixBlendMode::SaturationHsv
-    | MixBlendMode::ColorHsv
-    | MixBlendMode::LuminosityHsv => {
-      let (sh, ss, sv) = rgb_to_hsv(src.0, src.1, src.2);
-      let (dh, ds, dv) = rgb_to_hsv(dst.0, dst.1, dst.2);
-      match mode {
-        MixBlendMode::HueHsv => hsv_to_rgb(sh, ds, dv),
-        MixBlendMode::SaturationHsv => hsv_to_rgb(dh, ss, dv),
-        MixBlendMode::ColorHsv => hsv_to_rgb(sh, ss, dv),
-        MixBlendMode::LuminosityHsv => hsv_to_rgb(dh, ds, sv),
-        _ => dst,
-      }
-    }
-    MixBlendMode::HueOklch
-    | MixBlendMode::ChromaOklch
-    | MixBlendMode::ColorOklch
-    | MixBlendMode::LuminosityOklch => {
-      let (sl, sc, sh) = rgb_to_oklch(src.0, src.1, src.2);
-      let (dl, dc, dh) = rgb_to_oklch(dst.0, dst.1, dst.2);
-      match mode {
-        MixBlendMode::HueOklch => oklch_to_rgb(dl, dc, sh),
-        MixBlendMode::ChromaOklch => oklch_to_rgb(dl, sc, dh),
-        MixBlendMode::ColorOklch => oklch_to_rgb(dl, sc, sh),
-        MixBlendMode::LuminosityOklch => oklch_to_rgb(sl, dc, dh),
-        _ => dst,
-      }
-    }
-    MixBlendMode::PlusDarker => (
-      (src.0 + dst.0 - 1.0).max(0.0).min(1.0),
-      (src.1 + dst.1 - 1.0).max(0.0).min(1.0),
-      (src.2 + dst.2 - 1.0).max(0.0).min(1.0),
-    ),
-    _ => dst,
-  }
-}
-
-fn composite_manual_layer(
-  dest: &mut Pixmap,
-  layer: &Pixmap,
-  opacity: f32,
-  mode: MixBlendMode,
-  area: Option<Rect>,
-) {
-  if !is_manual_blend(mode) {
-    return;
-  }
-  let dest_width = dest.width() as usize;
-  let dest_height = dest.height() as usize;
-  let layer_width = layer.width() as usize;
-  let layer_height = layer.height() as usize;
-  if dest_width == 0 || dest_height == 0 || layer_width == 0 || layer_height == 0 {
-    return;
-  }
-
-  let max_width = dest_width.min(layer_width);
-  let max_height = dest_height.min(layer_height);
-  let (mut x0, mut y0, mut x1, mut y1) = if let Some(rect) = area {
-    let x0 = rect.min_x().floor() as i32;
-    let y0 = rect.min_y().floor() as i32;
-    let x1 = rect.max_x().ceil() as i32;
-    let y1 = rect.max_y().ceil() as i32;
-    (x0, y0, x1, y1)
-  } else {
-    (0, 0, max_width as i32, max_height as i32)
-  };
-  x0 = x0.clamp(0, max_width as i32);
-  y0 = y0.clamp(0, max_height as i32);
-  x1 = x1.clamp(0, max_width as i32);
-  y1 = y1.clamp(0, max_height as i32);
-  if x0 >= x1 || y0 >= y1 {
-    return;
-  }
-
-  let src_pixels = layer.pixels();
-  let dst_pixels = dest.pixels_mut();
-  let src_stride = layer_width;
-  let dst_stride = dest_width;
-  let opacity = opacity.clamp(0.0, 1.0);
-
-  for y in y0..y1 {
-    let yi = y as usize;
-    for x in x0..x1 {
-      let xi = x as usize;
-      let src_px = src_pixels[yi * src_stride + xi];
-      let raw_sa = src_px.alpha() as f32 / 255.0;
-      if raw_sa == 0.0 || opacity == 0.0 {
-        continue;
-      }
-      let dst_px = &mut dst_pixels[yi * dst_stride + xi];
-      let sa = (raw_sa * opacity).clamp(0.0, 1.0);
-      let da = dst_px.alpha() as f32 / 255.0;
-
-      let src_rgb = if raw_sa > 0.0 {
-        (
-          (src_px.red() as f32 / 255.0) / raw_sa,
-          (src_px.green() as f32 / 255.0) / raw_sa,
-          (src_px.blue() as f32 / 255.0) / raw_sa,
-        )
-      } else {
-        (0.0, 0.0, 0.0)
-      };
-      let dst_rgb = if da > 0.0 {
-        (
-          (dst_px.red() as f32 / 255.0) / da,
-          (dst_px.green() as f32 / 255.0) / da,
-          (dst_px.blue() as f32 / 255.0) / da,
-        )
-      } else {
-        (0.0, 0.0, 0.0)
-      };
-
-      let blended_rgb = apply_manual_blend(mode, src_rgb, dst_rgb);
-
-      let out_a = sa + da * (1.0 - sa);
-      let out_rgb = if out_a > 0.0 {
-        (
-          (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
-          (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
-          (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
-        )
-      } else {
-        (0.0, 0.0, 0.0)
-      };
-
-      let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-      let scale = out_a;
-      let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-      let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-      let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-      *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
-        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-    }
-  }
-}
-
 #[derive(Clone, Copy)]
 struct BackgroundRects {
   border: Rect,
@@ -8449,28 +7866,6 @@ fn compute_background_size(
   img_w: f32,
   img_h: f32,
 ) -> (f32, f32) {
-  compute_background_size_from_value(
-    &layer.size,
-    font_size,
-    root_font_size,
-    viewport,
-    area_w,
-    area_h,
-    img_w,
-    img_h,
-  )
-}
-
-fn compute_background_size_from_value(
-  size: &BackgroundSize,
-  font_size: f32,
-  root_font_size: f32,
-  viewport: (f32, f32),
-  area_w: f32,
-  area_h: f32,
-  img_w: f32,
-  img_h: f32,
-) -> (f32, f32) {
   let natural_w = if img_w > 0.0 { Some(img_w) } else { None };
   let natural_h = if img_h > 0.0 { Some(img_h) } else { None };
   let ratio = if img_w > 0.0 && img_h > 0.0 {
@@ -8479,7 +7874,7 @@ fn compute_background_size_from_value(
     None
   };
 
-  match size {
+  match layer.size {
     BackgroundSize::Keyword(BackgroundSizeKeyword::Cover) => {
       if let (Some(w), Some(h)) = (natural_w, natural_h) {
         let scale = (area_w / w).max(area_h / h);
@@ -8506,8 +7901,8 @@ fn compute_background_size_from_value(
         }
       };
 
-      let resolved_x = resolve(*x, area_w);
-      let resolved_y = resolve(*y, area_h);
+      let resolved_x = resolve(x, area_w);
+      let resolved_y = resolve(y, area_h);
 
       match (resolved_x, resolved_y) {
         (Some(w), Some(h)) => (w, h),
@@ -9392,17 +8787,7 @@ mod tests {
 
     let painter = Painter::new(100, 10, Rgba::WHITE).expect("painter");
     let mut commands = Vec::new();
-    let mut top_layer = Vec::new();
-    painter.collect_stacking_context(
-      &root,
-      Point::ZERO,
-      None,
-      true,
-      &mut commands,
-      &mut top_layer,
-      true,
-    );
-    commands.extend(top_layer);
+    painter.collect_stacking_context(&root, Point::ZERO, None, true, &mut commands);
 
     // Background commands occur in paint order; filter child backgrounds to check ordering.
     let xs: Vec<f32> = commands
@@ -9732,13 +9117,7 @@ mod tests {
   fn filter_lengths_resolve_viewport_units() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::new(10.0, LengthUnit::Vw))];
-    let filters = resolve_filters(
-      &style.filter,
-      &style,
-      (200.0, 100.0),
-      &FontContext::new(),
-      None,
-    );
+    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!((radius - 20.0).abs() < 0.001),
       other => panic!("expected blur filter, got {:?}", other),
@@ -9749,13 +9128,7 @@ mod tests {
   fn filter_lengths_ignore_percentages() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::percent(50.0))];
-    let filters = resolve_filters(
-      &style.filter,
-      &style,
-      (200.0, 100.0),
-      &FontContext::new(),
-      None,
-    );
+    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
     assert!(filters.is_empty(), "percentage blur should be discarded");
   }
 
@@ -9764,13 +9137,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_size = 20.0;
     style.filter = vec![FilterFunction::Blur(Length::new(1.0, LengthUnit::Ex))];
-    let filters = resolve_filters(
-      &style.filter,
-      &style,
-      (200.0, 100.0),
-      &FontContext::new(),
-      None,
-    );
+    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!(
         (radius - 10.0).abs() < 2.0,
@@ -9781,42 +9148,10 @@ mod tests {
   }
 
   #[test]
-  fn url_filters_resolve_to_svg_filter() {
-    use base64::{engine::general_purpose, Engine as _};
-
-    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='2' height='2'><filter id='f'><feFlood flood-color='rgb(255,0,0)' flood-opacity='1' result='f'/><feComposite in='f' in2='SourceAlpha' operator='in'/></filter></svg>";
-    let data_url = format!(
-      "data:image/svg+xml;base64,{}",
-      general_purpose::STANDARD.encode(svg)
-    );
-
-    let mut style = ComputedStyle::default();
-    style.filter = vec![FilterFunction::Url(data_url)];
-    let cache = ImageCache::new();
-    let filters = resolve_filters(
-      &style.filter,
-      &style,
-      (20.0, 20.0),
-      &FontContext::new(),
-      Some(&cache),
-    );
-    assert!(matches!(
-      filters.first(),
-      Some(ResolvedFilter::SvgFilter(_))
-    ));
-  }
-
-  #[test]
   fn negative_blur_lengths_resolve_to_no_filter() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::px(-2.0))];
-    let filters = resolve_filters(
-      &style.filter,
-      &style,
-      (200.0, 100.0),
-      &FontContext::new(),
-      None,
-    );
+    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
     assert!(filters.is_empty(), "negative blur should drop the filter");
   }
 
@@ -9943,13 +9278,7 @@ mod tests {
       FilterFunction::Invert(1.3),
       FilterFunction::Opacity(1.7),
     ];
-    let filters = resolve_filters(
-      &style.filter,
-      &style,
-      (200.0, 100.0),
-      &FontContext::new(),
-      None,
-    );
+    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
       ResolvedFilter::Grayscale(v) | ResolvedFilter::Sepia(v) | ResolvedFilter::Invert(v) =>
@@ -9967,13 +9296,7 @@ mod tests {
       FilterFunction::Contrast(1.7),
       FilterFunction::Saturate(3.2),
     ];
-    let filters = resolve_filters(
-      &style.filter,
-      &style,
-      (200.0, 100.0),
-      &FontContext::new(),
-      None,
-    );
+    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
     assert_eq!(filters.len(), 3);
     assert!(filters
       .iter()
@@ -11559,7 +10882,7 @@ mod tests {
     let pixmap = paint_tree(&FragmentTree::new(root), 2, 2, Rgba::WHITE).expect("paint");
     let (r, g, b, _) = color_at(&pixmap, 0, 0);
 
-    let expected = apply_manual_blend(
+    let expected = apply_hsl_blend(
       MixBlendMode::Hue,
       (
         src.0 as f32 / 255.0,
@@ -11669,7 +10992,7 @@ mod tests {
     let pixmap = paint_tree(&FragmentTree::new(fragment), 2, 2, Rgba::WHITE).expect("paint");
     let (r, g, b, _) = color_at(&pixmap, 0, 0);
 
-    let expected = apply_manual_blend(
+    let expected = apply_hsl_blend(
       MixBlendMode::Color,
       (
         src.0 as f32 / 255.0,
@@ -11875,7 +11198,6 @@ mod tests {
       radii: BorderRadii::uniform(0.5),
       clip: None,
       clip_path: None,
-      mask: None,
       commands: vec![DisplayCommand::Background {
         rect: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
         style,
@@ -11910,7 +11232,6 @@ mod tests {
       radii: BorderRadii::ZERO,
       clip: None,
       clip_path: None,
-      mask: None,
       commands: Vec::new(),
     };
 
@@ -12437,213 +11758,6 @@ mod tests {
   }
 
   #[test]
-  fn border_image_accepts_radial_gradients() {
-    let mut style = ComputedStyle::default();
-    style.border_top_width = Length::px(4.0);
-    style.border_right_width = Length::px(4.0);
-    style.border_bottom_width = Length::px(4.0);
-    style.border_left_width = Length::px(4.0);
-    style.border_image = BorderImage {
-      source: BorderImageSource::Image(Box::new(BackgroundImage::RadialGradient {
-        shape: crate::css::types::RadialGradientShape::Circle,
-        size: crate::css::types::RadialGradientSize::FarthestCorner,
-        position: BackgroundPosition::Position {
-          x: crate::style::types::BackgroundPositionComponent {
-            alignment: 0.0,
-            offset: Length::percent(0.0),
-          },
-          y: crate::style::types::BackgroundPositionComponent {
-            alignment: 0.0,
-            offset: Length::percent(0.0),
-          },
-        },
-        stops: vec![
-          ColorStop {
-            position: Some(0.0),
-            color: crate::style::color::Color::Rgba(Rgba::new(255, 0, 0, 1.0)),
-          },
-          ColorStop {
-            position: Some(1.0),
-            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 255, 1.0)),
-          },
-        ],
-      })),
-      slice: BorderImageSlice {
-        top: BorderImageSliceValue::Number(1.0),
-        right: BorderImageSliceValue::Number(1.0),
-        bottom: BorderImageSliceValue::Number(1.0),
-        left: BorderImageSliceValue::Number(1.0),
-        fill: false,
-      },
-      ..BorderImage::default()
-    };
-
-    let mut painter = Painter::new(16, 16, Rgba::WHITE).expect("painter");
-    painter.fill_background();
-    painter.paint_borders(0.0, 0.0, 16.0, 16.0, &style);
-
-    let top_left = painter.pixmap.pixel(0, 0).unwrap();
-    assert!(
-      top_left.red() > top_left.blue(),
-      "radial gradient should start near red at the origin, got {:?}",
-      top_left
-    );
-    let bottom_right = painter.pixmap.pixel(15, 15).unwrap();
-    assert!(
-      bottom_right.blue() > bottom_right.red(),
-      "far corner should reach final stop (blue), got {:?}",
-      bottom_right
-    );
-  }
-
-  #[test]
-  fn border_image_accepts_conic_gradients() {
-    let mut style = ComputedStyle::default();
-    style.border_top_width = Length::px(4.0);
-    style.border_right_width = Length::px(4.0);
-    style.border_bottom_width = Length::px(4.0);
-    style.border_left_width = Length::px(4.0);
-    style.border_image = BorderImage {
-      source: BorderImageSource::Image(Box::new(BackgroundImage::ConicGradient {
-        from_angle: 0.0,
-        position: BackgroundPosition::Position {
-          x: crate::style::types::BackgroundPositionComponent {
-            alignment: 0.5,
-            offset: Length::percent(0.0),
-          },
-          y: crate::style::types::BackgroundPositionComponent {
-            alignment: 0.5,
-            offset: Length::percent(0.0),
-          },
-        },
-        stops: vec![
-          ColorStop {
-            position: Some(0.0),
-            color: crate::style::color::Color::Rgba(Rgba::new(255, 0, 0, 1.0)),
-          },
-          ColorStop {
-            position: Some(0.5),
-            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 255, 1.0)),
-          },
-        ],
-      })),
-      slice: BorderImageSlice {
-        top: BorderImageSliceValue::Number(1.0),
-        right: BorderImageSliceValue::Number(1.0),
-        bottom: BorderImageSliceValue::Number(1.0),
-        left: BorderImageSliceValue::Number(1.0),
-        fill: false,
-      },
-      ..BorderImage::default()
-    };
-
-    let mut painter = Painter::new(16, 16, Rgba::WHITE).expect("painter");
-    painter.fill_background();
-    painter.paint_borders(0.0, 0.0, 16.0, 16.0, &style);
-
-    let top = painter.pixmap.pixel(8, 0).unwrap();
-    let bottom = painter.pixmap.pixel(8, 15).unwrap();
-    assert!(
-      top.red() > top.blue(),
-      "top edge should start at first stop (red)"
-    );
-    assert!(
-      bottom.blue() > bottom.red(),
-      "conic gradient should rotate to blue by the bottom edge"
-    );
-  }
-
-  #[test]
-  fn mask_image_gradient_repeats() {
-    let mut style = ComputedStyle::default();
-    style.background_color = Rgba::new(255, 0, 0, 1.0);
-    style.set_mask_layers(vec![MaskLayer {
-      image: Some(BackgroundImage::LinearGradient {
-        angle: 90.0,
-        stops: vec![
-          ColorStop {
-            position: Some(0.0),
-            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 1.0)),
-          },
-          ColorStop {
-            position: Some(0.5),
-            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 1.0)),
-          },
-          ColorStop {
-            position: Some(0.5),
-            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 0.0)),
-          },
-          ColorStop {
-            position: Some(1.0),
-            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 0.0)),
-          },
-        ],
-      }),
-      size: BackgroundSize::Explicit(
-        BackgroundSizeComponent::Length(Length::px(4.0)),
-        BackgroundSizeComponent::Length(Length::percent(100.0)),
-      ),
-      repeat: BackgroundRepeat {
-        x: BackgroundRepeatKeyword::Repeat,
-        y: BackgroundRepeatKeyword::NoRepeat,
-      },
-      mode: MaskMode::Alpha,
-      ..MaskLayer::default()
-    }]);
-
-    let fragment = FragmentNode::new_block_styled(
-      Rect::from_xywh(0.0, 0.0, 12.0, 4.0),
-      vec![],
-      Arc::new(style),
-    );
-    let tree = FragmentTree::new(fragment);
-    let pixmap = paint_tree(&tree, 12, 4, Rgba::WHITE).expect("paint");
-
-    let visible = color_at(&pixmap, 1, 1);
-    let masked = color_at(&pixmap, 3, 1);
-    assert_eq!(visible.0, 255);
-    assert_eq!(visible.3, 255);
-    assert_eq!(masked, (255, 255, 255, 255));
-  }
-
-  #[test]
-  fn mask_image_respects_luminance_mode() {
-    let mut style = ComputedStyle::default();
-    style.background_color = Rgba::new(0, 0, 255, 1.0);
-    style.set_mask_layers(vec![MaskLayer {
-      image: Some(BackgroundImage::LinearGradient {
-        angle: 90.0,
-        stops: vec![
-          ColorStop {
-            position: Some(0.0),
-            color: crate::style::color::Color::Rgba(Rgba::new(0, 0, 0, 1.0)),
-          },
-          ColorStop {
-            position: Some(1.0),
-            color: crate::style::color::Color::Rgba(Rgba::new(255, 255, 255, 1.0)),
-          },
-        ],
-      }),
-      mode: MaskMode::Luminance,
-      repeat: BackgroundRepeat::repeat(),
-      ..MaskLayer::default()
-    }]);
-
-    let fragment = FragmentNode::new_block_styled(
-      Rect::from_xywh(0.0, 0.0, 12.0, 4.0),
-      vec![],
-      Arc::new(style),
-    );
-    let tree = FragmentTree::new(fragment);
-    let pixmap = paint_tree(&tree, 12, 4, Rgba::WHITE).expect("paint");
-
-    let left = color_at(&pixmap, 0, 1);
-    let right = color_at(&pixmap, 11, 1);
-    assert_eq!(left, (255, 255, 255, 255));
-    assert_eq!(right.2, 255);
-  }
-
-  #[test]
   fn transform_box_uses_content_box_for_translate_percentage() {
     let mut style = ComputedStyle::default();
     style.transform_box = TransformBox::ContentBox;
@@ -12659,7 +11773,7 @@ mod tests {
       ));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-    let transform = build_transform(Some(&style), bounds).expect("transform should build");
+    let transform = build_transform(Some(&style), bounds, None).expect("transform should build");
 
     assert!((transform.tx - 85.0).abs() < 1e-3);
     assert!(transform.ty.abs() < 1e-3);
@@ -12680,7 +11794,7 @@ mod tests {
       .push(crate::css::types::Transform::Scale(2.0, 1.0));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-    let transform = build_transform(Some(&style), bounds).expect("transform should build");
+    let transform = build_transform(Some(&style), bounds, None).expect("transform should build");
 
     assert!((transform.tx + 15.0).abs() < 1e-3);
     assert!(transform.ty.abs() < 1e-3);

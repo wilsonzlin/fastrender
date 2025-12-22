@@ -35,11 +35,13 @@ use crate::style::values::LengthUnit;
 use crate::style::var_resolution::resolve_var_for_property;
 use crate::style::var_resolution::VarResolutionResult;
 use crate::style::ComputedStyle;
+use cssparser::BasicParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
 use std::cell::Cell;
 use std::collections::HashMap;
+use svgtypes::PathParser;
 
 thread_local! {
     static IMAGE_SET_DPR: Cell<f32> = const { Cell::new(1.0) };
@@ -7481,6 +7483,33 @@ pub fn apply_declaration_with_base(
         }
       }
     }
+    "offset-path" => {
+      if let Some(path) = parse_offset_path_value(&resolved_value) {
+        styles.offset_path = path;
+      }
+    }
+    "offset-distance" => match &resolved_value {
+      PropertyValue::Length(len) => {
+        styles.offset_distance = *len;
+      }
+      PropertyValue::Percentage(p) => {
+        styles.offset_distance = Length::percent(*p);
+      }
+      PropertyValue::Number(n) if (*n).abs() < f32::EPSILON => {
+        styles.offset_distance = Length::px(0.0);
+      }
+      _ => {}
+    },
+    "offset-rotate" => {
+      if let Some(value) = parse_offset_rotate(&resolved_value) {
+        styles.offset_rotate = value;
+      }
+    }
+    "offset-anchor" => {
+      if let Some(anchor) = parse_offset_anchor(&resolved_value) {
+        styles.offset_anchor = anchor;
+      }
+    }
     "transform-box" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
         if let Some(value) = parse_transform_box(kw) {
@@ -8702,6 +8731,400 @@ fn parse_transform_style(kw: &str) -> Option<TransformStyle> {
     "preserve-3d" => Some(TransformStyle::Preserve3d),
     _ => None,
   }
+}
+
+fn parse_angle_value<'i, 't>(
+  input: &mut Parser<'i, 't>,
+) -> Result<f32, cssparser::ParseError<'i, ()>> {
+  let token = input.next()?;
+  match token {
+    Token::Dimension {
+      value, ref unit, ..
+    } => {
+      let u = unit.to_ascii_lowercase();
+      let deg = match u.as_str() {
+        "deg" => *value,
+        "grad" => *value * (360.0 / 400.0),
+        "rad" => value.to_degrees(),
+        "turn" => *value * 360.0,
+        _ => {
+          return Err(cssparser::ParseError {
+            kind: cssparser::ParseErrorKind::Basic(BasicParseErrorKind::UnexpectedToken(
+              token.clone(),
+            )),
+            location: input.current_source_location(),
+          })
+        }
+      };
+      Ok(deg)
+    }
+    Token::Number { value, .. } if *value == 0.0 => Ok(0.0),
+    _ => Err(cssparser::ParseError {
+      kind: cssparser::ParseErrorKind::Basic(BasicParseErrorKind::UnexpectedToken(token.clone())),
+      location: input.current_source_location(),
+    }),
+  }
+}
+
+fn parse_offset_path_value(value: &PropertyValue) -> Option<OffsetPath> {
+  match value {
+    PropertyValue::Keyword(kw) => parse_offset_path_str(kw),
+    PropertyValue::Multiple(tokens) => {
+      let mut combined = String::new();
+      for (idx, token) in tokens.iter().enumerate() {
+        let PropertyValue::Keyword(part) = token else {
+          return None;
+        };
+        if idx > 0 {
+          combined.push(' ');
+        }
+        combined.push_str(part);
+      }
+      parse_offset_path_str(combined.trim())
+    }
+    _ => None,
+  }
+}
+
+fn parse_offset_path_str(input: &str) -> Option<OffsetPath> {
+  let trimmed = input.trim();
+  if trimmed.eq_ignore_ascii_case("none") {
+    return Some(OffsetPath::None);
+  }
+
+  if let Some(path_data) = trimmed
+    .strip_prefix("path(")
+    .and_then(|s| s.strip_suffix(')'))
+  {
+    let inner = path_data.trim().trim_matches(&['"', '\''][..]);
+    if let Some(commands) = parse_svg_motion_path(inner) {
+      return Some(OffsetPath::Path(commands));
+    }
+    return None;
+  }
+
+  let mut input = ParserInput::new(trimmed);
+  let mut parser = Parser::new(&mut input);
+
+  if let Ok(shape) = parser.try_parse(parse_basic_shape) {
+    parser.expect_exhausted().ok()?;
+    return Some(OffsetPath::BasicShape(Box::new(shape)));
+  }
+
+  if parser
+    .try_parse(|p| p.expect_function_matching("ray"))
+    .is_ok()
+  {
+    let ray = parser.parse_nested_block(parse_ray).ok()?;
+    parser.expect_exhausted().ok()?;
+    return Some(OffsetPath::Ray(ray));
+  }
+
+  None
+}
+
+fn parse_svg_motion_path(data: &str) -> Option<Vec<MotionPathCommand>> {
+  let mut commands = Vec::new();
+  let mut current = (0.0f32, 0.0f32);
+  let mut subpath_start = (0.0f32, 0.0f32);
+  let mut last_cubic_ctrl: Option<(f32, f32)> = None;
+  let mut last_quad_ctrl: Option<(f32, f32)> = None;
+
+  for segment in PathParser::from(data) {
+    let seg = segment.ok()?;
+    match seg {
+      svgtypes::PathSegment::MoveTo { abs, x, y } => {
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        current = (nx, ny);
+        subpath_start = current;
+        commands.push(MotionPathCommand::MoveTo(MotionPosition {
+          x: Length::px(nx),
+          y: Length::px(ny),
+        }));
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      svgtypes::PathSegment::LineTo { abs, x, y } => {
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        current = (nx, ny);
+        commands.push(MotionPathCommand::LineTo(MotionPosition {
+          x: Length::px(nx),
+          y: Length::px(ny),
+        }));
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      svgtypes::PathSegment::HorizontalLineTo { abs, x } => {
+        let nx = if abs { x as f32 } else { current.0 + x as f32 };
+        current.0 = nx;
+        commands.push(MotionPathCommand::LineTo(MotionPosition {
+          x: Length::px(nx),
+          y: Length::px(current.1),
+        }));
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      svgtypes::PathSegment::VerticalLineTo { abs, y } => {
+        let ny = if abs { y as f32 } else { current.1 + y as f32 };
+        current.1 = ny;
+        commands.push(MotionPathCommand::LineTo(MotionPosition {
+          x: Length::px(current.0),
+          y: Length::px(ny),
+        }));
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      svgtypes::PathSegment::CurveTo { abs, x1, y1, x2, y2, x, y } => {
+        let start = current;
+        let ctrl1 = if abs {
+          (x1 as f32, y1 as f32)
+        } else {
+          (current.0 + x1 as f32, current.1 + y1 as f32)
+        };
+        let ctrl2 = if abs {
+          (x2 as f32, y2 as f32)
+        } else {
+          (current.0 + x2 as f32, current.1 + y2 as f32)
+        };
+        let end = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        flatten_cubic_bezier(start, ctrl1, ctrl2, end, &mut commands);
+        current = end;
+        last_cubic_ctrl = Some(ctrl2);
+        last_quad_ctrl = None;
+      }
+      svgtypes::PathSegment::SmoothCurveTo { abs, x2, y2, x, y } => {
+        let start = current;
+        let ctrl1 = match last_cubic_ctrl {
+          Some((px, py)) => (2.0 * current.0 - px, 2.0 * current.1 - py),
+          None => current,
+        };
+        let ctrl2 = if abs {
+          (x2 as f32, y2 as f32)
+        } else {
+          (current.0 + x2 as f32, current.1 + y2 as f32)
+        };
+        let end = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        flatten_cubic_bezier(start, ctrl1, ctrl2, end, &mut commands);
+        current = end;
+        last_cubic_ctrl = Some(ctrl2);
+        last_quad_ctrl = None;
+      }
+      svgtypes::PathSegment::Quadratic { abs, x1, y1, x, y } => {
+        let start = current;
+        let ctrl = if abs {
+          (x1 as f32, y1 as f32)
+        } else {
+          (current.0 + x1 as f32, current.1 + y1 as f32)
+        };
+        let end = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        flatten_quadratic_bezier(start, ctrl, end, &mut commands);
+        current = end;
+        last_quad_ctrl = Some(ctrl);
+        last_cubic_ctrl = None;
+      }
+      svgtypes::PathSegment::SmoothQuadratic { abs, x, y } => {
+        let start = current;
+        let ctrl = match last_quad_ctrl {
+          Some((px, py)) => (2.0 * current.0 - px, 2.0 * current.1 - py),
+          None => current,
+        };
+        let end = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        flatten_quadratic_bezier(start, ctrl, end, &mut commands);
+        current = end;
+        last_quad_ctrl = Some(ctrl);
+        last_cubic_ctrl = None;
+      }
+      svgtypes::PathSegment::EllipticalArc { abs, x, y, .. } => {
+        let end = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        // Approximate arcs as straight lines for motion path purposes.
+        commands.push(MotionPathCommand::LineTo(MotionPosition {
+          x: Length::px(end.0),
+          y: Length::px(end.1),
+        }));
+        current = end;
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      svgtypes::PathSegment::ClosePath { .. } => {
+        commands.push(MotionPathCommand::ClosePath);
+        current = subpath_start;
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+    }
+  }
+
+  if commands.is_empty() {
+    None
+  } else {
+    Some(commands)
+  }
+}
+
+fn flatten_cubic_bezier(
+  start: (f32, f32),
+  ctrl1: (f32, f32),
+  ctrl2: (f32, f32),
+  end: (f32, f32),
+  out: &mut Vec<MotionPathCommand>,
+) {
+  const STEPS: usize = 20;
+  for step in 1..=STEPS {
+    let t = step as f32 / STEPS as f32;
+    let mt = 1.0 - t;
+    let x = mt * mt * mt * start.0
+      + 3.0 * mt * mt * t * ctrl1.0
+      + 3.0 * mt * t * t * ctrl2.0
+      + t * t * t * end.0;
+    let y = mt * mt * mt * start.1
+      + 3.0 * mt * mt * t * ctrl1.1
+      + 3.0 * mt * t * t * ctrl2.1
+      + t * t * t * end.1;
+    out.push(MotionPathCommand::LineTo(MotionPosition {
+      x: Length::px(x),
+      y: Length::px(y),
+    }));
+  }
+}
+
+fn flatten_quadratic_bezier(
+  start: (f32, f32),
+  ctrl: (f32, f32),
+  end: (f32, f32),
+  out: &mut Vec<MotionPathCommand>,
+) {
+  const STEPS: usize = 20;
+  for step in 1..=STEPS {
+    let t = step as f32 / STEPS as f32;
+    let mt = 1.0 - t;
+    let x = mt * mt * start.0 + 2.0 * mt * t * ctrl.0 + t * t * end.0;
+    let y = mt * mt * start.1 + 2.0 * mt * t * ctrl.1 + t * t * end.1;
+    out.push(MotionPathCommand::LineTo(MotionPosition {
+      x: Length::px(x),
+      y: Length::px(y),
+    }));
+  }
+}
+
+fn parse_ray<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Ray, cssparser::ParseError<'i, ()>> {
+  let angle = parse_angle_value(input)
+    .map_err(|_| input.new_error(BasicParseErrorKind::QualifiedRuleInvalid))?;
+  let mut length: Option<Length> = None;
+  let mut contain = false;
+
+  while !input.is_exhausted() {
+    if input
+      .try_parse(|p| p.expect_ident_matching("contain"))
+      .is_ok()
+    {
+      contain = true;
+      continue;
+    }
+
+    if length.is_none() {
+      if let Ok(len) = input.try_parse(parse_length_component) {
+        length = Some(len);
+        continue;
+      }
+    }
+
+    let _ = input.try_parse(|p| p.expect_comma());
+    break;
+  }
+
+  Ok(Ray {
+    angle,
+    length,
+    contain,
+  })
+}
+
+fn parse_offset_rotate(value: &PropertyValue) -> Option<OffsetRotate> {
+  let raw = property_value_to_string(value)?;
+  let mut input = ParserInput::new(&raw);
+  let mut parser = Parser::new(&mut input);
+  let mut auto = false;
+  let mut reverse = false;
+
+  if parser
+    .try_parse(|p| p.expect_ident_matching("reverse"))
+    .is_ok()
+  {
+    auto = true;
+    reverse = true;
+  } else if parser
+    .try_parse(|p| p.expect_ident_matching("auto"))
+    .is_ok()
+  {
+    auto = true;
+  }
+
+  // Allow optional second keyword when first was reverse
+  if !auto
+    && parser
+      .try_parse(|p| p.expect_ident_matching("reverse"))
+      .is_ok()
+  {
+    auto = true;
+    reverse = true;
+  } else if auto && !reverse {
+    if parser
+      .try_parse(|p| p.expect_ident_matching("reverse"))
+      .is_ok()
+    {
+      reverse = true;
+    }
+  }
+
+  let angle = parser.try_parse(parse_angle_value).unwrap_or(0.0);
+  parser.expect_exhausted().ok()?;
+
+  if auto {
+    Some(OffsetRotate::Auto { angle, reverse })
+  } else {
+    Some(OffsetRotate::Angle(angle))
+  }
+}
+
+fn parse_offset_anchor(value: &PropertyValue) -> Option<OffsetAnchor> {
+  if let PropertyValue::Keyword(kw) = value {
+    if kw.eq_ignore_ascii_case("auto") {
+      return Some(OffsetAnchor::Auto);
+    }
+  }
+
+  parse_transform_origin(value).map(|origin| OffsetAnchor::Position {
+    x: origin.x,
+    y: origin.y,
+  })
 }
 
 fn parse_backface_visibility(kw: &str) -> Option<BackfaceVisibility> {

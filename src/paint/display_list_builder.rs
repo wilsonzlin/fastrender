@@ -36,7 +36,6 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::layout::utils::resolve_font_relative_length;
-use crate::math::MathFragment;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BlendModeItem;
@@ -123,7 +122,6 @@ use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
-use crate::tree::box_tree::MathReplaced;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
@@ -366,7 +364,7 @@ impl DisplayListBuilder {
 
     if let Some(style) = fragment.style.as_deref() {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
-        && (!style.transform.is_empty() || style.perspective.is_some())
+        && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
       {
         if let Some(transform) = Self::build_transform(style, absolute_rect, self.viewport) {
           if Self::backface_is_hidden(&transform) {
@@ -381,7 +379,7 @@ impl DisplayListBuilder {
 
     if let Some(style) = fragment.style.as_deref() {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
-        && (!style.transform.is_empty() || style.perspective.is_some())
+        && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
       {
         if let Some(transform) = Self::build_transform(style, absolute_rect, self.viewport) {
           if Self::backface_is_hidden(&transform) {
@@ -534,20 +532,8 @@ impl DisplayListBuilder {
     let (filters, backdrop_filters, radii) = root_style
       .map(|style| {
         (
-          Self::resolve_filters(
-            &style.filter,
-            style,
-            self.viewport,
-            &self.font_ctx,
-            self.image_cache.as_ref(),
-          ),
-          Self::resolve_filters(
-            &style.backdrop_filter,
-            style,
-            self.viewport,
-            &self.font_ctx,
-            self.image_cache.as_ref(),
-          ),
+          Self::resolve_filters(&style.filter, style, self.viewport, &self.font_ctx),
+          Self::resolve_filters(&style.backdrop_filter, style, self.viewport, &self.font_ctx),
           Self::resolve_border_radii(Some(style), context.bounds),
         )
       })
@@ -765,14 +751,6 @@ impl DisplayListBuilder {
         filters,
         backdrop_filters,
         radii,
-        mask: root_fragment.and_then(|f| {
-          let style = f.style.as_ref()?;
-          let has_mask = style
-            .mask_layers
-            .iter()
-            .any(|layer| layer.image.as_ref().map(|img| !matches!(img, BackgroundImage::None)).unwrap_or(false));
-          has_mask.then_some(style.clone())
-        }),
       }));
 
     for child in neg {
@@ -818,15 +796,6 @@ impl DisplayListBuilder {
       MixBlendMode::Color => BlendMode::Color,
       MixBlendMode::Luminosity => BlendMode::Luminosity,
       MixBlendMode::PlusLighter => BlendMode::PlusLighter,
-      MixBlendMode::PlusDarker => BlendMode::PlusDarker,
-      MixBlendMode::HueHsv => BlendMode::HueHsv,
-      MixBlendMode::SaturationHsv => BlendMode::SaturationHsv,
-      MixBlendMode::ColorHsv => BlendMode::ColorHsv,
-      MixBlendMode::LuminosityHsv => BlendMode::LuminosityHsv,
-      MixBlendMode::HueOklch => BlendMode::HueOklch,
-      MixBlendMode::ChromaOklch => BlendMode::ChromaOklch,
-      MixBlendMode::ColorOklch => BlendMode::ColorOklch,
-      MixBlendMode::LuminosityOklch => BlendMode::LuminosityOklch,
     }
   }
 
@@ -1360,7 +1329,6 @@ impl DisplayListBuilder {
     style: &ComputedStyle,
     viewport: Option<(f32, f32)>,
     font_ctx: &FontContext,
-    image_cache: Option<&ImageCache>,
   ) -> Vec<ResolvedFilter> {
     let viewport = viewport.unwrap_or((0.0, 0.0));
     filters
@@ -1394,9 +1362,6 @@ impl DisplayListBuilder {
         crate::style::types::FilterFunction::Opacity(v) => {
           Some(ResolvedFilter::Opacity(v.clamp(0.0, 1.0)))
         }
-        crate::style::types::FilterFunction::Url(url) => image_cache
-          .and_then(|cache| crate::paint::svg_filter::load_svg_filter(url, cache))
-          .map(ResolvedFilter::SvgFilter),
         crate::style::types::FilterFunction::DropShadow(shadow) => {
           let color = match shadow.color {
             crate::style::types::FilterColor::CurrentColor => style.color,
@@ -1720,193 +1685,201 @@ impl DisplayListBuilder {
         .filter(|v| *v > 0.0)
     });
 
-    if style.transform.is_empty() && resolved_perspective.is_none() {
-      return None;
-    }
+    let mut transform_from_list: Option<Transform3D> = None;
 
-    let mut ts = Transform3D::identity();
-    const EPS: f32 = 1e-6;
-    for component in &style.transform {
-      let next = match component {
-        crate::css::types::Transform::Translate(x, y) => {
-          let tx = Self::resolve_transform_length(
-            x,
-            style.font_size,
-            style.root_font_size,
-            percentage_width,
-          );
-          let ty = Self::resolve_transform_length(
-            y,
-            style.font_size,
-            style.root_font_size,
-            percentage_height,
-          );
-          Transform3D::translate(tx, ty, 0.0)
-        }
-        crate::css::types::Transform::TranslateX(x) => {
-          let tx = Self::resolve_transform_length(
-            x,
-            style.font_size,
-            style.root_font_size,
-            percentage_width,
-          );
-          Transform3D::translate(tx, 0.0, 0.0)
-        }
-        crate::css::types::Transform::TranslateY(y) => {
-          let ty = Self::resolve_transform_length(
-            y,
-            style.font_size,
-            style.root_font_size,
-            percentage_height,
-          );
-          Transform3D::translate(0.0, ty, 0.0)
-        }
-        crate::css::types::Transform::TranslateZ(z) => Transform3D::translate(
-          0.0,
-          0.0,
-          Self::resolve_transform_length(
-            z,
-            style.font_size,
-            style.root_font_size,
-            percentage_width,
+    if !style.transform.is_empty() || resolved_perspective.is_some() {
+      let mut ts = Transform3D::identity();
+      const EPS: f32 = 1e-6;
+      for component in &style.transform {
+        let next = match component {
+          crate::css::types::Transform::Translate(x, y) => {
+            let tx = Self::resolve_transform_length(
+              x,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+            );
+            let ty = Self::resolve_transform_length(
+              y,
+              style.font_size,
+              style.root_font_size,
+              percentage_height,
+            );
+            Transform3D::translate(tx, ty, 0.0)
+          }
+          crate::css::types::Transform::TranslateX(x) => {
+            let tx = Self::resolve_transform_length(
+              x,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+            );
+            Transform3D::translate(tx, 0.0, 0.0)
+          }
+          crate::css::types::Transform::TranslateY(y) => {
+            let ty = Self::resolve_transform_length(
+              y,
+              style.font_size,
+              style.root_font_size,
+              percentage_height,
+            );
+            Transform3D::translate(0.0, ty, 0.0)
+          }
+          crate::css::types::Transform::TranslateZ(z) => Transform3D::translate(
+            0.0,
+            0.0,
+            Self::resolve_transform_length(
+              z,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+            ),
           ),
-        ),
-        crate::css::types::Transform::Translate3d(x, y, z) => {
-          let tx = Self::resolve_transform_length(
-            x,
-            style.font_size,
-            style.root_font_size,
-            percentage_width,
-          );
-          let ty = Self::resolve_transform_length(
-            y,
-            style.font_size,
-            style.root_font_size,
-            percentage_height,
-          );
-          let tz = Self::resolve_transform_length(
-            z,
-            style.font_size,
-            style.root_font_size,
-            percentage_width,
-          );
-          Transform3D::translate(tx, ty, tz)
-        }
-        crate::css::types::Transform::Scale(sx, sy) => Transform3D::scale(*sx, *sy, 1.0),
-        crate::css::types::Transform::ScaleX(sx) => Transform3D::scale(*sx, 1.0, 1.0),
-        crate::css::types::Transform::ScaleY(sy) => Transform3D::scale(1.0, *sy, 1.0),
-        crate::css::types::Transform::ScaleZ(sz) => Transform3D::scale(1.0, 1.0, *sz),
-        crate::css::types::Transform::Scale3d(sx, sy, sz) => Transform3D::scale(*sx, *sy, *sz),
-        crate::css::types::Transform::Rotate(deg) | crate::css::types::Transform::RotateZ(deg) => {
-          Transform3D::rotate_z(deg.to_radians())
-        }
-        crate::css::types::Transform::RotateX(deg) => Transform3D::rotate_x(deg.to_radians()),
-        crate::css::types::Transform::RotateY(deg) => Transform3D::rotate_y(deg.to_radians()),
-        crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
-          let len = (x * x + y * y + z * z).sqrt();
-          if len < EPS {
-            Transform3D::identity()
-          } else {
-            let ax = *x / len;
-            let ay = *y / len;
-            let az = *z / len;
-            let angle = deg.to_radians();
-            let (s, c) = angle.sin_cos();
-            let t = 1.0 - c;
+          crate::css::types::Transform::Translate3d(x, y, z) => {
+            let tx = Self::resolve_transform_length(
+              x,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+            );
+            let ty = Self::resolve_transform_length(
+              y,
+              style.font_size,
+              style.root_font_size,
+              percentage_height,
+            );
+            let tz = Self::resolve_transform_length(
+              z,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+            );
+            Transform3D::translate(tx, ty, tz)
+          }
+          crate::css::types::Transform::Scale(sx, sy) => Transform3D::scale(*sx, *sy, 1.0),
+          crate::css::types::Transform::ScaleX(sx) => Transform3D::scale(*sx, 1.0, 1.0),
+          crate::css::types::Transform::ScaleY(sy) => Transform3D::scale(1.0, *sy, 1.0),
+          crate::css::types::Transform::ScaleZ(sz) => Transform3D::scale(1.0, 1.0, *sz),
+          crate::css::types::Transform::Scale3d(sx, sy, sz) => Transform3D::scale(*sx, *sy, *sz),
+          crate::css::types::Transform::Rotate(deg)
+          | crate::css::types::Transform::RotateZ(deg) => Transform3D::rotate_z(deg.to_radians()),
+          crate::css::types::Transform::RotateX(deg) => Transform3D::rotate_x(deg.to_radians()),
+          crate::css::types::Transform::RotateY(deg) => Transform3D::rotate_y(deg.to_radians()),
+          crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
+            let len = (x * x + y * y + z * z).sqrt();
+            if len < EPS {
+              Transform3D::identity()
+            } else {
+              let ax = *x / len;
+              let ay = *y / len;
+              let az = *z / len;
+              let angle = deg.to_radians();
+              let (s, c) = angle.sin_cos();
+              let t = 1.0 - c;
 
-            let m00 = t * ax * ax + c;
-            let m01 = t * ax * ay + s * az;
-            let m02 = t * ax * az - s * ay;
-            let m10 = t * ax * ay - s * az;
-            let m11 = t * ay * ay + c;
-            let m12 = t * ay * az + s * ax;
-            let m20 = t * ax * az + s * ay;
-            let m21 = t * ay * az - s * ax;
-            let m22 = t * az * az + c;
+              let m00 = t * ax * ax + c;
+              let m01 = t * ax * ay + s * az;
+              let m02 = t * ax * az - s * ay;
+              let m10 = t * ax * ay - s * az;
+              let m11 = t * ay * ay + c;
+              let m12 = t * ay * az + s * ax;
+              let m20 = t * ax * az + s * ay;
+              let m21 = t * ay * az - s * ax;
+              let m22 = t * az * az + c;
 
-            Transform3D {
-              m: [
-                m00, m10, m20, 0.0, // column 1
-                m01, m11, m21, 0.0, // column 2
-                m02, m12, m22, 0.0, // column 3
-                0.0, 0.0, 0.0, 1.0, // column 4
-              ],
+              Transform3D {
+                m: [
+                  m00, m10, m20, 0.0, // column 1
+                  m01, m11, m21, 0.0, // column 2
+                  m02, m12, m22, 0.0, // column 3
+                  0.0, 0.0, 0.0, 1.0, // column 4
+                ],
+              }
             }
           }
-        }
-        crate::css::types::Transform::SkewX(deg) => Transform3D::skew(deg.to_radians(), 0.0),
-        crate::css::types::Transform::SkewY(deg) => Transform3D::skew(0.0, deg.to_radians()),
-        crate::css::types::Transform::Skew(ax, ay) => {
-          Transform3D::skew(ax.to_radians(), ay.to_radians())
-        }
-        crate::css::types::Transform::Perspective(len) => {
-          Transform3D::perspective(Self::resolve_transform_length(
-            len,
-            style.font_size,
-            style.root_font_size,
-            percentage_width,
-          ))
-        }
-        crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
-          Transform3D::from_2d(&Transform2D {
-            a: *a,
-            b: *b,
-            c: *c,
-            d: *d,
-            e: *e,
-            f: *f,
-          })
-        }
-        crate::css::types::Transform::Matrix3d(values) => Transform3D { m: *values },
-      };
-      ts = ts.multiply(&next);
-    }
+          crate::css::types::Transform::SkewX(deg) => Transform3D::skew(deg.to_radians(), 0.0),
+          crate::css::types::Transform::SkewY(deg) => Transform3D::skew(0.0, deg.to_radians()),
+          crate::css::types::Transform::Skew(ax, ay) => {
+            Transform3D::skew(ax.to_radians(), ay.to_radians())
+          }
+          crate::css::types::Transform::Perspective(len) => {
+            Transform3D::perspective(Self::resolve_transform_length(
+              len,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+            ))
+          }
+          crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
+            Transform3D::from_2d(&Transform2D {
+              a: *a,
+              b: *b,
+              c: *c,
+              d: *d,
+              e: *e,
+              f: *f,
+            })
+          }
+          crate::css::types::Transform::Matrix3d(values) => Transform3D { m: *values },
+        };
+        ts = ts.multiply(&next);
+      }
 
-    let origin_x = Self::resolve_transform_length(
-      &style.transform_origin.x,
-      style.font_size,
-      style.root_font_size,
-      percentage_width,
-    );
-    let origin_y = Self::resolve_transform_length(
-      &style.transform_origin.y,
-      style.font_size,
-      style.root_font_size,
-      percentage_height,
-    );
-    let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
-
-    let mut final_matrix = Transform3D::translate(origin.x, origin.y, 0.0)
-      .multiply(&ts)
-      .multiply(&Transform3D::translate(-origin.x, -origin.y, 0.0));
-
-    if let Some(perspective) = resolved_perspective {
-      let po_x = Self::resolve_transform_length(
-        &style.perspective_origin.x,
+      let origin_x = Self::resolve_transform_length(
+        &style.transform_origin.x,
         style.font_size,
         style.root_font_size,
         percentage_width,
       );
-      let po_y = Self::resolve_transform_length(
-        &style.perspective_origin.y,
+      let origin_y = Self::resolve_transform_length(
+        &style.transform_origin.y,
         style.font_size,
         style.root_font_size,
         percentage_height,
       );
-      let perspective_origin = Point::new(reference.x() + po_x, reference.y() + po_y);
-      let perspective_matrix =
-        Transform3D::translate(perspective_origin.x, perspective_origin.y, 0.0)
-          .multiply(&Transform3D::perspective(perspective))
-          .multiply(&Transform3D::translate(
-            -perspective_origin.x,
-            -perspective_origin.y,
-            0.0,
-          ));
+      let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
-      final_matrix = final_matrix.multiply(&perspective_matrix);
+      let mut matrix = Transform3D::translate(origin.x, origin.y, 0.0)
+        .multiply(&ts)
+        .multiply(&Transform3D::translate(-origin.x, -origin.y, 0.0));
+
+      if let Some(perspective) = resolved_perspective {
+        let po_x = Self::resolve_transform_length(
+          &style.perspective_origin.x,
+          style.font_size,
+          style.root_font_size,
+          percentage_width,
+        );
+        let po_y = Self::resolve_transform_length(
+          &style.perspective_origin.y,
+          style.font_size,
+          style.root_font_size,
+          percentage_height,
+        );
+        let perspective_origin = Point::new(reference.x() + po_x, reference.y() + po_y);
+        let perspective_matrix =
+          Transform3D::translate(perspective_origin.x, perspective_origin.y, 0.0)
+            .multiply(&Transform3D::perspective(perspective))
+            .multiply(&Transform3D::translate(
+              -perspective_origin.x,
+              -perspective_origin.y,
+              0.0,
+            ));
+        matrix = perspective_matrix.multiply(&matrix);
+      }
+
+      transform_from_list = Some(matrix);
     }
 
-    Some(final_matrix)
+    let motion = crate::paint::motion_path::compute_motion_transform(style, bounds, viewport)
+      .map(|t| Transform3D::from_2d(&t));
+
+    match (motion, transform_from_list) {
+      (None, None) => None,
+      (Some(motion), None) => Some(motion),
+      (None, Some(matrix)) => Some(matrix),
+      (Some(motion), Some(matrix)) => Some(matrix.multiply(&motion)),
+    }
   }
 
   /// Exposes transform resolution for debugging/inspection tools.
@@ -2209,12 +2182,6 @@ impl DisplayListBuilder {
       FragmentContent::Replaced { replaced_type, .. } => {
         if let ReplacedType::FormControl(control) = replaced_type {
           if self.emit_form_control(control, fragment, rect) {
-            return;
-          }
-        }
-
-        if let ReplacedType::Math(math) = replaced_type {
-          if self.emit_math_layout(math, fragment, rect) {
             return;
           }
         }
@@ -3908,79 +3875,6 @@ impl DisplayListBuilder {
     }
   }
 
-  fn emit_math_layout(&mut self, math: &MathReplaced, fragment: &FragmentNode, rect: Rect) -> bool {
-    let Some(layout) = math.layout.as_ref() else {
-      return false;
-    };
-    if layout.width <= 0.0 || layout.height <= 0.0 {
-      return false;
-    }
-
-    let style = fragment.style.as_deref();
-    let color = style.map(|s| s.color).unwrap_or(Rgba::BLACK);
-    let shadows = Self::text_shadows_from_style(style);
-    let scale_x = if layout.width > 0.0 {
-      rect.width() / layout.width
-    } else {
-      1.0
-    };
-    let scale_y = if layout.height > 0.0 {
-      rect.height() / layout.height
-    } else {
-      1.0
-    };
-    let scale = ((scale_x + scale_y) * 0.5).clamp(0.01, 64.0);
-
-    for frag in &layout.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => {
-          let mut scaled = run.clone();
-          scaled.font_size *= scale;
-          scaled.advance *= scale;
-          scaled.baseline_shift *= scale;
-          scaled.synthetic_bold *= scale;
-          scaled.scale *= scale;
-          for glyph in &mut scaled.glyphs {
-            glyph.x_offset *= scale;
-            glyph.y_offset *= scale;
-            glyph.x_advance *= scale;
-            glyph.y_advance *= scale;
-          }
-          let origin_x = rect.x() + origin.x * scale;
-          let origin_y = rect.y() + origin.y * scale;
-          let glyphs = self.glyphs_from_run(&scaled, origin_x, origin_y);
-          let font_id = self.font_id_from_run(&scaled);
-
-          self.list.push(DisplayItem::Text(TextItem {
-            origin: Point::new(origin_x, origin_y),
-            glyphs,
-            color,
-            shadows: shadows.clone(),
-            font_size: scaled.font_size,
-            advance_width: scaled.advance,
-            font_id: Some(font_id),
-            synthetic_bold: scaled.synthetic_bold,
-            synthetic_oblique: scaled.synthetic_oblique,
-            emphasis: None,
-            decorations: Vec::new(),
-          }));
-        }
-        MathFragment::Rule(rule_rect) => {
-          let x = rect.x() + rule_rect.x() * scale_x;
-          let y = rect.y() + rule_rect.y() * scale_y;
-          let w = rule_rect.width() * scale_x;
-          let h = rule_rect.height() * scale_y;
-          self.list.push(DisplayItem::FillRect(FillRectItem {
-            rect: Rect::from_xywh(x, y, w, h),
-            color,
-          }));
-        }
-      }
-    }
-
-    true
-  }
-
   fn resolved_accent_color(style: &ComputedStyle) -> Rgba {
     match style.accent_color {
       AccentColor::Color(c) => c,
@@ -4453,6 +4347,10 @@ mod tests {
   use crate::style::types::BackgroundRepeat;
   use crate::style::types::ImageRendering;
   use crate::style::types::MixBlendMode;
+  use crate::style::types::MotionPathCommand;
+  use crate::style::types::MotionPosition;
+  use crate::style::types::OffsetAnchor;
+  use crate::style::types::OffsetPath;
   use crate::style::types::TextDecorationLine;
   use crate::style::types::TransformBox;
   use crate::style::values::CalcLength;
@@ -5655,7 +5553,6 @@ mod tests {
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
-      None,
     );
 
     match filters.first() {
@@ -5690,7 +5587,6 @@ mod tests {
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
-      None,
     );
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
@@ -5715,7 +5611,6 @@ mod tests {
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
-      None,
     );
     assert_eq!(filters.len(), 3);
     assert!(filters
@@ -5870,6 +5765,74 @@ mod tests {
 
     assert!((transform.e + 15.0).abs() < 1e-3);
     assert!((transform.f).abs() < 1e-3);
+  }
+
+  #[test]
+  fn motion_path_combines_with_existing_transforms() {
+    let mut style = ComputedStyle::default();
+    style.transform_origin = crate::style::types::TransformOrigin {
+      x: Length::percent(0.0),
+      y: Length::percent(0.0),
+    };
+    style.transform.push(Transform::Scale(2.0, 1.0));
+    style.offset_path = OffsetPath::Path(vec![
+      MotionPathCommand::MoveTo(MotionPosition {
+        x: Length::px(0.0),
+        y: Length::px(0.0),
+      }),
+      MotionPathCommand::LineTo(MotionPosition {
+        x: Length::px(100.0),
+        y: Length::px(0.0),
+      }),
+    ]);
+    style.offset_anchor = OffsetAnchor::Position {
+      x: Length::px(0.0),
+      y: Length::px(0.0),
+    };
+    style.offset_distance = Length::percent(100.0);
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 20.0, 20.0);
+    let transform =
+      DisplayListBuilder::build_transform(&style, bounds, None).expect("transform should build");
+    let transform = transform.to_2d().expect("2d transform");
+
+    // Motion path translation composes before the transform list, so scaling affects translation.
+    assert!((transform.e - 200.0).abs() < 1e-3);
+    assert!((transform.a - 2.0).abs() < 1e-3);
+  }
+
+  #[test]
+  fn motion_path_composes_with_parent_transform() {
+    let mut style = ComputedStyle::default();
+    style.transform_origin = crate::style::types::TransformOrigin {
+      x: Length::percent(0.0),
+      y: Length::percent(0.0),
+    };
+    style.transform.push(Transform::Scale(2.0, 1.0));
+    style.offset_path = OffsetPath::Path(vec![
+      MotionPathCommand::MoveTo(MotionPosition {
+        x: Length::px(0.0),
+        y: Length::px(0.0),
+      }),
+      MotionPathCommand::LineTo(MotionPosition {
+        x: Length::px(100.0),
+        y: Length::px(0.0),
+      }),
+    ]);
+    style.offset_anchor = OffsetAnchor::Position {
+      x: Length::px(0.0),
+      y: Length::px(0.0),
+    };
+    style.offset_distance = Length::percent(50.0);
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 20.0, 20.0);
+    let child = DisplayListBuilder::build_transform(&style, bounds, None).expect("transform");
+    let parent = Transform3D::translate(25.0, 5.0, 0.0);
+    let combined = parent.multiply(&child).to_2d().expect("2d transform");
+
+    assert!((combined.e - 125.0).abs() < 1e-3);
+    assert!((combined.f - 5.0).abs() < 1e-3);
+    assert!((combined.a - 2.0).abs() < 1e-3);
   }
 
   #[test]
