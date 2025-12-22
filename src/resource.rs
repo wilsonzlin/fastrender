@@ -1063,6 +1063,32 @@ fn percent_decode(input: &str) -> Result<Vec<u8>> {
   Ok(out)
 }
 
+/// Allow fetching a target URL from a parent document, blocking http(s) → file:// by default.
+pub fn allow_file_iframe_from_http_parent(
+  parent_url: Option<&str>,
+  target_url: &str,
+  allow_file_from_http: bool,
+) -> bool {
+  if allow_file_from_http {
+    return true;
+  }
+
+  let Ok(target) = Url::parse(target_url) else {
+    return true;
+  };
+  if target.scheme() != "file" {
+    return true;
+  }
+
+  if let Some(parent) = parent_url.and_then(|p| Url::parse(p).ok()) {
+    if matches!(parent.scheme(), "http" | "https") {
+      return false;
+    }
+  }
+
+  true
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

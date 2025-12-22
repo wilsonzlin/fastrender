@@ -87,7 +87,9 @@ use crate::layout::profile::layout_profile_enabled;
 use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
 use crate::paint::painter::paint_tree_with_resources_scaled;
-use crate::paint::painter::paint_tree_with_resources_scaled_offset;
+use crate::paint::painter::paint_tree_with_resources_scaled_offset_options;
+use crate::paint::painter::PaintOptions;
+use crate::paint::painter::DEFAULT_MAX_IFRAME_DEPTH;
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
 use crate::resource::HttpFetcher;
@@ -210,6 +212,12 @@ pub struct FastRender {
 
   /// Base URL used for resolving links/targets
   base_url: Option<String>,
+
+  /// Maximum iframe nesting depth allowed during paint
+  max_iframe_depth: usize,
+
+  /// Whether to allow file:// iframe documents when parent is http(s)
+  allow_file_iframe_from_http: bool,
 }
 
 impl std::fmt::Debug for FastRender {
@@ -220,6 +228,11 @@ impl std::fmt::Debug for FastRender {
       .field("default_height", &self.default_height)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
       .field("base_url", &self.base_url)
+      .field("max_iframe_depth", &self.max_iframe_depth)
+      .field(
+        "allow_file_iframe_from_http",
+        &self.allow_file_iframe_from_http,
+      )
       .finish_non_exhaustive()
   }
 }
@@ -253,9 +266,14 @@ pub struct FastRenderConfig {
 
   /// Base URL used to resolve relative resource references (images, CSS)
   pub base_url: Option<String>,
-
   /// Optional in-memory resource cache configuration. If `None`, caching is disabled.
   pub resource_cache: Option<CachingFetcherConfig>,
+
+  /// Maximum iframe nesting depth when painting nested browsing contexts
+  pub max_iframe_depth: usize,
+
+  /// Allow http(s) parents to load file:// iframe documents when true (disabled by default)
+  pub allow_file_iframe_from_http: bool,
 }
 
 impl Default for FastRenderConfig {
@@ -267,6 +285,8 @@ impl Default for FastRenderConfig {
       device_pixel_ratio: 1.0,
       base_url: None,
       resource_cache: Some(CachingFetcherConfig::default()),
+      max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
+      allow_file_iframe_from_http: false,
     }
   }
 }
@@ -347,6 +367,18 @@ impl FastRenderBuilder {
     self
   }
 
+  /// Sets the maximum iframe nesting depth. Values less than 1 disable iframe rendering.
+  pub fn max_iframe_depth(mut self, depth: usize) -> Self {
+    self.config.max_iframe_depth = depth;
+    self
+  }
+
+  /// Allows http(s) parents to load file:// iframe sources when enabled.
+  pub fn allow_file_iframe_from_http(mut self, allow: bool) -> Self {
+    self.config.allow_file_iframe_from_http = allow;
+    self
+  }
+
   /// Sets a custom resource fetcher for loading external resources (images, CSS)
   ///
   /// This allows injection of custom fetching behavior, such as caching or mocking.
@@ -413,6 +445,18 @@ impl FastRenderConfig {
   /// Configures the resource cache. Passing `None` disables caching.
   pub fn with_resource_cache(mut self, cache: Option<CachingFetcherConfig>) -> Self {
     self.resource_cache = cache;
+    self
+  }
+
+  /// Sets the maximum iframe nesting depth when painting nested browsing contexts.
+  pub fn with_max_iframe_depth(mut self, depth: usize) -> Self {
+    self.max_iframe_depth = depth;
+    self
+  }
+
+  /// Allows http(s) parents to load file:// iframe sources when enabled.
+  pub fn with_file_iframe_from_http(mut self, allow: bool) -> Self {
+    self.allow_file_iframe_from_http = allow;
     self
   }
 }
@@ -545,6 +589,8 @@ impl FastRender {
       default_height: config.default_height,
       device_pixel_ratio: config.device_pixel_ratio,
       base_url: config.base_url.clone(),
+      max_iframe_depth: config.max_iframe_depth,
+      allow_file_iframe_from_http: config.allow_file_iframe_from_http,
     })
   }
 
@@ -1571,14 +1617,12 @@ impl FastRender {
   /// let pixmap = renderer.paint(&fragment_tree, 800, 600)?;
   /// ```
   pub fn paint(&self, fragment_tree: &FragmentTree, width: u32, height: u32) -> Result<Pixmap> {
-    paint_tree_with_resources_scaled(
+    self.paint_with_offset_and_options(
       fragment_tree,
       width,
       height,
-      self.background_color,
-      self.font_context.clone(),
-      self.image_cache.clone(),
-      self.device_pixel_ratio,
+      Point::ZERO,
+      self.default_paint_options(),
     )
   }
 
@@ -1590,7 +1634,32 @@ impl FastRender {
     height: u32,
     offset: Point,
   ) -> Result<Pixmap> {
-    paint_tree_with_resources_scaled_offset(
+    self.paint_with_offset_and_options(
+      fragment_tree,
+      width,
+      height,
+      offset,
+      self.default_paint_options(),
+    )
+  }
+
+  /// Paints a fragment tree using explicit paint options (used for nested documents).
+  pub(crate) fn paint_with_offset_and_options(
+    &self,
+    fragment_tree: &FragmentTree,
+    width: u32,
+    height: u32,
+    offset: Point,
+    mut options: PaintOptions,
+  ) -> Result<Pixmap> {
+    if options.base_url.is_none() {
+      options.base_url = self.base_url.clone();
+    }
+    options.max_iframe_depth = self.max_iframe_depth;
+    options.allow_file_iframe_from_http = self.allow_file_iframe_from_http;
+    options.fetcher = Arc::clone(&self.fetcher);
+
+    paint_tree_with_resources_scaled_offset_options(
       fragment_tree,
       width,
       height,
@@ -1599,7 +1668,14 @@ impl FastRender {
       self.image_cache.clone(),
       self.device_pixel_ratio,
       offset,
+      options,
     )
+  }
+
+  fn default_paint_options(&self) -> PaintOptions {
+    PaintOptions::new(self.base_url.clone(), Arc::clone(&self.fetcher))
+      .with_max_iframe_depth(self.max_iframe_depth)
+      .with_allow_file_iframe_from_http(self.allow_file_iframe_from_http)
   }
 
   /// Returns a reference to the font context
@@ -1632,6 +1708,16 @@ impl FastRender {
   pub fn clear_base_url(&mut self) {
     self.image_cache.clear_base_url();
     self.base_url = None;
+  }
+
+  /// Sets the maximum iframe nesting depth used during painting.
+  pub fn set_max_iframe_depth(&mut self, depth: usize) {
+    self.max_iframe_depth = depth;
+  }
+
+  /// Allows or blocks file:// iframe sources when the parent is http(s).
+  pub fn set_allow_file_iframe_from_http(&mut self, allow: bool) {
+    self.allow_file_iframe_from_http = allow;
   }
 
   /// Gets the default background color
@@ -2172,6 +2258,56 @@ impl CssImportLoader for CssImportFetcher {
       resource.content_type.as_deref(),
     ))
   }
+}
+
+/// Render a document string to a pixmap using explicit base URL and shared resources.
+pub(crate) fn render_document_to_pixmap_with_base_url(
+  html: &str,
+  viewport: Size,
+  background: Rgba,
+  base_url: Option<String>,
+  fetcher: Arc<dyn ResourceFetcher>,
+  font_ctx: FontContext,
+  mut image_cache: ImageCache,
+  device_pixel_ratio: f32,
+  mut paint_options: PaintOptions,
+) -> Result<Pixmap> {
+  if let Some(ref url) = base_url {
+    image_cache.set_base_url(url.clone());
+  } else {
+    image_cache.clear_base_url();
+  }
+
+  let layout_config =
+    LayoutConfig::for_viewport(viewport).with_identifier("iframe-document".to_string());
+  let layout_engine = LayoutEngine::with_font_context(layout_config, font_ctx.clone());
+  let target_width = viewport.width.ceil().max(1.0) as u32;
+  let target_height = viewport.height.ceil().max(1.0) as u32;
+
+  let mut renderer = FastRender {
+    font_context: font_ctx.clone(),
+    layout_engine,
+    image_cache,
+    fetcher,
+    background_color: background,
+    default_width: target_width,
+    default_height: target_height,
+    device_pixel_ratio,
+    base_url: base_url.clone(),
+    max_iframe_depth: paint_options.max_iframe_depth,
+    allow_file_iframe_from_http: paint_options.allow_file_iframe_from_http,
+  };
+
+  let dom = renderer.parse_html(html)?;
+  let mut fragment_tree = renderer.layout_document(&dom, target_width, target_height)?;
+  paint_options = paint_options.with_base_url(base_url);
+  renderer.paint_with_offset_and_options(
+    &fragment_tree,
+    target_width,
+    target_height,
+    Point::ZERO,
+    paint_options,
+  )
 }
 
 fn hash_enum_discriminant<T>(value: &T, hasher: &mut DefaultHasher) {
