@@ -496,24 +496,24 @@ impl AbsoluteLayout {
       style.margin.right
     };
 
-    let (mut x, mut width) = match (left, specified_width, right) {
+    let (mut x, mut width, overconstrained) = match (left, specified_width, right) {
       // Case 1: All three specified (overconstrained) - ignore right for LTR
       (Some(l), Some(w), Some(_r)) => {
         // For LTR, ignore right value
         let x = l + margin_left + border_left + padding_left;
-        (x, w)
+        (x, w, !margin_left_auto && !margin_right_auto)
       }
 
       // Case 2: left and width specified, right is auto
       (Some(l), Some(w), None) => {
         let x = l + margin_left + border_left + padding_left;
-        (x, w)
+        (x, w, false)
       }
 
       // Case 3: right and width specified, left is auto
       (None, Some(w), Some(r)) => {
         let x = cb_width - r - margin_right - border_right - padding_right - w;
-        (x, w)
+        (x, w, false)
       }
 
       // Case 4: left and right specified, width is auto (solve constraint)
@@ -525,7 +525,7 @@ impl AbsoluteLayout {
           available.max(0.0)
         };
         let x = l + margin_left + border_left + padding_left;
-        (x, width)
+        (x, width, false)
       }
 
       // Case 5: Only left specified - width auto shrink-to-fit
@@ -533,7 +533,7 @@ impl AbsoluteLayout {
         let available = cb_width - l - margin_left - margin_right - total_horizontal_spacing;
         let width = shrink(available);
         let x = l + margin_left + border_left + padding_left;
-        (x, width)
+        (x, width, false)
       }
 
       // Case 6: Only right specified - width auto shrink-to-fit
@@ -541,14 +541,14 @@ impl AbsoluteLayout {
         let available = cb_width - r - margin_left - margin_right - total_horizontal_spacing;
         let width = shrink(available);
         let x = cb_width - r - margin_right - border_right - padding_right - width;
-        (x, width)
+        (x, width, false)
       }
 
       // Case 7: Only width specified - use static position for left
       (None, Some(w), None) => {
         // Use static position
         let x = static_x + margin_left + border_left + padding_left;
-        (x, w)
+        (x, w, false)
       }
 
       // Case 8: None specified - shrink-to-fit using available space
@@ -556,7 +556,7 @@ impl AbsoluteLayout {
         let available = cb_width - margin_left - margin_right - total_horizontal_spacing;
         let width = shrink(available);
         let x = static_x + margin_left + border_left + padding_left;
-        (x, width)
+        (x, width, false)
       }
     };
 
@@ -571,25 +571,27 @@ impl AbsoluteLayout {
     }
 
     // Apply auto margin resolution only when both edges participate in the constraint (CSS 2.1 §10.3.7).
-    if let (Some(left_offset), Some(right_offset), Some(_)) = (left, right, specified_width) {
-      let available_for_margins = cb_width
-        - left_offset
-        - right_offset
-        - border_left
-        - padding_left
-        - width
-        - padding_right
-        - border_right;
+    if !overconstrained {
+      if let (Some(left_offset), Some(right_offset), Some(_)) = (left, right, specified_width) {
+        let available_for_margins = cb_width
+          - left_offset
+          - right_offset
+          - border_left
+          - padding_left
+          - width
+          - padding_right
+          - border_right;
 
-      if margin_left_auto && margin_right_auto {
-        margin_left = available_for_margins / 2.0;
-        margin_right = available_for_margins - margin_left;
-        x = left_offset + margin_left + border_left + padding_left;
-      } else if margin_left_auto {
-        margin_left = available_for_margins - margin_right;
-        x = left_offset + margin_left + border_left + padding_left;
-      } else if margin_right_auto {
-        margin_right = available_for_margins - margin_left;
+        if margin_left_auto && margin_right_auto {
+          margin_left = available_for_margins / 2.0;
+          margin_right = available_for_margins - margin_left;
+          x = left_offset + margin_left + border_left + padding_left;
+        } else if margin_left_auto {
+          margin_left = available_for_margins - margin_right;
+          x = left_offset + margin_left + border_left + padding_left;
+        } else if margin_right_auto {
+          margin_right = available_for_margins - margin_left;
+        }
       }
     }
 
@@ -676,23 +678,23 @@ impl AbsoluteLayout {
       preferred.min(available.max(preferred_min))
     };
 
-    let (mut y, mut height) = match (top, specified_height, bottom) {
+    let (mut y, mut height, overconstrained) = match (top, specified_height, bottom) {
       // All three specified (overconstrained) - ignore bottom
       (Some(t), Some(h), Some(_b)) => {
         let y = t + margin_top + border_top + padding_top;
-        (y, h)
+        (y, h, !margin_top_auto && !margin_bottom_auto)
       }
 
       // top and height specified
       (Some(t), Some(h), None) => {
         let y = t + margin_top + border_top + padding_top;
-        (y, h)
+        (y, h, false)
       }
 
       // bottom and height specified
       (None, Some(h), Some(b)) => {
         let y = cb_height - b - margin_bottom - border_bottom - padding_bottom - h;
-        (y, h)
+        (y, h, false)
       }
 
       // top and bottom specified, height is auto (fill available space per CSS 2.1)
@@ -700,7 +702,7 @@ impl AbsoluteLayout {
         let available = cb_height - t - b - margin_top - margin_bottom - total_vertical_spacing;
         let height = available.max(0.0);
         let y = t + margin_top + border_top + padding_top;
-        (y, height)
+        (y, height, false)
       }
 
       // Only top specified - shrink-to-fit
@@ -709,7 +711,7 @@ impl AbsoluteLayout {
         // For an unspecified opposite inset, CSS 2.1 treats bottom as auto; shrink-to-fit against the available CB height.
         let height = shrink(available);
         let y = t + margin_top + border_top + padding_top;
-        (y, height)
+        (y, height, false)
       }
 
       // Only bottom specified - shrink-to-fit
@@ -717,20 +719,20 @@ impl AbsoluteLayout {
         let available = cb_height - b - margin_top - margin_bottom - total_vertical_spacing;
         let height = shrink(available);
         let y = cb_height - b - margin_bottom - border_bottom - padding_bottom - height;
-        (y, height)
+        (y, height, false)
       }
 
       // Only height specified - use static position
       (None, Some(h), None) => {
         let y = static_y + margin_top + border_top + padding_top;
-        (y, h)
+        (y, h, false)
       }
 
       // None specified - use preferred block size (shrink-to-fit without constraints)
       (None, None, None) => {
         let height = preferred;
         let y = static_y + margin_top + border_top + padding_top;
-        (y, height)
+        (y, height, false)
       }
     };
 
@@ -744,25 +746,27 @@ impl AbsoluteLayout {
       }
     }
 
-    if let (Some(top_offset), Some(bottom_offset), Some(_)) = (top, bottom, specified_height) {
-      let available_for_margins = cb_height
-        - top_offset
-        - bottom_offset
-        - border_top
-        - padding_top
-        - height
-        - padding_bottom
-        - border_bottom;
+    if !overconstrained {
+      if let (Some(top_offset), Some(bottom_offset), Some(_)) = (top, bottom, specified_height) {
+        let available_for_margins = cb_height
+          - top_offset
+          - bottom_offset
+          - border_top
+          - padding_top
+          - height
+          - padding_bottom
+          - border_bottom;
 
-      if margin_top_auto && margin_bottom_auto {
-        margin_top = available_for_margins / 2.0;
-        margin_bottom = available_for_margins - margin_top;
-        y = top_offset + margin_top + border_top + padding_top;
-      } else if margin_top_auto {
-        margin_top = available_for_margins - margin_bottom;
-        y = top_offset + margin_top + border_top + padding_top;
-      } else if margin_bottom_auto {
-        margin_bottom = available_for_margins - margin_top;
+        if margin_top_auto && margin_bottom_auto {
+          margin_top = available_for_margins / 2.0;
+          margin_bottom = available_for_margins - margin_top;
+          y = top_offset + margin_top + border_top + padding_top;
+        } else if margin_top_auto {
+          margin_top = available_for_margins - margin_bottom;
+          y = top_offset + margin_top + border_top + padding_top;
+        } else if margin_bottom_auto {
+          margin_bottom = available_for_margins - margin_top;
+        }
       }
     }
 
