@@ -4,6 +4,7 @@ use fastrender::animation::{
 use fastrender::css::parser::parse_stylesheet;
 use fastrender::css::types::PropertyValue;
 use fastrender::dom;
+use fastrender::api::FastRender;
 use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::media::MediaContext;
@@ -162,4 +163,70 @@ fn nested_scroll_timelines_progress_independently() {
   assert!((outer_progress - 0.3).abs() < 0.05, "outer progress {outer_progress}");
   assert!((inner_progress - 0.44).abs() < 0.05, "inner progress {inner_progress}");
   assert!((outer_progress - inner_progress).abs() > 0.05);
+}
+
+fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+  let px = pixmap.pixel(x, y).unwrap();
+  (px.red(), px.green(), px.blue(), px.alpha())
+}
+
+fn red_pixels(pixmap: &tiny_skia::Pixmap) -> usize {
+  let mut count = 0usize;
+  for y in 0..pixmap.height() {
+    for x in 0..pixmap.width() {
+      let p = pixmap.pixel(x, y).unwrap();
+      if p.red() == 255 && p.green() == 0 && p.blue() == 0 && p.alpha() == 255 {
+        count += 1;
+      }
+    }
+  }
+  count
+}
+
+#[test]
+fn scroll_timeline_drives_animation_during_render() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r#"
+    <style>
+      html, body { margin: 0; height: 100%; }
+      body { background: black; scroll-timeline: main block; }
+      .box { display: block; position: sticky; top: 0; left: 0; width: 100px; height: 100px; background: red; animation-timeline: main; animation-name: fade; }
+      @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    </style>
+    <div class="box"></div>
+    <div style="height: 300px;"></div>
+  "#;
+
+  // Ensure content exceeds the viewport so scroll progress can advance.
+  let dom = renderer.parse_html(html).expect("parse html");
+  let tree = renderer.layout_document(&dom, 100, 100).expect("layout");
+  let content_height = tree.content_size().height();
+  assert!(content_height > 100.0, "content height must exceed viewport: {content_height}");
+  let max_scroll = (content_height - tree.viewport_size().height).max(0.0);
+  assert!(max_scroll > 0.0, "expected scrollable range, got {max_scroll}");
+  let timeline_check = ScrollTimeline::default();
+  let (pos, range, view_size) = axis_scroll_state(
+    timeline_check.axis,
+    WritingMode::HorizontalTb,
+    0.0,
+    max_scroll,
+    tree.viewport_size().width,
+    tree.viewport_size().height,
+    tree.content_size().width(),
+    tree.content_size().height(),
+  );
+  let prog = scroll_timeline_progress(&timeline_check, pos, range, view_size, &AnimationRange::default());
+  assert!(prog > 0.9, "expected near-complete progress ({} / {}) -> {prog}", pos, range);
+
+  let pixmap_top = renderer
+    .render_html_with_scroll(html, 100, 100, 0.0, 0.0)
+    .expect("render top");
+  assert_eq!(pixel(&pixmap_top, 50, 50), (0, 0, 0, 255));
+  assert_eq!(red_pixels(&pixmap_top), 0, "no red content when progress at start");
+
+  let pixmap_bottom = renderer
+    .render_html_with_scroll(html, 100, 100, 0.0, max_scroll)
+    .expect("render bottom");
+  assert_eq!(pixel(&pixmap_bottom, 50, 50), (255, 0, 0, 255));
+  assert!(red_pixels(&pixmap_bottom) > 0, "red content should appear when fully scrolled");
 }
