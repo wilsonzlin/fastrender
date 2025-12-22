@@ -46,9 +46,10 @@
 //! manager.leave_scope();
 //! ```
 
-use super::content::CounterStyle;
+use crate::style::counter_styles::{CounterStyleName, CounterStyleRegistry};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 /// A set of counter specifications for `counter-reset` or `counter-increment`
 ///
@@ -348,15 +349,23 @@ pub struct CounterManager {
   scopes: Vec<CounterScope>,
   /// Default increment for the `list-item` counter in the current scope (e.g., `reversed` lists).
   list_item_increments: Vec<i32>,
+  /// Available counter styles for formatting counters/markers.
+  counter_styles: Arc<CounterStyleRegistry>,
 }
 
 impl CounterManager {
   /// Creates a new CounterManager with an empty root scope
   pub fn new() -> Self {
+    Self::new_with_styles(Arc::new(CounterStyleRegistry::with_builtins()))
+  }
+
+  /// Creates a manager using the provided counter style registry.
+  pub fn new_with_styles(counter_styles: Arc<CounterStyleRegistry>) -> Self {
     Self {
       // Start with a root scope for implicit counters
       scopes: vec![CounterScope::new()],
       list_item_increments: vec![1],
+      counter_styles,
     }
   }
 
@@ -598,9 +607,9 @@ impl CounterManager {
   /// # Returns
   ///
   /// The formatted counter value, or "0" if the counter doesn't exist.
-  pub fn format(&self, name: &str, style: CounterStyle) -> String {
+  pub fn format<S: Into<CounterStyleName>>(&self, name: &str, style: S) -> String {
     let value = self.get_or_zero(name);
-    style.format(value)
+    self.counter_styles.format_value(value, style)
   }
 
   /// Formats all counter values with a separator (for counters() function)
@@ -634,16 +643,22 @@ impl CounterManager {
   ///
   /// assert_eq!(manager.format_all("section", ".", CounterStyle::Decimal), "1.2.3");
   /// ```
-  pub fn format_all(&self, name: &str, separator: &str, style: CounterStyle) -> String {
+  pub fn format_all<S: Into<CounterStyleName>>(
+    &self,
+    name: &str,
+    separator: &str,
+    style: S,
+  ) -> String {
     let values = self.get_all(name);
     if values.is_empty() {
       // Per CSS spec, if no counter exists, return "0"
-      return style.format(0);
+      return self.counter_styles.format_value(0, style);
     }
 
+    let style = style.into();
     values
       .iter()
-      .map(|&v| style.format(v))
+      .map(|&v| self.counter_styles.format_value(v, style.clone()))
       .collect::<Vec<_>>()
       .join(separator)
   }
@@ -748,6 +763,7 @@ impl CounterProperties {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::style::content::CounterStyle;
 
   // === CounterSet Parsing Tests ===
 

@@ -35,6 +35,7 @@ use super::types::SupportsCondition;
 use super::types::SupportsRule;
 use crate::dom::DomNode;
 use crate::error::Result;
+use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
 use crate::style::media::MediaQuery;
 use cssparser::ParseError;
 use cssparser::Parser;
@@ -175,6 +176,7 @@ fn parse_rule<'i, 't>(
         "supports" => parse_supports_rule(p),
         "layer" => parse_layer_rule(p),
         "page" => parse_page_rule(p),
+        "counter-style" => parse_counter_style_rule(p),
         "font-face" => parse_font_face_rule(p),
         "keyframes" | "-webkit-keyframes" => parse_keyframes_rule(p),
         _ => {
@@ -1026,6 +1028,283 @@ fn parse_keyframes_rule<'i, 't>(
 
   let frames = parser.parse_nested_block(|nested| parse_keyframe_list(nested))?;
   Ok(Some(CssRule::Keyframes(KeyframesRule { name, keyframes: frames })))
+}
+
+fn parse_counter_style_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  parser.skip_whitespace();
+
+  let name = match parser.next_including_whitespace() {
+    Ok(Token::Ident(id)) => id.to_string(),
+    Ok(Token::QuotedString(s)) => s.to_string(),
+    _ => {
+      skip_at_rule(parser);
+      return Ok(None);
+    }
+  };
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
+
+  let rule = parser.parse_nested_block(|parser| parse_counter_style_descriptors(parser, &name))?;
+  Ok(rule.map(CssRule::CounterStyle))
+}
+
+fn parse_counter_style_descriptors<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  name: &str,
+) -> std::result::Result<Option<CounterStyleRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let mut rule = CounterStyleRule::new(name);
+
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+      break;
+    }
+
+    let location = parser.current_source_location();
+    let ident = match parser.next_including_whitespace() {
+      Ok(Token::Ident(id)) => id.to_ascii_lowercase(),
+      _ => return Err(parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected ident".into()))),
+    };
+
+    match ident.as_str() {
+      "system" => {
+        rule.system = Some(parse_counter_style_system(parser)?);
+      }
+      "symbols" => {
+        rule.symbols = Some(parse_counter_style_symbols(parser)?);
+      }
+      "additive-symbols" => {
+        rule.additive_symbols = Some(parse_counter_style_additive_symbols(parser)?);
+      }
+      "negative" => {
+        rule.negative = Some(parse_counter_style_negative(parser)?);
+      }
+      "prefix" => {
+        rule.prefix = Some(parse_counter_style_component(parser)?);
+      }
+      "suffix" => {
+        rule.suffix = Some(parse_counter_style_component(parser)?);
+      }
+      "range" => {
+        rule.range = Some(parse_counter_style_range(parser)?);
+      }
+      "pad" => {
+        rule.pad = Some(parse_counter_style_pad(parser)?);
+      }
+      "fallback" => {
+        parser.skip_whitespace();
+        if let Ok(Token::Ident(id)) = parser.next_including_whitespace() {
+          rule.fallback = Some(id.to_string());
+        } else {
+          return Err(parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected ident".into())));
+        }
+      }
+      "speak-as" => {
+        rule.speak_as = Some(parse_counter_style_speak_as(parser)?);
+      }
+      _ => return Err(location.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(ident.into()))),
+    }
+
+    parser.skip_whitespace();
+  }
+
+  Ok(Some(rule))
+}
+
+fn parse_counter_system<'i>(value: &'i str) -> Option<CounterSystem> {
+  let mut input = ParserInput::new(value);
+  let mut parser = Parser::new(&mut input);
+  let ident = parser.expect_ident().ok()?.to_string().to_ascii_lowercase();
+  match ident.as_str() {
+    "cyclic" => Some(CounterSystem::Cyclic),
+    "numeric" => Some(CounterSystem::Numeric),
+    "alphabetic" => Some(CounterSystem::Alphabetic),
+    "symbolic" => Some(CounterSystem::Symbolic),
+    "additive" => Some(CounterSystem::Additive),
+    "fixed" => {
+      let start = parser
+        .try_parse(|p| {
+          p.skip_whitespace();
+          match p.next_including_whitespace() {
+            Ok(Token::Number {
+              int_value: Some(v), ..
+            }) => Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(Some(*v as i32)),
+            Ok(Token::Dimension {
+              int_value: Some(v), ..
+            }) => Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(Some(*v as i32)),
+            Ok(Token::Ident(v)) => {
+              Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(v.parse::<i32>().ok())
+            }
+            _ => Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(None),
+          }
+        })
+        .ok()
+        .flatten()
+        .unwrap_or(1);
+      Some(CounterSystem::Fixed(start))
+    }
+    "extends" => {
+      parser.skip_whitespace();
+      let name = parser.expect_ident().ok()?.to_string();
+      Some(CounterSystem::Extends(name.to_ascii_lowercase()))
+    }
+    _ => None,
+  }
+}
+
+fn token_to_symbol(token: &Token) -> Option<String> {
+  match token {
+    Token::QuotedString(s) => Some(s.to_string()),
+    Token::Ident(s) => Some(s.to_string()),
+    Token::Number { value, .. } => Some(value.to_string()),
+    Token::Dimension { value, unit, .. } => Some(format!("{}{}", value, unit)),
+    _ => None,
+  }
+}
+
+fn parse_symbols_descriptor(value: &str) -> Option<Vec<String>> {
+  let mut input = ParserInput::new(value);
+  let mut parser = Parser::new(&mut input);
+  let mut symbols = Vec::new();
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    if let Ok(token) = parser.next_including_whitespace() {
+      if matches!(token, Token::Comma | Token::Semicolon | Token::Delim('/')) {
+        continue;
+      }
+      if let Some(sym) = token_to_symbol(&token) {
+        symbols.push(sym);
+      }
+    }
+  }
+  if symbols.is_empty() {
+    None
+  } else {
+    Some(symbols)
+  }
+}
+
+fn parse_additive_symbols_descriptor(value: &str) -> Option<Vec<(i32, String)>> {
+  let mut input = ParserInput::new(value);
+  let mut parser = Parser::new(&mut input);
+  let mut items = Vec::new();
+
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    let weight = match parser.next_including_whitespace() {
+      Ok(Token::Number {
+        int_value: Some(v), ..
+      }) => *v as i32,
+      Ok(Token::Ident(v)) => v.parse::<i32>().ok().unwrap_or(0),
+      Ok(Token::Dimension {
+        int_value: Some(v), ..
+      }) => *v as i32,
+      Ok(Token::Comma) => continue,
+      _ => break,
+    };
+
+    parser.skip_whitespace();
+    let symbol_token = match parser.next_including_whitespace() {
+      Ok(t) => t,
+      Err(_) => break,
+    };
+    if let Some(sym) = token_to_symbol(&symbol_token) {
+      items.push((weight, sym));
+    }
+  }
+
+  if items.is_empty() {
+    None
+  } else {
+    Some(items)
+  }
+}
+
+fn parse_negative_descriptor(value: &str) -> Option<(String, String)> {
+  let symbols = parse_symbols_descriptor(value)?;
+  if symbols.is_empty() {
+    return None;
+  }
+  let first = symbols.get(0).cloned().unwrap_or_default();
+  let second = symbols.get(1).cloned().unwrap_or_default();
+  Some((first, second))
+}
+
+fn parse_range_descriptor(value: &str) -> Option<Vec<(i64, i64)>> {
+  if value.trim().eq_ignore_ascii_case("auto") {
+    return None;
+  }
+  let mut input = ParserInput::new(value);
+  let mut parser = Parser::new(&mut input);
+  let mut numbers: Vec<i64> = Vec::new();
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    match parser.next_including_whitespace() {
+      Ok(Token::Number {
+        int_value: Some(v), ..
+      }) => numbers.push(*v as i64),
+      Ok(Token::Ident(ident)) => match ident.to_ascii_lowercase().as_str() {
+        "infinite" => numbers.push(i64::MAX),
+        "-infinite" => numbers.push(i64::MIN),
+        other => {
+          if let Ok(parsed) = other.parse::<i64>() {
+            numbers.push(parsed)
+          }
+        }
+      },
+      Ok(Token::Comma) => continue,
+      _ => break,
+    }
+  }
+
+  if numbers.is_empty() {
+    return None;
+  }
+
+  let mut ranges = Vec::new();
+  let mut iter = numbers.into_iter();
+  while let Some(start) = iter.next() {
+    let end = iter.next().unwrap_or(start);
+    let (a, b) = if start <= end { (start, end) } else { (end, start) };
+    ranges.push((a, b));
+  }
+  Some(ranges)
+}
+
+fn parse_pad_descriptor(value: &str) -> Option<(u32, String)> {
+  let mut input = ParserInput::new(value);
+  let mut parser = Parser::new(&mut input);
+  parser.skip_whitespace();
+  let width = match parser.next_including_whitespace() {
+    Ok(Token::Number {
+      int_value: Some(v), ..
+    }) if *v > 0 => *v as u32,
+    Ok(Token::Ident(v)) => v.parse::<u32>().ok()?,
+    _ => return None,
+  };
+  parser.skip_whitespace();
+  let symbol = match parser.next_including_whitespace() {
+    Ok(tok) => token_to_symbol(&tok)?,
+    Err(_) => return None,
+  };
+  Some((width, symbol))
+}
+
+fn parse_speak_as_descriptor(value: &str) -> Option<SpeakAs> {
+  let trimmed = value.trim().to_ascii_lowercase();
+  match trimmed.as_str() {
+    "auto" => Some(SpeakAs::Auto),
+    "bullets" => Some(SpeakAs::Bullets),
+    "numbers" => Some(SpeakAs::Numbers),
+    "words" => Some(SpeakAs::Words),
+    "spell-out" => Some(SpeakAs::SpellOut),
+    other if other.is_empty() => None,
+    other => Some(SpeakAs::Other(other.to_string())),
+  }
 }
 
 fn parse_keyframe_list<'i, 't>(

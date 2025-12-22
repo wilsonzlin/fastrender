@@ -16,6 +16,7 @@ use crate::style::content::ContentContext;
 use crate::style::content::ContentItem;
 use crate::style::content::ContentValue;
 use crate::style::content::CounterStyle;
+use crate::style::counter_styles::CounterStyleName;
 use crate::style::counters::CounterManager;
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
@@ -603,7 +604,7 @@ impl BoxGenerator {
       return Err(BoxGenerationError::RootDisplayContents);
     }
 
-    let mut counters = CounterManager::new();
+    let mut counters = CounterManager::new_with_styles(dom_root.style.counter_styles.clone());
     counters.enter_scope();
     let root_result = self.generate_box_for_element(dom_root, &mut counters);
     counters.leave_scope();
@@ -643,7 +644,7 @@ impl BoxGenerator {
       return Err(BoxGenerationError::RootDisplayContents);
     }
 
-    let mut counters = CounterManager::new();
+    let mut counters = CounterManager::new_with_styles(dom_root.style.counter_styles.clone());
     counters.enter_scope();
     let root_result = self.generate_box_for_element(dom_root, &mut counters);
     counters.leave_scope();
@@ -1157,7 +1158,7 @@ use crate::style::cascade::StyledNode;
 
 fn build_box_tree_root(styled: &StyledNode) -> BoxNode {
   let document_css = collect_document_css(styled);
-  let mut counters = CounterManager::new();
+  let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
   counters.enter_scope();
   let mut roots = generate_boxes_for_styled(styled, &mut counters, true, &document_css);
   counters.leave_scope();
@@ -1816,7 +1817,9 @@ fn create_pseudo_element_box(
       }
       ContentItem::Counter { name, style } => {
         let value = context.get_counter(name);
-        let formatted = style.unwrap_or(CounterStyle::Decimal).format(value);
+        let formatted = styles
+          .counter_styles
+          .format_value(value, style.clone().unwrap_or(CounterStyle::Decimal.into()));
         text_buf.push_str(&formatted);
       }
       ContentItem::Counters {
@@ -1825,12 +1828,13 @@ fn create_pseudo_element_box(
         style,
       } => {
         let values = context.get_counters(name);
+        let style_name = style.clone().unwrap_or(CounterStyle::Decimal.into());
         if values.is_empty() {
-          text_buf.push('0');
+          text_buf.push_str(&styles.counter_styles.format_value(0, style_name));
         } else {
           let formatted: Vec<String> = values
             .iter()
-            .map(|v| style.unwrap_or(CounterStyle::Decimal).format(*v))
+            .map(|v| styles.counter_styles.format_value(*v, style_name.clone()))
             .collect();
           text_buf.push_str(&formatted.join(separator));
         }
@@ -1926,11 +1930,11 @@ fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<B
 
 fn marker_content_from_style(
   styled: &StyledNode,
-  style: &ComputedStyle,
+  marker_style: &ComputedStyle,
   counters: &CounterManager,
 ) -> Option<MarkerContent> {
-  let content_value = effective_content_value(style);
-  if matches!(content_value, ContentValue::None) || style.content == "none" {
+  let content_value = effective_content_value(marker_style);
+  if matches!(content_value, ContentValue::None) || marker_style.content == "none" {
     return None;
   }
 
@@ -1942,7 +1946,7 @@ fn marker_content_from_style(
     for (name, stack) in counters.snapshot() {
       context.set_counter_stack(&name, stack);
     }
-    context.set_quotes(style.quotes.clone());
+    context.set_quotes(marker_style.quotes.clone());
 
     let mut text = String::new();
     let mut image: Option<String> = None;
@@ -1960,7 +1964,10 @@ fn marker_content_from_style(
           }
           ContentItem::Counter { name, style } => {
             let value = context.get_counter(name);
-            let formatted = style.unwrap_or(CounterStyle::Decimal).format(value);
+            let formatted = style
+              .clone()
+              .unwrap_or(CounterStyleName::from(CounterStyle::Decimal));
+            let formatted = marker_style.counter_styles.format_value(value, formatted);
             text.push_str(&formatted);
           }
           ContentItem::Counters {
@@ -1969,12 +1976,15 @@ fn marker_content_from_style(
             style,
           } => {
             let values = context.get_counters(name);
+            let style = style
+              .clone()
+              .unwrap_or(CounterStyleName::from(CounterStyle::Decimal));
             if values.is_empty() {
-              text.push('0');
+              text.push_str(&marker_style.counter_styles.format_value(0, style));
             } else {
               let formatted: Vec<String> = values
                 .iter()
-                .map(|v| style.unwrap_or(CounterStyle::Decimal).format(*v))
+                .map(|v| marker_style.counter_styles.format_value(*v, style.clone()))
                 .collect();
               text.push_str(&formatted.join(separator));
             }
@@ -2016,7 +2026,7 @@ fn marker_content_from_style(
     return None;
   }
 
-  match &style.list_style_image {
+  match &marker_style.list_style_image {
     crate::style::types::ListStyleImage::Url(url) => {
       let replaced = ReplacedBox {
         replaced_type: ReplacedType::Image {
@@ -2033,7 +2043,7 @@ fn marker_content_from_style(
     crate::style::types::ListStyleImage::None => {}
   }
 
-  let text = list_marker_text(style.list_style_type.clone(), counters);
+  let text = list_marker_text(marker_style.list_style_type.clone(), counters);
   if text.is_empty() {
     None
   } else {
@@ -2528,6 +2538,7 @@ mod tests {
   use crate::dom;
   use crate::geometry::Size;
   use crate::style;
+  use crate::style::counter_styles::{CounterStyleRegistry, CounterStyleRule, CounterSystem};
   use crate::style::counters::CounterSet;
   use crate::style::types::CaseTransform;
   use crate::style::types::ListStylePosition;
@@ -3882,7 +3893,7 @@ mod tests {
       ContentItem::String(": ".to_string()),
       ContentItem::Counter {
         name: "item".to_string(),
-        style: Some(CounterStyle::UpperRoman),
+        style: Some(CounterStyle::UpperRoman.into()),
       },
       ContentItem::String(" ".to_string()),
       ContentItem::Url("icon.png".to_string()),
@@ -3947,7 +3958,7 @@ mod tests {
       ContentItem::String("[".to_string()),
       ContentItem::Counter {
         name: "item".to_string(),
-        style: Some(CounterStyle::LowerRoman),
+        style: Some(CounterStyle::LowerRoman.into()),
       },
       ContentItem::String("]".to_string()),
     ]);
@@ -4020,6 +4031,53 @@ mod tests {
       BoxType::Marker(marker) => match marker.content {
         MarkerContent::Text(t) => assert_eq!(t, "★ "),
         MarkerContent::Image(_) => panic!("expected text marker from string list-style-type"),
+      },
+      _ => panic!("expected marker box"),
+    }
+  }
+
+  #[test]
+  fn marker_uses_custom_counter_style_definition() {
+    let mut registry = CounterStyleRegistry::with_builtins();
+    let mut rule = CounterStyleRule::new("custom-mark");
+    rule.system = Some(CounterSystem::Cyclic);
+    rule.symbols = Some(vec!["◇".into()]);
+    registry.register(rule);
+    let registry = Arc::new(registry);
+
+    let mut style = ComputedStyle::default();
+    style.counter_styles = registry.clone();
+    style.list_style_type = ListStyleType::Custom("custom-mark".to_string());
+    style.display = Display::ListItem;
+
+    let styled = StyledNode {
+      node_id: 0,
+      node: dom::DomNode {
+        node_type: dom::DomNodeType::Element {
+          tag_name: "li".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      },
+      styles: style.clone(),
+      marker_styles: Some(style.clone()),
+      before_styles: None,
+      after_styles: None,
+      children: vec![],
+    };
+
+    let mut counters = CounterManager::new_with_styles(registry);
+    counters.enter_scope();
+    counters.apply_reset(&CounterSet::single("list-item", 1));
+
+    let marker_box = create_marker_box(&styled, &counters).expect("marker");
+    counters.leave_scope();
+
+    match marker_box.box_type {
+      BoxType::Marker(marker) => match marker.content {
+        MarkerContent::Text(t) => assert_eq!(t, "◇ "),
+        MarkerContent::Image(_) => panic!("expected text marker"),
       },
       _ => panic!("expected marker box"),
     }
@@ -5330,9 +5388,9 @@ mod tests {
 fn list_marker_text(list_style: ListStyleType, counters: &CounterManager) -> String {
   let core = match list_style {
     ListStyleType::None => return String::new(),
-    ListStyleType::Disc => "•".to_string(),
-    ListStyleType::Circle => "◦".to_string(),
-    ListStyleType::Square => "▪".to_string(),
+    ListStyleType::Disc => counters.format("list-item", CounterStyle::Disc),
+    ListStyleType::Circle => counters.format("list-item", CounterStyle::Circle),
+    ListStyleType::Square => counters.format("list-item", CounterStyle::Square),
     ListStyleType::Decimal => counters.format("list-item", CounterStyle::Decimal),
     ListStyleType::DecimalLeadingZero => {
       counters.format("list-item", CounterStyle::DecimalLeadingZero)
@@ -5345,9 +5403,10 @@ fn list_marker_text(list_style: ListStyleType, counters: &CounterManager) -> Str
     ListStyleType::LowerArmenian => counters.format("list-item", CounterStyle::LowerArmenian),
     ListStyleType::Georgian => counters.format("list-item", CounterStyle::Georgian),
     ListStyleType::LowerGreek => counters.format("list-item", CounterStyle::LowerGreek),
-    ListStyleType::DisclosureOpen => "▾".to_string(),
-    ListStyleType::DisclosureClosed => "▸".to_string(),
+    ListStyleType::DisclosureOpen => counters.format("list-item", CounterStyle::DisclosureOpen),
+    ListStyleType::DisclosureClosed => counters.format("list-item", CounterStyle::DisclosureClosed),
     ListStyleType::String(text) => text,
+    ListStyleType::Custom(name) => counters.format("list-item", CounterStyleName::Custom(name)),
   };
 
   if core.is_empty() {

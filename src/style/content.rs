@@ -35,8 +35,10 @@
 //! Reference: CSS Generated Content Module Level 3
 //! <https://www.w3.org/TR/css-content-3/>
 
+use crate::style::counter_styles::{CounterStyleName, CounterStyleRegistry};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 /// The computed value of the CSS `content` property
 ///
@@ -188,7 +190,7 @@ pub enum ContentItem {
     /// Counter name
     name: String,
     /// Counter style (e.g., "decimal", "lower-roman")
-    style: Option<CounterStyle>,
+    style: Option<CounterStyleName>,
   },
 
   /// Nested counter values
@@ -201,7 +203,7 @@ pub enum ContentItem {
     /// Separator between counter values
     separator: String,
     /// Counter style
-    style: Option<CounterStyle>,
+    style: Option<CounterStyleName>,
   },
 
   /// Opening quote character
@@ -286,7 +288,7 @@ impl ContentItem {
   pub fn counter_styled(name: impl Into<String>, style: CounterStyle) -> Self {
     ContentItem::Counter {
       name: name.into(),
-      style: Some(style),
+      style: Some(style.into()),
     }
   }
 
@@ -308,7 +310,7 @@ impl ContentItem {
     ContentItem::Counters {
       name: name.into(),
       separator: separator.into(),
-      style: Some(style),
+      style: Some(style.into()),
     }
   }
 }
@@ -357,7 +359,7 @@ impl fmt::Display for ContentItem {
 ///
 /// Reference: CSS Counter Styles Level 3
 /// <https://www.w3.org/TR/css-counter-styles-3/>
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CounterStyle {
   /// Decimal numbers (1, 2, 3, ...)
   Decimal,
@@ -398,6 +400,12 @@ pub enum CounterStyle {
   /// Square marker
   Square,
 
+  /// Disclosure-open marker
+  DisclosureOpen,
+
+  /// Disclosure-closed marker
+  DisclosureClosed,
+
   /// No marker
   None,
 }
@@ -429,6 +437,8 @@ impl CounterStyle {
       CounterStyle::Disc => "•".to_string(),
       CounterStyle::Circle => "◦".to_string(),
       CounterStyle::Square => "▪".to_string(),
+      CounterStyle::DisclosureOpen => "▾".to_string(),
+      CounterStyle::DisclosureClosed => "▸".to_string(),
       CounterStyle::None => String::new(),
     }
   }
@@ -459,6 +469,8 @@ impl CounterStyle {
       "disc" => Some(CounterStyle::Disc),
       "circle" => Some(CounterStyle::Circle),
       "square" => Some(CounterStyle::Square),
+      "disclosure-open" => Some(CounterStyle::DisclosureOpen),
+      "disclosure-closed" => Some(CounterStyle::DisclosureClosed),
       "none" => Some(CounterStyle::None),
       _ => None,
     }
@@ -487,13 +499,15 @@ impl fmt::Display for CounterStyle {
       CounterStyle::Disc => "disc",
       CounterStyle::Circle => "circle",
       CounterStyle::Square => "square",
+      CounterStyle::DisclosureOpen => "disclosure-open",
+      CounterStyle::DisclosureClosed => "disclosure-closed",
       CounterStyle::None => "none",
     };
     write!(f, "{}", s)
   }
 }
 
-const ARMENIAN_UPPER: &[(i32, &str)] = &[
+pub(crate) const ARMENIAN_UPPER: &[(i32, &str)] = &[
   (9000, "Ք"),
   (8000, "Փ"),
   (7000, "Ւ"),
@@ -532,7 +546,7 @@ const ARMENIAN_UPPER: &[(i32, &str)] = &[
   (1, "Ա"),
 ];
 
-const ARMENIAN_LOWER: &[(i32, &str)] = &[
+pub(crate) const ARMENIAN_LOWER: &[(i32, &str)] = &[
   (9000, "ք"),
   (8000, "փ"),
   (7000, "ւ"),
@@ -571,7 +585,7 @@ const ARMENIAN_LOWER: &[(i32, &str)] = &[
   (1, "ա"),
 ];
 
-const GEORGIAN_SYMBOLS: &[(i32, &str)] = &[
+pub(crate) const GEORGIAN_SYMBOLS: &[(i32, &str)] = &[
   (10000, "ჵ"),
   (9000, "ჰ"),
   (8000, "ჯ"),
@@ -609,6 +623,11 @@ const GEORGIAN_SYMBOLS: &[(i32, &str)] = &[
   (3, "გ"),
   (2, "ბ"),
   (1, "ა"),
+];
+
+pub(crate) const GREEK: &[char] = &[
+  'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 'ν', 'ξ', 'ο', 'π', 'ρ', 'σ', 'τ',
+  'υ', 'φ', 'χ', 'ψ', 'ω',
 ];
 
 fn format_additive(mut n: i32, symbols: &[(i32, &str)], max: i32) -> String {
@@ -696,11 +715,6 @@ fn to_greek(n: i32) -> String {
   if n <= 0 || n > 24 {
     return n.to_string();
   }
-
-  const GREEK: &[char] = &[
-    'α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ', 'ν', 'ξ', 'ο', 'π', 'ρ', 'σ', 'τ',
-    'υ', 'φ', 'χ', 'ψ', 'ω',
-  ];
 
   GREEK[(n - 1) as usize].to_string()
 }
@@ -949,15 +963,29 @@ impl ContentContext {
 /// let text = generator.generate(&content, &mut context);
 /// assert_eq!(text, "Chapter 5");
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ContentGenerator {
-  // Future: could hold configuration for content generation
+  /// Counter style registry for formatting counter() values.
+  counter_styles: Arc<CounterStyleRegistry>,
+}
+
+impl Default for ContentGenerator {
+  fn default() -> Self {
+    Self {
+      counter_styles: Arc::new(CounterStyleRegistry::with_builtins()),
+    }
+  }
 }
 
 impl ContentGenerator {
   /// Creates a new content generator
   pub fn new() -> Self {
-    Self {}
+    Self::default()
+  }
+
+  /// Creates a generator with a custom counter style registry.
+  pub fn with_counter_styles(counter_styles: Arc<CounterStyleRegistry>) -> Self {
+    Self { counter_styles }
   }
 
   /// Generates text content from a content value
@@ -1009,8 +1037,10 @@ impl ContentGenerator {
 
       ContentItem::Counter { name, style } => {
         let value = context.get_counter(name);
-        let style = style.as_ref().copied().unwrap_or_default();
-        style.format(value)
+        let style = style
+          .clone()
+          .unwrap_or_else(|| CounterStyleName::from(CounterStyle::Decimal));
+        self.counter_styles.format_value(value, style)
       }
 
       ContentItem::Counters {
@@ -1019,10 +1049,12 @@ impl ContentGenerator {
         style,
       } => {
         let values = context.get_counters(name);
-        let style = style.as_ref().copied().unwrap_or_default();
+        let style = style
+          .clone()
+          .unwrap_or_else(|| CounterStyleName::from(CounterStyle::Decimal));
         values
           .iter()
-          .map(|&v| style.format(v))
+          .map(|&v| self.counter_styles.format_value(v, style.clone()))
           .collect::<Vec<_>>()
           .join(separator)
       }
@@ -1249,7 +1281,7 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
       if let Some(comma_pos) = args.find(',') {
         let name = args[..comma_pos].trim();
         let style_str = args[comma_pos + 1..].trim();
-        let style = CounterStyle::parse(style_str);
+        let style = Some(CounterStyleName::parse(style_str));
         Some(ContentItem::Counter {
           name: name.to_string(),
           style,
@@ -1294,7 +1326,7 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
       if parts.len() >= 2 {
         let name = parts[0].clone();
         let separator = parts[1].clone();
-        let style = parts.get(2).and_then(|s| CounterStyle::parse(s));
+        let style = parts.get(2).map(|s| CounterStyleName::parse(s));
         Some(ContentItem::Counters {
           name,
           separator,

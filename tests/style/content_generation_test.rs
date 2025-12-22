@@ -9,6 +9,7 @@ use fastrender::style::content::ContentGenerator;
 use fastrender::style::content::ContentItem;
 use fastrender::style::content::ContentValue;
 use fastrender::style::content::CounterStyle;
+use fastrender::style::counter_styles::CounterStyleName;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -95,7 +96,10 @@ fn test_content_item_counter_styled_construction() {
   let item = ContentItem::counter_styled("chapter", CounterStyle::LowerRoman);
   if let ContentItem::Counter { name, style } = item {
     assert_eq!(name, "chapter");
-    assert_eq!(style, Some(CounterStyle::LowerRoman));
+    assert_eq!(
+      style,
+      Some(CounterStyleName::from(CounterStyle::LowerRoman))
+    );
   } else {
     panic!("Expected Counter variant");
   }
@@ -129,7 +133,10 @@ fn test_content_item_counters_styled_construction() {
   {
     assert_eq!(name, "section");
     assert_eq!(separator, ".");
-    assert_eq!(style, Some(CounterStyle::UpperAlpha));
+    assert_eq!(
+      style,
+      Some(CounterStyleName::from(CounterStyle::UpperAlpha))
+    );
   } else {
     panic!("Expected Counters variant");
   }
@@ -740,7 +747,10 @@ fn test_parse_counter_with_style() {
   if let ContentValue::Items(items) = content {
     if let ContentItem::Counter { name, style } = &items[0] {
       assert_eq!(name, "chapter");
-      assert_eq!(*style, Some(CounterStyle::UpperRoman));
+      assert_eq!(
+        *style,
+        Some(CounterStyleName::from(CounterStyle::UpperRoman)),
+      );
     }
   }
 }
@@ -774,7 +784,10 @@ fn test_parse_counters_with_style() {
     {
       assert_eq!(name, "section");
       assert_eq!(separator, " > ");
-      assert_eq!(*style, Some(CounterStyle::LowerAlpha));
+      assert_eq!(
+        *style,
+        Some(CounterStyleName::from(CounterStyle::LowerAlpha)),
+      );
     }
   }
 }
