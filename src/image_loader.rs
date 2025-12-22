@@ -758,6 +758,28 @@ mod tests {
   }
 
   #[test]
+  fn svg_mask_application() {
+    let cache = ImageCache::new();
+    let svg = r#"
+      <svg xmlns='http://www.w3.org/2000/svg' width='20' height='20'>
+        <defs>
+          <mask id='m'>
+            <rect width='100%' height='100%' fill='white'/>
+            <rect width='10' height='20' fill='black'/>
+          </mask>
+        </defs>
+        <rect width='20' height='20' fill='red' mask='url(#m)' />
+      </svg>
+    "#;
+
+    let image = cache.render_svg(svg).expect("render svg mask");
+    let rgba = image.image.to_rgba8();
+    let left_alpha = rgba.get_pixel(5, 10)[3];
+    let right_alpha = rgba.get_pixel(15, 10)[3];
+    assert!(left_alpha < right_alpha, "mask should reduce left side opacity");
+  }
+
+  #[test]
   fn exposes_exif_orientation() {
     let cache = ImageCache::new();
     let image = cache
