@@ -7155,6 +7155,53 @@ fn balance_score(lines: &[Line], hyphen_weight: f32, short_last_weight: f32) -> 
 }
 
 #[cfg(test)]
+fn append_text_content(item: &InlineItem, out: &mut String) {
+  match item {
+    InlineItem::Text(t) => out.push_str(&t.text),
+    InlineItem::InlineBox(b) => {
+      for child in &b.children {
+        append_text_content(child, out);
+      }
+    }
+    InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {}
+    InlineItem::Tab(_) => out.push('\t'),
+  }
+}
+
+#[cfg(test)]
+fn line_texts(lines: &[Line]) -> Vec<String> {
+  lines
+    .iter()
+    .map(|line| {
+      let mut out = String::new();
+      for pos in &line.items {
+        append_text_content(&pos.item, &mut out);
+      }
+      out
+    })
+    .collect()
+}
+
+#[cfg(test)]
+fn width_span(lines: &[Line]) -> f32 {
+  let mut min_w = f32::MAX;
+  let mut max_w: f32 = 0.0;
+  for line in lines {
+    if line.items.is_empty() {
+      continue;
+    }
+    let w = line_used_width(line);
+    min_w = min_w.min(w);
+    max_w = max_w.max(w);
+  }
+  if !min_w.is_finite() || min_w == f32::MAX {
+    0.0
+  } else {
+    max_w - min_w
+  }
+}
+
+#[cfg(test)]
 mod tests {
   use super::*;
   use crate::geometry::Size;
@@ -7203,50 +7250,6 @@ mod tests {
 
   fn make_inline_container(children: Vec<BoxNode>) -> BoxNode {
     BoxNode::new_block(default_style(), FormattingContextType::Block, children)
-  }
-
-  fn append_text_content(item: &InlineItem, out: &mut String) {
-    match item {
-      InlineItem::Text(t) => out.push_str(&t.text),
-      InlineItem::InlineBox(b) => {
-        for child in &b.children {
-          append_text_content(child, out);
-        }
-      }
-      InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {}
-      InlineItem::Tab(_) => out.push('\t'),
-    }
-  }
-
-  fn line_texts(lines: &[Line]) -> Vec<String> {
-    lines
-      .iter()
-      .map(|line| {
-        let mut out = String::new();
-        for pos in &line.items {
-          append_text_content(&pos.item, &mut out);
-        }
-        out
-      })
-      .collect()
-  }
-
-  fn width_span(lines: &[Line]) -> f32 {
-    let mut min_w = f32::MAX;
-    let mut max_w: f32 = 0.0;
-    for line in lines {
-      if line.items.is_empty() {
-        continue;
-      }
-      let w = line_used_width(line);
-      min_w = min_w.min(w);
-      max_w = max_w.max(w);
-    }
-    if !min_w.is_finite() || min_w == f32::MAX {
-      0.0
-    } else {
-      max_w - min_w
-    }
   }
 
   #[test]
