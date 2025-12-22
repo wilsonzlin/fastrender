@@ -391,6 +391,8 @@ pub struct RenderOptions {
   pub scroll_x: f32,
   /// Vertical scroll offset applied before painting.
   pub scroll_y: f32,
+  /// When true, document fetch failures will return a placeholder pixmap with diagnostics instead of an error.
+  pub allow_partial: bool,
 }
 
 impl Default for RenderOptions {
@@ -401,6 +403,7 @@ impl Default for RenderOptions {
       media_type: MediaType::Screen,
       scroll_x: 0.0,
       scroll_y: 0.0,
+      allow_partial: false,
     }
   }
 }
@@ -435,6 +438,12 @@ impl RenderOptions {
     self.scroll_y = scroll_y;
     self
   }
+
+  /// Enable returning a placeholder pixmap when document fetch fails.
+  pub fn allow_partial(mut self, allow: bool) -> Self {
+    self.allow_partial = allow;
+    self
+  }
 }
 
 /// Diagnostics collected during rendering.
@@ -442,6 +451,8 @@ impl RenderOptions {
 pub struct RenderDiagnostics {
   /// Network fetch errors encountered while loading subresources.
   pub fetch_errors: Vec<ResourceFetchError>,
+  /// Document-level fetch failure message when a placeholder render is produced.
+  pub document_error: Option<String>,
 }
 
 impl RenderDiagnostics {
@@ -1059,12 +1070,27 @@ impl FastRender {
     options: RenderOptions,
   ) -> Result<RenderResult> {
     let mut diagnostics = RenderDiagnostics::default();
-    let resource = self.fetcher.fetch(url).map_err(|e| {
-      Error::Navigation(NavigationError::FetchFailed {
-        url: url.to_string(),
-        reason: e.to_string(),
-      })
-    })?;
+    let (width, height) = options
+      .viewport
+      .unwrap_or((self.default_width, self.default_height));
+    let resource = match self.fetcher.fetch(url) {
+      Ok(res) => res,
+      Err(e) => {
+        diagnostics.record(ResourceKind::Document, url, e.to_string());
+        diagnostics.document_error = Some(e.to_string());
+        if options.allow_partial {
+          let pixmap = self.render_error_overlay(width, height)?;
+          return Ok(RenderResult {
+            pixmap,
+            diagnostics,
+          });
+        }
+        return Err(Error::Navigation(NavigationError::FetchFailed {
+          url: url.to_string(),
+          reason: e.to_string(),
+        }));
+      }
+    };
 
     let base_hint = resource.final_url.as_deref().unwrap_or(url);
     let html = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
@@ -1910,6 +1936,41 @@ impl FastRender {
     base
       .with_device_pixel_ratio(self.device_pixel_ratio)
       .with_env_overrides()
+  }
+
+  /// Create a simple placeholder pixmap indicating a render error.
+  fn render_error_overlay(&self, width: u32, height: u32) -> Result<Pixmap> {
+    let mut pixmap =
+      Pixmap::new(width, height).ok_or(Error::Render(RenderError::CanvasCreationFailed {
+        width,
+        height,
+      }))?;
+    // Light red background
+    pixmap.fill(tiny_skia::Color::from_rgba8(255, 235, 238, 255));
+
+    // Draw an "X" mark for visibility.
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(tiny_skia::Color::from_rgba8(198, 40, 40, 255));
+    paint.anti_alias = true;
+    let mut stroke = tiny_skia::Stroke::default();
+    stroke.width = 4.0;
+    let inset = 12.0f32;
+    let mut builder = tiny_skia::PathBuilder::new();
+    builder.move_to(inset, inset);
+    builder.line_to(width as f32 - inset, height as f32 - inset);
+    builder.move_to(width as f32 - inset, inset);
+    builder.line_to(inset, height as f32 - inset);
+    if let Some(path) = builder.finish() {
+      let _ = pixmap.stroke_path(
+        &path,
+        &paint,
+        &stroke,
+        tiny_skia::Transform::identity(),
+        None,
+      );
+    }
+
+    Ok(pixmap)
   }
 
   /// Extract the fragment identifier (without '#') from the configured base URL, if any.
