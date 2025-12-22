@@ -11,6 +11,7 @@ mod display_list_test;
 mod optimize_test;
 mod rasterize_test;
 mod stacking_test;
+mod svg_inline_test;
 mod text_rasterize_test;
 
 mod marker_paint_order;
