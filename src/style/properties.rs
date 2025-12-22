@@ -2625,6 +2625,10 @@ fn apply_property_from_source(
     }
     "column-fill" => styles.column_fill = source.column_fill,
     "column-span" => styles.column_span = source.column_span,
+    "columns" => {
+      styles.column_count = source.column_count;
+      styles.column_width = source.column_width;
+    }
     "font" => {
       styles.font_style = source.font_style;
       styles.font_weight = source.font_weight;
@@ -5214,6 +5218,50 @@ pub fn apply_declaration_with_base(
       if let Some(c) = color {
         styles.column_rule_color = Some(c);
       }
+    }
+    "columns" => {
+      let mut count: Option<u32> = None;
+      let mut width: Option<Length> = None;
+
+      let parse_token = |tok: &str, count_ref: &mut Option<u32>, width_ref: &mut Option<Length>| {
+        let lower = tok.trim();
+        if lower.is_empty() || lower.eq_ignore_ascii_case("auto") {
+          return;
+        }
+        if let Some(len) = parse_length(lower) {
+          *width_ref = Some(len);
+          return;
+        }
+        if let Ok(n) = lower.parse::<f32>() {
+          if n >= 1.0 {
+            *count_ref = Some(n.round() as u32);
+          }
+        }
+      };
+
+      match &resolved_value {
+        PropertyValue::Multiple(values) => {
+          for v in values {
+            match v {
+              PropertyValue::Keyword(kw) => parse_token(kw, &mut count, &mut width),
+              PropertyValue::Length(l) => width = Some(*l),
+              PropertyValue::Number(n) if *n >= 1.0 => count = Some(n.round() as u32),
+              _ => {}
+            }
+          }
+        }
+        PropertyValue::Keyword(kw) => {
+          for tok in kw.split_whitespace() {
+            parse_token(tok, &mut count, &mut width);
+          }
+        }
+        PropertyValue::Length(l) => width = Some(*l),
+        PropertyValue::Number(n) if *n >= 1.0 => count = Some(n.round() as u32),
+        _ => {}
+      }
+
+      styles.column_count = count;
+      styles.column_width = width;
     }
     "column-fill" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
@@ -14386,6 +14434,22 @@ mod tests {
     assert_eq!(style.column_rule_style, BorderStyle::Solid);
     assert_eq!(style.column_rule_width, Length::px(5.0));
     assert_eq!(style.column_rule_color, Some(Rgba::BLUE));
+
+    let mut shorthand = ComputedStyle::default();
+    apply_declaration(
+      &mut shorthand,
+      &Declaration {
+        property: "columns".to_string(),
+        value: PropertyValue::Keyword("4 60px".to_string()),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(shorthand.column_count, Some(4));
+    assert_eq!(shorthand.column_width, Some(Length::px(60.0)));
   }
 
   #[test]
