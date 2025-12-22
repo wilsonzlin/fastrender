@@ -75,6 +75,7 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::html::encoding::decode_html_bytes;
+use crate::html::viewport::ViewportLength;
 use crate::image_loader::ImageCache;
 use crate::image_output::encode_image;
 use crate::image_output::OutputFormat;
@@ -215,6 +216,13 @@ pub struct FastRender {
   /// Device pixel ratio used for media queries and resolution-dependent resources
   device_pixel_ratio: f32,
 
+  /// Whether to honor `<meta name="viewport">` directives when computing the
+  /// layout viewport for screen media.
+  apply_meta_viewport: bool,
+
+  /// Temporary override for device size during media query evaluation.
+  pending_device_size: Option<Size>,
+
   /// Base URL used for resolving links/targets
   base_url: Option<String>,
 
@@ -229,6 +237,7 @@ impl std::fmt::Debug for FastRender {
       .field("default_width", &self.default_width)
       .field("default_height", &self.default_height)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
+      .field("apply_meta_viewport", &self.apply_meta_viewport)
       .field("base_url", &self.base_url)
       .field("dom_compat_mode", &self.dom_compat_mode)
       .finish_non_exhaustive()
@@ -265,8 +274,20 @@ pub struct FastRenderConfig {
   /// Base URL used to resolve relative resource references (images, CSS)
   pub base_url: Option<String>,
 
+  /// Optional in-memory resource cache configuration. If `None`, caching is disabled.
+  pub resource_cache: Option<CachingFetcherConfig>,
+
+  /// Maximum iframe nesting depth when painting nested browsing contexts
+  pub max_iframe_depth: usize,
+
+  /// Allow http(s) parents to load file:// iframe documents when true (disabled by default)
+  pub allow_file_iframe_from_http: bool,
+
   /// Optional compatibility mode used when parsing HTML.
   pub dom_compat_mode: DomCompatibilityMode,
+
+  /// Whether to honor `<meta name="viewport">` when computing the layout viewport.
+  pub apply_meta_viewport: bool,
 }
 
 impl Default for FastRenderConfig {
@@ -277,7 +298,11 @@ impl Default for FastRenderConfig {
       default_height: 600,
       device_pixel_ratio: 1.0,
       base_url: None,
+      resource_cache: Some(CachingFetcherConfig::default()),
+      max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
+      allow_file_iframe_from_http: false,
       dom_compat_mode: DomCompatibilityMode::Standard,
+      apply_meta_viewport: false,
     }
   }
 }
@@ -343,6 +368,12 @@ impl FastRenderBuilder {
   /// Sets a base URL used to resolve relative resource references (images, linked CSS)
   pub fn base_url(mut self, url: impl Into<String>) -> Self {
     self.config.base_url = Some(url.into());
+    self
+  }
+
+  /// Applies `<meta name="viewport">` directives when computing the layout viewport.
+  pub fn apply_meta_viewport(mut self, enabled: bool) -> Self {
+    self.config.apply_meta_viewport = enabled;
     self
   }
 
@@ -565,11 +596,92 @@ impl FastRenderConfig {
     self
   }
 
+  /// Applies `<meta name="viewport">` directives when computing the layout viewport.
+  pub fn with_meta_viewport(mut self, enabled: bool) -> Self {
+    self.apply_meta_viewport = enabled;
+    self
+  }
+
   /// Sets the DOM compatibility mode applied during parsing.
   pub fn with_dom_compat_mode(mut self, mode: DomCompatibilityMode) -> Self {
     self.dom_compat_mode = mode;
     self
   }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResolvedViewport {
+  layout_viewport: Size,
+  visual_viewport: Size,
+  device_pixel_ratio: f32,
+}
+
+impl ResolvedViewport {
+  fn new(viewport: Size, device_pixel_ratio: f32) -> Self {
+    Self {
+      layout_viewport: viewport,
+      visual_viewport: viewport,
+      device_pixel_ratio: sanitize_positive(Some(device_pixel_ratio)).unwrap_or(1.0),
+    }
+  }
+}
+
+/// Resolves the effective viewport based on meta viewport directives.
+fn resolve_viewport(
+  requested: Size,
+  base_dpr: f32,
+  meta: Option<&crate::html::viewport::MetaViewport>,
+) -> ResolvedViewport {
+  let mut resolved = ResolvedViewport::new(requested, base_dpr);
+  let Some(meta) = meta else {
+    return resolved;
+  };
+
+  let mut visual = resolved.visual_viewport;
+  if let Some(width) = meta.width {
+    if let Some(value) = viewport_length_value(width, requested.width) {
+      visual.width = value;
+    }
+  }
+  if let Some(height) = meta.height {
+    if let Some(value) = viewport_length_value(height, requested.height) {
+      visual.height = value;
+    }
+  }
+
+  let mut scale = meta.initial_scale.unwrap_or(1.0);
+  if let Some(min_scale) = sanitize_positive(meta.minimum_scale) {
+    scale = scale.max(min_scale);
+  }
+  if let Some(max_scale) = sanitize_positive(meta.maximum_scale) {
+    scale = scale.min(max_scale);
+  }
+  scale = sanitize_positive(Some(scale)).unwrap_or(1.0);
+
+  let layout_viewport = Size::new(
+    (visual.width / scale).max(1.0),
+    (visual.height / scale).max(1.0),
+  );
+  let device_pixel_ratio = (resolved.device_pixel_ratio * scale).max(f32::EPSILON);
+
+  ResolvedViewport {
+    layout_viewport,
+    visual_viewport: visual,
+    device_pixel_ratio,
+  }
+}
+
+fn viewport_length_value(len: ViewportLength, fallback: f32) -> Option<f32> {
+  match len {
+    ViewportLength::Device => Some(fallback),
+    ViewportLength::Absolute(v) if v.is_finite() && v > 0.0 => Some(v),
+    _ => None,
+  }
+}
+
+fn sanitize_positive(value: Option<f32>) -> Option<f32> {
+  value.filter(|v| v.is_finite() && *v > 0.0)
+}
 }
 
 impl FastRender {
@@ -694,6 +806,8 @@ impl FastRender {
       default_width: config.default_width,
       default_height: config.default_height,
       device_pixel_ratio: config.device_pixel_ratio,
+      apply_meta_viewport: config.apply_meta_viewport,
+      pending_device_size: None,
       base_url: config.base_url.clone(),
       dom_compat_mode: config.dom_compat_mode,
     })
@@ -818,18 +932,38 @@ impl FastRender {
       *start = now;
     }
 
-    // Layout the document
-    let mut fragment_tree = self.layout_document_for_media(&dom, width, height, media_type)?;
+    let requested_viewport = Size::new(width as f32, height as f32);
+    let meta_viewport = if self.apply_meta_viewport {
+      crate::html::viewport::extract_viewport(&dom)
+    } else {
+      None
+    };
+    let resolved_viewport = resolve_viewport(
+      requested_viewport,
+      self.device_pixel_ratio,
+      meta_viewport.as_ref(),
+    );
+    let layout_width = resolved_viewport.layout_viewport.width.max(1.0).round() as u32;
+    let layout_height = resolved_viewport.layout_viewport.height.max(1.0).round() as u32;
 
-    if std::env::var("FASTR_LOG_FRAG_BOUNDS")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-    {
-      let bbox = fragment_tree.content_size();
-      eprintln!(
+    let previous_dpr = self.device_pixel_ratio;
+
+    let result = (|| -> Result<Pixmap> {
+      self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
+      self.pending_device_size = Some(resolved_viewport.visual_viewport);
+      let mut fragment_tree =
+        self.layout_document_for_media(&dom, layout_width, layout_height, media_type)?;
+      self.pending_device_size = None;
+      let layout_viewport = fragment_tree.viewport_size();
+      if std::env::var("FASTR_LOG_FRAG_BOUNDS")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+      {
+        let bbox = fragment_tree.content_size();
+        eprintln!(
                 "[frag-bounds] viewport=({}x{}) bbox=({:.1},{:.1})→({:.1},{:.1}) size=({:.1}x{:.1}) fragments={}",
-                width,
-                height,
+                layout_viewport.width,
+                layout_viewport.height,
                 bbox.min_x(),
                 bbox.min_y(),
                 bbox.max_x(),
@@ -838,183 +972,192 @@ impl FastRender {
                 bbox.height(),
                 fragment_tree.fragment_count()
             );
-    }
+      }
 
-    if let Ok(v) = std::env::var("FASTR_DUMP_TEXT_FRAGMENTS") {
-      if v != "0" && !v.eq_ignore_ascii_case("false") {
-        let limit: usize = v.parse().unwrap_or(20);
-        let mut total = 0usize;
-        let mut stack = vec![(&fragment_tree.root, crate::geometry::Point::ZERO)];
-        while let Some((frag, offset)) = stack.pop() {
+      if let Ok(v) = std::env::var("FASTR_DUMP_TEXT_FRAGMENTS") {
+        if v != "0" && !v.eq_ignore_ascii_case("false") {
+          let limit: usize = v.parse().unwrap_or(20);
+          let mut total = 0usize;
+          let mut stack = vec![(&fragment_tree.root, crate::geometry::Point::ZERO)];
+          while let Some((frag, offset)) = stack.pop() {
+            let abs = crate::geometry::Rect::from_xywh(
+              frag.bounds.x() + offset.x,
+              frag.bounds.y() + offset.y,
+              frag.bounds.width(),
+              frag.bounds.height(),
+            );
+            if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &frag.content {
+              if total < limit {
+                eprintln!(
+                  "text frag {} @ ({:.1},{:.1},{:.1},{:.1}) {:?}",
+                  total,
+                  abs.x(),
+                  abs.y(),
+                  abs.width(),
+                  abs.height(),
+                  text.chars().take(80).collect::<String>()
+                );
+              }
+              total += 1;
+            }
+            for child in frag.children.iter().rev() {
+              stack.push((child, crate::geometry::Point::new(abs.x(), abs.y())));
+            }
+          }
+          eprintln!("total text fragments: {}", total);
+        }
+      }
+
+      if let Ok(query) = std::env::var("FASTR_TRACE_TEXT") {
+        fn describe_node(node: &crate::tree::fragment_tree::FragmentNode) -> String {
+          let display = node
+            .style
+            .as_ref()
+            .map(|s| format!("{:?}", s.display))
+            .unwrap_or_else(|| "None".to_string());
+          match &node.content {
+            crate::tree::fragment_tree::FragmentContent::Block { box_id } => {
+              format!("Block(box_id={:?}, display={})", box_id, display)
+            }
+            crate::tree::fragment_tree::FragmentContent::Inline {
+              box_id,
+              fragment_index,
+            } => {
+              format!(
+                "Inline(box_id={:?}, fragment_index={}, display={})",
+                box_id, fragment_index, display
+              )
+            }
+            crate::tree::fragment_tree::FragmentContent::Line { baseline } => {
+              format!("Line(baseline={:.3}, display={})", baseline, display)
+            }
+            crate::tree::fragment_tree::FragmentContent::Text {
+              text,
+              box_id,
+              baseline_offset,
+              ..
+            } => {
+              let preview: String = text.chars().take(80).collect();
+              format!(
+                "Text(box_id={:?}, baseline={:.3}, display={}, text=\"{}\")",
+                box_id, baseline_offset, display, preview
+              )
+            }
+            crate::tree::fragment_tree::FragmentContent::Replaced { box_id, .. } => {
+              format!("Replaced(box_id={:?}, display={})", box_id, display)
+            }
+          }
+        }
+
+        fn trace_text<'a>(
+          node: &'a crate::tree::fragment_tree::FragmentNode,
+          offset: crate::geometry::Point,
+          query: &str,
+          trail: &mut Vec<String>,
+        ) -> bool {
+          let raw = node.bounds;
           let abs = crate::geometry::Rect::from_xywh(
-            frag.bounds.x() + offset.x,
-            frag.bounds.y() + offset.y,
-            frag.bounds.width(),
-            frag.bounds.height(),
+            node.bounds.x() + offset.x,
+            node.bounds.y() + offset.y,
+            node.bounds.width(),
+            node.bounds.height(),
           );
-          if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &frag.content {
-            if total < limit {
-              eprintln!(
-                "text frag {} @ ({:.1},{:.1},{:.1},{:.1}) {:?}",
-                total,
-                abs.x(),
-                abs.y(),
-                abs.width(),
-                abs.height(),
-                text.chars().take(80).collect::<String>()
-              );
+          let label = format!(
+            "{} raw=({:.1},{:.1},{:.1},{:.1}) abs=({:.1},{:.1},{:.1},{:.1})",
+            describe_node(node),
+            raw.x(),
+            raw.y(),
+            raw.width(),
+            raw.height(),
+            abs.x(),
+            abs.y(),
+            abs.width(),
+            abs.height()
+          );
+          trail.push(label);
+          if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &node.content {
+            if text.contains(query) {
+              eprintln!("trace for {:?}:", query);
+              for (depth, entry) in trail.iter().enumerate() {
+                eprintln!("  {}{}", "  ".repeat(depth), entry);
+              }
+              trail.pop();
+              return true;
             }
-            total += 1;
           }
-          for child in frag.children.iter().rev() {
-            stack.push((child, crate::geometry::Point::new(abs.x(), abs.y())));
+          let child_offset = crate::geometry::Point::new(abs.x(), abs.y());
+          for child in &node.children {
+            if trace_text(child, child_offset, query, trail) {
+              trail.pop();
+              return true;
+            }
           }
+          trail.pop();
+          false
         }
-        eprintln!("total text fragments: {}", total);
-      }
-    }
-
-    if let Ok(query) = std::env::var("FASTR_TRACE_TEXT") {
-      fn describe_node(node: &crate::tree::fragment_tree::FragmentNode) -> String {
-        let display = node
-          .style
-          .as_ref()
-          .map(|s| format!("{:?}", s.display))
-          .unwrap_or_else(|| "None".to_string());
-        match &node.content {
-          crate::tree::fragment_tree::FragmentContent::Block { box_id } => {
-            format!("Block(box_id={:?}, display={})", box_id, display)
-          }
-          crate::tree::fragment_tree::FragmentContent::Inline {
-            box_id,
-            fragment_index,
-          } => {
-            format!(
-              "Inline(box_id={:?}, fragment_index={}, display={})",
-              box_id, fragment_index, display
-            )
-          }
-          crate::tree::fragment_tree::FragmentContent::Line { baseline } => {
-            format!("Line(baseline={:.3}, display={})", baseline, display)
-          }
-          crate::tree::fragment_tree::FragmentContent::Text {
-            text,
-            box_id,
-            baseline_offset,
-            ..
-          } => {
-            let preview: String = text.chars().take(80).collect();
-            format!(
-              "Text(box_id={:?}, baseline={:.3}, display={}, text=\"{}\")",
-              box_id, baseline_offset, display, preview
-            )
-          }
-          crate::tree::fragment_tree::FragmentContent::Replaced { box_id, .. } => {
-            format!("Replaced(box_id={:?}, display={})", box_id, display)
-          }
-        }
+        let mut trail = Vec::new();
+        trace_text(
+          &fragment_tree.root,
+          crate::geometry::Point::ZERO,
+          &query,
+          &mut trail,
+        );
       }
 
-      fn trace_text<'a>(
-        node: &'a crate::tree::fragment_tree::FragmentNode,
-        offset: crate::geometry::Point,
-        query: &str,
-        trail: &mut Vec<String>,
-      ) -> bool {
-        let raw = node.bounds;
-        let abs = crate::geometry::Rect::from_xywh(
-          node.bounds.x() + offset.x,
-          node.bounds.y() + offset.y,
-          node.bounds.width(),
-          node.bounds.height(),
-        );
-        let label = format!(
-          "{} raw=({:.1},{:.1},{:.1},{:.1}) abs=({:.1},{:.1},{:.1},{:.1})",
-          describe_node(node),
-          raw.x(),
-          raw.y(),
-          raw.width(),
-          raw.height(),
-          abs.x(),
-          abs.y(),
-          abs.width(),
-          abs.height()
-        );
-        trail.push(label);
-        if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &node.content {
-          if text.contains(query) {
-            eprintln!("trace for {:?}:", query);
-            for (depth, entry) in trail.iter().enumerate() {
-              eprintln!("  {}{}", "  ".repeat(depth), entry);
-            }
-            trail.pop();
-            return true;
-          }
-        }
-        let child_offset = crate::geometry::Point::new(abs.x(), abs.y());
-        for child in &node.children {
-          if trace_text(child, child_offset, query, trail) {
-            trail.pop();
-            return true;
-          }
-        }
-        trail.pop();
-        false
+      if let Some(start) = stage_start.as_mut() {
+        let now = Instant::now();
+        eprintln!("timing:layout_document {:?}", now - *start);
+        *start = now;
       }
-      let mut trail = Vec::new();
-      trace_text(
-        &fragment_tree.root,
-        crate::geometry::Point::ZERO,
-        &query,
-        &mut trail,
+
+      let expand_full_page = std::env::var("FASTR_FULL_PAGE")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false);
+      let viewport_size = layout_viewport;
+      let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
+      let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
+      let scroll = scroll_result.state.viewport;
+
+      animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+
+      self.apply_sticky_offsets(
+        &mut fragment_tree.root,
+        Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
+        scroll,
+        viewport_size,
       );
-    }
 
-    if let Some(start) = stage_start.as_mut() {
-      let now = Instant::now();
-      eprintln!("timing:layout_document {:?}", now - *start);
-      *start = now;
-    }
+      let viewport_width_px = viewport_size.width.max(1.0).ceil() as u32;
+      let viewport_height_px = viewport_size.height.max(1.0).ceil() as u32;
 
-    let expand_full_page = std::env::var("FASTR_FULL_PAGE")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false);
-    let viewport_size = Size::new(width as f32, height as f32);
-    let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
-    let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-    let scroll = scroll_result.state.viewport;
+      let (target_width, target_height) = if expand_full_page {
+        let content_bounds = fragment_tree.content_size();
+        let w = viewport_width_px.max(content_bounds.max_x().ceil().max(1.0) as u32);
+        let h = viewport_height_px.max(content_bounds.max_y().ceil().max(1.0) as u32);
+        (w, h)
+      } else {
+        (viewport_width_px, viewport_height_px)
+      };
 
-    animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+      // Paint to pixmap
+      let offset = Point::new(-scroll.x, -scroll.y);
+      let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
 
-    self.apply_sticky_offsets(
-      &mut fragment_tree.root,
-      Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
-      scroll,
-      viewport_size,
-    );
-
-    let (target_width, target_height) = if expand_full_page {
-      let content_bounds = fragment_tree.content_size();
-      let w = width.max(content_bounds.max_x().ceil().max(1.0) as u32);
-      let h = height.max(content_bounds.max_y().ceil().max(1.0) as u32);
-      (w, h)
-    } else {
-      (width, height)
-    };
-
-    // Paint to pixmap
-    let offset = Point::new(-scroll.x, -scroll.y);
-    let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
-
-    if let Some(start) = stage_start {
-      let now = Instant::now();
-      eprintln!("timing:paint {:?}", now - start);
-      if let Some(overall) = overall_start {
-        eprintln!("timing:render_html_total {:?}", now - overall);
+      if let Some(start) = stage_start {
+        let now = Instant::now();
+        eprintln!("timing:paint {:?}", now - start);
+        if let Some(overall) = overall_start {
+          eprintln!("timing:render_html_total {:?}", now - overall);
+        }
       }
-    }
 
-    Ok(pixmap)
+      Ok(pixmap)
+    })();
+
+    self.device_pixel_ratio = previous_dpr;
+    self.pending_device_size = None;
+
+    result
   }
 
   /// Renders HTML with a custom background color
@@ -1265,7 +1408,12 @@ impl FastRender {
 
     // Apply styles to create styled tree
     let target_fragment = self.current_target_fragment();
-    let media_ctx = self.media_context_for_media(media_type, width as f32, height as f32);
+    let viewport_size = Size::new(width as f32, height as f32);
+    let device_size = self.pending_device_size.take().unwrap_or(viewport_size);
+    let media_ctx = MediaContext::screen(viewport_size.width, viewport_size.height)
+      .with_device_size(device_size.width, device_size.height)
+      .with_device_pixel_ratio(self.device_pixel_ratio)
+      .with_env_overrides();
     let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
     let mut media_query_cache = MediaQueryCache::default();
     let style_load_start = timings_enabled.then(Instant::now);
@@ -1309,7 +1457,7 @@ impl FastRender {
     let first_style_fingerprints =
       has_container_queries.then(|| styled_fingerprint_map(&styled_tree));
 
-    let fallback_page_size = Size::new(width as f32, height as f32);
+    let fallback_page_size = viewport_size;
     let page_rules =
       resolved_stylesheet.collect_page_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
     let page_name_hint = find_first_page_name(&styled_tree);

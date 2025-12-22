@@ -2,7 +2,7 @@
 //!
 //! These tests verify the complete rendering pipeline from HTML/CSS to images.
 
-use fastrender::FastRender;
+use fastrender::{FastRender, FastRenderConfig};
 
 #[test]
 fn test_simple_html_rendering() {
@@ -364,4 +364,34 @@ fn test_nested_elements() {
   let result = renderer.render_to_png(html, 800, 600);
 
   assert!(result.is_ok());
+}
+
+#[test]
+fn meta_viewport_flips_media_query_when_enabled() {
+  let html = r#"
+        <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=2">
+                <style>
+                    html, body { margin: 0; padding: 0; width: 100%; height: 100%; }
+                    body { background: rgb(200, 0, 0); }
+                    @media (max-width: 500px) {
+                        body { background: rgb(0, 180, 0); }
+                    }
+                </style>
+            </head>
+            <body></body>
+        </html>
+    "#;
+
+  let mut disabled = FastRender::new().unwrap();
+  let no_meta = disabled.render_html(html, 600, 400).unwrap();
+  let no_meta_pixel = no_meta.pixel(0, 0).unwrap();
+  assert!(no_meta_pixel.red() > no_meta_pixel.green());
+
+  let mut enabled =
+    FastRender::with_config(FastRenderConfig::new().with_meta_viewport(true)).unwrap();
+  let meta_applied = enabled.render_html(html, 600, 400).unwrap();
+  let meta_pixel = meta_applied.pixel(0, 0).unwrap();
+  assert!(meta_pixel.green() > meta_pixel.red());
 }

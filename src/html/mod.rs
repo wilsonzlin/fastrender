@@ -2,6 +2,7 @@
 
 pub mod encoding;
 pub mod meta_refresh;
+pub mod viewport;
 
 use crate::css::loader::resolve_href;
 use crate::dom::DomNode;
