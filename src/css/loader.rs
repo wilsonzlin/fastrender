@@ -161,6 +161,9 @@ fn normalize_embedded_css_candidate(candidate: &str) -> Option<String> {
 }
 
 /// Rewrite `url(...)` references in a CSS string to be absolute using the stylesheet's base URL.
+///
+/// This walks cssparser tokens so only real `url` tokens are rewritten (including nested
+/// `url()` calls inside other functions/blocks). Strings and comments are preserved verbatim.
 pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
   fn escape_url_for_css(url: &str) -> String {
     let mut escaped = String::with_capacity(url.len());
