@@ -57,6 +57,7 @@
 use crate::accessibility::AccessibilityNode;
 use crate::animation;
 use crate::css::encoding::decode_css_bytes;
+use crate::css::loader::absolutize_css_urls;
 use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
 use crate::dom::DomNode;
@@ -67,6 +68,7 @@ use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::html;
 use crate::image_loader::ImageCache;
 use crate::image_output::encode_image;
 use crate::image_output::OutputFormat;
@@ -971,15 +973,16 @@ impl FastRender {
     }
 
     let stylesheet = extract_css(dom)?;
+    let document_base = html::document_base_url(dom, self.base_url.as_deref());
     let target_fragment = self.current_target_fragment();
     let media_ctx = MediaContext::screen(width as f32, height as f32)
       .with_device_pixel_ratio(self.device_pixel_ratio)
       .with_env_overrides();
-    let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
+    let import_loader = CssImportFetcher::new(document_base.clone(), Arc::clone(&self.fetcher));
     let mut media_query_cache = MediaQueryCache::default();
     let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
       &import_loader,
-      self.base_url.as_deref(),
+      document_base.as_deref(),
       &media_ctx,
       Some(&mut media_query_cache),
     );
@@ -1057,6 +1060,12 @@ impl FastRender {
     let modal_open = modal_dialog_present(&dom_with_state);
     apply_top_layer_state(&mut dom_with_state, modal_open, false);
 
+    let document_base = html::document_base_url(&dom_with_state, self.base_url.as_deref());
+    match &document_base {
+      Some(base) => self.image_cache.set_base_url(base.clone()),
+      None => self.image_cache.clear_base_url(),
+    }
+
     // Extract CSS from style tags
     let css_parse_start = timings_enabled.then(Instant::now);
     let stylesheet = extract_css(&dom_with_state)?;
@@ -1074,12 +1083,12 @@ impl FastRender {
     let media_ctx = MediaContext::screen(width as f32, height as f32)
       .with_device_pixel_ratio(self.device_pixel_ratio)
       .with_env_overrides();
-    let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
+    let import_loader = CssImportFetcher::new(document_base.clone(), Arc::clone(&self.fetcher));
     let mut media_query_cache = MediaQueryCache::default();
     let style_load_start = timings_enabled.then(Instant::now);
     let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
       &import_loader,
-      self.base_url.as_deref(),
+      document_base.as_deref(),
       &media_ctx,
       Some(&mut media_query_cache),
     );
@@ -1092,7 +1101,7 @@ impl FastRender {
     // Best-effort loading; rendering should continue even if a web font fails.
     let _ = self.font_context.load_web_fonts(
       &font_faces,
-      self.base_url.as_deref(),
+      document_base.as_deref(),
       Some(&used_codepoints),
     );
     if let Some(start) = style_load_start {
@@ -2252,11 +2261,9 @@ impl CssImportLoader for CssImportFetcher {
     // Use the fetcher to get the bytes
     let resource = self.fetcher.fetch(&resolved)?;
 
-    // Decode CSS bytes with charset handling
-    Ok(decode_css_bytes(
-      &resource.bytes,
-      resource.content_type.as_deref(),
-    ))
+    // Decode CSS bytes with charset handling and absolutize any relative URLs
+    let css = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
+    Ok(absolutize_css_urls(&css, &resolved))
   }
 }
 
@@ -3759,12 +3766,13 @@ mod tests {
       .state
       .viewport
   }
+  use crate::resource::{FetchedResource, ResourceFetcher};
   use image::codecs::png::PngEncoder;
   use image::load_from_memory;
   use image::ColorType;
   use image::ImageEncoder;
   use image::RgbaImage;
-  use std::sync::Arc;
+  use std::sync::{Arc, Mutex};
 
   fn text_color_for(tree: &FragmentTree, needle: &str) -> Option<Rgba> {
     tree.iter_fragments().find_map(|frag| match &frag.content {
@@ -3813,6 +3821,42 @@ mod tests {
     let mut out = Vec::new();
     helper(styled, id, &mut out);
     out
+  }
+
+  #[derive(Clone, Default)]
+  struct RecordingFetcher {
+    seen: Arc<Mutex<Vec<String>>>,
+  }
+
+  impl RecordingFetcher {
+    fn new() -> Self {
+      Self::default()
+    }
+
+    fn urls(&self) -> Vec<String> {
+      self.seen.lock().unwrap().clone()
+    }
+  }
+
+  impl ResourceFetcher for RecordingFetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      self.seen.lock().unwrap().push(url.to_string());
+
+      if url.ends_with(".css") {
+        return Ok(FetchedResource::new(
+          b"body { color: rgb(10, 20, 30); }".to_vec(),
+          Some("text/css".to_string()),
+        ));
+      }
+
+      let mut data = Vec::new();
+      let mut encoder = PngEncoder::new(&mut data);
+      encoder
+        .write_image(&[255, 0, 0, 255], 1, 1, ColorType::Rgba8)
+        .unwrap();
+
+      Ok(FetchedResource::new(data, Some("image/png".to_string())))
+    }
   }
 
   #[test]
@@ -4119,6 +4163,70 @@ mod tests {
     let styled = renderer.layout_document(&dom, 400, 200).unwrap();
     let color = text_color_for(&styled, "hello").expect("text color");
     assert_eq!(color, Rgba::rgb(9, 8, 7));
+  }
+
+  #[test]
+  fn base_href_resolves_relative_image_sources() {
+    let fetcher = RecordingFetcher::new();
+    let mut renderer = FastRender::builder()
+      .base_url("https://example.com/path/page.html")
+      .fetcher(Arc::new(fetcher.clone()))
+      .build()
+      .unwrap();
+
+    let html = r#"
+            <html>
+                <head><base href="/static/"></head>
+                <body><img src="images/pic.png"></body>
+            </html>
+        "#;
+
+    renderer.render_html(html, 200, 150).unwrap();
+    let urls = fetcher.urls();
+    assert!(
+      urls.contains(&"https://example.com/static/images/pic.png".to_string()),
+      "requested urls: {:?}",
+      urls
+    );
+    assert!(
+      !urls.contains(&"https://example.com/path/images/pic.png".to_string()),
+      "base href should override document path"
+    );
+  }
+
+  #[test]
+  fn base_href_changes_import_resolution() {
+    let fetcher = RecordingFetcher::new();
+    let mut renderer = FastRender::builder()
+      .base_url("https://example.com/path/page.html")
+      .fetcher(Arc::new(fetcher.clone()))
+      .build()
+      .unwrap();
+
+    let html = r#"
+            <html>
+                <head>
+                    <base href="/assets/">
+                    <style>@import "styles/theme.css";</style>
+                </head>
+                <body>imported</body>
+            </html>
+        "#;
+    let dom = renderer.parse_html(html).unwrap();
+    let styled = renderer.layout_document(&dom, 320, 200).unwrap();
+    let color = text_color_for(&styled, "imported").expect("imported color");
+    assert_eq!(color, Rgba::rgb(10, 20, 30));
+
+    let urls = fetcher.urls();
+    assert!(
+      urls.contains(&"https://example.com/assets/styles/theme.css".to_string()),
+      "requested urls: {:?}",
+      urls
+    );
+    assert!(
+      !urls.contains(&"https://example.com/path/styles/theme.css".to_string()),
+      "base href should change import resolution"
+    );
   }
 
   #[test]

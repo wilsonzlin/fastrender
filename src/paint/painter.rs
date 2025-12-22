@@ -23,6 +23,7 @@
 
 use crate::api::render_document_to_pixmap_with_base_url;
 use crate::css;
+use crate::css::loader::absolutize_css_urls;
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
@@ -32,6 +33,7 @@ use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::html;
 use crate::html::encoding::decode_html_bytes;
 use crate::image_loader::CachedImage;
 use crate::image_loader::ImageCache;
@@ -637,11 +639,26 @@ impl Painter {
   }
 
   fn resolve_replaced_intrinsic_sizes(&self, node: &mut tree::box_tree::BoxNode, viewport: Size) {
+    self.resolve_replaced_intrinsic_sizes_with_cache(node, viewport, &self.image_cache);
+  }
+
+  fn resolve_replaced_intrinsic_sizes_with_cache(
+    &self,
+    node: &mut tree::box_tree::BoxNode,
+    viewport: Size,
+    image_cache: &ImageCache,
+  ) {
     use tree::box_tree::BoxType;
     use tree::box_tree::MarkerContent;
     if let BoxType::Marker(marker_box) = &mut node.box_type {
       if let MarkerContent::Image(replaced) = &mut marker_box.content {
-        self.resolve_intrinsic_for_replaced(replaced, node.style.as_ref(), None, viewport);
+        self.resolve_intrinsic_for_replaced(
+          replaced,
+          node.style.as_ref(),
+          None,
+          viewport,
+          image_cache,
+        );
       }
     }
 
@@ -655,11 +672,12 @@ impl Painter {
         node.style.as_ref(),
         alt.as_deref(),
         viewport,
+        image_cache,
       );
     }
 
     for child in &mut node.children {
-      self.resolve_replaced_intrinsic_sizes(child, viewport);
+      self.resolve_replaced_intrinsic_sizes_with_cache(child, viewport, image_cache);
     }
   }
 
@@ -669,6 +687,7 @@ impl Painter {
     style: &ComputedStyle,
     alt: Option<&str>,
     viewport: Size,
+    image_cache: &ImageCache,
   ) {
     let replaced_type_snapshot = replaced_box.replaced_type.clone();
     match replaced_type_snapshot {
@@ -751,7 +770,7 @@ impl Painter {
         };
 
         if let Some(selected) = selected {
-          if let Ok(img) = self.image_cache.load(selected.url) {
+          if let Ok(img) = image_cache.load(selected.url) {
             let orientation = style.image_orientation.resolve(img.orientation, false);
             if let Some((w, h)) = img.css_dimensions(
               orientation,
@@ -793,9 +812,9 @@ impl Painter {
           return;
         }
         let image = if content.trim_start().starts_with('<') {
-          self.image_cache.render_svg(&content)
+          image_cache.render_svg(&content)
         } else {
-          self.image_cache.load(&content)
+          image_cache.load(&content)
         };
         if let Ok(image) = image {
           let orientation = style.image_orientation.resolve(image.orientation, false);
@@ -818,7 +837,7 @@ impl Painter {
           return;
         }
         if let Some(poster) = poster {
-          if let Ok(img) = self.image_cache.load(&poster) {
+          if let Ok(img) = image_cache.load(&poster) {
             let orientation = style.image_orientation.resolve(img.orientation, false);
             if let Some((w, h)) =
               img.css_dimensions(orientation, &style.image_resolution, self.scale, None)
@@ -4567,20 +4586,22 @@ impl Painter {
     }
 
     let viewport = Size::new(content_rect.width(), content_rect.height());
+    let dom = dom::parse_html(html).ok()?;
+    let document_base = html::document_base_url(&dom, base_url.as_deref());
     let mut nested_cache = self.image_cache.clone();
-    match base_url.as_ref() {
+    match &document_base {
       Some(url) => nested_cache.set_base_url(url.clone()),
       None => nested_cache.clear_base_url(),
     }
 
-    let mut options = self.paint_options.child_with_base(base_url.clone());
+    let mut options = self.paint_options.child_with_base(document_base.clone());
     options.iframe_depth = next_depth;
 
     render_document_to_pixmap_with_base_url(
       html,
       viewport,
       style.map(|s| s.background_color).unwrap_or(Rgba::WHITE),
-      base_url,
+      document_base,
       options.fetcher.clone(),
       self.font_ctx.clone(),
       nested_cache,
@@ -6646,6 +6667,7 @@ impl css::types::CssImportLoader for EmbeddedImportFetcher {
       .ok_or_else(|| RenderError::InvalidParameters {
         message: format!("Cannot resolve @import URL '{}'", url),
       })?;
+    let resolved_string = resolved.to_string();
 
     match resolved.scheme() {
       "file" => {
@@ -6655,7 +6677,8 @@ impl css::types::CssImportLoader for EmbeddedImportFetcher {
             message: format!("Invalid file URL for @import: {}", resolved),
           })?;
         let bytes = std::fs::read(&path)?;
-        Ok(css::encoding::decode_css_bytes(&bytes, None))
+        let css = css::encoding::decode_css_bytes(&bytes, None);
+        Ok(absolutize_css_urls(&css, &resolved_string))
       }
       "http" | "https" => {
         let agent = ureq::Agent::config_builder()
@@ -6674,10 +6697,8 @@ impl css::types::CssImportLoader for EmbeddedImportFetcher {
         let mut body = Vec::new();
         let mut reader = response.into_body().into_reader();
         reader.read_to_end(&mut body)?;
-        Ok(css::encoding::decode_css_bytes(
-          &body,
-          content_type.as_deref(),
-        ))
+        let css = css::encoding::decode_css_bytes(&body, content_type.as_deref());
+        Ok(absolutize_css_urls(&css, &resolved_string))
       }
       _ => Err(
         RenderError::InvalidParameters {
