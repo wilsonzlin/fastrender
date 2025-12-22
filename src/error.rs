@@ -74,6 +74,10 @@ pub enum Error {
   #[error("Render error: {0}")]
   Render(#[from] RenderError),
 
+  /// Network/navigation error when fetching documents
+  #[error("Navigation error: {0}")]
+  Navigation(#[from] NavigationError),
+
   /// I/O error (file reading, network, etc.)
   #[error("I/O error: {0}")]
   Io(#[from] std::io::Error),
@@ -287,6 +291,14 @@ pub enum ImageError {
   /// Network error (for remote images)
   #[error("Network error loading '{url}': {status}")]
   NetworkError { url: String, status: String },
+}
+
+/// Errors that occur while fetching the root document for rendering.
+#[derive(Error, Debug, Clone)]
+pub enum NavigationError {
+  /// The document could not be fetched or decoded.
+  #[error("Failed to fetch document '{url}': {reason}")]
+  FetchFailed { url: String, reason: String },
 }
 
 /// Errors that occur during rendering and rasterization

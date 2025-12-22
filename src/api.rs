@@ -57,16 +57,24 @@
 use crate::accessibility::AccessibilityNode;
 use crate::animation;
 use crate::css::encoding::decode_css_bytes;
+use crate::css::loader::absolutize_css_urls;
+use crate::css::loader::extract_css_links;
+use crate::css::loader::extract_embedded_css_urls;
+use crate::css::loader::infer_base_url;
+use crate::css::loader::inject_css_into_html;
+use crate::css::loader::inline_imports;
 use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
 use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
+use crate::error::NavigationError;
 use crate::error::RenderError;
 use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::html::encoding::decode_html_bytes;
 use crate::image_loader::ImageCache;
 use crate::image_output::encode_image;
 use crate::image_output::OutputFormat;
@@ -98,6 +106,7 @@ use crate::style::cascade::StyledNode;
 use crate::style::color::Rgba;
 use crate::style::media::MediaContext;
 use crate::style::media::MediaQueryCache;
+use crate::style::media::MediaType;
 use crate::style::page::resolve_page_style;
 use crate::style::page::PageSide;
 use crate::style::types::ContainerType;
@@ -369,6 +378,139 @@ impl Default for FastRenderBuilder {
   }
 }
 
+/// Per-request rendering options for both HTML strings and URLs.
+#[derive(Debug, Clone)]
+pub struct RenderOptions {
+  /// Optional viewport override. Falls back to the renderer's default size.
+  pub viewport: Option<(u32, u32)>,
+  /// Optional device pixel ratio override for media queries and image selection.
+  pub device_pixel_ratio: Option<f32>,
+  /// Media type used for evaluating media queries.
+  pub media_type: MediaType,
+  /// Horizontal scroll offset applied before painting.
+  pub scroll_x: f32,
+  /// Vertical scroll offset applied before painting.
+  pub scroll_y: f32,
+}
+
+impl Default for RenderOptions {
+  fn default() -> Self {
+    Self {
+      viewport: None,
+      device_pixel_ratio: None,
+      media_type: MediaType::Screen,
+      scroll_x: 0.0,
+      scroll_y: 0.0,
+    }
+  }
+}
+
+impl RenderOptions {
+  /// Create a new options struct with defaults.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Override the viewport size for this render.
+  pub fn with_viewport(mut self, width: u32, height: u32) -> Self {
+    self.viewport = Some((width, height));
+    self
+  }
+
+  /// Override the device pixel ratio for this render.
+  pub fn with_device_pixel_ratio(mut self, dpr: f32) -> Self {
+    self.device_pixel_ratio = Some(dpr);
+    self
+  }
+
+  /// Override the media type used for media queries.
+  pub fn with_media_type(mut self, media_type: MediaType) -> Self {
+    self.media_type = media_type;
+    self
+  }
+
+  /// Apply scroll offsets before painting.
+  pub fn with_scroll(mut self, scroll_x: f32, scroll_y: f32) -> Self {
+    self.scroll_x = scroll_x;
+    self.scroll_y = scroll_y;
+    self
+  }
+}
+
+/// Diagnostics collected during rendering.
+#[derive(Debug, Default, Clone)]
+pub struct RenderDiagnostics {
+  /// Network fetch errors encountered while loading subresources.
+  pub fetch_errors: Vec<ResourceFetchError>,
+}
+
+impl RenderDiagnostics {
+  /// Create an empty diagnostics object.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Record a failed fetch.
+  pub fn record(&mut self, kind: ResourceKind, url: impl Into<String>, message: impl Into<String>) {
+    self
+      .fetch_errors
+      .push(ResourceFetchError::new(kind, url, message));
+  }
+}
+
+/// Error captured while fetching a resource needed for rendering.
+#[derive(Debug, Clone)]
+pub struct ResourceFetchError {
+  /// Type of resource that failed.
+  pub kind: ResourceKind,
+  /// URL that failed to load.
+  pub url: String,
+  /// Human-readable error string.
+  pub message: String,
+}
+
+impl ResourceFetchError {
+  /// Construct a new fetch error entry.
+  pub fn new(kind: ResourceKind, url: impl Into<String>, message: impl Into<String>) -> Self {
+    Self {
+      kind,
+      url: url.into(),
+      message: message.into(),
+    }
+  }
+}
+
+/// Classification of resource types for diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceKind {
+  /// The root HTML document
+  Document,
+  /// Stylesheet resource
+  Stylesheet,
+  /// Image resource
+  Image,
+  /// Font resource
+  Font,
+  /// Other resource types
+  Other,
+}
+
+/// Result of a rendering operation that includes diagnostics.
+#[derive(Debug, Clone)]
+pub struct RenderResult {
+  /// Rendered pixels.
+  pub pixmap: Pixmap,
+  /// Diagnostics captured while fetching resources.
+  pub diagnostics: RenderDiagnostics,
+}
+
+impl RenderResult {
+  /// Extract the rendered pixels, discarding diagnostics.
+  pub fn into_pixmap(self) -> Pixmap {
+    self.pixmap
+  }
+}
+
 impl FastRenderConfig {
   /// Sets the default background color
   ///
@@ -595,7 +737,7 @@ impl FastRender {
   /// - Painting fails
   /// - Invalid dimensions (width or height is 0)
   pub fn render_html(&mut self, html: &str, width: u32, height: u32) -> Result<Pixmap> {
-    self.render_html_internal(html, width, height, 0.0, 0.0)
+    self.render_html_internal(html, width, height, 0.0, 0.0, MediaType::Screen)
   }
 
   /// Renders HTML with scroll offsets applied to the viewport
@@ -607,7 +749,33 @@ impl FastRender {
     scroll_x: f32,
     scroll_y: f32,
   ) -> Result<Pixmap> {
-    self.render_html_internal(html, width, height, scroll_x, scroll_y)
+    self.render_html_internal(html, width, height, scroll_x, scroll_y, MediaType::Screen)
+  }
+
+  /// Renders HTML with explicit per-request options.
+  pub fn render_html_with_options(&mut self, html: &str, options: RenderOptions) -> Result<Pixmap> {
+    let (width, height) = options
+      .viewport
+      .unwrap_or((self.default_width, self.default_height));
+    let original_dpr = self.device_pixel_ratio;
+    if let Some(dpr) = options.device_pixel_ratio {
+      self.device_pixel_ratio = dpr;
+    }
+
+    let result = self.render_html_internal(
+      html,
+      width,
+      height,
+      options.scroll_x,
+      options.scroll_y,
+      options.media_type,
+    );
+
+    if options.device_pixel_ratio.is_some() {
+      self.device_pixel_ratio = original_dpr;
+    }
+
+    result
   }
 
   fn render_html_internal(
@@ -617,6 +785,7 @@ impl FastRender {
     height: u32,
     scroll_x: f32,
     scroll_y: f32,
+    media_type: MediaType,
   ) -> Result<Pixmap> {
     // Validate dimensions
     if width == 0 || height == 0 {
@@ -639,7 +808,7 @@ impl FastRender {
     }
 
     // Layout the document
-    let mut fragment_tree = self.layout_document(&dom, width, height)?;
+    let mut fragment_tree = self.layout_document_for_media(&dom, width, height, media_type)?;
 
     if std::env::var("FASTR_LOG_FRAG_BOUNDS")
       .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
@@ -878,6 +1047,40 @@ impl FastRender {
     result
   }
 
+  /// Fetches and renders a document from a URL using default options.
+  pub fn render_url(&mut self, url: &str) -> Result<RenderResult> {
+    self.render_url_with_options(url, RenderOptions::default())
+  }
+
+  /// Fetches and renders a document from a URL with explicit options.
+  pub fn render_url_with_options(
+    &mut self,
+    url: &str,
+    options: RenderOptions,
+  ) -> Result<RenderResult> {
+    let mut diagnostics = RenderDiagnostics::default();
+    let resource = self.fetcher.fetch(url).map_err(|e| {
+      Error::Navigation(NavigationError::FetchFailed {
+        url: url.to_string(),
+        reason: e.to_string(),
+      })
+    })?;
+
+    let base_hint = resource.final_url.as_deref().unwrap_or(url);
+    let html = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
+    let base_url = infer_base_url(&html, base_hint).into_owned();
+    self.set_base_url(base_url.clone());
+
+    let html_with_css =
+      self.inline_stylesheets(&html, &base_url, options.media_type, &mut diagnostics);
+    let pixmap = self.render_html_with_options(&html_with_css, options)?;
+
+    Ok(RenderResult {
+      pixmap,
+      diagnostics,
+    })
+  }
+
   /// Parses HTML into a DOM tree
   ///
   /// Use this when you need direct access to the parsed DOM structure.
@@ -929,9 +1132,7 @@ impl FastRender {
 
     let stylesheet = extract_css(dom)?;
     let target_fragment = self.current_target_fragment();
-    let media_ctx = MediaContext::screen(width as f32, height as f32)
-      .with_device_pixel_ratio(self.device_pixel_ratio)
-      .with_env_overrides();
+    let media_ctx = self.media_context_for_media(MediaType::Screen, width as f32, height as f32);
     let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
     let mut media_query_cache = MediaQueryCache::default();
     let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
@@ -1000,12 +1201,22 @@ impl FastRender {
   /// println!("Fragment count: {}", fragment_tree.fragment_count());
   /// println!("Viewport: {:?}", fragment_tree.viewport_size());
   /// ```
-  #[allow(clippy::cognitive_complexity)]
   pub fn layout_document(
     &mut self,
     dom: &DomNode,
     width: u32,
     height: u32,
+  ) -> Result<FragmentTree> {
+    self.layout_document_for_media(dom, width, height, MediaType::Screen)
+  }
+
+  #[allow(clippy::cognitive_complexity)]
+  pub fn layout_document_for_media(
+    &mut self,
+    dom: &DomNode,
+    width: u32,
+    height: u32,
+    media_type: MediaType,
   ) -> Result<FragmentTree> {
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
     let overall_start = timings_enabled.then(Instant::now);
@@ -1028,9 +1239,7 @@ impl FastRender {
 
     // Apply styles to create styled tree
     let target_fragment = self.current_target_fragment();
-    let media_ctx = MediaContext::screen(width as f32, height as f32)
-      .with_device_pixel_ratio(self.device_pixel_ratio)
-      .with_env_overrides();
+    let media_ctx = self.media_context_for_media(media_type, width as f32, height as f32);
     let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
     let mut media_query_cache = MediaQueryCache::default();
     let style_load_start = timings_enabled.then(Instant::now);
@@ -1104,7 +1313,11 @@ impl FastRender {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
 
     // Resolve intrinsic sizes for replaced elements using the image cache
-    self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
+    self.resolve_replaced_intrinsic_sizes_for_media(
+      &mut box_tree.root,
+      layout_viewport,
+      media_type,
+    );
 
     if let Some(start) = stage_start.as_mut() {
       let now = Instant::now();
@@ -1456,7 +1669,11 @@ impl FastRender {
           }
           let mut box_tree =
             crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
-          self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
+          self.resolve_replaced_intrinsic_sizes_for_media(
+            &mut box_tree.root,
+            layout_viewport,
+            media_type,
+          );
 
           intrinsic_cache_clear();
           if report_intrinsic {
@@ -1679,16 +1896,97 @@ impl FastRender {
     self.background_color = color;
   }
 
+  fn media_context_for_media(
+    &self,
+    media_type: MediaType,
+    width: f32,
+    height: f32,
+  ) -> MediaContext {
+    let base = match media_type {
+      MediaType::Print => MediaContext::print(width, height),
+      _ => MediaContext::screen(width, height),
+    };
+
+    base
+      .with_device_pixel_ratio(self.device_pixel_ratio)
+      .with_env_overrides()
+  }
+
   /// Extract the fragment identifier (without '#') from the configured base URL, if any.
   fn current_target_fragment(&self) -> Option<String> {
     self.base_url.as_ref().and_then(|url| extract_fragment(url))
   }
 
+  /// Fetch linked stylesheets and inject them into the document so they participate in cascade.
+  fn inline_stylesheets(
+    &self,
+    html: &str,
+    base_url: &str,
+    media_type: MediaType,
+    diagnostics: &mut RenderDiagnostics,
+  ) -> String {
+    let mut css_links = extract_css_links(html, base_url, media_type);
+    let mut seen: HashSet<String> = css_links.iter().cloned().collect();
+    for extra in extract_embedded_css_urls(html, base_url) {
+      if seen.insert(extra.clone()) {
+        css_links.push(extra);
+      }
+    }
+
+    let mut combined_css = String::new();
+    let mut seen_imports = HashSet::new();
+
+    for css_url in css_links {
+      seen_imports.insert(css_url.clone());
+      match self.fetcher.fetch(&css_url) {
+        Ok(res) => {
+          let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
+          let rewritten = absolutize_css_urls(&css_text, &css_url);
+          let inlined = inline_imports(
+            &rewritten,
+            &css_url,
+            &|u| {
+              self
+                .fetcher
+                .fetch(u)
+                .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
+            },
+            &mut seen_imports,
+          );
+          combined_css.push_str(&inlined);
+          combined_css.push('\n');
+        }
+        Err(err) => diagnostics.record(ResourceKind::Stylesheet, &css_url, err.to_string()),
+      }
+    }
+
+    if combined_css.is_empty() {
+      html.to_string()
+    } else {
+      inject_css_into_html(html, &combined_css)
+    }
+  }
+
   /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
   fn resolve_replaced_intrinsic_sizes(&self, node: &mut BoxNode, viewport: Size) {
+    self.resolve_replaced_intrinsic_sizes_for_media(node, viewport, MediaType::Screen);
+  }
+
+  fn resolve_replaced_intrinsic_sizes_for_media(
+    &self,
+    node: &mut BoxNode,
+    viewport: Size,
+    media_type: MediaType,
+  ) {
     if let BoxType::Marker(marker_box) = &mut node.box_type {
       if let MarkerContent::Image(replaced) = &mut marker_box.content {
-        self.resolve_intrinsic_for_replaced(replaced, node.style.as_ref(), None, viewport);
+        self.resolve_intrinsic_for_replaced_for_media(
+          replaced,
+          node.style.as_ref(),
+          None,
+          viewport,
+          media_type,
+        );
       }
     }
 
@@ -1697,16 +1995,17 @@ impl FastRender {
         ReplacedType::Image { alt, .. } => alt.clone(),
         _ => None,
       };
-      self.resolve_intrinsic_for_replaced(
+      self.resolve_intrinsic_for_replaced_for_media(
         replaced_box,
         node.style.as_ref(),
         alt.as_deref(),
         viewport,
+        media_type,
       );
     }
 
     for child in &mut node.children {
-      self.resolve_replaced_intrinsic_sizes(child, viewport);
+      self.resolve_replaced_intrinsic_sizes_for_media(child, viewport, media_type);
     }
   }
 
@@ -1717,6 +2016,24 @@ impl FastRender {
     style: &ComputedStyle,
     alt: Option<&str>,
     viewport: Size,
+  ) {
+    self.resolve_intrinsic_for_replaced_for_media(
+      replaced_box,
+      style,
+      alt,
+      viewport,
+      MediaType::Screen,
+    );
+  }
+
+  #[allow(clippy::cognitive_complexity)]
+  fn resolve_intrinsic_for_replaced_for_media(
+    &self,
+    replaced_box: &mut ReplacedBox,
+    style: &ComputedStyle,
+    alt: Option<&str>,
+    viewport: Size,
+    media_type: MediaType,
   ) {
     if let ReplacedType::Math(math) = &mut replaced_box.replaced_type {
       if math.layout.is_none() {
@@ -1757,10 +2074,7 @@ impl FastRender {
         let mut have_resource_dimensions = false;
 
         let selected = if !src.is_empty() {
-          let media_ctx =
-            crate::style::media::MediaContext::screen(viewport.width, viewport.height)
-              .with_device_pixel_ratio(self.device_pixel_ratio)
-              .with_env_overrides();
+          let media_ctx = self.media_context_for_media(media_type, viewport.width, viewport.height);
           Some(
             replaced_box
               .replaced_type
