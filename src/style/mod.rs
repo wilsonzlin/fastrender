@@ -13,6 +13,7 @@ pub mod display;
 pub mod float;
 pub mod grid;
 pub mod media;
+pub mod page;
 pub mod position;
 pub mod properties;
 pub mod types;

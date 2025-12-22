@@ -82,6 +82,7 @@ use crate::layout::flex_profile::reset_flex_profile;
 use crate::layout::formatting_context::intrinsic_cache_clear;
 use crate::layout::formatting_context::intrinsic_cache_reset_counters;
 use crate::layout::formatting_context::intrinsic_cache_stats;
+use crate::layout::pagination::paginate_fragment_tree;
 use crate::layout::profile::layout_profile_enabled;
 use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
@@ -97,6 +98,8 @@ use crate::style::cascade::StyledNode;
 use crate::style::color::Rgba;
 use crate::style::media::MediaContext;
 use crate::style::media::MediaQueryCache;
+use crate::style::page::resolve_page_style;
+use crate::style::page::PageSide;
 use crate::style::types::ContainerType;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -1041,6 +1044,25 @@ impl FastRender {
     let first_style_fingerprints =
       has_container_queries.then(|| styled_fingerprint_map(&styled_tree));
 
+    let fallback_page_size = Size::new(width as f32, height as f32);
+    let page_rules =
+      resolved_stylesheet.collect_page_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let page_name_hint = find_first_page_name(&styled_tree);
+    let mut layout_viewport = fallback_page_size;
+    let mut first_page_style = None;
+    if !page_rules.is_empty() {
+      let style = resolve_page_style(
+        &page_rules,
+        0,
+        page_name_hint.as_deref(),
+        PageSide::Right,
+        fallback_page_size,
+        styled_tree.styles.root_font_size,
+      );
+      layout_viewport = style.content_size;
+      first_page_style = Some(style);
+    }
+
     if let Some(start) = stage_start.as_mut() {
       let now = Instant::now();
       eprintln!("timing:cascade {:?}", now - *start);
@@ -1052,8 +1074,7 @@ impl FastRender {
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
 
     // Resolve intrinsic sizes for replaced elements using the image cache
-    self
-      .resolve_replaced_intrinsic_sizes(&mut box_tree.root, Size::new(width as f32, height as f32));
+    self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
 
     if let Some(start) = stage_start.as_mut() {
       let now = Instant::now();
@@ -1182,7 +1203,7 @@ impl FastRender {
     }
 
     // Update layout engine config for this viewport
-    let config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32));
+    let config = LayoutConfig::for_viewport(layout_viewport);
     self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
     intrinsic_cache_clear();
     let report_intrinsic = std::env::var_os("FASTR_INTRINSIC_STATS").is_some();
@@ -1405,10 +1426,7 @@ impl FastRender {
           }
           let mut box_tree =
             crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
-          self.resolve_replaced_intrinsic_sizes(
-            &mut box_tree.root,
-            Size::new(width as f32, height as f32),
-          );
+          self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
 
           intrinsic_cache_clear();
           if report_intrinsic {
@@ -1446,6 +1464,22 @@ impl FastRender {
       if flex_profile {
         log_flex_profile(now - start);
       }
+    }
+
+    if !page_rules.is_empty() {
+      let viewport = first_page_style
+        .as_ref()
+        .map(|s| s.total_size)
+        .unwrap_or(layout_viewport);
+      let pages = paginate_fragment_tree(
+        &fragment_tree.root,
+        &page_rules,
+        fallback_page_size,
+        &self.font_context,
+        styled_tree.styles.root_font_size,
+        page_name_hint.clone(),
+      );
+      fragment_tree = FragmentTree::from_fragments(pages, viewport);
     }
 
     if report_intrinsic {
@@ -2978,6 +3012,18 @@ fn styled_style_map(root: &StyledNode) -> HashMap<usize, Arc<ComputedStyle>> {
   let mut map = HashMap::new();
   walk(root, &mut map);
   map
+}
+
+fn find_first_page_name(node: &StyledNode) -> Option<String> {
+  if let Some(name) = &node.styles.page {
+    return Some(name.clone());
+  }
+  for child in &node.children {
+    if let Some(name) = find_first_page_name(child) {
+      return Some(name);
+    }
+  }
+  None
 }
 
 fn styled_summary_map(root: &StyledNode) -> HashMap<usize, String> {

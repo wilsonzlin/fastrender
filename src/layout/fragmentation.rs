@@ -139,7 +139,7 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
   fragments
 }
 
-fn propagate_fragment_metadata(node: &mut FragmentNode, index: usize, count: usize) {
+pub(crate) fn propagate_fragment_metadata(node: &mut FragmentNode, index: usize, count: usize) {
   node.fragment_index = index;
   node.fragment_count = count.max(1);
   node.fragmentainer_index = index;
@@ -148,7 +148,7 @@ fn propagate_fragment_metadata(node: &mut FragmentNode, index: usize, count: usi
   }
 }
 
-fn clip_node(
+pub(crate) fn clip_node(
   node: &FragmentNode,
   fragment_start: f32,
   fragment_end: f32,
@@ -324,6 +324,17 @@ fn collect_break_plan(node: &FragmentNode, abs_start: f32, plan: &mut BreakPlan)
       end: abs_end + 0.01,
     });
   }
+}
+
+pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> Vec<f32> {
+  let mut plan = BreakPlan::default();
+  collect_break_plan(node, abs_start, &mut plan);
+  plan
+    .candidates
+    .into_iter()
+    .filter(|c| c.forced)
+    .map(|c| c.pos)
+    .collect()
 }
 
 fn compute_boundaries(total_height: f32, fragmentainer: f32, plan: &BreakPlan) -> Vec<f32> {

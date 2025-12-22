@@ -166,11 +166,63 @@ pub struct CollectedRule<'a> {
   pub container_conditions: Vec<ContainerCondition>,
 }
 
+/// Flattened @page rule with cascade-layer ordering preserved.
+#[derive(Debug, Clone)]
+pub struct CollectedPageRule<'a> {
+  pub rule: &'a PageRule,
+  pub layer_order: Vec<u32>,
+  pub order: usize,
+}
+
 /// Stylesheet containing CSS rules
 #[derive(Debug, Clone)]
 pub struct StyleSheet {
   /// All CSS rules in the stylesheet (style rules and @-rules)
   pub rules: Vec<CssRule>,
+}
+
+/// A page selector used by @page rules.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PageSelector {
+  /// Optional named page identifier.
+  pub name: Option<String>,
+  /// Optional page pseudo-class (:first/:left/:right/:blank).
+  pub pseudo: Option<PagePseudoClass>,
+}
+
+/// Supported page-side pseudo-classes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PagePseudoClass {
+  First,
+  Left,
+  Right,
+  Blank,
+}
+
+/// Margin-box positions inside a page rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PageMarginArea {
+  TopLeft,
+  TopCenter,
+  TopRight,
+  BottomLeft,
+  BottomCenter,
+  BottomRight,
+}
+
+/// Nested @top-*/@bottom-* declarations inside @page.
+#[derive(Debug, Clone)]
+pub struct PageMarginRule {
+  pub area: PageMarginArea,
+  pub declarations: Vec<Declaration>,
+}
+
+/// A @page rule (page selectors + declarations + margin boxes).
+#[derive(Debug, Clone)]
+pub struct PageRule {
+  pub selectors: Vec<PageSelector>,
+  pub declarations: Vec<Declaration>,
+  pub margin_rules: Vec<PageMarginRule>,
 }
 
 /// A minimal interface for loading imported stylesheets.
@@ -211,6 +263,30 @@ impl StyleSheet {
       cache,
       &mut registry,
       &[],
+      &[],
+      &mut result,
+    );
+    result
+  }
+
+  /// Collects applicable @page rules for the given media context.
+  pub fn collect_page_rules(&self, media_ctx: &MediaContext) -> Vec<CollectedPageRule<'_>> {
+    self.collect_page_rules_with_cache(media_ctx, None)
+  }
+
+  /// Collects @page rules using an optional media-query cache.
+  pub fn collect_page_rules_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+  ) -> Vec<CollectedPageRule<'_>> {
+    let mut result = Vec::new();
+    let mut registry = LayerRegistry::new();
+    collect_page_rules_recursive(
+      &self.rules,
+      media_ctx,
+      cache,
+      &mut registry,
       &[],
       &mut result,
     );
@@ -305,7 +381,15 @@ impl StyleSheet {
               return true;
             }
           }
-          CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) | CssRule::Keyframes(_) => {}
+<<<<<<< HEAD
+          CssRule::Page(_)
+          | CssRule::Style(_)
+          | CssRule::Import(_)
+          | CssRule::FontFace(_)
+          | CssRule::Keyframes(_) => {}
+=======
+          CssRule::Page(_) | CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+>>>>>>> 4ad3a36 (Add CSS @page parsing and pagination support)
         }
       }
       false
@@ -385,6 +469,7 @@ fn collect_rules_recursive<'a>(
           );
         }
       }
+      CssRule::Page(_) => {}
       CssRule::Import(_) => {
         // Imports are resolved before collection; nothing to add here.
       }
@@ -434,6 +519,99 @@ fn collect_rules_recursive<'a>(
   }
 }
 
+/// Collect @page rules from nested @media/@layer blocks.
+fn collect_page_rules_recursive<'a>(
+  rules: &'a [CssRule],
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+  registry: &mut LayerRegistry,
+  current_layer: &[u32],
+  out: &mut Vec<CollectedPageRule<'a>>,
+) {
+  let mut cache = cache;
+  for rule in rules {
+    match rule {
+      CssRule::Page(page_rule) => {
+        let layer_order = if current_layer.is_empty() {
+          vec![u32::MAX]
+        } else {
+          current_layer.to_vec()
+        };
+        let order = out.len();
+        out.push(CollectedPageRule {
+          rule: page_rule,
+          layer_order,
+          order,
+        });
+      }
+      CssRule::Media(media_rule) => {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+          collect_page_rules_recursive(
+            &media_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Supports(supports_rule) => {
+        if supports_rule.condition.matches() {
+          collect_page_rules_recursive(
+            &supports_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Layer(layer_rule) => {
+        if layer_rule.rules.is_empty() {
+          for name in &layer_rule.names {
+            registry.ensure_path(current_layer, name);
+          }
+          if layer_rule.anonymous {
+            registry.ensure_anonymous(current_layer);
+          }
+          continue;
+        }
+
+        if layer_rule.anonymous {
+          let path = registry.ensure_anonymous(current_layer);
+          collect_page_rules_recursive(
+            &layer_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            &path,
+            out,
+          );
+          continue;
+        }
+
+        if layer_rule.names.len() != 1 {
+          continue;
+        }
+
+        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        collect_page_rules_recursive(
+          &layer_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          &path,
+          out,
+        );
+      }
+      CssRule::Container(_) => {}
+      CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
+    }
+  }
+}
+
 fn collect_font_faces_recursive(
   rules: &[CssRule],
   media_ctx: &MediaContext,
@@ -459,6 +637,7 @@ fn collect_font_faces_recursive(
           collect_font_faces_recursive(&supports_rule.rules, media_ctx, cache.as_deref_mut(), out);
         }
       }
+      CssRule::Page(_) => {}
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           continue;
@@ -790,6 +969,8 @@ pub enum CssRule {
   Container(ContainerRule),
   /// A @supports rule containing conditional rules
   Supports(SupportsRule),
+  /// A @page rule controlling paged-media page boxes
+  Page(PageRule),
   /// An @import rule (href + optional media list)
   Import(ImportRule),
   /// A @layer rule establishing cascade layers
@@ -1024,6 +1205,9 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           condition: supports_rule.condition.clone(),
           rules: resolved_children,
         }));
+      }
+      CssRule::Page(page_rule) => {
+        out.push(CssRule::Page(page_rule.clone()));
       }
       CssRule::Layer(layer_rule) => {
         let mut resolved_children = Vec::new();

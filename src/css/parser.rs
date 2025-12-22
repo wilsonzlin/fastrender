@@ -22,6 +22,13 @@ use super::types::LayerRule;
 use super::types::MediaRule;
 use super::types::Keyframe;
 use super::types::KeyframesRule;
+use super::types::PageMarginArea;
+use super::types::PageMarginRule;
+use super::types::PagePseudoClass;
+use super::types::PageRule;
+use super::types::PageSelector;
+use super::types::ScrollTimelineName;
+use super::types::ViewTimelineName;
 use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
@@ -167,6 +174,7 @@ fn parse_rule<'i, 't>(
         "container" => parse_container_rule(p),
         "supports" => parse_supports_rule(p),
         "layer" => parse_layer_rule(p),
+        "page" => parse_page_rule(p),
         "font-face" => parse_font_face_rule(p),
         "keyframes" | "-webkit-keyframes" => parse_keyframes_rule(p),
         _ => {
@@ -755,6 +763,141 @@ fn parse_layer_rule<'i, 't>(
   })))
 }
 
+fn parse_page_rule<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let selectors = parse_page_selectors(parser)?;
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
+
+  let (declarations, margin_rules) =
+    parser.parse_nested_block(|nested| parse_page_block(nested))?;
+
+  Ok(Some(CssRule::Page(PageRule {
+    selectors,
+    declarations,
+    margin_rules,
+  })))
+}
+
+fn parse_page_selectors<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Vec<PageSelector>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let selectors = parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+    let mut selectors = Vec::new();
+    loop {
+      parser.skip_whitespace();
+      if parser.is_exhausted() {
+        break;
+      }
+
+      let mut name = None;
+      if let Ok(ident) = parser.try_parse(|p| p.expect_ident().map(|i| i.to_string())) {
+        name = Some(ident);
+      }
+
+      let mut pseudo = None;
+      if parser.try_parse(|p| p.expect_colon()).is_ok() {
+        if let Ok(pseudo_ident) = parser.expect_ident() {
+          pseudo = match pseudo_ident.as_ref().to_ascii_lowercase().as_str() {
+            "first" => Some(PagePseudoClass::First),
+            "left" => Some(PagePseudoClass::Left),
+            "right" => Some(PagePseudoClass::Right),
+            "blank" => Some(PagePseudoClass::Blank),
+            _ => None,
+          };
+        }
+      }
+
+      if name.is_some() || pseudo.is_some() {
+        selectors.push(PageSelector { name, pseudo });
+      }
+
+      parser.skip_whitespace();
+      if parser.try_parse(|p| p.expect_comma()).is_ok() {
+        continue;
+      }
+      if parser.is_exhausted() {
+        break;
+      }
+    }
+
+    if selectors.is_empty() {
+      selectors.push(PageSelector {
+        name: None,
+        pseudo: None,
+      });
+    }
+
+    Ok(selectors)
+  })?;
+
+  Ok(selectors)
+}
+
+fn parse_page_block<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<
+  (Vec<Declaration>, Vec<PageMarginRule>),
+  ParseError<'i, SelectorParseErrorKind<'i>>,
+> {
+  let mut declarations = Vec::new();
+  let mut margin_rules = Vec::new();
+
+  while !parser.is_exhausted() {
+    parser.skip_whitespace();
+    if parser.is_exhausted() {
+      break;
+    }
+
+    let state = parser.state();
+    match parser.next_including_whitespace() {
+      Ok(Token::AtKeyword(kw)) => {
+        if let Some(area) = parse_margin_area(&kw.to_string()) {
+          parser.expect_curly_bracket_block().map_err(|_| {
+            parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+          })?;
+          let nested = parser.parse_nested_block(|nested| {
+            parse_declaration_list(nested).map_err(|_| {
+              nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+                "declaration".into(),
+              ))
+            })
+          })?;
+          margin_rules.push(PageMarginRule {
+            area,
+            declarations: nested,
+          });
+          continue;
+        }
+        skip_at_rule(parser);
+      }
+      Ok(_) | Err(_) => {
+        parser.reset(&state);
+        if let Some(decl) = parse_declaration(parser) {
+          declarations.push(decl);
+        }
+      }
+    }
+  }
+
+  Ok((declarations, margin_rules))
+}
+
+fn parse_margin_area(name: &str) -> Option<PageMarginArea> {
+  match name.to_ascii_lowercase().as_str() {
+    "top-left" | "top-left-corner" => Some(PageMarginArea::TopLeft),
+    "top-center" => Some(PageMarginArea::TopCenter),
+    "top-right" | "top-right-corner" => Some(PageMarginArea::TopRight),
+    "bottom-left" | "bottom-left-corner" => Some(PageMarginArea::BottomLeft),
+    "bottom-center" => Some(PageMarginArea::BottomCenter),
+    "bottom-right" | "bottom-right-corner" => Some(PageMarginArea::BottomRight),
+    _ => None,
+  }
+}
+
 fn parse_font_face_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -1245,6 +1388,67 @@ fn parse_style_rule<'i, 't>(
   }))
 }
 
+fn parse_declaration<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<Declaration> {
+  let property = match parser.expect_ident() {
+    Ok(ident) => ident.to_string(),
+    Err(_) => {
+      skip_to_semicolon(parser);
+      return None;
+    }
+  };
+
+  if parser.expect_colon().is_err() {
+    skip_to_semicolon(parser);
+    return None;
+  }
+
+  let value_start = parser.position();
+  let mut important = false;
+
+  loop {
+    match parser.next() {
+      Ok(Token::Semicolon) | Err(_) => break,
+      Ok(Token::Delim('!')) => {
+        if parser
+          .try_parse(|p| p.expect_ident_matching("important"))
+          .is_ok()
+        {
+          important = true;
+        }
+        break;
+      }
+      Ok(Token::Function(_)) => {
+        let _ = parser.parse_nested_block(|p| {
+          while !p.is_exhausted() {
+            let _ = p.next();
+          }
+          Ok::<_, ParseError<()>>(())
+        });
+      }
+      Ok(_) => {}
+    }
+  }
+
+  let full_slice_raw = parser.slice_from(value_start);
+  let value = if important {
+    let without_important = if let Some((before, _)) = full_slice_raw.rsplit_once("!important") {
+      before
+    } else {
+      full_slice_raw
+    };
+    without_important.trim_end_matches(';').trim_end()
+  } else {
+    full_slice_raw.trim_end_matches(';').trim_end()
+  };
+
+  parse_property_value(&property, value).map(|parsed_value| Declaration {
+    property,
+    value: parsed_value,
+    raw_value: value.to_string(),
+    important,
+  })
+}
+
 /// Parse a list of declarations
 fn parse_declaration_list<'i, 't>(
   parser: &mut Parser<'i, 't>,
@@ -1256,79 +1460,8 @@ fn parse_declaration_list<'i, 't>(
     if parser.is_exhausted() {
       break;
     }
-
-    // Parse property name
-    let property = match parser.expect_ident() {
-      Ok(ident) => ident.to_string(),
-      Err(_) => {
-        // Skip to next declaration
-        skip_to_semicolon(parser);
-        continue;
-      }
-    };
-
-    // Expect colon
-    if parser.expect_colon().is_err() {
-      skip_to_semicolon(parser);
-      continue;
-    }
-
-    // Parse value until semicolon or !important
-    let value_start = parser.position();
-    let mut _value_end = value_start;
-    let mut important = false;
-
-    loop {
-      match parser.next() {
-        Ok(Token::Semicolon) | Err(_) => break,
-        Ok(Token::Delim('!')) => {
-          if parser
-            .try_parse(|p| p.expect_ident_matching("important"))
-            .is_ok()
-          {
-            important = true;
-          }
-          break;
-        }
-        Ok(Token::Function(_)) => {
-          // Consume the entire function including its contents
-          let _ = parser.parse_nested_block(|p| {
-            while !p.is_exhausted() {
-              let _ = p.next();
-            }
-            Ok::<_, ParseError<()>>(())
-          });
-          _value_end = parser.position();
-        }
-        Ok(_) => {
-          _value_end = parser.position();
-        }
-      }
-    }
-
-    // Slice from value_start to value_end
-    let full_slice_raw = parser.slice_from(value_start);
-
-    // Strip trailing "!important" / semicolon but preserve leading whitespace for custom properties.
-    let value = if important {
-      let without_important = if let Some((before, _)) = full_slice_raw.rsplit_once("!important") {
-        before
-      } else {
-        full_slice_raw
-      };
-      without_important.trim_end_matches(';').trim_end()
-    } else {
-      full_slice_raw.trim_end_matches(';').trim_end()
-    };
-
-    // Parse the value based on property
-    if let Some(parsed_value) = parse_property_value(&property, value) {
-      declarations.push(Declaration {
-        property,
-        value: parsed_value,
-        raw_value: value.to_string(),
-        important,
-      });
+    if let Some(decl) = parse_declaration(parser) {
+      declarations.push(decl);
     }
   }
 

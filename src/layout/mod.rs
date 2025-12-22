@@ -73,6 +73,9 @@ pub mod float_context;
 // W4 - Inline layout module (W4.T13 Baseline, W4.T14 Text Run, W4.T15 Float Integration)
 pub mod inline;
 
+// Pagination helpers for @page and multi-page outputs
+pub mod pagination;
+
 // W3.T13 - Absolute positioning algorithm
 pub mod absolute_positioning;
 
