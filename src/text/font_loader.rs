@@ -51,6 +51,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
+use std::sync::mpsc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
@@ -587,27 +588,22 @@ impl FontContext {
       }
 
       let display = face.display;
-      if matches!(
-        display,
-        FontDisplay::Swap | FontDisplay::Fallback | FontDisplay::Optional
-      ) {
-        let face_clone = face.clone();
-        let family_clone = family.clone();
-        let base = base_url.map(|b| b.to_string());
-        let guard = PendingTask::new(self.pending_async.clone());
-        started_count += 1;
-        let ctx = self.clone();
-        std::thread::spawn(move || {
-          let _pending = guard;
-          let start = Instant::now();
-          ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
-        });
-        continue;
-      }
+      let face_clone = face.clone();
+      let family_clone = family.clone();
+      let base = base_url.map(|b| b.to_string());
+      let guard = PendingTask::new(self.pending_async.clone());
+      let (tx, rx) = mpsc::channel();
+      started_count += 1;
+      let ctx = self.clone();
+      std::thread::spawn(move || {
+        let _pending = guard;
+        let start = Instant::now();
+        let loaded = ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
+        let _ = tx.send(loaded);
+      });
 
-      let start = Instant::now();
-      if self.load_face_sources(&family, face, base_url, order, start) {
-        started_count += 1;
+      if matches!(display, FontDisplay::Block | FontDisplay::Auto) {
+        let _ = rx.recv_timeout(BLOCK_PERIOD);
       }
     }
     Ok(())
