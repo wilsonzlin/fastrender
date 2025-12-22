@@ -1,16 +1,20 @@
 use fastrender::animation::{
   axis_scroll_state, sample_keyframes, scroll_timeline_progress, view_timeline_progress,
+  AnimatedValue,
 };
 use fastrender::css::parser::parse_stylesheet;
-use fastrender::css::types::PropertyValue;
-use fastrender::dom;
 use fastrender::api::FastRender;
+use fastrender::dom;
+use fastrender::{ComputedStyle, Size};
 use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::media::MediaContext;
 use fastrender::style::types::{
-  AnimationRange, ScrollTimeline, TimelineAxis, TimelineOffset, ViewTimeline, WritingMode,
+  AnimationRange, BasicShape, FilterFunction, ScrollTimeline, TimelineAxis, TimelineOffset,
+  ViewTimeline, WritingMode,
 };
+use fastrender::css::types::Transform as CssTransform;
+use fastrender::Rgba;
 
 fn find_by_tag<'a>(node: &'a StyledNode, tag: &str) -> Option<&'a StyledNode> {
   if let Some(name) = node.node.tag_name() {
@@ -93,12 +97,128 @@ fn keyframes_sample_interpolates_opacity() {
   let sheet = parse_stylesheet("@keyframes fade { 0% { opacity: 0; } 100% { opacity: 1; } }").unwrap();
   let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
   let rule = &keyframes[0];
-  let sampled = sample_keyframes(rule, 0.25);
+  let sampled = sample_keyframes(
+    rule,
+    0.25,
+    &ComputedStyle::default(),
+    Size::new(800.0, 600.0),
+    Size::new(100.0, 100.0),
+  );
   let opacity = match sampled.get("opacity") {
-    Some(PropertyValue::Number(n)) => *n,
+    Some(AnimatedValue::Opacity(n)) => *n,
     other => panic!("unexpected value {other:?}"),
   };
   assert!((opacity - 0.25).abs() < 1e-6);
+}
+
+#[test]
+fn keyframes_interpolate_colors_and_currentcolor() {
+  let sheet = parse_stylesheet(
+    "@keyframes tint { from { background-color: currentColor; } to { background-color: rgb(0, 0, 255); } }",
+  )
+  .unwrap();
+  let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+  let rule = &keyframes[0];
+  let mut base = ComputedStyle::default();
+  base.color = Rgba::new(255, 0, 0, 1.0);
+  let sampled = sample_keyframes(
+    rule,
+    0.5,
+    &base,
+    Size::new(800.0, 600.0),
+    Size::new(200.0, 200.0),
+  );
+  let color = match sampled.get("background-color") {
+    Some(AnimatedValue::Color(c)) => *c,
+    other => panic!("unexpected value {other:?}"),
+  };
+  assert!(color.r > 120 && color.r < 140, "r={}", color.r);
+  assert!(color.b > 120 && color.b < 140, "b={}", color.b);
+  assert_eq!(color.g, 0);
+}
+
+#[test]
+fn keyframes_interpolate_transform_lists() {
+  let sheet = parse_stylesheet(
+    "@keyframes move { from { transform: translateX(0px); } to { transform: translateX(100px); } }",
+  )
+  .unwrap();
+  let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+  let rule = &keyframes[0];
+  let sampled = sample_keyframes(
+    rule,
+    0.5,
+    &ComputedStyle::default(),
+    Size::new(800.0, 600.0),
+    Size::new(120.0, 80.0),
+  );
+  let transform = match sampled.get("transform") {
+    Some(AnimatedValue::Transform(t)) => t,
+    other => panic!("unexpected value {other:?}"),
+  };
+  assert_eq!(transform.len(), 1);
+  match &transform[0] {
+    CssTransform::TranslateX(len) => assert!((len.to_px() - 50.0).abs() < 1e-3),
+    other => panic!("unexpected transform {other:?}"),
+  }
+}
+
+#[test]
+fn keyframes_interpolate_filters() {
+  let sheet = parse_stylesheet(
+    "@keyframes blur { from { filter: blur(0px); } to { filter: blur(10px); } }",
+  )
+  .unwrap();
+  let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+  let rule = &keyframes[0];
+  let sampled = sample_keyframes(
+    rule,
+    0.5,
+    &ComputedStyle::default(),
+    Size::new(800.0, 600.0),
+    Size::new(100.0, 100.0),
+  );
+  let filters = match sampled.get("filter") {
+    Some(AnimatedValue::Filter(f)) => f,
+    other => panic!("unexpected value {other:?}"),
+  };
+  assert_eq!(filters.len(), 1);
+  match &filters[0] {
+    FilterFunction::Blur(len) => assert!((len.to_px() - 5.0).abs() < 1e-3),
+    other => panic!("unexpected filter {other:?}"),
+  }
+}
+
+#[test]
+fn clip_path_mismatches_fall_back_to_discrete() {
+  let sheet = parse_stylesheet(
+    "@keyframes mask { from { clip-path: inset(0%); } to { clip-path: circle(50%); } }",
+  )
+  .unwrap();
+  let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+  let rule = &keyframes[0];
+  let sampled = sample_keyframes(
+    rule,
+    0.5,
+    &ComputedStyle::default(),
+    Size::new(400.0, 300.0),
+    Size::new(100.0, 100.0),
+  );
+  match sampled.get("clip-path") {
+    Some(AnimatedValue::ClipPath(path)) => match path {
+      fastrender::style::types::ClipPath::BasicShape(shape, _) => match shape.as_ref() {
+        BasicShape::Inset { top, right, bottom, left, .. } => {
+          assert_eq!(top.to_px(), 0.0);
+          assert_eq!(right.to_px(), 0.0);
+          assert_eq!(bottom.to_px(), 0.0);
+          assert_eq!(left.to_px(), 0.0);
+        }
+        other => panic!("expected inset fallback, got {other:?}"),
+      },
+      other => panic!("unexpected clip-path {other:?}"),
+    },
+    other => panic!("unexpected clip-path value {other:?}"),
+  }
 }
 
 #[test]
@@ -229,4 +349,33 @@ fn scroll_timeline_drives_animation_during_render() {
     .expect("render bottom");
   assert_eq!(pixel(&pixmap_bottom, 50, 50), (255, 0, 0, 255));
   assert!(red_pixels(&pixmap_bottom) > 0, "red content should appear when fully scrolled");
+}
+
+#[test]
+fn transform_animation_moves_pixels() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r#"
+    <style>
+      html, body { margin: 0; height: 100%; }
+      body { background: black; scroll-timeline: main block; }
+      .box { display: block; position: sticky; top: 0; left: 0; width: 40px; height: 40px; background: red; animation-timeline: main; animation-name: slide; }
+      @keyframes slide { from { transform: translateX(0px); } to { transform: translateX(50px); } }
+    </style>
+    <div class="box"></div>
+    <div style="height: 300px;"></div>
+  "#;
+
+  let dom = renderer.parse_html(html).expect("parse html");
+  let tree = renderer.layout_document(&dom, 120, 120).expect("layout");
+  let max_scroll = (tree.content_size().height() - tree.viewport_size().height).max(0.0);
+  let pixmap_top = renderer
+    .render_html_with_scroll(html, 120, 120, 0.0, 0.0)
+    .expect("render top");
+  assert_eq!(pixel(&pixmap_top, 10, 10), (255, 0, 0, 255));
+
+  let pixmap_bottom = renderer
+    .render_html_with_scroll(html, 120, 120, 0.0, max_scroll)
+    .expect("render bottom");
+  assert_eq!(pixel(&pixmap_bottom, 10, 10), (0, 0, 0, 255));
+  assert_eq!(pixel(&pixmap_bottom, 60, 10), (255, 0, 0, 255));
 }
