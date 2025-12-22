@@ -80,7 +80,14 @@ pub fn build_accessibility_tree(root: &StyledNode) -> AccessibilityNode {
   let mut ids = HashMap::new();
   compute_hidden_and_ids(root, false, &mut hidden, &mut ids);
 
-  let ctx = BuildContext { root, hidden, ids };
+  let labels = collect_labels(root, &hidden, &ids);
+
+  let ctx = BuildContext {
+    root,
+    hidden,
+    ids,
+    labels,
+  };
 
   let mut ancestors: Vec<&DomNode> = Vec::new();
   let mut children = Vec::new();
@@ -110,6 +117,7 @@ struct BuildContext<'a> {
   root: &'a StyledNode,
   hidden: HashMap<usize, bool>,
   ids: HashMap<String, usize>,
+  labels: HashMap<usize, Vec<usize>>,
 }
 
 impl<'a> BuildContext<'a> {
@@ -176,30 +184,14 @@ impl<'a> BuildContext<'a> {
       return None;
     }
 
+    if let Some(labelled) = referenced_text_attr(node, self, "aria-labelledby", visited) {
+      return Some(labelled);
+    }
+
     if let Some(label) = node.node.get_attribute_ref("aria-label") {
       let norm = normalize_whitespace(label);
       if !norm.is_empty() {
         return Some(norm);
-      }
-    }
-
-    let mut labelled_by = Vec::new();
-    if let Some(attr) = node.node.get_attribute_ref("aria-labelledby") {
-      labelled_by.extend(attr.split_whitespace());
-    }
-    if !labelled_by.is_empty() {
-      let mut parts = Vec::new();
-      for id in labelled_by {
-        if let Some(target) = self.node_for_id(id) {
-          if let Some(text) = self.text_alternative(target, visited) {
-            if !text.is_empty() {
-              parts.push(text);
-            }
-          }
-        }
-      }
-      if !parts.is_empty() {
-        return Some(normalize_whitespace(&parts.join(" ")));
       }
     }
 
@@ -344,6 +336,77 @@ fn compute_hidden_and_ids(
   }
 }
 
+fn collect_labels(
+  root: &StyledNode,
+  hidden: &HashMap<usize, bool>,
+  ids: &HashMap<String, usize>,
+) -> HashMap<usize, Vec<usize>> {
+  fn is_hidden(node: &StyledNode, hidden: &HashMap<usize, bool>) -> bool {
+    *hidden.get(&node.node_id).unwrap_or(&false)
+  }
+
+  fn first_labelable_descendant<'a>(
+    node: &'a StyledNode,
+    hidden: &HashMap<usize, bool>,
+  ) -> Option<&'a StyledNode> {
+    for child in &node.children {
+      if is_hidden(child, hidden) {
+        continue;
+      }
+      if is_labelable(&child.node) {
+        return Some(child);
+      }
+      if let Some(found) = first_labelable_descendant(child, hidden) {
+        return Some(found);
+      }
+    }
+    None
+  }
+
+  fn walk(
+    node: &StyledNode,
+    root: &StyledNode,
+    hidden: &HashMap<usize, bool>,
+    ids: &HashMap<String, usize>,
+    labels: &mut HashMap<usize, Vec<usize>>,
+  ) {
+    if is_hidden(node, hidden) {
+      return;
+    }
+
+    let is_label = node
+      .node
+      .tag_name()
+      .map(|t| t.eq_ignore_ascii_case("label"))
+      .unwrap_or(false);
+
+    if is_label {
+      if let Some(for_attr) = node.node.get_attribute_ref("for") {
+        let target_key = for_attr.trim();
+        if !target_key.is_empty() {
+          if let Some(target_id) = ids.get(target_key) {
+            if let Some(target_node) = find_node_by_id(root, *target_id) {
+              if is_labelable(&target_node.node) {
+                labels.entry(*target_id).or_default().push(node.node_id);
+              }
+            }
+          }
+        }
+      } else if let Some(target) = first_labelable_descendant(node, hidden) {
+        labels.entry(target.node_id).or_default().push(node.node_id);
+      }
+    }
+
+    for child in &node.children {
+      walk(child, root, hidden, ids, labels);
+    }
+  }
+
+  let mut labels: HashMap<usize, Vec<usize>> = HashMap::new();
+  walk(root, root, hidden, ids, &mut labels);
+  labels
+}
+
 fn is_node_hidden(node: &StyledNode) -> bool {
   let attr_hidden = match node.node.node_type {
     DomNodeType::Element { .. } => {
@@ -401,6 +464,7 @@ fn compute_role(node: &DomNode) -> Option<String> {
 
   match tag.as_str() {
     "a" => node.get_attribute_ref("href").map(|_| "link".to_string()),
+    "area" => node.get_attribute_ref("href").map(|_| "link".to_string()),
     "button" => Some("button".to_string()),
     "summary" => Some("button".to_string()),
     "input" => input_role(node),
@@ -416,6 +480,10 @@ fn compute_role(node: &DomNode) -> Option<String> {
     "td" => Some("cell".to_string()),
     "th" => header_role(node),
     "caption" => Some("caption".to_string()),
+    "progress" => Some("progressbar".to_string()),
+    "meter" => Some("meter".to_string()),
+    "output" => Some("status".to_string()),
+    "fieldset" => Some("group".to_string()),
     "main" => Some("main".to_string()),
     "nav" => Some("navigation".to_string()),
     "header" => Some("banner".to_string()),
@@ -441,6 +509,7 @@ fn input_role(node: &DomNode) -> Option<String> {
     "radio" => Some("radio".to_string()),
     "range" => Some("slider".to_string()),
     "number" => Some("spinbutton".to_string()),
+    "search" => Some("searchbox".to_string()),
     "button" | "submit" | "reset" | "image" => Some("button".to_string()),
     _ => Some("textbox".to_string()),
   }
@@ -498,6 +567,10 @@ fn compute_name_internal(
     return None;
   }
 
+  if let Some(labelled) = referenced_text_attr(node, ctx, "aria-labelledby", visited) {
+    return Some(labelled);
+  }
+
   if let Some(label) = node.node.get_attribute_ref("aria-label") {
     let norm = normalize_whitespace(label);
     if !norm.is_empty() {
@@ -505,24 +578,8 @@ fn compute_name_internal(
     }
   }
 
-  let mut labelled_by = Vec::new();
-  if let Some(attr) = node.node.get_attribute_ref("aria-labelledby") {
-    labelled_by.extend(attr.split_whitespace());
-  }
-  if !labelled_by.is_empty() {
-    let mut parts = Vec::new();
-    for id in labelled_by {
-      if let Some(target) = ctx.node_for_id(id) {
-        if let Some(text) = ctx.text_alternative(target, visited) {
-          if !text.is_empty() {
-            parts.push(text);
-          }
-        }
-      }
-    }
-    if !parts.is_empty() {
-      return Some(normalize_whitespace(&parts.join(" ")));
-    }
+  if let Some(label) = label_association_name(node, ctx, visited) {
+    return Some(label);
   }
 
   if let Some(specific) = role_specific_name(node, ctx, role) {
@@ -543,6 +600,65 @@ fn compute_name_internal(
     None
   } else {
     Some(text)
+  }
+}
+
+fn referenced_text_attr(
+  node: &StyledNode,
+  ctx: &BuildContext,
+  attr: &str,
+  visited: &mut HashSet<usize>,
+) -> Option<String> {
+  let Some(attr_value) = node.node.get_attribute_ref(attr) else {
+    return None;
+  };
+
+  let mut parts = Vec::new();
+  for id in attr_value.split_whitespace() {
+    if let Some(target) = ctx.node_for_id(id) {
+      if let Some(text) = ctx.text_alternative(target, visited) {
+        if !text.is_empty() {
+          parts.push(text);
+        }
+      }
+    }
+  }
+
+  if parts.is_empty() {
+    None
+  } else {
+    Some(normalize_whitespace(&parts.join(" ")))
+  }
+}
+
+fn label_association_name(
+  node: &StyledNode,
+  ctx: &BuildContext,
+  visited: &mut HashSet<usize>,
+) -> Option<String> {
+  if !is_labelable(&node.node) {
+    return None;
+  }
+
+  let Some(label_ids) = ctx.labels.get(&node.node_id) else {
+    return None;
+  };
+
+  let mut parts = Vec::new();
+  for label_id in label_ids {
+    if let Some(label_node) = find_node_by_id(ctx.root, *label_id) {
+      if let Some(text) = ctx.text_alternative(label_node, visited) {
+        if !text.is_empty() {
+          parts.push(text);
+        }
+      }
+    }
+  }
+
+  if parts.is_empty() {
+    None
+  } else {
+    Some(normalize_whitespace(&parts.join(" ")))
   }
 }
 
@@ -626,12 +742,11 @@ fn fallback_name_for_role(
   element_ref: &ElementRef,
 ) -> Option<String> {
   match role {
-    Some("textbox") | Some("combobox") | Some("listbox") | Some("spinbutton") | Some("slider") => {
-      element_ref
-        .accessibility_value()
-        .filter(|v| !v.is_empty())
-        .map(|v| normalize_whitespace(&v))
-    }
+    Some("textbox") | Some("searchbox") | Some("combobox") | Some("listbox")
+    | Some("spinbutton") | Some("slider") => element_ref
+      .accessibility_value()
+      .filter(|v| !v.is_empty())
+      .map(|v| normalize_whitespace(&v)),
     Some("option") => {
       let text = ctx.visible_text(node);
       if text.is_empty() {
@@ -654,19 +769,17 @@ fn default_button_label(input_type: &str) -> Option<&'static str> {
 }
 
 fn compute_description(node: &StyledNode, ctx: &BuildContext) -> Option<String> {
-  let Some(attr) = node.node.get_attribute_ref("aria-describedby") else {
-    return None;
-  };
-
   let mut parts = Vec::new();
   let mut visited = HashSet::new();
-  for id in attr.split_whitespace() {
-    if let Some(target) = ctx.node_for_id(id) {
-      if let Some(text) = ctx.text_alternative(target, &mut visited) {
-        if !text.is_empty() {
-          parts.push(text);
-        }
-      }
+
+  if let Some(desc) = referenced_text_attr(node, ctx, "aria-describedby", &mut visited) {
+    parts.push(desc);
+  }
+
+  if let Some(description) = node.node.get_attribute_ref("aria-description") {
+    let norm = normalize_whitespace(description);
+    if !norm.is_empty() {
+      parts.push(norm);
     }
   }
 
@@ -707,11 +820,33 @@ fn compute_value(
   ctx: &BuildContext,
 ) -> Option<String> {
   match role {
-    Some("textbox") | Some("combobox") | Some("listbox") | Some("spinbutton") | Some("slider") => {
+    Some("textbox") | Some("searchbox") | Some("combobox") | Some("listbox") => element_ref
+      .accessibility_value()
+      .filter(|v| !v.is_empty())
+      .map(|v| normalize_whitespace(&v)),
+    Some("spinbutton") | Some("slider") => {
+      if let Some(value) = aria_value_attr(&node.node) {
+        return Some(value);
+      }
+
       element_ref
         .accessibility_value()
         .filter(|v| !v.is_empty())
         .map(|v| normalize_whitespace(&v))
+    }
+    Some("progressbar") => {
+      if let Some(value) = aria_value_attr(&node.node) {
+        return Some(value);
+      }
+
+      progress_value(&node.node)
+    }
+    Some("meter") => {
+      if let Some(value) = aria_value_attr(&node.node) {
+        return Some(value);
+      }
+
+      meter_value(&node.node)
     }
     Some("option") => {
       let text = ctx.visible_text(node);
@@ -723,6 +858,52 @@ fn compute_value(
     }
     _ => None,
   }
+}
+
+fn aria_value_attr(node: &DomNode) -> Option<String> {
+  if let Some(text) = node.get_attribute_ref("aria-valuetext") {
+    let norm = normalize_whitespace(text);
+    if !norm.is_empty() {
+      return Some(norm);
+    }
+  }
+
+  if let Some(text) = node.get_attribute_ref("aria-valuenow") {
+    let norm = normalize_whitespace(text);
+    if !norm.is_empty() {
+      return Some(norm);
+    }
+  }
+
+  None
+}
+
+fn format_number(mut value: f64) -> String {
+  if value == -0.0 {
+    value = 0.0;
+  }
+  let mut s = value.to_string();
+  if s.contains('.') {
+    while s.ends_with('0') {
+      s.pop();
+    }
+    if s.ends_with('.') {
+      s.pop();
+    }
+  }
+  s
+}
+
+fn progress_value(node: &DomNode) -> Option<String> {
+  let raw_value = node.get_attribute_ref("value")?;
+  let parsed = raw_value.trim().parse::<f64>().ok()?;
+  Some(format_number(parsed))
+}
+
+fn meter_value(node: &DomNode) -> Option<String> {
+  let raw_value = node.get_attribute_ref("value")?;
+  let parsed = raw_value.trim().parse::<f64>().ok()?;
+  Some(format_number(parsed))
 }
 
 fn compute_invalid(node: &DomNode, element_ref: &ElementRef) -> bool {
@@ -868,5 +1049,23 @@ fn parse_pressed_state(node: &DomNode, name: &str) -> Option<PressedState> {
     "false" | "0" => Some(PressedState::False),
     "mixed" => Some(PressedState::Mixed),
     _ => None,
+  }
+}
+
+fn is_labelable(node: &DomNode) -> bool {
+  let Some(tag) = node.tag_name() else {
+    return false;
+  };
+
+  match tag.to_ascii_lowercase().as_str() {
+    "button" | "select" | "textarea" | "output" | "progress" | "meter" => true,
+    "input" => {
+      let input_type = node
+        .get_attribute_ref("type")
+        .map(|t| t.to_ascii_lowercase())
+        .unwrap_or_else(|| "text".to_string());
+      input_type != "hidden"
+    }
+    _ => false,
   }
 }
