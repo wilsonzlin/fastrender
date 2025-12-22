@@ -1,12 +1,15 @@
 //! Fragmentation utilities
 //!
-//! This module post-processes a laid out fragment tree into multiple fragmentainer
-//! roots (pages or columns). It clips fragments to each fragmentainer and carries
-//! break metadata from computed styles.
+//! Pagination and multi-column output require splitting a laid-out fragment tree
+//! into fragmentainers (pages/columns). Fragmentation happens in the block axis
+//! and respects authored break hints (`break-before/after/inside`), widows/orphans
+//! constraints, and line-level break opportunities. The fragment tree that comes
+//! out of layout is treated as flow order; this module decides where to break and
+//! clones the appropriate fragment subtrees for each fragmentainer.
 
 use std::sync::OnceLock;
 
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::style::types::{BreakBetween, BreakInside};
 use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
@@ -14,12 +17,13 @@ use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 /// Options controlling how fragments are split across fragmentainers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FragmentationOptions {
-  /// Height of each fragmentainer (page/column block-size).
+  /// Block-size of each fragmentainer (page/column).
   pub fragmentainer_size: f32,
-  /// Number of columns in a fragmentainer. Currently informational; fragment
-  /// splitting is performed vertically for each fragmentainer slot.
+  /// Gap between successive fragmentainers when translated into absolute space.
+  pub fragmentainer_gap: f32,
+  /// Number of columns to target during fragmentation.
   pub column_count: usize,
-  /// Gap between columns in CSS pixels.
+  /// Gap between columns.
   pub column_gap: f32,
 }
 
@@ -28,9 +32,23 @@ impl FragmentationOptions {
   pub fn new(fragmentainer_size: f32) -> Self {
     Self {
       fragmentainer_size,
+      fragmentainer_gap: 0.0,
       column_count: 1,
       column_gap: 0.0,
     }
+  }
+
+  /// Sets a gap between fragmentainers (useful for pagination).
+  pub fn with_gap(mut self, gap: f32) -> Self {
+    self.fragmentainer_gap = gap.max(0.0);
+    self
+  }
+
+  /// Configures column count and gap.
+  pub fn with_columns(mut self, count: usize, gap: f32) -> Self {
+    self.column_count = count.max(1);
+    self.column_gap = gap.max(0.0);
+    self
   }
 }
 
@@ -38,6 +56,24 @@ impl Default for FragmentationOptions {
   fn default() -> Self {
     Self::new(0.0)
   }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BreakCandidate {
+  pos: f32,
+  forced: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ForbiddenRange {
+  start: f32,
+  end: f32,
+}
+
+#[derive(Default, Debug)]
+struct BreakPlan {
+  candidates: Vec<BreakCandidate>,
+  forbidden: Vec<ForbiddenRange>,
 }
 
 /// Splits a fragment tree into multiple fragmentainer roots based on the given options.
@@ -51,27 +87,32 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     return vec![root.clone()];
   }
 
-  let mut boundaries = vec![0.0];
-  boundaries.extend(collect_forced_boundaries(root, 0.0));
-  let mut pos = options.fragmentainer_size;
   let total_height = root.bounding_box().height().max(options.fragmentainer_size);
-  while pos < total_height {
-    boundaries.push(pos);
-    pos += options.fragmentainer_size;
-  }
+  let mut plan = BreakPlan::default();
+  collect_break_plan(root, 0.0, &mut plan);
+  // Always allow breaking at the end of the content range so the final fragment closes.
+  plan.candidates.push(BreakCandidate {
+    pos: total_height,
+    forced: true,
+  });
 
-  // Ensure the final boundary closes the content range.
-  boundaries.push(total_height);
+  plan.candidates.sort_by(|a, b| {
+    a.pos
+      .partial_cmp(&b.pos)
+      .unwrap_or(std::cmp::Ordering::Equal)
+  });
+  plan
+    .candidates
+    .dedup_by(|a, b| (a.pos - b.pos).abs() < 0.01 && a.forced == b.forced);
 
-  boundaries.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-  boundaries.dedup_by(|a, b| (*a - *b).abs() < 0.01);
-
+  let boundaries = compute_boundaries(total_height, options.fragmentainer_size, &plan);
   if boundaries.len() < 2 {
     return vec![root.clone()];
   }
 
   let fragment_count = boundaries.len() - 1;
   let mut fragments = Vec::with_capacity(fragment_count);
+
   for (index, window) in boundaries.windows(2).enumerate() {
     let start = window[0];
     let end = window[1];
@@ -79,17 +120,15 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       continue;
     }
 
-    if let Some(mut clipped) = clip_node(
-      root,
-      start,
-      end,
-      0.0,
-      start,
-      index,
-      fragment_count,
-    ) {
+    if let Some(mut clipped) = clip_node(root, start, end, 0.0, start, index, fragment_count) {
       propagate_fragment_metadata(&mut clipped, index, fragment_count);
-      fragments.push(clipped);
+
+      // Translate fragments to account for fragmentainer gaps so downstream consumers
+      // can reason about the absolute position of each fragmentainer stack.
+      let vertical_offset = index as f32 * (options.fragmentainer_size + options.fragmentainer_gap);
+      let translated = clipped.translate(Point::new(0.0, vertical_offset));
+
+      fragments.push(translated);
     }
   }
 
@@ -126,11 +165,11 @@ fn clip_node(
   }
 
   let default_style = default_style();
-  let style = if let Some(style) = node.style.as_ref() {
-    style.as_ref()
-  } else {
-    default_style
-  };
+  let style = node
+    .style
+    .as_ref()
+    .map(|s| s.as_ref())
+    .unwrap_or(default_style);
   let has_line_children = node
     .children
     .iter()
@@ -192,34 +231,179 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
   }
 }
 
-fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> Vec<f32> {
-  let mut breaks = Vec::new();
+fn collect_break_plan(node: &FragmentNode, abs_start: f32, plan: &mut BreakPlan) {
   let default_style = default_style();
-  let style = if let Some(style) = node.style.as_ref() {
-    style.as_ref()
-  } else {
-    default_style
-  };
-
-  if forces_break(style.break_before) {
-    breaks.push(abs_start);
-  }
+  let style = node
+    .style
+    .as_ref()
+    .map(|s| s.as_ref())
+    .unwrap_or(default_style);
 
   let abs_end = abs_start + node.bounds.height();
-  if forces_break(style.break_after) {
-    breaks.push(abs_end);
+
+  if forces_break(style.break_before) {
+    plan.candidates.push(BreakCandidate {
+      pos: abs_start,
+      forced: true,
+    });
+  } else if avoids_break(style.break_before) {
+    plan.forbidden.push(ForbiddenRange {
+      start: abs_start - 0.01,
+      end: abs_start + 0.01,
+    });
+  }
+
+  if matches!(style.break_inside, BreakInside::Avoid) {
+    // Allow breaking exactly at the element boundaries while preventing inner breaks.
+    let epsilon = 0.1;
+    if abs_end - abs_start > epsilon * 2.0 {
+      plan.forbidden.push(ForbiddenRange {
+        start: abs_start + epsilon,
+        end: abs_end - epsilon,
+      });
+    }
+  }
+
+  let line_children: Vec<_> = node
+    .children
+    .iter()
+    .filter(|child| matches!(child.content, FragmentContent::Line { .. }))
+    .collect();
+
+  if !line_children.is_empty() {
+    let line_count = line_children.len();
+    let widows = style.widows.max(1);
+    let orphans = style.orphans.max(1);
+
+    for (idx, line) in line_children.iter().enumerate() {
+      let line_start = abs_start + line.bounds.y();
+      let line_end = line_start + line.bounds.height();
+      let lines_before = idx + 1;
+      let lines_after = line_count.saturating_sub(lines_before);
+      let allow_break = lines_before >= orphans && lines_after >= widows;
+      if allow_break {
+        plan.candidates.push(BreakCandidate {
+          pos: line_end,
+          forced: false,
+        });
+      } else {
+        plan.forbidden.push(ForbiddenRange {
+          start: line_start,
+          end: line_end,
+        });
+      }
+    }
   }
 
   for child in &node.children {
-    let child_abs = abs_start + child.bounds.y();
-    breaks.extend(collect_forced_boundaries(child, child_abs));
+    let child_abs_start = abs_start + child.bounds.y();
+    let child_abs_end = child_abs_start + child.bounds.height();
+
+    let child_is_line = matches!(child.content, FragmentContent::Line { .. });
+
+    // Natural break opportunity after each child so pagination can split between siblings.
+    if !child_is_line {
+      plan.candidates.push(BreakCandidate {
+        pos: child_abs_end,
+        forced: false,
+      });
+    }
+
+    collect_break_plan(child, child_abs_start, plan);
   }
 
-  breaks
+  if forces_break(style.break_after) {
+    plan.candidates.push(BreakCandidate {
+      pos: abs_end,
+      forced: true,
+    });
+  } else if avoids_break(style.break_after) {
+    plan.forbidden.push(ForbiddenRange {
+      start: abs_end - 0.01,
+      end: abs_end + 0.01,
+    });
+  }
+}
+
+fn compute_boundaries(total_height: f32, fragmentainer: f32, plan: &BreakPlan) -> Vec<f32> {
+  const EPSILON: f32 = 0.01;
+
+  let mut forced: Vec<f32> = plan
+    .candidates
+    .iter()
+    .filter(|c| c.forced)
+    .map(|c| c.pos)
+    .collect();
+  let mut allowed: Vec<f32> = plan.candidates.iter().map(|c| c.pos).collect();
+
+  forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+  forced.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
+  allowed.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+  allowed.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
+
+  let mut boundaries = vec![0.0];
+  let mut start = 0.0;
+
+  while start + fragmentainer < total_height - EPSILON {
+    let target = start + fragmentainer;
+
+    // Forced breaks take precedence when they fall within the available range.
+    let forced_boundary = forced.iter().copied().find(|p| {
+      *p > start + EPSILON && *p <= target + EPSILON && !is_forbidden(*p, &plan.forbidden)
+    });
+
+    let boundary = if let Some(pos) = forced_boundary {
+      pos
+    } else {
+      let natural = allowed.iter().rev().copied().find(|p| {
+        *p > start + EPSILON && *p <= target + EPSILON && !is_forbidden(*p, &plan.forbidden)
+      });
+
+      if let Some(pos) = natural {
+        pos
+      } else {
+        // No candidate in range: fall back to the next allowed candidate even if it overflows.
+        allowed
+          .iter()
+          .copied()
+          .find(|p| *p > target + EPSILON && !is_forbidden(*p, &plan.forbidden))
+          .unwrap_or(target.min(total_height))
+      }
+    };
+
+    let clamped = boundary.min(total_height);
+    if (clamped - start).abs() < EPSILON {
+      // Give up on tiny slices to avoid infinite loops.
+      break;
+    }
+    boundaries.push(clamped);
+    start = clamped;
+  }
+
+  if total_height - *boundaries.last().unwrap_or(&0.0) > EPSILON {
+    boundaries.push(total_height);
+  }
+
+  boundaries.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+  boundaries.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
+  boundaries
+}
+
+fn is_forbidden(pos: f32, forbidden: &[ForbiddenRange]) -> bool {
+  forbidden
+    .iter()
+    .any(|range| pos >= range.start - 0.01 && pos <= range.end + 0.01)
 }
 
 fn forces_break(value: BreakBetween) -> bool {
-  matches!(value, BreakBetween::Always | BreakBetween::Page | BreakBetween::Column)
+  matches!(
+    value,
+    BreakBetween::Always | BreakBetween::Page | BreakBetween::Column
+  )
+}
+
+fn avoids_break(value: BreakBetween) -> bool {
+  matches!(value, BreakBetween::Avoid)
 }
 
 fn default_style() -> &'static ComputedStyle {

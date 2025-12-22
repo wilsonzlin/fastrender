@@ -101,3 +101,103 @@ fn multicol_layout_balances_children_and_rules() {
   assert!((rule_frag.bounds.height() - 80.0).abs() < 0.2);
   assert!((rule_frag.bounds.x() - 197.0).abs() < 0.5);
 }
+
+#[test]
+fn column_span_creates_new_segment() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(400.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(20.0);
+  let parent_style = Arc::new(parent_style);
+
+  let child_style = |height: f32| -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
+    style.height = Some(Length::px(height));
+    Arc::new(style)
+  };
+
+  let mut first = BoxNode::new_block(child_style(60.0), FormattingContextType::Block, vec![]);
+  first.id = 1;
+  let mut second = BoxNode::new_block(child_style(60.0), FormattingContextType::Block, vec![]);
+  second.id = 2;
+
+  let mut span_style = ComputedStyle::default();
+  span_style.height = Some(Length::px(30.0));
+  span_style.column_span = ColumnSpan::All;
+  let mut span = BoxNode::new_block(Arc::new(span_style), FormattingContextType::Block, vec![]);
+  span.id = 3;
+
+  let mut trailing = BoxNode::new_block(child_style(40.0), FormattingContextType::Block, vec![]);
+  trailing.id = 4;
+
+  let mut parent = BoxNode::new_block(
+    parent_style,
+    FormattingContextType::Block,
+    vec![
+      first.clone(),
+      second.clone(),
+      span.clone(),
+      trailing.clone(),
+    ],
+  );
+  parent.id = 20;
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&parent, &LayoutConstraints::definite_width(400.0))
+    .expect("layout");
+
+  let span_frag = find_fragment(&fragment, span.id).expect("span fragment");
+  assert!((span_frag.bounds.y() - 60.0).abs() < 0.5);
+
+  let trailing_frag = find_fragment(&fragment, trailing.id).expect("trailing fragment");
+  assert!(trailing_frag.bounds.y() >= span_frag.bounds.max_y());
+}
+
+#[test]
+fn nested_multicol_layouts_columns() {
+  let mut inner_style = ComputedStyle::default();
+  inner_style.width = Some(Length::px(240.0));
+  inner_style.column_count = Some(2);
+  inner_style.column_gap = Length::px(16.0);
+  let inner_style = Arc::new(inner_style);
+
+  let child_style = |height: f32| -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
+    style.height = Some(Length::px(height));
+    Arc::new(style)
+  };
+
+  let mut inner_child1 =
+    BoxNode::new_block(child_style(30.0), FormattingContextType::Block, vec![]);
+  inner_child1.id = 5;
+  let mut inner_child2 =
+    BoxNode::new_block(child_style(30.0), FormattingContextType::Block, vec![]);
+  inner_child2.id = 6;
+
+  let mut inner = BoxNode::new_block(
+    inner_style,
+    FormattingContextType::Block,
+    vec![inner_child1.clone(), inner_child2.clone()],
+  );
+  inner.id = 30;
+
+  let outer_style = Arc::new(ComputedStyle::default());
+  let root = BoxNode::new_block(
+    outer_style,
+    FormattingContextType::Block,
+    vec![inner.clone()],
+  );
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&root, &LayoutConstraints::definite_width(400.0))
+    .expect("layout");
+
+  let first_frag = find_fragment(&fragment, inner_child1.id).expect("first fragment");
+  let second_frag = find_fragment(&fragment, inner_child2.id).expect("second fragment");
+
+  assert!(first_frag.bounds.x() < second_frag.bounds.x());
+  assert!((second_frag.bounds.x() - first_frag.bounds.x()) > 60.0);
+  assert!((first_frag.bounds.y() - second_frag.bounds.y()).abs() < 0.1);
+}
