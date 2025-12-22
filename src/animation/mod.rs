@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::css::types::{Declaration, Keyframe, KeyframesRule};
 use crate::css::types::PropertyValue;
+use crate::geometry::{Point, Rect};
 use crate::style::inline_axis_is_horizontal;
 use crate::style::types::AnimationRange;
 use crate::style::types::RangeOffset;
@@ -17,9 +18,12 @@ use crate::style::types::TimelineAxis;
 use crate::style::types::TimelineOffset;
 use crate::style::types::ViewTimeline;
 use crate::style::types::ViewTimelinePhase;
+use crate::style::types::AnimationTimeline;
 use crate::style::types::WritingMode;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
+use crate::tree::fragment_tree::{FragmentNode, FragmentTree};
+use std::sync::Arc;
 
 fn axis_is_horizontal(axis: TimelineAxis, writing_mode: WritingMode) -> bool {
   match axis {
@@ -226,6 +230,219 @@ pub fn apply_animated_properties(style: &mut ComputedStyle, values: &HashMap<Str
     if let PropertyValue::Number(n) = val {
       style.opacity = clamp_progress(*n);
     }
+  }
+}
+
+enum TimelineState {
+  Scroll {
+    timeline: ScrollTimeline,
+    scroll_pos: f32,
+    scroll_range: f32,
+    viewport_size: f32,
+  },
+  View {
+    timeline: ViewTimeline,
+    target_start: f32,
+    target_end: f32,
+    view_size: f32,
+    scroll_offset: f32,
+  },
+}
+
+fn pick<'a, T: Clone>(list: &'a [T], idx: usize, default: T) -> T {
+  if list.is_empty() {
+    return default;
+  }
+  list
+    .get(idx)
+    .cloned()
+    .unwrap_or_else(|| list.last().cloned().unwrap_or(default))
+}
+
+fn collect_timelines(
+  node: &FragmentNode,
+  offset: Point,
+  viewport: Rect,
+  content: Rect,
+  scroll: Point,
+  map: &mut HashMap<String, TimelineState>,
+) {
+  let abs = Rect::from_xywh(
+    node.bounds.x() + offset.x,
+    node.bounds.y() + offset.y,
+    node.bounds.width(),
+    node.bounds.height(),
+  );
+
+  if let Some(style) = node.style.as_ref() {
+    for tl in &style.scroll_timelines {
+      if let Some(name) = &tl.name {
+        let (scroll_pos, scroll_range, viewport_size) = axis_scroll_state(
+          tl.axis,
+          style.writing_mode,
+          scroll.x,
+          scroll.y,
+          viewport.width(),
+          viewport.height(),
+          content.width(),
+          content.height(),
+        );
+        map.entry(name.clone()).or_insert(TimelineState::Scroll {
+          timeline: tl.clone(),
+          scroll_pos,
+          scroll_range,
+          viewport_size,
+        });
+      }
+    }
+
+    for tl in &style.view_timelines {
+      if let Some(name) = &tl.name {
+        let horizontal = axis_is_horizontal(tl.axis, style.writing_mode);
+        let target_start = if horizontal { abs.x() } else { abs.y() };
+        let target_end = if horizontal {
+          abs.x() + abs.width()
+        } else {
+          abs.y() + abs.height()
+        };
+        let view_size = if horizontal {
+          viewport.width()
+        } else {
+          viewport.height()
+        };
+        let scroll_offset = if horizontal { scroll.x } else { scroll.y };
+        map.entry(name.clone()).or_insert(TimelineState::View {
+          timeline: tl.clone(),
+          target_start,
+          target_end,
+          view_size,
+          scroll_offset,
+        });
+      }
+    }
+  }
+
+  let child_offset = Point::new(abs.x(), abs.y());
+  for child in &node.children {
+    collect_timelines(child, child_offset, viewport, content, scroll, map);
+  }
+}
+
+fn apply_animations_to_node(
+  node: &mut FragmentNode,
+  offset: Point,
+  viewport: Rect,
+  scroll: Point,
+  keyframes: &HashMap<String, KeyframesRule>,
+  timelines: &HashMap<String, TimelineState>,
+) {
+  let abs = Rect::from_xywh(
+    node.bounds.x() + offset.x,
+    node.bounds.y() + offset.y,
+    node.bounds.width(),
+    node.bounds.height(),
+  );
+
+  if let Some(style_arc) = node.style.clone() {
+    let names = &style_arc.animation_names;
+    if !names.is_empty() {
+      let timelines_list = &style_arc.animation_timelines;
+      let ranges_list = &style_arc.animation_ranges;
+
+      let mut animated = (*style_arc).clone();
+      let mut changed = false;
+
+      for (idx, name) in names.iter().enumerate() {
+        let timeline_ref = pick(
+          timelines_list,
+          idx,
+          AnimationTimeline::Auto,
+        );
+        let range = pick(ranges_list, idx, AnimationRange::default());
+        let progress = match timeline_ref {
+          AnimationTimeline::Auto => None,
+          AnimationTimeline::None => None,
+          AnimationTimeline::Named(ref timeline_name) => {
+            timelines.get(timeline_name).map(|state| match state {
+              TimelineState::Scroll {
+                timeline,
+                scroll_pos,
+                scroll_range,
+                viewport_size,
+              } => scroll_timeline_progress(timeline, *scroll_pos, *scroll_range, *viewport_size, &range),
+              TimelineState::View {
+                timeline,
+                target_start,
+                target_end,
+                view_size,
+                scroll_offset,
+              } => view_timeline_progress(
+                timeline,
+                *target_start,
+                *target_end,
+                *view_size,
+                *scroll_offset,
+                &range,
+              ),
+            })
+          }
+        };
+
+        let Some(progress) = progress else { continue }; // skip if no timeline
+        if let Some(rule) = keyframes.get(name) {
+          let values = sample_keyframes(rule, progress);
+          apply_animated_properties(&mut animated, &values);
+          changed = true;
+        }
+      }
+
+      if changed {
+        node.style = Some(Arc::new(animated));
+      }
+    }
+  }
+
+  let child_offset = Point::new(abs.x(), abs.y());
+  for child in &mut node.children {
+    apply_animations_to_node(child, child_offset, viewport, scroll, keyframes, timelines);
+  }
+}
+
+/// Applies scroll/view timeline-driven animations to the fragment tree by sampling
+/// matching @keyframes rules and applying animated properties (currently opacity).
+///
+/// This is a lightweight hook to make scroll-driven effects visible without a full
+/// animation engine. It uses the provided scroll offsets for the root viewport.
+pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
+  if tree.keyframes.is_empty() {
+    return;
+  }
+
+  let viewport = Rect::from_xywh(0.0, 0.0, tree.viewport_size().width, tree.viewport_size().height);
+  let content = tree.content_size();
+  let mut timelines: HashMap<String, TimelineState> = HashMap::new();
+  collect_timelines(&tree.root, Point::ZERO, viewport, content, scroll, &mut timelines);
+  for frag in &tree.additional_fragments {
+    collect_timelines(frag, Point::ZERO, viewport, content, scroll, &mut timelines);
+  }
+
+  apply_animations_to_node(
+    &mut tree.root,
+    Point::ZERO,
+    viewport,
+    scroll,
+    &tree.keyframes,
+    &timelines,
+  );
+  for frag in &mut tree.additional_fragments {
+    apply_animations_to_node(
+      frag,
+      Point::ZERO,
+      viewport,
+      scroll,
+      &tree.keyframes,
+      &timelines,
+    );
   }
 }
 

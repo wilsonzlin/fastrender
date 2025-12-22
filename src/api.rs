@@ -55,6 +55,7 @@
 //! instance per thread.
 
 use crate::accessibility::AccessibilityNode;
+use crate::animation;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
@@ -779,6 +780,8 @@ impl FastRender {
     let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
     let scroll = scroll_result.state.viewport;
 
+    animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+
     self.apply_sticky_offsets(
       &mut fragment_tree.root,
       Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
@@ -1004,6 +1007,8 @@ impl FastRender {
       &media_ctx,
       Some(&mut media_query_cache),
     );
+    let keyframes = resolved_stylesheet
+      .collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
     let has_container_queries = resolved_stylesheet.has_container_rules();
     self.font_context.clear_web_fonts();
     let font_faces = resolved_stylesheet
@@ -1467,6 +1472,13 @@ impl FastRender {
         "layout_cache hits={} misses={} total_passes={}",
         stats.cache_hits, stats.cache_misses, stats.total_layouts
       );
+    }
+
+    if !keyframes.is_empty() {
+      fragment_tree.keyframes = keyframes
+        .into_iter()
+        .map(|rule| (rule.name.clone(), rule))
+        .collect();
     }
 
     Ok(fragment_tree)

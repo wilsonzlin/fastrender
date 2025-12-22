@@ -38,10 +38,12 @@
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::css::types::KeyframesRule;
 use crate::style::ComputedStyle;
 use crate::text::pipeline::ShapedRun;
 use crate::scroll::ScrollMetadata;
 use crate::tree::box_tree::ReplacedType;
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -686,6 +688,9 @@ pub struct FragmentTree {
   /// The first fragment is always stored in `root` for backwards compatibility.
   pub additional_fragments: Vec<FragmentNode>,
 
+  /// Collected @keyframes rules active for this tree.
+  pub keyframes: HashMap<String, KeyframesRule>,
+
   /// The viewport size (may differ from root fragment bounds)
   viewport: Option<Size>,
 
@@ -700,6 +705,7 @@ impl FragmentTree {
       root,
       additional_fragments: Vec::new(),
       viewport: None,
+      keyframes: HashMap::new(),
       scroll_metadata: None,
     }
   }
@@ -713,6 +719,7 @@ impl FragmentTree {
       root,
       additional_fragments: Vec::new(),
       viewport: Some(viewport),
+      keyframes: HashMap::new(),
       scroll_metadata: None,
     }
   }
@@ -730,6 +737,7 @@ impl FragmentTree {
       root,
       additional_fragments: roots,
       viewport: Some(viewport),
+      keyframes: HashMap::new(),
       scroll_metadata: None,
     }
   }
