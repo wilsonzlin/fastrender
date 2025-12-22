@@ -164,10 +164,10 @@
 // Core Modules
 // ============================================================================
 
+pub mod animation;
 pub mod api;
 pub mod error;
 pub mod geometry;
-pub mod animation;
 
 // ============================================================================
 // Pipeline Modules
@@ -273,6 +273,7 @@ pub use paint::stacking::get_stacking_context_reason;
 pub use paint::stacking::StackingContext;
 pub use paint::stacking::StackingContextReason;
 pub use paint::text_rasterize::GlyphCache;
+pub use paint::text_rasterize::GlyphCacheStats;
 pub use paint::text_rasterize::TextRasterizer;
 // Resource fetching
 pub use resource::{FetchedResource, HttpFetcher, ResourceFetcher};

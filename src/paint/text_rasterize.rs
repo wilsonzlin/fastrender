@@ -57,6 +57,7 @@ use crate::text::font_db::LoadedFont;
 use crate::text::pipeline::GlyphPosition;
 use crate::text::pipeline::ShapedRun;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tiny_skia::FillRule;
 use tiny_skia::Paint;
@@ -85,14 +86,10 @@ use tiny_skia::Transform;
 struct GlyphOutlineBuilder {
   /// The path being built
   builder: PathBuilder,
-  /// Scale factor to convert font units to pixels
-  scale: f32,
-  /// Horizontal shear factor (tan(angle)) for synthetic oblique
-  skew: f32,
-  /// X offset for positioning
-  x_offset: f32,
-  /// Y offset for positioning (inverted for Y-down coordinate system)
-  y_offset: f32,
+  /// Number of outline commands
+  verb_count: usize,
+  /// Number of points added to the outline
+  point_count: usize,
 }
 
 impl GlyphOutlineBuilder {
@@ -100,77 +97,65 @@ impl GlyphOutlineBuilder {
   ///
   /// # Arguments
   ///
-  /// * `scale` - Scale factor (font_size / units_per_em)
-  /// * `skew` - Synthetic shear factor to emulate oblique (tan(angle))
-  /// * `x_offset` - X position offset in pixels
-  /// * `y_offset` - Y position offset in pixels (baseline position)
-  fn new(scale: f32, skew: f32, x_offset: f32, y_offset: f32) -> Self {
+  /// Outlines are recorded in font design units with no positioning
+  /// or scaling. The caller is responsible for applying any required
+  /// transforms when rasterizing the path.
+  fn new() -> Self {
     Self {
       builder: PathBuilder::new(),
-      scale,
-      skew,
-      x_offset,
-      y_offset,
+      verb_count: 0,
+      point_count: 0,
     }
   }
 
-  /// Converts font units to pixels with positioning.
-  #[inline]
-  fn transform_x(&self, x: f32, y: f32) -> f32 {
-    (x + self.skew * y) * self.scale + self.x_offset
-  }
-
-  /// Converts font units to pixels with positioning.
-  ///
-  /// Note: Font Y coordinates are up-positive, but screen coordinates
-  /// are down-positive. We invert Y by subtracting from the baseline.
-  #[inline]
-  fn transform_y(&self, y: f32) -> f32 {
-    self.y_offset - (y * self.scale)
-  }
-
-  /// Consumes the builder and returns the completed path.
-  fn finish(self) -> Option<Path> {
-    self.builder.finish()
+  /// Consumes the builder and returns the completed path and metrics.
+  fn finish(self) -> (Option<Path>, GlyphOutlineMetrics) {
+    (
+      self.builder.finish(),
+      GlyphOutlineMetrics {
+        verb_count: self.verb_count,
+        point_count: self.point_count,
+      },
+    )
   }
 }
 
 impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
   fn move_to(&mut self, x: f32, y: f32) {
-    self
-      .builder
-      .move_to(self.transform_x(x, y), self.transform_y(y));
+    self.verb_count += 1;
+    self.point_count += 1;
+    self.builder.move_to(x, y);
   }
 
   fn line_to(&mut self, x: f32, y: f32) {
-    self
-      .builder
-      .line_to(self.transform_x(x, y), self.transform_y(y));
+    self.verb_count += 1;
+    self.point_count += 1;
+    self.builder.line_to(x, y);
   }
 
   fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-    self.builder.quad_to(
-      self.transform_x(x1, y1),
-      self.transform_y(y1),
-      self.transform_x(x, y),
-      self.transform_y(y),
-    );
+    self.verb_count += 1;
+    self.point_count += 2;
+    self.builder.quad_to(x1, y1, x, y);
   }
 
   fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-    self.builder.cubic_to(
-      self.transform_x(x1, y1),
-      self.transform_y(y1),
-      self.transform_x(x2, y2),
-      self.transform_y(y2),
-      self.transform_x(x, y),
-      self.transform_y(y),
-    );
+    self.verb_count += 1;
+    self.point_count += 3;
+    self.builder.cubic_to(x1, y1, x2, y2, x, y);
   }
 
   fn close(&mut self) {
+    self.verb_count += 1;
     self.builder.close();
   }
+}
+
+/// Simple metrics captured while building an outline.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct GlyphOutlineMetrics {
+  verb_count: usize,
+  point_count: usize,
 }
 
 // ============================================================================
@@ -179,12 +164,9 @@ impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
 
 /// Cache key for glyph paths.
 ///
-/// Glyphs are cached by font data pointer + glyph ID + font size.
+/// Glyphs are cached by font data pointer + glyph ID + skew.
 /// Using the font data pointer avoids comparing large font binaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-// Note: Glyph caching infrastructure prepared but not yet integrated.
-// These types will be used when implementing full glyph caching.
-#[allow(dead_code)]
 struct GlyphCacheKey {
   /// Pointer to font data (used as unique identifier)
   font_ptr: usize,
@@ -192,18 +174,17 @@ struct GlyphCacheKey {
   font_index: u32,
   /// Glyph ID within the font
   glyph_id: u32,
-  /// Font size in 1/100 pixels (to enable f32 hashing)
-  font_size_hundredths: u32,
+  /// Quantized synthetic skew (tan(angle) * 1e4)
+  skew_units: i32,
 }
 
 impl GlyphCacheKey {
-  #[allow(dead_code)]
-  fn new(font: &LoadedFont, glyph_id: u32, font_size: f32) -> Self {
+  fn new(font: &LoadedFont, glyph_id: u32, skew: f32) -> Self {
     Self {
       font_ptr: Arc::as_ptr(&font.data) as usize,
       font_index: font.index,
       glyph_id,
-      font_size_hundredths: (font_size * 100.0) as u32,
+      skew_units: quantize_skew(skew),
     }
   }
 }
@@ -214,95 +195,170 @@ impl GlyphCacheKey {
 /// render calls at the same font size.
 /// (Reserved for glyph caching optimization)
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct CachedGlyph {
   /// The rendered path, or None if the glyph has no outline
   path: Option<Path>,
   /// Horizontal advance for this glyph
   advance: f32,
+  /// LRU timestamp (monotonic counter)
+  last_used: u64,
+  /// Rough estimate of memory usage for budgeting/eviction
+  estimated_size: usize,
+}
+
+/// Lightweight cache metrics for profiling.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GlyphCacheStats {
+  /// Number of cache hits (outline reused)
+  pub hits: u64,
+  /// Number of cache misses (outline had to be built)
+  pub misses: u64,
+  /// Number of entries evicted by the cache policy
+  pub evictions: u64,
 }
 
 /// Cache for rendered glyph paths.
 ///
-/// Caches paths by font + glyph ID + size to avoid rebuilding
-/// paths for frequently used characters.
+/// Glyph outlines are cached in font design units (unpositioned) and
+/// transformed at draw time. The cache key includes the font identity,
+/// face index, glyph id, and synthetic oblique skew.
 ///
-/// # Performance
-///
-/// Path building is expensive (parsing font tables, bezier conversion).
-/// Caching provides significant speedup for repeated text rendering.
-///
-/// # Memory
-///
-/// Each cached path uses roughly 100-500 bytes depending on glyph
-/// complexity. A typical cache might hold 500-2000 glyphs.
+/// The cache uses an LRU eviction policy with an optional memory budget
+/// to keep footprint predictable while still delivering reuse on text-
+/// heavy pages.
 #[derive(Debug, Default)]
 pub struct GlyphCache {
   /// Cached glyph paths
   glyphs: HashMap<GlyphCacheKey, CachedGlyph>,
+  /// Usage order for LRU eviction (key + generation)
+  usage_queue: VecDeque<(GlyphCacheKey, u64)>,
   /// Maximum cache size
   max_size: usize,
+  /// Optional memory budget (bytes) for cached paths
+  max_bytes: Option<usize>,
+  /// Current estimated memory used by cached paths
+  current_bytes: usize,
+  /// Monotonic counter used for LRU
+  generation: u64,
+  /// Cache hit count (for profiling)
+  hits: u64,
+  /// Cache miss count (for profiling)
+  misses: u64,
+  /// Number of evicted glyphs
+  evictions: u64,
 }
 
 impl GlyphCache {
   /// Creates a new glyph cache with default size.
   pub fn new() -> Self {
+    let max_size = 2048;
     Self {
       glyphs: HashMap::new(),
-      max_size: 2048,
+      max_size,
+      max_bytes: None,
+      usage_queue: VecDeque::new(),
+      current_bytes: 0,
+      generation: 0,
+      hits: 0,
+      misses: 0,
+      evictions: 0,
     }
   }
 
   /// Creates a cache with custom maximum size.
   pub fn with_capacity(max_size: usize) -> Self {
+    let max_size = max_size.max(1);
     Self {
       glyphs: HashMap::with_capacity(max_size.min(256)),
       max_size,
+      max_bytes: None,
+      usage_queue: VecDeque::new(),
+      current_bytes: 0,
+      generation: 0,
+      hits: 0,
+      misses: 0,
+      evictions: 0,
     }
   }
 
+  /// Creates a cache with both glyph count and memory budget.
+  pub fn with_limits(max_size: usize, max_bytes: Option<usize>) -> Self {
+    let max_size = max_size.max(1);
+    Self {
+      glyphs: HashMap::with_capacity(max_size.min(256)),
+      max_size,
+      max_bytes,
+      usage_queue: VecDeque::new(),
+      current_bytes: 0,
+      generation: 0,
+      hits: 0,
+      misses: 0,
+      evictions: 0,
+    }
+  }
+
+  /// Updates the maximum number of cached glyphs.
+  pub fn set_max_size(&mut self, max_size: usize) {
+    self.max_size = max_size.max(1);
+    self.evict_if_needed();
+  }
+
+  /// Sets an optional memory budget (in bytes) for cached glyphs.
+  pub fn set_max_bytes(&mut self, max_bytes: Option<usize>) {
+    self.max_bytes = max_bytes;
+    self.evict_if_needed();
+  }
+
   /// Gets a cached glyph path or builds and caches it.
-  fn get_or_build(
-    &self,
-    font: &LoadedFont,
-    glyph_id: u32,
-    font_size: f32,
-    x_offset: f32,
-    y_offset: f32,
-    skew: f32,
-  ) -> Option<Path> {
-    // For now, always build the path with the correct position
-    // (caching positioned paths is complex, we'd need to store
-    // unpositioned paths and transform them)
-    self.build_glyph_path(font, glyph_id, font_size, x_offset, y_offset, skew)
+  fn get_or_build(&mut self, font: &LoadedFont, glyph_id: u32, skew: f32) -> Option<&CachedGlyph> {
+    let key = GlyphCacheKey::new(font, glyph_id, skew);
+    let generation = self.bump_generation();
+
+    if let Some(entry) = self.glyphs.get_mut(&key) {
+      self.hits += 1;
+      entry.last_used = generation;
+      self.usage_queue.push_back((key, generation));
+      return Some(entry);
+    }
+
+    self.misses += 1;
+    let mut cached = self.build_glyph_path(font, glyph_id)?;
+    cached.last_used = generation;
+    self.current_bytes = self.current_bytes.saturating_add(cached.estimated_size);
+    self.glyphs.insert(key, cached);
+    self.usage_queue.push_back((key, generation));
+    self.evict_if_needed();
+
+    self.glyphs.get(&key)
   }
 
   /// Builds a glyph path without caching.
-  fn build_glyph_path(
-    &self,
-    font: &LoadedFont,
-    glyph_id: u32,
-    font_size: f32,
-    x_offset: f32,
-    y_offset: f32,
-    skew: f32,
-  ) -> Option<Path> {
+  fn build_glyph_path(&self, font: &LoadedFont, glyph_id: u32) -> Option<CachedGlyph> {
     // Parse font face
     let face = font.as_ttf_face().ok()?;
+    let mut builder = GlyphOutlineBuilder::new();
 
-    // Calculate scale factor
-    let units_per_em = face.units_per_em() as f32;
-    let scale = font_size / units_per_em;
-
-    // Create outline builder
-    let mut builder = GlyphOutlineBuilder::new(scale, skew, x_offset, y_offset);
-
-    // Get glyph outline
     let glyph_id = ttf_parser::GlyphId(glyph_id as u16);
-    face.outline_glyph(glyph_id, &mut builder)?;
+    let has_outline = face.outline_glyph(glyph_id, &mut builder).is_some();
+    let (path, metrics) = builder.finish();
 
-    // Build and return path
-    builder.finish()
+    let advance = face
+      .glyph_hor_advance(glyph_id)
+      .map(|v| v as f32)
+      .unwrap_or(0.0);
+
+    let estimated_size = if has_outline {
+      estimate_glyph_size(&metrics)
+    } else {
+      0
+    };
+
+    Some(CachedGlyph {
+      path: if has_outline { path } else { None },
+      advance,
+      last_used: 0,
+      estimated_size,
+    })
   }
 
   /// Returns the number of cached glyphs.
@@ -320,21 +376,102 @@ impl GlyphCache {
   /// Clears all cached glyphs.
   pub fn clear(&mut self) {
     self.glyphs.clear();
+    self.usage_queue.clear();
+    self.current_bytes = 0;
+  }
+
+  /// Returns cache statistics (hits, misses, evictions).
+  pub fn stats(&self) -> GlyphCacheStats {
+    GlyphCacheStats {
+      hits: self.hits,
+      misses: self.misses,
+      evictions: self.evictions,
+    }
+  }
+
+  /// Resets cache statistics without clearing cached glyphs.
+  pub fn reset_stats(&mut self) {
+    self.hits = 0;
+    self.misses = 0;
+    self.evictions = 0;
+  }
+
+  /// Bumps the generation counter used for LRU ordering.
+  fn bump_generation(&mut self) -> u64 {
+    self.generation = self.generation.wrapping_add(1);
+    self.generation
   }
 
   /// Evicts old entries if cache is full.
-  #[allow(dead_code)]
   fn evict_if_needed(&mut self) {
-    if self.glyphs.len() >= self.max_size {
-      // Simple strategy: clear half the cache
-      // A more sophisticated LRU could be used
-      let to_remove = self.max_size / 2;
-      let keys: Vec<_> = self.glyphs.keys().take(to_remove).copied().collect();
-      for key in keys {
-        self.glyphs.remove(&key);
+    let max_bytes = self.max_bytes.unwrap_or(usize::MAX);
+
+    while self.glyphs.len() > self.max_size || self.current_bytes > max_bytes {
+      if let Some((key, generation)) = self.usage_queue.pop_front() {
+        if let Some(entry) = self.glyphs.get(&key) {
+          if entry.last_used == generation {
+            let removed = self.glyphs.remove(&key).unwrap();
+            self.current_bytes = self.current_bytes.saturating_sub(removed.estimated_size);
+            self.evictions += 1;
+          }
+        }
+      } else {
+        break;
       }
     }
   }
+}
+
+fn quantize_skew(skew: f32) -> i32 {
+  if !skew.is_finite() {
+    return 0;
+  }
+
+  let scaled = (skew * 10_000.0).round();
+  scaled.clamp(i32::MIN as f32, i32::MAX as f32).trunc() as i32
+}
+
+fn estimate_glyph_size(metrics: &GlyphOutlineMetrics) -> usize {
+  let point_bytes = metrics.point_count * std::mem::size_of::<tiny_skia::Point>();
+  // Each verb typically expands to a few bytes; use a small constant
+  // so the estimate scales with command count without relying on
+  // private tiny-skia details.
+  let verb_bytes = metrics.verb_count * std::mem::size_of::<u8>();
+  point_bytes.saturating_add(verb_bytes)
+}
+
+fn glyph_transform(scale: f32, skew: f32, x: f32, y: f32) -> Transform {
+  Transform::from_row(scale, 0.0, skew * scale, -scale, x, y)
+}
+
+fn rotation_transform(
+  rotation: crate::text::pipeline::RunRotation,
+  origin_x: f32,
+  origin_y: f32,
+) -> Option<Transform> {
+  let angle = match rotation {
+    crate::text::pipeline::RunRotation::Ccw90 => -90.0_f32.to_radians(),
+    crate::text::pipeline::RunRotation::Cw90 => 90.0_f32.to_radians(),
+    crate::text::pipeline::RunRotation::None => return None,
+  };
+
+  let (sin, cos) = angle.sin_cos();
+  // Rotate around the provided origin, matching previous behavior that
+  // rotated around the run start and baseline position.
+  let tx = origin_x - origin_x * cos + origin_y * sin;
+  let ty = origin_y - origin_x * sin - origin_y * cos;
+  Some(Transform::from_row(cos, sin, -sin, cos, tx, ty))
+}
+
+fn concat_transforms(a: Transform, b: Transform) -> Transform {
+  Transform::from_row(
+    a.sx * b.sx + a.kx * b.ky,
+    a.ky * b.sx + a.sy * b.ky,
+    a.sx * b.kx + a.kx * b.sy,
+    a.ky * b.kx + a.sy * b.sy,
+    a.sx * b.tx + a.kx * b.ty + a.tx,
+    a.ky * b.tx + a.sy * b.ty + a.ty,
+  )
 }
 
 // ============================================================================
@@ -425,6 +562,25 @@ impl TextRasterizer {
     paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
     paint.anti_alias = true;
 
+    let face = run
+      .font
+      .as_ttf_face()
+      .map_err(|_| RenderError::RasterizationFailed {
+        reason: format!("Failed to parse font: {}", run.font.family),
+      })?;
+
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em == 0.0 {
+      return Err(
+        RenderError::RasterizationFailed {
+          reason: format!("Font {} has invalid units_per_em", run.font.family),
+        }
+        .into(),
+      );
+    }
+
+    let scale = run.font_size * run.scale / units_per_em;
+    let rotation = rotation_transform(run.rotation, x, baseline_y);
     let mut cursor_x = x;
 
     // Render each glyph
@@ -434,44 +590,26 @@ impl TextRasterizer {
       let glyph_y = baseline_y + glyph.y_offset;
 
       // Get or build glyph path
-      if let Some(path) = self.cache.get_or_build(
-        &run.font,
-        glyph.glyph_id,
-        run.font_size,
-        glyph_x,
-        glyph_y,
-        run.synthetic_oblique,
-      ) {
-        let mut path = path;
-        if !matches!(run.rotation, crate::text::pipeline::RunRotation::None) {
-          let angle = match run.rotation {
-            crate::text::pipeline::RunRotation::Ccw90 => -90.0_f32.to_radians(),
-            crate::text::pipeline::RunRotation::Cw90 => 90.0_f32.to_radians(),
-            crate::text::pipeline::RunRotation::None => 0.0,
-          };
-          let (sin, cos) = angle.sin_cos();
-          let tx = x - x * cos + baseline_y * sin;
-          let ty = baseline_y - x * sin - baseline_y * cos;
-          let rotate = Transform::from_row(cos, sin, -sin, cos, tx, ty);
-          if let Some(rotated) = path.clone().transform(rotate) {
-            path = rotated;
+      if let Some(cached) =
+        self
+          .cache
+          .get_or_build(&run.font, glyph.glyph_id, run.synthetic_oblique)
+      {
+        if let Some(path) = cached.path.as_ref() {
+          let mut transform = glyph_transform(scale, run.synthetic_oblique, glyph_x, glyph_y);
+          if let Some(rotation) = rotation {
+            transform = concat_transforms(rotation, transform);
           }
-        }
 
-        // Render the path
-        pixmap.fill_path(
-          &path,
-          &paint,
-          FillRule::Winding,
-          Transform::identity(),
-          None,
-        );
-        if run.synthetic_bold > 0.0 {
-          let mut stroke = tiny_skia::Stroke::default();
-          stroke.width = run.synthetic_bold * 2.0;
-          stroke.line_join = tiny_skia::LineJoin::Round;
-          stroke.line_cap = tiny_skia::LineCap::Round;
-          pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+          // Render the path
+          pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+          if run.synthetic_bold > 0.0 {
+            let mut stroke = tiny_skia::Stroke::default();
+            stroke.width = run.synthetic_bold * 2.0;
+            stroke.line_join = tiny_skia::LineJoin::Round;
+            stroke.line_cap = tiny_skia::LineCap::Round;
+            pixmap.stroke_path(&path, &paint, &stroke, transform, None);
+          }
         }
       }
 
@@ -543,24 +681,34 @@ impl TextRasterizer {
     paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
     paint.anti_alias = true;
 
+    let face = font
+      .as_ttf_face()
+      .map_err(|_| RenderError::RasterizationFailed {
+        reason: format!("Failed to parse font: {}", font.family),
+      })?;
+
+    let units_per_em = face.units_per_em() as f32;
+    if units_per_em == 0.0 {
+      return Err(
+        RenderError::RasterizationFailed {
+          reason: format!("Font {} has invalid units_per_em", font.family),
+        }
+        .into(),
+      );
+    }
+
+    let scale = font_size / units_per_em;
     let mut cursor_x = x;
 
     for glyph in glyphs {
       let glyph_x = cursor_x + glyph.x_offset;
       let glyph_y = baseline_y + glyph.y_offset;
 
-      if let Some(path) =
-        self
-          .cache
-          .get_or_build(font, glyph.glyph_id, font_size, glyph_x, glyph_y, 0.0)
-      {
-        pixmap.fill_path(
-          &path,
-          &paint,
-          FillRule::Winding,
-          Transform::identity(),
-          None,
-        );
+      if let Some(cached) = self.cache.get_or_build(font, glyph.glyph_id, 0.0) {
+        if let Some(path) = cached.path.as_ref() {
+          let transform = glyph_transform(scale, 0.0, glyph_x, glyph_y);
+          pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+        }
       }
 
       cursor_x += glyph.x_advance;
@@ -576,10 +724,31 @@ impl TextRasterizer {
     self.cache.clear();
   }
 
+  /// Sets the maximum number of cached glyph outlines.
+  pub fn set_cache_capacity(&mut self, max_glyphs: usize) {
+    self.cache.set_max_size(max_glyphs);
+  }
+
+  /// Sets an optional memory budget (in bytes) for cached outlines.
+  pub fn set_cache_memory_budget(&mut self, max_bytes: Option<usize>) {
+    self.cache.set_max_bytes(max_bytes);
+  }
+
   /// Returns the number of cached glyph paths.
   #[inline]
   pub fn cache_size(&self) -> usize {
     self.cache.len()
+  }
+
+  /// Returns glyph cache statistics (hits/misses/evictions).
+  #[inline]
+  pub fn cache_stats(&self) -> GlyphCacheStats {
+    self.cache.stats()
+  }
+
+  /// Resets cache statistics without dropping cached outlines.
+  pub fn reset_cache_stats(&mut self) {
+    self.cache.reset_stats();
   }
 }
 
@@ -631,8 +800,8 @@ pub fn render_glyph(
   let units_per_em = face.units_per_em() as f32;
   let scale = font_size / units_per_em;
 
-  // Build path
-  let mut builder = GlyphOutlineBuilder::new(scale, 0.0, x, y);
+  // Build path in font units and transform at draw time
+  let mut builder = GlyphOutlineBuilder::new();
   let glyph = ttf_parser::GlyphId(glyph_id as u16);
 
   if face.outline_glyph(glyph, &mut builder).is_none() {
@@ -644,19 +813,17 @@ pub fn render_glyph(
     return Ok(0.0);
   }
 
+  let (path, _) = builder.finish();
+
   // Render path
-  if let Some(path) = builder.finish() {
+  if let Some(path) = path {
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
     paint.anti_alias = true;
 
-    pixmap.fill_path(
-      &path,
-      &paint,
-      FillRule::Winding,
-      Transform::identity(),
-      None,
-    );
+    let transform = glyph_transform(scale, 0.0, x, y);
+
+    pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
   }
 
   // Return advance
@@ -844,10 +1011,10 @@ mod tests {
       None => return,
     };
 
-    let key1 = GlyphCacheKey::new(&font, 65, 16.0);
-    let key2 = GlyphCacheKey::new(&font, 65, 16.0);
-    let key3 = GlyphCacheKey::new(&font, 66, 16.0);
-    let key4 = GlyphCacheKey::new(&font, 65, 24.0);
+    let key1 = GlyphCacheKey::new(&font, 65, 0.0);
+    let key2 = GlyphCacheKey::new(&font, 65, 0.0);
+    let key3 = GlyphCacheKey::new(&font, 66, 0.0);
+    let key4 = GlyphCacheKey::new(&font, 65, 0.25);
 
     // Same font, glyph, and size should be equal
     assert_eq!(key1, key2);
@@ -855,8 +1022,37 @@ mod tests {
     // Different glyph should be different
     assert_ne!(key1, key3);
 
-    // Different size should be different
+    // Different skew should be different
     assert_ne!(key1, key4);
+  }
+
+  #[test]
+  fn test_glyph_cache_hit_miss_and_eviction() {
+    let font = match get_test_font() {
+      Some(f) => f,
+      None => return,
+    };
+
+    let face = font.as_ttf_face().unwrap();
+    let glyph_a = face.glyph_index('A').map(|g| g.0 as u32).unwrap_or(0);
+    let glyph_b = face.glyph_index('B').map(|g| g.0 as u32).unwrap_or(1);
+
+    let mut cache = GlyphCache::with_capacity(1);
+
+    assert!(cache.get_or_build(&font, glyph_a, 0.0).is_some());
+    let stats = cache.stats();
+    assert_eq!(stats.misses, 1);
+    assert_eq!(stats.hits, 0);
+
+    assert!(cache.get_or_build(&font, glyph_a, 0.0).is_some());
+    let stats = cache.stats();
+    assert_eq!(stats.hits, 1);
+
+    // Insert another glyph to trigger eviction
+    assert!(cache.get_or_build(&font, glyph_b, 0.0).is_some());
+    let stats = cache.stats();
+    assert!(stats.evictions >= 1);
+    assert!(cache.len() <= 1);
   }
 
   #[test]
@@ -874,6 +1070,43 @@ mod tests {
   }
 
   #[test]
+  fn test_text_rasterizer_cache_hits_on_reuse() {
+    let font = match get_test_font() {
+      Some(f) => f,
+      None => return,
+    };
+
+    let face = font.as_ttf_face().unwrap();
+    let glyph_id = face.glyph_index('A').map(|g| g.0 as u32).unwrap_or(0);
+
+    let glyphs = vec![GlyphPosition {
+      glyph_id,
+      cluster: 0,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 10.0,
+      y_advance: 0.0,
+    }];
+
+    let mut rasterizer = TextRasterizer::new();
+    rasterizer.reset_cache_stats();
+
+    let mut pixmap = Pixmap::new(50, 50).unwrap();
+    rasterizer
+      .render_glyphs(&glyphs, &font, 16.0, 10.0, 35.0, Rgba::BLACK, &mut pixmap)
+      .unwrap();
+
+    let mut pixmap2 = Pixmap::new(50, 50).unwrap();
+    rasterizer
+      .render_glyphs(&glyphs, &font, 16.0, 20.0, 40.0, Rgba::BLACK, &mut pixmap2)
+      .unwrap();
+
+    let stats = rasterizer.cache_stats();
+    assert_eq!(stats.misses, 1);
+    assert!(stats.hits >= 1);
+  }
+
+  #[test]
   fn test_color_black() {
     let black = Rgba::BLACK;
     assert_eq!(black.r, 0);
@@ -883,25 +1116,28 @@ mod tests {
   }
 
   #[test]
-  fn test_glyph_outline_builder_transform() {
-    let builder = GlyphOutlineBuilder::new(1.0, 0.0, 100.0, 200.0);
+  fn test_glyph_outline_builder_metrics() {
+    use ttf_parser::OutlineBuilder;
 
-    // X should add offset
-    assert_eq!(builder.transform_x(0.0, 0.0), 100.0);
-    assert_eq!(builder.transform_x(50.0, 0.0), 150.0);
+    let mut builder = GlyphOutlineBuilder::new();
+    OutlineBuilder::move_to(&mut builder, 0.0, 0.0);
+    OutlineBuilder::line_to(&mut builder, 10.0, 0.0);
+    OutlineBuilder::quad_to(&mut builder, 15.0, 5.0, 20.0, 0.0);
+    OutlineBuilder::curve_to(&mut builder, 20.0, 5.0, 25.0, 5.0, 30.0, 0.0);
+    OutlineBuilder::close(&mut builder);
 
-    // Y should invert and add baseline
-    assert_eq!(builder.transform_y(0.0), 200.0);
-    assert_eq!(builder.transform_y(50.0), 150.0); // 200 - 50
+    let (_path, metrics) = builder.finish();
+    assert_eq!(metrics.verb_count, 5);
+    assert_eq!(metrics.point_count, 7);
   }
 
   #[test]
-  fn test_glyph_outline_builder_scale() {
-    // Zero offsets so we isolate the scaling behavior; baseline at 100 for y inversion
-    let builder = GlyphOutlineBuilder::new(0.5, 0.0, 0.0, 100.0);
-
-    // With scale 0.5, 100 font units = 50 pixels
-    assert_eq!(builder.transform_x(100.0, 0.0), 50.0);
-    assert_eq!(builder.transform_y(100.0), 50.0); // 100 - 50
+  fn test_glyph_transform_matrix() {
+    let transform = glyph_transform(2.0, 0.25, 10.0, 20.0);
+    assert!((transform.sx - 2.0).abs() < 1e-6);
+    assert!((transform.kx - 0.5).abs() < 1e-6);
+    assert!((transform.sy + 2.0).abs() < 1e-6);
+    assert_eq!(transform.tx, 10.0);
+    assert_eq!(transform.ty, 20.0);
   }
 }

@@ -767,6 +767,7 @@ fn test_repeated_rendering_uses_cache() {
   }];
 
   let mut rasterizer = TextRasterizer::new();
+  rasterizer.reset_cache_stats();
 
   // Render the same glyph multiple times
   for _ in 0..10 {
@@ -774,6 +775,7 @@ fn test_repeated_rendering_uses_cache() {
     let _ = rasterizer.render_glyphs(&glyphs, &font, 16.0, 10.0, 35.0, Rgba::BLACK, &mut pixmap);
   }
 
-  // Cache should have been used (though we can't directly verify hits,
-  // we ensure no crashes and consistent behavior)
+  let stats = rasterizer.cache_stats();
+  assert_eq!(stats.misses, 1);
+  assert!(stats.hits >= 9);
 }

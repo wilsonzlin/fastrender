@@ -25,8 +25,11 @@ use fastrender::geometry::Rect;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
+use fastrender::text::font_loader::FontContext;
+use fastrender::text::pipeline::GlyphPosition;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::tree::fragment_tree::FragmentTree;
+use fastrender::TextRasterizer;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
 use fastrender::ClipItem;
@@ -38,6 +41,7 @@ use fastrender::FillRoundedRectItem;
 use fastrender::OpacityItem;
 use fastrender::OptimizationConfig;
 use fastrender::StrokeRectItem;
+use tiny_skia::Pixmap;
 
 // ============================================================================
 // Helper Functions
@@ -664,6 +668,72 @@ fn bench_paint_stress_tests(c: &mut Criterion) {
 }
 
 // ============================================================================
+// Text Rasterization Benchmarks
+// ============================================================================
+
+fn bench_text_rasterizer_cache(c: &mut Criterion) {
+  let font_ctx = FontContext::new();
+  if !font_ctx.has_fonts() {
+    return;
+  }
+
+  let font = match font_ctx.get_sans_serif() {
+    Some(font) => font,
+    None => return,
+  };
+
+  let face = match font.as_ttf_face() {
+    Ok(face) => face,
+    Err(_) => return,
+  };
+
+  let glyph_id = match face.glyph_index('a') {
+    Some(glyph) => glyph.0 as u32,
+    None => return,
+  };
+
+  let glyphs: Vec<GlyphPosition> = (0..20)
+    .map(|i| GlyphPosition {
+      glyph_id,
+      cluster: i,
+      x_offset: 0.0,
+      y_offset: 0.0,
+      x_advance: 12.0,
+      y_advance: 0.0,
+    })
+    .collect();
+
+  let mut rasterizer = TextRasterizer::new();
+  let mut pixmap = Pixmap::new(400, 200).unwrap();
+  let mut group = c.benchmark_group("text_rasterizer_cache");
+  group.bench_function("reuse_cached_glyphs", |b| {
+    b.iter(|| {
+      rasterizer.reset_cache_stats();
+      // Warm the cache once
+      let _ =
+        rasterizer.render_glyphs(&glyphs, &font, 18.0, 10.0, 50.0, Rgba::BLACK, &mut pixmap);
+
+      for i in 0..5 {
+        let baseline = 20.0 + (i as f32) * 6.0;
+        let _ = rasterizer.render_glyphs(
+          &glyphs,
+          &font,
+          18.0,
+          10.0,
+          baseline,
+          Rgba::BLACK,
+          &mut pixmap,
+        );
+      }
+
+      black_box(rasterizer.cache_stats());
+    })
+  });
+
+  group.finish();
+}
+
+// ============================================================================
 // Criterion Groups and Main
 // ============================================================================
 
@@ -677,6 +747,7 @@ criterion_group!(
   bench_display_item_creation,
   bench_fragment_tree_operations,
   bench_paint_stress_tests,
+  bench_text_rasterizer_cache,
 );
 
 criterion_main!(benches);
