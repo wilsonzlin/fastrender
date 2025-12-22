@@ -21,6 +21,7 @@ use crate::style::counters::CounterManager;
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
+use crate::style::media::MediaQuery;
 use crate::style::types::Appearance;
 use crate::style::types::FontStyle;
 use crate::style::types::ListStyleType;
@@ -36,6 +37,7 @@ use crate::tree::box_tree::FormControl;
 use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::box_tree::MathReplaced;
+use crate::tree::box_tree::PictureSource;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::box_tree::SizesEntry;
@@ -46,6 +48,7 @@ use crate::tree::debug::DebugInfo;
 use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Simplified DOM node representation
@@ -334,6 +337,7 @@ impl DOMNode {
         alt,
         srcset,
         sizes: None,
+        picture_sources: Vec::new(),
       }),
       "video" => Some(ReplacedType::Video { src, poster }),
       "canvas" => Some(ReplacedType::Canvas),
@@ -1165,9 +1169,11 @@ use crate::style::cascade::StyledNode;
 
 fn build_box_tree_root(styled: &StyledNode) -> BoxNode {
   let document_css = collect_document_css(styled);
+  let picture_sources = collect_picture_source_map(styled);
   let mut counters = CounterManager::new_with_styles(styled.styles.counter_styles.clone());
   counters.enter_scope();
-  let mut roots = generate_boxes_for_styled(styled, &mut counters, true, &document_css);
+  let mut roots =
+    generate_boxes_for_styled(styled, &mut counters, true, &document_css, &picture_sources);
   counters.leave_scope();
   match roots.len() {
     0 => BoxNode::new_block(
@@ -1246,6 +1252,91 @@ fn collect_document_css(styled: &StyledNode) -> String {
   let mut css = String::new();
   walk(styled, &mut css);
   css
+}
+
+fn normalize_mime_type(value: &str) -> Option<String> {
+  let base = value.split(';').next().unwrap_or("").trim();
+  if base.is_empty() {
+    None
+  } else {
+    Some(base.to_ascii_lowercase())
+  }
+}
+
+fn picture_sources_for(styled: &StyledNode) -> Option<(usize, Vec<PictureSource>)> {
+  let tag = styled.node.tag_name()?;
+  if !tag.eq_ignore_ascii_case("picture") {
+    return None;
+  }
+
+  let mut sources: Vec<PictureSource> = Vec::new();
+  let mut fallback_img: Option<&StyledNode> = None;
+
+  for child in &styled.children {
+    let Some(child_tag) = child.node.tag_name() else {
+      continue;
+    };
+
+    let lower = child_tag.to_ascii_lowercase();
+    if lower == "source" {
+      if fallback_img.is_some() {
+        continue;
+      }
+
+      let srcset_attr = match child.node.get_attribute("srcset") {
+        Some(val) => val,
+        None => continue,
+      };
+      let parsed_srcset = parse_srcset(&srcset_attr);
+      if parsed_srcset.is_empty() {
+        continue;
+      }
+
+      let sizes = child
+        .node
+        .get_attribute("sizes")
+        .and_then(|s| parse_sizes(&s));
+      let media = child
+        .node
+        .get_attribute("media")
+        .and_then(|m| MediaQuery::parse_list(&m).ok());
+      let mime_type = child
+        .node
+        .get_attribute("type")
+        .and_then(|t| normalize_mime_type(&t));
+
+      sources.push(PictureSource {
+        srcset: parsed_srcset,
+        sizes,
+        media,
+        mime_type,
+      });
+      continue;
+    }
+
+    if lower == "img" {
+      fallback_img = Some(child);
+      break;
+    }
+  }
+
+  fallback_img.map(|img| (img.node_id, sources))
+}
+
+fn collect_picture_source_map(styled: &StyledNode) -> HashMap<usize, Vec<PictureSource>> {
+  fn walk(node: &StyledNode, out: &mut HashMap<usize, Vec<PictureSource>>) {
+    if let Some((img_id, sources)) = picture_sources_for(node) {
+      out.insert(img_id, sources);
+    }
+
+    for child in &node.children {
+      walk(child, out);
+    }
+  }
+
+  let mut map = HashMap::new();
+  walk(styled, &mut map);
+  map
 }
 
 fn parse_svg_number(value: &str) -> Option<f32> {
@@ -1533,6 +1624,7 @@ fn generate_boxes_for_styled(
   counters: &mut CounterManager,
   _is_root: bool,
   document_css: &str,
+  picture_sources: &HashMap<usize, Vec<PictureSource>>,
 ) -> Vec<BoxNode> {
   if let Some(text) = styled.node.text_content() {
     if !text.is_empty() {
@@ -1625,8 +1717,16 @@ fn generate_boxes_for_styled(
           .unwrap_or(false)
       {
         counters.leave_scope();
-        let box_node =
-          create_replaced_box_from_styled(styled, Arc::new(styled.styles.clone()), document_css);
+        let picture = picture_sources
+          .get(&styled.node_id)
+          .map(|v| v.as_slice())
+          .unwrap_or(&[]);
+        let box_node = create_replaced_box_from_styled(
+          styled,
+          Arc::new(styled.styles.clone()),
+          document_css,
+          picture,
+        );
         return vec![attach_debug_info(box_node, styled)];
       }
     }
@@ -1661,6 +1761,7 @@ fn generate_boxes_for_styled(
                     counters,
                     false,
                     document_css,
+                    picture_sources,
                   ));
                 }
                 idx += 1;
@@ -1677,6 +1778,7 @@ fn generate_boxes_for_styled(
       counters,
       false,
       document_css,
+      picture_sources,
     ));
     idx += 1;
   }
@@ -1887,6 +1989,7 @@ fn create_pseudo_element_box(
             alt: None,
             sizes: None,
             srcset: Vec::new(),
+            picture_sources: Vec::new(),
           },
           intrinsic_size: None,
           aspect_ratio: None,
@@ -2047,6 +2150,7 @@ fn marker_content_from_style(
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: None,
         aspect_ratio: None,
@@ -2064,6 +2168,7 @@ fn marker_content_from_style(
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         intrinsic_size: None,
         aspect_ratio: None,
@@ -2457,6 +2562,7 @@ fn create_replaced_box_from_styled(
   styled: &StyledNode,
   style: Arc<ComputedStyle>,
   document_css: &str,
+  picture_sources: &[PictureSource],
 ) -> BoxNode {
   let tag = styled.node.tag_name().unwrap_or("img");
 
@@ -2483,6 +2589,7 @@ fn create_replaced_box_from_styled(
       alt,
       srcset,
       sizes,
+      picture_sources: picture_sources.to_vec(),
     },
     "video" => ReplacedType::Video { src, poster },
     "audio" => ReplacedType::Audio { src },
@@ -2504,6 +2611,7 @@ fn create_replaced_box_from_styled(
       alt,
       sizes: None,
       srcset: Vec::new(),
+      picture_sources: Vec::new(),
     },
   };
 
@@ -3392,7 +3500,7 @@ mod tests {
 
     for tag in ["canvas", "video", "iframe", "embed", "object"] {
       let styled = styled_element(tag);
-      let box_node = create_replaced_box_from_styled(&styled, style.clone(), "");
+      let box_node = create_replaced_box_from_styled(&styled, style.clone(), "", &[]);
       match &box_node.box_type {
         BoxType::Replaced(replaced) => {
           assert_eq!(
@@ -3564,6 +3672,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
       Some(Size::new(100.0, 100.0)),
       Some(1.0),
