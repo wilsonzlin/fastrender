@@ -22,9 +22,13 @@
 use crate::error::Error;
 use crate::error::ImageError;
 use crate::error::Result;
+use lru::LruCache;
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Condvar;
+use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
 
@@ -178,6 +182,12 @@ pub struct FetchedResource {
   pub bytes: Vec<u8>,
   /// Content-Type header value, if available (e.g., "image/png", "text/css")
   pub content_type: Option<String>,
+  /// HTTP status code when fetched over HTTP(S)
+  pub status: Option<u16>,
+  /// HTTP ETag header (weak or strong) when present
+  pub etag: Option<String>,
+  /// HTTP Last-Modified header when present
+  pub last_modified: Option<String>,
 }
 
 impl FetchedResource {
@@ -186,7 +196,15 @@ impl FetchedResource {
     Self {
       bytes,
       content_type,
+      status: None,
+      etag: None,
+      last_modified: None,
     }
+  }
+
+  /// Returns true when this response represents a 304 Not Modified HTTP response.
+  pub fn is_not_modified(&self) -> bool {
+    matches!(self.status, Some(304))
   }
 
   /// Check if this resource appears to be an image based on content-type
@@ -279,12 +297,35 @@ pub trait ResourceFetcher: Send + Sync {
   /// Returns `Ok(FetchedResource)` containing the bytes and optional content-type,
   /// or an error if the fetch fails.
   fn fetch(&self, url: &str) -> Result<FetchedResource>;
+
+  /// Fetch a resource with optional cache validators for HTTP requests.
+  ///
+  /// Implementors can ignore the validators if they do not support conditional
+  /// requests. The default implementation delegates to [`ResourceFetcher::fetch`].
+  fn fetch_with_validation(
+    &self,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    let _ = (etag, last_modified);
+    self.fetch(url)
+  }
 }
 
 // Allow Arc<dyn ResourceFetcher> to be used as ResourceFetcher
 impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
     (**self).fetch(url)
+  }
+
+  fn fetch_with_validation(
+    &self,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    (**self).fetch_with_validation(url, etag, last_modified)
   }
 }
 
@@ -313,6 +354,12 @@ pub struct HttpFetcher {
   user_agent: String,
   accept_language: String,
   max_size: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HttpCacheValidators<'a> {
+  etag: Option<&'a str>,
+  last_modified: Option<&'a str>,
 }
 
 impl HttpFetcher {
@@ -347,13 +394,14 @@ impl HttpFetcher {
 
   /// Fetch from an HTTP/HTTPS URL
   fn fetch_http(&self, url: &str) -> Result<FetchedResource> {
-    self.fetch_http_with_accept(url, None)
+    self.fetch_http_with_accept(url, None, None)
   }
 
   fn fetch_http_with_accept(
     &self,
     url: &str,
     accept_encoding: Option<&str>,
+    validators: Option<HttpCacheValidators<'_>>,
   ) -> Result<FetchedResource> {
     let config = ureq::Agent::config_builder()
       .timeout_global(Some(self.timeout))
@@ -361,11 +409,22 @@ impl HttpFetcher {
     let agent: ureq::Agent = config.into();
 
     let mut current = url.to_string();
+    let mut validators = validators;
     for _ in 0..10 {
       let mut request = agent
         .get(&current)
         .header("User-Agent", &self.user_agent)
-        .header("Accept-Language", &self.accept_language);
+        .header("Accept-Language", &self.accept_language)
+        .header("Accept-Encoding", "gzip, deflate, br");
+
+      if let Some(v) = validators {
+        if let Some(tag) = v.etag {
+          request = request.header("If-None-Match", tag);
+        }
+        if let Some(modified) = v.last_modified {
+          request = request.header("If-Modified-Since", modified);
+        }
+      }
 
       if let Some(enc) = accept_encoding {
         request = request.header("Accept-Encoding", enc);
@@ -388,6 +447,7 @@ impl HttpFetcher {
             .map(|u| u.to_string())
             .unwrap_or_else(|| loc.to_string());
           current = next;
+          validators = None;
           continue;
         }
       }
@@ -395,6 +455,16 @@ impl HttpFetcher {
       let content_type = response
         .headers()
         .get("content-type")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+      let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string());
+      let last_modified = response
+        .headers()
+        .get("last-modified")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string());
 
@@ -407,16 +477,20 @@ impl HttpFetcher {
 
       match body_result {
         Ok(bytes) => {
-          if bytes.is_empty() {
+          if bytes.is_empty() && status.as_u16() != 304 {
             return Err(Error::Io(io::Error::new(
               io::ErrorKind::UnexpectedEof,
               "Empty HTTP response body",
             )));
           }
-          return Ok(FetchedResource::new(bytes, content_type));
+          let mut resource = FetchedResource::new(bytes, content_type);
+          resource.status = Some(status.as_u16());
+          resource.etag = etag;
+          resource.last_modified = last_modified;
+          return Ok(resource);
         }
         Err(err) if accept_encoding.is_none() && is_decompression_error(&err) => {
-          return self.fetch_http_with_accept(&current, Some("identity"));
+          return self.fetch_http_with_accept(&current, Some("identity"), validators);
         }
         Err(err) => return Err(Error::Io(err)),
       }
@@ -471,6 +545,397 @@ impl ResourceFetcher for HttpFetcher {
       // Treat as local file path
       self.fetch_file(&format!("file://{}", url))
     }
+  }
+
+  fn fetch_with_validation(
+    &self,
+    url: &str,
+    etag: Option<&str>,
+    last_modified: Option<&str>,
+  ) -> Result<FetchedResource> {
+    if url.starts_with("http://") || url.starts_with("https://") {
+      return self.fetch_http_with_accept(
+        url,
+        None,
+        Some(HttpCacheValidators {
+          etag,
+          last_modified,
+        }),
+      );
+    }
+
+    self.fetch(url)
+  }
+}
+
+// ============================================================================
+// CachingFetcher - in-memory cache + single-flight
+// ============================================================================
+
+/// Configuration for [`CachingFetcher`].
+#[derive(Debug, Clone, Copy)]
+pub struct CachingFetcherConfig {
+  /// Maximum total bytes to keep in-memory across cached entries. `0` disables the limit.
+  pub max_bytes: usize,
+  /// Maximum number of cached entries. `0` disables the limit.
+  pub max_items: usize,
+  /// Whether to cache failed fetch results (by error string) to avoid hammering endpoints.
+  pub cache_errors: bool,
+  /// Whether to use HTTP validators (ETag/Last-Modified) when present.
+  pub honor_http_cache_headers: bool,
+}
+
+impl Default for CachingFetcherConfig {
+  fn default() -> Self {
+    Self {
+      max_bytes: 64 * 1024 * 1024,
+      max_items: 512,
+      cache_errors: true,
+      honor_http_cache_headers: true,
+    }
+  }
+}
+
+#[derive(Clone)]
+enum CacheValue {
+  Resource(FetchedResource),
+  Error(String),
+}
+
+impl CacheValue {
+  fn size(&self) -> usize {
+    match self {
+      Self::Resource(res) => res.bytes.len(),
+      Self::Error(_) => 0,
+    }
+  }
+
+  fn as_result(&self) -> Result<FetchedResource> {
+    match self {
+      Self::Resource(res) => Ok(res.clone()),
+      Self::Error(err) => Err(Error::Other(err.clone())),
+    }
+  }
+}
+
+#[derive(Clone)]
+struct CacheEntry {
+  value: CacheValue,
+  etag: Option<String>,
+  last_modified: Option<String>,
+}
+
+impl CacheEntry {
+  fn weight(&self) -> usize {
+    self.value.size()
+  }
+}
+
+#[derive(Clone)]
+struct CachedSnapshot {
+  value: CacheValue,
+  etag: Option<String>,
+  last_modified: Option<String>,
+}
+
+struct CacheState {
+  lru: LruCache<String, CacheEntry>,
+  current_bytes: usize,
+}
+
+impl CacheState {
+  fn new() -> Self {
+    Self {
+      lru: LruCache::unbounded(),
+      current_bytes: 0,
+    }
+  }
+}
+
+#[derive(Clone)]
+enum SharedResult {
+  Success(FetchedResource),
+  Error(String),
+}
+
+impl SharedResult {
+  fn as_result(&self) -> Result<FetchedResource> {
+    match self {
+      Self::Success(res) => Ok(res.clone()),
+      Self::Error(err) => Err(Error::Other(err.clone())),
+    }
+  }
+}
+
+struct InFlight {
+  result: Mutex<Option<SharedResult>>,
+  cv: Condvar,
+}
+
+impl InFlight {
+  fn new() -> Self {
+    Self {
+      result: Mutex::new(None),
+      cv: Condvar::new(),
+    }
+  }
+
+  fn set(&self, result: SharedResult) {
+    if let Ok(mut slot) = self.result.lock() {
+      *slot = Some(result);
+      self.cv.notify_all();
+    }
+  }
+
+  fn wait(&self) -> Result<FetchedResource> {
+    let mut guard = self.result.lock().unwrap();
+    while guard.is_none() {
+      guard = self.cv.wait(guard).unwrap();
+    }
+    guard.as_ref().unwrap().as_result()
+  }
+}
+
+/// In-memory caching [`ResourceFetcher`] with LRU eviction and single-flight
+/// de-duplication of concurrent requests.
+#[derive(Clone)]
+pub struct CachingFetcher<F: ResourceFetcher> {
+  inner: F,
+  state: Arc<Mutex<CacheState>>,
+  in_flight: Arc<Mutex<HashMap<String, Arc<InFlight>>>>,
+  config: CachingFetcherConfig,
+}
+
+impl<F: ResourceFetcher> std::fmt::Debug for CachingFetcher<F> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("CachingFetcher")
+      .field("config", &self.config)
+      .finish_non_exhaustive()
+  }
+}
+
+impl<F: ResourceFetcher> CachingFetcher<F> {
+  /// Creates a new caching wrapper with default limits.
+  pub fn new(inner: F) -> Self {
+    Self::with_config(inner, CachingFetcherConfig::default())
+  }
+
+  /// Creates a new caching wrapper with a custom configuration.
+  pub fn with_config(inner: F, config: CachingFetcherConfig) -> Self {
+    Self {
+      inner,
+      state: Arc::new(Mutex::new(CacheState::new())),
+      in_flight: Arc::new(Mutex::new(HashMap::new())),
+      config,
+    }
+  }
+
+  /// Updates the maximum total bytes retained in the cache.
+  pub fn with_max_bytes(mut self, max_bytes: usize) -> Self {
+    self.config.max_bytes = max_bytes;
+    self
+  }
+
+  /// Updates the maximum number of cached entries.
+  pub fn with_max_items(mut self, max_items: usize) -> Self {
+    self.config.max_items = max_items;
+    self
+  }
+
+  /// Enables or disables caching of failed fetches.
+  pub fn with_cache_errors(mut self, cache_errors: bool) -> Self {
+    self.config.cache_errors = cache_errors;
+    self
+  }
+
+  /// Enables or disables conditional requests using cached ETag/Last-Modified headers.
+  pub fn with_http_cache_validation(mut self, enabled: bool) -> Self {
+    self.config.honor_http_cache_headers = enabled;
+    self
+  }
+
+  fn should_revalidate(&self, url: &str, cached: &CachedSnapshot) -> bool {
+    if !self.config.honor_http_cache_headers {
+      return false;
+    }
+
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+      return false;
+    }
+
+    cached.etag.is_some() || cached.last_modified.is_some()
+  }
+
+  fn insert_cache(&self, url: &str, entry: CacheEntry) {
+    if self.config.max_bytes > 0 && entry.weight() > self.config.max_bytes {
+      return;
+    }
+
+    if let Ok(mut state) = self.state.lock() {
+      if let Some(existing) = state.lru.peek(url) {
+        state.current_bytes = state.current_bytes.saturating_sub(existing.weight());
+      }
+      state.current_bytes = state.current_bytes.saturating_add(entry.weight());
+      state.lru.put(url.to_string(), entry);
+      self.evict_locked(&mut state);
+    }
+  }
+
+  fn evict_locked(&self, state: &mut CacheState) {
+    while (self.config.max_items > 0 && state.lru.len() > self.config.max_items)
+      || (self.config.max_bytes > 0 && state.current_bytes > self.config.max_bytes)
+    {
+      if let Some((_k, entry)) = state.lru.pop_lru() {
+        state.current_bytes = state.current_bytes.saturating_sub(entry.weight());
+      } else {
+        break;
+      }
+    }
+  }
+
+  fn cached_entry(&self, url: &str) -> Option<CachedSnapshot> {
+    self
+      .state
+      .lock()
+      .ok()
+      .and_then(|mut state| state.lru.get(url).cloned())
+      .map(|entry| CachedSnapshot {
+        value: entry.value,
+        etag: entry.etag,
+        last_modified: entry.last_modified,
+      })
+  }
+
+  fn join_inflight(&self, url: &str) -> (Arc<InFlight>, bool) {
+    let mut map = self.in_flight.lock().unwrap();
+    if let Some(existing) = map.get(url) {
+      return (Arc::clone(existing), false);
+    }
+
+    let flight = Arc::new(InFlight::new());
+    map.insert(url.to_string(), Arc::clone(&flight));
+    (flight, true)
+  }
+
+  fn finish_inflight(&self, url: &str, flight: &Arc<InFlight>, result: SharedResult) {
+    flight.set(result);
+    if let Ok(mut map) = self.in_flight.lock() {
+      map.remove(url);
+    }
+  }
+}
+
+impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
+  fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    let cached = self.cached_entry(url);
+    let needs_revalidate = cached
+      .as_ref()
+      .map(|c| self.should_revalidate(url, c))
+      .unwrap_or(false);
+
+    if let Some(snapshot) = &cached {
+      if !needs_revalidate {
+        return snapshot.value.as_result();
+      }
+    }
+
+    let (flight, is_owner) = self.join_inflight(url);
+    if !is_owner {
+      return flight.wait();
+    }
+
+    let validators = if needs_revalidate {
+      Some((
+        cached.as_ref().and_then(|c| c.etag.as_deref()),
+        cached.as_ref().and_then(|c| c.last_modified.as_deref()),
+      ))
+    } else {
+      None
+    };
+
+    let fetch_result = match validators {
+      Some((etag, last_modified)) => self.inner.fetch_with_validation(url, etag, last_modified),
+      None => self.inner.fetch(url),
+    };
+
+    let mut shared: Option<SharedResult> = None;
+
+    let result = match fetch_result {
+      Ok(mut res) => {
+        if res.is_not_modified() {
+          if let Some(snapshot) = cached.as_ref() {
+            let value = snapshot.value.as_result();
+            if let Ok(ref ok) = value {
+              // Refresh validators if the server changed them during revalidation.
+              let mut updated = snapshot.clone();
+              if res.etag.is_some() {
+                updated.etag = res.etag.clone();
+              }
+              if res.last_modified.is_some() {
+                updated.last_modified = res.last_modified.clone();
+              }
+              self.insert_cache(
+                url,
+                CacheEntry {
+                  value: CacheValue::Resource(ok.clone()),
+                  etag: updated.etag,
+                  last_modified: updated.last_modified,
+                },
+              );
+            }
+            shared = value
+              .as_ref()
+              .ok()
+              .map(|v| SharedResult::Success(v.clone()));
+            value
+          } else {
+            Err(Error::Other(
+              "Received 304 without cached entry".to_string(),
+            ))
+          }
+        } else {
+          let entry = CacheEntry {
+            etag: res.etag.clone(),
+            last_modified: res.last_modified.clone(),
+            value: CacheValue::Resource(res.clone()),
+          };
+          self.insert_cache(url, entry);
+          shared = Some(SharedResult::Success(res.clone()));
+          Ok(res)
+        }
+      }
+      Err(err) => {
+        if let Some(snapshot) = cached.as_ref() {
+          let fallback = snapshot.value.as_result();
+          if let Ok(ok) = &fallback {
+            shared = Some(SharedResult::Success(ok.clone()));
+          }
+          fallback
+        } else {
+          if self.config.cache_errors {
+            self.insert_cache(
+              url,
+              CacheEntry {
+                value: CacheValue::Error(err.to_string()),
+                etag: None,
+                last_modified: None,
+              },
+            );
+          }
+          shared = Some(SharedResult::Error(err.to_string()));
+          Err(err)
+        }
+      }
+    };
+
+    // Ensure waiters are released even if we returned cached content on error.
+    let notify = shared.unwrap_or_else(|| match &result {
+      Ok(res) => SharedResult::Success(res.clone()),
+      Err(err) => SharedResult::Error(err.to_string()),
+    });
+    self.finish_inflight(url, &flight, notify);
+
+    result
   }
 }
 
@@ -608,7 +1073,10 @@ mod tests {
   use std::io::Read;
   use std::io::Write;
   use std::net::TcpListener;
+  use std::sync::atomic::AtomicUsize;
+  use std::sync::atomic::Ordering;
   use std::sync::Arc;
+  use std::sync::Barrier;
   use std::sync::Mutex;
   use std::thread;
 
@@ -1114,5 +1582,116 @@ mod tests {
     assert_eq!(normalize_user_agent_for_log("User-Agent: Foo"), "Foo");
     assert_eq!(normalize_user_agent_for_log("Foo"), "Foo");
     assert_eq!(normalize_user_agent_for_log(""), "");
+  }
+
+  #[derive(Clone)]
+  struct CountingFetcher {
+    count: Arc<AtomicUsize>,
+    body: Vec<u8>,
+  }
+
+  impl ResourceFetcher for CountingFetcher {
+    fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+      self.count.fetch_add(1, Ordering::SeqCst);
+      Ok(FetchedResource::new(
+        self.body.clone(),
+        Some("text/plain".to_string()),
+      ))
+    }
+  }
+
+  #[test]
+  fn caching_fetcher_hits_cache_and_evicts() {
+    let counter = Arc::new(AtomicUsize::new(0));
+    let inner = CountingFetcher {
+      count: Arc::clone(&counter),
+      body: b"hello".to_vec(),
+    };
+
+    let cache = CachingFetcher::new(inner)
+      .with_max_items(1)
+      .with_max_bytes(8);
+
+    let _ = cache.fetch("http://example.com/a").unwrap();
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    // Second fetch should hit cache
+    let _ = cache.fetch("http://example.com/a").unwrap();
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+    // Different URL should evict previous entry due to max_items = 1
+    let _ = cache.fetch("http://example.com/b").unwrap();
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
+
+    // First URL should require a re-fetch after eviction
+    let _ = cache.fetch("http://example.com/a").unwrap();
+    assert_eq!(counter.load(Ordering::SeqCst), 3);
+  }
+
+  #[test]
+  fn caching_fetcher_coalesces_inflight_requests() {
+    #[derive(Clone)]
+    struct SlowFetcher {
+      count: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for SlowFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        Ok(FetchedResource::new(
+          b"ok".to_vec(),
+          Some("text/plain".to_string()),
+        ))
+      }
+    }
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = SlowFetcher {
+      count: Arc::clone(&counter),
+    };
+    let cache = Arc::new(CachingFetcher::new(fetcher));
+    let barrier = Arc::new(Barrier::new(4));
+
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+      let f = Arc::clone(&cache);
+      let b = Arc::clone(&barrier);
+      handles.push(thread::spawn(move || {
+        b.wait();
+        f.fetch("http://example.com/shared").unwrap();
+      }));
+    }
+
+    for handle in handles {
+      handle.join().unwrap();
+    }
+
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn caching_fetcher_can_cache_errors() {
+    #[derive(Clone)]
+    struct ErrorFetcher {
+      count: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for ErrorFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        self.count.fetch_add(1, Ordering::SeqCst);
+        Err(Error::Other("boom".to_string()))
+      }
+    }
+
+    let counter = Arc::new(AtomicUsize::new(0));
+    let fetcher = ErrorFetcher {
+      count: Arc::clone(&counter),
+    };
+    let cache = CachingFetcher::new(fetcher).with_cache_errors(true);
+
+    assert!(cache.fetch("http://example.com/error").is_err());
+    assert!(cache.fetch("http://example.com/error").is_err());
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
   }
 }

@@ -17,6 +17,7 @@ fontdb = "0.23"
 html5ever = "0.35"
 hyphenation = { version = "0.8", features = ["embed_en-us"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+lru = "0.12"
 kamadak-exif = "0.6"
 markup5ever_rcdom = "0.35"
 memchr = "2.7"
