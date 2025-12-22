@@ -134,11 +134,13 @@ pub fn axis_scroll_state(
 ) -> (f32, f32, f32) {
   let horizontal = axis_is_horizontal(axis, writing_mode);
   if horizontal {
-    let range = (content_width - view_width).max(0.0);
-    (scroll_x.clamp(0.0, range), range, view_width)
+    let unclamped = scroll_x.max(0.0);
+    let range = (content_width - view_width).max(unclamped);
+    (unclamped.min(range), range, view_width)
   } else {
-    let range = (content_height - view_height).max(0.0);
-    (scroll_y.clamp(0.0, range), range, view_height)
+    let unclamped = scroll_y.max(0.0);
+    let range = (content_height - view_height).max(unclamped);
+    (unclamped.min(range), range, view_height)
   }
 }
 
