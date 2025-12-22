@@ -37,7 +37,7 @@ fn absolutize_rewrites_nested_image_set_urls() {
 #[test]
 fn absolutize_handles_data_urls_with_parentheses() {
   let data_url = "data:image/svg+xml,<svg>text)</svg>";
-  let css = format!("div {{ background: url({data_url}); }}");
+  let css = format!("div {{ background: url(\"{data_url}\"); }}");
   let out = absolutize_css_urls(&css, "https://example.com/app/site.css");
   assert!(out.contains(&format!("url(\"{data_url}\")")));
 }
@@ -47,6 +47,21 @@ fn absolutize_handles_escaped_paren_in_url_function() {
   let css = r#"div { mask: url("icons/close\).svg"); }"#;
   let out = absolutize_css_urls(css, "https://example.com/theme/style.css");
   assert!(out.contains("url(\"https://example.com/theme/icons/close).svg\")"));
+}
+
+#[test]
+fn absolutize_handles_uppercase_url_function_and_whitespace() {
+  let css = "div { background-image: URL(   './img/bg.png'  ); }";
+  let out = absolutize_css_urls(css, "https://example.com/css/main.css");
+  assert!(out.contains("url(\"https://example.com/css/img/bg.png\")"));
+}
+
+#[test]
+fn absolutize_rewrites_inside_parenthesized_blocks() {
+  let css = "@supports (background: url('../check.png')) { body { background: url(./inner.png); } }";
+  let out = absolutize_css_urls(css, "https://example.com/styles/app.css");
+  assert!(out.contains("url(\"https://example.com/check.png\")"));
+  assert!(out.contains("url(\"https://example.com/styles/inner.png\")"));
 }
 
 #[test]
