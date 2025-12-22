@@ -39,6 +39,11 @@
 - `0eda8a4` Add handoff summary
 - `f1f99a0` Update handoff with element scroll notes
 
+## Commits
+
+- `b0d7544` Add scroll chaining model with overscroll behavior and snap support
+- `0a06054` Add handoff summary
+
 ## Testing
 
 - Not run (workers ran `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, `cargo test accessibility_`, `cargo test font_loader -- --nocapture`, `cargo test media_level5_features_evaluate -- --nocapture`, `cargo test extract_css_links_skips_print_only_for_screen -- --nocapture`, `cargo test has_selector_test -- --nocapture`, `cargo test supports_selector_test -- --nocapture`, and `cargo test scroll_snap -- --nocapture`).
