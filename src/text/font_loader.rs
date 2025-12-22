@@ -1600,7 +1600,9 @@ mod tests {
   use super::*;
   use crate::style::media::MediaContext;
   use crate::ComputedStyle;
+  use std::collections::HashMap;
   use std::sync::Arc;
+  use std::sync::Mutex;
   use std::thread;
   use std::time::Duration;
 
@@ -1641,6 +1643,43 @@ mod tests {
         }));
       }
       Ok((self.data.clone(), None))
+    }
+  }
+
+  struct RecordingFetcher {
+    responses: HashMap<String, (Vec<u8>, Option<String>)>,
+    calls: Mutex<Vec<String>>,
+  }
+
+  impl RecordingFetcher {
+    fn new(entries: Vec<(String, Vec<u8>, Option<String>)>) -> Self {
+      let mut responses = HashMap::new();
+      for (url, data, content_type) in entries {
+        responses.insert(url, (data, content_type));
+      }
+      Self {
+        responses,
+        calls: Mutex::new(Vec::new()),
+      }
+    }
+
+    fn calls(&self) -> Vec<String> {
+      self.calls.lock().map(|c| c.clone()).unwrap_or_default()
+    }
+  }
+
+  impl FontFetcher for RecordingFetcher {
+    fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
+      if let Ok(mut calls) = self.calls.lock() {
+        calls.push(url.to_string());
+      }
+
+      self.responses.get(url).cloned().ok_or_else(|| {
+        Error::Font(crate::error::FontError::LoadFailed {
+          family: url.to_string(),
+          reason: "missing response".into(),
+        })
+      })
     }
   }
 
@@ -1687,6 +1726,80 @@ mod tests {
     let families = vec!["WebFont".to_string()];
     let loaded = ctx.get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal);
     assert!(loaded.is_some());
+  }
+
+  #[test]
+  fn loads_woff2_fixture_font() {
+    let path = std::path::Path::new("tests/fixtures/fonts/DejaVuSans-subset.woff2");
+    if !path.exists() {
+      return;
+    }
+    let url = Url::from_file_path(path).expect("url for fixture");
+    let css = format!(
+      "@font-face {{ font-family: \"SubsetWoff2\"; src: url(\"{}\") format(\"woff2\"); font-style: normal; font-weight: 400; }}",
+      url
+    );
+    let sheet = crate::css::parser::parse_stylesheet(&css).unwrap();
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let faces = sheet.collect_font_face_rules(&media_ctx);
+
+    let ctx = FontContext::empty();
+    ctx
+      .load_web_fonts(&faces, None, None)
+      .expect("load woff2 face");
+
+    let families = vec!["SubsetWoff2".to_string()];
+    let font = ctx
+      .get_font_full(&families, 400, FontStyle::Normal, FontStretch::Normal)
+      .expect("web font to be available");
+    assert_eq!(font.family, "SubsetWoff2");
+
+    let width = ctx.measure_text("WOFF2", &font, 32.0);
+    assert!(width > 0.0);
+  }
+
+  #[test]
+  fn prefers_best_supported_format_source() {
+    let woff2_path = std::path::Path::new("tests/fixtures/fonts/DejaVuSans-subset.woff2");
+    let ttf_path = std::path::Path::new("tests/fixtures/fonts/DejaVuSans-subset.ttf");
+    if !(woff2_path.exists() && ttf_path.exists()) {
+      return;
+    }
+
+    let woff2_bytes = fs::read(woff2_path).expect("read woff2 fixture");
+    let ttf_bytes = fs::read(ttf_path).expect("read ttf fixture");
+
+    let fetcher = Arc::new(RecordingFetcher::new(vec![
+      (
+        "https://example.com/font.ttf".to_string(),
+        ttf_bytes,
+        Some("font/ttf".to_string()),
+      ),
+      (
+        "https://example.com/font.woff2".to_string(),
+        woff2_bytes,
+        Some("font/woff2".to_string()),
+      ),
+    ]));
+
+    let css = r#"@font-face { font-family: "FormatPref"; src: url("https://example.com/font.ttf") format("truetype"), url("https://example.com/font.woff2") format("woff2"); }"#;
+    let sheet = crate::css::parser::parse_stylesheet(css).unwrap();
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let faces = sheet.collect_font_face_rules(&media_ctx);
+
+    let ctx = FontContext::with_fetcher(fetcher.clone());
+    ctx
+      .load_web_fonts(&faces, None, None)
+      .expect("schedule format loads");
+    assert!(ctx.wait_for_pending_web_fonts(Duration::from_secs(1)));
+
+    let calls = fetcher.calls();
+    assert!(
+      !calls.is_empty(),
+      "fetcher should have been invoked for at least one source"
+    );
+    assert_eq!(calls[0], "https://example.com/font.woff2");
+    assert!(ctx.has_web_faces("FormatPref"));
   }
 
   #[test]
