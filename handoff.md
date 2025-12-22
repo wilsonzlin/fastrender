@@ -1,13 +1,21 @@
 ## Summary
 
-- Implemented paragraph-level handling for `text-wrap: balance`, `pretty`, and `stable` in the inline formatting context. Balancing re-runs line construction with measured width factors, scoring raggedness per paragraph, penalizing hyphenated endings and short last lines, and equalizing first-line width for balance/pretty/stable.
-- Added stability mode that lays out with a conservative 90% effective inline width to keep breakpoints steady across small width changes while respecting bidi and replaced items; balancing is skipped when floats shorten widths to avoid oscillation.
-- Added helper utilities for measuring raggedness/hyphenation plus regression tests (Latin, CJK, hyphenation on/off, pretty, stable) validating balanced behavior and deterministic stable breaks. Test-only helpers are now gated to avoid dead-code warnings.
+- Reworked fragmentation planning to honor break hints (`before/after/inside`), widows/orphans, and avoid-inside blocks while propagating fragment metadata. Fragments now account for fragmentainer gaps and are translated per fragmentainer for correct stacking.
+- Added pagination-aware layout config and plumbed fragmentainer block-size constraints so pagination can fall back to fragmentainer-height slices when no explicit break candidates exist.
+- Implemented paragraph-level handling for `text-wrap: balance`, `pretty`, and `stable`, re-running line construction with measured width factors and raggedness scoring while penalizing hyphenated endings and short last lines. Stability uses a conservative 90% effective inline width; balancing is skipped when floats shorten widths to avoid oscillation. Regression tests now cover Latin/CJK, hyphenation on/off, pretty, stable, and gated helpers to avoid dead code warnings.
+
+## Commits
+
+- `6d404bf` Rework fragmentation handling and tests
+- `cb9b24c` Add pagination config and improve fragmentation planning
+- `d0f48b5` Implement text-wrap balance, pretty, and stable
+- `e10517b` Refine balance helpers and gate test utilities
+- `c51ae16` Update handoff with final details
 
 ## Testing
 
-- `cargo test text_wrap_ -- --nocapture`
+- Not run (workers ran `cargo test fragmentation --quiet` and `cargo test text_wrap_ -- --nocapture`).
 
-## Notes
+## Notes / Caveats
 
-- Only `src/layout/contexts/inline/mod.rs` was touched. Scratchpad remains untracked.
+- Fragmentation remains a post-layout pass; column-count options are not yet integrated beyond metadata/translation. Fragmentainer coordinates are offset by `(fragmentainer_size + gap) * index`.
