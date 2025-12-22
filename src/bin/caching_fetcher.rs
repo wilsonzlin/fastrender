@@ -114,7 +114,11 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
           .map(|s| s.trim().to_string())
           .filter(|s| !s.is_empty())
           .or_else(|| Self::content_type_from_ext(&cache_path));
-        return Ok(FetchedResource::new(bytes, content_type));
+        return Ok(FetchedResource::with_final_url(
+          bytes,
+          content_type,
+          Some(url.to_string()),
+        ));
       }
     }
 

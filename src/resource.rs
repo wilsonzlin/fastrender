@@ -188,6 +188,8 @@ pub struct FetchedResource {
   pub etag: Option<String>,
   /// HTTP Last-Modified header when present
   pub last_modified: Option<String>,
+  /// The final URL after redirects, when available
+  pub final_url: Option<String>,
 }
 
 impl FetchedResource {
@@ -199,6 +201,29 @@ impl FetchedResource {
       status: None,
       etag: None,
       last_modified: None,
+      final_url: None,
+      status: None,
+      etag: None,
+      last_modified: None,
+      final_url: None,
+    }
+  }
+
+  /// Create a new FetchedResource while recording the final URL.
+  pub fn with_final_url(
+    bytes: Vec<u8>,
+    content_type: Option<String>,
+    final_url: Option<String>,
+  ) -> Self {
+    Self {
+      bytes,
+      content_type,
+      status: None,
+      etag: None,
+      last_modified: None,
+      final_url,
+    }
+  }
     }
   }
 
@@ -483,7 +508,7 @@ impl HttpFetcher {
               "Empty HTTP response body",
             )));
           }
-          let mut resource = FetchedResource::new(bytes, content_type);
+          let mut resource = FetchedResource::with_final_url(bytes, content_type, Some(current));
           resource.status = Some(status.as_u16());
           resource.etag = etag;
           resource.last_modified = last_modified;
@@ -513,7 +538,11 @@ impl HttpFetcher {
     })?;
 
     let content_type = guess_content_type_from_path(path);
-    Ok(FetchedResource::new(bytes, content_type))
+    Ok(FetchedResource::with_final_url(
+      bytes,
+      content_type,
+      Some(url.to_string()),
+    ))
   }
 
   /// Decode a data: URL
@@ -1022,7 +1051,11 @@ fn decode_data_url(url: &str) -> Result<FetchedResource> {
     percent_decode(data)?
   };
 
-  Ok(FetchedResource::new(bytes, media_type))
+  Ok(FetchedResource::with_final_url(
+    bytes,
+    media_type,
+    Some(url.to_string()),
+  ))
 }
 
 /// Percent-decode a string to bytes
@@ -1437,6 +1470,15 @@ mod tests {
 
     assert_eq!(res.bytes, b"ok");
     assert_eq!(res.content_type, Some("text/plain".to_string()));
+    assert!(
+      res
+        .final_url
+        .as_deref()
+        .unwrap_or("")
+        .starts_with(&format!("http://{}", addr)),
+      "final_url should record redirect destination: {:?}",
+      res.final_url
+    );
   }
 
   #[test]
