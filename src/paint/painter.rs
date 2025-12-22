@@ -4280,7 +4280,7 @@ impl Painter {
     let mut svg = content.svg.clone();
     for (idx, foreign) in content.foreign_objects.iter().enumerate() {
       let data_url = self.render_foreign_object_data_url(foreign, &content.shared_css)?;
-      let replacement = self.foreign_object_image_tag(foreign, &data_url);
+      let replacement = self.foreign_object_image_tag(foreign, &data_url, idx);
       let placeholder = if foreign.placeholder.is_empty() {
         format!("<!--FASTRENDER_FOREIGN_OBJECT_{}-->", idx)
       } else {
@@ -4298,7 +4298,7 @@ impl Painter {
     Some(svg)
   }
 
-  fn foreign_object_image_tag(&self, info: &ForeignObjectInfo, data_url: &str) -> String {
+  fn foreign_object_image_tag(&self, info: &ForeignObjectInfo, data_url: &str, idx: usize) -> String {
     let mut parts: Vec<String> = Vec::new();
     parts.push(format!("x=\"{:.6}\"", info.x));
     parts.push(format!("y=\"{:.6}\"", info.y));
@@ -4318,7 +4318,22 @@ impl Painter {
     parts.push("preserveAspectRatio=\"none\"".to_string());
     parts.push(format!("href=\"{}\"", escape_attr_value(data_url)));
 
-    format!("<image {}/>", parts.join(" "))
+    let clip_id = format!("fastr-fo-{}", idx);
+    let clip = format!(
+      "<clipPath id=\"{}\"><rect x=\"{:.6}\" y=\"{:.6}\" width=\"{:.6}\" height=\"{:.6}\"/></clipPath>",
+      clip_id,
+      info.x,
+      info.y,
+      info.width,
+      info.height
+    );
+
+    format!(
+      "<g>{clip}<image clip-path=\"url(#{clip_id})\" {attrs}/></g>",
+      clip = clip,
+      clip_id = clip_id,
+      attrs = parts.join(" ")
+    )
   }
 
   fn render_foreign_object_data_url(
