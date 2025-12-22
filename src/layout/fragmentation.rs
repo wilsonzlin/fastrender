@@ -352,6 +352,12 @@ fn compute_boundaries(total_height: f32, fragmentainer: f32, plan: &BreakPlan) -
       *p > start + EPSILON && *p <= target + EPSILON && !is_forbidden(*p, &plan.forbidden)
     });
 
+    let preferred_target = if !is_forbidden(target, &plan.forbidden) {
+      Some(target)
+    } else {
+      None
+    };
+
     let boundary = if let Some(pos) = forced_boundary {
       pos
     } else {
@@ -360,6 +366,8 @@ fn compute_boundaries(total_height: f32, fragmentainer: f32, plan: &BreakPlan) -
       });
 
       if let Some(pos) = natural {
+        pos
+      } else if let Some(pos) = preferred_target {
         pos
       } else {
         // No candidate in range: fall back to the next allowed candidate even if it overflows.
@@ -374,6 +382,7 @@ fn compute_boundaries(total_height: f32, fragmentainer: f32, plan: &BreakPlan) -
     let clamped = boundary.min(total_height);
     if (clamped - start).abs() < EPSILON {
       // Give up on tiny slices to avoid infinite loops.
+      boundaries.push(total_height);
       break;
     }
     boundaries.push(clamped);

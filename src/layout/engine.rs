@@ -118,6 +118,15 @@ impl LayoutConfig {
     Self::new(viewport)
   }
 
+  /// Creates a pagination-aware configuration with a given page size and gap between pages.
+  ///
+  /// The initial containing block is set to the provided page size and fragmentation is
+  /// configured to split content at that block-size with the supplied gap.
+  pub fn for_pagination(page_size: Size, gap: f32) -> Self {
+    let fragmentation = FragmentationOptions::new(page_size.height).with_gap(gap);
+    Self::new(page_size).with_fragmentation(fragmentation)
+  }
+
   /// Enables fragmentation of the resulting fragment tree.
   pub fn with_fragmentation(mut self, fragmentation: FragmentationOptions) -> Self {
     self.fragmentation = Some(fragmentation);
@@ -363,9 +372,22 @@ impl LayoutEngine {
       self.factory.reset_caches();
     }
 
-    // Create root constraints from initial containing block
+    // Create root constraints from initial containing block, preferring explicit
+    // fragmentainer size when pagination is enabled.
     let icb = &self.config.initial_containing_block;
-    let constraints = LayoutConstraints::definite(icb.width, icb.height);
+    let constraint_height = self
+      .config
+      .fragmentation
+      .as_ref()
+      .map(|f| {
+        if f.fragmentainer_size > 0.0 {
+          f.fragmentainer_size
+        } else {
+          icb.height
+        }
+      })
+      .unwrap_or(icb.height);
+    let constraints = LayoutConstraints::definite(icb.width, constraint_height);
 
     // Layout the root box
     let root_fragment = self.layout_subtree(&box_tree.root, &constraints)?;
