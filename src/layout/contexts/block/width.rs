@@ -1,7 +1,9 @@
-//! Block Width Computation (CSS 2.1 Section 10.3.3)
+//! Block Inline-Size Computation (CSS 2.1 Section 10.3.3)
 //!
-//! This module implements width computation for block-level, non-replaced
-//! elements in normal flow. This is the most common case for block layout.
+//! This module implements inline-size computation for block-level, non-replaced
+//! elements in normal flow. The algorithm follows CSS 2.1 but operates in the
+//! element's inline axis, which may map to the physical width **or** height
+//! depending on writing-mode.
 //!
 //! # The Fundamental Constraint Equation
 //!
@@ -31,31 +33,31 @@
 use crate::layout::utils::content_size_from_box_sizing;
 use crate::layout::utils::resolve_length_with_percentage;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::style::types::Direction;
+use crate::style::PhysicalSide;
 use crate::style::types::Overflow;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 
 /// Result of width computation
 ///
-/// Contains all resolved horizontal box dimensions:
-/// margin-left, border-left, padding-left, content-width,
-/// padding-right, border-right, margin-right
+/// Contains all resolved inline-axis dimensions:
+/// margin-start, border-start, padding-start, content inline-size,
+/// padding-end, border-end, margin-end
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ComputedBlockWidth {
-  /// Computed left margin (can be negative from over-constraining)
+  /// Computed inline start margin (can be negative from over-constraining)
   pub margin_left: f32,
-  /// Border left width
+  /// Border inline start width
   pub border_left: f32,
-  /// Padding left
+  /// Padding inline start
   pub padding_left: f32,
-  /// Content width
+  /// Content inline size
   pub content_width: f32,
-  /// Padding right
+  /// Padding inline end
   pub padding_right: f32,
-  /// Border right width
+  /// Border inline end width
   pub border_right: f32,
-  /// Computed right margin (can be negative from over-constraining)
+  /// Computed inline end margin (can be negative from over-constraining)
   pub margin_right: f32,
 }
 
@@ -122,7 +124,7 @@ impl MarginValue {
 /// # Arguments
 ///
 /// * `style` - The computed style of the element
-/// * `containing_width` - The width of the containing block
+/// * `containing_width` - The inline-size of the containing block
 ///
 /// # Returns
 ///
@@ -131,22 +133,13 @@ pub fn compute_block_width(
   style: &ComputedStyle,
   containing_width: f32,
   viewport: crate::geometry::Size,
+  inline_sides: (PhysicalSide, PhysicalSide),
+  inline_positive: bool,
 ) -> ComputedBlockWidth {
+  let (start_side, end_side) = inline_sides;
   // Resolve padding (percentages relative to containing width)
-  let mut padding_left = resolve_length(
-    style.padding_left,
-    containing_width,
-    style.font_size,
-    style.root_font_size,
-    viewport,
-  );
-  let mut padding_right = resolve_length(
-    style.padding_right,
-    containing_width,
-    style.font_size,
-    style.root_font_size,
-    viewport,
-  );
+  let mut padding_left = resolve_padding_for_side(style, start_side, containing_width, viewport);
+  let mut padding_right = resolve_padding_for_side(style, end_side, containing_width, viewport);
 
   // Reserve space for a vertical scrollbar when requested by overflow or scrollbar-gutter stability
   let reserve_vertical_gutter = matches!(style.overflow_y, Overflow::Scroll)
@@ -158,8 +151,6 @@ pub fn compute_block_width(
       if style.scrollbar_gutter.both_edges {
         padding_left += gutter;
         padding_right += gutter;
-      } else if style.direction == Direction::Rtl {
-        padding_left += gutter;
       } else {
         padding_right += gutter;
       }
@@ -167,43 +158,13 @@ pub fn compute_block_width(
   }
 
   // Border widths
-  let border_left = resolve_length(
-    style.border_left_width,
-    containing_width,
-    style.font_size,
-    style.root_font_size,
-    viewport,
-  );
-  let border_right = resolve_length(
-    style.border_right_width,
-    containing_width,
-    style.font_size,
-    style.root_font_size,
-    viewport,
-  );
+  let border_left = resolve_border_for_side(style, start_side, containing_width, viewport);
+  let border_right = resolve_border_for_side(style, end_side, containing_width, viewport);
   let horizontal_edges = padding_left + padding_right + border_left + border_right;
 
   // Resolve margins (may be auto - represented by None)
-  let margin_left = match &style.margin_left {
-    Some(len) => MarginValue::Length(resolve_length(
-      *len,
-      containing_width,
-      style.font_size,
-      style.root_font_size,
-      viewport,
-    )),
-    None => MarginValue::Auto,
-  };
-  let margin_right = match &style.margin_right {
-    Some(len) => MarginValue::Length(resolve_length(
-      *len,
-      containing_width,
-      style.font_size,
-      style.root_font_size,
-      viewport,
-    )),
-    None => MarginValue::Auto,
-  };
+  let margin_left = margin_value_for_side(style, start_side, containing_width, viewport);
+  let margin_right = margin_value_for_side(style, end_side, containing_width, viewport);
 
   // Resolve width (may be auto - represented by None)
   let width_value = style
@@ -230,7 +191,7 @@ pub fn compute_block_width(
     border_right,
     margin_left,
     margin_right,
-    style.direction,
+    inline_positive,
   );
 
   ComputedBlockWidth {
@@ -253,38 +214,17 @@ pub fn compute_block_width_with_auto_margins(
   margin_left_is_auto: bool,
   margin_right_is_auto: bool,
   viewport: crate::geometry::Size,
+  inline_sides: (PhysicalSide, PhysicalSide),
+  inline_positive: bool,
 ) -> ComputedBlockWidth {
+  let (start_side, end_side) = inline_sides;
   // Resolve padding
-  let padding_left = resolve_length(
-    style.padding_left,
-    containing_width,
-    style.font_size,
-    style.root_font_size,
-    viewport,
-  );
-  let padding_right = resolve_length(
-    style.padding_right,
-    containing_width,
-    style.font_size,
-    style.root_font_size,
-    viewport,
-  );
+  let padding_left = resolve_padding_for_side(style, start_side, containing_width, viewport);
+  let padding_right = resolve_padding_for_side(style, end_side, containing_width, viewport);
 
   // Border widths
-  let border_left = resolve_length(
-    style.border_left_width,
-    containing_width,
-    style.font_size,
-    style.root_font_size,
-    viewport,
-  );
-  let border_right = resolve_length(
-    style.border_right_width,
-    containing_width,
-    style.font_size,
-    style.root_font_size,
-    viewport,
-  );
+  let border_left = resolve_border_for_side(style, start_side, containing_width, viewport);
+  let border_right = resolve_border_for_side(style, end_side, containing_width, viewport);
   let horizontal_edges = padding_left + padding_right + border_left + border_right;
 
   // Resolve margins with explicit auto flags
@@ -292,19 +232,7 @@ pub fn compute_block_width_with_auto_margins(
     MarginValue::Auto
   } else {
     MarginValue::Length(
-      style
-        .margin_left
-        .as_ref()
-        .map(|l| {
-          resolve_length(
-            *l,
-            containing_width,
-            style.font_size,
-            style.root_font_size,
-            viewport,
-          )
-        })
-        .unwrap_or(0.0),
+      resolve_margin_length_for_side(style, start_side, containing_width, viewport).unwrap_or(0.0),
     )
   };
 
@@ -312,19 +240,7 @@ pub fn compute_block_width_with_auto_margins(
     MarginValue::Auto
   } else {
     MarginValue::Length(
-      style
-        .margin_right
-        .as_ref()
-        .map(|l| {
-          resolve_length(
-            *l,
-            containing_width,
-            style.font_size,
-            style.root_font_size,
-            viewport,
-          )
-        })
-        .unwrap_or(0.0),
+      resolve_margin_length_for_side(style, end_side, containing_width, viewport).unwrap_or(0.0),
     )
   };
 
@@ -353,7 +269,7 @@ pub fn compute_block_width_with_auto_margins(
     border_right,
     margin_left,
     margin_right,
-    style.direction,
+    inline_positive,
   );
 
   ComputedBlockWidth {
@@ -365,6 +281,80 @@ pub fn compute_block_width_with_auto_margins(
     border_right,
     margin_right: final_margin_right,
   }
+}
+
+fn resolve_margin_length_for_side(
+  style: &ComputedStyle,
+  side: PhysicalSide,
+  containing_width: f32,
+  viewport: crate::geometry::Size,
+) -> Option<f32> {
+  let length = match side {
+    PhysicalSide::Top => style.margin_top,
+    PhysicalSide::Right => style.margin_right,
+    PhysicalSide::Bottom => style.margin_bottom,
+    PhysicalSide::Left => style.margin_left,
+  }?;
+  Some(resolve_length(
+    length,
+    containing_width,
+    style.font_size,
+    style.root_font_size,
+    viewport,
+  ))
+}
+
+fn margin_value_for_side(
+  style: &ComputedStyle,
+  side: PhysicalSide,
+  containing_width: f32,
+  viewport: crate::geometry::Size,
+) -> MarginValue {
+  resolve_margin_length_for_side(style, side, containing_width, viewport)
+    .map(MarginValue::Length)
+    .unwrap_or(MarginValue::Auto)
+}
+
+fn resolve_padding_for_side(
+  style: &ComputedStyle,
+  side: PhysicalSide,
+  containing_width: f32,
+  viewport: crate::geometry::Size,
+) -> f32 {
+  let length = match side {
+    PhysicalSide::Top => style.padding_top,
+    PhysicalSide::Right => style.padding_right,
+    PhysicalSide::Bottom => style.padding_bottom,
+    PhysicalSide::Left => style.padding_left,
+  };
+  resolve_length(
+    length,
+    containing_width,
+    style.font_size,
+    style.root_font_size,
+    viewport,
+  )
+}
+
+fn resolve_border_for_side(
+  style: &ComputedStyle,
+  side: PhysicalSide,
+  containing_width: f32,
+  viewport: crate::geometry::Size,
+) -> f32 {
+  let length = match side {
+    PhysicalSide::Top => style.border_top_width,
+    PhysicalSide::Right => style.border_right_width,
+    PhysicalSide::Bottom => style.border_bottom_width,
+    PhysicalSide::Left => style.border_left_width,
+  };
+  resolve_length(
+    length,
+    containing_width,
+    style.font_size,
+    style.root_font_size,
+    viewport,
+  )
 }
 
 /// Resolves the constraint equation for block width
@@ -379,7 +369,7 @@ fn resolve_constraint(
   border_right: f32,
   margin_left: MarginValue,
   margin_right: MarginValue,
-  direction: crate::style::types::Direction,
+  inline_positive: bool,
 ) -> (f32, f32, f32) {
   // Sum of non-auto, non-width values
   let borders_and_padding = border_left + padding_left + padding_right + border_right;
@@ -408,17 +398,13 @@ fn resolve_constraint(
         }
         (MarginValue::Length(ml), MarginValue::Length(_mr)) => {
           // Neither margin is auto: OVER-CONSTRAINED
-          // Ignore the end-side margin per CSS2.1 §10.3.3: right in LTR, left in RTL.
-          match direction {
-            crate::style::types::Direction::Ltr => {
-              let mr = containing_width - borders_and_padding - width - ml;
-              (ml, width, mr)
-            }
-            crate::style::types::Direction::Rtl => {
-              let ml =
-                containing_width - borders_and_padding - width - margin_right.unwrap_or_zero();
-              (ml, width, margin_right.unwrap_or_zero())
-            }
+          // Ignore the inline-end margin per CSS2.1 §10.3.3.
+          if inline_positive {
+            let mr = containing_width - borders_and_padding - width - ml;
+            (ml, width, mr)
+          } else {
+            let ml = containing_width - borders_and_padding - width - margin_right.unwrap_or_zero();
+            (ml, width, margin_right.unwrap_or_zero())
           }
         }
       }
@@ -456,6 +442,8 @@ fn resolve_length(
 mod tests {
   use super::*;
   use crate::geometry::Size;
+  use crate::style::inline_axis_is_horizontal;
+  use crate::style::inline_axis_positive;
   use crate::style::types::BoxSizing;
   use crate::style::types::Direction;
   use crate::style::types::Overflow;
@@ -468,6 +456,41 @@ mod tests {
 
   fn viewport() -> Size {
     Size::new(800.0, 600.0)
+  }
+
+  fn inline_params(style: &ComputedStyle) -> ((PhysicalSide, PhysicalSide), bool) {
+    let horizontal = inline_axis_is_horizontal(style.writing_mode);
+    let positive = inline_axis_positive(style.writing_mode, style.direction);
+    let sides = match (horizontal, positive) {
+      (true, true) => (PhysicalSide::Left, PhysicalSide::Right),
+      (true, false) => (PhysicalSide::Right, PhysicalSide::Left),
+      (false, true) => (PhysicalSide::Top, PhysicalSide::Bottom),
+      (false, false) => (PhysicalSide::Bottom, PhysicalSide::Top),
+    };
+    (sides, positive)
+  }
+
+  fn compute(style: &ComputedStyle, containing: f32) -> ComputedBlockWidth {
+    let (sides, positive) = inline_params(style);
+    compute_block_width(style, containing, viewport(), sides, positive)
+  }
+
+  fn compute_auto(
+    style: &ComputedStyle,
+    containing: f32,
+    margin_left_auto: bool,
+    margin_right_auto: bool,
+  ) -> ComputedBlockWidth {
+    let (sides, positive) = inline_params(style);
+    compute_block_width_with_auto_margins(
+      style,
+      containing,
+      margin_left_auto,
+      margin_right_auto,
+      viewport(),
+      sides,
+      positive,
+    )
   }
 
   // ComputedBlockWidth tests
@@ -521,7 +544,7 @@ mod tests {
     style.padding_left = Length::em(1.5);
     style.padding_right = Length::rem(1.0);
 
-    let width = compute_block_width(&style, 200.0, viewport());
+    let width = compute(&style, 200.0);
     assert!((width.padding_left - 15.0).abs() < f32::EPSILON);
     assert!((width.padding_right - 12.0).abs() < f32::EPSILON);
   }
@@ -532,7 +555,7 @@ mod tests {
     style.padding_left = Length::new(10.0, LengthUnit::Vw);
     style.padding_right = Length::new(5.0, LengthUnit::Vmin);
 
-    let width = compute_block_width(&style, 200.0, viewport());
+    let width = compute(&style, 200.0);
     assert!((width.padding_left - 80.0).abs() < f32::EPSILON);
     assert!((width.padding_right - 30.0).abs() < f32::EPSILON);
   }
@@ -557,21 +580,21 @@ mod tests {
     style.overflow_y = Overflow::Scroll;
     style.scrollbar_width = ScrollbarWidth::Thin;
 
-    let result = compute_block_width(&style, 200.0, viewport());
+    let result = compute(&style, 200.0);
     // Thin scrollbar (8px) should be reserved on the inline end (LTR → right).
     assert!((result.padding_right - 8.0).abs() < f32::EPSILON);
     assert!((result.content_width - 192.0).abs() < f32::EPSILON);
 
     style.direction = Direction::Rtl;
-    let rtl = compute_block_width(&style, 200.0, viewport());
-    assert!((rtl.padding_left - 8.0).abs() < f32::EPSILON);
+    let rtl = compute(&style, 200.0);
+    assert!((rtl.padding_right - 8.0).abs() < f32::EPSILON);
   }
 
   // Width computation tests
   #[test]
   fn test_width_auto_fills_container() {
     let style = default_style();
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
     // width: auto, margins: 0, borders/padding: 0
     // Result should fill the container
     assert_eq!(result.content_width, 800.0);
@@ -582,7 +605,7 @@ mod tests {
     let mut style = default_style();
     style.width = Some(Length::px(400.0));
 
-    let result = compute_block_width_with_auto_margins(&style, 800.0, true, true, viewport());
+    let result = compute_auto(&style, 800.0, true, true);
 
     // width: 400px with auto margins should center
     assert_eq!(result.content_width, 400.0);
@@ -596,7 +619,7 @@ mod tests {
     style.width = Some(Length::px(400.0));
     style.margin_right = Some(Length::px(100.0));
 
-    let result = compute_block_width_with_auto_margins(&style, 800.0, true, false, viewport());
+    let result = compute_auto(&style, 800.0, true, false);
 
     // width: 400px, margin-right: 100px, margin-left: auto
     // margin-left should get the remainder: 800 - 400 - 100 = 300
@@ -611,7 +634,7 @@ mod tests {
     style.width = Some(Length::px(400.0));
     style.margin_left = Some(Length::px(100.0));
 
-    let result = compute_block_width_with_auto_margins(&style, 800.0, false, true, viewport());
+    let result = compute_auto(&style, 800.0, false, true);
 
     // width: 400px, margin-left: 100px, margin-right: auto
     // margin-right should get the remainder: 800 - 400 - 100 = 300
@@ -627,7 +650,7 @@ mod tests {
     style.margin_left = Some(Length::px(100.0));
     style.margin_right = Some(Length::px(100.0));
 
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
 
     // Over-constrained: width: 400px, margins: 100px each
     // Total would be 600px in 800px container
@@ -645,7 +668,7 @@ mod tests {
     style.margin_left = Some(Length::px(150.0));
     style.margin_right = Some(Length::px(50.0));
 
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
 
     // In RTL the left margin is dropped when over-constrained. Remaining space goes to margin-left.
     // available = 800 - 400 - borders/padding(0) - margin-right(50) = 350
@@ -662,7 +685,7 @@ mod tests {
     style.margin_left = Some(Length::px(150.0));
     style.margin_right = Some(Length::px(50.0));
 
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
 
     // In LTR the right margin is dropped when over-constrained. Remaining space goes to margin-right.
     // available = 800 - 400 - 150 = 250
@@ -677,7 +700,7 @@ mod tests {
     style.margin_left = Some(Length::px(50.0));
     style.margin_right = Some(Length::px(50.0));
 
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
 
     // width: auto, margins: 50px each
     // width should be 800 - 50 - 50 = 700
@@ -690,7 +713,7 @@ mod tests {
   fn test_width_auto_margins_become_zero() {
     let style = default_style();
 
-    let result = compute_block_width_with_auto_margins(&style, 800.0, true, true, viewport());
+    let result = compute_auto(&style, 800.0, true, true);
 
     // width: auto, both margins auto
     // auto margins should become 0, width fills container
@@ -705,7 +728,7 @@ mod tests {
     style.padding_left = Length::px(20.0);
     style.padding_right = Length::px(20.0);
 
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
 
     // width: auto, padding: 20px each side
     // content width should be 800 - 40 = 760
@@ -720,7 +743,7 @@ mod tests {
     style.border_left_width = Length::px(5.0);
     style.border_right_width = Length::px(5.0);
 
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
 
     // width: auto, border: 5px each side
     // content width should be 800 - 10 = 790
@@ -739,7 +762,7 @@ mod tests {
     style.border_left_width = Length::px(5.0);
     style.border_right_width = Length::px(5.0);
 
-    let result = compute_block_width(&style, 400.0, viewport());
+    let result = compute(&style, 400.0);
 
     assert_eq!(result.content_width, 170.0);
     assert_eq!(result.border_box_width(), 200.0);
@@ -750,7 +773,7 @@ mod tests {
     let mut style = default_style();
     style.width = Some(Length::percent(50.0));
 
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
 
     // width: 50%
     // content width should be 400
@@ -764,7 +787,7 @@ mod tests {
     style.padding_left = Length::px(500.0);
     style.padding_right = Length::px(500.0);
 
-    let result = compute_block_width(&style, 800.0, viewport());
+    let result = compute(&style, 800.0);
 
     // Absurd padding that would make content negative
     // Content width should stay at the specified value (100)

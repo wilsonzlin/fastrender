@@ -227,6 +227,23 @@ pub(crate) fn block_axis_is_horizontal(wm: WritingMode) -> bool {
   )
 }
 
+pub(crate) fn inline_axis_positive(wm: WritingMode, dir: Direction) -> bool {
+  match wm {
+    WritingMode::HorizontalTb => dir != Direction::Rtl,
+    WritingMode::VerticalRl
+    | WritingMode::VerticalLr
+    | WritingMode::SidewaysRl
+    | WritingMode::SidewaysLr => true,
+  }
+}
+
+pub(crate) fn block_axis_positive(wm: WritingMode) -> bool {
+  match wm {
+    WritingMode::VerticalRl | WritingMode::SidewaysRl => false,
+    _ => true,
+  }
+}
+
 /// Pending logical properties (margin/padding/border) to resolve after writing-mode is known.
 // Outer Option tracks presence in the cascade; inner Option carries keyword vs length (e.g., auto vs length).
 #[allow(clippy::option_option)]

@@ -52,16 +52,21 @@ use crate::layout::utils::content_size_from_box_sizing;
 use crate::layout::utils::resolve_length_with_percentage;
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
+use crate::style::block_axis_is_horizontal;
+use crate::style::block_axis_positive;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::float::Float;
 use crate::style::position::Position;
+use crate::style::inline_axis_is_horizontal;
+use crate::style::inline_axis_positive;
 use crate::style::types::BorderStyle;
 use crate::style::types::ColumnFill;
 use crate::style::types::ColumnSpan;
 use crate::style::types::Overflow;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
+use crate::style::PhysicalSide;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxType;
@@ -119,6 +124,29 @@ fn resolve_opt_length(
   length
     .map(|l| resolve_length(l, font_size, containing_block_size, viewport))
     .unwrap_or(0.0)
+}
+
+fn axis_sides(horizontal: bool, positive: bool) -> (PhysicalSide, PhysicalSide) {
+  match (horizontal, positive) {
+    (true, true) => (PhysicalSide::Left, PhysicalSide::Right),
+    (true, false) => (PhysicalSide::Right, PhysicalSide::Left),
+    (false, true) => (PhysicalSide::Top, PhysicalSide::Bottom),
+    (false, false) => (PhysicalSide::Bottom, PhysicalSide::Top),
+  }
+}
+
+fn inline_axis_sides(style: &ComputedStyle) -> (PhysicalSide, PhysicalSide) {
+  axis_sides(
+    inline_axis_is_horizontal(style.writing_mode),
+    inline_axis_positive(style.writing_mode, style.direction),
+  )
+}
+
+fn block_axis_sides(style: &ComputedStyle) -> (PhysicalSide, PhysicalSide) {
+  axis_sides(
+    block_axis_is_horizontal(style.writing_mode),
+    block_axis_positive(style.writing_mode),
+  )
 }
 
 /// Block Formatting Context implementation
@@ -237,17 +265,20 @@ impl BlockFormattingContext {
     let font_size = style.font_size; // Get font-size for resolving em units
     let containing_height = constraints.height();
 
-    // Handle vertical margins (resolve em/rem units with font-size)
-    let margin_top = resolve_opt_length(
-      style.margin_top.as_ref(),
-      font_size,
+    // Handle block-axis margins (resolve em/rem units with font-size)
+    let block_sides = block_axis_sides(style);
+    let margin_top = resolve_margin_side(
+      style,
+      block_sides.0,
       containing_width,
+      &self.font_context,
       self.viewport_size,
     );
-    let margin_bottom = resolve_opt_length(
-      style.margin_bottom.as_ref(),
-      font_size,
+    let margin_bottom = resolve_margin_side(
+      style,
+      block_sides.1,
       containing_width,
+      &self.font_context,
       self.viewport_size,
     );
 
@@ -279,7 +310,15 @@ impl BlockFormattingContext {
       .unwrap_or(AvailableSpace::Indefinite);
 
     // Compute width using CSS 2.1 Section 10.3.3 algorithm
-    let mut computed_width = compute_block_width(style, containing_width, self.viewport_size);
+    let inline_sides = inline_axis_sides(style);
+    let inline_positive = inline_axis_positive(style.writing_mode, style.direction);
+    let mut computed_width = compute_block_width(
+      style,
+      containing_width,
+      self.viewport_size,
+      inline_sides,
+      inline_positive,
+    );
     static LOG_BLOCK_WIDE: OnceLock<bool> = OnceLock::new();
     if *LOG_BLOCK_WIDE.get_or_init(|| {
       std::env::var("FASTR_LOG_BLOCK_WIDE")
@@ -562,31 +601,31 @@ impl BlockFormattingContext {
     };
 
     // Compute height (resolve em/rem units with font-size)
-    let border_top = resolve_length_for_width(
-      style.border_top_width,
-      containing_width,
+    let border_top = resolve_border_side(
       style,
+      block_sides.0,
+      containing_width,
       &self.font_context,
       self.viewport_size,
     );
-    let border_bottom = resolve_length_for_width(
-      style.border_bottom_width,
-      containing_width,
+    let border_bottom = resolve_border_side(
       style,
+      block_sides.1,
+      containing_width,
       &self.font_context,
       self.viewport_size,
     );
-    let mut padding_top = resolve_length_for_width(
-      style.padding_top,
-      containing_width,
+    let mut padding_top = resolve_padding_side(
       style,
+      block_sides.0,
+      containing_width,
       &self.font_context,
       self.viewport_size,
     );
-    let mut padding_bottom = resolve_length_for_width(
-      style.padding_bottom,
-      containing_width,
+    let mut padding_bottom = resolve_padding_side(
       style,
+      block_sides.1,
+      containing_width,
       &self.font_context,
       self.viewport_size,
     );
@@ -954,7 +993,15 @@ impl BlockFormattingContext {
     let mut width_style = (*style).as_ref().clone();
     width_style.width = Some(Length::px(used_size.width));
     width_style.box_sizing = crate::style::types::BoxSizing::ContentBox;
-    let computed_width = compute_block_width(&width_style, containing_width, self.viewport_size);
+    let inline_sides = inline_axis_sides(style);
+    let inline_positive = inline_axis_positive(style.writing_mode, style.direction);
+    let computed_width = compute_block_width(
+      &width_style,
+      containing_width,
+      self.viewport_size,
+      inline_sides,
+      inline_positive,
+    );
 
     let box_width = computed_width.border_box_width();
     let box_height = border_top + padding_top + used_size.height + padding_bottom + border_bottom;
@@ -1390,7 +1437,13 @@ impl BlockFormattingContext {
         }
         let pending_margin = margin_ctx.pending_margin();
         // Hypothetical box for static position: use normal block width resolution to include auto margins.
-        let hypo_width = compute_block_width(&child.style, containing_width, self.viewport_size);
+        let hypo_width = compute_block_width(
+          &child.style,
+          containing_width,
+          self.viewport_size,
+          inline_axis_sides(&child.style),
+          inline_axis_positive(child.style.writing_mode, child.style.direction),
+        );
         let static_x = hypo_width.margin_left;
         let static_y = current_y + pending_margin;
         let static_position = Some(Point::new(static_x, static_y));
@@ -2346,8 +2399,16 @@ impl FormattingContext for BlockFormattingContext {
       None
     };
 
-    let mut computed_width =
-      compute_block_width(style_for_width, containing_width, self.viewport_size);
+    let inline_sides = inline_axis_sides(style);
+    let inline_positive = inline_axis_positive(style.writing_mode, style.direction);
+
+    let mut computed_width = compute_block_width(
+      style_for_width,
+      containing_width,
+      self.viewport_size,
+      inline_sides,
+      inline_positive,
+    );
     if style.shrink_to_fit_inline_size && style_for_width.width.is_none() {
       static LOG_SHRINK: OnceLock<bool> = OnceLock::new();
       let log_shrink = *LOG_SHRINK.get_or_init(|| {
@@ -3315,7 +3376,55 @@ fn recompute_margins_for_width(
     }
   }
 }
+fn resolve_margin_side(
+  style: &ComputedStyle,
+  side: PhysicalSide,
+  percentage_base: f32,
+  font_context: &FontContext,
+  viewport: crate::geometry::Size,
+) -> f32 {
+  let length = match side {
+    PhysicalSide::Top => style.margin_top,
+    PhysicalSide::Right => style.margin_right,
+    PhysicalSide::Bottom => style.margin_bottom,
+    PhysicalSide::Left => style.margin_left,
+  };
+  length
+    .map(|l| resolve_length_for_width(l, percentage_base, style, font_context, viewport))
+    .unwrap_or(0.0)
+}
 
+fn resolve_padding_side(
+  style: &ComputedStyle,
+  side: PhysicalSide,
+  percentage_base: f32,
+  font_context: &FontContext,
+  viewport: crate::geometry::Size,
+) -> f32 {
+  let length = match side {
+    PhysicalSide::Top => style.padding_top,
+    PhysicalSide::Right => style.padding_right,
+    PhysicalSide::Bottom => style.padding_bottom,
+    PhysicalSide::Left => style.padding_left,
+  };
+  resolve_length_for_width(length, percentage_base, style, font_context, viewport)
+}
+
+fn resolve_border_side(
+  style: &ComputedStyle,
+  side: PhysicalSide,
+  percentage_base: f32,
+  font_context: &FontContext,
+  viewport: crate::geometry::Size,
+) -> f32 {
+  let length = match side {
+    PhysicalSide::Top => style.border_top_width,
+    PhysicalSide::Right => style.border_right_width,
+    PhysicalSide::Bottom => style.border_bottom_width,
+    PhysicalSide::Left => style.border_left_width,
+  };
+  resolve_length_for_width(length, percentage_base, style, font_context, viewport)
+}
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -3493,8 +3602,8 @@ mod tests {
       sibling_fragment.bounds.x().abs() < 0.01,
       "sibling should start at the container origin; got {}",
       sibling_fragment.bounds.x()
-    );
-  }
+  );
+}
 
   #[test]
   fn test_layout_nested_blocks() {
