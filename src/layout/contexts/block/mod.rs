@@ -3606,6 +3606,60 @@ mod tests {
   }
 
   #[test]
+  fn vertical_writing_blocks_stack_horizontally() {
+    let mut root_style = ComputedStyle::default();
+    root_style.display = Display::Block;
+    root_style.writing_mode = WritingMode::VerticalRl;
+    root_style.width = Some(Length::px(200.0));
+
+    let mut child_style = ComputedStyle::default();
+    child_style.display = Display::Block;
+    child_style.writing_mode = WritingMode::VerticalRl;
+    child_style.height = Some(Length::px(40.0));
+
+    let child1 = BoxNode::new_block(Arc::new(child_style.clone()), FormattingContextType::Block, vec![]);
+    let child2 = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
+    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![child1, child2]);
+
+    let fc = BlockFormattingContext::new();
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+    let fragment = fc.layout(&root, &constraints).unwrap();
+
+    let root_w = fragment.bounds.width();
+    let root_h = fragment.bounds.height();
+    // Block axis is horizontal; total block extent should be sum of block sizes (approx 80).
+    assert!(
+      (root_w - 80.0).abs() < 0.5,
+      "expected ~80 width, got {}x{}",
+      root_w,
+      root_h
+    );
+    assert!(
+      (root_h - 200.0).abs() < 0.5,
+      "expected height 200, got {}x{}",
+      root_w,
+      root_h
+    );
+    assert_eq!(fragment.children.len(), 2);
+
+    let first = &fragment.children[0];
+    let second = &fragment.children[1];
+
+    // Children are transposed: physical width = block size (40), height = inline size (200).
+    assert!((first.bounds.width() - 40.0).abs() < 0.5);
+    assert!((first.bounds.height() - 200.0).abs() < 0.5);
+    assert!((second.bounds.width() - 40.0).abs() < 0.5);
+    assert!((second.bounds.height() - 200.0).abs() < 0.5);
+
+    // vertical-rl stacks from right to left (block-axis negative).
+    assert!(first.bounds.x() > second.bounds.x());
+    assert!((first.bounds.x() - 40.0).abs() < 0.5);
+    assert!((second.bounds.x()).abs() < 0.5);
+    assert!((first.bounds.y()).abs() < 0.5);
+    assert!((second.bounds.y()).abs() < 0.5);
+  }
+
+  #[test]
   fn test_bfc_new() {
     let _bfc = BlockFormattingContext::new();
   }
