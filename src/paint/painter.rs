@@ -7754,13 +7754,13 @@ fn apply_manual_blend(
     | MixBlendMode::ChromaOklch
     | MixBlendMode::ColorOklch
     | MixBlendMode::LuminosityOklch => {
-      let (sh, sc, sl) = rgb_to_oklch(src.0, src.1, src.2);
-      let (dh, dc, dl) = rgb_to_oklch(dst.0, dst.1, dst.2);
+      let (sl, sc, sh) = rgb_to_oklch(src.0, src.1, src.2);
+      let (dl, dc, dh) = rgb_to_oklch(dst.0, dst.1, dst.2);
       match mode {
-        MixBlendMode::HueOklch => oklch_to_rgb(sh, dc, dl),
-        MixBlendMode::ChromaOklch => oklch_to_rgb(dh, sc, dl),
-        MixBlendMode::ColorOklch => oklch_to_rgb(sh, sc, dl),
-        MixBlendMode::LuminosityOklch => oklch_to_rgb(dh, dc, sl),
+        MixBlendMode::HueOklch => oklch_to_rgb(dl, dc, sh),
+        MixBlendMode::ChromaOklch => oklch_to_rgb(dl, sc, dh),
+        MixBlendMode::ColorOklch => oklch_to_rgb(dl, sc, sh),
+        MixBlendMode::LuminosityOklch => oklch_to_rgb(sl, dc, dh),
         _ => dst,
       }
     }
