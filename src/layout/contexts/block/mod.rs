@@ -1031,6 +1031,35 @@ impl BlockFormattingContext {
     constraints: &LayoutConstraints,
     nearest_positioned_cb: &ContainingBlock,
   ) -> Result<(Vec<FragmentNode>, f32, Vec<PositionedCandidate>), LayoutError> {
+    let inline_is_horizontal = inline_axis_is_horizontal(parent.style.writing_mode);
+    let inline_space = if inline_is_horizontal {
+      constraints.available_width
+    } else {
+      constraints.available_height
+    };
+    let block_space = if inline_is_horizontal {
+      constraints.available_height
+    } else {
+      constraints.available_width
+    };
+    let inline_percentage_base = match inline_space {
+      AvailableSpace::Definite(_) => {
+        let base = if inline_is_horizontal {
+          constraints.inline_percentage_base.or_else(|| constraints.width())
+        } else {
+          constraints.height()
+        };
+        let viewport_inline = if inline_is_horizontal {
+          self.viewport_size.width
+        } else {
+          self.viewport_size.height
+        };
+        base.unwrap_or(viewport_inline)
+      }
+      AvailableSpace::MinContent | AvailableSpace::MaxContent | AvailableSpace::Indefinite => {
+        constraints.inline_percentage_base.unwrap_or(0.0)
+      }
+    };
     static DUMP_CELL_CHILD_Y: OnceLock<bool> = OnceLock::new();
     let dump_cell_child_y = *DUMP_CELL_CHILD_Y.get_or_init(|| {
       std::env::var("FASTR_DUMP_CELL_CHILD_Y")
@@ -1207,17 +1236,19 @@ impl BlockFormattingContext {
     // the base to the viewport — leave it at 0 unless the caller provided a definite percentage
     // base.
     let intrinsic_width = matches!(
-      constraints.available_width,
+      inline_space,
       AvailableSpace::MinContent | AvailableSpace::MaxContent | AvailableSpace::Indefinite
     );
-    let containing_width = constraints
-      .inline_percentage_base
-      .or_else(|| constraints.width())
-      .map(|w| w.min(self.viewport_size.width));
+    let inline_viewport = if inline_is_horizontal {
+      self.viewport_size.width
+    } else {
+      self.viewport_size.height
+    };
+    let containing_width = Some(inline_percentage_base).map(|w| w.min(inline_viewport));
     let mut containing_width = containing_width.unwrap_or(if intrinsic_width {
       0.0
     } else {
-      self.viewport_size.width
+      inline_viewport
     });
     if !intrinsic_width && containing_width <= 1.0 {
       let width_is_absolute = parent
@@ -1227,15 +1258,15 @@ impl BlockFormattingContext {
         .map(|l| l.unit.is_absolute())
         .unwrap_or(false);
       if !width_is_absolute {
-        containing_width = self.viewport_size.width;
+        containing_width = inline_viewport;
       }
     }
     let mut float_ctx = FloatContext::new(containing_width);
-    let available_height = constraints.available_height;
+    let available_height = block_space;
     let relative_cb = ContainingBlock::with_viewport(
       Rect::new(
         Point::ZERO,
-        Size::new(containing_width, constraints.height().unwrap_or(0.0)),
+        Size::new(containing_width, block_space.to_option().unwrap_or(0.0)),
       ),
       self.viewport_size,
     );
@@ -2180,14 +2211,31 @@ impl FormattingContext for BlockFormattingContext {
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Block);
     let style = &box_node.style;
+    let inline_is_horizontal = inline_axis_is_horizontal(style.writing_mode);
+    let _inline_positive = inline_axis_positive(style.writing_mode, style.direction);
+    let _block_positive = block_axis_positive(style.writing_mode);
+    let inline_space = if inline_is_horizontal {
+      constraints.available_width
+    } else {
+      constraints.available_height
+    };
     let log_skinny = std::env::var("FASTR_LOG_SKINNY_FLEX")
       .map(|v| v != "0")
       .unwrap_or(false);
-    let inline_percentage_base = match constraints.available_width {
-      AvailableSpace::Definite(_) => constraints
-        .inline_percentage_base
-        .or_else(|| constraints.width())
-        .unwrap_or(self.viewport_size.width),
+    let inline_percentage_base = match inline_space {
+      AvailableSpace::Definite(_) => {
+        let base = if inline_is_horizontal {
+          constraints.inline_percentage_base.or_else(|| constraints.width())
+        } else {
+          constraints.height()
+        };
+        let viewport_inline = if inline_is_horizontal {
+          self.viewport_size.width
+        } else {
+          self.viewport_size.height
+        };
+        base.unwrap_or(viewport_inline)
+      }
       AvailableSpace::MinContent | AvailableSpace::MaxContent | AvailableSpace::Indefinite => {
         constraints.inline_percentage_base.unwrap_or(0.0)
       }
@@ -2196,7 +2244,7 @@ impl FormattingContext for BlockFormattingContext {
     // percentage widths behave as `auto` per CSS sizing. Strip percentage width/min/max hints
     // so intrinsic sizing does not resolve them against an unrelated base (e.g., viewport).
     let use_percent_as_auto = matches!(
-      constraints.available_width,
+      inline_space,
       AvailableSpace::MinContent | AvailableSpace::MaxContent | AvailableSpace::Indefinite
     );
     let _style_for_width_owned: Option<ComputedStyle>;
@@ -2256,7 +2304,11 @@ impl FormattingContext for BlockFormattingContext {
           containing_width = self.viewport_size.width;
         }
       }
-      let containing_height = constraints.height();
+      let containing_height = if inline_is_horizontal {
+        constraints.height()
+      } else {
+        constraints.width()
+      };
       let percentage_base = Some(crate::geometry::Size::new(
         containing_width,
         containing_height.unwrap_or(f32::NAN),
