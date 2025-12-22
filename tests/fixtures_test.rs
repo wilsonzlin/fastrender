@@ -176,6 +176,7 @@ fn test_all_fixture_files_exist() {
     "grid_template",
     "grid_auto_flow",
     "grid_gaps",
+    "multicol_basic",
     // Tables
     "table_fixed",
     "table_auto",
