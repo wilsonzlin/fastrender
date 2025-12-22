@@ -1743,6 +1743,74 @@ mod tests {
   }
 
   #[test]
+  fn font_display_block_waits_for_fast_load() {
+    let Some((data, _family)) = system_font_for_char('A') else {
+      return;
+    };
+    let fetcher = Arc::new(StubFetcher {
+      data: data.clone(),
+      delay: Duration::from_millis(0),
+      fail: false,
+    });
+    let ctx = FontContext::with_fetcher(fetcher);
+
+    let face = FontFaceRule {
+      family: Some("BlockFace".to_string()),
+      sources: vec![FontFaceSource::Url("http://example.com/font.ttf".to_string())],
+      display: FontDisplay::Block,
+      ..Default::default()
+    };
+    ctx
+      .load_web_fonts(&[face], None, None)
+      .expect("load block face");
+
+    assert!(ctx.has_web_faces("BlockFace"), "block display should wait for quick loads");
+  }
+
+  #[test]
+  fn failed_font_load_falls_back() {
+    let Some((data, fallback_family)) = system_font_for_char('A') else {
+      return;
+    };
+    let fetcher = Arc::new(StubFetcher {
+      data,
+      delay: Duration::from_millis(0),
+      fail: true,
+    });
+    let ctx = FontContext::with_fetcher(fetcher);
+
+    let face = FontFaceRule {
+      family: Some("Broken".to_string()),
+      sources: vec![FontFaceSource::Url("http://example.com/font.ttf".to_string())],
+      display: FontDisplay::Swap,
+      ..Default::default()
+    };
+    ctx
+      .load_web_fonts(&[face], None, None)
+      .expect("schedule broken face");
+    let _ = ctx.wait_for_pending_web_fonts(Duration::from_millis(200));
+
+    assert!(
+      !ctx.has_web_faces("Broken"),
+      "failed downloads must not register web faces"
+    );
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["Broken".to_string(), fallback_family];
+    style.font_size = 14.0;
+
+    let pipeline = crate::text::pipeline::ShapingPipeline::new();
+    let runs = match pipeline.shape("A", &style, &ctx) {
+      Ok(runs) => runs,
+      Err(_) => return,
+    };
+    if runs.is_empty() {
+      return;
+    }
+    assert_ne!(runs[0].font.family, "Broken");
+  }
+
+  #[test]
   fn font_display_swap_eventually_installs() {
     let Some((data, _family)) = system_font_for_char('A') else {
       return;
