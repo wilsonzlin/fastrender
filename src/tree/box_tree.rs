@@ -23,6 +23,7 @@
 
 use crate::geometry::Size;
 use crate::style::display::FormattingContextType;
+use crate::style::types::Appearance;
 use crate::style::ComputedStyle;
 use crate::tree::debug::DebugInfo;
 use std::fmt;
@@ -84,6 +85,67 @@ pub enum MarkerContent {
 pub struct MarkerBox {
   /// Marker payload (text or image)
   pub content: MarkerContent,
+}
+
+/// A form control description used by the painter when rendering native controls.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormControl {
+  /// Specific control type and metadata
+  pub control: FormControlKind,
+  /// Resolved appearance value (Auto/None/Keyword)
+  pub appearance: Appearance,
+  /// Whether the control is disabled
+  pub disabled: bool,
+}
+
+/// Specific form control kinds
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormControlKind {
+  /// Text-like control (<input type=text>, search, etc.)
+  Text {
+    /// Current value attribute
+    value: String,
+    /// Placeholder text to render when value is empty
+    placeholder: Option<String>,
+    /// Optional size attribute hint for intrinsic width
+    size_attr: Option<u32>,
+  },
+  /// Multiline control (<textarea>)
+  TextArea {
+    /// Raw text content
+    value: String,
+    /// Optional rows hint (default 2)
+    rows: Option<u32>,
+    /// Optional cols hint (default 20)
+    cols: Option<u32>,
+  },
+  /// Button control (<button> and <input type=button|submit|reset>)
+  Button { label: String },
+  /// Selection control (<select>)
+  Select {
+    /// User-visible label for the current selection
+    label: String,
+    /// Whether multiple selections are allowed
+    multiple: bool,
+  },
+  /// Checkbox or radio input
+  Checkbox {
+    /// Whether this represents a radio input (circle) instead of checkbox (square)
+    is_radio: bool,
+    /// Current checked state
+    checked: bool,
+  },
+  /// Range control (<input type=range>)
+  Range {
+    /// Current numeric value
+    value: f32,
+    /// Minimum value (default 0)
+    min: Option<f32>,
+    /// Maximum value (default 100)
+    max: Option<f32>,
+  },
+  /// Fallback for unknown input types
+  Unknown { label: Option<String> },
 }
 
 /// A replaced element box
@@ -188,6 +250,9 @@ pub enum ReplacedType {
     /// Data URL
     data: String,
   },
+
+  /// Native form controls (input/select/textarea/button)
+  FormControl(FormControl),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -263,6 +328,7 @@ impl ReplacedType {
       ReplacedType::Canvas => Some("canvas"),
       ReplacedType::Embed { .. } => Some("embed"),
       ReplacedType::Object { .. } => Some("object"),
+      ReplacedType::FormControl(_) => Some("control"),
       _ => None,
     }
   }
@@ -1043,9 +1109,11 @@ mod tests {
 
     let inline_box = BoxNode::new_inline(default_style(), vec![text1, text2]);
 
-    let block_box = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      inline_box,
-    ]);
+    let block_box = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![inline_box],
+    );
 
     assert_eq!(block_box.children.len(), 1);
     assert_eq!(block_box.children[0].children.len(), 2);
@@ -1054,10 +1122,11 @@ mod tests {
 
   #[test]
   fn test_debug_info() {
-    let debug_info = DebugInfo::new(Some("div".to_string()), Some("header".to_string()), vec![
-      "navbar".to_string(),
-      "sticky".to_string(),
-    ]);
+    let debug_info = DebugInfo::new(
+      Some("div".to_string()),
+      Some("header".to_string()),
+      vec!["navbar".to_string(), "sticky".to_string()],
+    );
 
     assert_eq!(debug_info.to_selector(), "div#header.navbar.sticky");
 
@@ -1069,10 +1138,14 @@ mod tests {
 
   #[test]
   fn test_box_tree() {
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      BoxNode::new_text(default_style(), "Text".to_string()),
-      BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![
+        BoxNode::new_text(default_style(), "Text".to_string()),
+        BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]),
+      ],
+    );
 
     let tree = BoxTree::new(root);
 

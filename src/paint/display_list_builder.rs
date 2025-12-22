@@ -42,6 +42,7 @@ use crate::paint::display_list::BlendModeItem;
 use crate::paint::display_list::BorderImageItem;
 use crate::paint::display_list::BorderImageSourceItem;
 use crate::paint::display_list::BorderItem;
+use crate::paint::display_list::BorderRadii;
 use crate::paint::display_list::BorderSide;
 use crate::paint::display_list::BoxShadowItem;
 use crate::paint::display_list::ClipItem;
@@ -54,6 +55,7 @@ use crate::paint::display_list::DisplayList;
 use crate::paint::display_list::EmphasisMark;
 use crate::paint::display_list::EmphasisText;
 use crate::paint::display_list::FillRectItem;
+use crate::paint::display_list::FillRoundedRectItem;
 use crate::paint::display_list::FontId;
 use crate::paint::display_list::GlyphInstance;
 use crate::paint::display_list::GradientSpread;
@@ -80,6 +82,8 @@ use crate::paint::object_fit::default_object_position;
 use crate::paint::stacking::StackingContext;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
+use crate::style::types::AccentColor;
+use crate::style::types::Appearance;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundAttachment;
 use crate::style::types::BackgroundBox;
@@ -116,6 +120,8 @@ use crate::text::font_db::ScaledMetrics;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::ShapedRun;
 use crate::text::pipeline::ShapingPipeline;
+use crate::tree::box_tree::FormControl;
+use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
@@ -2014,6 +2020,12 @@ impl DisplayListBuilder {
       }
 
       FragmentContent::Replaced { replaced_type, .. } => {
+        if let ReplacedType::FormControl(control) = replaced_type {
+          if self.emit_form_control(control, fragment, rect) {
+            return;
+          }
+        }
+
         let media_ctx = self.viewport.map(|(w, h)| {
           crate::style::media::MediaContext::screen(w, h)
             .with_device_pixel_ratio(self.device_pixel_ratio)
@@ -3700,6 +3712,171 @@ impl DisplayListBuilder {
         .map(|s| s as &ComputedStyle)
         .or(fragment.style.as_deref());
       let _ = self.emit_text_with_style(label_text, label_style_ref, label_rect);
+    }
+  }
+
+  fn resolved_accent_color(style: &ComputedStyle) -> Rgba {
+    match style.accent_color {
+      AccentColor::Color(c) => c,
+      AccentColor::Auto => style.color,
+    }
+  }
+
+  fn emit_form_control(
+    &mut self,
+    control: &FormControl,
+    fragment: &FragmentNode,
+    rect: Rect,
+  ) -> bool {
+    let Some(style) = fragment.style.as_deref() else {
+      return false;
+    };
+
+    let accent = Self::resolved_accent_color(style);
+    let muted_accent = if control.disabled {
+      accent.with_alpha((accent.a * 0.7).clamp(0.0, 1.0))
+    } else {
+      accent
+    };
+
+    let inset_rect = |rect: Rect, inset: f32| {
+      Rect::from_xywh(
+        rect.x() + inset,
+        rect.y() + inset,
+        (rect.width() - 2.0 * inset).max(0.0),
+        (rect.height() - 2.0 * inset).max(0.0),
+      )
+    };
+
+    match &control.control {
+      FormControlKind::Text {
+        value, placeholder, ..
+      } => {
+        let value_trimmed = value.trim();
+        let (text, color) = if !value_trimmed.is_empty() {
+          (value_trimmed, style.color)
+        } else if let Some(ph) = placeholder.as_deref() {
+          (ph.trim(), style.color.with_alpha(0.6))
+        } else {
+          return true;
+        };
+
+        let mut text_style = style.clone();
+        text_style.color = color;
+        let rect = inset_rect(rect, 2.0);
+        let _ = self.emit_text_with_style(text, Some(&text_style), rect);
+        true
+      }
+      FormControlKind::TextArea { value, .. } => {
+        if value.is_empty() {
+          return true;
+        }
+        let rect = inset_rect(rect, 2.0);
+        let line_height = compute_line_height_with_metrics_viewport(
+          style,
+          None,
+          self.viewport.map(|(w, h)| Size::new(w, h)),
+        );
+        let mut y = rect.y();
+        for line in value.split('\n') {
+          if y > rect.y() + rect.height() {
+            break;
+          }
+          let line_rect = Rect::from_xywh(rect.x(), y, rect.width(), rect.height());
+          let _ = self.emit_text_with_style(line.trim_end(), Some(style), line_rect);
+          y += line_height;
+        }
+        true
+      }
+      FormControlKind::Select { label, .. } => {
+        let rect = inset_rect(rect, 2.0);
+        let arrow_space = if matches!(control.appearance, Appearance::None) {
+          0.0
+        } else {
+          14.0
+        };
+        let text_rect = Rect::from_xywh(
+          rect.x(),
+          rect.y(),
+          (rect.width() - arrow_space).max(0.0),
+          rect.height(),
+        );
+        let _ = self.emit_text_with_style(label, Some(style), text_rect);
+
+        if arrow_space > 0.0 {
+          let mut arrow_style = style.clone();
+          arrow_style.color = muted_accent;
+          let arrow_rect = Rect::from_xywh(
+            rect.x() + rect.width() - arrow_space,
+            rect.y(),
+            arrow_space,
+            rect.height(),
+          );
+          let _ = self.emit_text_with_style("▾", Some(&arrow_style), arrow_rect);
+        }
+        true
+      }
+      FormControlKind::Button { label } => {
+        if label.trim().is_empty() {
+          return true;
+        }
+        let rect = inset_rect(rect, 2.0);
+        let _ = self.emit_text_with_style(label, Some(style), rect);
+        true
+      }
+      FormControlKind::Checkbox { is_radio, checked } => {
+        if !*checked || matches!(control.appearance, Appearance::None) {
+          return true;
+        }
+        let mut mark_style = style.clone();
+        mark_style.color = muted_accent;
+        let glyph = if *is_radio { "●" } else { "✓" };
+        let rect = inset_rect(rect, 2.0);
+        let _ = self.emit_text_with_style(glyph, Some(&mark_style), rect);
+        true
+      }
+      FormControlKind::Range { value, min, max } => {
+        let track_height = 4.0_f32.min(rect.height());
+        let track_y = rect.y() + (rect.height() - track_height) / 2.0;
+        let track_rect = Rect::from_xywh(rect.x(), track_y, rect.width(), track_height);
+        self
+          .list
+          .push(DisplayItem::FillRoundedRect(FillRoundedRectItem {
+            rect: track_rect,
+            color: style
+              .background_color
+              .with_alpha((style.background_color.a * 0.8).max(0.1)),
+            radii: BorderRadii::uniform(track_height / 2.0),
+          }));
+
+        let min_val = min.unwrap_or(0.0);
+        let max_val = max.unwrap_or(100.0);
+        let span = (max_val - min_val).abs().max(0.0001);
+        let clamped = ((*value - min_val) / span).clamp(0.0, 1.0);
+        let knob_radius = (rect.height().min(16.0)) / 2.0;
+        let knob_center_x = rect.x() + knob_radius + clamped * (rect.width() - 2.0 * knob_radius);
+        let knob_rect = Rect::from_xywh(
+          knob_center_x - knob_radius,
+          rect.y() + (rect.height() - knob_radius * 2.0) / 2.0,
+          knob_radius * 2.0,
+          knob_radius * 2.0,
+        );
+        self
+          .list
+          .push(DisplayItem::FillRoundedRect(FillRoundedRectItem {
+            rect: knob_rect,
+            color: muted_accent,
+            radii: BorderRadii::uniform(knob_radius),
+          }));
+        true
+      }
+      FormControlKind::Unknown { label } => {
+        if let Some(text) = label {
+          let rect = inset_rect(rect, 2.0);
+          let _ = self.emit_text_with_style(text, Some(style), rect);
+        }
+        true
+      }
     }
   }
 

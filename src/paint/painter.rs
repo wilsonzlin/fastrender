@@ -57,6 +57,8 @@ use crate::style::display::Display;
 use crate::style::media::MediaContext;
 use crate::style::media::MediaQueryCache;
 use crate::style::position::Position;
+use crate::style::types::AccentColor;
+use crate::style::types::Appearance;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundAttachment;
 use crate::style::types::BackgroundImage;
@@ -98,6 +100,7 @@ use crate::text::pipeline::ShapingPipeline;
 use crate::tree;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
+use crate::tree::box_tree::{FormControl, FormControlKind};
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
@@ -615,6 +618,55 @@ impl Painter {
   ) {
     let replaced_type_snapshot = replaced_box.replaced_type.clone();
     match replaced_type_snapshot {
+      ReplacedType::FormControl(control) => {
+        if replaced_box.intrinsic_size.is_none() {
+          let metrics = self.resolve_scaled_metrics(style);
+          let char_width = metrics
+            .as_ref()
+            .and_then(|m| m.x_height)
+            .unwrap_or(style.font_size * 0.6)
+            * 0.6;
+          let line_height =
+            compute_line_height_with_metrics_viewport(style, metrics.as_ref(), Some(viewport));
+          let size = match &control.control {
+            FormControlKind::Text { size_attr, .. } => {
+              let cols = size_attr.unwrap_or(20) as f32;
+              Size::new(char_width * cols.max(1.0), line_height)
+            }
+            FormControlKind::TextArea { rows, cols, .. } => {
+              let row_count = rows.unwrap_or(2) as f32;
+              let col_count = cols.unwrap_or(20) as f32;
+              Size::new(
+                char_width * col_count.max(1.0),
+                line_height * row_count.max(1.0),
+              )
+            }
+            FormControlKind::Button { label } => {
+              let text_len = label.chars().count().max(1) as f32;
+              Size::new(char_width * text_len + char_width * 2.0, line_height)
+            }
+            FormControlKind::Select { label, .. } => {
+              let text_len = label.chars().count().max(4) as f32;
+              Size::new(char_width * text_len + 20.0, line_height)
+            }
+            FormControlKind::Checkbox { .. } => {
+              let edge = (style.font_size * 1.1).clamp(12.0, 20.0);
+              Size::new(edge, edge)
+            }
+            FormControlKind::Range { .. } => Size::new(char_width * 12.0, line_height.max(12.0)),
+            FormControlKind::Unknown { .. } => Size::new(char_width * 10.0, line_height),
+          };
+          replaced_box.intrinsic_size = Some(size);
+        }
+
+        if replaced_box.aspect_ratio.is_none() {
+          if let Some(size) = replaced_box.intrinsic_size {
+            if size.height > 0.0 {
+              replaced_box.aspect_ratio = Some(size.width / size.height);
+            }
+          }
+        }
+      }
       ReplacedType::Image {
         src,
         alt: stored_alt,
@@ -4002,6 +4054,13 @@ impl Painter {
 
     // Try to render actual content for images and SVG
     match replaced_type {
+      ReplacedType::FormControl(control) => {
+        if let Some(style) = style {
+          if self.paint_form_control(control, style, content_rect) {
+            return;
+          }
+        }
+      }
       ReplacedType::Image { alt, .. } => {
         let media_ctx = crate::style::media::MediaContext::screen(self.css_width, self.css_height)
           .with_device_pixel_ratio(self.scale)
@@ -4129,6 +4188,199 @@ impl Painter {
     }
 
     self.paint_replaced_placeholder(replaced_type, style, content_rect);
+  }
+
+  fn resolved_accent_color(style: &ComputedStyle) -> Rgba {
+    match style.accent_color {
+      AccentColor::Color(c) => c,
+      AccentColor::Auto => style.color,
+    }
+  }
+
+  fn paint_form_control(
+    &mut self,
+    control: &FormControl,
+    style: &ComputedStyle,
+    content_rect: Rect,
+  ) -> bool {
+    if content_rect.width() <= 0.0 || content_rect.height() <= 0.0 {
+      return true;
+    }
+
+    let accent = Self::resolved_accent_color(style);
+    let muted_accent = if control.disabled {
+      accent.with_alpha((accent.a * 0.7).clamp(0.0, 1.0))
+    } else {
+      accent
+    };
+    let inset_rect = |rect: Rect, inset: f32| {
+      Rect::from_xywh(
+        rect.x() + inset,
+        rect.y() + inset,
+        (rect.width() - 2.0 * inset).max(0.0),
+        (rect.height() - 2.0 * inset).max(0.0),
+      )
+    };
+
+    match &control.control {
+      FormControlKind::Text {
+        value, placeholder, ..
+      } => {
+        let value_trimmed = value.trim();
+        let (text, color) = if !value_trimmed.is_empty() {
+          (value_trimmed, style.color)
+        } else if let Some(ph) = placeholder.as_deref() {
+          (ph.trim(), style.color.with_alpha(0.6))
+        } else {
+          return true;
+        };
+
+        let mut text_style = style.clone();
+        text_style.color = color;
+        let rect = inset_rect(content_rect, 2.0);
+        let _ = self.paint_alt_text(text, &text_style, rect);
+        true
+      }
+      FormControlKind::TextArea { value, .. } => {
+        if value.is_empty() {
+          return true;
+        }
+        let rect = inset_rect(content_rect, 2.0);
+        let metrics = self.resolve_scaled_metrics(style);
+        let line_height = compute_line_height_with_metrics_viewport(
+          style,
+          metrics.as_ref(),
+          Some(Size::new(self.css_width, self.css_height)),
+        );
+        let mut y = rect.y();
+        for line in value.split('\n') {
+          if y > rect.y() + rect.height() {
+            break;
+          }
+          let line_rect = Rect::from_xywh(
+            rect.x(),
+            y,
+            rect.width(),
+            (rect.height() - (y - rect.y())).max(0.0),
+          );
+          let _ = self.paint_alt_text(line.trim_end(), style, line_rect);
+          y += line_height;
+        }
+        true
+      }
+      FormControlKind::Select { label, .. } => {
+        let rect = inset_rect(content_rect, 2.0);
+        let arrow_space = if matches!(control.appearance, Appearance::None) {
+          0.0
+        } else {
+          14.0
+        };
+        let text_rect = Rect::from_xywh(
+          rect.x(),
+          rect.y(),
+          (rect.width() - arrow_space).max(0.0),
+          rect.height(),
+        );
+        let _ = self.paint_alt_text(label, style, text_rect);
+
+        if arrow_space > 0.0 {
+          let mut arrow_style = style.clone();
+          arrow_style.color = muted_accent;
+          let arrow_rect = Rect::from_xywh(
+            rect.x() + rect.width() - arrow_space,
+            rect.y(),
+            arrow_space,
+            rect.height(),
+          );
+          let _ = self.paint_alt_text("▾", &arrow_style, arrow_rect);
+        }
+        true
+      }
+      FormControlKind::Button { label } => {
+        if label.trim().is_empty() {
+          return true;
+        }
+
+        let label_rect = if let Some(size) = self.measure_alt_text(label, style) {
+          let start_x = content_rect.x() + ((content_rect.width() - size.width).max(0.0) / 2.0);
+          Rect::from_xywh(
+            start_x,
+            content_rect.y(),
+            size.width.min(content_rect.width()),
+            content_rect.height(),
+          )
+        } else {
+          content_rect
+        };
+        let _ = self.paint_alt_text(label, style, label_rect);
+        true
+      }
+      FormControlKind::Checkbox { is_radio, checked } => {
+        if !*checked || matches!(control.appearance, Appearance::None) {
+          return true;
+        }
+        let mut mark_style = style.clone();
+        mark_style.color = muted_accent;
+        let rect = inset_rect(content_rect, 2.0);
+        let glyph = if *is_radio { "●" } else { "✓" };
+        let _ = self.paint_alt_text(glyph, &mark_style, rect);
+        true
+      }
+      FormControlKind::Range { value, min, max } => {
+        let track_height = 4.0_f32.min(content_rect.height());
+        let track_y = content_rect.y() + (content_rect.height() - track_height) / 2.0;
+        let radii = BorderRadii::uniform(track_height / 2.0);
+        let track_color = style
+          .background_color
+          .with_alpha((style.background_color.a * 0.8).max(0.1));
+        let _ = fill_rounded_rect(
+          &mut self.pixmap,
+          content_rect.x(),
+          track_y,
+          content_rect.width(),
+          track_height,
+          &radii,
+          track_color,
+        );
+
+        let min_val = min.unwrap_or(0.0);
+        let max_val = max.unwrap_or(100.0);
+        let span = (max_val - min_val).abs().max(0.0001);
+        let clamped = ((*value - min_val) / span).clamp(0.0, 1.0);
+        let knob_radius = (content_rect.height().min(16.0)) / 2.0;
+        let knob_center_x =
+          content_rect.x() + knob_radius + clamped * (content_rect.width() - 2.0 * knob_radius);
+        let knob_center_y = content_rect.y() + content_rect.height() / 2.0;
+        if let Some(path) = PathBuilder::from_circle(knob_center_x, knob_center_y, knob_radius) {
+          let mut paint = Paint::default();
+          paint.set_color(
+            tiny_skia::Color::from_rgba(
+              muted_accent.r as f32 / 255.0,
+              muted_accent.g as f32 / 255.0,
+              muted_accent.b as f32 / 255.0,
+              muted_accent.a,
+            )
+            .unwrap_or(tiny_skia::Color::BLACK),
+          );
+          paint.anti_alias = true;
+          self.pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            Transform::identity(),
+            None,
+          );
+        }
+        true
+      }
+      FormControlKind::Unknown { label } => {
+        if let Some(text) = label {
+          let rect = inset_rect(content_rect, 2.0);
+          let _ = self.paint_alt_text(text, style, rect);
+        }
+        true
+      }
+    }
   }
 
   fn render_iframe_srcdoc(

@@ -19,6 +19,7 @@ use crate::style::counters::CounterManager;
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
+use crate::style::types::Appearance;
 use crate::style::types::ListStyleType;
 use crate::style::types::TextTransform;
 use crate::style::values::Length;
@@ -28,6 +29,8 @@ use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::box_tree::BoxType;
+use crate::tree::box_tree::FormControl;
+use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
@@ -1292,6 +1295,18 @@ fn generate_boxes_for_styled(
     return Vec::new();
   }
 
+  // Form controls render as replaced elements with intrinsic sizing and native painting.
+  if let Some(form_control) = create_form_control_replaced(styled) {
+    counters.leave_scope();
+    let box_node = BoxNode::new_replaced(
+      Arc::new(styled.styles.clone()),
+      ReplacedType::FormControl(form_control),
+      None,
+      None,
+    );
+    return vec![attach_debug_info(box_node, styled)];
+  }
+
   // Replaced elements short-circuit to a single replaced box unless they're display: contents.
   if let Some(tag) = styled.node.tag_name() {
     // Non-rendered elements: <source>, <track> never create boxes.
@@ -1591,9 +1606,11 @@ fn create_pseudo_element_box(
   };
 
   // Add debug info to mark this as a pseudo-element
-  pseudo_box.debug_info = Some(DebugInfo::new(Some(pseudo_name.to_string()), None, vec![
-    "pseudo-element".to_string(),
-  ]));
+  pseudo_box.debug_info = Some(DebugInfo::new(
+    Some(pseudo_name.to_string()),
+    None,
+    vec!["pseudo-element".to_string()],
+  ));
   pseudo_box.styled_node_id = Some(styled.node_id);
 
   Some(pseudo_box)
@@ -1877,6 +1894,229 @@ fn list_item_count(styled: &StyledNode) -> usize {
   count
 }
 
+fn collect_text_content(node: &DomNode) -> String {
+  let mut text = String::new();
+  node.walk_tree(&mut |n| {
+    if let DomNodeType::Text { content } = &n.node_type {
+      text.push_str(content);
+    }
+  });
+  text
+}
+
+fn option_label_from_node(node: &DomNode) -> Option<String> {
+  let label_attr = node
+    .get_attribute("label")
+    .or_else(|| node.get_attribute("value"));
+  if let Some(label) = label_attr {
+    if !label.is_empty() {
+      return Some(label);
+    }
+  }
+
+  let text = collect_text_content(node).trim().to_string();
+  if text.is_empty() {
+    None
+  } else {
+    Some(text)
+  }
+}
+
+fn find_selected_option_label(node: &DomNode, optgroup_disabled: bool) -> Option<String> {
+  let Some(tag) = node.tag_name() else {
+    return None;
+  };
+
+  let lower = tag.to_ascii_lowercase();
+  let is_option = lower == "option";
+  let is_optgroup = lower == "optgroup";
+  let this_disabled = optgroup_disabled
+    || (is_option && node.get_attribute("disabled").is_some())
+    || (is_optgroup && node.get_attribute("disabled").is_some());
+
+  if is_option && !this_disabled && node.get_attribute("selected").is_some() {
+    return option_label_from_node(node);
+  }
+
+  let next_optgroup_disabled =
+    optgroup_disabled || (is_optgroup && node.get_attribute("disabled").is_some());
+  for child in &node.children {
+    if let Some(val) = find_selected_option_label(child, next_optgroup_disabled) {
+      return Some(val);
+    }
+  }
+
+  None
+}
+
+fn first_enabled_option_label(node: &DomNode, optgroup_disabled: bool) -> Option<String> {
+  let Some(tag) = node.tag_name() else {
+    return None;
+  };
+
+  let lower = tag.to_ascii_lowercase();
+  let is_option = lower == "option";
+  let is_optgroup = lower == "optgroup";
+  let this_disabled = optgroup_disabled
+    || (is_option && node.get_attribute("disabled").is_some())
+    || (is_optgroup && node.get_attribute("disabled").is_some());
+
+  if is_option && !this_disabled {
+    return option_label_from_node(node);
+  }
+
+  let next_optgroup_disabled =
+    optgroup_disabled || (is_optgroup && node.get_attribute("disabled").is_some());
+  for child in &node.children {
+    if let Some(val) = first_enabled_option_label(child, next_optgroup_disabled) {
+      return Some(val);
+    }
+  }
+
+  None
+}
+
+fn select_label(node: &DomNode) -> Option<String> {
+  let explicit = find_selected_option_label(node, false);
+  if explicit.is_some() {
+    return explicit;
+  }
+
+  if node.get_attribute("multiple").is_some() {
+    return None;
+  }
+
+  first_enabled_option_label(node, false)
+}
+
+fn input_label(node: &DomNode, input_type: &str) -> String {
+  let from_value = node.get_attribute("value").unwrap_or_default();
+  if !from_value.is_empty() {
+    return from_value;
+  }
+
+  match input_type {
+    "submit" => "Submit".to_string(),
+    "reset" => "Reset".to_string(),
+    "button" => "Button".to_string(),
+    other => other.to_ascii_uppercase(),
+  }
+}
+
+fn button_label(node: &StyledNode) -> String {
+  let text = collect_text_content(&node.node).trim().to_string();
+  if !text.is_empty() {
+    return text;
+  }
+
+  node
+    .node
+    .get_attribute("value")
+    .filter(|v| !v.is_empty())
+    .unwrap_or_else(|| "Button".to_string())
+}
+
+fn parse_f32_attr(node: &DomNode, name: &str) -> Option<f32> {
+  node
+    .get_attribute(name)
+    .and_then(|v| v.trim().parse::<f32>().ok())
+}
+
+fn create_form_control_replaced(styled: &StyledNode) -> Option<FormControl> {
+  let tag = styled.node.tag_name()?.to_ascii_lowercase();
+  let appearance = styled.styles.appearance.clone();
+
+  if matches!(appearance, Appearance::None) {
+    return None;
+  }
+
+  let disabled = styled.node.get_attribute("disabled").is_some();
+
+  match tag.as_str() {
+    "input" => {
+      let input_type = styled
+        .node
+        .get_attribute("type")
+        .unwrap_or_else(|| "text".to_string())
+        .to_ascii_lowercase();
+
+      if input_type == "hidden" {
+        return None;
+      }
+
+      let control = match input_type.as_str() {
+        "checkbox" => FormControlKind::Checkbox {
+          is_radio: false,
+          checked: styled.node.get_attribute("checked").is_some(),
+        },
+        "radio" => FormControlKind::Checkbox {
+          is_radio: true,
+          checked: styled.node.get_attribute("checked").is_some(),
+        },
+        "button" | "submit" | "reset" => FormControlKind::Button {
+          label: input_label(&styled.node, &input_type),
+        },
+        "range" => FormControlKind::Range {
+          value: parse_f32_attr(&styled.node, "value").unwrap_or(50.0),
+          min: parse_f32_attr(&styled.node, "min"),
+          max: parse_f32_attr(&styled.node, "max"),
+        },
+        _ => FormControlKind::Text {
+          value: styled.node.get_attribute("value").unwrap_or_default(),
+          placeholder: styled
+            .node
+            .get_attribute("placeholder")
+            .filter(|p| !p.is_empty()),
+          size_attr: styled
+            .node
+            .get_attribute("size")
+            .and_then(|s| s.parse::<u32>().ok()),
+        },
+      };
+
+      Some(FormControl {
+        control,
+        appearance,
+        disabled,
+      })
+    }
+    "textarea" => Some(FormControl {
+      control: FormControlKind::TextArea {
+        value: collect_text_content(&styled.node),
+        rows: styled
+          .node
+          .get_attribute("rows")
+          .and_then(|r| r.parse::<u32>().ok()),
+        cols: styled
+          .node
+          .get_attribute("cols")
+          .and_then(|c| c.parse::<u32>().ok()),
+      },
+      appearance,
+      disabled,
+    }),
+    "select" => {
+      let label = select_label(&styled.node).unwrap_or_else(|| "Select".to_string());
+      Some(FormControl {
+        control: FormControlKind::Select {
+          label,
+          multiple: styled.node.get_attribute("multiple").is_some(),
+        },
+        appearance,
+        disabled,
+      })
+    }
+    "button" => Some(FormControl {
+      control: FormControlKind::Button {
+        label: button_label(styled),
+      },
+      appearance,
+      disabled,
+    }),
+    _ => None,
+  }
+}
+
 /// Checks if an element is a replaced element
 ///
 /// Replaced elements are those whose content is replaced by an external resource,
@@ -2003,6 +2243,8 @@ mod tests {
   use crate::style::counters::CounterSet;
   use crate::style::types::CaseTransform;
   use crate::style::types::ListStylePosition;
+  use crate::tree::box_tree::FormControl;
+  use crate::tree::box_tree::FormControlKind;
   use crate::tree::box_tree::MarkerContent;
   use crate::tree::box_tree::ReplacedType;
 
@@ -2118,9 +2360,11 @@ mod tests {
     let child2 = DOMNode::new_element("p", style_with_display(Display::Block), vec![]);
     let child3 = DOMNode::new_element("p", style_with_display(Display::Block), vec![]);
 
-    let dom = DOMNode::new_element("div", style_with_display(Display::Block), vec![
-      child1, child2, child3,
-    ]);
+    let dom = DOMNode::new_element(
+      "div",
+      style_with_display(Display::Block),
+      vec![child1, child2, child3],
+    );
 
     let box_tree = generator.generate(&dom).unwrap();
     assert_eq!(box_tree.count_boxes(), 4); // div + 3 p's
@@ -2135,9 +2379,11 @@ mod tests {
     let child2 = DOMNode::new_element("p", style_with_display(Display::None), vec![]);
     let child3 = DOMNode::new_element("p", style_with_display(Display::Block), vec![]);
 
-    let dom = DOMNode::new_element("div", style_with_display(Display::Block), vec![
-      child1, child2, child3,
-    ]);
+    let dom = DOMNode::new_element(
+      "div",
+      style_with_display(Display::Block),
+      vec![child1, child2, child3],
+    );
 
     let box_tree = generator.generate(&dom).unwrap();
     // child2 is skipped (display: none)
@@ -2153,10 +2399,11 @@ mod tests {
     let grandchild1 = DOMNode::new_element("span", style_with_display(Display::Inline), vec![]);
     let grandchild2 = DOMNode::new_element("span", style_with_display(Display::Inline), vec![]);
 
-    let child = DOMNode::new_element("p", style_with_display(Display::Contents), vec![
-      grandchild1,
-      grandchild2,
-    ]);
+    let child = DOMNode::new_element(
+      "p",
+      style_with_display(Display::Contents),
+      vec![grandchild1, grandchild2],
+    );
 
     let root = DOMNode::new_element("div", style_with_display(Display::Block), vec![child]);
 
@@ -2281,9 +2528,11 @@ mod tests {
     let p3 = DOMNode::new_element("p", style_with_display(Display::Block), vec![text3]);
 
     let inner_div = DOMNode::new_element("div", style_with_display(Display::Block), vec![p3]);
-    let outer_div = DOMNode::new_element("div", style_with_display(Display::Block), vec![
-      p1, p2, inner_div,
-    ]);
+    let outer_div = DOMNode::new_element(
+      "div",
+      style_with_display(Display::Block),
+      vec![p1, p2, inner_div],
+    );
 
     let box_tree = generator.generate(&outer_div).unwrap();
 
@@ -2323,9 +2572,11 @@ mod tests {
     let child3 =
       DOMNode::new_element("p", style_with_display(Display::Block), vec![]).with_id("third");
 
-    let dom = DOMNode::new_element("div", style_with_display(Display::Block), vec![
-      child1, child2, child3,
-    ]);
+    let dom = DOMNode::new_element(
+      "div",
+      style_with_display(Display::Block),
+      vec![child1, child2, child3],
+    );
 
     let box_tree = generator.generate(&dom).unwrap();
 
@@ -2351,9 +2602,11 @@ mod tests {
     let em = DOMNode::new_element("em", style_with_display(Display::Inline), vec![]);
     let text2 = DOMNode::new_text("After", default_style());
 
-    let p = DOMNode::new_element("p", style_with_display(Display::Block), vec![
-      text1, em, text2,
-    ]);
+    let p = DOMNode::new_element(
+      "p",
+      style_with_display(Display::Block),
+      vec![text1, em, text2],
+    );
 
     let box_tree = generator.generate(&p).unwrap();
 
@@ -2647,9 +2900,11 @@ mod tests {
     );
     let img2 = DOMNode::new_replaced("img", style.clone(), "img2.png", None);
 
-    let container = DOMNode::new_element("div", style_with_display(Display::Block), vec![
-      img1, video, img2,
-    ]);
+    let container = DOMNode::new_element(
+      "div",
+      style_with_display(Display::Block),
+      vec![img1, video, img2],
+    );
 
     let box_tree = generator.generate(&container).unwrap();
 
@@ -2676,6 +2931,83 @@ mod tests {
   }
 
   #[test]
+  fn form_controls_generate_replaced_boxes() {
+    let html = "<html><body>
+      <input id=\"text\" value=\"hello\">
+      <input type=\"checkbox\" checked>
+      <input type=\"radio\" checked>
+      <select><option selected>One</option><option>Two</option></select>
+      <button>Go</button>
+      <textarea>note</textarea>
+    </body></html>";
+    let dom = crate::dom::parse_html(html).expect("parse");
+    let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+    let box_tree = generate_box_tree(&styled);
+
+    fn collect_controls(node: &BoxNode, out: &mut Vec<ReplacedType>) {
+      if let BoxType::Replaced(repl) = &node.box_type {
+        if matches!(repl.replaced_type, ReplacedType::FormControl(_)) {
+          out.push(repl.replaced_type.clone());
+        }
+      }
+      for child in &node.children {
+        collect_controls(child, out);
+      }
+    }
+
+    let mut controls = Vec::new();
+    collect_controls(&box_tree.root, &mut controls);
+    assert_eq!(controls.len(), 6, "all form controls should be replaced");
+
+    assert!(controls.iter().any(|c| matches!(
+      c,
+      ReplacedType::FormControl(FormControl {
+        control: FormControlKind::Checkbox {
+          is_radio: false,
+          checked: true
+        },
+        ..
+      })
+    )));
+
+    assert!(controls.iter().any(|c| matches!(
+      c,
+      ReplacedType::FormControl(FormControl {
+        control: FormControlKind::Select { label, .. },
+        ..
+      }) if label == "One"
+    )));
+  }
+
+  #[test]
+  fn appearance_none_avoids_form_control_replacement() {
+    let html =
+      "<html><body><input id=\"plain\" style=\"appearance: none; border: 0\"></body></html>";
+    let dom = crate::dom::parse_html(html).expect("parse");
+    let styled = crate::style::cascade::apply_styles(&dom, &crate::css::types::StyleSheet::new());
+    let box_tree = generate_box_tree(&styled);
+
+    fn count_replaced(node: &BoxNode) -> usize {
+      let mut count = 0;
+      if let BoxType::Replaced(repl) = &node.box_type {
+        if matches!(repl.replaced_type, ReplacedType::FormControl(_)) {
+          count += 1;
+        }
+      }
+      for child in &node.children {
+        count += count_replaced(child);
+      }
+      count
+    }
+
+    assert_eq!(
+      count_replaced(&box_tree.root),
+      0,
+      "appearance:none should disable native control replacement"
+    );
+  }
+
+  #[test]
   fn test_replaced_element_inline_context() {
     let generator = BoxGenerator::new();
     let style = default_style();
@@ -2690,9 +3022,11 @@ mod tests {
     );
     let text2 = DOMNode::new_text(" World", style.clone());
 
-    let span = DOMNode::new_element("span", style_with_display(Display::Inline), vec![
-      text, img, text2,
-    ]);
+    let span = DOMNode::new_element(
+      "span",
+      style_with_display(Display::Inline),
+      vec![text, img, text2],
+    );
     let p = DOMNode::new_element("p", style_with_display(Display::Block), vec![span]);
 
     let box_tree = generator.generate(&p).unwrap();
@@ -2829,9 +3163,11 @@ mod tests {
     let text1 = BoxNode::new_text(style.clone(), "Hello".to_string());
     let text2 = BoxNode::new_text(style.clone(), "World".to_string());
     let inline = BoxNode::new_inline(style.clone(), vec![text1]);
-    let block = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![
-      inline, text2,
-    ]);
+    let block = BoxNode::new_block(
+      style.clone(),
+      FormattingContextType::Block,
+      vec![inline, text2],
+    );
 
     // Find all text boxes
     let text_boxes = BoxGenerator::find_boxes_by_predicate(&block, |b| b.is_text());
@@ -2850,9 +3186,11 @@ mod tests {
     let inline = BoxNode::new_inline(style.clone(), vec![]);
     let block1 = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
     let block2 = BoxNode::new_block(style.clone(), FormattingContextType::Flex, vec![]);
-    let root = BoxNode::new_block(style, FormattingContextType::Block, vec![
-      text, inline, block1, block2,
-    ]);
+    let root = BoxNode::new_block(
+      style,
+      FormattingContextType::Block,
+      vec![text, inline, block1, block2],
+    );
 
     let blocks = BoxGenerator::find_block_boxes(&root);
     assert_eq!(blocks.len(), 3); // root + block1 + block2
@@ -3152,13 +3490,17 @@ mod tests {
     );
     let text2 = DOMNode::new_text(" after image ", style.clone());
     let video = DOMNode::new_replaced("video", style.clone(), "test.mp4", None);
-    let nested_div = DOMNode::new_element("div", style_with_display(Display::Block), vec![
-      DOMNode::new_text("Nested", style.clone()),
-    ]);
+    let nested_div = DOMNode::new_element(
+      "div",
+      style_with_display(Display::Block),
+      vec![DOMNode::new_text("Nested", style.clone())],
+    );
 
-    let root = DOMNode::new_element("div", style_with_display(Display::Block), vec![
-      text1, img, text2, video, nested_div,
-    ]);
+    let root = DOMNode::new_element(
+      "div",
+      style_with_display(Display::Block),
+      vec![text1, img, text2, video, nested_div],
+    );
 
     let box_tree = generator.generate(&root).unwrap();
 
@@ -4169,14 +4511,16 @@ mod tests {
     li_style.list_style_position = ListStylePosition::Inside;
     let li_style = Arc::new(li_style);
 
-    let li1 = DOMNode::new_element("li", li_style.clone(), vec![DOMNode::new_text(
-      "First",
+    let li1 = DOMNode::new_element(
+      "li",
       li_style.clone(),
-    )]);
-    let li2 = DOMNode::new_element("li", li_style.clone(), vec![DOMNode::new_text(
-      "Second",
+      vec![DOMNode::new_text("First", li_style.clone())],
+    );
+    let li2 = DOMNode::new_element(
+      "li",
       li_style.clone(),
-    )]);
+      vec![DOMNode::new_text("Second", li_style.clone())],
+    );
     let ul = DOMNode::new_element("ul", style_with_display(Display::Block), vec![li1, li2]);
 
     let tree = generator.generate(&ul).unwrap();
@@ -4210,12 +4554,15 @@ mod tests {
     armenian_style.list_style_type = ListStyleType::Armenian;
     let armenian_style = Arc::new(armenian_style);
 
-    let armenian_list = DOMNode::new_element("ol", style_with_display(Display::Block), vec![
-      DOMNode::new_element("li", armenian_style.clone(), vec![DOMNode::new_text(
-        "item",
+    let armenian_list = DOMNode::new_element(
+      "ol",
+      style_with_display(Display::Block),
+      vec![DOMNode::new_element(
+        "li",
         armenian_style.clone(),
-      )]),
-    ]);
+        vec![DOMNode::new_text("item", armenian_style.clone())],
+      )],
+    );
     let armenian_tree = generator.generate(&armenian_list).unwrap();
     if let BoxType::Marker(marker_box) = &armenian_tree.root.children[0].children[0].box_type {
       if let MarkerContent::Text(text) = &marker_box.content {
@@ -4232,12 +4579,15 @@ mod tests {
     georgian_style.list_style_type = ListStyleType::Georgian;
     let georgian_style = Arc::new(georgian_style);
 
-    let georgian_list = DOMNode::new_element("ol", style_with_display(Display::Block), vec![
-      DOMNode::new_element("li", georgian_style.clone(), vec![DOMNode::new_text(
-        "item",
+    let georgian_list = DOMNode::new_element(
+      "ol",
+      style_with_display(Display::Block),
+      vec![DOMNode::new_element(
+        "li",
         georgian_style.clone(),
-      )]),
-    ]);
+        vec![DOMNode::new_text("item", georgian_style.clone())],
+      )],
+    );
     let georgian_tree = generator.generate(&georgian_list).unwrap();
     if let BoxType::Marker(marker_box) = &georgian_tree.root.children[0].children[0].box_type {
       if let MarkerContent::Text(text) = &marker_box.content {
@@ -4264,14 +4614,19 @@ mod tests {
     closed_style.list_style_type = ListStyleType::DisclosureClosed;
     let closed_style = Arc::new(closed_style);
 
-    let open = DOMNode::new_element("li", open_style.clone(), vec![DOMNode::new_text(
-      "Open".to_string(),
+    let open = DOMNode::new_element(
+      "li",
       open_style.clone(),
-    )]);
-    let closed = DOMNode::new_element("li", closed_style.clone(), vec![DOMNode::new_text(
-      "Closed".to_string(),
+      vec![DOMNode::new_text("Open".to_string(), open_style.clone())],
+    );
+    let closed = DOMNode::new_element(
+      "li",
       closed_style.clone(),
-    )]);
+      vec![DOMNode::new_text(
+        "Closed".to_string(),
+        closed_style.clone(),
+      )],
+    );
     let ul = DOMNode::new_element("ul", style_with_display(Display::Block), vec![open, closed]);
 
     let tree = generator.generate(&ul).unwrap();
@@ -4308,18 +4663,20 @@ mod tests {
     li_style.list_style_type = ListStyleType::Decimal;
     let li_style = Arc::new(li_style);
 
-    let first = DOMNode::new_element("li", li_style.clone(), vec![DOMNode::new_text(
-      "first",
+    let first = DOMNode::new_element(
+      "li",
       li_style.clone(),
-    )]);
+      vec![DOMNode::new_text("first", li_style.clone())],
+    );
 
     let mut custom_increment = (*li_style).clone();
     custom_increment.counters.counter_increment = Some(CounterSet::single("list-item", 2));
     let custom_increment = Arc::new(custom_increment);
-    let second = DOMNode::new_element("li", custom_increment.clone(), vec![DOMNode::new_text(
-      "second",
+    let second = DOMNode::new_element(
+      "li",
       custom_increment.clone(),
-    )]);
+      vec![DOMNode::new_text("second", custom_increment.clone())],
+    );
 
     let list = DOMNode::new_element("ol", container_style, vec![first, second]);
     let tree = generator.generate(&list).unwrap();
@@ -4354,16 +4711,18 @@ mod tests {
     li_style.list_style_type = ListStyleType::Decimal;
     let li_style = Arc::new(li_style);
 
-    let inner_li = DOMNode::new_element("li", li_style.clone(), vec![DOMNode::new_text(
-      "inner",
+    let inner_li = DOMNode::new_element(
+      "li",
       li_style.clone(),
-    )]);
+      vec![DOMNode::new_text("inner", li_style.clone())],
+    );
     let inner_list = DOMNode::new_element("ul", style_with_display(Display::Block), vec![inner_li]);
 
-    let outer_li = DOMNode::new_element("li", li_style.clone(), vec![
-      DOMNode::new_text("outer", li_style.clone()),
-      inner_list,
-    ]);
+    let outer_li = DOMNode::new_element(
+      "li",
+      li_style.clone(),
+      vec![DOMNode::new_text("outer", li_style.clone()), inner_list],
+    );
     let outer = DOMNode::new_element("ul", style_with_display(Display::Block), vec![outer_li]);
 
     let tree = generator.generate(&outer).unwrap();
@@ -4407,17 +4766,19 @@ mod tests {
     let text_style = Arc::new(ComputedStyle::default());
 
     let mk_li = |text: &str| {
-      DOMNode::new_element("li", li_style.clone(), vec![DOMNode::new_text(
-        text.to_string(),
-        text_style.clone(),
-      )])
+      DOMNode::new_element(
+        "li",
+        li_style.clone(),
+        vec![DOMNode::new_text(text.to_string(), text_style.clone())],
+      )
     };
 
     // First list (ol) increments counter to 2.
-    let ol = DOMNode::new_element("ol", style_with_display(Display::Block), vec![
-      mk_li("one"),
-      mk_li("two"),
-    ]);
+    let ol = DOMNode::new_element(
+      "ol",
+      style_with_display(Display::Block),
+      vec![mk_li("one"), mk_li("two")],
+    );
 
     // Second list (menu) should reset counters back to 1 even though its items are decimal.
     let menu_li_style = {
@@ -4426,15 +4787,17 @@ mod tests {
       Arc::new(s)
     };
     let mk_menu_li = |text: &str| {
-      DOMNode::new_element("li", menu_li_style.clone(), vec![DOMNode::new_text(
-        text.to_string(),
-        text_style.clone(),
-      )])
+      DOMNode::new_element(
+        "li",
+        menu_li_style.clone(),
+        vec![DOMNode::new_text(text.to_string(), text_style.clone())],
+      )
     };
-    let menu = DOMNode::new_element("menu", style_with_display(Display::Block), vec![
-      mk_menu_li("first"),
-      mk_menu_li("second"),
-    ]);
+    let menu = DOMNode::new_element(
+      "menu",
+      style_with_display(Display::Block),
+      vec![mk_menu_li("first"), mk_menu_li("second")],
+    );
 
     let root = DOMNode::new_element("div", style_with_display(Display::Block), vec![ol, menu]);
     let tree = generator.generate(&root).unwrap();
@@ -4592,10 +4955,11 @@ mod tests {
     li_style.text_transform = TextTransform::with_case(CaseTransform::Uppercase);
     let li_style = Arc::new(li_style);
 
-    let li = DOMNode::new_element("li", li_style.clone(), vec![DOMNode::new_text(
-      "item",
+    let li = DOMNode::new_element(
+      "li",
       li_style.clone(),
-    )]);
+      vec![DOMNode::new_text("item", li_style.clone())],
+    );
     let ul = DOMNode::new_element("ul", style_with_display(Display::Block), vec![li]);
 
     let tree = generator.generate(&ul).unwrap();
@@ -4618,10 +4982,11 @@ mod tests {
     li_style.list_style_image = crate::style::types::ListStyleImage::Url("bullet.png".to_string());
     let li_style = Arc::new(li_style);
 
-    let li = DOMNode::new_element("li", li_style.clone(), vec![DOMNode::new_text(
-      "item",
+    let li = DOMNode::new_element(
+      "li",
       li_style.clone(),
-    )]);
+      vec![DOMNode::new_text("item", li_style.clone())],
+    );
     let ul = DOMNode::new_element("ul", style_with_display(Display::Block), vec![li]);
 
     let tree = generator.generate(&ul).unwrap();

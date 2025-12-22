@@ -291,24 +291,47 @@ code, kbd, samp, tt {
 /* Form elements */
 input, textarea, select, button {
     display: inline-block;
-    padding: 1px 2px;
-    border: 2px inset #ccc;
+    padding: 4px 6px;
+    border: 1px solid #767676;
+    background-color: white;
+    color: black;
     font-family: inherit;
     font-size: inherit;
+    line-height: 1.2;
+    border-radius: 4px;
 }
 
 input[type="text"], input[type="password"], input[type="email"],
-input[type="search"], input[type="tel"], input[type="url"] {
-    padding: 1px 2px;
+input[type="search"], input[type="tel"], input[type="url"],
+input:not([type]) {
+    padding: 4px 6px;
 }
 
 input[type="submit"], input[type="button"], button {
-    padding: 2px 6px;
-    border: 2px outset #ccc;
+    padding: 4px 10px;
+    background-color: rgb(245, 245, 245);
+    border: 1px solid #767676;
 }
 
 textarea {
     white-space: pre-wrap;
+    min-height: 3em;
+}
+
+select {
+    padding-right: 20px;
+}
+
+input[type="checkbox"], input[type="radio"] {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border-radius: 3px;
+    vertical-align: middle;
+}
+
+input[type="radio"] {
+    border-radius: 50%;
 }
 
 input[type="hidden"] {
