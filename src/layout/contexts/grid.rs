@@ -31,6 +31,8 @@ use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
+use crate::layout::formatting_context::layout_cache_lookup;
+use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
@@ -1274,6 +1276,14 @@ impl FormattingContext for GridFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Grid);
+    if let Some(cached) = layout_cache_lookup(
+      box_node,
+      FormattingContextType::Grid,
+      constraints,
+      self.viewport_size,
+    ) {
+      return Ok(cached);
+    }
     // Create fresh Taffy tree for this layout
     let mut taffy = TaffyTree::new();
 
@@ -1392,13 +1402,15 @@ impl FormattingContext for GridFormattingContext {
       let establishes_abs_cb = box_node.style.position.is_positioned()
         || !box_node.style.transform.is_empty()
         || box_node.style.perspective.is_some();
-      let establishes_fixed_cb = !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
-      let padding_cb = crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
-        padding_rect,
-        self.viewport_size,
-        Some(padding_rect.size.width),
-        block_base,
-      );
+      let establishes_fixed_cb =
+        !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
+      let padding_cb =
+        crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
+          padding_rect,
+          self.viewport_size,
+          Some(padding_rect.size.width),
+          block_base,
+        );
       let cb_for_absolute = if establishes_abs_cb {
         padding_cb
       } else {
@@ -1485,6 +1497,14 @@ impl FormattingContext for GridFormattingContext {
         fragment.children.push(child_fragment);
       }
     }
+
+    layout_cache_store(
+      box_node,
+      FormattingContextType::Grid,
+      constraints,
+      &fragment,
+      self.viewport_size,
+    );
 
     Ok(fragment)
   }
@@ -1625,9 +1645,11 @@ mod tests {
     let child2 = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
     let child3 = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
 
-    let grid = BoxNode::new_block(make_grid_style(), FormattingContextType::Grid, vec![
-      child1, child2, child3,
-    ]);
+    let grid = BoxNode::new_block(
+      make_grid_style(),
+      FormattingContextType::Grid,
+      vec![child1, child2, child3],
+    );
 
     let constraints = LayoutConstraints::definite(800.0, 600.0);
     let fragment = fc.layout(&grid, &constraints).unwrap();
@@ -1661,10 +1683,13 @@ mod tests {
   fn test_grid_explicit_rows() {
     let fc = GridFormattingContext::new();
 
-    let style = make_grid_style_with_tracks(vec![], vec![
-      GridTrack::Length(Length::px(50.0)),
-      GridTrack::Length(Length::px(100.0)),
-    ]);
+    let style = make_grid_style_with_tracks(
+      vec![],
+      vec![
+        GridTrack::Length(Length::px(50.0)),
+        GridTrack::Length(Length::px(100.0)),
+      ],
+    );
 
     let child1 = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
     let child2 = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
@@ -1691,9 +1716,11 @@ mod tests {
     abs_style.height = Some(Length::px(9.0));
 
     let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
-    let grid = BoxNode::new_block(Arc::new(grid_style), FormattingContextType::Grid, vec![
-      abs_child,
-    ]);
+    let grid = BoxNode::new_block(
+      Arc::new(grid_style),
+      FormattingContextType::Grid,
+      vec![abs_child],
+    );
 
     let viewport = crate::geometry::Size::new(300.0, 300.0);
     let cb_rect = crate::geometry::Rect::from_xywh(20.0, 30.0, 150.0, 150.0);
@@ -1764,11 +1791,10 @@ mod tests {
   fn test_grid_item_placement() {
     let fc = GridFormattingContext::new();
 
-    let grid_style =
-      make_grid_style_with_tracks(vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)], vec![
-        GridTrack::Fr(1.0),
-        GridTrack::Fr(1.0),
-      ]);
+    let grid_style = make_grid_style_with_tracks(
+      vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
+      vec![GridTrack::Fr(1.0), GridTrack::Fr(1.0)],
+    );
 
     let mut item_style = ComputedStyle::default();
     item_style.grid_column_start = 2;
@@ -1982,12 +2008,16 @@ mod tests {
     let fc = GridFormattingContext::new();
 
     let inner_child = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
-    let inner_grid = BoxNode::new_block(make_grid_style(), FormattingContextType::Grid, vec![
-      inner_child,
-    ]);
-    let outer_grid = BoxNode::new_block(make_grid_style(), FormattingContextType::Grid, vec![
-      inner_grid,
-    ]);
+    let inner_grid = BoxNode::new_block(
+      make_grid_style(),
+      FormattingContextType::Grid,
+      vec![inner_child],
+    );
+    let outer_grid = BoxNode::new_block(
+      make_grid_style(),
+      FormattingContextType::Grid,
+      vec![inner_grid],
+    );
 
     let constraints = LayoutConstraints::definite(800.0, 600.0);
     let fragment = fc.layout(&outer_grid, &constraints).unwrap();
@@ -2112,10 +2142,11 @@ mod tests {
       vec![],
     );
 
-    let grid = BoxNode::new_block(style, FormattingContextType::Grid, vec![
-      inline_item,
-      block_item,
-    ]);
+    let grid = BoxNode::new_block(
+      style,
+      FormattingContextType::Grid,
+      vec![inline_item, block_item],
+    );
 
     let constraints = LayoutConstraints::definite(500.0, 500.0);
     let fragment = fc.layout(&grid, &constraints).unwrap();
@@ -2230,9 +2261,11 @@ mod tests {
     let child2 = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
     let child3 = BoxNode::new_block(make_item_style(), FormattingContextType::Block, vec![]);
 
-    let grid = BoxNode::new_block(style, FormattingContextType::Grid, vec![
-      child1, child2, child3,
-    ]);
+    let grid = BoxNode::new_block(
+      style,
+      FormattingContextType::Grid,
+      vec![child1, child2, child3],
+    );
 
     let constraints = LayoutConstraints::definite(400.0, 200.0);
     let fragment = fc.layout(&grid, &constraints).unwrap();

@@ -41,6 +41,8 @@ use crate::layout::contexts::table::column_distribution::distribute_spanning_per
 use crate::layout::contexts::table::column_distribution::ColumnConstraints;
 use crate::layout::contexts::table::column_distribution::ColumnDistributor;
 use crate::layout::contexts::table::column_distribution::DistributionMode;
+use crate::layout::formatting_context::layout_cache_lookup;
+use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
@@ -49,6 +51,7 @@ use crate::layout::profile::LayoutKind;
 use crate::style::color::Rgba;
 use crate::style::computed::Visibility;
 use crate::style::display::Display;
+use crate::style::display::FormattingContextType;
 use crate::style::types::BorderCollapse;
 use crate::style::types::BorderStyle;
 use crate::style::types::CaptionSide;
@@ -3712,6 +3715,14 @@ impl FormattingContext for TableFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Table);
+    if let Some(cached) = layout_cache_lookup(
+      box_node,
+      FormattingContextType::Table,
+      constraints,
+      self.viewport_size,
+    ) {
+      return Ok(cached);
+    }
     static DUMP_TABLE: OnceLock<bool> = OnceLock::new();
     let dump = *DUMP_TABLE.get_or_init(|| {
       std::env::var("FASTR_DUMP_TABLE")
@@ -4038,6 +4049,13 @@ impl FormattingContext for TableFormattingContext {
         };
         place_out_of_flow(&mut fragment, cb)?;
       }
+      layout_cache_store(
+        box_node,
+        FormattingContextType::Table,
+        constraints,
+        &fragment,
+        self.viewport_size,
+      );
       return Ok(fragment);
     }
 
@@ -5288,6 +5306,13 @@ impl FormattingContext for TableFormattingContext {
         Arc::new(table_style),
       );
       fragment.baseline = baseline_offset;
+      layout_cache_store(
+        box_node,
+        FormattingContextType::Table,
+        constraints,
+        &fragment,
+        self.viewport_size,
+      );
       return Ok(fragment);
     }
 
@@ -5414,6 +5439,14 @@ impl FormattingContext for TableFormattingContext {
 
       place_out_of_flow(&mut wrapper_fragment, cb)?;
     }
+
+    layout_cache_store(
+      box_node,
+      FormattingContextType::Table,
+      constraints,
+      &wrapper_fragment,
+      self.viewport_size,
+    );
 
     Ok(wrapper_fragment)
   }

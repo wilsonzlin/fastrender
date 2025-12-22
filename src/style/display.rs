@@ -491,7 +491,7 @@ pub enum InnerDisplay {
 ///
 /// Reference: CSS Display Module Level 3
 /// <https://www.w3.org/TR/css-display-3/#formatting-context>
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FormattingContextType {
   /// Block formatting context (BFC)
   ///

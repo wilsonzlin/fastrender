@@ -19,6 +19,8 @@ use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::formatting_context::intrinsic_cache_use_epoch;
+use crate::layout::formatting_context::layout_cache_stats;
+use crate::layout::formatting_context::layout_cache_use_epoch;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation;
@@ -150,8 +152,9 @@ impl Default for LayoutConfig {
 /// Statistics about layout operations
 ///
 /// Tracks metrics about layout performance. Cache hit/miss counts reflect
-/// intrinsic sizing cache usage, and `total_layouts` reports how many layout
-/// passes the engine has orchestrated.
+/// intrinsic sizing cache usage, while `layout_cache_*` track subtree layout
+/// cache reuse. `total_layouts` reports how many layout passes the engine has
+/// orchestrated.
 ///
 /// # Examples
 ///
@@ -169,6 +172,15 @@ pub struct LayoutStats {
 
   /// Number of cache misses (intrinsic sizing cache)
   pub cache_misses: usize,
+
+  /// Number of layout cache hits (subtree layout cache)
+  pub layout_cache_hits: usize,
+
+  /// Number of layout cache misses (subtree layout cache)
+  pub layout_cache_misses: usize,
+
+  /// Number of cached entries evicted during this run.
+  pub layout_cache_evictions: usize,
 
   /// Total number of layout operations performed
   pub total_layouts: usize,
@@ -347,7 +359,7 @@ impl LayoutEngine {
   /// let fragment_tree = engine.layout_tree(&box_tree).unwrap();
   /// ```
   pub fn layout_tree(&self, box_tree: &BoxTree) -> Result<FragmentTree, LayoutError> {
-    self.layout_tree_internal(box_tree, true)
+    self.layout_tree_internal(box_tree, !self.config.enable_incremental)
   }
 
   /// Performs layout on a box tree, optionally reusing shared caches.
@@ -364,10 +376,14 @@ impl LayoutEngine {
     box_tree: &BoxTree,
     reset_caches: bool,
   ) -> Result<FragmentTree, LayoutError> {
-    let epoch = self.cache.start_run(reset_caches);
-    intrinsic_cache_use_epoch(epoch, reset_caches);
+    let use_cache = self.config.enable_cache;
+    let reset_for_run = reset_caches || !use_cache;
 
-    if reset_caches {
+    let epoch = self.cache.start_run(reset_for_run);
+    layout_cache_use_epoch(epoch, use_cache, reset_for_run, self.config.fragmentation);
+    intrinsic_cache_use_epoch(epoch, reset_for_run);
+
+    if reset_for_run {
       // Reset any per-run caches so a fresh layout starts from a clean slate.
       self.factory.reset_caches();
     }
@@ -570,9 +586,14 @@ impl LayoutEngine {
   pub fn stats(&self) -> LayoutStats {
     let (lookups, hits, _, _, _, _) = crate::layout::formatting_context::intrinsic_cache_stats();
     let cache_misses = lookups.saturating_sub(hits);
+    let (layout_lookups, layout_hits, _, evictions) = layout_cache_stats();
+    let layout_cache_misses = layout_lookups.saturating_sub(layout_hits);
     LayoutStats {
       cache_hits: hits,
       cache_misses,
+      layout_cache_hits: layout_hits,
+      layout_cache_misses,
+      layout_cache_evictions: evictions,
       total_layouts: self.cache.run_count(),
     }
   }
@@ -592,12 +613,19 @@ impl Default for LayoutEngine {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::style::display::Display;
   use crate::style::display::FormattingContextType;
   use crate::style::ComputedStyle;
   use std::sync::Arc;
 
   fn default_style() -> Arc<ComputedStyle> {
     Arc::new(ComputedStyle::default())
+  }
+
+  fn flow_root_style() -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
+    style.display = Display::FlowRoot;
+    Arc::new(style)
   }
 
   // === LayoutConfig Tests ===
@@ -803,12 +831,16 @@ mod tests {
   #[test]
   fn test_engine_stats() {
     crate::layout::formatting_context::intrinsic_cache_reset_counters();
+    crate::layout::formatting_context::layout_cache_reset_counters();
     let engine = LayoutEngine::with_defaults();
     let stats = engine.stats();
 
-    // Currently all zeros (cache not implemented)
+    // Currently all zeros (no layout executed)
     assert_eq!(stats.cache_hits, 0);
     assert_eq!(stats.cache_misses, 0);
+    assert_eq!(stats.layout_cache_hits, 0);
+    assert_eq!(stats.layout_cache_misses, 0);
+    assert_eq!(stats.layout_cache_evictions, 0);
     assert_eq!(stats.total_layouts, 0);
   }
 
@@ -817,10 +849,59 @@ mod tests {
     let stats = LayoutStats::default();
     assert_eq!(stats.cache_hits, 0);
     assert_eq!(stats.cache_misses, 0);
+    assert_eq!(stats.layout_cache_hits, 0);
+    assert_eq!(stats.layout_cache_misses, 0);
+    assert_eq!(stats.layout_cache_evictions, 0);
     assert_eq!(stats.total_layouts, 0);
   }
 
   // === Engine Reuse Tests ===
+
+  #[test]
+  fn test_layout_cache_hits_repeated_layouts() {
+    crate::layout::formatting_context::intrinsic_cache_reset_counters();
+    crate::layout::formatting_context::layout_cache_reset_counters();
+
+    let mut config = LayoutConfig::for_viewport(Size::new(800.0, 600.0));
+    config.enable_cache = true;
+    config.enable_incremental = true;
+    let engine = LayoutEngine::new(config);
+
+    let root = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    let tree = BoxTree::new(root);
+
+    engine.layout_tree(&tree).unwrap();
+    let first = engine.stats();
+
+    engine.layout_tree(&tree).unwrap();
+    let second = engine.stats();
+
+    assert!(second.layout_cache_hits > first.layout_cache_hits);
+    assert!(second.layout_cache_hits > 0);
+    assert!(second.layout_cache_misses >= first.layout_cache_misses);
+  }
+
+  #[test]
+  fn test_layout_cache_preserves_output() {
+    let mut config_disabled = LayoutConfig::for_viewport(Size::new(640.0, 480.0));
+    config_disabled.enable_cache = false;
+    let engine_disabled = LayoutEngine::new(config_disabled);
+
+    let mut config_enabled = LayoutConfig::for_viewport(Size::new(640.0, 480.0));
+    config_enabled.enable_cache = true;
+    config_enabled.enable_incremental = true;
+    let engine_enabled = LayoutEngine::new(config_enabled);
+
+    let root = BoxNode::new_block(flow_root_style(), FormattingContextType::Block, vec![]);
+    let tree_disabled = BoxTree::new(root.clone());
+    let tree_enabled = BoxTree::new(root);
+
+    let frag_disabled = engine_disabled.layout_tree(&tree_disabled).unwrap();
+    let frag_enabled = engine_enabled.layout_tree(&tree_enabled).unwrap();
+
+    assert_eq!(frag_disabled.root.bounds, frag_enabled.root.bounds);
+    assert_eq!(frag_disabled.viewport_size(), frag_enabled.viewport_size());
+  }
 
   #[test]
   fn test_engine_reuse() {

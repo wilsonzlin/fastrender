@@ -31,11 +31,24 @@
 //! - CSS Flexbox: <https://www.w3.org/TR/css-flexbox-1/>
 //! - CSS Grid: <https://www.w3.org/TR/css-grid-1/>
 
+use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
+use crate::layout::fragmentation::FragmentationOptions;
+use crate::style::display::FormattingContextType;
+use crate::style::float::Float;
+use crate::style::position::Position;
+use crate::style::values::Length;
+use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::Hash;
+use std::hash::Hasher;
+use std::mem;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -176,6 +189,338 @@ pub(crate) fn count_flex_intrinsic_call() {
 
 pub(crate) fn count_inline_intrinsic_call() {
   INLINE_INTRINSIC_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+// === Layout result cache ====================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct LayoutCacheKey {
+  box_id: usize,
+  fc_type: FormattingContextType,
+  style_hash: u64,
+  constraints_hash: u64,
+  fragmentation_hash: u64,
+  viewport_hash: u64,
+}
+
+#[derive(Debug, Clone)]
+struct LayoutCacheEntry {
+  epoch: usize,
+  fragment: Arc<FragmentNode>,
+  style_hash: u64,
+}
+
+thread_local! {
+    static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutCacheKey, LayoutCacheEntry>> =
+        RefCell::new(HashMap::new());
+}
+
+static LAYOUT_CACHE_ENABLED: AtomicBool = AtomicBool::new(false);
+static LAYOUT_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
+static LAYOUT_CACHE_FRAGMENTATION: AtomicU64 = AtomicU64::new(0);
+static LAYOUT_CACHE_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
+static LAYOUT_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
+static LAYOUT_CACHE_STORES: AtomicUsize = AtomicUsize::new(0);
+static LAYOUT_CACHE_EVICTIONS: AtomicUsize = AtomicUsize::new(0);
+
+fn pack_viewport_size(size: Size) -> u64 {
+  let w = size.width.to_bits() as u64;
+  let h = size.height.to_bits() as u64;
+  (w << 32) | h
+}
+
+fn hash_enum_discriminant<T>(value: &T, hasher: &mut DefaultHasher) {
+  mem::discriminant(value).hash(hasher);
+}
+
+fn hash_length(len: &Length, hasher: &mut DefaultHasher) {
+  hash_enum_discriminant(&len.unit, hasher);
+  len.value.to_bits().hash(hasher);
+  if let Some(calc) = &len.calc {
+    1u8.hash(hasher);
+    for term in calc.terms() {
+      hash_enum_discriminant(&term.unit, hasher);
+      term.value.to_bits().hash(hasher);
+    }
+  } else {
+    0u8.hash(hasher);
+  }
+}
+
+fn hash_option_length(len: &Option<Length>, hasher: &mut DefaultHasher) {
+  match len {
+    Some(l) => {
+      1u8.hash(hasher);
+      hash_length(l, hasher);
+    }
+    None => 0u8.hash(hasher),
+  }
+}
+
+fn layout_constraints_hash(constraints: &LayoutConstraints) -> u64 {
+  let mut h = DefaultHasher::new();
+  let hash_space = |space: &crate::layout::constraints::AvailableSpace,
+                    hasher: &mut DefaultHasher| match space {
+    crate::layout::constraints::AvailableSpace::Definite(v) => {
+      0u8.hash(hasher);
+      v.to_bits().hash(hasher);
+    }
+    crate::layout::constraints::AvailableSpace::Indefinite => 1u8.hash(hasher),
+    crate::layout::constraints::AvailableSpace::MinContent => 2u8.hash(hasher),
+    crate::layout::constraints::AvailableSpace::MaxContent => 3u8.hash(hasher),
+  };
+  hash_space(&constraints.available_width, &mut h);
+  hash_space(&constraints.available_height, &mut h);
+  match constraints.inline_percentage_base {
+    Some(v) => {
+      1u8.hash(&mut h);
+      v.to_bits().hash(&mut h);
+    }
+    None => 0u8.hash(&mut h),
+  }
+  h.finish()
+}
+
+/// Computes a conservative fingerprint of layout-affecting style properties.
+pub(crate) fn layout_style_fingerprint(style: &Arc<ComputedStyle>) -> u64 {
+  let mut h = DefaultHasher::new();
+  (Arc::as_ptr(style) as usize).hash(&mut h);
+  hash_enum_discriminant(&style.display, &mut h);
+  hash_enum_discriminant(&style.position, &mut h);
+  hash_enum_discriminant(&style.float, &mut h);
+  hash_enum_discriminant(&style.clear, &mut h);
+  hash_enum_discriminant(&style.box_sizing, &mut h);
+  hash_option_length(&style.width, &mut h);
+  hash_option_length(&style.height, &mut h);
+  hash_option_length(&style.min_width, &mut h);
+  hash_option_length(&style.max_width, &mut h);
+  hash_option_length(&style.min_height, &mut h);
+  hash_option_length(&style.max_height, &mut h);
+  hash_option_length(&style.margin_top, &mut h);
+  hash_option_length(&style.margin_right, &mut h);
+  hash_option_length(&style.margin_bottom, &mut h);
+  hash_option_length(&style.margin_left, &mut h);
+  hash_length(&style.padding_top, &mut h);
+  hash_length(&style.padding_right, &mut h);
+  hash_length(&style.padding_bottom, &mut h);
+  hash_length(&style.padding_left, &mut h);
+  hash_length(&style.border_top_width, &mut h);
+  hash_length(&style.border_right_width, &mut h);
+  hash_length(&style.border_bottom_width, &mut h);
+  hash_length(&style.border_left_width, &mut h);
+  hash_enum_discriminant(&style.overflow_x, &mut h);
+  hash_enum_discriminant(&style.overflow_y, &mut h);
+  hash_enum_discriminant(&style.scrollbar_width, &mut h);
+  hash_enum_discriminant(&style.aspect_ratio, &mut h);
+  hash_enum_discriminant(&style.writing_mode, &mut h);
+  hash_enum_discriminant(&style.direction, &mut h);
+  hash_enum_discriminant(&style.line_height, &mut h);
+  style.font_size.to_bits().hash(&mut h);
+  style.root_font_size.to_bits().hash(&mut h);
+  style.letter_spacing.to_bits().hash(&mut h);
+  style.word_spacing.to_bits().hash(&mut h);
+  hash_option_length(&style.column_width, &mut h);
+  hash_enum_discriminant(&style.column_count, &mut h);
+  hash_length(&style.column_gap, &mut h);
+  style.containment.size.hash(&mut h);
+  style.containment.inline_size.hash(&mut h);
+  style.containment.layout.hash(&mut h);
+  style.containment.style.hash(&mut h);
+  style.containment.paint.hash(&mut h);
+  for family in &style.font_family {
+    family.hash(&mut h);
+  }
+  h.finish()
+}
+
+fn fragmentation_fingerprint(options: Option<FragmentationOptions>) -> u64 {
+  if let Some(opts) = options {
+    let mut h = DefaultHasher::new();
+    opts.fragmentainer_size.to_bits().hash(&mut h);
+    opts.fragmentainer_gap.to_bits().hash(&mut h);
+    opts.column_count.hash(&mut h);
+    opts.column_gap.to_bits().hash(&mut h);
+    h.finish()
+  } else {
+    0
+  }
+}
+
+fn is_layout_cacheable(box_node: &BoxNode, fc_type: FormattingContextType) -> bool {
+  if !LAYOUT_CACHE_ENABLED.load(Ordering::Relaxed) {
+    return false;
+  }
+  if box_node.id() == 0 || box_node.is_anonymous() {
+    return false;
+  }
+  if matches!(
+    box_node.style.position,
+    Position::Absolute | Position::Fixed | Position::Sticky
+  ) {
+    return false;
+  }
+  if box_node.style.float != Float::None {
+    return false;
+  }
+
+  match fc_type {
+    FormattingContextType::Inline => false,
+    FormattingContextType::Block => {
+      crate::layout::contexts::block::margin_collapse::establishes_bfc(&box_node.style)
+    }
+    FormattingContextType::Flex | FormattingContextType::Grid | FormattingContextType::Table => {
+      true
+    }
+  }
+}
+
+fn layout_cache_key(
+  box_node: &BoxNode,
+  fc_type: FormattingContextType,
+  constraints: &LayoutConstraints,
+  viewport: Size,
+) -> Option<LayoutCacheKey> {
+  if !is_layout_cacheable(box_node, fc_type) {
+    return None;
+  }
+
+  let style_hash = layout_style_fingerprint(&box_node.style);
+  let constraints_hash = layout_constraints_hash(constraints);
+  let fragmentation_hash = LAYOUT_CACHE_FRAGMENTATION.load(Ordering::Relaxed);
+  Some(LayoutCacheKey {
+    box_id: box_node.id(),
+    fc_type,
+    style_hash,
+    constraints_hash,
+    fragmentation_hash,
+    viewport_hash: pack_viewport_size(viewport),
+  })
+}
+
+fn layout_cache_clear() {
+  LAYOUT_RESULT_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    let evicted = map.len();
+    if evicted > 0 {
+      LAYOUT_CACHE_EVICTIONS.fetch_add(evicted, Ordering::Relaxed);
+    }
+    map.clear();
+  });
+}
+
+pub(crate) fn layout_cache_reset_counters() {
+  LAYOUT_RESULT_CACHE.with(|cache| {
+    cache.borrow_mut().clear();
+  });
+  LAYOUT_CACHE_LOOKUPS.store(0, Ordering::Relaxed);
+  LAYOUT_CACHE_HITS.store(0, Ordering::Relaxed);
+  LAYOUT_CACHE_STORES.store(0, Ordering::Relaxed);
+  LAYOUT_CACHE_EVICTIONS.store(0, Ordering::Relaxed);
+}
+
+/// Configures the layout cache epoch and run-scoped parameters.
+pub(crate) fn layout_cache_use_epoch(
+  epoch: usize,
+  enabled: bool,
+  reset_counters: bool,
+  fragmentation: Option<FragmentationOptions>,
+) {
+  let epoch = epoch.max(1);
+  let previous = LAYOUT_CACHE_EPOCH.swap(epoch, Ordering::Relaxed);
+  LAYOUT_CACHE_ENABLED.store(enabled, Ordering::Relaxed);
+  LAYOUT_CACHE_FRAGMENTATION.store(fragmentation_fingerprint(fragmentation), Ordering::Relaxed);
+
+  if reset_counters || previous != epoch || !enabled {
+    layout_cache_reset_counters();
+  }
+  if reset_counters || previous != epoch || !enabled {
+    layout_cache_clear();
+  }
+}
+
+/// Attempts to retrieve a cached layout result for the given formatting context.
+pub(crate) fn layout_cache_lookup(
+  box_node: &BoxNode,
+  fc_type: FormattingContextType,
+  constraints: &LayoutConstraints,
+  viewport: Size,
+) -> Option<FragmentNode> {
+  let key = layout_cache_key(box_node, fc_type, constraints, viewport)?;
+  LAYOUT_CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
+  let epoch = LAYOUT_CACHE_EPOCH.load(Ordering::Relaxed);
+
+  let result = LAYOUT_RESULT_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    if let Some(entry) = map.get(&key) {
+      if entry.epoch == epoch && entry.style_hash == key.style_hash {
+        return Some(entry.fragment.clone());
+      }
+      // Drop stale entries tied to an old epoch.
+      if entry.epoch != epoch {
+        map.remove(&key);
+        LAYOUT_CACHE_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+      }
+    }
+    None
+  });
+
+  if let Some(fragment) = result {
+    LAYOUT_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+    return Some((*fragment).clone());
+  }
+  None
+}
+
+/// Stores a layout result in the cache for reuse within the current epoch.
+pub(crate) fn layout_cache_store(
+  box_node: &BoxNode,
+  fc_type: FormattingContextType,
+  constraints: &LayoutConstraints,
+  fragment: &FragmentNode,
+  viewport: Size,
+) {
+  let key = match layout_cache_key(box_node, fc_type, constraints, viewport) {
+    Some(k) => k,
+    None => return,
+  };
+
+  let epoch = LAYOUT_CACHE_EPOCH.load(Ordering::Relaxed);
+  LAYOUT_RESULT_CACHE.with(|cache| {
+    let mut map = cache.borrow_mut();
+    // Drop entries for the same box/style from previous epochs to avoid stale reuse when the
+    // caller opts into incremental layouts without bumping the epoch.
+    map.retain(|existing_key, entry| {
+      if entry.epoch != epoch {
+        LAYOUT_CACHE_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+        return false;
+      }
+      if existing_key.box_id == key.box_id && existing_key.style_hash != key.style_hash {
+        LAYOUT_CACHE_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+        return false;
+      }
+      true
+    });
+
+    map.insert(
+      key,
+      LayoutCacheEntry {
+        epoch,
+        fragment: Arc::new(fragment.clone()),
+        style_hash: key.style_hash,
+      },
+    );
+  });
+
+  LAYOUT_CACHE_STORES.fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn layout_cache_stats() -> (usize, usize, usize, usize) {
+  (
+    LAYOUT_CACHE_LOOKUPS.load(Ordering::Relaxed),
+    LAYOUT_CACHE_HITS.load(Ordering::Relaxed),
+    LAYOUT_CACHE_STORES.load(Ordering::Relaxed),
+    LAYOUT_CACHE_EVICTIONS.load(Ordering::Relaxed),
+  )
 }
 
 /// Common trait for all formatting contexts

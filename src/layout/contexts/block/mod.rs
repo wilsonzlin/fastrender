@@ -41,6 +41,8 @@ use crate::layout::float_context::FloatSide;
 use crate::layout::formatting_context::count_block_intrinsic_call;
 use crate::layout::formatting_context::intrinsic_cache_lookup;
 use crate::layout::formatting_context::intrinsic_cache_store;
+use crate::layout::formatting_context::layout_cache_lookup;
+use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
@@ -57,9 +59,9 @@ use crate::style::block_axis_positive;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::float::Float;
-use crate::style::position::Position;
 use crate::style::inline_axis_is_horizontal;
 use crate::style::inline_axis_positive;
+use crate::style::position::Position;
 use crate::style::types::BorderStyle;
 use crate::style::types::ColumnFill;
 use crate::style::types::ColumnSpan;
@@ -1046,7 +1048,9 @@ impl BlockFormattingContext {
     let inline_percentage_base = match inline_space {
       AvailableSpace::Definite(_) => {
         let base = if inline_is_horizontal {
-          constraints.inline_percentage_base.or_else(|| constraints.width())
+          constraints
+            .inline_percentage_base
+            .or_else(|| constraints.width())
         } else {
           constraints.height()
         };
@@ -1077,7 +1081,8 @@ impl BlockFormattingContext {
     let establishes_absolute_cb = parent.style.position.is_positioned()
       || !parent.style.transform.is_empty()
       || parent.style.perspective.is_some();
-    let establishes_fixed_cb = !parent.style.transform.is_empty() || parent.style.perspective.is_some();
+    let establishes_fixed_cb =
+      !parent.style.transform.is_empty() || parent.style.perspective.is_some();
     if !collapse_with_parent_top {
       margin_ctx.mark_content_encountered();
     }
@@ -1934,8 +1939,8 @@ impl BlockFormattingContext {
 
     if specified_count > 0 {
       let count = specified_count as usize;
-      let width = ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32)
-        .max(0.0);
+      let width =
+        ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32).max(0.0);
       let used_width = specified_width.map(|w| w.min(width)).unwrap_or(width);
       return (count.max(1), used_width, gap);
     }
@@ -1950,9 +1955,8 @@ impl BlockFormattingContext {
       if count == 0 {
         count = 1;
       }
-      let used_width = ((available_inline - gap * (count.saturating_sub(1) as f32))
-        / count as f32)
-        .max(0.0);
+      let used_width =
+        ((available_inline - gap * (count.saturating_sub(1) as f32)) / count as f32).max(0.0);
       return (count, used_width, gap);
     }
 
@@ -1985,10 +1989,8 @@ impl BlockFormattingContext {
 
     let mut parent_clone = parent.clone();
     parent_clone.children = children.to_vec();
-    let column_constraints = LayoutConstraints::new(
-      AvailableSpace::Definite(column_width),
-      available_height,
-    );
+    let column_constraints =
+      LayoutConstraints::new(AvailableSpace::Definite(column_width), available_height);
     let (flow_fragments, flow_height, flow_positioned) =
       self.layout_children(&parent_clone, &column_constraints, nearest_positioned_cb)?;
 
@@ -2052,7 +2054,10 @@ impl BlockFormattingContext {
 
     if column_count > 1
       && column_gap > 0.0
-      && !matches!(parent.style.column_rule_style, BorderStyle::None | BorderStyle::Hidden)
+      && !matches!(
+        parent.style.column_rule_style,
+        BorderStyle::None | BorderStyle::Hidden
+      )
     {
       let mut rule_width = resolve_length_for_width(
         parent.style.column_rule_width,
@@ -2147,11 +2152,8 @@ impl BlockFormattingContext {
           AvailableSpace::Definite(available_inline),
           constraints.available_height,
         );
-        let (mut span_fragments, span_height, mut span_positioned) = self.layout_children(
-          &span_parent,
-          &span_constraints,
-          nearest_positioned_cb,
-        )?;
+        let (mut span_fragments, span_height, mut span_positioned) =
+          self.layout_children(&span_parent, &span_constraints, nearest_positioned_cb)?;
         for frag in &mut span_fragments {
           frag.bounds = Rect::from_xywh(
             frag.bounds.x(),
@@ -2198,6 +2200,14 @@ impl FormattingContext for BlockFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Block);
+    if let Some(cached) = layout_cache_lookup(
+      box_node,
+      FormattingContextType::Block,
+      constraints,
+      self.viewport_size,
+    ) {
+      return Ok(cached);
+    }
     let style = &box_node.style;
     let inline_is_horizontal = inline_axis_is_horizontal(style.writing_mode);
     let _inline_positive = inline_axis_positive(style.writing_mode, style.direction);
@@ -2218,7 +2228,9 @@ impl FormattingContext for BlockFormattingContext {
     let inline_percentage_base = match inline_space {
       AvailableSpace::Definite(_) => {
         let base = if inline_is_horizontal {
-          constraints.inline_percentage_base.or_else(|| constraints.width())
+          constraints
+            .inline_percentage_base
+            .or_else(|| constraints.width())
         } else {
           constraints.height()
         };
@@ -2770,9 +2782,8 @@ impl FormattingContext for BlockFormattingContext {
       content_height_base + padding_top + padding_bottom,
     );
     let cb_block_base = resolved_height.map(|h| h.max(0.0) + padding_top + padding_bottom);
-    let establishes_positioned_cb = style.position.is_positioned()
-      || !style.transform.is_empty()
-      || style.perspective.is_some();
+    let establishes_positioned_cb =
+      style.position.is_positioned() || !style.transform.is_empty() || style.perspective.is_some();
     let nearest_cb = if establishes_positioned_cb {
       ContainingBlock::with_viewport_and_bases(
         Rect::new(padding_origin, padding_size),
@@ -3025,6 +3036,14 @@ impl FormattingContext for BlockFormattingContext {
       box_height,
       style.writing_mode,
       style.direction,
+    );
+
+    layout_cache_store(
+      box_node,
+      FormattingContextType::Block,
+      constraints,
+      &converted,
+      self.viewport_size,
     );
 
     Ok(converted)
@@ -3553,12 +3572,12 @@ mod tests {
   use crate::layout::formatting_context::IntrinsicSizingMode;
   use crate::style::display::Display;
   use crate::style::display::FormattingContextType;
-  use crate::style::types::WritingMode;
   use crate::style::position::Position;
   use crate::style::types::ListStylePosition;
   use crate::style::types::ListStyleType;
   use crate::style::types::Overflow;
   use crate::style::types::ScrollbarWidth;
+  use crate::style::types::WritingMode;
   use crate::style::values::Length;
   use crate::style::ComputedStyle;
   use crate::text::font_loader::FontContext;
@@ -3622,9 +3641,17 @@ mod tests {
     child_style.writing_mode = WritingMode::VerticalRl;
     child_style.height = Some(Length::px(40.0));
 
-    let child1 = BoxNode::new_block(Arc::new(child_style.clone()), FormattingContextType::Block, vec![]);
+    let child1 = BoxNode::new_block(
+      Arc::new(child_style.clone()),
+      FormattingContextType::Block,
+      vec![],
+    );
     let child2 = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![child1, child2]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![child1, child2],
+    );
 
     let fc = BlockFormattingContext::new();
     let constraints = LayoutConstraints::definite(200.0, 200.0);
@@ -3713,9 +3740,11 @@ mod tests {
       vec![],
     );
 
-    let legend = BoxNode::new_block(Arc::new(legend_style), FormattingContextType::Block, vec![
-      legend_child,
-    ]);
+    let legend = BoxNode::new_block(
+      Arc::new(legend_style),
+      FormattingContextType::Block,
+      vec![legend_child],
+    );
 
     let mut sibling_style = ComputedStyle::default();
     sibling_style.display = Display::Block;
@@ -3739,9 +3768,11 @@ mod tests {
       solo.bounds.width()
     );
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      legend, sibling,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![legend, sibling],
+    );
     let fragment = fc.layout(&root, &constraints).expect("block layout");
 
     assert_eq!(
@@ -3778,8 +3809,8 @@ mod tests {
       sibling_fragment.bounds.x().abs() < 0.01,
       "sibling should start at the container origin; got {}",
       sibling_fragment.bounds.x()
-  );
-}
+    );
+  }
 
   #[test]
   fn test_layout_nested_blocks() {
@@ -3796,9 +3827,11 @@ mod tests {
       vec![],
     );
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      child1, child2,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![child1, child2],
+    );
     let constraints = LayoutConstraints::definite(800.0, 600.0);
 
     let fragment = bfc.layout(&root, &constraints).unwrap();
@@ -3855,9 +3888,11 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.display = Display::Block;
     root_style.height = Some(Length::px(120.0));
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      child,
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![child],
+    );
     let constraints = LayoutConstraints::definite(200.0, 200.0);
 
     let fragment = BlockFormattingContext::new()
@@ -3880,9 +3915,11 @@ mod tests {
     let mut root_style = ComputedStyle::default();
     root_style.display = Display::Block;
     root_style.height = Some(Length::px(300.0));
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      child,
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![child],
+    );
     let constraints = LayoutConstraints::definite(200.0, 400.0);
 
     let fragment = bfc.layout(&root, &constraints).unwrap();
@@ -3901,9 +3938,11 @@ mod tests {
 
     let mut root_style = ComputedStyle::default();
     root_style.display = Display::Block;
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      child,
-    ]);
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![child],
+    );
     let constraints = LayoutConstraints::definite(200.0, 400.0);
 
     let fragment = bfc.layout(&root, &constraints).unwrap();
@@ -3941,9 +3980,11 @@ mod tests {
       vec![],
     );
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      child1, child2,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![child1, child2],
+    );
     let constraints = LayoutConstraints::definite(800.0, 600.0);
 
     let fragment = bfc.layout(&root, &constraints).unwrap();
@@ -3978,10 +4019,11 @@ mod tests {
       vec![],
     );
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      float_node,
-      cleared_node,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![float_node, cleared_node],
+    );
     let constraints = LayoutConstraints::definite(200.0, 400.0);
 
     let fragment = bfc.layout(&root, &constraints).unwrap();
@@ -4029,10 +4071,11 @@ mod tests {
       BoxNode::new_block(Arc::new(float_style), FormattingContextType::Block, vec![]);
 
     let text = BoxNode::new_text(default_style(), "text".to_string());
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      float_node,
-      BoxNode::new_inline(default_style(), vec![text]),
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![float_node, BoxNode::new_inline(default_style(), vec![text])],
+    );
     let constraints = LayoutConstraints::definite(200.0, 200.0);
 
     let fragment = bfc.layout(&root, &constraints).unwrap();
@@ -4077,13 +4120,17 @@ mod tests {
     auto_style.display = Display::Block;
     auto_style.float = Float::Left;
     let text = BoxNode::new_text(default_style(), "word ".repeat(20));
-    let auto_float = BoxNode::new_block(Arc::new(auto_style), FormattingContextType::Block, vec![
-      BoxNode::new_inline(default_style(), vec![text]),
-    ]);
+    let auto_float = BoxNode::new_block(
+      Arc::new(auto_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_inline(default_style(), vec![text])],
+    );
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      wide_float, auto_float,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![wide_float, auto_float],
+    );
     let constraints =
       LayoutConstraints::new(AvailableSpace::Definite(200.0), AvailableSpace::Indefinite);
 
@@ -4146,10 +4193,11 @@ mod tests {
     ul_style.display = Display::Block;
     let ul_style = Arc::new(ul_style);
 
-    let li = DOMNode::new_element("li", li_style.clone(), vec![DOMNode::new_text(
-      "Item",
+    let li = DOMNode::new_element(
+      "li",
       li_style.clone(),
-    )]);
+      vec![DOMNode::new_text("Item", li_style.clone())],
+    );
     let ul = DOMNode::new_element("ul", ul_style, vec![li]);
     let box_tree = generator.generate(&ul).unwrap();
 
@@ -4208,9 +4256,11 @@ mod tests {
     let text_right = BoxNode::new_text(default_style(), "unbreakable".to_string());
     let block_child = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-    let run_container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      text_left.clone(),
-    ]);
+    let run_container = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![text_left.clone()],
+    );
     let run_min = ifc
       .compute_intrinsic_inline_size(&run_container, IntrinsicSizingMode::MinContent)
       .unwrap();
@@ -4218,11 +4268,11 @@ mod tests {
       .compute_intrinsic_inline_size(&run_container, IntrinsicSizingMode::MaxContent)
       .unwrap();
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      text_left,
-      block_child,
-      text_right,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![text_left, block_child, text_right],
+    );
     let min_width = bfc
       .compute_intrinsic_inline_size(&root, IntrinsicSizingMode::MinContent)
       .unwrap();
@@ -4249,9 +4299,14 @@ mod tests {
     style.padding_right = Length::px(4.0);
     style.border_left_width = Length::px(2.0);
     style.border_right_width = Length::px(2.0);
-    let container = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![
-      BoxNode::new_text(default_style(), "superlongword".to_string()),
-    ]);
+    let container = BoxNode::new_block(
+      Arc::new(style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        default_style(),
+        "superlongword".to_string(),
+      )],
+    );
 
     let bfc = BlockFormattingContext::new();
     let max = bfc
@@ -4281,9 +4336,11 @@ mod tests {
     child_style.height = Some(Length::px(20.0));
 
     let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
-    let parent = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Block, vec![
-      child,
-    ]);
+    let parent = BoxNode::new_block(
+      Arc::new(parent_style),
+      FormattingContextType::Block,
+      vec![child],
+    );
 
     let fc = BlockFormattingContext::new();
     let constraints = LayoutConstraints::definite(300.0, 300.0);
@@ -4320,12 +4377,16 @@ mod tests {
     abs_style.height = Some(Length::px(12.0));
 
     let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
-    let middle = BoxNode::new_block(Arc::new(middle_style), FormattingContextType::Block, vec![
-      abs_child,
-    ]);
-    let root = BoxNode::new_block(Arc::new(root_style), FormattingContextType::Block, vec![
-      middle,
-    ]);
+    let middle = BoxNode::new_block(
+      Arc::new(middle_style),
+      FormattingContextType::Block,
+      vec![abs_child],
+    );
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![middle],
+    );
 
     let fc = BlockFormattingContext::new();
     let constraints = LayoutConstraints::definite(500.0, 500.0);

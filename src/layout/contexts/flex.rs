@@ -40,6 +40,8 @@ use crate::layout::flex_profile::{self};
 use crate::layout::formatting_context::count_flex_intrinsic_call;
 use crate::layout::formatting_context::intrinsic_cache_lookup;
 use crate::layout::formatting_context::intrinsic_cache_store;
+use crate::layout::formatting_context::layout_cache_lookup;
+use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
@@ -247,6 +249,15 @@ impl FormattingContext for FlexFormattingContext {
       }
     }
     // Keep block axis as provided; many flex containers legitimately size-to-content.
+
+    if let Some(cached) = layout_cache_lookup(
+      box_node,
+      FormattingContextType::Flex,
+      &constraints,
+      self.viewport_size,
+    ) {
+      return Ok(cached);
+    }
 
     // Reuse full layout fragments when the same flex container is laid out repeatedly with
     // identical available sizes (common on carousel-heavy pages). This is scoped per layout
@@ -1753,7 +1764,8 @@ impl FormattingContext for FlexFormattingContext {
       let establishes_abs_cb = box_node.style.position.is_positioned()
         || !box_node.style.transform.is_empty()
         || box_node.style.perspective.is_some();
-      let establishes_fixed_cb = !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
+      let establishes_fixed_cb =
+        !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
       let padding_cb = ContainingBlock::with_viewport_and_bases(
         padding_rect,
         self.viewport_size,
@@ -1839,6 +1851,14 @@ impl FormattingContext for FlexFormattingContext {
         fragment.children.push(child_fragment);
       }
     }
+
+    layout_cache_store(
+      box_node,
+      FormattingContextType::Flex,
+      &constraints,
+      &fragment,
+      self.viewport_size,
+    );
 
     Ok(fragment)
   }
@@ -4712,9 +4732,11 @@ mod tests {
       vec![],
     );
 
-    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![
-      item1, item2, item3,
-    ]);
+    let container = BoxNode::new_block(
+      create_flex_style(),
+      FormattingContextType::Flex,
+      vec![item1, item2, item3],
+    );
 
     let constraints = LayoutConstraints::definite(400.0, 600.0);
     let fragment = fc.layout(&container, &constraints).unwrap();
@@ -4796,9 +4818,11 @@ mod tests {
       vec![],
     );
 
-    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![
-      item1, item2,
-    ]);
+    let container = BoxNode::new_block(
+      create_flex_style(),
+      FormattingContextType::Flex,
+      vec![item1, item2],
+    );
 
     let constraints = LayoutConstraints::definite(400.0, 600.0);
     let fragment = fc.layout(&container, &constraints).unwrap();
@@ -4825,9 +4849,11 @@ mod tests {
       vec![],
     );
 
-    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![
-      item1, item2,
-    ]);
+    let container = BoxNode::new_block(
+      create_flex_style(),
+      FormattingContextType::Flex,
+      vec![item1, item2],
+    );
 
     // Container only 400px wide, but items total 500px
     let constraints = LayoutConstraints::definite(400.0, 600.0);
@@ -4977,9 +5003,11 @@ mod tests {
       vec![],
     );
 
-    let container = BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![
-      child1, child2,
-    ]);
+    let container = BoxNode::new_block(
+      Arc::new(style),
+      FormattingContextType::Flex,
+      vec![child1, child2],
+    );
     let constraints = LayoutConstraints::definite(100.0, 100.0);
     let fragment = fc.layout(&container, &constraints).unwrap();
 
@@ -5036,9 +5064,11 @@ mod tests {
       vec![],
     );
 
-    let container = BoxNode::new_block(Arc::new(style), FormattingContextType::Flex, vec![
-      child1, child2,
-    ]);
+    let container = BoxNode::new_block(
+      Arc::new(style),
+      FormattingContextType::Flex,
+      vec![child1, child2],
+    );
 
     let constraints = LayoutConstraints::definite(100.0, 100.0);
     let fragment = fc.layout(&container, &constraints).unwrap();
@@ -5048,18 +5078,22 @@ mod tests {
     assert_eq!(fragment.children[1].bounds.y(), 10.0);
 
     // Now flex-end should pack to the bottom of the inline axis.
-    let end_container = BoxNode::new_block(Arc::new(end_style), FormattingContextType::Flex, vec![
-      BoxNode::new_block(
-        create_item_style(10.0, 10.0),
-        FormattingContextType::Block,
-        vec![],
-      ),
-      BoxNode::new_block(
-        create_item_style(10.0, 10.0),
-        FormattingContextType::Block,
-        vec![],
-      ),
-    ]);
+    let end_container = BoxNode::new_block(
+      Arc::new(end_style),
+      FormattingContextType::Flex,
+      vec![
+        BoxNode::new_block(
+          create_item_style(10.0, 10.0),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        BoxNode::new_block(
+          create_item_style(10.0, 10.0),
+          FormattingContextType::Block,
+          vec![],
+        ),
+      ],
+    );
     let end_fragment = fc.layout(&end_container, &constraints).unwrap();
     assert_eq!(end_fragment.children[0].bounds.y(), 80.0);
     assert_eq!(end_fragment.children[1].bounds.y(), 90.0);
@@ -5175,9 +5209,11 @@ mod tests {
       vec![],
     );
 
-    let container = BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![
-      item1, item2,
-    ]);
+    let container = BoxNode::new_block(
+      create_flex_style(),
+      FormattingContextType::Flex,
+      vec![item1, item2],
+    );
 
     let width = fc
       .compute_intrinsic_inline_size(&container, IntrinsicSizingMode::MaxContent)
@@ -5203,11 +5239,11 @@ mod tests {
       vec![],
     );
 
-    let inner_container =
-      BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![
-        inner_item1,
-        inner_item2,
-      ]);
+    let inner_container = BoxNode::new_block(
+      create_flex_style(),
+      FormattingContextType::Flex,
+      vec![inner_item1, inner_item2],
+    );
 
     // Outer flex container
     let outer_item = BoxNode::new_block(
@@ -5216,11 +5252,11 @@ mod tests {
       vec![],
     );
 
-    let outer_container =
-      BoxNode::new_block(create_flex_style(), FormattingContextType::Flex, vec![
-        inner_container,
-        outer_item,
-      ]);
+    let outer_container = BoxNode::new_block(
+      create_flex_style(),
+      FormattingContextType::Flex,
+      vec![inner_container, outer_item],
+    );
 
     let constraints = LayoutConstraints::definite(400.0, 600.0);
     let fragment = fc.layout(&outer_container, &constraints).unwrap();
