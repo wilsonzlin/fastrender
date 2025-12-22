@@ -4,10 +4,12 @@
 - Implemented `text-wrap: balance`, `pretty`, and `stable` handling that re-runs line construction with measured width factors and raggedness scoring, penalizing hyphenated endings/short last lines. Stability uses a conservative 90% effective inline width and skips balancing when floats shorten widths; regression tests cover Latin/CJK, hyphenation on/off, pretty, and stable modes.
 - Added full parsing/resolution for `color-contrast()` (with optional `vs` reference defaulting to currentColor) using WCAG contrast with alpha compositing, plus `color(from …)` relative color syntax across srgb/srgb-linear/hsl/hwb/lab/lch/oklab/oklch/xyz with conversions, channel defaults, and currentColor-aware resolution. Tests cover unit, integration, gradients, and cascade cases.
 - Introduced an accessibility tree builder that computes implicit/explicit roles, accessible names/descriptions, state flags (focusable, disabled, required/invalid, visited/pressed, checked/selected), heading levels, and form values while skipping hidden nodes. New APIs expose the tree and JSON output, with tests covering common controls, landmarks, tables, labels, and hidden filtering.
-- Added `font-display` descriptor support with async web-font loading that respects block/swap/fallback/optional deadlines, swaps in loaded fonts while avoiding long stalls, filters by `unicode-range`, bumps font generation to invalidate shaping, and exposes pluggable fetchers plus `wait_for_pending_web_fonts`. Tests cover display phases, unicode-range filtering, block waiting, and failure fallback.
+- Added `font-display` descriptor support with async web-font loading that respects block/swap/fallback/optional deadlines, filters by `unicode-range`, bumps font generation to invalidate shaping, and exposes pluggable fetchers plus `wait_for_pending_web_fonts`. Tests cover display phases, unicode-range filtering, block waiting, swap upgrades, and failure fallback.
 - Implemented CSS Media Queries Level 5 features (scripting, update frequency, light-level, display-mode) with env overrides and builder helpers, dynamic viewport units (dvw/dvh/dvmin/dvmax), MediaContext fingerprinting updates, and media link extraction that respects media type (skips print styles in screen contexts). Tests cover MQ5 evaluation/invalids, env overrides, dynamic viewport units, cache invalidation, and print stylesheet handling.
 - Added parsing/matching for `:has()` using relative selectors with proper specificity and `:scope` anchoring, plus traversal support for relative combinators and feature-query reporting. Regression coverage includes combinators, `:is`/`:not` interactions, and specificity.
-- Built scroll snap metadata after layout/fragmentation (`scroll_overflow`, snap targets, scrollable bounds) and a new scroll module with snapping logic for viewport and element containers, handling writing mode, scroll-padding/margin, snap-stop tie-breaks, and behavior flags. Updated scroll snap tests cover nested containers, RTL inline-start, both-axis snapping, and snap-stop.
+- Expanded scrolling: post-layout scroll snap metadata with viewport/element offsets and snap-stop tie-breaking, plus a scroll chaining model honoring `overscroll-behavior`, clamping to bounds even without snap containers, and per-container snap application for chained scrolling.
+- Enhanced compositing: manual HSL/HSV/OKLCH and plus-darker blend modes in painter/renderer with backdrop-filter isolation and background-blend fixes; added tests for new blend keywords and isolation behavior.
+- Improved inline SVG rendering by serializing styled subtrees with document `<style>` CSS, applying computed fonts/colors to the root, handling default `xmlns`, adding a foreignObject fallback for unsupported HTML, and ensuring mask url()s apply; new integration tests cover gradients, masks/transforms, and foreignObject sizing/painting.
 
 ## Commits
 
@@ -38,15 +40,23 @@
 - `e142fa0` Implement scroll snap metadata and snapping across containers
 - `0eda8a4` Add handoff summary
 - `f1f99a0` Update handoff with element scroll notes
-
-## Commits
-
 - `b0d7544` Add scroll chaining model with overscroll behavior and snap support
 - `0a06054` Add handoff summary
+- `d5bc737` Update handoff with commit references
+- `e16e267` Handle HSL blend groups and backdrop isolation
+- `27e698f` Add extended blend modes and manual HSV/OKLCH compositing
+- `f1049b6` Fix OKLCH blend component selection
+- `7661b81` Align OKLCH blend test helper with component order
+- `ea4ea30` Silence unused variable in OKLCH blend test
+- `ab5fc0a` Serialize inline SVG with document CSS and HTML fallbacks
+- `4602f39` Add inline SVG integration tests for gradients and foreignObject
+- `dcbb68b` Add handoff summary
+- `9130d40` Add scroll chaining model with overscroll behavior and snap support
+- `e338983` Update handoff with commit references
 
 ## Testing
 
-- Not run (workers ran `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, `cargo test accessibility_`, `cargo test font_loader -- --nocapture`, `cargo test media_level5_features_evaluate -- --nocapture`, `cargo test extract_css_links_skips_print_only_for_screen -- --nocapture`, `cargo test has_selector_test -- --nocapture`, `cargo test supports_selector_test -- --nocapture`, and `cargo test scroll_snap -- --nocapture`).
+- Not run (workers ran `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, `cargo test accessibility_`, `cargo test font_loader -- --nocapture`, `cargo test media_level5_features_evaluate -- --nocapture`, `cargo test extract_css_links_skips_print_only_for_screen -- --nocapture`, `cargo test has_selector_test -- --nocapture`, `cargo test supports_selector_test -- --nocapture`, `cargo test scroll_snap -- --nocapture`, `cargo test scroll -- --nocapture`, `cargo test inline_svg`, and blend regressions: `cargo test backdrop_filter_isolates_blend_mode`, `stacking_context_hsl_blend_preserves_backdrop_luminance`, `background_blend_mode_combines_multiple_layers`, `plus_darker_blend_clamps_to_black`, `hue_hsv_blend_mode_uses_source_hue`, `color_oklch_blend_uses_source_chroma_and_hue`).
 
 ## Notes / Caveats
 
@@ -54,5 +64,5 @@
 - Relative color `calc()` support is minimal (single numeric/percentage values only), only convertible spaces are allowed, and `color-contrast()` lacks `to` thresholds. Contrast evaluation composites transparent colors against white when selecting options.
 - Accessibility tree flattens non-semantic containers without names/roles, skips hidden nodes (`display:none`/`visibility:hidden`/`aria-hidden`/`hidden`) for inclusion and label resolution, and uses the first cascade pass (no container-query reruns).
 - Font-display timing constants are shortened for tests (block/auto ~300ms; fallback block 100ms + 400ms swap; optional 100ms). Block/auto wait only through the block window, loads continue asynchronously, and initial shaping may use fallbacks until web fonts finish loading.
-- Fast-reject bloom filtering for relative selectors is disabled for `:has()` relative traversal to avoid false negatives; caching remains in place.
-- Element snapping requires providing an entry in `ScrollState.elements` for that container’s `box_id`; viewport snapping uses the viewport offset. `ScrollSnapResult.updates` carries per-container behavior for smooth scroll integration.
+- Scroll snapping requires providing element offsets in `ScrollState.elements` for snapping containers; `ScrollSnapResult.updates` lists per-container behavior. Scroll chaining processes innermost→outermost containers, honoring `overscroll-behavior`, clamping to bounds, and applying container snap targets during chaining.
+- Inline SVG serialization inlines only document `<style>` CSS (no external/imported sheets), applies computed fonts/colors to the root, and falls back to painting foreignObject children when unsupported.
