@@ -270,9 +270,9 @@ fn test_fixture(name: &str) -> Result<(), String> {
     .unwrap()
 }
 
-// =============================================================================
+// 
 // Fixture existence tests (always run)
-// =============================================================================
+// 
 
 #[test]
 fn test_fixtures_directory_exists() {
@@ -319,8 +319,7 @@ fn test_all_fixture_files_exist() {
     "positioned_absolute",
     // Transforms
     "transform_layer",
-    // SVG
-    "svg_foreign_object",
+    "mask_composite",
     // Forms
     "form_controls",
     // Text
@@ -329,6 +328,7 @@ fn test_all_fixture_files_exist() {
     "text_line_break",
     "text_overflow_vertical",
     "shadow_dom",
+    "svg_foreign_object",
   ];
 
   for name in &expected_fixtures {
@@ -373,9 +373,9 @@ fn fixture_text_overflow_vertical() {
   test_fixture("text_overflow_vertical").unwrap();
 }
 
-// =============================================================================
+// 
 // Block Layout Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_block_simple() {
@@ -397,9 +397,9 @@ fn test_fixture_block_clearance() {
   test_fixture("block_clearance").expect("block_clearance fixture should render");
 }
 
-// =============================================================================
+// 
 // Inline Layout Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_inline_text_wrap() {
@@ -416,9 +416,9 @@ fn test_fixture_inline_baseline() {
   test_fixture("inline_baseline").expect("inline_baseline fixture should render");
 }
 
-// =============================================================================
+// 
 // Flexbox Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_flex_direction() {
@@ -435,9 +435,9 @@ fn test_fixture_flex_grow_shrink() {
   test_fixture("flex_grow_shrink").expect("flex_grow_shrink fixture should render");
 }
 
-// =============================================================================
+// 
 // Grid Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_grid_template() {
@@ -454,9 +454,9 @@ fn test_fixture_grid_gaps() {
   test_fixture("grid_gaps").expect("grid_gaps fixture should render");
 }
 
-// =============================================================================
+// 
 // Table Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_table_fixed() {
@@ -473,18 +473,18 @@ fn test_fixture_table_span() {
   test_fixture("table_span").expect("table_span fixture should render");
 }
 
-// =============================================================================
+// 
 // Column Layout Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_columns_multicol() {
   test_fixture("columns_multicol").expect("columns_multicol fixture should render");
 }
 
-// =============================================================================
+// 
 // Float Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_float_basic() {
@@ -501,9 +501,9 @@ fn test_fixture_float_clearance() {
   test_fixture("float_clearance").expect("float_clearance fixture should render");
 }
 
-// =============================================================================
+// 
 // Positioned Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_positioned_relative() {
@@ -515,36 +515,45 @@ fn test_fixture_positioned_absolute() {
   test_fixture("positioned_absolute").expect("positioned_absolute fixture should render");
 }
 
-// =============================================================================
+// 
 // Transform Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_transform_layer() {
   test_fixture("transform_layer").expect("transform_layer fixture should render");
 }
 
-// =============================================================================
+// 
+
 // SVG Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_svg_foreign_object() {
   test_fixture("svg_foreign_object").expect("svg_foreign_object fixture should render");
+
+// Mask Tests
+// 
+
+#[test]
+fn test_fixture_mask_composite() {
+  test_fixture("mask_composite").expect("mask_composite fixture should render");
+
 }
 
-// =============================================================================
+// 
 // Form Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_form_controls() {
   test_fixture("form_controls").expect("form_controls fixture should render");
 }
 
-// =============================================================================
+// 
 // Text Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_text_complex_scripts() {
@@ -561,18 +570,18 @@ fn test_fixture_text_line_break() {
   test_fixture("text_line_break").expect("text_line_break fixture should render");
 }
 
-// =============================================================================
+// 
 // Shadow DOM Tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_shadow_dom() {
   test_fixture("shadow_dom").expect("shadow_dom fixture should render");
 }
 
-// =============================================================================
+// 
 // Utility tests
-// =============================================================================
+// 
 
 #[test]
 fn test_fixture_loading() {
@@ -589,9 +598,9 @@ fn test_golden_directory_structure() {
   assert!(golden.exists() || fs::create_dir_all(&golden).is_ok());
 }
 
-// =============================================================================
+// 
 // Fixture metadata
-// =============================================================================
+// 
 
 /// Returns a list of all available fixture names
 pub fn list_fixtures() -> Vec<&'static str> {
@@ -631,6 +640,8 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "text_complex_scripts",
     "text_bidi",
     "text_line_break",
+    // Masks
+    "mask_composite",
   ]
 }
 
@@ -748,9 +759,15 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "Line breaking and white-space handling",
     ),
     (
+
       "shadow_dom",
       "Shadow DOM",
       "Declarative shadow DOM slotting",
+
+      "mask_composite",
+      "Masks",
+      "Compositing multiple CSS mask layers",
+
     ),
   ]
 }

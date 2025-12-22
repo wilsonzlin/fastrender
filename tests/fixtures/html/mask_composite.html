@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body {
+        margin: 0;
+        background: white;
+      }
+      #target {
+        width: 200px;
+        height: 200px;
+        background: rgb(0, 128, 255);
+        mask-image: linear-gradient(90deg, black 0 50%, transparent 50%),
+          linear-gradient(180deg, black 0 50%, transparent 50%);
+        mask-size: 100% 100%;
+        mask-repeat: no-repeat;
+        mask-composite: intersect;
+        mask-origin: border-box;
+        mask-clip: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="target"></div>
+  </body>
+</html>
