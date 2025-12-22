@@ -466,19 +466,9 @@ impl PositionedLayout {
           .unwrap_or_else(|| ContainingBlock::viewport(viewport_size))
       }
       Position::Fixed => {
-        let rect =
-          positioned_ancestor_rect.unwrap_or_else(|| Rect::new(Point::ZERO, viewport_size));
-        let block_base = if rect.size.height > 0.0 {
-          Some(rect.size.height)
-        } else {
-          None
-        };
-        ContainingBlock::with_viewport_and_bases(
-          rect,
-          viewport_size,
-          Some(rect.size.width),
-          block_base,
-        )
+        // Always use the viewport (initial containing block) for fixed positioning
+        // per CSS 2.1 §10.1
+        ContainingBlock::viewport(viewport_size)
       }
     }
   }
@@ -965,10 +955,9 @@ mod tests {
     let cb =
       layout.determine_containing_block(Position::Fixed, viewport, positioned_rect, block_rect);
 
-    // Fixed uses the containing block established by positioned/transform/perspective ancestors
-    let expected = positioned_rect.unwrap();
-    assert_eq!(cb.rect.size, expected.size);
-    assert_eq!(cb.rect.origin, expected.origin);
+    // Fixed uses the viewport regardless of positioned ancestors
+    assert_eq!(cb.rect.size, viewport);
+    assert_eq!(cb.rect.origin, Point::ZERO);
     assert_eq!(cb.viewport_size(), viewport);
   }
 
