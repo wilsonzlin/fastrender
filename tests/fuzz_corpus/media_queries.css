@@ -1,0 +1,17 @@
+@media screen and (min-width: 768px) {
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+  }
+}
+
+@supports (container-type: inline-size) {
+  section[hidden] {
+    display: none !important;
+  }
+
+  article:where(.feature, .promo) {
+    container-name: promo;
+  }
+}

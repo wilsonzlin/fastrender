@@ -1,0 +1,13 @@
+main :is(article, section):has(> header h1) {
+  margin-block: 1rem;
+}
+
+[data-theme="dark"] .button:hover,
+nav ul > li:focus-within > a {
+  background: linear-gradient(90deg, #333, #111);
+  color: #f8f8f8;
+}
+
+form input[type="search"]::placeholder {
+  color: #666;
+}

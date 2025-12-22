@@ -1,0 +1,41 @@
+[package]
+name = "fastrender-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+fastrender = { path = ".." }
+libfuzzer-sys = "0.4"
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "css_parser"
+path = "fuzz_targets/css_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "selectors"
+path = "fuzz_targets/selectors.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vars_and_calc"
+path = "fuzz_targets/vars_and_calc.rs"
+test = false
+doc = false
+bench = false

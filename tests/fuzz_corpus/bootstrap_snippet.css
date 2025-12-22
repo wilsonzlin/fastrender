@@ -1,0 +1,17 @@
+:root {
+  --bs-body-bg: #fff;
+  --bs-body-color: #212529;
+  --bs-gutter-x: 1.5rem;
+}
+
+.container {
+  width: 100%;
+  padding-right: calc(var(--bs-gutter-x) * 0.5);
+  padding-left: calc(var(--bs-gutter-x) * 0.5);
+}
+
+.navbar-nav > li > a {
+  display: block;
+  padding: 0.5rem 1rem;
+  color: var(--bs-body-color);
+}

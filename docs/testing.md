@@ -38,3 +38,14 @@ Local visual tests live in `tests/wpt/tests/` with expected PNGs under `tests/wp
 ```
 cargo run --quiet --bin fetch_and_render -- --viewport 800x600 file://$PWD/tests/wpt/tests/columns/multicol-001.html tests/wpt/expected/columns/multicol-001.png
 ```
+
+## Fuzzing (CSS parsing and selectors)
+
+Structured fuzzers live under `fuzz/` and target crash-prone areas in CSS parsing, selector matching, and custom property resolution.
+
+- Install tooling once: `cargo install cargo-fuzz`
+- Quick local run with a short time budget: `cargo fuzz run css_parser -- -runs=1000`
+- Selector matching and variable/calc parsing are covered by the `selectors` and `vars_and_calc` targets.
+- Seed corpora with real-world CSS live in `tests/fuzz_corpus/`; pass them as extra corpus paths (e.g. `cargo fuzz run selectors fuzz/corpus/selectors tests/fuzz_corpus`).
+
+The fuzz harnesses are optimized for fast iterations and can be run in CI with a low `-max_total_time` when needed.
