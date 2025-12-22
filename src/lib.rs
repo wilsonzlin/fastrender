@@ -314,7 +314,10 @@ pub use text::hyphenation::SupportedLanguage;
 pub use text::shaper::Script;
 pub use text::shaper::TextDirection;
 pub use text::shaper::TextShaper;
-pub use tree::box_generation::BoxGenerator;
+#[cfg(any(test, feature = "box_generation_demo"))]
+pub use tree::box_generation_demo::{
+  BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode,
+};
 pub use tree::box_tree::BoxNode;
 pub use tree::box_tree::BoxTree;
 pub use tree::box_tree::BoxType;

@@ -3,9 +3,6 @@
 //! Tests the AnonymousBoxCreator implementation per CSS 2.1 Section 9.2.1.1 and 9.2.2.1
 
 use fastrender::tree::anonymous::AnonymousBoxCreator;
-use fastrender::tree::box_generation::BoxGenerationConfig;
-use fastrender::tree::box_generation::BoxGenerator;
-use fastrender::tree::box_generation::DOMNode;
 use fastrender::tree::box_tree::AnonymousType;
 use fastrender::tree::box_tree::BoxType;
 use fastrender::BoxNode;
@@ -72,9 +69,11 @@ fn test_all_block_children_no_change() {
   let child2 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
   let child3 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    child1, child2, child3,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![child1, child2, child3],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -112,9 +111,11 @@ fn test_multiple_text_nodes_each_wrapped() {
   let text1 = BoxNode::new_text(default_style(), "Hello".to_string());
   let text2 = BoxNode::new_text(default_style(), "World".to_string());
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    text1, text2,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![text1, text2],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -149,9 +150,11 @@ fn test_text_before_block_wrapped_in_anonymous_block() {
   let text = BoxNode::new_text(default_style(), "Before".to_string());
   let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    text, block,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![text, block],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -172,9 +175,11 @@ fn test_text_after_block_wrapped_in_anonymous_block() {
   let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
   let text = BoxNode::new_text(default_style(), "After".to_string());
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    block, text,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![block, text],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -196,9 +201,11 @@ fn test_text_between_blocks_wrapped() {
   let text = BoxNode::new_text(default_style(), "Middle".to_string());
   let block2 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    block1, text, block2,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![block1, text, block2],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -217,9 +224,11 @@ fn test_mixed_content_text_block_text() {
   let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
   let text2 = BoxNode::new_text(default_style(), "After".to_string());
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    text1, block, text2,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![text1, block, text2],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -253,9 +262,11 @@ fn test_consecutive_inlines_grouped_in_single_anon_block() {
   let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
   let inline3 = BoxNode::new_inline(default_style(), vec![]);
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    inline1, inline2, block, inline3,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![inline1, inline2, block, inline3],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -280,9 +291,11 @@ fn test_text_and_inline_grouped_together() {
   let inline = BoxNode::new_inline(default_style(), vec![]);
   let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    text, inline, block,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![text, inline, block],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -300,9 +313,11 @@ fn test_alternating_block_inline_pattern() {
   let inline2 = BoxNode::new_inline(default_style(), vec![]);
   let block3 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    block1, inline1, block2, inline2, block3,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![block1, inline1, block2, inline2, block3],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -326,17 +341,19 @@ fn test_nested_fixup_two_levels() {
   let inner_text = BoxNode::new_text(default_style(), "Inner".to_string());
   let inner_block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let inner_container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    inner_text,
-    inner_block,
-  ]);
+  let inner_container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![inner_text, inner_block],
+  );
 
   let outer_text = BoxNode::new_text(default_style(), "Outer".to_string());
 
-  let outer_container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    outer_text,
-    inner_container,
-  ]);
+  let outer_container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![outer_text, inner_container],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(outer_container);
 
@@ -358,10 +375,11 @@ fn test_deeply_nested_structure() {
   let text = BoxNode::new_text(default_style(), "Deep".to_string());
   let inner_block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let level3 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    text,
-    inner_block,
-  ]);
+  let level3 = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![text, inner_block],
+  );
 
   let level2 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![level3]);
 
@@ -436,9 +454,11 @@ fn test_nested_inline_with_block_descendant_splits_at_outer() {
   let after = BoxNode::new_text(style.clone(), "After".to_string());
   let outer_inline = BoxNode::new_inline(style.clone(), vec![inner_inline, after]);
 
-  let container = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![
-    outer_inline,
-  ]);
+  let container = BoxNode::new_block(
+    style.clone(),
+    FormattingContextType::Block,
+    vec![outer_inline],
+  );
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
   assert_eq!(fixed.children.len(), 3);
@@ -460,9 +480,11 @@ fn test_inline_block_with_block_children_is_not_split() {
     vec![block_child],
   );
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    inline_block.clone(),
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![inline_block.clone()],
+  );
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
   assert_eq!(fixed.children.len(), 1);
@@ -479,9 +501,11 @@ fn test_all_inline_children_text_gets_wrapped() {
   let inline = BoxNode::new_inline(default_style(), vec![]);
   let text = BoxNode::new_text(default_style(), "Text".to_string());
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    inline, text,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![inline, text],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -503,9 +527,11 @@ fn test_multiple_inlines_no_block_mixing() {
   let inline2 = BoxNode::new_inline(default_style(), vec![]);
   let inline3 = BoxNode::new_inline(default_style(), vec![]);
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    inline1, inline2, inline3,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![inline1, inline2, inline3],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
@@ -568,71 +594,17 @@ fn test_count_anonymous_boxes() {
   let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
   let text2 = BoxNode::new_text(default_style(), "Text 2".to_string());
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    text1, block, text2,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![text1, block, text2],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 
   // Should have 2 anonymous blocks (one for each text)
   let count = AnonymousBoxCreator::count_anonymous_boxes(&fixed);
   assert_eq!(count, 2);
-}
-
-// =============================================================================
-// BoxGenerator Integration Tests
-// =============================================================================
-
-#[test]
-fn test_generator_with_anonymous_fixup_enabled() {
-  let mut config = BoxGenerationConfig::new();
-  config.insert_anonymous_boxes = true;
-
-  let generator = BoxGenerator::with_config(config);
-
-  // Create DOM with mixed content
-  let text = DOMNode::new_text("Hello", style_with_display(Display::Block));
-  let block = DOMNode::new_element("p", style_with_display(Display::Block), vec![]);
-
-  let root = DOMNode::new_element("div", style_with_display(Display::Block), vec![text, block]);
-
-  let box_tree = generator.generate(&root).unwrap();
-
-  // Mixed content should be fixed up
-  assert!(box_tree.root.children.iter().any(|c| c.is_anonymous()));
-}
-
-#[test]
-fn test_generator_with_anonymous_fixup_disabled() {
-  let config = BoxGenerationConfig::new(); // default has insert_anonymous_boxes = false
-  let generator = BoxGenerator::with_config(config);
-
-  // Create DOM with mixed content
-  let text = DOMNode::new_text("Hello", style_with_display(Display::Block));
-  let block = DOMNode::new_element("p", style_with_display(Display::Block), vec![]);
-
-  let root = DOMNode::new_element("div", style_with_display(Display::Block), vec![text, block]);
-
-  let box_tree = generator.generate(&root).unwrap();
-
-  // Without fixup, no anonymous boxes
-  assert!(!box_tree.root.children.iter().any(|c| c.is_anonymous()));
-}
-
-#[test]
-fn test_generate_with_anonymous_fixup_method() {
-  let generator = BoxGenerator::new();
-
-  // Create DOM with mixed content
-  let text = DOMNode::new_text("Hello", style_with_display(Display::Block));
-  let block = DOMNode::new_element("p", style_with_display(Display::Block), vec![]);
-
-  let root = DOMNode::new_element("div", style_with_display(Display::Block), vec![text, block]);
-
-  let box_tree = generator.generate_with_anonymous_fixup(&root).unwrap();
-
-  // Should have anonymous boxes
-  assert!(box_tree.root.children.iter().any(|c| c.is_anonymous()));
 }
 
 // =============================================================================
@@ -683,9 +655,11 @@ fn test_anonymous_type_is_block() {
   let text = BoxNode::new_text(default_style(), "Text".to_string());
   let block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![]);
 
-  let container = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    text, block,
-  ]);
+  let container = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![text, block],
+  );
 
   let fixed = AnonymousBoxCreator::fixup_tree(container);
 

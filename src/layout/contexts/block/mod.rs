@@ -3562,8 +3562,8 @@ mod tests {
   use crate::style::values::Length;
   use crate::style::ComputedStyle;
   use crate::text::font_loader::FontContext;
-  use crate::tree::box_generation::BoxGenerator;
-  use crate::tree::box_generation::DOMNode;
+  use crate::tree::box_generation_demo::BoxGenerator;
+  use crate::tree::box_generation_demo::DOMNode;
   use crate::tree::fragment_tree::FragmentContent;
   use std::sync::Arc;
 

@@ -22,6 +22,8 @@
 // Module declarations
 pub mod anonymous;
 pub mod box_generation;
+#[cfg(any(test, feature = "box_generation_demo"))]
+pub mod box_generation_demo;
 pub mod box_tree;
 pub mod debug;
 pub mod fragment_tree;
