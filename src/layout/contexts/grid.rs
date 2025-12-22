@@ -1370,16 +1370,18 @@ impl FormattingContext for GridFormattingContext {
       } else {
         None
       };
-      let establishes_cb = box_node.style.position.is_positioned()
+      let establishes_abs_cb = box_node.style.position.is_positioned()
         || !box_node.style.transform.is_empty()
         || box_node.style.perspective.is_some();
-      let cb = if establishes_cb {
-        crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
-          padding_rect,
-          self.viewport_size,
-          Some(padding_rect.size.width),
-          block_base,
-        )
+      let establishes_fixed_cb = !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
+      let padding_cb = crate::layout::contexts::positioned::ContainingBlock::with_viewport_and_bases(
+        padding_rect,
+        self.viewport_size,
+        Some(padding_rect.size.width),
+        block_base,
+      );
+      let cb_for_absolute = if establishes_abs_cb {
+        padding_cb
       } else {
         self.nearest_positioned_cb
       };
@@ -1397,6 +1399,17 @@ impl FormattingContext for GridFormattingContext {
         style.bottom = None;
         style.left = None;
         layout_child.style = Arc::new(style);
+
+        let cb = match child.style.position {
+          crate::style::position::Position::Fixed => {
+            if establishes_fixed_cb {
+              padding_cb
+            } else {
+              crate::layout::contexts::positioned::ContainingBlock::viewport(self.viewport_size)
+            }
+          }
+          _ => cb_for_absolute,
+        };
 
         let factory =
                     crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(

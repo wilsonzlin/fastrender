@@ -997,9 +997,10 @@ impl BlockFormattingContext {
     let mut inline_buffer: Vec<BoxNode> = Vec::new();
     let mut positioned_children: Vec<PositionedCandidate> = Vec::new();
     let collapse_with_parent_top = should_collapse_with_first_child(&parent.style);
-    let establishes_positioned_cb = parent.style.position.is_positioned()
+    let establishes_absolute_cb = parent.style.position.is_positioned()
       || !parent.style.transform.is_empty()
       || parent.style.perspective.is_some();
+    let establishes_fixed_cb = !parent.style.transform.is_empty() || parent.style.perspective.is_some();
     if !collapse_with_parent_top {
       margin_ctx.mark_content_encountered();
     }
@@ -1395,14 +1396,14 @@ impl BlockFormattingContext {
         let static_position = Some(Point::new(static_x, static_y));
         let source = match child.style.position {
           Position::Fixed => {
-            if establishes_positioned_cb {
+            if establishes_fixed_cb {
               ContainingBlockSource::ParentPadding
             } else {
               ContainingBlockSource::Explicit(ContainingBlock::viewport(self.viewport_size))
             }
           }
           Position::Absolute => {
-            if establishes_positioned_cb {
+            if establishes_absolute_cb {
               ContainingBlockSource::ParentPadding
             } else {
               ContainingBlockSource::Explicit(*nearest_positioned_cb)

@@ -143,3 +143,54 @@ fn fixed_flex_container_centers_children_with_insets() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn fixed_inside_positioned_parent_uses_viewport() {
+  std::thread::Builder::new()
+    .stack_size(64 * 1024 * 1024)
+    .spawn(|| {
+      let mut renderer = FastRender::new().expect("renderer");
+      let html = r#"
+            <style>
+              body { margin: 0; background: white; }
+              .container { position: relative; width: 120px; height: 120px; }
+              .fixed { position: fixed; top: 0; left: 0; right: 0; height: 30px; background: rgb(255, 0, 0); }
+            </style>
+            <div class="container"><div class="fixed"></div></div>
+            "#;
+
+      // If the fixed element incorrectly uses the positioned parent, pixels outside the parent's
+      // width would remain white. The viewport is 200px wide, so x=150 should be inside the bar.
+      let pixmap = renderer.render_html(html, 200, 120).expect("render");
+      assert!(is_red(pixel(&pixmap, 150, 10)), "fixed bar should span the viewport");
+    })
+    .unwrap()
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn fixed_inside_transformed_parent_uses_transformed_cb() {
+  std::thread::Builder::new()
+    .stack_size(64 * 1024 * 1024)
+    .spawn(|| {
+      let mut renderer = FastRender::new().expect("renderer");
+      let html = r#"
+            <style>
+              body { margin: 0; background: white; }
+              .transformed { transform: translateZ(0); width: 120px; height: 120px; }
+              .fixed { position: fixed; top: 0; left: 0; right: 0; height: 30px; background: rgb(255, 0, 0); }
+            </style>
+            <div class="transformed"><div class="fixed"></div></div>
+            "#;
+
+      // When a transform is present, it establishes the containing block for fixed descendants.
+      // The bar should be constrained to 120px, so x=150 should remain white.
+      let pixmap = renderer.render_html(html, 200, 120).expect("render");
+      assert!(!is_red(pixel(&pixmap, 150, 10)), "transform should capture fixed containing block");
+      assert!(is_red(pixel(&pixmap, 60, 10)), "bar should still render inside transformed ancestor");
+    })
+    .unwrap()
+    .join()
+    .unwrap();
+}

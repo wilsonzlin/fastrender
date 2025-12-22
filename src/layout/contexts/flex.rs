@@ -1750,27 +1750,41 @@ impl FormattingContext for FlexFormattingContext {
       } else {
         None
       };
-      let establishes_cb = box_node.style.position.is_positioned()
+      let establishes_abs_cb = box_node.style.position.is_positioned()
         || !box_node.style.transform.is_empty()
         || box_node.style.perspective.is_some();
-      let cb = if establishes_cb {
-        ContainingBlock::with_viewport_and_bases(
-          padding_rect,
-          self.viewport_size,
-          Some(padding_rect.size.width),
-          block_base,
-        )
+      let establishes_fixed_cb = !box_node.style.transform.is_empty() || box_node.style.perspective.is_some();
+      let padding_cb = ContainingBlock::with_viewport_and_bases(
+        padding_rect,
+        self.viewport_size,
+        Some(padding_rect.size.width),
+        block_base,
+      );
+      let cb_for_absolute = if establishes_abs_cb {
+        padding_cb
       } else {
         self.nearest_positioned_cb
       };
 
-      let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-                self.font_context.clone(),
-                self.viewport_size,
-                cb,
-            );
-
       for child in positioned_children {
+        let cb = match child.style.position {
+          Position::Fixed => {
+            if establishes_fixed_cb {
+              padding_cb
+            } else {
+              ContainingBlock::viewport(self.viewport_size)
+            }
+          }
+          Position::Absolute => cb_for_absolute,
+          _ => cb_for_absolute,
+        };
+
+        let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+                  self.font_context.clone(),
+                  self.viewport_size,
+                  cb,
+              );
+
         let original_style = child.style.clone();
         // Layout child as static to obtain intrinsic size.
         let mut layout_child = child.clone();
