@@ -1166,6 +1166,15 @@ impl BlendModeExt for BlendMode {
       BlendMode::Color => SkiaBlendMode::Color,
       BlendMode::Luminosity => SkiaBlendMode::Luminosity,
       BlendMode::PlusLighter => SkiaBlendMode::Plus,
+      BlendMode::PlusDarker => SkiaBlendMode::Darken,
+      BlendMode::HueHsv => SkiaBlendMode::Hue,
+      BlendMode::SaturationHsv => SkiaBlendMode::Saturation,
+      BlendMode::ColorHsv => SkiaBlendMode::Color,
+      BlendMode::LuminosityHsv => SkiaBlendMode::Luminosity,
+      BlendMode::HueOklch => SkiaBlendMode::Hue,
+      BlendMode::ChromaOklch => SkiaBlendMode::Saturation,
+      BlendMode::ColorOklch => SkiaBlendMode::Color,
+      BlendMode::LuminosityOklch => SkiaBlendMode::Luminosity,
     }
   }
 }

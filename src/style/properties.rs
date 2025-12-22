@@ -9644,6 +9644,15 @@ fn parse_mix_blend_mode(kw: &str) -> Option<MixBlendMode> {
     "color" => Some(MixBlendMode::Color),
     "luminosity" => Some(MixBlendMode::Luminosity),
     "plus-lighter" => Some(MixBlendMode::PlusLighter),
+    "plus-darker" => Some(MixBlendMode::PlusDarker),
+    "hue-hsv" | "hue-hsb" => Some(MixBlendMode::HueHsv),
+    "saturation-hsv" | "saturation-hsb" => Some(MixBlendMode::SaturationHsv),
+    "color-hsv" | "color-hsb" => Some(MixBlendMode::ColorHsv),
+    "luminosity-hsv" | "luminosity-hsb" => Some(MixBlendMode::LuminosityHsv),
+    "hue-oklch" => Some(MixBlendMode::HueOklch),
+    "saturation-oklch" | "chroma-oklch" => Some(MixBlendMode::ChromaOklch),
+    "color-oklch" => Some(MixBlendMode::ColorOklch),
+    "luminosity-oklch" | "lightness-oklch" => Some(MixBlendMode::LuminosityOklch),
     _ => None,
   }
 }
@@ -11976,11 +11985,14 @@ mod tests {
       16.0,
       16.0,
     );
-    assert_eq!(style.image_resolution, ImageResolution {
-      from_image: false,
-      specified: Some(2.0),
-      snap: false
-    });
+    assert_eq!(
+      style.image_resolution,
+      ImageResolution {
+        from_image: false,
+        specified: Some(2.0),
+        snap: false
+      }
+    );
 
     apply_declaration(
       &mut style,
@@ -12207,10 +12219,13 @@ mod tests {
       16.0,
       16.0,
     );
-    assert_eq!(style.image_orientation, ImageOrientation::Angle {
-      quarter_turns: 1,
-      flip: true
-    });
+    assert_eq!(
+      style.image_orientation,
+      ImageOrientation::Angle {
+        quarter_turns: 1,
+        flip: true
+      }
+    );
 
     apply_declaration(
       &mut style,
@@ -12224,10 +12239,13 @@ mod tests {
       16.0,
       16.0,
     );
-    assert_eq!(style.image_orientation, ImageOrientation::Angle {
-      quarter_turns: 1,
-      flip: false
-    });
+    assert_eq!(
+      style.image_orientation,
+      ImageOrientation::Angle {
+        quarter_turns: 1,
+        flip: false
+      }
+    );
 
     apply_declaration(
       &mut style,
@@ -12241,10 +12259,13 @@ mod tests {
       16.0,
       16.0,
     );
-    assert_eq!(style.image_orientation, ImageOrientation::Angle {
-      quarter_turns: 0,
-      flip: true
-    });
+    assert_eq!(
+      style.image_orientation,
+      ImageOrientation::Angle {
+        quarter_turns: 0,
+        flip: true
+      }
+    );
   }
 
   #[test]
@@ -12621,10 +12642,13 @@ mod tests {
       16.0,
       16.0,
     );
-    assert_eq!(style.color_scheme, ColorSchemePreference::Supported {
-      schemes: vec![ColorSchemeEntry::Light, ColorSchemeEntry::Dark],
-      only: false
-    });
+    assert_eq!(
+      style.color_scheme,
+      ColorSchemePreference::Supported {
+        schemes: vec![ColorSchemeEntry::Light, ColorSchemeEntry::Dark],
+        only: false
+      }
+    );
 
     apply_declaration(
       &mut style,
@@ -12638,10 +12662,13 @@ mod tests {
       16.0,
       16.0,
     );
-    assert_eq!(style.color_scheme, ColorSchemePreference::Supported {
-      schemes: vec![ColorSchemeEntry::Dark],
-      only: true
-    });
+    assert_eq!(
+      style.color_scheme,
+      ColorSchemePreference::Supported {
+        schemes: vec![ColorSchemeEntry::Dark],
+        only: true
+      }
+    );
   }
 
   #[test]
@@ -12665,10 +12692,13 @@ mod tests {
       16.0,
     );
 
-    assert_eq!(style.color_scheme, ColorSchemePreference::Supported {
-      schemes: vec![ColorSchemeEntry::Light],
-      only: false
-    });
+    assert_eq!(
+      style.color_scheme,
+      ColorSchemePreference::Supported {
+        schemes: vec![ColorSchemeEntry::Light],
+        only: false
+      }
+    );
   }
 
   #[test]
@@ -15878,10 +15908,13 @@ mod tests {
       important: false,
     };
     apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
-    assert_eq!(style.quotes, vec![
-      ("«".to_string(), "»".to_string()),
-      ("‹".to_string(), "›".to_string())
-    ]);
+    assert_eq!(
+      style.quotes,
+      vec![
+        ("«".to_string(), "»".to_string()),
+        ("‹".to_string(), "›".to_string())
+      ]
+    );
 
     let decl = Declaration {
       property: "quotes".to_string(),
@@ -16860,6 +16893,37 @@ mod tests {
   }
 
   #[test]
+  fn parses_plus_darker_and_color_spaces_mix_blend_mode() {
+    let mut style = ComputedStyle::default();
+    let darker = Declaration {
+      property: "mix-blend-mode".to_string(),
+      value: PropertyValue::Keyword("plus-darker".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &darker, &ComputedStyle::default(), 16.0, 16.0);
+    assert!(matches!(style.mix_blend_mode, MixBlendMode::PlusDarker));
+
+    let hsv = Declaration {
+      property: "mix-blend-mode".to_string(),
+      value: PropertyValue::Keyword("hue-hsv".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &hsv, &ComputedStyle::default(), 16.0, 16.0);
+    assert!(matches!(style.mix_blend_mode, MixBlendMode::HueHsv));
+
+    let oklch = Declaration {
+      property: "mix-blend-mode".to_string(),
+      value: PropertyValue::Keyword("color-oklch".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &oklch, &ComputedStyle::default(), 16.0, 16.0);
+    assert!(matches!(style.mix_blend_mode, MixBlendMode::ColorOklch));
+  }
+
+  #[test]
   fn parses_backdrop_filter_as_filter_list() {
     let mut style = ComputedStyle::default();
     let decl = Declaration {
@@ -16970,10 +17034,10 @@ mod tests {
       LineHeight::Length(len) => assert!((len.to_px() - 30.0).abs() < 0.01),
       _ => panic!("expected length line-height"),
     }
-    assert_eq!(style.font_family, vec![
-      "Fira Sans".to_string(),
-      "serif".to_string()
-    ]);
+    assert_eq!(
+      style.font_family,
+      vec!["Fira Sans".to_string(), "serif".to_string()]
+    );
   }
 
   #[test]
@@ -17095,11 +17159,14 @@ mod tests {
     };
 
     apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
-    assert_eq!(style.font_family, vec![
-      "Font, With, Commas".to_string(),
-      "Open Sans".to_string(),
-      "serif".to_string()
-    ]);
+    assert_eq!(
+      style.font_family,
+      vec![
+        "Font, With, Commas".to_string(),
+        "Open Sans".to_string(),
+        "serif".to_string()
+      ]
+    );
   }
 
   #[test]

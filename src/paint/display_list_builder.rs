@@ -796,6 +796,15 @@ impl DisplayListBuilder {
       MixBlendMode::Color => BlendMode::Color,
       MixBlendMode::Luminosity => BlendMode::Luminosity,
       MixBlendMode::PlusLighter => BlendMode::PlusLighter,
+      MixBlendMode::PlusDarker => BlendMode::PlusDarker,
+      MixBlendMode::HueHsv => BlendMode::HueHsv,
+      MixBlendMode::SaturationHsv => BlendMode::SaturationHsv,
+      MixBlendMode::ColorHsv => BlendMode::ColorHsv,
+      MixBlendMode::LuminosityHsv => BlendMode::LuminosityHsv,
+      MixBlendMode::HueOklch => BlendMode::HueOklch,
+      MixBlendMode::ChromaOklch => BlendMode::ChromaOklch,
+      MixBlendMode::ColorOklch => BlendMode::ColorOklch,
+      MixBlendMode::LuminosityOklch => BlendMode::LuminosityOklch,
     }
   }
 
@@ -1674,14 +1683,15 @@ impl DisplayListBuilder {
     let percentage_height = reference.height();
 
     let resolved_perspective = style.perspective.as_ref().and_then(|len| {
-      len.resolve_with_context(
-        Some(percentage_width),
-        viewport.map(|v| v.0).unwrap_or(0.0),
-        viewport.map(|v| v.1).unwrap_or(0.0),
-        style.font_size,
-        style.root_font_size,
-      )
-      .filter(|v| *v > 0.0)
+      len
+        .resolve_with_context(
+          Some(percentage_width),
+          viewport.map(|v| v.0).unwrap_or(0.0),
+          viewport.map(|v| v.1).unwrap_or(0.0),
+          style.font_size,
+          style.root_font_size,
+        )
+        .filter(|v| *v > 0.0)
     });
 
     if style.transform.is_empty() && resolved_perspective.is_none() {
@@ -1728,7 +1738,12 @@ impl DisplayListBuilder {
         crate::css::types::Transform::TranslateZ(z) => Transform3D::translate(
           0.0,
           0.0,
-          Self::resolve_transform_length(z, style.font_size, style.root_font_size, percentage_width),
+          Self::resolve_transform_length(
+            z,
+            style.font_size,
+            style.root_font_size,
+            percentage_width,
+          ),
         ),
         crate::css::types::Transform::Translate3d(x, y, z) => {
           let tx = Self::resolve_transform_length(
@@ -1756,8 +1771,9 @@ impl DisplayListBuilder {
         crate::css::types::Transform::ScaleY(sy) => Transform3D::scale(1.0, *sy, 1.0),
         crate::css::types::Transform::ScaleZ(sz) => Transform3D::scale(1.0, 1.0, *sz),
         crate::css::types::Transform::Scale3d(sx, sy, sz) => Transform3D::scale(*sx, *sy, *sz),
-        crate::css::types::Transform::Rotate(deg)
-        | crate::css::types::Transform::RotateZ(deg) => Transform3D::rotate_z(deg.to_radians()),
+        crate::css::types::Transform::Rotate(deg) | crate::css::types::Transform::RotateZ(deg) => {
+          Transform3D::rotate_z(deg.to_radians())
+        }
         crate::css::types::Transform::RotateX(deg) => Transform3D::rotate_x(deg.to_radians()),
         crate::css::types::Transform::RotateY(deg) => Transform3D::rotate_y(deg.to_radians()),
         crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
@@ -1797,14 +1813,14 @@ impl DisplayListBuilder {
         crate::css::types::Transform::Skew(ax, ay) => {
           Transform3D::skew(ax.to_radians(), ay.to_radians())
         }
-        crate::css::types::Transform::Perspective(len) => Transform3D::perspective(
-          Self::resolve_transform_length(
+        crate::css::types::Transform::Perspective(len) => {
+          Transform3D::perspective(Self::resolve_transform_length(
             len,
             style.font_size,
             style.root_font_size,
             percentage_width,
-          ),
-        ),
+          ))
+        }
         crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
           Transform3D::from_2d(&Transform2D {
             a: *a,
@@ -1852,13 +1868,14 @@ impl DisplayListBuilder {
         percentage_height,
       );
       let perspective_origin = Point::new(reference.x() + po_x, reference.y() + po_y);
-      let perspective_matrix = Transform3D::translate(
-        perspective_origin.x,
-        perspective_origin.y,
-        0.0,
-      )
-      .multiply(&Transform3D::perspective(perspective))
-      .multiply(&Transform3D::translate(-perspective_origin.x, -perspective_origin.y, 0.0));
+      let perspective_matrix =
+        Transform3D::translate(perspective_origin.x, perspective_origin.y, 0.0)
+          .multiply(&Transform3D::perspective(perspective))
+          .multiply(&Transform3D::translate(
+            -perspective_origin.x,
+            -perspective_origin.y,
+            0.0,
+          ));
 
       final_matrix = final_matrix.multiply(&perspective_matrix);
     }
@@ -5788,7 +5805,9 @@ mod tests {
     assert_eq!(transform.m[12], 5.0);
     assert_eq!(transform.m[13], 6.0);
     assert_eq!(transform.m[15], 1.0);
-    let affine = transform.to_2d().expect("matrix3d translation stays affine");
+    let affine = transform
+      .to_2d()
+      .expect("matrix3d translation stays affine");
     assert!((affine.e - 5.0).abs() < 1e-6);
     assert!((affine.f - 6.0).abs() < 1e-6);
   }
@@ -5802,7 +5821,10 @@ mod tests {
     let transform =
       DisplayListBuilder::build_transform(&style, bounds, None).expect("perspective builds");
 
-    assert!(transform.to_2d().is_none(), "perspective should keep 3d components");
+    assert!(
+      transform.to_2d().is_none(),
+      "perspective should keep 3d components"
+    );
     assert!((transform.m[11] + 1.0 / 500.0).abs() < 1e-6);
   }
 
@@ -5879,6 +5901,9 @@ mod tests {
     let builder = DisplayListBuilder::new();
     let list = builder.build(&fragment);
 
-    assert!(list.is_empty(), "backface should be culled with perspective");
+    assert!(
+      list.is_empty(),
+      "backface should be culled with perspective"
+    );
   }
 }

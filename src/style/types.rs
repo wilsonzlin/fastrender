@@ -592,6 +592,15 @@ pub enum MixBlendMode {
   Color,
   Luminosity,
   PlusLighter,
+  PlusDarker,
+  HueHsv,
+  SaturationHsv,
+  ColorHsv,
+  LuminosityHsv,
+  HueOklch,
+  ChromaOklch,
+  ColorOklch,
+  LuminosityOklch,
 }
 
 /// Isolation for stacking contexts

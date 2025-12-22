@@ -111,6 +111,15 @@ fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
     BlendMode::Color => tiny_skia::BlendMode::Color,
     BlendMode::Luminosity => tiny_skia::BlendMode::Luminosity,
     BlendMode::PlusLighter => tiny_skia::BlendMode::Plus,
+    BlendMode::PlusDarker => tiny_skia::BlendMode::Darken,
+    BlendMode::HueHsv => tiny_skia::BlendMode::Hue,
+    BlendMode::SaturationHsv => tiny_skia::BlendMode::Saturation,
+    BlendMode::ColorHsv => tiny_skia::BlendMode::Color,
+    BlendMode::LuminosityHsv => tiny_skia::BlendMode::Luminosity,
+    BlendMode::HueOklch => tiny_skia::BlendMode::Hue,
+    BlendMode::ChromaOklch => tiny_skia::BlendMode::Saturation,
+    BlendMode::ColorOklch => tiny_skia::BlendMode::Color,
+    BlendMode::LuminosityOklch => tiny_skia::BlendMode::Luminosity,
   }
 }
 
@@ -206,14 +215,179 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
   (r, g, b)
 }
 
-fn apply_hsl_blend(mode: BlendMode, src: (f32, f32, f32), dst: (f32, f32, f32)) -> (f32, f32, f32) {
-  let (sh, ss, sl) = rgb_to_hsl(src.0, src.1, src.2);
-  let (dh, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
+fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+  let max = r.max(g).max(b);
+  let min = r.min(g).min(b);
+  let v = max;
+  let d = max - min;
+  if d.abs() < f32::EPSILON {
+    return (0.0, 0.0, v);
+  }
+  let s = if max > 0.0 { d / max } else { 0.0 };
+  let h = if (max - r).abs() < f32::EPSILON {
+    (g - b) / d + if g < b { 6.0 } else { 0.0 }
+  } else if (max - g).abs() < f32::EPSILON {
+    (b - r) / d + 2.0
+  } else {
+    (r - g) / d + 4.0
+  } / 6.0;
+  (h, s, v)
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+  if s <= 0.0 {
+    return (v, v, v);
+  }
+  let hh = (h * 6.0) % 6.0;
+  let i = hh.floor();
+  let f = hh - i;
+  let p = v * (1.0 - s);
+  let q = v * (1.0 - s * f);
+  let t = v * (1.0 - s * (1.0 - f));
+  match i as i32 {
+    0 => (v, t, p),
+    1 => (q, v, p),
+    2 => (p, v, t),
+    3 => (p, q, v),
+    4 => (t, p, v),
+    _ => (v, p, q),
+  }
+}
+
+fn srgb_to_linear(v: f32) -> f32 {
+  if v <= 0.04045 {
+    v / 12.92
+  } else {
+    ((v + 0.055) / 1.055).powf(2.4)
+  }
+}
+
+fn linear_to_srgb(v: f32) -> f32 {
+  if v <= 0.0031308 {
+    v * 12.92
+  } else {
+    1.055 * v.powf(1.0 / 2.4) - 0.055
+  }
+}
+
+fn linear_srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+  let l = 0.412_221_46 * r + 0.536_332_54 * g + 0.051_445_996 * b;
+  let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+  let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
+
+  let l_ = l.cbrt();
+  let m_ = m.cbrt();
+  let s_ = s.cbrt();
+
+  let l_ok = 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_;
+  let a_ok = 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_;
+  let b_ok = 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_;
+  (l_ok, a_ok, b_ok)
+}
+
+fn oklab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
+  let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+  let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
+  let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+
+  let l3 = l_.powf(3.0);
+  let m3 = m_.powf(3.0);
+  let s3 = s_.powf(3.0);
+
+  let r = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
+  let g = -1.268_438_ * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
+  let b = 0.004_421_97 * l3 - 0.703_418_6 * m3 + 1.698_594_8 * s3;
+  (r, g, b)
+}
+
+fn rgb_to_oklch(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+  let (l, a, bb) = linear_srgb_to_oklab(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b));
+  let c = (a * a + bb * bb).sqrt();
+  let h = bb.atan2(a).to_degrees().rem_euclid(360.0);
+  (l, c, h)
+}
+
+fn oklch_to_rgb(l: f32, c: f32, h: f32) -> (f32, f32, f32) {
+  let hr = h.to_radians();
+  let a = c * hr.cos();
+  let b = c * hr.sin();
+  let (r_lin, g_lin, b_lin) = oklab_to_linear_srgb(l, a, b);
+  (
+    linear_to_srgb(r_lin).clamp(0.0, 1.0),
+    linear_to_srgb(g_lin).clamp(0.0, 1.0),
+    linear_to_srgb(b_lin).clamp(0.0, 1.0),
+  )
+}
+
+fn is_manual_blend(mode: BlendMode) -> bool {
+  matches!(
+    mode,
+    BlendMode::Hue
+      | BlendMode::Saturation
+      | BlendMode::Color
+      | BlendMode::Luminosity
+      | BlendMode::HueHsv
+      | BlendMode::SaturationHsv
+      | BlendMode::ColorHsv
+      | BlendMode::LuminosityHsv
+      | BlendMode::HueOklch
+      | BlendMode::ChromaOklch
+      | BlendMode::ColorOklch
+      | BlendMode::LuminosityOklch
+      | BlendMode::PlusDarker
+  )
+}
+
+fn apply_manual_blend(
+  mode: BlendMode,
+  src: (f32, f32, f32),
+  dst: (f32, f32, f32),
+) -> (f32, f32, f32) {
   match mode {
-    BlendMode::Hue => hsl_to_rgb(sh, ds, dl),
-    BlendMode::Saturation => hsl_to_rgb(dh, ss, dl),
-    BlendMode::Color => hsl_to_rgb(sh, ss, dl),
-    BlendMode::Luminosity => hsl_to_rgb(dh, ds, sl),
+    BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity => {
+      let (sh, ss, sl) = rgb_to_hsl(src.0, src.1, src.2);
+      let (dh, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
+      match mode {
+        BlendMode::Hue => hsl_to_rgb(sh, ds, dl),
+        BlendMode::Saturation => hsl_to_rgb(dh, ss, dl),
+        BlendMode::Color => hsl_to_rgb(sh, ss, dl),
+        BlendMode::Luminosity => hsl_to_rgb(dh, ds, sl),
+        _ => dst,
+      }
+    }
+    BlendMode::HueHsv
+    | BlendMode::SaturationHsv
+    | BlendMode::ColorHsv
+    | BlendMode::LuminosityHsv => {
+      let (sh, ss, sv) = rgb_to_hsv(src.0, src.1, src.2);
+      let (dh, ds, dv) = rgb_to_hsv(dst.0, dst.1, dst.2);
+      match mode {
+        BlendMode::HueHsv => hsv_to_rgb(sh, ds, dv),
+        BlendMode::SaturationHsv => hsv_to_rgb(dh, ss, dv),
+        BlendMode::ColorHsv => hsv_to_rgb(sh, ss, dv),
+        BlendMode::LuminosityHsv => hsv_to_rgb(dh, ds, sv),
+        _ => dst,
+      }
+    }
+    BlendMode::HueOklch
+    | BlendMode::ChromaOklch
+    | BlendMode::ColorOklch
+    | BlendMode::LuminosityOklch => {
+      let (sh, sc, sl) = rgb_to_oklch(src.0, src.1, src.2);
+      let (dh, dc, dl) = rgb_to_oklch(dst.0, dst.1, dst.2);
+      match mode {
+        BlendMode::HueOklch => oklch_to_rgb(sh, dc, dl),
+        BlendMode::ChromaOklch => oklch_to_rgb(dh, sc, dl),
+        BlendMode::ColorOklch => oklch_to_rgb(sh, sc, dl),
+        BlendMode::LuminosityOklch => oklch_to_rgb(dh, dc, sl),
+        _ => dst,
+      }
+    }
+    BlendMode::PlusDarker => (
+      (src.0 + dst.0 - 1.0).max(0.0).min(1.0),
+      (src.1 + dst.1 - 1.0).max(0.0).min(1.0),
+      (src.2 + dst.2 - 1.0).max(0.0).min(1.0),
+    ),
     _ => dst,
   }
 }
@@ -837,7 +1011,7 @@ struct StackingRecord {
   filters: Vec<ResolvedFilter>,
   radii: BorderRadii,
   mask_bounds: Rect,
-  hsl_blend: Option<BlendMode>,
+  manual_blend: Option<BlendMode>,
   culled: bool,
 }
 
@@ -2079,7 +2253,12 @@ impl DisplayListRenderer {
       .draw_pixmap(0, 0, temp.as_ref(), &paint, transform, clip.as_ref());
   }
 
-  fn composite_hsl_layer(&mut self, layer: &Pixmap, opacity: f32, mode: BlendMode) -> Result<()> {
+  fn composite_manual_layer(
+    &mut self,
+    layer: &Pixmap,
+    opacity: f32,
+    mode: BlendMode,
+  ) -> Result<()> {
     let target = self.canvas.pixmap_mut();
     let width = target.width().min(layer.width()) as usize;
     let height = target.height().min(layer.height()) as usize;
@@ -2128,7 +2307,7 @@ impl DisplayListRenderer {
             (0.0, 0.0, 0.0)
           };
 
-          let blended_rgb = apply_hsl_blend(mode, src_rgb, dst_rgb);
+          let blended_rgb = apply_manual_blend(mode, src_rgb, dst_rgb);
 
           let out_a = sa + da * (1.0 - sa);
           let out_rgb = if out_a > 0.0 {
@@ -2246,14 +2425,7 @@ impl DisplayListRenderer {
         let radii = self.ds_radii(item.radii);
 
         let is_isolated = item.is_isolated || !scaled_backdrop.is_empty();
-        let is_hsl_blend = matches!(
-          item.mix_blend_mode,
-          crate::paint::display_list::BlendMode::Hue
-            | crate::paint::display_list::BlendMode::Saturation
-            | crate::paint::display_list::BlendMode::Color
-            | crate::paint::display_list::BlendMode::Luminosity
-        );
-        let hsl_blend = if is_hsl_blend && !is_isolated {
+        let manual_blend = if is_manual_blend(item.mix_blend_mode) && !is_isolated {
           Some(item.mix_blend_mode)
         } else {
           None
@@ -2286,7 +2458,7 @@ impl DisplayListRenderer {
           || !scaled_filters.is_empty()
           || !scaled_backdrop.is_empty();
         if needs_layer {
-          if hsl_blend.is_some() {
+          if manual_blend.is_some() {
             self.canvas.push_layer(1.0)?;
           } else {
             let blend = if is_isolated {
@@ -2304,7 +2476,7 @@ impl DisplayListRenderer {
           filters: scaled_filters,
           radii,
           mask_bounds: bounds,
-          hsl_blend,
+          manual_blend,
           culled: false,
         });
 
@@ -2321,7 +2493,7 @@ impl DisplayListRenderer {
             filters: Vec::new(),
             radii: BorderRadii::ZERO,
             mask_bounds: Rect::ZERO,
-            hsl_blend: None,
+            manual_blend: None,
             culled: false,
           });
 
@@ -2333,7 +2505,7 @@ impl DisplayListRenderer {
           return Ok(());
         }
         if record.needs_layer {
-          if let Some(mode) = record.hsl_blend {
+          if let Some(mode) = record.manual_blend {
             let (mut layer, opacity, _) = self.canvas.pop_layer_raw()?;
             if !record.filters.is_empty() {
               apply_filters(&mut layer, &record.filters, self.scale);
@@ -2351,7 +2523,7 @@ impl DisplayListRenderer {
             if let Some(mask) = self.canvas.clip_mask().cloned() {
               layer.apply_mask(&mask);
             }
-            self.composite_hsl_layer(&layer, opacity, mode)?;
+            self.composite_manual_layer(&layer, opacity, mode)?;
           } else {
             if !record.filters.is_empty() {
               apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
@@ -2400,10 +2572,7 @@ impl DisplayListRenderer {
         self.canvas.restore();
       }
       DisplayItem::PushBlendMode(mode) => {
-        if matches!(
-          mode.mode,
-          BlendMode::Hue | BlendMode::Saturation | BlendMode::Color | BlendMode::Luminosity
-        ) {
+        if is_manual_blend(mode.mode) {
           self.canvas.push_layer(1.0)?;
           self.blend_stack.push(Some(mode.mode));
         } else {
@@ -2417,7 +2586,7 @@ impl DisplayListRenderer {
         let blend_mode = self.blend_stack.pop().flatten();
         if let Some(mode) = blend_mode {
           let (layer, opacity, _) = self.canvas.pop_layer_raw()?;
-          self.composite_hsl_layer(&layer, opacity, mode)?;
+          self.composite_manual_layer(&layer, opacity, mode)?;
         } else {
           self.canvas.pop_layer()?;
         }

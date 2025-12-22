@@ -2090,13 +2090,13 @@ impl Painter {
         } else {
           map_blend_mode(blend_mode)
         };
-        if is_hsl_blend(blend_mode) && !isolated {
+        if is_manual_blend(blend_mode) && !isolated {
           if let Some(mut transformed) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
             let mut paint = PixmapPaint::default();
             paint.opacity = 1.0;
             paint.blend_mode = SkiaBlendMode::SourceOver;
             transformed.draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
-            composite_hsl_layer(
+            composite_manual_layer(
               &mut self.pixmap,
               &transformed,
               opacity.min(1.0),
@@ -2516,7 +2516,7 @@ impl Painter {
     paint.shader = shader;
     paint.anti_alias = true;
 
-    if is_hsl_blend(blend_mode) {
+    if is_manual_blend(blend_mode) {
       if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
         paint.blend_mode = SkiaBlendMode::SourceOver;
         layer.fill_path(
@@ -2526,7 +2526,7 @@ impl Painter {
           Transform::identity(),
           clip_mask,
         );
-        composite_hsl_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(paint_rect));
+        composite_manual_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(paint_rect));
       } else {
         paint.blend_mode = map_blend_mode(blend_mode);
         self.pixmap.fill_path(
@@ -2684,7 +2684,7 @@ impl Painter {
     paint.shader = shader;
     paint.anti_alias = true;
 
-    if is_hsl_blend(blend_mode) {
+    if is_manual_blend(blend_mode) {
       if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
         paint.blend_mode = SkiaBlendMode::SourceOver;
         layer.fill_path(
@@ -2694,7 +2694,7 @@ impl Painter {
           Transform::identity(),
           clip_mask,
         );
-        composite_hsl_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(paint_rect));
+        composite_manual_layer(&mut self.pixmap, &layer, 1.0, blend_mode, Some(paint_rect));
       } else {
         paint.blend_mode = map_blend_mode(blend_mode);
         self.pixmap.fill_path(
@@ -2779,11 +2779,11 @@ impl Painter {
       intersection.width(),
       intersection.height(),
     ) {
-      if is_hsl_blend(blend_mode) {
+      if is_manual_blend(blend_mode) {
         if let Some(mut layer) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
           paint.blend_mode = SkiaBlendMode::SourceOver;
           layer.fill_rect(rect, &paint, Transform::identity(), mask);
-          composite_hsl_layer(
+          composite_manual_layer(
             &mut self.pixmap,
             &layer,
             1.0,
@@ -7276,187 +7276,6 @@ fn apply_spread(pixmap: &mut Pixmap, spread: f32) {
   }
 }
 
-fn is_hsl_blend(mode: MixBlendMode) -> bool {
-  matches!(
-    mode,
-    MixBlendMode::Hue | MixBlendMode::Saturation | MixBlendMode::Color | MixBlendMode::Luminosity
-  )
-}
-
-fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
-  let max = r.max(g).max(b);
-  let min = r.min(g).min(b);
-  let l = (max + min) / 2.0;
-  if (max - min).abs() < f32::EPSILON {
-    return (0.0, 0.0, l);
-  }
-
-  let d = max - min;
-  let s = if l > 0.5 {
-    d / (2.0 - max - min)
-  } else {
-    d / (max + min)
-  };
-  let h = if (max - r).abs() < f32::EPSILON {
-    (g - b) / d + if g < b { 6.0 } else { 0.0 }
-  } else if (max - g).abs() < f32::EPSILON {
-    (b - r) / d + 2.0
-  } else {
-    (r - g) / d + 4.0
-  } / 6.0;
-  (h, s, l)
-}
-
-fn hue_to_rgb(p: f32, q: f32, t: f32) -> f32 {
-  let mut t = t;
-  if t < 0.0 {
-    t += 1.0;
-  }
-  if t > 1.0 {
-    t -= 1.0;
-  }
-  if t < 1.0 / 6.0 {
-    p + (q - p) * 6.0 * t
-  } else if t < 0.5 {
-    q
-  } else if t < 2.0 / 3.0 {
-    p + (q - p) * (2.0 / 3.0 - t) * 6.0
-  } else {
-    p
-  }
-}
-
-fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
-  if s <= 0.0 {
-    return (l, l, l);
-  }
-  let q = if l < 0.5 {
-    l * (1.0 + s)
-  } else {
-    l + s - l * s
-  };
-  let p = 2.0 * l - q;
-  let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
-  let g = hue_to_rgb(p, q, h);
-  let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
-  (r, g, b)
-}
-
-fn apply_hsl_blend(
-  mode: MixBlendMode,
-  src: (f32, f32, f32),
-  dst: (f32, f32, f32),
-) -> (f32, f32, f32) {
-  let (sh, ss, sl) = rgb_to_hsl(src.0, src.1, src.2);
-  let (dh, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
-  match mode {
-    MixBlendMode::Hue => hsl_to_rgb(sh, ds, dl),
-    MixBlendMode::Saturation => hsl_to_rgb(dh, ss, dl),
-    MixBlendMode::Color => hsl_to_rgb(sh, ss, dl),
-    MixBlendMode::Luminosity => hsl_to_rgb(dh, ds, sl),
-    _ => dst,
-  }
-}
-
-fn composite_hsl_layer(
-  dest: &mut Pixmap,
-  layer: &Pixmap,
-  opacity: f32,
-  mode: MixBlendMode,
-  area: Option<Rect>,
-) {
-  if !is_hsl_blend(mode) {
-    return;
-  }
-  let dest_width = dest.width() as usize;
-  let dest_height = dest.height() as usize;
-  let layer_width = layer.width() as usize;
-  let layer_height = layer.height() as usize;
-  if dest_width == 0 || dest_height == 0 || layer_width == 0 || layer_height == 0 {
-    return;
-  }
-
-  let max_width = dest_width.min(layer_width);
-  let max_height = dest_height.min(layer_height);
-  let (mut x0, mut y0, mut x1, mut y1) = if let Some(rect) = area {
-    let x0 = rect.min_x().floor() as i32;
-    let y0 = rect.min_y().floor() as i32;
-    let x1 = rect.max_x().ceil() as i32;
-    let y1 = rect.max_y().ceil() as i32;
-    (x0, y0, x1, y1)
-  } else {
-    (0, 0, max_width as i32, max_height as i32)
-  };
-  x0 = x0.clamp(0, max_width as i32);
-  y0 = y0.clamp(0, max_height as i32);
-  x1 = x1.clamp(0, max_width as i32);
-  y1 = y1.clamp(0, max_height as i32);
-  if x0 >= x1 || y0 >= y1 {
-    return;
-  }
-
-  let src_pixels = layer.pixels();
-  let dst_pixels = dest.pixels_mut();
-  let src_stride = layer_width;
-  let dst_stride = dest_width;
-  let opacity = opacity.clamp(0.0, 1.0);
-
-  for y in y0..y1 {
-    let yi = y as usize;
-    for x in x0..x1 {
-      let xi = x as usize;
-      let src_px = src_pixels[yi * src_stride + xi];
-      let raw_sa = src_px.alpha() as f32 / 255.0;
-      if raw_sa == 0.0 || opacity == 0.0 {
-        continue;
-      }
-      let dst_px = &mut dst_pixels[yi * dst_stride + xi];
-      let sa = (raw_sa * opacity).clamp(0.0, 1.0);
-      let da = dst_px.alpha() as f32 / 255.0;
-
-      let src_rgb = if raw_sa > 0.0 {
-        (
-          (src_px.red() as f32 / 255.0) / raw_sa,
-          (src_px.green() as f32 / 255.0) / raw_sa,
-          (src_px.blue() as f32 / 255.0) / raw_sa,
-        )
-      } else {
-        (0.0, 0.0, 0.0)
-      };
-      let dst_rgb = if da > 0.0 {
-        (
-          (dst_px.red() as f32 / 255.0) / da,
-          (dst_px.green() as f32 / 255.0) / da,
-          (dst_px.blue() as f32 / 255.0) / da,
-        )
-      } else {
-        (0.0, 0.0, 0.0)
-      };
-
-      let blended_rgb = apply_hsl_blend(mode, src_rgb, dst_rgb);
-
-      let out_a = sa + da * (1.0 - sa);
-      let out_rgb = if out_a > 0.0 {
-        (
-          (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
-          (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
-          (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
-        )
-      } else {
-        (0.0, 0.0, 0.0)
-      };
-
-      let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-      let scale = out_a;
-      let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-      let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-      let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-      *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
-        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-    }
-  }
-}
-
 fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
   match mode {
     MixBlendMode::Normal => SkiaBlendMode::SourceOver,
@@ -7476,6 +7295,15 @@ fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
     MixBlendMode::Color => SkiaBlendMode::Color,
     MixBlendMode::Luminosity => SkiaBlendMode::Luminosity,
     MixBlendMode::PlusLighter => SkiaBlendMode::Plus,
+    MixBlendMode::PlusDarker => SkiaBlendMode::Darken,
+    MixBlendMode::HueHsv => SkiaBlendMode::Hue,
+    MixBlendMode::SaturationHsv => SkiaBlendMode::Saturation,
+    MixBlendMode::ColorHsv => SkiaBlendMode::Color,
+    MixBlendMode::LuminosityHsv => SkiaBlendMode::Luminosity,
+    MixBlendMode::HueOklch => SkiaBlendMode::Hue,
+    MixBlendMode::ChromaOklch => SkiaBlendMode::Saturation,
+    MixBlendMode::ColorOklch => SkiaBlendMode::Color,
+    MixBlendMode::LuminosityOklch => SkiaBlendMode::Luminosity,
   }
 }
 
@@ -7702,6 +7530,344 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
         data[idx + 2] = 0;
         data[idx + 3] = 0;
       }
+    }
+  }
+}
+
+fn is_manual_blend(mode: MixBlendMode) -> bool {
+  matches!(
+    mode,
+    MixBlendMode::Hue
+      | MixBlendMode::Saturation
+      | MixBlendMode::Color
+      | MixBlendMode::Luminosity
+      | MixBlendMode::HueHsv
+      | MixBlendMode::SaturationHsv
+      | MixBlendMode::ColorHsv
+      | MixBlendMode::LuminosityHsv
+      | MixBlendMode::HueOklch
+      | MixBlendMode::ChromaOklch
+      | MixBlendMode::ColorOklch
+      | MixBlendMode::LuminosityOklch
+      | MixBlendMode::PlusDarker
+  )
+}
+
+fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+  let max = r.max(g).max(b);
+  let min = r.min(g).min(b);
+  let l = (max + min) / 2.0;
+  if (max - min).abs() < f32::EPSILON {
+    return (0.0, 0.0, l);
+  }
+
+  let d = max - min;
+  let s = if l > 0.5 {
+    d / (2.0 - max - min)
+  } else {
+    d / (max + min)
+  };
+  let h = if (max - r).abs() < f32::EPSILON {
+    (g - b) / d + if g < b { 6.0 } else { 0.0 }
+  } else if (max - g).abs() < f32::EPSILON {
+    (b - r) / d + 2.0
+  } else {
+    (r - g) / d + 4.0
+  } / 6.0;
+  (h, s, l)
+}
+
+fn hue_to_rgb(p: f32, q: f32, t: f32) -> f32 {
+  let mut t = t;
+  if t < 0.0 {
+    t += 1.0;
+  }
+  if t > 1.0 {
+    t -= 1.0;
+  }
+  if t < 1.0 / 6.0 {
+    p + (q - p) * 6.0 * t
+  } else if t < 0.5 {
+    q
+  } else if t < 2.0 / 3.0 {
+    p + (q - p) * (2.0 / 3.0 - t) * 6.0
+  } else {
+    p
+  }
+}
+
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
+  if s <= 0.0 {
+    return (l, l, l);
+  }
+  let q = if l < 0.5 {
+    l * (1.0 + s)
+  } else {
+    l + s - l * s
+  };
+  let p = 2.0 * l - q;
+  let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+  let g = hue_to_rgb(p, q, h);
+  let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+  (r, g, b)
+}
+
+fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+  let max = r.max(g).max(b);
+  let min = r.min(g).min(b);
+  let v = max;
+  let d = max - min;
+  if d.abs() < f32::EPSILON {
+    return (0.0, 0.0, v);
+  }
+  let s = if max > 0.0 { d / max } else { 0.0 };
+  let h = if (max - r).abs() < f32::EPSILON {
+    (g - b) / d + if g < b { 6.0 } else { 0.0 }
+  } else if (max - g).abs() < f32::EPSILON {
+    (b - r) / d + 2.0
+  } else {
+    (r - g) / d + 4.0
+  } / 6.0;
+  (h, s, v)
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+  if s <= 0.0 {
+    return (v, v, v);
+  }
+  let hh = (h * 6.0) % 6.0;
+  let i = hh.floor();
+  let f = hh - i;
+  let p = v * (1.0 - s);
+  let q = v * (1.0 - s * f);
+  let t = v * (1.0 - s * (1.0 - f));
+  match i as i32 {
+    0 => (v, t, p),
+    1 => (q, v, p),
+    2 => (p, v, t),
+    3 => (p, q, v),
+    4 => (t, p, v),
+    _ => (v, p, q),
+  }
+}
+
+fn srgb_to_linear(v: f32) -> f32 {
+  if v <= 0.04045 {
+    v / 12.92
+  } else {
+    ((v + 0.055) / 1.055).powf(2.4)
+  }
+}
+
+fn linear_to_srgb(v: f32) -> f32 {
+  if v <= 0.0031308 {
+    v * 12.92
+  } else {
+    1.055 * v.powf(1.0 / 2.4) - 0.055
+  }
+}
+
+fn linear_srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+  let l = 0.412_221_46 * r + 0.536_332_54 * g + 0.051_445_996 * b;
+  let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+  let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
+
+  let l_ = l.cbrt();
+  let m_ = m.cbrt();
+  let s_ = s.cbrt();
+
+  let l_ok = 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_;
+  let a_ok = 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_;
+  let b_ok = 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_;
+  (l_ok, a_ok, b_ok)
+}
+
+fn oklab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
+  let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+  let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
+  let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+
+  let l3 = l_.powf(3.0);
+  let m3 = m_.powf(3.0);
+  let s3 = s_.powf(3.0);
+
+  let r = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
+  let g = -1.268_438_ * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
+  let b = 0.004_421_97 * l3 - 0.703_418_6 * m3 + 1.698_594_8 * s3;
+  (r, g, b)
+}
+
+fn rgb_to_oklch(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+  let (l, a, bb) = linear_srgb_to_oklab(srgb_to_linear(r), srgb_to_linear(g), srgb_to_linear(b));
+  let c = (a * a + bb * bb).sqrt();
+  let h = bb.atan2(a).to_degrees().rem_euclid(360.0);
+  (l, c, h)
+}
+
+fn oklch_to_rgb(l: f32, c: f32, h: f32) -> (f32, f32, f32) {
+  let hr = h.to_radians();
+  let a = c * hr.cos();
+  let b = c * hr.sin();
+  let (r_lin, g_lin, b_lin) = oklab_to_linear_srgb(l, a, b);
+  (
+    linear_to_srgb(r_lin).clamp(0.0, 1.0),
+    linear_to_srgb(g_lin).clamp(0.0, 1.0),
+    linear_to_srgb(b_lin).clamp(0.0, 1.0),
+  )
+}
+
+fn apply_manual_blend(
+  mode: MixBlendMode,
+  src: (f32, f32, f32),
+  dst: (f32, f32, f32),
+) -> (f32, f32, f32) {
+  match mode {
+    MixBlendMode::Hue
+    | MixBlendMode::Saturation
+    | MixBlendMode::Color
+    | MixBlendMode::Luminosity => {
+      let (sh, ss, sl) = rgb_to_hsl(src.0, src.1, src.2);
+      let (dh, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
+      match mode {
+        MixBlendMode::Hue => hsl_to_rgb(sh, ds, dl),
+        MixBlendMode::Saturation => hsl_to_rgb(dh, ss, dl),
+        MixBlendMode::Color => hsl_to_rgb(sh, ss, dl),
+        MixBlendMode::Luminosity => hsl_to_rgb(dh, ds, sl),
+        _ => dst,
+      }
+    }
+    MixBlendMode::HueHsv
+    | MixBlendMode::SaturationHsv
+    | MixBlendMode::ColorHsv
+    | MixBlendMode::LuminosityHsv => {
+      let (sh, ss, sv) = rgb_to_hsv(src.0, src.1, src.2);
+      let (dh, ds, dv) = rgb_to_hsv(dst.0, dst.1, dst.2);
+      match mode {
+        MixBlendMode::HueHsv => hsv_to_rgb(sh, ds, dv),
+        MixBlendMode::SaturationHsv => hsv_to_rgb(dh, ss, dv),
+        MixBlendMode::ColorHsv => hsv_to_rgb(sh, ss, dv),
+        MixBlendMode::LuminosityHsv => hsv_to_rgb(dh, ds, sv),
+        _ => dst,
+      }
+    }
+    MixBlendMode::HueOklch
+    | MixBlendMode::ChromaOklch
+    | MixBlendMode::ColorOklch
+    | MixBlendMode::LuminosityOklch => {
+      let (sh, sc, sl) = rgb_to_oklch(src.0, src.1, src.2);
+      let (dh, dc, dl) = rgb_to_oklch(dst.0, dst.1, dst.2);
+      match mode {
+        MixBlendMode::HueOklch => oklch_to_rgb(sh, dc, dl),
+        MixBlendMode::ChromaOklch => oklch_to_rgb(dh, sc, dl),
+        MixBlendMode::ColorOklch => oklch_to_rgb(sh, sc, dl),
+        MixBlendMode::LuminosityOklch => oklch_to_rgb(dh, dc, sl),
+        _ => dst,
+      }
+    }
+    MixBlendMode::PlusDarker => (
+      (src.0 + dst.0 - 1.0).max(0.0).min(1.0),
+      (src.1 + dst.1 - 1.0).max(0.0).min(1.0),
+      (src.2 + dst.2 - 1.0).max(0.0).min(1.0),
+    ),
+    _ => dst,
+  }
+}
+
+fn composite_manual_layer(
+  dest: &mut Pixmap,
+  layer: &Pixmap,
+  opacity: f32,
+  mode: MixBlendMode,
+  area: Option<Rect>,
+) {
+  if !is_manual_blend(mode) {
+    return;
+  }
+  let dest_width = dest.width() as usize;
+  let dest_height = dest.height() as usize;
+  let layer_width = layer.width() as usize;
+  let layer_height = layer.height() as usize;
+  if dest_width == 0 || dest_height == 0 || layer_width == 0 || layer_height == 0 {
+    return;
+  }
+
+  let max_width = dest_width.min(layer_width);
+  let max_height = dest_height.min(layer_height);
+  let (mut x0, mut y0, mut x1, mut y1) = if let Some(rect) = area {
+    let x0 = rect.min_x().floor() as i32;
+    let y0 = rect.min_y().floor() as i32;
+    let x1 = rect.max_x().ceil() as i32;
+    let y1 = rect.max_y().ceil() as i32;
+    (x0, y0, x1, y1)
+  } else {
+    (0, 0, max_width as i32, max_height as i32)
+  };
+  x0 = x0.clamp(0, max_width as i32);
+  y0 = y0.clamp(0, max_height as i32);
+  x1 = x1.clamp(0, max_width as i32);
+  y1 = y1.clamp(0, max_height as i32);
+  if x0 >= x1 || y0 >= y1 {
+    return;
+  }
+
+  let src_pixels = layer.pixels();
+  let dst_pixels = dest.pixels_mut();
+  let src_stride = layer_width;
+  let dst_stride = dest_width;
+  let opacity = opacity.clamp(0.0, 1.0);
+
+  for y in y0..y1 {
+    let yi = y as usize;
+    for x in x0..x1 {
+      let xi = x as usize;
+      let src_px = src_pixels[yi * src_stride + xi];
+      let raw_sa = src_px.alpha() as f32 / 255.0;
+      if raw_sa == 0.0 || opacity == 0.0 {
+        continue;
+      }
+      let dst_px = &mut dst_pixels[yi * dst_stride + xi];
+      let sa = (raw_sa * opacity).clamp(0.0, 1.0);
+      let da = dst_px.alpha() as f32 / 255.0;
+
+      let src_rgb = if raw_sa > 0.0 {
+        (
+          (src_px.red() as f32 / 255.0) / raw_sa,
+          (src_px.green() as f32 / 255.0) / raw_sa,
+          (src_px.blue() as f32 / 255.0) / raw_sa,
+        )
+      } else {
+        (0.0, 0.0, 0.0)
+      };
+      let dst_rgb = if da > 0.0 {
+        (
+          (dst_px.red() as f32 / 255.0) / da,
+          (dst_px.green() as f32 / 255.0) / da,
+          (dst_px.blue() as f32 / 255.0) / da,
+        )
+      } else {
+        (0.0, 0.0, 0.0)
+      };
+
+      let blended_rgb = apply_manual_blend(mode, src_rgb, dst_rgb);
+
+      let out_a = sa + da * (1.0 - sa);
+      let out_rgb = if out_a > 0.0 {
+        (
+          (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
+          (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
+          (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
+        )
+      } else {
+        (0.0, 0.0, 0.0)
+      };
+
+      let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+      let scale = out_a;
+      let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+      let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+      let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+      *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     }
   }
 }
@@ -10864,7 +11030,7 @@ mod tests {
     let pixmap = paint_tree(&FragmentTree::new(root), 2, 2, Rgba::WHITE).expect("paint");
     let (r, g, b, _) = color_at(&pixmap, 0, 0);
 
-    let expected = apply_hsl_blend(
+    let expected = apply_manual_blend(
       MixBlendMode::Hue,
       (
         src.0 as f32 / 255.0,
@@ -10974,7 +11140,7 @@ mod tests {
     let pixmap = paint_tree(&FragmentTree::new(fragment), 2, 2, Rgba::WHITE).expect("paint");
     let (r, g, b, _) = color_at(&pixmap, 0, 0);
 
-    let expected = apply_hsl_blend(
+    let expected = apply_manual_blend(
       MixBlendMode::Color,
       (
         src.0 as f32 / 255.0,

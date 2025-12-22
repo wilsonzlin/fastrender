@@ -125,6 +125,119 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
   )
 }
 
+fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+  let r = r as f32 / 255.0;
+  let g = g as f32 / 255.0;
+  let b = b as f32 / 255.0;
+  let max = r.max(g).max(b);
+  let min = r.min(g).min(b);
+  let v = max;
+  let d = max - min;
+  if d.abs() < f32::EPSILON {
+    return (0.0, 0.0, v);
+  }
+  let s = if max > 0.0 { d / max } else { 0.0 };
+  let h = if (max - r).abs() < f32::EPSILON {
+    (g - b) / d + if g < b { 6.0 } else { 0.0 }
+  } else if (max - g).abs() < f32::EPSILON {
+    (b - r) / d + 2.0
+  } else {
+    (r - g) / d + 4.0
+  } / 6.0;
+  (h, s, v)
+}
+
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (u8, u8, u8) {
+  if s <= 0.0 {
+    let v_u8 = (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    return (v_u8, v_u8, v_u8);
+  }
+  let hh = (h * 6.0) % 6.0;
+  let i = hh.floor();
+  let f = hh - i;
+  let p = v * (1.0 - s);
+  let q = v * (1.0 - s * f);
+  let t = v * (1.0 - s * (1.0 - f));
+  let (r, g, b) = match i as i32 {
+    0 => (v, t, p),
+    1 => (q, v, p),
+    2 => (p, v, t),
+    3 => (p, q, v),
+    4 => (t, p, v),
+    _ => (v, p, q),
+  };
+  (
+    (r * 255.0).round().clamp(0.0, 255.0) as u8,
+    (g * 255.0).round().clamp(0.0, 255.0) as u8,
+    (b * 255.0).round().clamp(0.0, 255.0) as u8,
+  )
+}
+
+fn srgb_to_linear(v: f32) -> f32 {
+  if v <= 0.04045 {
+    v / 12.92
+  } else {
+    ((v + 0.055) / 1.055).powf(2.4)
+  }
+}
+
+fn linear_to_srgb(v: f32) -> f32 {
+  if v <= 0.0031308 {
+    v * 12.92
+  } else {
+    1.055 * v.powf(1.0 / 2.4) - 0.055
+  }
+}
+
+fn rgb_to_oklch(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+  let r = srgb_to_linear(r as f32 / 255.0);
+  let g = srgb_to_linear(g as f32 / 255.0);
+  let b = srgb_to_linear(b as f32 / 255.0);
+  let l = 0.412_221_46 * r + 0.536_332_54 * g + 0.051_445_996 * b;
+  let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+  let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
+
+  let l_ = l.cbrt();
+  let m_ = m.cbrt();
+  let s_ = s.cbrt();
+
+  let l_ok = 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_;
+  let a_ok = 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_;
+  let b_ok = 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_;
+  let c = (a_ok * a_ok + b_ok * b_ok).sqrt();
+  let h = b_ok.atan2(a_ok).to_degrees().rem_euclid(360.0);
+  (l_ok, c, h)
+}
+
+fn oklch_to_rgb(l: f32, c: f32, h: f32) -> (u8, u8, u8) {
+  let hr = h.to_radians();
+  let a = c * hr.cos();
+  let b = c * hr.sin();
+  let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+  let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
+  let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+
+  let l3 = l_.powf(3.0);
+  let m3 = m_.powf(3.0);
+  let s3 = s_.powf(3.0);
+
+  let r = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
+  let g = -1.268_438_ * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
+  let b = 0.004_421_97 * l3 - 0.703_418_6 * m3 + 1.698_594_8 * s3;
+
+  (
+    (linear_to_srgb(r).clamp(0.0, 1.0) * 255.0)
+      .round()
+      .clamp(0.0, 255.0) as u8,
+    (linear_to_srgb(g).clamp(0.0, 1.0) * 255.0)
+      .round()
+      .clamp(0.0, 255.0) as u8,
+    (linear_to_srgb(b).clamp(0.0, 1.0) * 255.0)
+      .round()
+      .clamp(0.0, 255.0) as u8,
+  )
+}
+
 fn blend_hue(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
   let (sh, _, _) = rgb_to_hsl(src.0, src.1, src.2);
   let (_, ds, dl) = rgb_to_hsl(dst.0, dst.1, dst.2);
@@ -149,6 +262,18 @@ fn blend_luminosity(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
   hsl_to_rgb(dh, ds, sl)
 }
 
+fn blend_hue_hsv(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
+  let (sh, _, _) = rgb_to_hsv(src.0, src.1, src.2);
+  let (_, ds, dv) = rgb_to_hsv(dst.0, dst.1, dst.2);
+  hsv_to_rgb(sh, ds, dv)
+}
+
+fn blend_color_oklch(src: (u8, u8, u8), dst: (u8, u8, u8)) -> (u8, u8, u8) {
+  let (sh, sc, _) = rgb_to_oklch(src.0, src.1, src.2);
+  let (dl, _, _) = rgb_to_oklch(dst.0, dst.1, dst.2);
+  oklch_to_rgb(dl, sc, sh)
+}
+
 fn hue_delta(a: f32, b: f32) -> f32 {
   let d = (a - b).abs();
   d.min(1.0 - d)
@@ -169,6 +294,24 @@ fn assert_hsl_components(
       && (l - expected_hsl.2).abs() <= tol_l,
     "{context}: expected hsl {:?}, got hsl ({h:.3},{s:.3},{l:.3})",
     expected_hsl
+  );
+}
+
+fn assert_oklch_components(
+  actual: (u8, u8, u8),
+  expected: (f32, f32, f32),
+  tol_l: f32,
+  tol_c: f32,
+  tol_h: f32,
+  context: &str,
+) {
+  let (al, ac, ah) = rgb_to_oklch(actual.0, actual.1, actual.2);
+  assert!(
+    (al - expected.0).abs() <= tol_l
+      && (ac - expected.1).abs() <= tol_c
+      && hue_delta(ah / 360.0, expected.2 / 360.0) * 360.0 <= tol_h,
+    "{context}: expected oklch {:?}, got oklch ({al:.3},{ac:.3},{ah:.3})",
+    expected
   );
 }
 
@@ -1422,6 +1565,34 @@ fn hue_blend_mode_uses_source_hue() {
 }
 
 #[test]
+fn hue_hsv_blend_mode_uses_source_hue() {
+  use fastrender::paint::display_list::BlendMode;
+  use fastrender::paint::display_list::BlendModeItem;
+
+  let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  let dst = (255u8, 255u8, 0u8); // yellow
+  let src = (0u8, 0u8, 255u8); // blue
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+    color: Rgba::from_rgba8(dst.0, dst.1, dst.2, 255),
+  }));
+  list.push(DisplayItem::PushBlendMode(BlendModeItem {
+    mode: BlendMode::HueHsv,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+    color: Rgba::from_rgba8(src.0, src.1, src.2, 255),
+  }));
+  list.push(DisplayItem::PopBlendMode);
+
+  let pixmap = renderer.render(&list).unwrap();
+  let (r, g, b, _) = pixel(&pixmap, 0, 0);
+  let expected = blend_hue_hsv(src, dst);
+  assert_eq!((r, g, b), expected);
+}
+
+#[test]
 fn saturation_blend_mode_uses_source_saturation() {
   use fastrender::paint::display_list::BlendMode;
   use fastrender::paint::display_list::BlendModeItem;
@@ -1458,6 +1629,42 @@ fn saturation_blend_mode_uses_source_saturation() {
 }
 
 #[test]
+fn color_oklch_blend_uses_source_chroma_and_hue() {
+  use fastrender::paint::display_list::BlendMode;
+  use fastrender::paint::display_list::BlendModeItem;
+
+  let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  let dst = (120u8, 120u8, 120u8);
+  let src = (0u8, 200u8, 0u8);
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+    color: Rgba::from_rgba8(dst.0, dst.1, dst.2, 255),
+  }));
+  list.push(DisplayItem::PushBlendMode(BlendModeItem {
+    mode: BlendMode::ColorOklch,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+    color: Rgba::from_rgba8(src.0, src.1, src.2, 255),
+  }));
+  list.push(DisplayItem::PopBlendMode);
+
+  let pixmap = renderer.render(&list).unwrap();
+  let (r, g, b, _) = pixel(&pixmap, 0, 0);
+  let expected = blend_color_oklch(src, dst);
+  let expected_oklch = rgb_to_oklch(expected.0, expected.1, expected.2);
+  assert_oklch_components(
+    (r, g, b),
+    expected_oklch,
+    0.02,
+    0.02,
+    1.0,
+    "color oklch blend",
+  );
+}
+
+#[test]
 fn plus_lighter_blend_adds_colors() {
   use fastrender::paint::display_list::BlendMode;
   use fastrender::paint::display_list::BlendModeItem;
@@ -1479,6 +1686,32 @@ fn plus_lighter_blend_adds_colors() {
 
   let pixmap = renderer.render(&list).unwrap();
   assert_eq!(pixel(&pixmap, 0, 0), (255, 100, 100, 255));
+}
+
+#[test]
+fn plus_darker_blend_clamps_to_black() {
+  use fastrender::paint::display_list::BlendMode;
+  use fastrender::paint::display_list::BlendModeItem;
+
+  let renderer = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  // Destination: solid red.
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PushBlendMode(BlendModeItem {
+    mode: BlendMode::PlusDarker,
+  }));
+  // Source: solid blue.
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 2.0, 2.0),
+    color: Rgba::BLUE,
+  }));
+  list.push(DisplayItem::PopBlendMode);
+
+  let pixmap = renderer.render(&list).unwrap();
+  assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 0, 255));
 }
 
 #[test]

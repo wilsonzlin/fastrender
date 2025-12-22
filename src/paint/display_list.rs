@@ -49,9 +49,9 @@ use crate::style::types::BorderImageSlice;
 use crate::style::types::BorderImageWidth;
 use crate::style::types::BorderStyle as CssBorderStyle;
 use crate::style::types::ResolvedTextDecoration;
-use crate::style::types::TransformStyle;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
+use crate::style::types::TransformStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
 use std::fmt;
@@ -1013,11 +1013,10 @@ impl Transform3D {
     let mut out = [0.0_f32; 16];
     for row in 0..4 {
       for col in 0..4 {
-        out[col * 4 + row] =
-          self.m[0 * 4 + row] * other.m[col * 4 + 0]
-            + self.m[1 * 4 + row] * other.m[col * 4 + 1]
-            + self.m[2 * 4 + row] * other.m[col * 4 + 2]
-            + self.m[3 * 4 + row] * other.m[col * 4 + 3];
+        out[col * 4 + row] = self.m[0 * 4 + row] * other.m[col * 4 + 0]
+          + self.m[1 * 4 + row] * other.m[col * 4 + 1]
+          + self.m[2 * 4 + row] * other.m[col * 4 + 2]
+          + self.m[3 * 4 + row] * other.m[col * 4 + 3];
       }
     }
     Transform3D { m: out }
@@ -1438,6 +1437,24 @@ pub enum BlendMode {
   Luminosity,
   /// Plus-lighter
   PlusLighter,
+  /// Plus-darker (additive darkening)
+  PlusDarker,
+  /// Hue blend in HSV/HSB space
+  HueHsv,
+  /// Saturation blend in HSV/HSB space
+  SaturationHsv,
+  /// Color blend in HSV/HSB space (hue+saturation)
+  ColorHsv,
+  /// Luminosity blend in HSV/HSB space (value component)
+  LuminosityHsv,
+  /// Hue blend in OKLCH space
+  HueOklch,
+  /// Chroma blend in OKLCH space
+  ChromaOklch,
+  /// Color blend in OKLCH space (hue+chroma)
+  ColorOklch,
+  /// Luminosity blend in OKLCH space (lightness component)
+  LuminosityOklch,
 }
 
 /// Stacking context
