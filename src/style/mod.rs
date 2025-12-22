@@ -33,13 +33,14 @@ use counters::CounterProperties;
 use display::Display;
 use position::Position;
 use std::collections::HashMap;
+use std::sync::Arc;
 use types::AccentColor;
 use types::AlignContent;
 use types::AlignItems;
-use types::Appearance;
-use types::AspectRatio;
 use types::AnimationRange;
 use types::AnimationTimeline;
+use types::Appearance;
+use types::AspectRatio;
 use types::BackfaceVisibility;
 use types::BackgroundAttachment;
 use types::BackgroundBox;
@@ -102,8 +103,11 @@ use types::LineHeight;
 use types::ListStyleImage;
 use types::ListStylePosition;
 use types::ListStyleType;
+use types::MaskClip;
+use types::MaskComposite;
 use types::MaskLayer;
 use types::MaskMode;
+use types::MaskOrigin;
 use types::MixBlendMode;
 use types::ObjectFit;
 use types::ObjectPosition;
@@ -122,10 +126,10 @@ use types::ScrollBehavior;
 use types::ScrollSnapAlignments;
 use types::ScrollSnapStop;
 use types::ScrollSnapType;
+use types::ScrollTimeline;
 use types::ScrollbarColor;
 use types::ScrollbarGutter;
 use types::ScrollbarWidth;
-use types::ScrollTimeline;
 use types::TabSize;
 use types::TableLayout;
 use types::TextAlign;
@@ -150,15 +154,14 @@ use types::TransformBox;
 use types::TransformOrigin;
 use types::TransformStyle;
 use types::UnicodeBidi;
-use types::ViewTimeline;
 use types::UserSelect;
 use types::VerticalAlign;
+use types::ViewTimeline;
 use types::WhiteSpace;
 use types::WillChange;
 use types::WordBreak;
 use types::WritingMode;
 use values::Length;
-use std::sync::Arc;
 
 // Re-export common types from values module
 // These are now public via the module system
@@ -665,6 +668,9 @@ pub struct ComputedStyle {
   pub mask_sizes: Vec<BackgroundSize>,
   pub mask_repeats: Vec<BackgroundRepeat>,
   pub mask_modes: Vec<MaskMode>,
+  pub mask_origins: Vec<MaskOrigin>,
+  pub mask_clips: Vec<MaskClip>,
+  pub mask_composites: Vec<MaskComposite>,
   pub mask_layers: Vec<MaskLayer>,
   pub object_fit: ObjectFit,
   pub object_position: ObjectPosition,
@@ -950,6 +956,9 @@ impl Default for ComputedStyle {
       mask_sizes: vec![mask_default.size.clone()],
       mask_repeats: vec![mask_default.repeat],
       mask_modes: vec![mask_default.mode],
+      mask_origins: vec![mask_default.origin],
+      mask_clips: vec![mask_default.clip],
+      mask_composites: vec![mask_default.composite],
       mask_layers: vec![mask_default],
       object_fit: ObjectFit::Fill,
       object_position: ObjectPosition {
@@ -1101,13 +1110,35 @@ impl ComputedStyle {
     if self.mask_modes.is_empty() {
       self.mask_modes.push(defaults.mode);
     }
+    if self.mask_origins.is_empty() {
+      self.mask_origins.push(defaults.origin);
+    }
+    if self.mask_clips.is_empty() {
+      self.mask_clips.push(defaults.clip);
+    }
+    if self.mask_composites.is_empty() {
+      self.mask_composites.push(defaults.composite);
+    }
   }
 
   /// Rebuild per-layer mask data from stored lists, repeating the last value of
   /// shorter lists and truncating longer lists to the number of mask-image layers.
   pub fn rebuild_mask_layers(&mut self) {
     self.ensure_mask_lists();
-    let layer_count = self.mask_images.len().max(1);
+    let layer_count = [
+      self.mask_images.len(),
+      self.mask_positions.len(),
+      self.mask_sizes.len(),
+      self.mask_repeats.len(),
+      self.mask_modes.len(),
+      self.mask_origins.len(),
+      self.mask_clips.len(),
+      self.mask_composites.len(),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0)
+    .max(1);
     self.mask_layers.clear();
     for idx in 0..layer_count {
       let mut layer = MaskLayer::default();
@@ -1116,12 +1147,18 @@ impl ComputedStyle {
       let size_idx = self.mask_sizes.len().saturating_sub(1).min(idx);
       let rep_idx = self.mask_repeats.len().saturating_sub(1).min(idx);
       let mode_idx = self.mask_modes.len().saturating_sub(1).min(idx);
+      let origin_idx = self.mask_origins.len().saturating_sub(1).min(idx);
+      let clip_idx = self.mask_clips.len().saturating_sub(1).min(idx);
+      let composite_idx = self.mask_composites.len().saturating_sub(1).min(idx);
 
       layer.image = self.mask_images[img_idx].clone();
       layer.position = self.mask_positions[pos_idx].clone();
       layer.size = self.mask_sizes[size_idx].clone();
       layer.repeat = self.mask_repeats[rep_idx];
       layer.mode = self.mask_modes[mode_idx];
+      layer.origin = self.mask_origins[origin_idx];
+      layer.clip = self.mask_clips[clip_idx];
+      layer.composite = self.mask_composites[composite_idx];
       self.mask_layers.push(layer);
     }
   }
@@ -1139,6 +1176,9 @@ impl ComputedStyle {
     self.mask_sizes = normalized.iter().map(|l| l.size.clone()).collect();
     self.mask_repeats = normalized.iter().map(|l| l.repeat).collect();
     self.mask_modes = normalized.iter().map(|l| l.mode).collect();
+    self.mask_origins = normalized.iter().map(|l| l.origin).collect();
+    self.mask_clips = normalized.iter().map(|l| l.clip).collect();
+    self.mask_composites = normalized.iter().map(|l| l.composite).collect();
     self.mask_layers = normalized;
   }
 

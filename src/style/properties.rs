@@ -23,8 +23,8 @@ use crate::style::float::Float;
 use crate::style::grid::parse_grid_shorthand;
 use crate::style::grid::parse_grid_template_areas;
 use crate::style::grid::parse_grid_template_shorthand;
-use crate::style::grid::parse_subgrid_line_names;
 use crate::style::grid::parse_grid_tracks_with_names;
+use crate::style::grid::parse_subgrid_line_names;
 use crate::style::grid::parse_track_list;
 use crate::style::grid::ParsedTracks;
 use crate::style::inline_axis_is_horizontal;
@@ -945,7 +945,10 @@ fn parse_animation_timeline_list(raw: &str) -> Vec<AnimationTimeline> {
     };
     timelines.push(timeline);
   }
-  if timelines.iter().any(|t| matches!(t, AnimationTimeline::None)) {
+  if timelines
+    .iter()
+    .any(|t| matches!(t, AnimationTimeline::None))
+  {
     return timelines
       .into_iter()
       .filter(|t| !matches!(t, AnimationTimeline::None))
@@ -998,8 +1001,10 @@ fn parse_animation_range_list(raw: &str) -> Vec<AnimationRange> {
     if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("none") {
       return Vec::new();
     }
-    let (start, consumed_start) = parse_range_offset(&tokens).unwrap_or((RangeOffset::Progress(0.0), 0));
-    let (end, _) = parse_range_offset(&tokens[consumed_start..]).unwrap_or((RangeOffset::Progress(1.0), 0));
+    let (start, consumed_start) =
+      parse_range_offset(&tokens).unwrap_or((RangeOffset::Progress(0.0), 0));
+    let (end, _) =
+      parse_range_offset(&tokens[consumed_start..]).unwrap_or((RangeOffset::Progress(1.0), 0));
     ranges.push(AnimationRange { start, end });
   }
   ranges
@@ -5302,7 +5307,9 @@ pub fn apply_declaration_with_base(
                 styles.grid_column_names.clear();
               }
             } else {
-              let ParsedTracks { tracks, line_names, .. } = parse_track_list(col_part);
+              let ParsedTracks {
+                tracks, line_names, ..
+              } = parse_track_list(col_part);
               if !tracks.is_empty() {
                 styles.grid_template_columns = tracks;
                 styles.grid_column_line_names = line_names;
@@ -7386,6 +7393,24 @@ pub fn apply_declaration_with_base(
         styles.rebuild_mask_layers();
       }
     }
+    "mask-origin" => {
+      if let Some(origins) = parse_layer_list(&resolved_value, parse_mask_origin) {
+        styles.mask_origins = origins;
+        styles.rebuild_mask_layers();
+      }
+    }
+    "mask-clip" => {
+      if let Some(clips) = parse_layer_list(&resolved_value, parse_mask_clip) {
+        styles.mask_clips = clips;
+        styles.rebuild_mask_layers();
+      }
+    }
+    "mask-composite" => {
+      if let Some(ops) = parse_layer_list(&resolved_value, parse_mask_composite) {
+        styles.mask_composites = ops;
+        styles.rebuild_mask_layers();
+      }
+    }
     "mask" => {
       if let Some(images) = parse_background_image_list(&resolved_value) {
         styles.mask_images = images;
@@ -8882,7 +8907,15 @@ fn parse_svg_motion_path(data: &str) -> Option<Vec<MotionPathCommand>> {
         last_cubic_ctrl = None;
         last_quad_ctrl = None;
       }
-      svgtypes::PathSegment::CurveTo { abs, x1, y1, x2, y2, x, y } => {
+      svgtypes::PathSegment::CurveTo {
+        abs,
+        x1,
+        y1,
+        x2,
+        y2,
+        x,
+        y,
+      } => {
         let start = current;
         let ctrl1 = if abs {
           (x1 as f32, y1 as f32)
@@ -10288,6 +10321,45 @@ fn parse_mask_mode(value: &PropertyValue) -> Option<MaskMode> {
       "alpha" => Some(MaskMode::Alpha),
       "luminance" => Some(MaskMode::Luminance),
       "match-source" => Some(MaskMode::Alpha),
+      _ => None,
+    },
+    _ => None,
+  }
+}
+
+fn parse_mask_origin(value: &PropertyValue) -> Option<MaskOrigin> {
+  match value {
+    PropertyValue::Keyword(kw) => match kw.as_str() {
+      "border-box" => Some(MaskOrigin::BorderBox),
+      "padding-box" => Some(MaskOrigin::PaddingBox),
+      "content-box" => Some(MaskOrigin::ContentBox),
+      _ => None,
+    },
+    _ => None,
+  }
+}
+
+fn parse_mask_clip(value: &PropertyValue) -> Option<MaskClip> {
+  match value {
+    PropertyValue::Keyword(kw) => match kw.as_str() {
+      "border-box" => Some(MaskClip::BorderBox),
+      "padding-box" => Some(MaskClip::PaddingBox),
+      "content-box" => Some(MaskClip::ContentBox),
+      "text" => Some(MaskClip::Text),
+      "no-clip" => Some(MaskClip::NoClip),
+      _ => None,
+    },
+    _ => None,
+  }
+}
+
+fn parse_mask_composite(value: &PropertyValue) -> Option<MaskComposite> {
+  match value {
+    PropertyValue::Keyword(kw) => match kw.as_str() {
+      "add" | "source-over" | "src-over" => Some(MaskComposite::Add),
+      "subtract" | "source-out" | "src-out" => Some(MaskComposite::Subtract),
+      "intersect" | "source-in" | "src-in" => Some(MaskComposite::Intersect),
+      "exclude" | "xor" => Some(MaskComposite::Exclude),
       _ => None,
     },
     _ => None,

@@ -14,6 +14,7 @@ mod flex_property_test;
 mod grid_property_test;
 mod has_selector_test;
 mod logical_properties_test;
+mod mask_properties_test;
 mod media_invalid_calc;
 mod media_invalid_type;
 mod media_test;

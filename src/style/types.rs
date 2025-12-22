@@ -137,6 +137,28 @@ pub enum MaskMode {
   Luminance,
 }
 
+/// Reference box for mask positioning (mask-origin)
+pub type MaskOrigin = BackgroundBox;
+
+/// Area the mask is clipped to (mask-clip)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskClip {
+  BorderBox,
+  PaddingBox,
+  ContentBox,
+  Text,
+  NoClip,
+}
+
+/// Compositing operator between mask layers (mask-composite)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskComposite {
+  Add,
+  Subtract,
+  Intersect,
+  Exclude,
+}
+
 /// Border image source
 #[derive(Debug, Clone, PartialEq)]
 pub enum BorderImageSource {
@@ -2751,6 +2773,9 @@ pub struct MaskLayer {
   pub size: BackgroundSize,
   pub repeat: BackgroundRepeat,
   pub mode: MaskMode,
+  pub origin: MaskOrigin,
+  pub clip: MaskClip,
+  pub composite: MaskComposite,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2808,6 +2833,9 @@ impl Default for MaskLayer {
       size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
       repeat: BackgroundRepeat::repeat(),
       mode: MaskMode::Alpha,
+      origin: MaskOrigin::BorderBox,
+      clip: MaskClip::BorderBox,
+      composite: MaskComposite::Add,
     }
   }
 }
