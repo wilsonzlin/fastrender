@@ -30,6 +30,7 @@ use crate::css::types::FontFaceSource;
 use crate::css::types::FontFaceStyle;
 use crate::error::Error;
 use crate::error::Result;
+use crate::resource::ResourceFetcher;
 use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
@@ -49,9 +50,9 @@ use std::collections::HashSet;
 use std::fs;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Condvar;
-use std::sync::mpsc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::RwLock;
@@ -84,6 +85,19 @@ struct DefaultFontFetcher;
 impl FontFetcher for DefaultFontFetcher {
   fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
     fetch_font_bytes(url)
+  }
+}
+
+struct ResourceFontFetcher {
+  fetcher: Arc<dyn ResourceFetcher>,
+}
+
+impl FontFetcher for ResourceFontFetcher {
+  fn fetch(&self, url: &str) -> Result<(Vec<u8>, Option<String>)> {
+    self
+      .fetcher
+      .fetch(url)
+      .map(|res| (res.bytes, res.content_type))
   }
 }
 
@@ -176,18 +190,7 @@ pub struct FontContext {
 }
 
 impl FontContext {
-  /// Creates a new font context with system fonts loaded
-  ///
-  /// This will scan system font directories and load all available fonts.
-  /// The operation may take a moment on systems with many fonts.
-  ///
-  /// # Example
-  ///
-  /// ```rust,ignore
-  /// let ctx = FontContext::new();
-  /// println!("Loaded {} fonts", ctx.font_count());
-  /// ```
-  pub fn new() -> Self {
+  fn build_default_database() -> Arc<FontDatabase> {
     let mut db = FontDatabase::new();
 
     if db.font_count() == 0 {
@@ -218,7 +221,30 @@ impl FontContext {
       }
     }
 
-    Self::with_database_and_fetcher(Arc::new(db), Arc::new(DefaultFontFetcher))
+    Arc::new(db)
+  }
+
+  /// Creates a new font context with system fonts loaded
+  ///
+  /// This will scan system font directories and load all available fonts.
+  /// The operation may take a moment on systems with many fonts.
+  ///
+  /// # Example
+  ///
+  /// ```rust,ignore
+  /// let ctx = FontContext::new();
+  /// println!("Loaded {} fonts", ctx.font_count());
+  /// ```
+  pub fn new() -> Self {
+    Self::with_database_and_fetcher(Self::build_default_database(), Arc::new(DefaultFontFetcher))
+  }
+
+  /// Creates a new font context backed by a [`ResourceFetcher`] for remote fonts.
+  pub fn with_resource_fetcher(fetcher: Arc<dyn ResourceFetcher>) -> Self {
+    Self::with_database_and_fetcher(
+      Self::build_default_database(),
+      Arc::new(ResourceFontFetcher { fetcher }),
+    )
   }
 
   /// Creates a font context with a custom font database
@@ -598,7 +624,8 @@ impl FontContext {
       std::thread::spawn(move || {
         let _pending = guard;
         let start = Instant::now();
-        let loaded = ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
+        let loaded =
+          ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
         let _ = tx.send(loaded);
       });
 
@@ -1756,7 +1783,9 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some("BlockFace".to_string()),
-      sources: vec![FontFaceSource::Url("http://example.com/font.ttf".to_string())],
+      sources: vec![FontFaceSource::Url(
+        "http://example.com/font.ttf".to_string(),
+      )],
       display: FontDisplay::Block,
       ..Default::default()
     };
@@ -1764,7 +1793,10 @@ mod tests {
       .load_web_fonts(&[face], None, None)
       .expect("load block face");
 
-    assert!(ctx.has_web_faces("BlockFace"), "block display should wait for quick loads");
+    assert!(
+      ctx.has_web_faces("BlockFace"),
+      "block display should wait for quick loads"
+    );
   }
 
   #[test]
@@ -1781,7 +1813,9 @@ mod tests {
 
     let face = FontFaceRule {
       family: Some("Broken".to_string()),
-      sources: vec![FontFaceSource::Url("http://example.com/font.ttf".to_string())],
+      sources: vec![FontFaceSource::Url(
+        "http://example.com/font.ttf".to_string(),
+      )],
       display: FontDisplay::Swap,
       ..Default::default()
     };

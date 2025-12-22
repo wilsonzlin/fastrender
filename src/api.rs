@@ -88,6 +88,8 @@ use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
 use crate::paint::painter::paint_tree_with_resources_scaled;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
+use crate::resource::CachingFetcher;
+use crate::resource::CachingFetcherConfig;
 use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
@@ -251,6 +253,9 @@ pub struct FastRenderConfig {
 
   /// Base URL used to resolve relative resource references (images, CSS)
   pub base_url: Option<String>,
+
+  /// Optional in-memory resource cache configuration. If `None`, caching is disabled.
+  pub resource_cache: Option<CachingFetcherConfig>,
 }
 
 impl Default for FastRenderConfig {
@@ -261,6 +266,7 @@ impl Default for FastRenderConfig {
       default_height: 600,
       device_pixel_ratio: 1.0,
       base_url: None,
+      resource_cache: Some(CachingFetcherConfig::default()),
     }
   }
 }
@@ -335,6 +341,12 @@ impl FastRenderBuilder {
     self
   }
 
+  /// Overrides the resource cache configuration. Pass `None` to disable caching.
+  pub fn resource_cache(mut self, cache: Option<CachingFetcherConfig>) -> Self {
+    self.config.resource_cache = cache;
+    self
+  }
+
   /// Sets a custom resource fetcher for loading external resources (images, CSS)
   ///
   /// This allows injection of custom fetching behavior, such as caching or mocking.
@@ -395,6 +407,12 @@ impl FastRenderConfig {
   /// Sets the base URL used to resolve relative resource references.
   pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
     self.base_url = Some(url.into());
+    self
+  }
+
+  /// Configures the resource cache. Passing `None` disables caching.
+  pub fn with_resource_cache(mut self, cache: Option<CachingFetcherConfig>) -> Self {
+    self.resource_cache = cache;
     self
   }
 }
@@ -499,8 +517,13 @@ impl FastRender {
     config: FastRenderConfig,
     fetcher: Option<Arc<dyn ResourceFetcher>>,
   ) -> Result<Self> {
-    let fetcher = fetcher.unwrap_or_else(|| Arc::new(HttpFetcher::new()));
-    let font_context = FontContext::new();
+    let base_fetcher = fetcher.unwrap_or_else(|| Arc::new(HttpFetcher::new()));
+    let fetcher: Arc<dyn ResourceFetcher> = if let Some(cache_cfg) = config.resource_cache {
+      Arc::new(CachingFetcher::with_config(base_fetcher, cache_cfg))
+    } else {
+      base_fetcher
+    };
+    let font_context = FontContext::with_resource_fetcher(Arc::clone(&fetcher));
     let layout_config = LayoutConfig::for_viewport(Size::new(
       config.default_width as f32,
       config.default_height as f32,
@@ -1014,8 +1037,8 @@ impl FastRender {
       &media_ctx,
       Some(&mut media_query_cache),
     );
-    let keyframes = resolved_stylesheet
-      .collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let keyframes =
+      resolved_stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
     let has_container_queries = resolved_stylesheet.has_container_rules();
     self.font_context.clear_web_fonts();
     let font_faces = resolved_stylesheet
@@ -3436,7 +3459,10 @@ fn build_styled_lookup<'a>(styled: &'a StyledNode, out: &mut HashMap<usize, *con
 }
 
 fn boolish(value: &str) -> bool {
-  matches!(value.to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "on" | "open")
+  matches!(
+    value.to_ascii_lowercase().as_str(),
+    "true" | "1" | "yes" | "on" | "open"
+  )
 }
 
 fn data_fastr_open_state(node: &DomNode) -> Option<(bool, bool)> {
@@ -3519,10 +3545,19 @@ fn apply_top_layer_state(node: &mut DomNode, modal_open: bool, inside_modal: boo
   let mut within_modal = inside_modal;
   let dialog_info = dialog_state(node);
   let has_popover = node.get_attribute_ref("popover").is_some();
-  let popover_is_open = if has_popover { popover_open(node) } else { false };
+  let popover_is_open = if has_popover {
+    popover_open(node)
+  } else {
+    false
+  };
   let mut subtree_has_modal = within_modal;
 
-  if let crate::dom::DomNodeType::Element { tag_name, attributes, .. } = &mut node.node_type {
+  if let crate::dom::DomNodeType::Element {
+    tag_name,
+    attributes,
+    ..
+  } = &mut node.node_type
+  {
     let tag_lower = tag_name.to_ascii_lowercase();
     let mut should_open = false;
 
@@ -3584,12 +3619,9 @@ mod tests {
   use base64::Engine;
 
   fn snap_viewport(tree: &mut FragmentTree, scroll: Point) -> Point {
-    crate::scroll::apply_scroll_snap(
-      tree,
-      &crate::scroll::ScrollState::with_viewport(scroll),
-    )
-    .state
-    .viewport
+    crate::scroll::apply_scroll_snap(tree, &crate::scroll::ScrollState::with_viewport(scroll))
+      .state
+      .viewport
   }
   use image::codecs::png::PngEncoder;
   use image::load_from_memory;
@@ -4866,7 +4898,10 @@ mod tests {
     let mut fragments = renderer.layout_document(&dom, 100, 100).unwrap();
 
     let near = snap_viewport(&mut fragments, Point::new(0.0, 30.0));
-    assert!(near.y.abs() < 0.1, "nearby offset should snap to the first section");
+    assert!(
+      near.y.abs() < 0.1,
+      "nearby offset should snap to the first section"
+    );
 
     let far = snap_viewport(&mut fragments, Point::new(0.0, 260.0));
     assert!(
@@ -4934,7 +4969,10 @@ mod tests {
       .as_ref()
       .and_then(|m| m.containers.first())
       .expect("snap container");
-    assert!((metadata.padding_y.0 - 40.0).abs() < 0.1, "scroll-padding should parse");
+    assert!(
+      (metadata.padding_y.0 - 40.0).abs() < 0.1,
+      "scroll-padding should parse"
+    );
 
     let snapped = snap_viewport(&mut fragments, Point::new(0.0, 120.0));
     assert!(
@@ -5031,11 +5069,11 @@ mod tests {
 
     let snapped = snap_viewport(&mut fragments, Point::new(120.0, 0.0));
     assert!(
-            (snapped.x - 200.0).abs() < 0.1,
-            "inline axis snapping should match the horizontal flow (snapped={:?}, content={:?})",
-            snapped,
-            fragments.content_size()
-        );
+      (snapped.x - 200.0).abs() < 0.1,
+      "inline axis snapping should match the horizontal flow (snapped={:?}, content={:?})",
+      snapped,
+      fragments.content_size()
+    );
     assert!(snapped.y.abs() < 0.1);
   }
 
