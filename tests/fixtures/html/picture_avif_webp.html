@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Picture AVIF/WebP Fallback</title>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fff;
+      height: 100vh;
+    }
+
+    picture,
+    img {
+      width: 64px;
+      height: 64px;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <picture>
+    <source type="image/avif" srcset="tests/fixtures/avif/solid.avif" />
+    <source type="image/webp" srcset="tests/fixtures/avif/solid.webp" />
+    <img src="tests/fixtures/avif/solid.png" alt="fallback" />
+  </picture>
+</body>
+</html>
