@@ -12,6 +12,7 @@ Key points:
 - `matrix3d()` is preserved verbatim; 2D-compatible matrices still round-trip
   through `to_2d()` for affine consumers.
 - `backface-visibility: hidden` culls display list items using the transformed
-  surface normal.
+  surface normal, evaluated in the renderer with the accumulated transform
+  stack.
 - Elements with transforms or perspective establish containing blocks for
   positioned descendants (including `position: fixed`).
