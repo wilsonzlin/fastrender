@@ -202,6 +202,16 @@ pub struct FragmentNode {
   /// Contains color, background, border, font and other paint-relevant properties.
   /// Optional for backwards compatibility with tests.
   pub style: Option<Arc<ComputedStyle>>,
+
+  /// Index of this fragment within a fragmented sequence for the same box
+  /// (e.g., when flowing across pages or columns).
+  pub fragment_index: usize,
+
+  /// Total number of fragments generated for the originating box.
+  pub fragment_count: usize,
+
+  /// Which fragmentainer (page/column) this fragment occupies.
+  pub fragmentainer_index: usize,
 }
 
 impl FragmentNode {
@@ -226,6 +236,9 @@ impl FragmentNode {
       baseline: None,
       children,
       style: None,
+      fragment_index: 0,
+      fragment_count: 1,
+      fragmentainer_index: 0,
     }
   }
 
@@ -242,6 +255,9 @@ impl FragmentNode {
       baseline: None,
       children,
       style: Some(style),
+      fragment_index: 0,
+      fragment_count: 1,
+      fragmentainer_index: 0,
     }
   }
 
@@ -504,6 +520,9 @@ impl FragmentNode {
         .map(|child| child.translate(offset))
         .collect(),
       style: self.style.clone(),
+      fragment_index: self.fragment_index,
+      fragment_count: self.fragment_count,
+      fragmentainer_index: self.fragmentainer_index,
     }
   }
 
@@ -594,7 +613,7 @@ impl FragmentNode {
   /// assert_eq!(all_fragments.len(), 3); // parent + 2 children
   /// ```
   pub fn iter_fragments(&self) -> FragmentIterator<'_> {
-    FragmentIterator { stack: vec![self] }
+    FragmentIterator::new(vec![self])
   }
 
   /// Returns an iterator over direct children
@@ -606,6 +625,12 @@ impl FragmentNode {
 /// Iterator over fragments in paint order (depth-first, pre-order)
 pub struct FragmentIterator<'a> {
   stack: Vec<&'a FragmentNode>,
+}
+
+impl<'a> FragmentIterator<'a> {
+  pub fn new(stack: Vec<&'a FragmentNode>) -> Self {
+    Self { stack }
+  }
 }
 
 impl<'a> Iterator for FragmentIterator<'a> {
@@ -647,6 +672,10 @@ pub struct FragmentTree {
   /// The root fragment (usually the viewport or document root)
   pub root: FragmentNode,
 
+  /// Additional root fragments produced by pagination/column fragmentation.
+  /// The first fragment is always stored in `root` for backwards compatibility.
+  pub additional_fragments: Vec<FragmentNode>,
+
   /// The viewport size (may differ from root fragment bounds)
   viewport: Option<Size>,
 }
@@ -656,6 +685,7 @@ impl FragmentTree {
   pub fn new(root: FragmentNode) -> Self {
     Self {
       root,
+      additional_fragments: Vec::new(),
       viewport: None,
     }
   }
@@ -667,6 +697,23 @@ impl FragmentTree {
   pub fn with_viewport(root: FragmentNode, viewport: Size) -> Self {
     Self {
       root,
+      additional_fragments: Vec::new(),
+      viewport: Some(viewport),
+    }
+  }
+
+  /// Creates a fragment tree from multiple root fragments (e.g., pages/columns).
+  ///
+  /// The first fragment is stored in `root`; the remainder are placed in
+  /// `additional_fragments`.
+  pub fn from_fragments(mut roots: Vec<FragmentNode>, viewport: Size) -> Self {
+    let root = roots
+      .drain(0..1)
+      .next()
+      .expect("at least one fragment root required");
+    Self {
+      root,
+      additional_fragments: roots,
       viewport: Some(viewport),
     }
   }
@@ -681,17 +728,30 @@ impl FragmentTree {
 
   /// Computes the total bounding box of all content
   pub fn content_size(&self) -> Rect {
-    self.root.bounding_box()
+    let mut bbox = self.root.bounding_box();
+    for root in &self.additional_fragments {
+      bbox = bbox.union(root.bounding_box());
+    }
+    bbox
   }
 
   /// Finds all fragments at the given point
   pub fn hit_test(&self, point: Point) -> Vec<&FragmentNode> {
-    self.root.fragments_at_point(point)
+    let mut hits = self.root.fragments_at_point(point);
+    for root in &self.additional_fragments {
+      hits.extend(root.fragments_at_point(point));
+    }
+    hits
   }
 
   /// Returns an iterator over all fragments in paint order
   pub fn iter_fragments(&self) -> FragmentIterator<'_> {
-    self.root.iter_fragments()
+    let mut stack: Vec<&FragmentNode> = Vec::new();
+    for root in self.additional_fragments.iter().rev() {
+      stack.push(root);
+    }
+    stack.push(&self.root);
+    FragmentIterator::new(stack)
   }
 
   /// Counts total number of fragments in the tree
@@ -766,9 +826,10 @@ mod tests {
   fn test_bounding_box_with_children() {
     let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), vec![]);
     let child2 = FragmentNode::new_block(Rect::from_xywh(60.0, 0.0, 50.0, 50.0), vec![]);
-    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, 100.0), vec![
-      child1, child2,
-    ]);
+    let parent = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
+      vec![child1, child2],
+    );
 
     let bbox = parent.bounding_box();
     assert_eq!(bbox.min_x(), 0.0);
@@ -852,9 +913,10 @@ mod tests {
   fn test_fragments_at_point_overlapping() {
     let child1 = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 50.0, 50.0), vec![]);
     let child2 = FragmentNode::new_block(Rect::from_xywh(30.0, 30.0, 50.0, 50.0), vec![]);
-    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![
-      child1, child2,
-    ]);
+    let parent = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![child1, child2],
+    );
 
     // Point in overlapping region
     let hits = parent.fragments_at_point(Point::new(40.0, 40.0));
@@ -875,9 +937,10 @@ mod tests {
   fn test_iter_fragments_with_children() {
     let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), vec![]);
     let child2 = FragmentNode::new_block(Rect::from_xywh(0.0, 50.0, 50.0, 50.0), vec![]);
-    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![
-      child1, child2,
-    ]);
+    let parent = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![child1, child2],
+    );
 
     let fragments: Vec<_> = parent.iter_fragments().collect();
     assert_eq!(fragments.len(), 3); // parent + 2 children
@@ -909,9 +972,10 @@ mod tests {
   fn test_fragment_tree_count() {
     let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![]);
     let child2 = FragmentNode::new_block(Rect::from_xywh(0.0, 100.0, 100.0, 100.0), vec![]);
-    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 800.0, 600.0), vec![
-      child1, child2,
-    ]);
+    let root = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 800.0, 600.0),
+      vec![child1, child2],
+    );
     let tree = FragmentTree::new(root);
 
     assert_eq!(tree.fragment_count(), 3);
@@ -987,9 +1051,10 @@ mod tests {
   fn test_children_iterator() {
     let child1 = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 50.0, 50.0), vec![]);
     let child2 = FragmentNode::new_block(Rect::from_xywh(50.0, 0.0, 50.0, 50.0), vec![]);
-    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![
-      child1, child2,
-    ]);
+    let parent = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      vec![child1, child2],
+    );
 
     assert_eq!(parent.children().count(), 2);
   }

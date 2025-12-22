@@ -8509,9 +8509,10 @@ mod tests {
     let mut positioned = FragmentNode::new_block(Rect::from_xywh(40.0, 0.0, 5.0, 5.0), vec![]);
     positioned.style = Some(Arc::new(positioned_style));
 
-    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 10.0), vec![
-      block, float_frag, inline, positioned,
-    ]);
+    let root = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 100.0, 10.0),
+      vec![block, float_frag, inline, positioned],
+    );
 
     let painter = Painter::new(100, 10, Rgba::WHITE).expect("painter");
     let mut commands = Vec::new();
@@ -8929,13 +8930,16 @@ mod tests {
 
   #[test]
   fn filter_outset_accumulates_drop_shadow_offsets() {
-    let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::DropShadow {
-      offset_x: -4.0,
-      offset_y: 3.0,
-      blur_radius: 1.0,
-      spread: 0.0,
-      color: Rgba::BLACK,
-    }];
+    let filters = vec![
+      ResolvedFilter::Blur(2.0),
+      ResolvedFilter::DropShadow {
+        offset_x: -4.0,
+        offset_y: 3.0,
+        blur_radius: 1.0,
+        spread: 0.0,
+        color: Rgba::BLACK,
+      },
+    ];
     let (l, t, r, b) = filter_outset(&filters, 1.0);
     // Blur contributes 6px first; drop shadow adds another 3px blur and shifts left/up by offsets.
     assert!(
@@ -11588,19 +11592,18 @@ mod tests {
         <style>html, body { margin: 0; padding: 0; background: red; }</style>
         ";
     let painter = Painter::new(20, 20, Rgba::WHITE).expect("painter");
-    let fragment = FragmentNode {
-      bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-      content: FragmentContent::Replaced {
+    let fragment = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      FragmentContent::Replaced {
         box_id: None,
         replaced_type: ReplacedType::Iframe {
           src: String::new(),
           srcdoc: Some(html.to_string()),
         },
       },
-      baseline: None,
-      children: vec![],
-      style: Some(Arc::new(ComputedStyle::default())),
-    };
+      vec![],
+      Arc::new(ComputedStyle::default()),
+    );
     let tree = FragmentTree::new(fragment);
     let pixmap = painter.paint(&tree).expect("paint");
 

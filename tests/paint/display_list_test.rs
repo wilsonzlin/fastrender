@@ -725,19 +725,12 @@ fn fragment_opacity_wraps_display_items() {
   let mut style = fastrender::ComputedStyle::default();
   style.opacity = 0.5;
   style.color = Rgba::BLACK;
-  let fragment = fastrender::FragmentNode {
-    bounds: Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
-    content: fastrender::FragmentContent::Text {
-      text: "hi".to_string(),
-      baseline_offset: 8.0,
-      shaped: None,
-      box_id: None,
-      is_marker: false,
-    },
-    baseline: None,
-    children: vec![],
-    style: Some(Arc::new(style)),
-  };
+  let fragment = fastrender::FragmentNode::new_text_styled(
+    Rect::from_xywh(0.0, 0.0, 20.0, 10.0),
+    "hi".to_string(),
+    8.0,
+    Arc::new(style),
+  );
 
   let list = fastrender::paint::display_list_builder::DisplayListBuilder::new().build(&fragment);
   let items = list.items();

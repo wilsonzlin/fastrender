@@ -920,6 +920,42 @@ impl Default for OverscrollBehavior {
   }
 }
 
+/// Fragmentation break opportunities between boxes (page/column breaks)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakBetween {
+  /// Follow normal fragmentainer breaking rules
+  Auto,
+  /// Avoid breaking before/after the element
+  Avoid,
+  /// Force a fragment break
+  Always,
+  /// Force a column break (treated the same as `always` for now)
+  Column,
+  /// Force a page break (treated the same as `always` for now)
+  Page,
+}
+
+impl Default for BreakBetween {
+  fn default() -> Self {
+    BreakBetween::Auto
+  }
+}
+
+/// Fragmentation control within an element's contents
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakInside {
+  /// Allow breaking inside the element
+  Auto,
+  /// Avoid breaking inside the element
+  Avoid,
+}
+
+impl Default for BreakInside {
+  fn default() -> Self {
+    BreakInside::Auto
+  }
+}
+
 /// CSS `resize` property
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resize {

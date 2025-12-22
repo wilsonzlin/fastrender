@@ -49,6 +49,8 @@ use types::BorderCollapse;
 use types::BorderImage;
 use types::BorderStyle;
 use types::BoxSizing;
+use types::BreakBetween;
+use types::BreakInside;
 use types::CaptionSide;
 use types::CaretColor;
 use types::ClipPath;
@@ -379,6 +381,13 @@ pub struct ComputedStyle {
   pub left: Option<Length>,
   pub float: Float,
   pub clear: Clear,
+  pub break_before: BreakBetween,
+  pub break_after: BreakBetween,
+  pub break_inside: BreakInside,
+  /// Minimum number of lines at the bottom of a fragment
+  pub widows: usize,
+  /// Minimum number of lines at the top of a fragment
+  pub orphans: usize,
   /// Stacking order for positioned elements (`auto` = None)
   pub z_index: Option<i32>,
   pub visibility: Visibility,
@@ -666,6 +675,11 @@ impl Default for ComputedStyle {
       left: None,
       float: Float::None,
       clear: Clear::None,
+      break_before: BreakBetween::Auto,
+      break_after: BreakBetween::Auto,
+      break_inside: BreakInside::Auto,
+      widows: 2,
+      orphans: 2,
       z_index: None,
       visibility: Visibility::Visible,
       cursor: CursorKeyword::Auto,

@@ -4058,12 +4058,15 @@ mod tests {
   }
 
   fn create_image_fragment(x: f32, y: f32, width: f32, height: f32, src: &str) -> FragmentNode {
-    FragmentNode::new_replaced(Rect::from_xywh(x, y, width, height), ReplacedType::Image {
-      src: src.to_string(),
-      alt: None,
-      sizes: None,
-      srcset: Vec::new(),
-    })
+    FragmentNode::new_replaced(
+      Rect::from_xywh(x, y, width, height),
+      ReplacedType::Image {
+        src: src.to_string(),
+        alt: None,
+        sizes: None,
+        srcset: Vec::new(),
+      },
+    )
   }
 
   fn text_fragment_at(x: f32, label: &str) -> FragmentNode {
@@ -4332,9 +4335,10 @@ mod tests {
     let child_zero = styled_fragment(20.0, "zero", 0);
     let child_pos = styled_fragment(40.0, "pos", 1);
 
-    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 20.0), vec![
-      child_neg, child_zero, child_pos,
-    ]);
+    let root = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 100.0, 20.0),
+      vec![child_neg, child_zero, child_pos],
+    );
 
     let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
     let origins: Vec<f32> = list
@@ -4353,9 +4357,10 @@ mod tests {
   fn test_builder_nested_fragments() {
     let child1 = create_text_fragment(0.0, 0.0, 50.0, 20.0, "One");
     let child2 = create_text_fragment(0.0, 20.0, 50.0, 20.0, "Two");
-    let parent = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 100.0, 50.0), vec![
-      child1, child2,
-    ]);
+    let parent = FragmentNode::new_block(
+      Rect::from_xywh(10.0, 10.0, 100.0, 50.0),
+      vec![child1, child2],
+    );
 
     let builder = DisplayListBuilder::new();
     let list = builder.build(&parent);
@@ -4639,13 +4644,15 @@ mod tests {
       other => panic!("unexpected content value: {other:?}"),
     };
 
-    let fragment =
-      FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), ReplacedType::Image {
+    let fragment = FragmentNode::new_replaced(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      ReplacedType::Image {
         src: chosen,
         alt: None,
         sizes: None,
         srcset: Vec::new(),
-      });
+      },
+    );
 
     let list = DisplayListBuilder::new().build(&fragment);
     let image = list
@@ -4689,13 +4696,15 @@ mod tests {
       crate::style::types::ListStyleImage::None => panic!("unexpected list-style-image: None"),
     };
 
-    let mut fragment =
-      FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), ReplacedType::Image {
+    let mut fragment = FragmentNode::new_replaced(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      ReplacedType::Image {
         src: chosen,
         alt: None,
         sizes: None,
         srcset: Vec::new(),
-      });
+      },
+    );
     fragment.style = Some(Arc::new(style));
 
     let list = DisplayListBuilder::with_image_cache(ImageCache::new()).build(&fragment);
@@ -4893,9 +4902,10 @@ mod tests {
             "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E",
         );
 
-    let inner = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 120.0, 100.0), vec![
-      text1, text2, image,
-    ]);
+    let inner = FragmentNode::new_block(
+      Rect::from_xywh(10.0, 10.0, 120.0, 100.0),
+      vec![text1, text2, image],
+    );
     let outer = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, 200.0), vec![inner]);
 
     let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
@@ -4941,10 +4951,12 @@ mod tests {
   fn embed_and_object_decode_images() {
     let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><rect width="2" height="2" fill="blue"/></svg>"#;
 
-    let embed_fragment =
-      FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), ReplacedType::Embed {
+    let embed_fragment = FragmentNode::new_replaced(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      ReplacedType::Embed {
         src: svg.to_string(),
-      });
+      },
+    );
     let embed_list = DisplayListBuilder::with_image_cache(ImageCache::new()).build(&embed_fragment);
     let DisplayItem::Image(embed_img) = &embed_list.items()[0] else {
       panic!("expected image item for embed");
@@ -4981,21 +4993,20 @@ mod tests {
       ),
     };
 
-    let fragment = FragmentNode {
-            bounds: Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
-            content: FragmentContent::Replaced {
-                box_id: None,
-                replaced_type: ReplacedType::Image {
-                    src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
-                    alt: None,
-                    sizes: None,
-                    srcset: Vec::new(),
-                },
-            },
-            baseline: None,
-            children: vec![],
-            style: Some(Arc::new(style)),
-        };
+    let fragment = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
+      FragmentContent::Replaced {
+        box_id: None,
+        replaced_type: ReplacedType::Image {
+          src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
+          alt: None,
+          sizes: None,
+          srcset: Vec::new(),
+        },
+      },
+      vec![],
+      Arc::new(style),
+    );
 
     let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
     let list = builder.build(&fragment);
@@ -5026,21 +5037,20 @@ mod tests {
       ),
     };
 
-    let fragment = FragmentNode {
-            bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            content: FragmentContent::Replaced {
-                box_id: None,
-                replaced_type: ReplacedType::Image {
-                    src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
-                    alt: None,
-                    sizes: None,
-                    srcset: Vec::new(),
-                },
-            },
-            baseline: None,
-            children: vec![],
-            style: Some(Arc::new(style)),
-        };
+    let fragment = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+      FragmentContent::Replaced {
+        box_id: None,
+        replaced_type: ReplacedType::Image {
+          src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
+          alt: None,
+          sizes: None,
+          srcset: Vec::new(),
+        },
+      },
+      vec![],
+      Arc::new(style),
+    );
 
     let tree = FragmentTree::with_viewport(fragment, crate::geometry::Size::new(200.0, 200.0));
     let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
@@ -5058,21 +5068,20 @@ mod tests {
   fn image_rendering_pixelated_sets_nearest_filter_quality() {
     let mut style = ComputedStyle::default();
     style.image_rendering = ImageRendering::Pixelated;
-    let fragment = FragmentNode {
-            bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            content: FragmentContent::Replaced {
-                box_id: None,
-                replaced_type: ReplacedType::Image {
-                    src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
-                    alt: None,
-                    sizes: None,
-                    srcset: Vec::new(),
-                },
-            },
-            baseline: None,
-            children: vec![],
-            style: Some(Arc::new(style)),
-        };
+    let fragment = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      FragmentContent::Replaced {
+        box_id: None,
+        replaced_type: ReplacedType::Image {
+          src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
+          alt: None,
+          sizes: None,
+          srcset: Vec::new(),
+        },
+      },
+      vec![],
+      Arc::new(style),
+    );
 
     let list = DisplayListBuilder::new().build(&fragment);
     let DisplayItem::Image(img) = &list.items()[0] else {
@@ -5085,21 +5094,20 @@ mod tests {
   fn image_rendering_crisp_edges_sets_nearest_filter_quality() {
     let mut style = ComputedStyle::default();
     style.image_rendering = ImageRendering::CrispEdges;
-    let fragment = FragmentNode {
-            bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            content: FragmentContent::Replaced {
-                box_id: None,
-                replaced_type: ReplacedType::Image {
-                    src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
-                    alt: None,
-                    sizes: None,
-                    srcset: Vec::new(),
-                },
-            },
-            baseline: None,
-            children: vec![],
-            style: Some(Arc::new(style)),
-        };
+    let fragment = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      FragmentContent::Replaced {
+        box_id: None,
+        replaced_type: ReplacedType::Image {
+          src: "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%221%22%20height=%221%22%3E%3C/svg%3E".to_string(),
+          alt: None,
+          sizes: None,
+          srcset: Vec::new(),
+        },
+      },
+      vec![],
+      Arc::new(style),
+    );
 
     let list = DisplayListBuilder::new().build(&fragment);
     let DisplayItem::Image(img) = &list.items()[0] else {
@@ -5263,9 +5271,9 @@ mod tests {
     style.color = Rgba::BLACK;
     style.font_size = 12.0;
 
-    let fragment = FragmentNode {
-      bounds: Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
-      content: FragmentContent::Replaced {
+    let fragment = FragmentNode::new_with_style(
+      Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
+      FragmentContent::Replaced {
         box_id: None,
         replaced_type: ReplacedType::Image {
           src: String::new(),
@@ -5274,10 +5282,9 @@ mod tests {
           srcset: Vec::new(),
         },
       },
-      baseline: None,
-      children: vec![],
-      style: Some(Arc::new(style)),
-    };
+      vec![],
+      Arc::new(style),
+    );
 
     let builder = DisplayListBuilder::new();
     let list = builder.build(&fragment);
@@ -5291,13 +5298,15 @@ mod tests {
 
   #[test]
   fn missing_image_without_alt_emits_placeholder() {
-    let fragment =
-      FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 40.0, 20.0), ReplacedType::Image {
+    let fragment = FragmentNode::new_replaced(
+      Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
+      ReplacedType::Image {
         src: String::new(),
         alt: None,
         sizes: None,
         srcset: Vec::new(),
-      });
+      },
+    );
     let builder = DisplayListBuilder::new();
     let list = builder.build(&fragment);
 
@@ -5308,11 +5317,13 @@ mod tests {
 
   #[test]
   fn non_image_replaced_uses_labeled_placeholder() {
-    let fragment =
-      FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 40.0, 20.0), ReplacedType::Video {
+    let fragment = FragmentNode::new_replaced(
+      Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
+      ReplacedType::Video {
         src: String::new(),
         poster: None,
-      });
+      },
+    );
     let builder = DisplayListBuilder::new();
     let list = builder.build(&fragment);
 
@@ -5324,10 +5335,10 @@ mod tests {
 
   #[test]
   fn audio_replaced_uses_labeled_placeholder() {
-    let fragment =
-      FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 30.0, 12.0), ReplacedType::Audio {
-        src: String::new(),
-      });
+    let fragment = FragmentNode::new_replaced(
+      Rect::from_xywh(0.0, 0.0, 30.0, 12.0),
+      ReplacedType::Audio { src: String::new() },
+    );
     let builder = DisplayListBuilder::new();
     let list = builder.build(&fragment);
 
@@ -5340,11 +5351,13 @@ mod tests {
   #[test]
   fn video_poster_decodes_before_placeholder() {
     let poster = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"2\"><rect width=\"4\" height=\"2\" fill=\"red\"/></svg>";
-    let fragment =
-      FragmentNode::new_replaced(Rect::from_xywh(0.0, 0.0, 40.0, 20.0), ReplacedType::Video {
+    let fragment = FragmentNode::new_replaced(
+      Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
+      ReplacedType::Video {
         src: String::new(),
         poster: Some(poster.to_string()),
-      });
+      },
+    );
     let builder = DisplayListBuilder::with_image_cache(ImageCache::new());
     let list = builder.build(&fragment);
 

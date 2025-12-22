@@ -326,13 +326,9 @@ impl PositionedLayout {
 
     // Create new fragment with adjusted bounds but same children and style.
     // Note: Children positions are relative to parent, so they don't change
-    Ok(FragmentNode {
-      bounds: new_bounds,
-      content: fragment.content.clone(),
-      baseline: fragment.baseline,
-      children: fragment.children.clone(),
-      style: fragment.style.clone(),
-    })
+    let mut adjusted = fragment.clone();
+    adjusted.bounds = new_bounds;
+    Ok(adjusted)
   }
 
   /// Computes the offset for relative positioning
