@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Grid with spanning header</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .grid {
+    display: grid;
+    grid-template-columns: 90px 1fr;
+    grid-template-rows: 60px 70px;
+    gap: 8px;
+    padding: 16px;
+    background: #fdfdfd;
+  }
+  .cell {
+    background: #eee;
+    border: 2px solid #444;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .cell.header {
+    grid-column: span 2;
+    background: #ffd966;
+  }
+  .cell.side { background: #d9ead3; }
+  .cell.main { background: #cfe2f3; }
+</style>
+<div class="grid">
+  <div class="cell header">Header</div>
+  <div class="cell side">Nav</div>
+  <div class="cell main">Content</div>
+</div>

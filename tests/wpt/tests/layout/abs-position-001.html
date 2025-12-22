@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Absolute positioning inside relative container</title>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #fafafa; }
+  .container {
+    position: relative;
+    width: 220px;
+    height: 150px;
+    margin: 20px;
+    background: #f2f2f2;
+    border: 1px solid #ccc;
+  }
+  .box {
+    position: absolute;
+    width: 90px;
+    height: 45px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+  }
+  .one { top: 10px; left: 10px; background: #8e44ad; }
+  .two { right: 10px; bottom: 10px; background: #f39c12; }
+</style>
+<div class="container">
+  <div class="box one">Top Left</div>
+  <div class="box two">Bottom Right</div>
+</div>

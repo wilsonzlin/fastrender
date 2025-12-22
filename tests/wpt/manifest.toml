@@ -1,0 +1,134 @@
+[[tests]]
+id = "columns/multicol-001"
+path = "columns/multicol-001.html"
+test_type = "visual"
+viewport = { width = 800, height = 600 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 20000
+
+[[tests]]
+id = "forms/form-basics-001"
+path = "forms/form-basics-001.html"
+test_type = "visual"
+viewport = { width = 800, height = 600 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 20000
+
+[[tests]]
+id = "forms/form-styled-002"
+path = "forms/form-styled-002.html"
+test_type = "visual"
+viewport = { width = 420, height = 320 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 20000
+
+[[tests]]
+id = "layout/block-basic-001"
+path = "layout/block-basic-001.html"
+test_type = "visual"
+viewport = { width = 480, height = 320 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "layout/flex-row-001"
+path = "layout/flex-row-001.html"
+test_type = "visual"
+viewport = { width = 500, height = 260 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "layout/grid-basic-001"
+path = "layout/grid-basic-001.html"
+test_type = "visual"
+viewport = { width = 460, height = 260 }
+dpr = 1.25
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "layout/abs-position-001"
+path = "layout/abs-position-001.html"
+test_type = "visual"
+viewport = { width = 480, height = 280 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "paint/border-radius-001"
+path = "paint/border-radius-001.html"
+test_type = "visual"
+viewport = { width = 460, height = 260 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "paint/box-shadow-001"
+path = "paint/box-shadow-001.html"
+test_type = "visual"
+viewport = { width = 460, height = 280 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "paint/border-styles-001"
+path = "paint/border-styles-001.html"
+test_type = "visual"
+viewport = { width = 460, height = 220 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "text/letter-spacing-001"
+path = "text/letter-spacing-001.html"
+test_type = "visual"
+viewport = { width = 460, height = 220 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "text/text-align-001"
+path = "text/text-align-001.html"
+test_type = "visual"
+viewport = { width = 420, height = 200 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "text/line-height-001"
+path = "text/line-height-001.html"
+test_type = "visual"
+viewport = { width = 460, height = 260 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "transforms/transform-rotate-001"
+path = "transforms/transform-rotate-001.html"
+test_type = "visual"
+viewport = { width = 800, height = 600 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 20000
+
+[[tests]]
+id = "transforms/transform-scale-001"
+path = "transforms/transform-scale-001.html"
+test_type = "visual"
+viewport = { width = 420, height = 240 }
+dpr = 1.5
+expected = "pass"
+timeout_ms = 12000

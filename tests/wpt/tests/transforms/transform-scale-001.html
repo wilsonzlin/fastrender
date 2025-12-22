@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Transform scale</title>
+<style>
+  body { margin: 0; padding: 24px; background: #fff; }
+  .row { display: flex; gap: 24px; align-items: flex-start; }
+  .box {
+    width: 80px;
+    height: 80px;
+    background: #1abc9c;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 14px sans-serif;
+  }
+  .scaled {
+    transform: scale(1.5);
+    transform-origin: left top;
+    background: #e74c3c;
+  }
+</style>
+<div class="row">
+  <div class="box">1x</div>
+  <div class="box scaled">1.5x</div>
+</div>

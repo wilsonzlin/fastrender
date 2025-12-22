@@ -29,15 +29,14 @@ This harness covers targeted style/cascade/layout regressions.
 
 New columns/transform/form fixtures ship with checked-in goldens; keep these up to date when adjusting layouts.
 
-## WPT harness (experimental)
+## WPT harness (local, visual)
 
-There is a small WPT-style runner under `tests/wpt/` that can execute a subset of “render and compare” style tests. It is not a full WPT integration and does not run the upstream WPT suite.
+There is a self-contained WPT-style runner under `tests/wpt/` for local “render and compare” tests. It does not talk to upstream WPT and never fetches from the network.
 
-Local visual tests live in `tests/wpt/tests/` with expected PNGs under `tests/wpt/expected/`. Run them via `cargo test wpt_local_suite_passes`. To refresh an expected image, re-render the matching HTML with `fetch_and_render`, e.g.:
-
-```
-cargo run --quiet --bin fetch_and_render -- --viewport 800x600 file://$PWD/tests/wpt/tests/columns/multicol-001.html tests/wpt/expected/columns/multicol-001.png
-```
+- Tests are declared in `tests/wpt/manifest.toml` with per-test viewport, DPR, expected outcome, and type (`visual`, `reftest`, `crashtest`). New HTML fixtures belong under `tests/wpt/tests/` and must be added to the manifest.
+- Expected images live under `tests/wpt/expected/` following the same relative path structure. Missing images are auto-generated on first run; set `UPDATE_WPT_EXPECTED=1 cargo test wpt_local_suite_passes -- --exact` to refresh everything.
+- Artifacts land in `target/wpt-output/<relative>.actual.png` and `<relative>.diff.png` with a `report.md` summary linking expected/actual/diff for failures.
+- The runner supports parallel execution and per-test timeouts (see `HarnessConfig`).
 
 ## Fuzzing (CSS parsing and selectors)
 

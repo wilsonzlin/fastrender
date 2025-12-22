@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Flex row with gap</title>
+<style>
+  body {
+    margin: 0;
+    font-family: sans-serif;
+  }
+  .flex {
+    display: flex;
+    gap: 12px;
+    padding: 20px;
+    background: #fafafa;
+  }
+  .item {
+    flex: 1;
+    height: 70px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+  }
+  .item.one { background: #c0392b; }
+  .item.two { background: #27ae60; }
+  .item.three { background: #2980b9; }
+</style>
+<div class="flex">
+  <div class="item one">One</div>
+  <div class="item two">Two</div>
+  <div class="item three">Three</div>
+</div>

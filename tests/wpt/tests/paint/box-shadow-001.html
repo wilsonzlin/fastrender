@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Box shadows</title>
+<style>
+  body {
+    margin: 0;
+    padding: 24px;
+    background: #fdfdfd;
+  }
+  .shadow {
+    width: 140px;
+    height: 90px;
+    background: #ec7063;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.25);
+  }
+  .shadow.inset {
+    margin-top: 24px;
+    background: #2ecc71;
+    box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.35);
+  }
+</style>
+<div class="shadow"></div>
+<div class="shadow inset"></div>

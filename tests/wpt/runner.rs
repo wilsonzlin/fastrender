@@ -329,7 +329,9 @@ impl WptRunner {
 
   fn record_result(&mut self, result: &TestResult) {
     self.stats.record(result);
-    if self.config.save_rendered {
+    if self.config.save_rendered
+      || (self.config.save_diffs && result.status == TestStatus::Fail)
+    {
       self.save_artifact(result);
     }
   }

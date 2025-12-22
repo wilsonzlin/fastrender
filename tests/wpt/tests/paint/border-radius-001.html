@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Border radius variations</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    background: #ffffff;
+  }
+  .rounded {
+    width: 170px;
+    height: 90px;
+    background: #3498db;
+    border-radius: 20px;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font: 16px/1 sans-serif;
+  }
+  .rounded.large {
+    margin-top: 18px;
+    border-radius: 45px;
+    background: #9b59b6;
+  }
+</style>
+<div class="rounded">Radius 20px</div>
+<div class="rounded large">Radius 45px</div>

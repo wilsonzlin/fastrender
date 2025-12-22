@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Basic block flow with padding and margins</title>
+<style>
+  body {
+    margin: 0;
+    background: #f5f5f5;
+    font: 16px/1.4 sans-serif;
+  }
+  .container {
+    padding: 24px;
+  }
+  .box {
+    width: 160px;
+    height: 90px;
+    padding: 12px;
+    margin: 10px;
+    color: #fff;
+    box-sizing: border-box;
+    background: #4a90e2;
+  }
+  .box.secondary {
+    background: #50e3c2;
+    margin-left: 40px;
+  }
+</style>
+<div class="container">
+  <div class="box">Block A</div>
+  <div class="box secondary">Block B</div>
+</div>

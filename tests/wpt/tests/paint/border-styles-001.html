@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Border styles</title>
+<style>
+  body {
+    margin: 0;
+    padding: 18px;
+    background: #fff;
+    font-family: sans-serif;
+  }
+  .row {
+    display: flex;
+    gap: 12px;
+  }
+  .border {
+    width: 120px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f7f7f7;
+  }
+  .solid { border: 4px solid #34495e; }
+  .dashed { border: 4px dashed #e67e22; }
+  .double { border: 6px double #16a085; }
+</style>
+<div class="row">
+  <div class="border solid">Solid</div>
+  <div class="border dashed">Dashed</div>
+  <div class="border double">Double</div>
+</div>

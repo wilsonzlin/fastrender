@@ -1,0 +1,39 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Styled form controls</title>
+<style>
+  body {
+    margin: 0;
+    padding: 18px;
+    font: 16px/1.4 sans-serif;
+    background: #fafafa;
+  }
+  form {
+    display: grid;
+    gap: 10px;
+    width: 240px;
+  }
+  label { font-weight: 600; }
+  input, select {
+    padding: 6px 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+  }
+  button {
+    padding: 8px;
+    background: #3498db;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+  }
+</style>
+<form>
+  <label for="name">Name</label>
+  <input id="name" value="FastRender">
+  <label for="role">Role</label>
+  <select id="role">
+    <option>Engineer</option>
+    <option selected>Tester</option>
+  </select>
+  <button type="button">Submit</button>
+</form>
