@@ -27,6 +27,14 @@ This harness covers targeted style/cascade/layout regressions.
 - (Re)generate goldens: `UPDATE_GOLDEN=1 cargo test fixtures`
 - To refresh a single fixture (faster): `UPDATE_GOLDEN=1 cargo test test_fixture_<name> -- --exact`
 
+Rendered output is compared pixel-by-pixel against the checked-in PNG goldens. Failures write artifacts under `target/fixtures_diffs/<fixture>_{actual,expected,diff}.png` for debugging.
+
+Comparisons are strict by default. To allow small local differences (fonts, GPU, AA), set a tolerance env var:
+
+- `FIXTURE_TOLERANCE=5` (per-channel tolerance)
+- `FIXTURE_MAX_DIFFERENT_PERCENT=0.5` (percent of pixels allowed to differ)
+- `FIXTURE_FUZZY=1` (preset: tolerance 10, up to 1% different, no alpha compare)
+
 New columns/transform/form fixtures ship with checked-in goldens; keep these up to date when adjusting layouts.
 
 ## WPT harness (local, visual)
