@@ -459,17 +459,112 @@ pub fn inline_imports<S: BuildHasher>(
 }
 
 fn extract_attr_value(tag_source: &str, attr: &str) -> Option<String> {
-  let tag_lower = tag_source.to_lowercase();
-  if let Some(attr_pos) = tag_lower.find(attr) {
-    let attr_slice = &tag_source[attr_pos..];
-    if let Some(qpos) = attr_slice.find('"').or_else(|| attr_slice.find('\'')) {
-      let quote = attr_slice.chars().nth(qpos).unwrap();
-      let after = &attr_slice[qpos + 1..];
-      if let Some(end) = after.find(quote) {
-        return Some(decode_html_entities(&after[..end]));
+  let target = attr.to_ascii_lowercase();
+  let mut chars = tag_source.chars().peekable();
+
+  // Skip the tag name itself.
+  if let Some('<') = chars.peek().copied() {
+    chars.next();
+  }
+  while let Some(&c) = chars.peek() {
+    if c.is_whitespace() || c == '>' {
+      break;
+    }
+    chars.next();
+  }
+
+  loop {
+    // Skip whitespace between attributes.
+    while let Some(&c) = chars.peek() {
+      if c.is_whitespace() {
+        chars.next();
+      } else {
+        break;
       }
     }
+
+    match chars.peek().copied() {
+      None | Some('>') => break,
+      Some('/') => {
+        chars.next();
+        continue;
+      }
+      _ => {}
+    }
+
+    let mut name = String::new();
+    while let Some(&c) = chars.peek() {
+      if c.is_whitespace() || c == '=' || c == '>' {
+        break;
+      }
+      name.push(c);
+      chars.next();
+    }
+
+    if name.is_empty() {
+      if chars.next().is_none() {
+        break;
+      }
+      continue;
+    }
+
+    let name_lower = name.to_ascii_lowercase();
+
+    while let Some(&c) = chars.peek() {
+      if c.is_whitespace() {
+        chars.next();
+      } else {
+        break;
+      }
+    }
+
+    let value = if let Some('=') = chars.peek().copied() {
+      chars.next();
+
+      while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+          chars.next();
+        } else {
+          break;
+        }
+      }
+
+      if let Some(next) = chars.peek().copied() {
+        if next == '"' || next == '\'' {
+          let quote = next;
+          chars.next();
+          let mut val = String::new();
+          while let Some(ch) = chars.next() {
+            if ch == quote {
+              break;
+            }
+            val.push(ch);
+          }
+          val
+        } else {
+          let mut val = String::new();
+          while let Some(&ch) = chars.peek() {
+            if ch.is_whitespace() || ch == '>' {
+              break;
+            }
+            val.push(ch);
+            chars.next();
+          }
+          val
+        }
+      } else {
+        String::new()
+      }
+    } else {
+      // Boolean attribute: treat as present with an empty value.
+      String::new()
+    };
+
+    if name_lower == target {
+      return Some(decode_html_entities(&value));
+    }
   }
+
   None
 }
 
@@ -986,6 +1081,20 @@ mod tests {
   }
 
   #[test]
+  fn extracts_unquoted_stylesheet_hrefs() {
+    let html = r#"
+            <link rel=stylesheet href=/styles/a.css media=screen>
+            <link rel=stylesheet href=/styles/print.css media=print>
+            <link rel=stylesheet href=/styles/b.css media=all>
+        "#;
+    let urls = extract_css_links(html, "https://example.com/app/page.html");
+    assert_eq!(urls, vec![
+      "https://example.com/styles/a.css".to_string(),
+      "https://example.com/styles/b.css".to_string(),
+    ]);
+  }
+
+  #[test]
   fn unescapes_js_escaped_stylesheet_hrefs() {
     let html = r#"
             <link rel="stylesheet" href="https://cdn.example.com/app.css?foo=bar\u0026baz=qux">
@@ -1181,6 +1290,15 @@ mod tests {
   fn falls_back_to_print_styles_when_no_screen_stylesheets() {
     let html = r#"
             <link rel="stylesheet" media="print" href="/print.css">
+        "#;
+    let urls = extract_css_links(html, "https://example.com/");
+    assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
+  }
+
+  #[test]
+  fn falls_back_to_unquoted_print_stylesheets() {
+    let html = r#"
+            <link rel=stylesheet media=print href=/print.css>
         "#;
     let urls = extract_css_links(html, "https://example.com/");
     assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
