@@ -2207,6 +2207,17 @@ impl FormattingContext for BlockFormattingContext {
     } else {
       constraints.available_height
     };
+    let _block_space_layout = if inline_is_horizontal {
+      constraints.available_height
+    } else {
+      constraints.available_width
+    };
+    let _ = _block_space_layout;
+    let inline_viewport = if inline_is_horizontal {
+      self.viewport_size.width
+    } else {
+      self.viewport_size.height
+    };
     let log_skinny = std::env::var("FASTR_LOG_SKINNY_FLEX")
       .map(|v| v != "0")
       .unwrap_or(false);
@@ -2385,10 +2396,10 @@ impl FormattingContext for BlockFormattingContext {
     }
 
     let intrinsic_width_mode = matches!(
-      constraints.available_width,
+      inline_space,
       AvailableSpace::MaxContent | AvailableSpace::MinContent | AvailableSpace::Indefinite
     );
-    let mut containing_width = match constraints.available_width {
+    let mut containing_width = match inline_space {
       AvailableSpace::Definite(w) => w,
       // In-flow blocks use the containing block’s inline size; shrink-to-fit contexts should
       // feed a definite width in constraints. When the available width is indefinite/max/min
@@ -2398,7 +2409,7 @@ impl FormattingContext for BlockFormattingContext {
         preferred_containing_width(inline_percentage_base).unwrap_or(inline_percentage_base)
       }
     }
-    .min(self.viewport_size.width);
+    .min(inline_viewport);
     if containing_width <= 1.0 && !intrinsic_width_mode {
       let width_is_absolute = style
         .width
@@ -2406,7 +2417,7 @@ impl FormattingContext for BlockFormattingContext {
         .map(|l| l.unit.is_absolute())
         .unwrap_or(false);
       if !width_is_absolute {
-        containing_width = self.viewport_size.width;
+        containing_width = inline_viewport;
       }
     }
     static LOG_SMALL_BLOCK: OnceLock<bool> = OnceLock::new();
