@@ -79,6 +79,17 @@ pub enum FilterPrimitive {
     b: TransferFn,
     a: TransferFn,
   },
+  Image(Pixmap),
+  Tile {
+    input: FilterInput,
+  },
+  Turbulence,
+  DisplacementMap {
+    input: FilterInput,
+  },
+  ConvolveMatrix {
+    input: FilterInput,
+  },
 }
 
 #[derive(Clone, Debug)]
@@ -140,7 +151,7 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
 
   let resource = image_cache.fetcher().fetch(&resource_url).ok()?;
   let text = String::from_utf8(resource.bytes.clone()).ok()?;
-  let filter = parse_filter_definition(&text, fragment.as_deref())?;
+  let filter = parse_filter_definition(&text, fragment.as_deref(), image_cache)?;
 
   if let Ok(mut guard) = filter_cache().lock() {
     guard.insert(cache_key, filter.clone());
@@ -149,7 +160,7 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
   Some(filter)
 }
 
-fn parse_filter_definition(svg: &str, fragment: Option<&str>) -> Option<Arc<SvgFilter>> {
+fn parse_filter_definition(svg: &str, fragment: Option<&str>, image_cache: &ImageCache) -> Option<Arc<SvgFilter>> {
   let doc = Document::parse(svg).ok()?;
   let filter_node = doc.descendants().find(|n| {
     n.has_tag_name("filter")
@@ -173,6 +184,11 @@ fn parse_filter_definition(svg: &str, fragment: Option<&str>) -> Option<Arc<SvgF
       "feblend" => parse_fe_blend(&child),
       "femorphology" => parse_fe_morphology(&child),
       "fecomponenttransfer" => parse_fe_component_transfer(&child),
+      "feimage" => parse_fe_image(&child, image_cache),
+      "fetile" => parse_fe_tile(&child),
+      "feturbulence" => Some(FilterPrimitive::Turbulence),
+      "fedisplacementmap" => parse_fe_displacement_map(&child),
+      "feconvolvematrix" => parse_fe_convolve_matrix(&child),
       _ => None,
     };
     if let Some(prim) = primitive {
@@ -397,6 +413,34 @@ fn parse_fe_drop_shadow(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   })
 }
 
+fn parse_fe_image(node: &roxmltree::Node, cache: &ImageCache) -> Option<FilterPrimitive> {
+  let href = node
+    .attribute("href")
+    .or_else(|| node.attribute("xlink:href"))?;
+  let loaded = cache.load(href).ok()?;
+  let dyn_img = loaded.image.as_ref();
+  let rgba = dyn_img.to_rgba8();
+  let (w, h) = rgba.dimensions();
+  let size = tiny_skia::IntSize::from_wh(w, h)?;
+  let pixmap = Pixmap::from_vec(rgba.into_raw(), size)?;
+  Some(FilterPrimitive::Image(pixmap))
+}
+
+fn parse_fe_tile(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let input = parse_input(node.attribute("in"));
+  Some(FilterPrimitive::Tile { input })
+}
+
+fn parse_fe_displacement_map(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let input = parse_input(node.attribute("in"));
+  Some(FilterPrimitive::DisplacementMap { input })
+}
+
+fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let input = parse_input(node.attribute("in"));
+  Some(FilterPrimitive::ConvolveMatrix { input })
+}
+
 pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap) {
   let source = pixmap.clone();
   let mut results: HashMap<String, Pixmap> = HashMap::new();
@@ -479,6 +523,11 @@ fn apply_primitive(
         img
       })
     }
+    FilterPrimitive::Image(pix) => Some(pix.clone()),
+    FilterPrimitive::Tile { input } => resolve_input(input, source, results, current),
+    FilterPrimitive::Turbulence => Some(source.clone()),
+    FilterPrimitive::DisplacementMap { input } => resolve_input(input, source, results, current),
+    FilterPrimitive::ConvolveMatrix { input } => resolve_input(input, source, results, current),
   }
 }
 
