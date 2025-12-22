@@ -776,6 +776,34 @@ fn test_absolute_vertical_auto_margins_center() {
   assert!((result.margins.bottom - 65.0).abs() < 0.001);
 }
 
+#[test]
+fn test_absolute_overconstrained_auto_margins_not_centered() {
+  let layout = AbsoluteLayout::new();
+
+  let mut style = ComputedStyle::default();
+  style.position = Position::Absolute;
+  style.left = Some(Length::px(20.0));
+  style.right = Some(Length::px(30.0));
+  style.width = Some(Length::px(100.0));
+  // Auto margins (None) should become 0 in overconstrained case (ignore right in LTR)
+  style.margin_left = None;
+  style.margin_right = None;
+  style.border_left_width = Length::px(0.0);
+  style.border_right_width = Length::px(0.0);
+  style.border_top_width = Length::px(0.0);
+  style.border_bottom_width = Length::px(0.0);
+
+  let cb = create_cb(400.0, 200.0);
+  let positioned = layout.resolve_positioned_style(&style, &cb);
+  let input = create_input(positioned, Size::new(0.0, 0.0));
+
+  let result = layout.layout_absolute(&input, &cb).unwrap();
+
+  assert_eq!(result.position.x, 20.0);
+  assert_eq!(result.margins.left, 0.0);
+  assert_eq!(result.margins.right, 0.0);
+}
+
 // ============================================================================
 // Combination Tests (Complex Scenarios)
 // ============================================================================
