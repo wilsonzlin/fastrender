@@ -2253,6 +2253,102 @@ pub fn parse_declarations(declarations_str: &str) -> Vec<Declaration> {
   parse_declaration_list(&mut parser).unwrap_or_default()
 }
 
+/// Inline `<style>` block extracted from the DOM.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineStyle {
+  /// Raw CSS text inside the `<style>` element.
+  pub css: String,
+  /// Optional `media` attribute value.
+  pub media: Option<String>,
+  /// Optional `type` attribute value.
+  pub type_attr: Option<String>,
+  /// Whether the element is disabled via the boolean `disabled` attribute.
+  pub disabled: bool,
+}
+
+/// External stylesheet reference extracted from a `<link>` element.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StylesheetLink {
+  /// The href value, as-authored.
+  pub href: String,
+  /// Tokenized `rel` attribute, lowercased.
+  pub rel: Vec<String>,
+  /// Optional `media` attribute value.
+  pub media: Option<String>,
+  /// Optional `type` attribute value.
+  pub type_attr: Option<String>,
+  /// Whether the link is disabled via the boolean `disabled` attribute.
+  pub disabled: bool,
+}
+
+/// Stylesheet sources (inline or external) in document order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StylesheetSource {
+  /// Inline `<style>` element.
+  Inline(InlineStyle),
+  /// External `<link rel="stylesheet">` reference.
+  External(StylesheetLink),
+}
+
+/// Tokenize a `rel` attribute into lowercase relationship values.
+pub fn tokenize_rel_list(rel: &str) -> Vec<String> {
+  rel
+    .split_whitespace()
+    .filter(|t| !t.is_empty())
+    .map(|t| t.to_ascii_lowercase())
+    .collect()
+}
+
+/// Returns true if the tokenized rel list contains the `stylesheet` keyword.
+pub fn rel_list_contains_stylesheet(tokens: &[String]) -> bool {
+  tokens
+    .iter()
+    .any(|token| token.eq_ignore_ascii_case("stylesheet"))
+}
+
+/// Extract inline `<style>` blocks and external `<link rel="stylesheet">` entries from a DOM.
+///
+/// The returned list preserves document order so callers can maintain the correct cascade
+/// ordering when loading and parsing the resulting stylesheets.
+pub fn extract_css_sources(dom: &DomNode) -> Vec<StylesheetSource> {
+  let mut sources = Vec::new();
+
+  dom.walk_tree(&mut |node| {
+    if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("style") {
+        let mut css = String::new();
+        for child in &node.children {
+          if let Some(text) = child.text_content() {
+            css.push_str(text);
+          }
+        }
+
+        sources.push(StylesheetSource::Inline(InlineStyle {
+          css,
+          media: node.get_attribute("media"),
+          type_attr: node.get_attribute("type"),
+          disabled: node.get_attribute_ref("disabled").is_some(),
+        }));
+      } else if tag.eq_ignore_ascii_case("link") {
+        let rel_attr = node.get_attribute("rel");
+        let href_attr = node.get_attribute("href");
+        if let (Some(rel), Some(href)) = (rel_attr, href_attr) {
+          let rel = tokenize_rel_list(&rel);
+          sources.push(StylesheetSource::External(StylesheetLink {
+            href,
+            rel,
+            media: node.get_attribute("media"),
+            type_attr: node.get_attribute("type"),
+            disabled: node.get_attribute_ref("disabled").is_some(),
+          }));
+        }
+      }
+    }
+  });
+
+  sources
+}
+
 /// Extracts CSS from style tags in the DOM
 ///
 /// Walks the DOM tree looking for `<style>` elements and concatenates
@@ -2749,5 +2845,48 @@ mod tests {
       1,
       "parentheses-adjacent operator should still parse"
     );
+  }
+
+  #[test]
+  fn rel_tokenization_splits_and_lowercases() {
+    let tokens = tokenize_rel_list(" StyleSheet  Alternate   PREFETCH ");
+    assert_eq!(tokens, vec!["stylesheet", "alternate", "prefetch"]);
+    assert!(rel_list_contains_stylesheet(&tokens));
+  }
+
+  #[test]
+  fn extract_css_sources_preserves_order_and_attrs() {
+    let html = r#"
+      <head>
+        <style id="one">body { color: red; }</style>
+        <link rel="StyleSheet alternate" href="a.css" media="screen">
+        <style id="two" media="print">p { color: blue; }</style>
+      </head>
+    "#;
+    let dom = crate::dom::parse_html(html).unwrap();
+    let sources = extract_css_sources(&dom);
+    assert_eq!(sources.len(), 3);
+
+    match &sources[0] {
+      StylesheetSource::Inline(inline) => assert!(inline.css.contains("red")),
+      other => panic!("expected inline style, got {:?}", other),
+    }
+
+    match &sources[1] {
+      StylesheetSource::External(link) => {
+        assert_eq!(link.href, "a.css");
+        assert!(rel_list_contains_stylesheet(&link.rel));
+        assert_eq!(link.media.as_deref(), Some("screen"));
+      }
+      other => panic!("expected external stylesheet link, got {:?}", other),
+    }
+
+    match &sources[2] {
+      StylesheetSource::Inline(inline) => {
+        assert_eq!(inline.media.as_deref(), Some("print"));
+        assert!(inline.css.contains("blue"));
+      }
+      other => panic!("expected inline style, got {:?}", other),
+    }
   }
 }

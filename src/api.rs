@@ -63,8 +63,27 @@ use crate::css::loader::extract_embedded_css_urls;
 use crate::css::loader::infer_base_url;
 use crate::css::loader::inject_css_into_html;
 use crate::css::loader::inline_imports;
+use crate::css::loader::resolve_href_with_base;
 use crate::css::parser::extract_css;
-use crate::css::types::CssImportLoader;
+use crate::css::parser::{
+  extract_css_sources,
+  parse_stylesheet,
+  rel_list_contains_stylesheet,
+  StylesheetSource,
+};
+use crate::css::types::{CssImportLoader, StyleSheet};
+use crate::css::loader::{
+  absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
+  inject_css_into_html, inline_imports, resolve_href_with_base,
+};
+use crate::css::parser::{
+  extract_css,
+  extract_css_sources,
+  parse_stylesheet,
+  rel_list_contains_stylesheet,
+  StylesheetSource,
+};
+use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
@@ -108,6 +127,7 @@ use crate::style::color::Rgba;
 use crate::style::media::MediaContext;
 use crate::style::media::MediaQueryCache;
 use crate::style::media::MediaType;
+use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache};
 use crate::style::page::resolve_page_style;
 use crate::style::page::PageSide;
 use crate::style::types::ContainerType;
@@ -1282,6 +1302,122 @@ impl FastRender {
     )
   }
 
+  fn collect_document_stylesheet(
+    &self,
+    dom: &DomNode,
+    media_ctx: &MediaContext,
+    media_query_cache: &mut MediaQueryCache,
+  ) -> StyleSheet {
+    let mut combined_rules = Vec::new();
+    let sources = extract_css_sources(dom);
+    let fetcher = Arc::clone(&self.fetcher);
+    let inline_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&fetcher));
+
+    for source in sources {
+      match source {
+        StylesheetSource::Inline(inline) => {
+          if inline.disabled || !Self::stylesheet_type_is_css(inline.type_attr.as_deref()) {
+            continue;
+          }
+          if !Self::media_attr_allows(inline.media.as_deref(), media_ctx, media_query_cache) {
+            continue;
+          }
+          if inline.css.trim().is_empty() {
+            continue;
+          }
+
+          if let Ok(sheet) = parse_stylesheet(&inline.css) {
+            let resolved = sheet.resolve_imports_with_cache(
+              &inline_loader,
+              self.base_url.as_deref(),
+              media_ctx,
+              Some(media_query_cache),
+            );
+            combined_rules.extend(resolved.rules);
+          }
+        }
+        StylesheetSource::External(link) => {
+          if link.disabled
+            || !rel_list_contains_stylesheet(&link.rel)
+            || !Self::stylesheet_type_is_css(link.type_attr.as_deref())
+          {
+            continue;
+          }
+          if !Self::media_attr_allows(link.media.as_deref(), media_ctx, media_query_cache) {
+            continue;
+          }
+          if link.href.trim().is_empty() {
+            continue;
+          }
+
+          let Some(stylesheet_url) = resolve_href_with_base(self.base_url.as_deref(), &link.href)
+          else {
+            continue;
+          };
+
+          match fetcher.fetch(&stylesheet_url) {
+            Ok(resource) => {
+              let mut css_text =
+                decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
+              css_text = absolutize_css_urls(&css_text, &stylesheet_url);
+
+              if let Ok(sheet) = parse_stylesheet(&css_text) {
+                let loader =
+                  CssImportFetcher::new(Some(stylesheet_url.clone()), Arc::clone(&fetcher));
+                let resolved = sheet.resolve_imports_with_cache(
+                  &loader,
+                  Some(&stylesheet_url),
+                  media_ctx,
+                  Some(media_query_cache),
+                );
+                combined_rules.extend(resolved.rules);
+              }
+            }
+            Err(_) => {
+              // Per spec, stylesheet loads are best-effort. On failure, continue.
+              continue;
+            }
+          }
+        }
+      }
+    }
+
+    StyleSheet {
+      rules: combined_rules,
+    }
+  }
+
+  fn stylesheet_type_is_css(type_attr: Option<&str>) -> bool {
+    match type_attr {
+      None => true,
+      Some(value) => {
+        let mime = value.split(';').next().map(str::trim).unwrap_or("");
+        mime.is_empty() || mime.eq_ignore_ascii_case("text/css")
+      }
+    }
+  }
+
+  fn media_attr_allows(
+    media_attr: Option<&str>,
+    media_ctx: &MediaContext,
+    cache: &mut MediaQueryCache,
+  ) -> bool {
+    match media_attr {
+      None => true,
+      Some(media) => {
+        let trimmed = media.trim();
+        if trimmed.is_empty() {
+          return true;
+        }
+
+        match MediaQuery::parse_list(trimmed) {
+          Ok(list) => media_ctx.evaluate_list_with_cache(&list, Some(cache)),
+          Err(_) => false,
+        }
+      }
+    }
+  }
+
   /// Computes the accessibility tree for the given document.
   ///
   /// This runs HTML and CSS parsing to produce a styled tree, then maps
@@ -1299,20 +1435,15 @@ impl FastRender {
       }));
     }
 
-    let stylesheet = extract_css(dom)?;
     let target_fragment = self.current_target_fragment();
-    let media_ctx = self.media_context_for_media(MediaType::Screen, width as f32, height as f32);
-    let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
+    let media_ctx = MediaContext::screen(width as f32, height as f32)
+      .with_device_pixel_ratio(self.device_pixel_ratio)
+      .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
-    let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
-      &import_loader,
-      self.base_url.as_deref(),
-      &media_ctx,
-      Some(&mut media_query_cache),
-    );
+    let stylesheet = self.collect_document_stylesheet(dom, &media_ctx, &mut media_query_cache);
     let styled_tree = apply_styles_with_media_target_and_imports_cached(
       dom,
-      &resolved_stylesheet,
+      &stylesheet,
       &media_ctx,
       target_fragment.as_deref(),
       None,
@@ -1394,9 +1525,15 @@ impl FastRender {
     let modal_open = modal_dialog_present(&dom_with_state);
     apply_top_layer_state(&mut dom_with_state, modal_open, false);
 
-    // Extract CSS from style tags
+    let target_fragment = self.current_target_fragment();
+    let media_ctx = MediaContext::screen(width as f32, height as f32)
+      .with_device_pixel_ratio(self.device_pixel_ratio)
+      .with_env_overrides();
+
     let css_parse_start = timings_enabled.then(Instant::now);
-    let stylesheet = extract_css(&dom_with_state)?;
+    let mut media_query_cache = MediaQueryCache::default();
+    let stylesheet =
+      self.collect_document_stylesheet(&dom_with_state, &media_ctx, &mut media_query_cache);
     if let Some(start) = css_parse_start {
       eprintln!("timing:css_parse {:?}", start.elapsed());
     }
@@ -1426,9 +1563,13 @@ impl FastRender {
     let keyframes =
       resolved_stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
     let has_container_queries = resolved_stylesheet.has_container_rules();
+    let style_load_start = timings_enabled.then(Instant::now);
+    let keyframes =
+      stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let has_container_queries = stylesheet.has_container_rules();
     self.font_context.clear_web_fonts();
-    let font_faces = resolved_stylesheet
-      .collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let font_faces =
+      stylesheet.collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
     // Best-effort loading; rendering should continue even if a web font fails.
     let _ = self.font_context.load_web_fonts(
       &font_faces,
@@ -1441,7 +1582,7 @@ impl FastRender {
     let style_apply_start = timings_enabled.then(Instant::now);
     let styled_tree = apply_styles_with_media_target_and_imports_cached(
       &dom_with_state,
-      &resolved_stylesheet,
+      &stylesheet,
       &media_ctx,
       target_fragment.as_deref(),
       None,
@@ -1459,7 +1600,7 @@ impl FastRender {
 
     let fallback_page_size = viewport_size;
     let page_rules =
-      resolved_stylesheet.collect_page_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
+      stylesheet.collect_page_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
     let page_name_hint = find_first_page_name(&styled_tree);
     let mut layout_viewport = fallback_page_size;
     let mut first_page_style = None;
@@ -1721,7 +1862,7 @@ impl FastRender {
 
         let styled_tree = apply_styles_with_media_target_and_imports(
           dom,
-          &resolved_stylesheet,
+          &stylesheet,
           &media_ctx,
           target_fragment.as_deref(),
           None,
@@ -2283,7 +2424,6 @@ impl FastRender {
         let mut have_resource_dimensions = false;
 
         let selected = if !src.is_empty() {
-          let media_ctx = self.media_context_for_media(media_type, viewport.width, viewport.height);
           Some(
             replaced_box
               .replaced_type
@@ -2591,10 +2731,8 @@ impl FastRender {
     }
   }
 
-  // =========================================================================
-  // Convenience methods for encoding to image formats
-  // =========================================================================
-
+  // ===  // Convenience methods for encoding to image formats
+  // ===
   /// Renders HTML to PNG bytes
   ///
   /// This is a convenience method that renders and encodes in one step.
@@ -2726,10 +2864,8 @@ impl CssImportLoader for CssImportFetcher {
     let resource = self.fetcher.fetch(&resolved)?;
 
     // Decode CSS bytes with charset handling
-    Ok(decode_css_bytes(
-      &resource.bytes,
-      resource.content_type.as_deref(),
-    ))
+    let decoded = decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
+    Ok(absolutize_css_urls(&decoded, &resolved))
   }
 }
 
@@ -4198,10 +4334,11 @@ mod tests {
   use crate::layout::engine::LayoutConfig;
   use crate::layout::engine::LayoutEngine;
   use crate::layout::formatting_context::intrinsic_cache_clear;
+  use crate::resource::FetchedResource;
   use crate::style::cascade::StyledNode;
   use crate::style::types::{
-    ImageResolution, ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness,
-    WritingMode,
+    BackgroundImage, ImageResolution, ScrollSnapAlign, ScrollSnapAxis, ScrollSnapStop,
+    ScrollSnapStrictness, WritingMode,
   };
   use crate::text::pipeline::ShapingPipeline;
   use crate::tree::fragment_tree::FragmentContent;
@@ -4209,6 +4346,39 @@ mod tests {
   use crate::ComputedStyle;
   use crate::Rect;
   use base64::Engine;
+  use std::collections::HashMap;
+  use std::io;
+  use std::sync::Arc;
+
+  #[derive(Clone, Default)]
+  struct MapFetcher {
+    map: HashMap<String, (Vec<u8>, Option<String>)>,
+  }
+
+  impl MapFetcher {
+    fn with_entry(mut self, url: &str, css: &str) -> Self {
+      self.map.insert(
+        url.to_string(),
+        (css.as_bytes().to_vec(), Some("text/css".to_string())),
+      );
+      self
+    }
+  }
+
+  impl ResourceFetcher for MapFetcher {
+    fn fetch(&self, url: &str) -> crate::error::Result<FetchedResource> {
+      self
+        .map
+        .get(url)
+        .map(|(bytes, content_type)| FetchedResource::new(bytes.clone(), content_type.clone()))
+        .ok_or_else(|| {
+          Error::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("missing resource: {url}"),
+          ))
+        })
+    }
+  }
 
   fn snap_viewport(tree: &mut FragmentTree, scroll: Point) -> Point {
     crate::scroll::apply_scroll_snap(tree, &crate::scroll::ScrollState::with_viewport(scroll))
@@ -4220,7 +4390,6 @@ mod tests {
   use image::ColorType;
   use image::ImageEncoder;
   use image::RgbaImage;
-  use std::sync::Arc;
 
   fn text_color_for(tree: &FragmentTree, needle: &str) -> Option<Rgba> {
     tree.iter_fragments().find_map(|frag| match &frag.content {
@@ -4239,6 +4408,17 @@ mod tests {
       .children
       .iter()
       .find_map(|child| styled_color_by_id(child, id))
+  }
+
+  fn find_styled_by_dom_id<'a>(styled: &'a StyledNode, id: &str) -> Option<&'a StyledNode> {
+    if styled.node.get_attribute("id").as_deref() == Some(id) {
+      return Some(styled);
+    }
+
+    styled
+      .children
+      .iter()
+      .find_map(|child| find_styled_by_dom_id(child, id))
   }
 
   fn styled_node_id_by_id(styled: &StyledNode, id: &str) -> Option<usize> {
@@ -4302,10 +4482,8 @@ mod tests {
     assert!((child.bounds.y() - 30.0).abs() < 0.01);
   }
 
-  // =========================================================================
-  // Creation Tests (these should always pass)
-  // =========================================================================
-
+  // ===  // Creation Tests (these should always pass)
+  // ===
   #[test]
   fn test_fastrender_new() {
     let result = FastRender::new();
@@ -4664,11 +4842,9 @@ mod tests {
     assert_eq!(image.height(), 240);
   }
 
-  // =========================================================================
-  // Rendering Tests (may fail if pipeline not fully integrated)
+  // ===  // Rendering Tests (may fail if pipeline not fully integrated)
   // These are marked with ignore to match the integration_test.rs pattern
-  // =========================================================================
-
+  // ===
   #[test]
   #[ignore = "Full rendering pipeline integration pending"]
   fn test_render_simple_html() {
@@ -5808,6 +5984,118 @@ mod tests {
       snapped
     );
     assert!(snapped.x.abs() < 0.1);
+  }
+
+  #[test]
+  fn external_stylesheets_respect_media_queries() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = MapFetcher::default()
+      .with_entry(
+        "https://example.com/screen.css",
+        "body { color: rgb(1, 2, 3); }",
+      )
+      .with_entry(
+        "https://example.com/print.css",
+        "body { color: rgb(10, 20, 30); }",
+      );
+
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(Arc::new(fetcher) as Arc<dyn ResourceFetcher>)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <link rel="stylesheet" href="screen.css" media="screen">
+      <link rel="stylesheet" href="print.css" media="print">
+      <div>Hello media</div>
+    "#;
+    let dom = renderer.parse_html(html).unwrap();
+    let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+
+    let color = text_color_for(&tree, "Hello media").unwrap();
+    assert_eq!(color, Rgba::rgb(1, 2, 3));
+  }
+
+  #[test]
+  fn external_stylesheets_follow_document_order() {
+    let base_url = "https://example.com/page.html";
+    let fetcher = MapFetcher::default().with_entry(
+      "https://example.com/a.css",
+      "body { color: rgb(20, 40, 60); }",
+    );
+
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(Arc::new(fetcher) as Arc<dyn ResourceFetcher>)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <style>body { color: rgb(200, 0, 0); }</style>
+      <link rel="stylesheet" href="a.css">
+      <div>Order Test</div>
+    "#;
+    let dom = renderer.parse_html(html).unwrap();
+    let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+
+    let color = text_color_for(&tree, "Order Test").unwrap();
+    assert_eq!(color, Rgba::rgb(20, 40, 60));
+  }
+
+  #[test]
+  fn stylesheet_urls_resolve_against_stylesheet_base() {
+    let base_url = "https://example.com/app/page.html";
+    let fetcher = MapFetcher::default().with_entry(
+      "https://example.com/app/styles/main.css",
+      "#target { background-image: url(\"../images/bg.png\"); }",
+    );
+
+    let mut renderer = FastRender::builder()
+      .base_url(base_url.to_string())
+      .fetcher(Arc::new(fetcher) as Arc<dyn ResourceFetcher>)
+      .build()
+      .unwrap();
+
+    let html = r#"
+      <link rel="stylesheet" href="styles/main.css">
+      <div id="target">bg</div>
+    "#;
+
+    let mut dom = renderer.parse_html(html).unwrap();
+    let modal_open = modal_dialog_present(&dom);
+    apply_top_layer_state(&mut dom, modal_open, false);
+
+    let media_ctx = MediaContext::screen(200.0, 200.0)
+      .with_device_pixel_ratio(renderer.device_pixel_ratio)
+      .with_env_overrides();
+    let mut media_query_cache = MediaQueryCache::default();
+    let stylesheet = renderer.collect_document_stylesheet(&dom, &media_ctx, &mut media_query_cache);
+    let styled = apply_styles_with_media_target_and_imports_cached(
+      &dom,
+      &stylesheet,
+      &media_ctx,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      Some(&mut media_query_cache),
+    );
+
+    let target = find_styled_by_dom_id(&styled, "target").expect("styled node");
+    let image = target
+      .styles
+      .background_layers
+      .first()
+      .and_then(|layer| layer.image.clone());
+    let url = match image {
+      Some(BackgroundImage::Url(url)) => url,
+      other => panic!("unexpected background image: {:?}", other),
+    };
+
+    assert_eq!(url, "https://example.com/app/images/bg.png");
   }
 
   #[test]
