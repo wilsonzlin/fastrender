@@ -1,5 +1,6 @@
 use fastrender::accessibility::{AccessibilityNode, CheckState, PressedState};
 use fastrender::api::FastRender;
+use serde_json::{json, Value};
 
 fn find_by_id<'a>(node: &'a AccessibilityNode, id: &str) -> Option<&'a AccessibilityNode> {
   if node.id.as_deref() == Some(id) {
@@ -24,6 +25,75 @@ fn collect_by_role<'a>(
   for child in &node.children {
     collect_by_role(child, role, out);
   }
+}
+
+fn render_accessibility_json(html: &str) -> Value {
+  let mut renderer = FastRender::new().expect("renderer");
+  let dom = renderer.parse_html(html).expect("parse");
+  let json = renderer
+    .accessibility_tree_json(&dom, 800, 600)
+    .expect("accessibility tree json");
+  serde_json::from_str(&json).expect("parse json")
+}
+
+fn find_json_node<'a>(node: &'a Value, id: &str) -> Option<&'a Value> {
+  if node
+    .get("id")
+    .and_then(|v| v.as_str())
+    .is_some_and(|v| v == id)
+  {
+    return Some(node);
+  }
+
+  if let Some(children) = node.get("children").and_then(|c| c.as_array()) {
+    for child in children {
+      if let Some(found) = find_json_node(child, id) {
+        return Some(found);
+      }
+    }
+  }
+
+  None
+}
+
+fn snapshot_subset(root: &Value, ids: &[&str]) -> Value {
+  let mut out = serde_json::Map::new();
+  for id in ids {
+    if let Some(node) = find_json_node(root, id) {
+      let mut entry = serde_json::Map::new();
+      entry.insert(
+        "role".into(),
+        node.get("role").cloned().unwrap_or(Value::Null),
+      );
+      entry.insert(
+        "name".into(),
+        node.get("name").cloned().unwrap_or(Value::Null),
+      );
+      entry.insert(
+        "description".into(),
+        node.get("description").cloned().unwrap_or(Value::Null),
+      );
+      entry.insert(
+        "value".into(),
+        node.get("value").cloned().unwrap_or(Value::Null),
+      );
+      entry.insert(
+        "level".into(),
+        node.get("level").cloned().unwrap_or(Value::Null),
+      );
+      entry.insert(
+        "html_tag".into(),
+        node.get("html_tag").cloned().unwrap_or(Value::Null),
+      );
+      entry.insert(
+        "states".into(),
+        node.get("states").cloned().unwrap_or_else(|| json!({})),
+      );
+      out.insert((*id).to_string(), Value::Object(entry));
+    }
+  }
+
+  Value::Object(out)
 }
 
 #[test]
@@ -166,4 +236,320 @@ fn accessibility_relations_and_visibility() {
 
   let toggle = find_by_id(&tree, "toggle").expect("toggle button");
   assert_eq!(toggle.states.pressed, Some(PressedState::Mixed));
+}
+
+#[test]
+fn accessibility_label_snapshot_json() {
+  let html = r##"
+    <html>
+      <body>
+        <label for="text">Text Label</label>
+        <input id="text" type="text" />
+        <label>Wrapped <input id="check" type="checkbox" /></label>
+        <input id="desc" aria-describedby="help" aria-description="extra detail" />
+        <div id="help">Helpful</div>
+        <label for="hidden-target" style="display:none">Hidden</label>
+        <input id="hidden-target" type="text" />
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+  let subset = snapshot_subset(&tree, &["text", "check", "desc", "hidden-target"]);
+
+  assert_eq!(
+    subset,
+    json!({
+      "text": {
+        "role": "textbox",
+        "name": "Text Label",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "input",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "check": {
+        "role": "checkbox",
+        "name": "Wrapped",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "input",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false,
+          "checked": "false"
+        }
+      },
+      "desc": {
+        "role": "textbox",
+        "name": null,
+        "description": "Helpful extra detail",
+        "value": null,
+        "level": null,
+        "html_tag": "input",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "hidden-target": {
+        "role": "textbox",
+        "name": null,
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "input",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      }
+    })
+  );
+}
+
+#[test]
+fn accessibility_table_snapshot_json() {
+  let html = r##"
+    <html>
+      <body>
+        <table id="table">
+          <caption id="caption">Summary</caption>
+          <thead>
+            <tr id="head-row">
+              <th id="h1">Head 1</th>
+              <th id="h2" scope="row">Row Head</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr id="r1">
+              <td id="c1">Cell 1</td>
+              <td id="c2">Cell 2</td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+  let subset = snapshot_subset(
+    &tree,
+    &["table", "caption", "head-row", "h1", "h2", "r1", "c1"],
+  );
+
+  assert_eq!(
+    subset,
+    json!({
+      "table": {
+        "role": "table",
+        "name": "Summary Head 1 Row Head Cell 1 Cell 2",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "table",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "caption": {
+        "role": "caption",
+        "name": "Summary",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "caption",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "head-row": {
+        "role": "row",
+        "name": "Head 1 Row Head",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "tr",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "h1": {
+        "role": "columnheader",
+        "name": "Head 1",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "th",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "h2": {
+        "role": "rowheader",
+        "name": "Row Head",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "th",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "r1": {
+        "role": "row",
+        "name": "Cell 1 Cell 2",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "tr",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "c1": {
+        "role": "cell",
+        "name": "Cell 1",
+        "description": null,
+        "value": null,
+        "level": null,
+        "html_tag": "td",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      }
+    })
+  );
+}
+
+#[test]
+fn accessibility_form_controls_snapshot_json() {
+  let html = r##"
+    <html>
+      <body>
+        <form>
+          <label for="search">Search</label>
+          <input id="search" type="search" value="Query" />
+          <label for="slider">Volume</label>
+          <input id="slider" type="range" value="5" min="0" max="10" aria-valuetext="Quiet" />
+          <progress id="progress" value="0.4" max="1"></progress>
+          <meter id="meter" min="0" max="10" value="7"></meter>
+        </form>
+      </body>
+    </html>
+  "##;
+
+  let tree = render_accessibility_json(html);
+  let subset = snapshot_subset(&tree, &["search", "slider", "progress", "meter"]);
+
+  assert_eq!(
+    subset,
+    json!({
+      "search": {
+        "role": "searchbox",
+        "name": "Search",
+        "description": null,
+        "value": "Query",
+        "level": null,
+        "html_tag": "input",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "slider": {
+        "role": "slider",
+        "name": "Volume",
+        "description": null,
+        "value": "Quiet",
+        "level": null,
+        "html_tag": "input",
+        "states": {
+          "focusable": true,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "progress": {
+        "role": "progressbar",
+        "name": null,
+        "description": null,
+        "value": "0.4",
+        "level": null,
+        "html_tag": "progress",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      },
+      "meter": {
+        "role": "meter",
+        "name": null,
+        "description": null,
+        "value": "7",
+        "level": null,
+        "html_tag": "meter",
+        "states": {
+          "focusable": false,
+          "disabled": false,
+          "required": false,
+          "invalid": false,
+          "visited": false
+        }
+      }
+    })
+  );
 }
