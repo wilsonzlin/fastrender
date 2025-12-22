@@ -163,6 +163,8 @@ pub use compare::compare_images;
 #[allow(unused_imports)]
 pub use compare::create_solid_pixmap;
 #[allow(unused_imports)]
+pub use compare::load_png_from_bytes;
+#[allow(unused_imports)]
 pub use compare::load_png;
 #[allow(unused_imports)]
 pub use compare::save_png;

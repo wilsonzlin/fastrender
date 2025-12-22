@@ -430,7 +430,20 @@ pub fn load_png(path: &Path) -> Result<Pixmap, String> {
   let img =
     image::open(path).map_err(|e| format!("Failed to load image '{}': {}", path.display(), e))?;
 
-  let rgba = img.to_rgba8();
+  pixmap_from_rgba_image(img.to_rgba8())
+}
+
+/// Loads a PNG from memory into a Pixmap
+///
+/// Useful for comparing in-memory renders without writing to disk first.
+pub fn load_png_from_bytes(data: &[u8]) -> Result<Pixmap, String> {
+  let img = image::load_from_memory(data)
+    .map_err(|e| format!("Failed to decode PNG from memory: {}", e))?;
+
+  pixmap_from_rgba_image(img.to_rgba8())
+}
+
+fn pixmap_from_rgba_image(rgba: image::RgbaImage) -> Result<Pixmap, String> {
   let width = rgba.width();
   let height = rgba.height();
 
@@ -736,6 +749,31 @@ mod tests {
     let pixmap3 = create_solid_pixmap(10, 10, 0, 0, 0, 255).unwrap();
     let diff2 = compare_images(&pixmap1, &pixmap3, &CompareConfig::strict());
     assert!(diff2.statistics.mse > 0.0);
+  }
+
+  #[test]
+  fn test_load_png_from_bytes() {
+    let mut buffer = Vec::new();
+    let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([10, 20, 30, 255]));
+    image
+      .write_to(
+        &mut std::io::Cursor::new(&mut buffer),
+        image::ImageOutputFormat::Png,
+      )
+      .unwrap();
+
+    let pixmap = load_png_from_bytes(&buffer).expect("Failed to decode PNG from bytes");
+    assert_eq!(pixmap.width(), 2);
+    assert_eq!(pixmap.height(), 2);
+
+    let data = pixmap.data();
+    assert_eq!(data[0], 30);
+    assert_eq!(data[1], 20);
+    assert_eq!(data[2], 10);
+    assert_eq!(data[3], 255);
+
+    let diff = compare_images(&pixmap, &pixmap, &CompareConfig::strict());
+    assert!(diff.is_match());
   }
 
   #[test]
