@@ -1,16 +1,13 @@
 ## Summary
 
-- Rewrote `src/layout/fragmentation.rs` to plan fragmentainer breaks using style hints (`break-before/after/inside`, widows/orphans) and added fragmentainer gaps plus metadata propagation. Fragments are now translated per fragmentainer to give absolute stacking positions and avoid splitting avoid/widow/orphan blocks when possible.
-- Updated fragmentation regression tests to cover gaps, forced breaks, avoid-inside rules, widows/orphans, and positioned content placement. Added multicolumn regressions for span segments and nested column containers.
-
-## Commits
-
-- `6d404bf` Rework fragmentation handling and tests
+- Implemented paragraph-level handling for `text-wrap: balance`, `pretty`, and `stable` in the inline formatting context. Balancing now re-runs line construction with measured width factors, scoring raggedness per paragraph, penalizing hyphenated endings and short last lines, and equalizing first-line width for balance/pretty/stable.
+- Added stability mode that always lays out using a conservative 90% effective inline width to keep breakpoints steady across small width changes, while still respecting bidi/replaced items. Balancing is skipped when floats shorten widths to avoid oscillation.
+- Added helper utilities for measuring line raggedness/hyphenation and new regression tests (Latin, CJK, hyphenation on/off, pretty, stable) validating balanced behavior and deterministic stable breaks.
 
 ## Testing
 
-- `cargo test fragmentation --quiet`
+- `cargo test text_wrap_ -- --nocapture`
 
-## Notes / Caveats
+## Notes
 
-- Fragmentation still operates as a post-layout pass; column-count options are not yet integrated beyond metadata/translation. Fragmentainer coordinates are now offset by `(fragmentainer_size + gap) * index`, which may affect consumers expecting zero-based origins.
+- Only `src/layout/contexts/inline/mod.rs` was touched. Scratchpad remains untracked.
