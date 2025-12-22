@@ -32,6 +32,46 @@ pub const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
 pub const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 pub const MATHML_NAMESPACE: &str = "http://www.w3.org/1998/Math/MathML";
 
+/// Controls whether non-standard DOM compatibility mutations are applied while parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomCompatibilityMode {
+  /// Parse the DOM without any FastRender-specific mutations.
+  Standard,
+
+  /// Apply compatibility mutations to mimic JS-driven class flips in static renders.
+  Compatibility,
+}
+
+impl Default for DomCompatibilityMode {
+  fn default() -> Self {
+    Self::Standard
+  }
+}
+
+/// Options for DOM parsing.
+#[derive(Debug, Clone, Copy)]
+pub struct DomParseOptions {
+  /// Optional compatibility mutations applied after HTML parsing.
+  pub compatibility_mode: DomCompatibilityMode,
+}
+
+impl Default for DomParseOptions {
+  fn default() -> Self {
+    Self {
+      compatibility_mode: DomCompatibilityMode::Standard,
+    }
+  }
+}
+
+impl DomParseOptions {
+  /// Enable compatibility DOM mutations (e.g., JS-managed class flips).
+  pub fn compatibility() -> Self {
+    Self {
+      compatibility_mode: DomCompatibilityMode::Compatibility,
+    }
+  }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShadowRootMode {
   Open,
@@ -168,6 +208,11 @@ pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
 }
 
 pub fn parse_html(html: &str) -> Result<DomNode> {
+  parse_html_with_options(html, DomParseOptions::default())
+}
+
+/// Parse HTML with explicit parsing options (e.g., DOM compatibility mode).
+pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<DomNode> {
   let opts = ParseOpts {
     tree_builder: TreeBuilderOpts {
       scripting_enabled: false,
@@ -188,7 +233,11 @@ pub fn parse_html(html: &str) -> Result<DomNode> {
 
   let mut root = convert_handle_to_node(&dom.document);
   attach_shadow_roots(&mut root);
-  toggle_no_js_class(&mut root);
+
+  if matches!(options.compatibility_mode, DomCompatibilityMode::Compatibility) {
+    apply_dom_compatibility_mutations(&mut root);
+  }
+
   Ok(root)
 }
 
@@ -241,6 +290,14 @@ fn attach_shadow_roots(node: &mut DomNode) {
   let light_children = std::mem::take(&mut node.children);
   distribute_slots(&mut shadow_root, light_children);
   node.children = vec![shadow_root];
+}
+
+/// Optional DOM compatibility tweaks applied after HTML parsing.
+///
+/// Currently mirrors FastRender's previous implicit class toggles to mimic
+/// JS-driven behaviors in static renders.
+fn apply_dom_compatibility_mutations(root: &mut DomNode) {
+  toggle_no_js_class(root);
 }
 
 fn distribute_slots(shadow_root: &mut DomNode, light_children: Vec<DomNode>) {
@@ -322,12 +379,25 @@ fn fill_slot_tree(
   }
 }
 
+=======
+  if matches!(
+    options.compatibility_mode,
+    DomCompatibilityMode::Compatibility
+  ) {
+    apply_dom_compatibility_mutations(&mut root);
+  }
+  Ok(root)
+}
+
+/// Optional DOM compatibility tweaks applied after HTML parsing.
+///
+>>>>>>> 2f2debf (Add DOM compatibility mode and gate class flips)
 /// Some documents bootstrap by marking the root with `no-js` and replacing it with a
 /// `js-enabled` class once scripts execute. Others toggle visibility gates like
 /// `jsl10n-visible` after client-side localization. Since we do not run author scripts,
 /// mirror those initializations so content that relies on the class flip (e.g., initial
 /// opacity) is visible in static renders.
-fn toggle_no_js_class(node: &mut DomNode) {
+fn apply_dom_compatibility_mutations(node: &mut DomNode) {
   if let DomNodeType::Element {
     tag_name,
     attributes,
@@ -372,7 +442,7 @@ fn toggle_no_js_class(node: &mut DomNode) {
   }
 
   for child in &mut node.children {
-    toggle_no_js_class(child);
+    apply_dom_compatibility_mutations(child);
   }
 }
 
@@ -3880,8 +3950,54 @@ mod tests {
   }
 
   #[test]
-  fn parse_html_flips_no_js_class() {
+  fn parse_html_leaves_classes_untouched_by_default() {
     let dom = parse_html("<html class='no-js foo'><body></body></html>").expect("parse");
+    let html = dom
+      .children
+      .iter()
+      .find(|c| matches!(c.node_type, DomNodeType::Element { .. }))
+      .expect("html child");
+    let classes = match &html.node_type {
+      DomNodeType::Element { attributes, .. } => attributes
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+        .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>())
+        .unwrap_or_default(),
+      _ => panic!("expected html element"),
+    };
+    assert!(classes.contains(&"no-js"));
+    assert!(!classes.contains(&"js-enabled"));
+    assert!(!classes.contains(&"jsl10n-visible"));
+
+    let body = html
+      .children
+      .iter()
+      .find(|c| {
+        if let DomNodeType::Element { tag_name, .. } = &c.node_type {
+          tag_name.eq_ignore_ascii_case("body")
+        } else {
+          false
+        }
+      })
+      .expect("body child");
+    let body_classes = match &body.node_type {
+      DomNodeType::Element { attributes, .. } => attributes
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+        .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>())
+        .unwrap_or_default(),
+      _ => panic!("expected body element"),
+    };
+    assert!(!body_classes.contains(&"jsl10n-visible"));
+  }
+
+  #[test]
+  fn parse_html_compat_mode_flips_no_js_class() {
+    let dom = parse_html_with_options(
+      "<html class='no-js foo'><body></body></html>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
     let html = dom
       .children
       .iter()
@@ -3902,8 +4018,12 @@ mod tests {
   }
 
   #[test]
-  fn parse_html_adds_jsl10n_visible_when_missing() {
-    let dom = parse_html("<html><body></body></html>").expect("parse");
+  fn parse_html_compat_mode_adds_jsl10n_visible_when_missing() {
+    let dom = parse_html_with_options(
+      "<html><body></body></html>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
     let html = dom
       .children
       .iter()
@@ -3921,8 +4041,12 @@ mod tests {
   }
 
   #[test]
-  fn parse_html_marks_body_jsl10n_visible() {
-    let dom = parse_html("<html><body class='portal'></body></html>").expect("parse");
+  fn parse_html_compat_mode_marks_body_jsl10n_visible() {
+    let dom = parse_html_with_options(
+      "<html><body class='portal'></body></html>",
+      DomParseOptions::compatibility(),
+    )
+    .expect("parse");
     let html = dom
       .children
       .iter()

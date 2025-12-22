@@ -60,7 +60,7 @@ use crate::css::encoding::decode_css_bytes;
 use crate::css::parser::extract_css;
 use crate::css::types::CssImportLoader;
 use crate::dom::DomNode;
-use crate::dom::{self};
+use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
 use crate::error::RenderError;
 use crate::error::Result;
@@ -208,6 +208,9 @@ pub struct FastRender {
 
   /// Base URL used for resolving links/targets
   base_url: Option<String>,
+
+  /// Optional compatibility mode applied during DOM parsing
+  dom_compat_mode: DomCompatibilityMode,
 }
 
 impl std::fmt::Debug for FastRender {
@@ -218,6 +221,7 @@ impl std::fmt::Debug for FastRender {
       .field("default_height", &self.default_height)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
       .field("base_url", &self.base_url)
+      .field("dom_compat_mode", &self.dom_compat_mode)
       .finish_non_exhaustive()
   }
 }
@@ -251,6 +255,9 @@ pub struct FastRenderConfig {
 
   /// Base URL used to resolve relative resource references (images, CSS)
   pub base_url: Option<String>,
+
+  /// Optional compatibility mode used when parsing HTML.
+  pub dom_compat_mode: DomCompatibilityMode,
 }
 
 impl Default for FastRenderConfig {
@@ -261,6 +268,7 @@ impl Default for FastRenderConfig {
       default_height: 600,
       device_pixel_ratio: 1.0,
       base_url: None,
+      dom_compat_mode: DomCompatibilityMode::Standard,
     }
   }
 }
@@ -326,6 +334,12 @@ impl FastRenderBuilder {
   /// Sets a base URL used to resolve relative resource references (images, linked CSS)
   pub fn base_url(mut self, url: impl Into<String>) -> Self {
     self.config.base_url = Some(url.into());
+    self
+  }
+
+  /// Sets the DOM compatibility mode applied during parsing.
+  pub fn dom_compatibility_mode(mut self, mode: DomCompatibilityMode) -> Self {
+    self.config.dom_compat_mode = mode;
     self
   }
 
@@ -395,6 +409,12 @@ impl FastRenderConfig {
   /// Sets the base URL used to resolve relative resource references.
   pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
     self.base_url = Some(url.into());
+    self
+  }
+
+  /// Sets the DOM compatibility mode applied during parsing.
+  pub fn with_dom_compat_mode(mut self, mode: DomCompatibilityMode) -> Self {
+    self.dom_compat_mode = mode;
     self
   }
 }
@@ -522,6 +542,7 @@ impl FastRender {
       default_height: config.default_height,
       device_pixel_ratio: config.device_pixel_ratio,
       base_url: config.base_url.clone(),
+      dom_compat_mode: config.dom_compat_mode,
     })
   }
 
@@ -881,7 +902,12 @@ impl FastRender {
   /// assert!(dom.children.len() > 0);
   /// ```
   pub fn parse_html(&self, html: &str) -> Result<DomNode> {
-    dom::parse_html(html)
+    dom::parse_html_with_options(
+      html,
+      DomParseOptions {
+        compatibility_mode: self.dom_compat_mode,
+      },
+    )
   }
 
   /// Computes the accessibility tree for the given document.
@@ -3635,6 +3661,7 @@ pub(crate) fn render_html_with_shared_resources(
 mod tests {
   use super::*;
   use crate::css::parser::extract_css;
+  use crate::dom::DomNodeType;
   use crate::layout::contexts::inline::line_builder::TextItem;
   use crate::layout::engine::LayoutConfig;
   use crate::layout::engine::LayoutEngine;
@@ -3773,6 +3800,60 @@ mod tests {
     let renderer = FastRender::new().unwrap();
     let result = renderer.parse_html("<html><body><div>Hello</div></body></html>");
     assert!(result.is_ok());
+  }
+
+  #[test]
+  fn parse_html_uses_standard_mode_by_default() {
+    let renderer = FastRender::new().unwrap();
+    let dom = renderer
+      .parse_html("<html class='no-js'><body></body></html>")
+      .expect("parse html");
+
+    let html = dom
+      .children
+      .iter()
+      .find(|c| matches!(c.node_type, DomNodeType::Element { .. }))
+      .expect("html element child");
+    let classes = match &html.node_type {
+      DomNodeType::Element { attributes, .. } => attributes
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+        .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>())
+        .unwrap_or_default(),
+      _ => vec![],
+    };
+
+    assert!(classes.contains(&"no-js"));
+    assert!(!classes.contains(&"js-enabled"));
+  }
+
+  #[test]
+  fn parse_html_honors_dom_compat_config() {
+    let renderer = FastRender::with_config(
+      FastRenderConfig::new().with_dom_compat_mode(DomCompatibilityMode::Compatibility),
+    )
+    .unwrap();
+    let dom = renderer
+      .parse_html("<html class='no-js'><body></body></html>")
+      .expect("parse html");
+
+    let html = dom
+      .children
+      .iter()
+      .find(|c| matches!(c.node_type, DomNodeType::Element { .. }))
+      .expect("html element child");
+    let classes = match &html.node_type {
+      DomNodeType::Element { attributes, .. } => attributes
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+        .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>())
+        .unwrap_or_default(),
+      _ => vec![],
+    };
+
+    assert!(!classes.contains(&"no-js"));
+    assert!(classes.contains(&"js-enabled"));
+    assert!(classes.contains(&"jsl10n-visible"));
   }
 
   #[test]

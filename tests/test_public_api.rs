@@ -10,6 +10,7 @@
 
 use fastrender::api::FastRender;
 use fastrender::api::FastRenderConfig;
+use fastrender::dom::DomCompatibilityMode;
 use fastrender::Rgba;
 
 // =============================================================================
@@ -61,19 +62,22 @@ fn test_config_default_values() {
   assert_eq!(config.background_color, Rgba::WHITE);
   assert_eq!(config.default_width, 800);
   assert_eq!(config.default_height, 600);
+  assert_eq!(config.dom_compat_mode, DomCompatibilityMode::Standard);
 }
 
 #[test]
 fn test_config_builder_pattern() {
   let config = FastRenderConfig::new()
     .with_default_background(Rgba::rgb(100, 150, 200))
-    .with_default_viewport(1024, 768);
+    .with_default_viewport(1024, 768)
+    .with_dom_compat_mode(DomCompatibilityMode::Compatibility);
 
   assert_eq!(config.background_color.r, 100);
   assert_eq!(config.background_color.g, 150);
   assert_eq!(config.background_color.b, 200);
   assert_eq!(config.default_width, 1024);
   assert_eq!(config.default_height, 768);
+  assert_eq!(config.dom_compat_mode, DomCompatibilityMode::Compatibility);
 }
 
 // =============================================================================
