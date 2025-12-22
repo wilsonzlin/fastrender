@@ -68,7 +68,9 @@ fn absolutize_rewrites_inside_parenthesized_blocks() {
 fn absolutize_escapes_quotes_and_backslashes() {
   let css = r#"div { background: url("images/sp\"ace\\ path.png"); }"#;
   let out = absolutize_css_urls(css, "https://example.com/css/main.css");
-  assert!(out.contains("url(\"https://example.com/css/images/sp\\\"ace\\\\ path.png\")"));
+  // The resolved URL percent-encodes the quotes/backslashes/spaces, but the rewriter
+  // must still emit a valid quoted url() string.
+  assert!(out.contains("url(\"https://example.com/css/images/sp%22ace%5C%20path.png\")"));
 }
 
 #[test]
