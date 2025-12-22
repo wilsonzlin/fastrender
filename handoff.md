@@ -5,6 +5,7 @@
 - Added full parsing/resolution for `color-contrast()` (with optional `vs` reference defaulting to currentColor) using WCAG contrast with alpha compositing, plus `color(from …)` relative color syntax across srgb/srgb-linear/hsl/hwb/lab/lch/oklab/oklch/xyz with conversions, channel defaults, and currentColor-aware resolution. Tests cover unit, integration, gradients, and cascade cases.
 - Introduced an accessibility tree builder that computes implicit/explicit roles, accessible names/descriptions, state flags (focusable, disabled, required/invalid, visited/pressed, checked/selected), heading levels, and form values while skipping hidden nodes. New APIs expose the tree and JSON output, with tests covering common controls, landmarks, tables, labels, and hidden filtering.
 - Added `font-display` descriptor support with async web-font loading that respects block/swap/fallback/optional deadlines, swaps in loaded fonts while avoiding long stalls, filters by `unicode-range`, bumps font generation to invalidate shaping, and exposes pluggable fetchers plus `wait_for_pending_web_fonts`. Tests cover display phases, unicode-range filtering, block waiting, and failure fallback.
+- Implemented CSS Media Queries Level 5 features (scripting, update frequency, light-level, display-mode) with env overrides and builder helpers, dynamic viewport units (dvw/dvh/dvmin/dvmax), MediaContext fingerprinting updates, and media link extraction that respects media type (skips print styles in screen contexts). Tests cover MQ5 evaluation/invalids, env overrides, dynamic viewport units, cache invalidation, and print stylesheet handling.
 
 ## Commits
 
@@ -25,10 +26,14 @@
 - `b16d4a2` Add handoff summary
 - `bbe4a10` Add block-display sync wait and failure regression tests
 - `02fb894` Update handoff with new tests
+- `3ffe5a2` Add MQ5 media features and dynamic viewport units
+- `0968d8d` Add media level 5 and cache tests
+- `c744b29` Respect media type when extracting linked stylesheets
+- `f944732` Add handoff summary
 
 ## Testing
 
-- Not run (workers ran `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, `cargo test accessibility_`, and `cargo test font_loader -- --nocapture`).
+- Not run (workers ran `cargo test fragmentation --quiet`, `cargo test text_wrap_ -- --nocapture`, `cargo test color_contrast -- --nocapture` / `cargo test`, `cargo test accessibility_`, `cargo test font_loader -- --nocapture`, `cargo test media_level5_features_evaluate -- --nocapture`, and `cargo test extract_css_links_skips_print_only_for_screen -- --nocapture`).
 
 ## Notes / Caveats
 
