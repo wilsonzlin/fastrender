@@ -7,7 +7,7 @@
 
 use crate::error::Result;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::hash::BuildHasher;
 use std::path::Path;
@@ -568,6 +568,91 @@ fn extract_attr_value(tag_source: &str, attr: &str) -> Option<String> {
   None
 }
 
+fn parse_tag_attributes(tag_source: &str) -> HashMap<String, String> {
+  let mut attrs = HashMap::new();
+  let bytes = tag_source.as_bytes();
+  let mut i = tag_source.find('<').map(|idx| idx + 1).unwrap_or(0);
+
+  while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+    i += 1;
+  }
+
+  while i < bytes.len() {
+    while i < bytes.len() {
+      let b = bytes[i];
+      if b.is_ascii_whitespace() || b == b'/' {
+        i += 1;
+      } else {
+        break;
+      }
+    }
+
+    if i >= bytes.len() || bytes[i] == b'>' {
+      break;
+    }
+
+    let name_start = i;
+    while i < bytes.len() {
+      let b = bytes[i];
+      if b.is_ascii_whitespace() || b == b'=' || b == b'>' {
+        break;
+      }
+      i += 1;
+    }
+
+    if name_start == i {
+      i += 1;
+      continue;
+    }
+
+    let name = tag_source[name_start..i].to_ascii_lowercase();
+
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+      i += 1;
+    }
+
+    let mut value = String::new();
+    if i < bytes.len() && bytes[i] == b'=' {
+      i += 1;
+      while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+      }
+
+      if i >= bytes.len() {
+        attrs.insert(name, value);
+        break;
+      }
+
+      let quote = bytes[i];
+      if quote == b'"' || quote == b'\'' {
+        i += 1;
+        let val_start = i;
+        while i < bytes.len() && bytes[i] != quote {
+          i += 1;
+        }
+        value.push_str(&tag_source[val_start..i]);
+        if i < bytes.len() {
+          i += 1;
+        }
+      } else {
+        let val_start = i;
+        while i < bytes.len() {
+          let b = bytes[i];
+          if b.is_ascii_whitespace() || b == b'>' {
+            break;
+          }
+          i += 1;
+        }
+        value.push_str(&tag_source[val_start..i]);
+      }
+    }
+
+    attrs.insert(name, decode_html_entities(value.trim()));
+  }
+
+  attrs
+}
+
 fn decode_html_entities(input: &str) -> String {
   let mut out = String::with_capacity(input.len());
   let mut chars = input.chars().peekable();
@@ -969,11 +1054,17 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
     is_file_input = url.scheme() == "file";
   }
 
+  enum BaseUrlHintFilter {
+    Any,
+    RelCanonical,
+    PropertyOgUrl,
+  }
+
   let lower = html.to_lowercase();
   for (needle, attr, filter, allow_for_http_inputs) in [
-    ("<base", "href", None, true),
-    ("<link", "href", Some("rel=\"canonical\""), false),
-    ("<meta", "content", Some("property=\"og:url\""), false),
+    ("<base", "href", BaseUrlHintFilter::Any, true),
+    ("<link", "href", BaseUrlHintFilter::RelCanonical, false),
+    ("<meta", "content", BaseUrlHintFilter::PropertyOgUrl, false),
   ] {
     if !allow_for_http_inputs && !is_file_input {
       continue;
@@ -983,17 +1074,26 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
       let abs = pos + idx;
       if let Some(end) = lower[abs..].find('>') {
         let tag_slice = &html[abs..=abs + end];
-        let tag_lower = &lower[abs..=abs + end];
-        if let Some(f) = filter {
-          if !tag_lower.contains(f) {
-            pos = abs + end + 1;
-            continue;
-          }
-        }
-        if let Some(val) = extract_attr_value(tag_slice, attr) {
-          if let Some(resolved) = resolve_href(&input, &val) {
-            if resolved.starts_with("http://") || resolved.starts_with("https://") {
-              return Cow::Owned(resolved);
+        let attrs = parse_tag_attributes(tag_slice);
+
+        let matches_filter = match filter {
+          BaseUrlHintFilter::Any => true,
+          BaseUrlHintFilter::RelCanonical => attrs.get("rel").map_or(false, |rel| {
+            rel
+              .split_whitespace()
+              .any(|token| token.eq_ignore_ascii_case("canonical"))
+          }),
+          BaseUrlHintFilter::PropertyOgUrl => attrs
+            .get("property")
+            .map_or(false, |prop| prop.eq_ignore_ascii_case("og:url")),
+        };
+
+        if matches_filter {
+          if let Some(val) = attrs.get(attr) {
+            if let Some(resolved) = resolve_href(&input, val) {
+              if resolved.starts_with("http://") || resolved.starts_with("https://") {
+                return Cow::Owned(resolved);
+              }
             }
           }
         }
@@ -1339,7 +1439,7 @@ mod tests {
   #[test]
   fn prefers_document_url_over_canonical_for_http_inputs() {
     let html = r#"
-            <link rel="canonical" href="https://example.com/">
+            <link rel=canonical href="https://example.com/">
         "#;
     let base = infer_base_url(html, "https://example.com/path/page.html");
     assert_eq!(base, "https://example.com/path/page.html");
@@ -1355,6 +1455,42 @@ mod tests {
         "#;
     let base = infer_base_url(html, "file:///tmp/cache/example.net.html");
     assert_eq!(base, "https://example.net/app/");
+  }
+
+  #[test]
+  fn uses_single_quoted_canonical_for_file_inputs() {
+    let html = r#"
+            <link rel='canonical' href='https://example.net/single/'>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.net.single.html");
+    assert_eq!(base, "https://example.net/single/");
+  }
+
+  #[test]
+  fn uses_unquoted_canonical_for_file_inputs() {
+    let html = r#"
+            <link rel=canonical href="https://example.net/unquoted/">
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.net.unquoted.html");
+    assert_eq!(base, "https://example.net/unquoted/");
+  }
+
+  #[test]
+  fn uses_single_quoted_og_url_for_file_inputs() {
+    let html = r#"
+            <meta property='og:url' content='https://example.org/from-og/'>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.org.from-og.html");
+    assert_eq!(base, "https://example.org/from-og/");
+  }
+
+  #[test]
+  fn uses_unquoted_og_url_for_file_inputs() {
+    let html = r#"
+            <meta property=og:url content="https://example.org/unquoted-og/">
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.org.unquoted.html");
+    assert_eq!(base, "https://example.org/unquoted-og/");
   }
 
   #[test]
