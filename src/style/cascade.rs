@@ -7315,7 +7315,7 @@ fn apply_cascaded_declarations<'a, F>(
     }
   }
 
-  fn cmp_layer_order(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
+  fn cmp_layer_order_normal(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
     for (ai, bi) in a.iter().zip(b.iter()) {
       if ai != bi {
         return ai.cmp(bi);
@@ -7324,22 +7324,43 @@ fn apply_cascaded_declarations<'a, F>(
     a.len().cmp(&b.len())
   }
 
+  // Per CSS Cascade Layers, important declarations reverse layer order so earlier layers win.
+  // Unlayered rules use u32::MAX; reversing the comparator ensures layered !important rules
+  // outrank unlayered ones.
+  fn cmp_layer_order_important(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
+    cmp_layer_order_normal(b, a)
+  }
+
   flattened.sort_by(|a, b| {
     a.important
       .cmp(&b.important)
       .then(a.origin.rank().cmp(&b.origin.rank()))
-      .then_with(|| cmp_layer_order(&a.layer_order, &b.layer_order))
+      .then_with(|| {
+        if a.important {
+          cmp_layer_order_important(&a.layer_order, &b.layer_order)
+        } else {
+          cmp_layer_order_normal(&a.layer_order, &b.layer_order)
+        }
+      })
       .then(a.specificity.cmp(&b.specificity))
       .then(a.rule_order.cmp(&b.rule_order))
       .then(a.decl_order.cmp(&b.decl_order))
   });
 
   let defaults = ComputedStyle::default();
+  // Scope revert-layer bases to the current cascade stratum (origin + importance) so that
+  // important declarations don't reuse snapshots from the normal cascade segment.
   let mut layer_snapshots: HashMap<Vec<u32>, ComputedStyle> = HashMap::new();
+  let mut layer_snapshot_stratum: Option<(u8, bool)> = None;
 
   let mut apply_entry = |entry: &MatchedDeclaration<'_>| {
     if !filter(entry.declaration.as_ref()) {
       return;
+    }
+    let stratum = (entry.origin.rank(), entry.important);
+    if layer_snapshot_stratum != Some(stratum) {
+      layer_snapshots.clear();
+      layer_snapshot_stratum = Some(stratum);
     }
     let revert_base = match entry.origin {
       StyleOrigin::UserAgent => &defaults,
