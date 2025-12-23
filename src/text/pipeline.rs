@@ -69,6 +69,7 @@ use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
+use lru::LruCache;
 use rustybuzz::Direction as HbDirection;
 use rustybuzz::Face;
 use rustybuzz::Feature;
@@ -76,8 +77,10 @@ use rustybuzz::Language as HbLanguage;
 use rustybuzz::UnicodeBuffer;
 use rustybuzz::Variation;
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use ttf_parser::Face as ParserFace;
 use ttf_parser::Tag;
 use unicode_bidi::BidiInfo;
@@ -86,6 +89,7 @@ use unicode_vo::char_orientation;
 use unicode_vo::Orientation as VerticalOrientation;
 
 pub(crate) const DEFAULT_OBLIQUE_ANGLE_DEG: f32 = 14.0;
+const FONT_RESOLUTION_CACHE_SIZE: usize = 2048;
 
 // ============================================================================
 // Core Types
@@ -1022,6 +1026,24 @@ pub fn assign_fonts(
   style: &ComputedStyle,
   font_context: &FontContext,
 ) -> Result<Vec<FontRun>> {
+  assign_fonts_internal(
+    runs,
+    style,
+    font_context,
+    None,
+    shaping_style_hash(style),
+    font_context.font_generation(),
+  )
+}
+
+fn assign_fonts_internal(
+  runs: &[ItemizedRun],
+  style: &ComputedStyle,
+  font_context: &FontContext,
+  font_cache: Option<&FontResolverCache>,
+  style_hash: u64,
+  font_generation: u64,
+) -> Result<Vec<FontRun>> {
   let features = collect_opentype_features(style);
   let authored_variations: Vec<Variation> = style
     .font_variation_settings
@@ -1074,18 +1096,39 @@ pub fn assign_fonts(
       }
       let emoji_pref =
         emoji_preference_with_selector(ch, next_peek.map(|(_, c)| c), style.font_variant_emoji);
-      let mut picker = FontPreferencePicker::new(emoji_pref);
-      let font = resolve_font_for_char(
+      let cache_key = font_cache.map(|_| FontResolverCacheKey {
         ch,
-        &families,
-        style.font_weight.to_u16(),
-        font_style,
-        requested_oblique,
-        font_stretch,
-        font_context,
-        &mut picker,
-      )
-      .ok_or_else(|| TextError::ShapingFailed {
+        style_hash,
+        font_generation,
+        emoji_pref,
+      });
+
+      let cached = match (font_cache, cache_key.as_ref()) {
+        (Some(cache), Some(key)) => cache.get(key),
+        _ => None,
+      };
+
+      let resolved = if let Some(hit) = cached {
+        hit
+      } else {
+        let mut picker = FontPreferencePicker::new(emoji_pref);
+        let resolved = resolve_font_for_char(
+          ch,
+          &families,
+          style.font_weight.to_u16(),
+          font_style,
+          requested_oblique,
+          font_stretch,
+          font_context,
+          &mut picker,
+        );
+        if let (Some(cache), Some(key)) = (font_cache, cache_key.clone()) {
+          cache.insert(key, resolved.clone());
+        }
+        resolved
+      };
+
+      let font = resolved.ok_or_else(|| TextError::ShapingFailed {
         text: run.text.clone(),
         reason: format!("No suitable font found for character U+{:04X}", ch as u32),
       })?;
@@ -1560,7 +1603,7 @@ fn font_is_emoji_font(font: &LoadedFont) -> bool {
     || name.contains("symbola")
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum EmojiPreference {
   PreferEmoji,
   AvoidEmoji,
@@ -1796,7 +1839,7 @@ fn resolve_font_for_char(
                   let is_emoji_font = font_is_emoji_font(&font);
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
-                  if db.has_glyph(id, ch) {
+                  if db.has_glyph_cached(id, ch) {
                     if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                       return Some(font);
                     }
@@ -1842,7 +1885,7 @@ fn resolve_font_for_char(
               let is_emoji_font = font_is_emoji_font(&font);
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
-              if db.has_glyph(id, ch) {
+              if db.has_glyph_cached(id, ch) {
                 if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                   return Some(font);
                 }
@@ -1869,7 +1912,7 @@ fn resolve_font_for_char(
                   let is_emoji_font = font_is_emoji_font(&font);
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
-                  if db.has_glyph(id, ch) {
+                  if db.has_glyph_cached(id, ch) {
                     if let Some(font) = picker.consider(font, is_emoji_font, idx) {
                       return Some(font);
                     }
@@ -1888,7 +1931,7 @@ fn resolve_font_for_char(
       if let Some(font) = db.load_font(id) {
         let idx = picker.bump_order();
         picker.record_any(&font, true, idx);
-        if db.has_glyph(id, ch) {
+        if db.has_glyph_cached(id, ch) {
           if let Some(font) = picker.consider(font, true, idx) {
             return Some(font);
           }
@@ -1902,7 +1945,7 @@ fn resolve_font_for_char(
       let is_emoji_font = font_is_emoji_font(&font);
       let idx = picker.bump_order();
       picker.record_any(&font, is_emoji_font, idx);
-      if db.has_glyph(face.id, ch) {
+      if db.has_glyph_cached(face.id, ch) {
         if let Some(font) = picker.consider(font, is_emoji_font, idx) {
           return Some(font);
         }
@@ -2222,11 +2265,18 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 ///
 /// let runs = pipeline.shape("Hello, world!", &style, &font_context)?;
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ShapingPipeline {
   cache: std::sync::Arc<
     std::sync::Mutex<std::collections::HashMap<ShapingCacheKey, std::sync::Arc<Vec<ShapedRun>>>>,
   >,
+  font_cache: FontResolverCache,
+}
+
+impl Default for ShapingPipeline {
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 #[derive(Clone, Eq, Debug)]
@@ -2354,11 +2404,54 @@ impl PartialEq for ShapingCacheKey {
   }
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct FontResolverCacheKey {
+  ch: char,
+  style_hash: u64,
+  font_generation: u64,
+  emoji_pref: EmojiPreference,
+}
+
+#[derive(Clone)]
+struct FontResolverCache {
+  inner: Arc<Mutex<LruCache<FontResolverCacheKey, Option<LoadedFont>>>>,
+}
+
+impl FontResolverCache {
+  fn new(capacity: usize) -> Self {
+    let cap = NonZeroUsize::new(capacity).unwrap_or_else(|| NonZeroUsize::new(1).unwrap());
+    Self {
+      inner: Arc::new(Mutex::new(LruCache::new(cap))),
+    }
+  }
+
+  fn get(&self, key: &FontResolverCacheKey) -> Option<Option<LoadedFont>> {
+    self
+      .inner
+      .lock()
+      .ok()
+      .and_then(|mut cache| cache.get(key).cloned())
+  }
+
+  fn insert(&self, key: FontResolverCacheKey, value: Option<LoadedFont>) {
+    if let Ok(mut cache) = self.inner.lock() {
+      cache.put(key, value);
+    }
+  }
+
+  fn clear(&self) {
+    if let Ok(mut cache) = self.inner.lock() {
+      cache.clear();
+    }
+  }
+}
+
 impl ShapingPipeline {
   /// Creates a new shaping pipeline.
   pub fn new() -> Self {
     Self {
       cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+      font_cache: FontResolverCache::new(FONT_RESOLUTION_CACHE_SIZE),
     }
   }
 
@@ -2367,6 +2460,7 @@ impl ShapingPipeline {
     if let Ok(mut cache) = self.cache.lock() {
       cache.clear();
     }
+    self.font_cache.clear();
   }
 
   /// Shapes text into positioned glyphs.
@@ -2470,7 +2564,14 @@ impl ShapingPipeline {
     let itemized_runs = split_itemized_runs_by_paragraph(itemized_runs, bidi.paragraphs());
 
     // Step 3: Font matching
-    let font_runs = assign_fonts(&itemized_runs, style, font_context)?;
+    let font_runs = assign_fonts_internal(
+      &itemized_runs,
+      style,
+      font_context,
+      Some(&self.font_cache),
+      style_hash,
+      font_generation,
+    )?;
 
     // Step 4: Shape each run, applying vertical text-orientation when needed.
     let mut font_runs = font_runs;
@@ -2797,7 +2898,7 @@ mod tests {
     let db = FontDatabase::new();
     let id = db
       .faces()
-      .find(|face| db.has_glyph(face.id, ch))
+      .find(|face| db.has_glyph_cached(face.id, ch))
       .map(|face| face.id)?;
     let font = db.load_font(id)?;
     Some(((*font.data).clone(), font.family))
@@ -2845,7 +2946,7 @@ mod tests {
   fn system_math_font_for_char(ch: char) -> Option<(Vec<u8>, u32, String)> {
     let db = FontDatabase::new();
     for id in db.find_math_fonts() {
-      if !db.has_glyph(id, ch) {
+      if !db.has_glyph_cached(id, ch) {
         continue;
       }
       let font = db.load_font(id)?;
@@ -2857,7 +2958,7 @@ mod tests {
   fn system_non_math_font_for_char(ch: char) -> Option<(Vec<u8>, u32, String)> {
     let db = FontDatabase::new();
     for face in db.faces() {
-      if !db.has_glyph(face.id, ch) {
+      if !db.has_glyph_cached(face.id, ch) {
         continue;
       }
       let font = db.load_font(face.id)?;
@@ -3782,6 +3883,38 @@ mod tests {
     )
     .expect("fallback font");
     assert_ne!(lower.family, "RangeFace");
+  }
+
+  #[cfg(debug_assertions)]
+  #[test]
+  fn face_parse_counts_stop_scaling_with_length() {
+    std::env::set_var("FASTRENDER_COUNT_FACE_PARSE", "1");
+    let ctx = FontContext::new();
+    crate::text::font_db::reset_face_parse_counter_for_tests();
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["sans-serif".to_string()];
+    let pipeline = ShapingPipeline::new();
+
+    let short = "fast render text ".repeat(4);
+    let long = "fast render text ".repeat(200);
+
+    if pipeline.shape(&short, &style, &ctx).is_err() {
+      return;
+    }
+    let short_count = crate::text::font_db::face_parse_count();
+
+    if pipeline.shape(&long, &style, &ctx).is_err() {
+      return;
+    }
+    let long_count = crate::text::font_db::face_parse_count();
+
+    assert!(
+      long_count.saturating_sub(short_count) < 10,
+      "face parse count should not scale with text length ({} -> {})",
+      short_count,
+      long_count
+    );
   }
 
   #[test]
