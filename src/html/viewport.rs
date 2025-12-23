@@ -317,7 +317,8 @@ mod tests {
 
   #[test]
   fn ignores_body_viewport_meta() {
-    let html = "<html><head></head><body><meta name=viewport content='width=device-width'></body></html>";
+    let html =
+      "<html><head></head><body><meta name=viewport content='width=device-width'></body></html>";
     let dom = crate::dom::parse_html(html).unwrap();
     assert!(extract_viewport(&dom).is_none());
   }
