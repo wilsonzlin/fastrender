@@ -292,14 +292,6 @@ fn attach_shadow_roots(node: &mut DomNode) {
   node.children = vec![shadow_root];
 }
 
-/// Optional DOM compatibility tweaks applied after HTML parsing.
-///
-/// Currently mirrors FastRender's previous implicit class toggles to mimic
-/// JS-driven behaviors in static renders.
-fn apply_dom_compatibility_mutations(root: &mut DomNode) {
-  toggle_no_js_class(root);
-}
-
 fn distribute_slots(shadow_root: &mut DomNode, light_children: Vec<DomNode>) {
   let mut available_slots: HashSet<String> = HashSet::new();
   collect_slot_names(shadow_root, &mut available_slots);
@@ -379,19 +371,6 @@ fn fill_slot_tree(
   }
 }
 
-=======
-  if matches!(
-    options.compatibility_mode,
-    DomCompatibilityMode::Compatibility
-  ) {
-    apply_dom_compatibility_mutations(&mut root);
-  }
-  Ok(root)
-}
-
-/// Optional DOM compatibility tweaks applied after HTML parsing.
-///
->>>>>>> 2f2debf (Add DOM compatibility mode and gate class flips)
 /// Some documents bootstrap by marking the root with `no-js` and replacing it with a
 /// `js-enabled` class once scripts execute. Others toggle visibility gates like
 /// `jsl10n-visible` after client-side localization. Since we do not run author scripts,

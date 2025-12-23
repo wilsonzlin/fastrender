@@ -652,7 +652,7 @@ impl FastRenderConfig {
 
   /// Sets the site compatibility profile applied during box generation.
   pub fn compat_profile(mut self, profile: CompatProfile) -> Self {
-    self.config.compat_profile = profile;
+    self.compat_profile = profile;
     self
   }
 }
@@ -729,19 +729,6 @@ fn viewport_length_value(len: ViewportLength, fallback: f32) -> Option<f32> {
 
 fn sanitize_positive(value: Option<f32>) -> Option<f32> {
   value.filter(|v| v.is_finite() && *v > 0.0)
-}
-  /// Selects a compatibility profile. The default is spec-first rendering with no
-  /// site-specific heuristics.
-  pub fn compat_mode(mut self, profile: CompatProfile) -> Self {
-    self.compat_profile = profile;
-    self
-  }
-
-  /// Enables site-specific compatibility hacks used for internal page sets.
-  pub fn with_site_compat_hacks(mut self) -> Self {
-    self.compat_profile = CompatProfile::SiteCompatibility;
-    self
-  }
 }
 
 impl FastRender {

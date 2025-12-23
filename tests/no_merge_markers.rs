@@ -44,7 +44,7 @@ fn no_merge_conflict_markers_present() {
         });
 
         for marker in MERGE_MARKERS {
-          if line.contains(marker) {
+          if line.trim_start().starts_with(marker) {
             offenders.push(format!(
               "{}:{line_number}: contains merge-conflict marker {marker}",
               rel_path.display()

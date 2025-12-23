@@ -204,10 +204,6 @@ impl FetchedResource {
       etag: None,
       last_modified: None,
       final_url: None,
-      status: None,
-      etag: None,
-      last_modified: None,
-      final_url: None,
     }
   }
 
@@ -224,8 +220,6 @@ impl FetchedResource {
       etag: None,
       last_modified: None,
       final_url,
-    }
-  }
     }
   }
 
