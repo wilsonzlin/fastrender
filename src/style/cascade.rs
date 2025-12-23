@@ -586,8 +586,10 @@ fn selector_keys(selector: &Selector<crate::css::selectors::FastRenderSelectorIm
   loop {
     if let Some(component) = iter.next() {
       match component {
-        Component::Is(list, _) => merge_alternative_keys(list.iter(), &base_keys, &mut alt_keys),
-        Component::Where(list) => merge_alternative_keys(list.iter(), &base_keys, &mut alt_keys),
+        Component::Is(list) => merge_alternative_keys(list.slice().iter(), &base_keys, &mut alt_keys),
+        Component::Where(list) => {
+          merge_alternative_keys(list.slice().iter(), &base_keys, &mut alt_keys)
+        }
         _ => {}
       }
       continue;
