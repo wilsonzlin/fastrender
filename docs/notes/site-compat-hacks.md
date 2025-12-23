@@ -5,8 +5,9 @@ disabled unless explicitly enabled via a compatibility profile.
 
 Enable the hacks with either of the following:
 
-- `FastRenderConfig::compat_mode(CompatProfile::SiteCompatibility)`
+- `FastRenderConfig::compat_profile(CompatProfile::SiteCompatibility)`
 - `FastRenderConfig::with_site_compat_hacks()`
+- `FastRender::builder().with_site_compat_hacks()`
 - `BoxGenerationOptions::with_compat_profile(CompatProfile::SiteCompatibility)` (for
   direct box-generation tests)
 

@@ -10,6 +10,7 @@
 
 use fastrender::api::FastRender;
 use fastrender::api::FastRenderConfig;
+use fastrender::compat::CompatProfile;
 use fastrender::dom::DomCompatibilityMode;
 use fastrender::Rgba;
 
@@ -52,6 +53,16 @@ fn test_fastrender_with_custom_config() {
   assert_eq!(renderer.background_color().b, 240);
 }
 
+#[test]
+fn test_builder_chain_for_compatibility() {
+  let renderer = FastRender::builder()
+    .compat_mode(CompatProfile::Standards)
+    .with_site_compat_hacks()
+    .build();
+
+  assert!(renderer.is_ok(), "Builder should produce a renderer");
+}
+
 // =============================================================================
 // Configuration Tests
 // =============================================================================
@@ -78,6 +89,21 @@ fn test_config_builder_pattern() {
   assert_eq!(config.default_width, 1024);
   assert_eq!(config.default_height, 768);
   assert_eq!(config.dom_compat_mode, DomCompatibilityMode::Compatibility);
+}
+
+#[test]
+fn test_config_compatibility_chain() {
+  let config = FastRenderConfig::new()
+    .with_dom_compat_mode(DomCompatibilityMode::Compatibility)
+    .with_meta_viewport(true)
+    .compat_profile(CompatProfile::Standards);
+
+  assert_eq!(config.dom_compat_mode, DomCompatibilityMode::Compatibility);
+  assert!(config.apply_meta_viewport);
+  assert_eq!(config.compat_profile, CompatProfile::Standards);
+
+  let with_hacks = config.with_site_compat_hacks();
+  assert_eq!(with_hacks.compat_profile, CompatProfile::SiteCompatibility);
 }
 
 // =============================================================================
