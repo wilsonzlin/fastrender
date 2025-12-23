@@ -4428,9 +4428,15 @@ mod tests {
       .rposition(|item| matches!(item, DisplayItem::PopStackingContext))
       .expect("stacking context pop missing");
 
-    assert!(push_sc < push_clip, "clip should be emitted inside the stacking context");
+    assert!(
+      push_sc < push_clip,
+      "clip should be emitted inside the stacking context"
+    );
     assert!(push_clip < pop_clip, "clip should wrap painted items");
-    assert!(pop_clip < pop_sc, "stacking context should be popped after its clips");
+    assert!(
+      pop_clip < pop_sc,
+      "stacking context should be popped after its clips"
+    );
 
     (push_sc, push_clip, pop_clip, pop_sc)
   }
@@ -4917,7 +4923,10 @@ mod tests {
     let (push_sc, push_clip, pop_clip, pop_sc) = stacking_clip_order(items);
 
     if let DisplayItem::PushStackingContext(stacking) = &items[push_sc] {
-      assert!(stacking.transform.is_some(), "stacking context should carry transform");
+      assert!(
+        stacking.transform.is_some(),
+        "stacking context should carry transform"
+      );
     } else {
       panic!("expected stacking context push item");
     }
