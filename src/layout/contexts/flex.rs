@@ -126,7 +126,9 @@ fn fragment_first_baseline(fragment: &FragmentNode) -> Option<f32> {
 
   match &fragment.content {
     FragmentContent::Line { baseline } => Some(*baseline),
-    FragmentContent::Text { baseline_offset, .. } => Some(*baseline_offset),
+    FragmentContent::Text {
+      baseline_offset, ..
+    } => Some(*baseline_offset),
     FragmentContent::Replaced { .. } => Some(fragment.bounds.height()),
     _ => {
       for child in &fragment.children {
@@ -5196,12 +5198,8 @@ mod tests {
     let mut replaced_style = ComputedStyle::default();
     replaced_style.width = Some(Length::px(20.0));
     replaced_style.height = Some(Length::px(10.0));
-    let replaced = BoxNode::new_replaced(
-      Arc::new(replaced_style),
-      ReplacedType::Canvas,
-      None,
-      None,
-    );
+    let replaced =
+      BoxNode::new_replaced(Arc::new(replaced_style), ReplacedType::Canvas, None, None);
 
     let container = BoxNode::new_block(
       Arc::new(container_style),
@@ -5241,7 +5239,11 @@ mod tests {
       let inline = BoxNode::new_inline(text_style.clone(), vec![text]);
       let mut item_style = ComputedStyle::default();
       item_style.width = Some(Length::px(width));
-      BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![inline])
+      BoxNode::new_block(
+        Arc::new(item_style),
+        FormattingContextType::Block,
+        vec![inline],
+      )
     };
 
     let item1 = make_item(12.0, 60.0);
