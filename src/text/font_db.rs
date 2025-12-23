@@ -38,10 +38,120 @@ use fontdb::Database as FontDbDatabase;
 use fontdb::Family as FontDbFamily;
 use fontdb::Query as FontDbQuery;
 use fontdb::ID;
+use lru::LruCache;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::RwLock;
+
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
+
+#[cfg(debug_assertions)]
+static FACE_PARSE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn record_face_parse() {
+  #[cfg(debug_assertions)]
+  if std::env::var("FASTRENDER_COUNT_FACE_PARSE").is_ok() {
+    FACE_PARSE_COUNTER.fetch_add(1, Ordering::Relaxed);
+  }
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn face_parse_count() -> u64 {
+  FACE_PARSE_COUNTER.load(Ordering::Relaxed)
+}
+
+#[cfg(not(debug_assertions))]
+#[allow(dead_code)]
+pub(crate) fn face_parse_count() -> u64 {
+  0
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn reset_face_parse_counter_for_tests() {
+  FACE_PARSE_COUNTER.store(0, Ordering::Relaxed);
+}
+
+#[cfg(not(debug_assertions))]
+#[allow(dead_code)]
+pub(crate) fn reset_face_parse_counter_for_tests() {}
+
+#[inline]
+fn parse_face_with_counter<'a>(
+  data: &'a [u8],
+  index: u32,
+) -> Result<ttf_parser::Face<'a>, ttf_parser::FaceParsingError> {
+  record_face_parse();
+  ttf_parser::Face::parse(data, index)
+}
+
+#[derive(Clone)]
+struct CachedFace {
+  data: Arc<Vec<u8>>,
+  face: ttf_parser::Face<'static>,
+}
+
+impl CachedFace {
+  fn parse(data: Arc<Vec<u8>>, index: u32) -> Result<Self, ttf_parser::FaceParsingError> {
+    // SAFETY: the Arc keeps the font data alive for the lifetime of the cached face.
+    let static_data: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(&*data) };
+    let face = parse_face_with_counter(static_data, index)?;
+    Ok(Self { data, face })
+  }
+
+  #[inline]
+  fn has_glyph(&self, c: char) -> bool {
+    self.face.glyph_index(c).is_some()
+  }
+}
+
+#[derive(Clone)]
+struct GlyphCoverageCache {
+  inner: Arc<Mutex<LruCache<ID, Arc<CachedFace>>>>,
+}
+
+impl GlyphCoverageCache {
+  fn new(capacity: usize) -> Self {
+    let cap = NonZeroUsize::new(capacity).unwrap_or_else(|| NonZeroUsize::new(1).unwrap());
+    Self {
+      inner: Arc::new(Mutex::new(LruCache::new(cap))),
+    }
+  }
+
+  fn get_or_put<F>(&self, id: ID, loader: F) -> Option<Arc<CachedFace>>
+  where
+    F: FnOnce() -> Option<Arc<CachedFace>>,
+  {
+    if let Ok(mut cache) = self.inner.lock() {
+      if let Some(face) = cache.get(&id) {
+        return Some(face.clone());
+      }
+    }
+
+    let loaded = loader()?;
+
+    if let Ok(mut cache) = self.inner.lock() {
+      if let Some(face) = cache.get(&id) {
+        return Some(face.clone());
+      }
+      cache.put(id, loaded.clone());
+    }
+
+    Some(loaded)
+  }
+
+  fn clear(&self) {
+    if let Ok(mut cache) = self.inner.lock() {
+      cache.clear();
+    }
+  }
+}
 
 /// Font weight (100-900)
 ///
@@ -315,7 +425,7 @@ impl LoadedFont {
   ///
   /// Returns a parsed font face for accessing glyph data, kerning, etc.
   pub fn as_ttf_face(&self) -> Result<ttf_parser::Face<'_>> {
-    ttf_parser::Face::parse(&self.data, self.index).map_err(|e| {
+    parse_face_with_counter(&self.data, self.index).map_err(|e| {
       FontError::LoadFailed {
         family: self.family.clone(),
         reason: format!("Failed to parse font: {:?}", e),
@@ -327,7 +437,7 @@ impl LoadedFont {
 
 /// Returns true if the font advertises an OpenType GSUB feature with the given tag.
 pub fn font_has_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
-  if let Ok(face) = ttf_parser::Face::parse(&font.data, font.index) {
+  if let Ok(face) = parse_face_with_counter(&font.data, font.index) {
     if let Some(gsub) = face.tables().gsub {
       return gsub
         .features
@@ -538,6 +648,8 @@ pub struct FontDatabase {
   cache: RwLock<HashMap<ID, Arc<Vec<u8>>>>,
   /// Cached list of math-capable fonts (IDs with a MATH table)
   math_fonts: RwLock<Option<Vec<ID>>>,
+  /// Glyph coverage cache to avoid repeated face parsing
+  glyph_coverage: GlyphCoverageCache,
 }
 
 impl FontDatabase {
@@ -561,6 +673,7 @@ impl FontDatabase {
       db,
       cache: RwLock::new(HashMap::new()),
       math_fonts: RwLock::new(None),
+      glyph_coverage: GlyphCoverageCache::new(GLYPH_COVERAGE_CACHE_SIZE),
     }
   }
 
@@ -572,6 +685,7 @@ impl FontDatabase {
       db: FontDbDatabase::new(),
       cache: RwLock::new(HashMap::new()),
       math_fonts: RwLock::new(None),
+      glyph_coverage: GlyphCoverageCache::new(GLYPH_COVERAGE_CACHE_SIZE),
     }
   }
 
@@ -594,7 +708,7 @@ impl FontDatabase {
   /// Returns an error if the data is not a valid font file.
   pub fn load_font_data(&mut self, data: Vec<u8>) -> Result<()> {
     // Validate the data is a valid font
-    ttf_parser::Face::parse(&data, 0).map_err(|e| FontError::InvalidFontFile {
+    parse_face_with_counter(&data, 0).map_err(|e| FontError::InvalidFontFile {
       path: format!("(memory): {:?}", e),
     })?;
 
@@ -684,18 +798,19 @@ impl FontDatabase {
   ///
   /// Returns the loaded font with its data, or None if loading fails.
   pub fn load_font(&self, id: ID) -> Option<LoadedFont> {
-    // Check cache first
-    {
-      let cache = self.cache.read().ok()?;
+    let data = self.get_or_load_font_data(id)?;
+    let face_info = self.db.face(id)?;
+
+    Some(self.create_loaded_font_with_info(id, data, &face_info))
+  }
+
+  fn get_or_load_font_data(&self, id: ID) -> Option<Arc<Vec<u8>>> {
+    if let Ok(cache) = self.cache.read() {
       if let Some(data) = cache.get(&id) {
-        return Some(self.create_loaded_font(id, Arc::clone(data)));
+        return Some(Arc::clone(data));
       }
     }
 
-    // Load from fontdb
-    let face_info = self.db.face(id)?;
-
-    // fontdb stores font data internally, we need to access it via with_face_data
     let mut data_result: Option<Arc<Vec<u8>>> = None;
     self.db.with_face_data(id, |font_data, _face_index| {
       data_result = Some(Arc::new(font_data.to_vec()));
@@ -703,14 +818,11 @@ impl FontDatabase {
 
     let data = data_result?;
 
-    // Cache it
-    {
-      if let Ok(mut cache) = self.cache.write() {
-        cache.insert(id, Arc::clone(&data));
-      }
+    if let Ok(mut cache) = self.cache.write() {
+      cache.insert(id, Arc::clone(&data));
     }
 
-    Some(self.create_loaded_font_with_info(id, data, &face_info))
+    Some(data)
   }
 
   /// Creates a LoadedFont from cached data
@@ -814,6 +926,7 @@ impl FontDatabase {
     if let Ok(mut cache) = self.cache.write() {
       cache.clear();
     }
+    self.glyph_coverage.clear();
     if let Ok(mut cached) = self.math_fonts.write() {
       *cached = None;
     }
@@ -842,6 +955,17 @@ impl FontDatabase {
     self.db.faces()
   }
 
+  fn cached_face(&self, id: ID) -> Option<Arc<CachedFace>> {
+    let face_info = self.db.face(id)?;
+    let data = self.get_or_load_font_data(id)?;
+
+    self.glyph_coverage.get_or_put(id, || {
+      CachedFace::parse(Arc::clone(&data), face_info.index)
+        .ok()
+        .map(Arc::new)
+    })
+  }
+
   /// Loads the first available font in the database, if any
   pub fn first_font(&self) -> Option<LoadedFont> {
     self.faces().next().and_then(|face| self.load_font(face.id))
@@ -852,15 +976,14 @@ impl FontDatabase {
   /// This is used during fallback resolution to find a font that
   /// can render a specific character.
   pub fn has_glyph(&self, id: ID, c: char) -> bool {
+    self.has_glyph_cached(id, c)
+  }
+
+  /// Checks glyph support using the cached coverage table for the font.
+  pub fn has_glyph_cached(&self, id: ID, c: char) -> bool {
     self
-      .db
-      .with_face_data(id, |data, face_index| {
-        if let Ok(face) = ttf_parser::Face::parse(data, face_index) {
-          face.glyph_index(c).is_some()
-        } else {
-          false
-        }
-      })
+      .cached_face(id)
+      .map(|f| f.has_glyph(c))
       .unwrap_or(false)
   }
 
@@ -962,7 +1085,7 @@ impl FontDatabase {
       let has_math = self
         .db
         .with_face_data(face.id, |data, face_index| {
-          ttf_parser::Face::parse(data, face_index)
+          parse_face_with_counter(data, face_index)
             .ok()
             .and_then(|f| f.tables().math)
             .is_some()
@@ -1063,7 +1186,7 @@ impl FontMetrics {
 
   /// Extract metrics from font data
   pub fn from_data(data: &[u8], index: u32) -> Result<Self> {
-    let face = ttf_parser::Face::parse(data, index).map_err(|e| FontError::LoadFailed {
+    let face = parse_face_with_counter(data, index).map_err(|e| FontError::LoadFailed {
       family: String::new(),
       reason: format!("Failed to parse font: {:?}", e),
     })?;
@@ -1598,6 +1721,35 @@ mod tests {
 
       // Verify we can access the face
       assert!(face.units_per_em() > 0);
+    }
+  }
+
+  #[test]
+  fn has_glyph_cached_is_deterministic() {
+    let db = FontDatabase::new();
+    let Some(face) = db.faces().next() else {
+      return;
+    };
+
+    let expected = db
+      .inner()
+      .with_face_data(face.id, |data, index| {
+        parse_face_with_counter(data, index).ok().map(|f| {
+          (
+            f.glyph_index('A').is_some(),
+            f.glyph_index(char::MAX).is_some(),
+          )
+        })
+      })
+      .unwrap_or(None);
+
+    let Some((has_a, has_max)) = expected else {
+      return;
+    };
+
+    for _ in 0..4 {
+      assert_eq!(db.has_glyph_cached(face.id, 'A'), has_a);
+      assert_eq!(db.has_glyph_cached(face.id, char::MAX), has_max);
     }
   }
 }
