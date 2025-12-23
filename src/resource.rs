@@ -1024,8 +1024,9 @@ fn decode_data_url(url: &str) -> Result<FetchedResource> {
 
 #[cfg(test)]
 mod tests {
-  use super::*;
   use super::data_url;
+  use super::*;
+  use std::collections::VecDeque;
   use std::io::Read;
   use std::io::Write;
   use std::net::TcpListener;
@@ -1255,6 +1256,33 @@ mod tests {
   fn sanitize_filename_trims_trailing_separators_and_punctuation() {
     assert_eq!(sanitize_filename("example.com///"), "example.com");
     assert_eq!(sanitize_filename("foo_bar.."), "foo_bar");
+  }
+
+  #[test]
+  fn fetched_resource_new_defaults_metadata() {
+    let resource = FetchedResource::new(vec![1, 2, 3], Some("text/plain".to_string()));
+
+    assert_eq!(resource.status, None);
+    assert_eq!(resource.etag, None);
+    assert_eq!(resource.last_modified, None);
+    assert_eq!(resource.final_url, None);
+  }
+
+  #[test]
+  fn fetched_resource_with_final_url_sets_only_final_url() {
+    let resource = FetchedResource::with_final_url(
+      b"bytes".to_vec(),
+      Some("text/plain".to_string()),
+      Some("http://example.com/data".to_string()),
+    );
+
+    assert_eq!(resource.status, None);
+    assert_eq!(resource.etag, None);
+    assert_eq!(resource.last_modified, None);
+    assert_eq!(
+      resource.final_url.as_deref(),
+      Some("http://example.com/data")
+    );
   }
 
   #[test]
@@ -1723,5 +1751,158 @@ mod tests {
     assert!(cache.fetch("http://example.com/error").is_err());
     assert!(cache.fetch("http://example.com/error").is_err());
     assert_eq!(counter.load(Ordering::SeqCst), 1);
+  }
+
+  #[derive(Clone, Debug)]
+  struct MockResponse {
+    status: u16,
+    body: Vec<u8>,
+    etag: Option<String>,
+    last_modified: Option<String>,
+  }
+
+  #[derive(Clone, Debug)]
+  struct MockCall {
+    url: String,
+    etag: Option<String>,
+    last_modified: Option<String>,
+  }
+
+  #[derive(Clone)]
+  struct ScriptedFetcher {
+    responses: Arc<Mutex<VecDeque<MockResponse>>>,
+    calls: Arc<Mutex<Vec<MockCall>>>,
+  }
+
+  impl ScriptedFetcher {
+    fn new(responses: Vec<MockResponse>) -> Self {
+      Self {
+        responses: Arc::new(Mutex::new(VecDeque::from(responses))),
+        calls: Arc::new(Mutex::new(Vec::new())),
+      }
+    }
+
+    fn record_call(&self, url: &str, etag: Option<&str>, last_modified: Option<&str>) {
+      let mut calls = self.calls.lock().unwrap();
+      calls.push(MockCall {
+        url: url.to_string(),
+        etag: etag.map(|s| s.to_string()),
+        last_modified: last_modified.map(|s| s.to_string()),
+      });
+    }
+
+    fn next_response(&self) -> Result<FetchedResource> {
+      let mut responses = self.responses.lock().unwrap();
+      let resp = responses
+        .pop_front()
+        .expect("scripted fetcher ran out of responses");
+
+      let mut resource = FetchedResource::new(resp.body.clone(), Some("text/plain".to_string()));
+      resource.status = Some(resp.status);
+      resource.etag = resp.etag.clone();
+      resource.last_modified = resp.last_modified.clone();
+      Ok(resource)
+    }
+
+    fn calls(&self) -> Vec<MockCall> {
+      self.calls.lock().unwrap().clone()
+    }
+  }
+
+  impl ResourceFetcher for ScriptedFetcher {
+    fn fetch(&self, url: &str) -> Result<FetchedResource> {
+      self.record_call(url, None, None);
+      self.next_response()
+    }
+
+    fn fetch_with_validation(
+      &self,
+      url: &str,
+      etag: Option<&str>,
+      last_modified: Option<&str>,
+    ) -> Result<FetchedResource> {
+      self.record_call(url, etag, last_modified);
+      self.next_response()
+    }
+  }
+
+  #[test]
+  fn caching_fetcher_uses_cached_body_on_not_modified() {
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: Some("lm1".to_string()),
+      },
+      MockResponse {
+        status: 304,
+        body: Vec::new(),
+        etag: None,
+        last_modified: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::new(fetcher.clone());
+    let url = "http://example.com/resource";
+
+    let first = cache.fetch(url).expect("initial fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = cache.fetch(url).expect("revalidated fetch");
+    assert_eq!(second.bytes, b"cached", "should return cached body on 304");
+
+    let calls = fetcher.calls();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].etag, None);
+    assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(calls[1].last_modified.as_deref(), Some("lm1"));
+  }
+
+  #[test]
+  fn caching_fetcher_updates_validators_on_not_modified() {
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: Some("lm1".to_string()),
+      },
+      MockResponse {
+        status: 304,
+        body: Vec::new(),
+        etag: Some("etag2".to_string()),
+        last_modified: Some("lm2".to_string()),
+      },
+      MockResponse {
+        status: 304,
+        body: Vec::new(),
+        etag: None,
+        last_modified: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::new(fetcher.clone());
+    let url = "http://example.com/resource";
+
+    let first = cache.fetch(url).expect("initial fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = cache.fetch(url).expect("first revalidation");
+    assert_eq!(second.bytes, b"cached");
+
+    let third = cache.fetch(url).expect("second revalidation");
+    assert_eq!(third.bytes, b"cached");
+
+    let calls = fetcher.calls();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(calls[1].last_modified.as_deref(), Some("lm1"));
+    assert_eq!(
+      calls[2].etag.as_deref(),
+      Some("etag2"),
+      "validators should update after 304 with new etag"
+    );
+    assert_eq!(calls[2].last_modified.as_deref(), Some("lm2"));
   }
 }
