@@ -12,7 +12,10 @@ struct MockFetcher {
 
 #[derive(Clone)]
 enum MockResponse {
-  Success { bytes: Vec<u8>, content_type: Option<String> },
+  Success {
+    bytes: Vec<u8>,
+    content_type: Option<String>,
+  },
   Error(String),
 }
 
@@ -46,7 +49,10 @@ impl ResourceFetcher for MockFetcher {
   fn fetch(&self, url: &str) -> fastrender::Result<FetchedResource> {
     let responses = self.responses.lock().unwrap();
     match responses.get(url) {
-      Some(MockResponse::Success { bytes, content_type }) => Ok(FetchedResource::with_final_url(
+      Some(MockResponse::Success {
+        bytes,
+        content_type,
+      }) => Ok(FetchedResource::with_final_url(
         bytes.clone(),
         content_type.clone(),
         Some(url.to_string()),
@@ -64,7 +70,9 @@ fn partial_render_returns_placeholder_with_diagnostics_on_document_failure() {
   let fetcher = Arc::new(fetcher) as Arc<dyn ResourceFetcher>;
 
   let mut renderer = FastRenderBuilder::new().fetcher(fetcher).build().unwrap();
-  let options = RenderOptions::new().with_viewport(32, 24).allow_partial(true);
+  let options = RenderOptions::new()
+    .with_viewport(32, 24)
+    .allow_partial(true);
 
   let result = renderer
     .render_url_with_options(url, options)

@@ -968,12 +968,7 @@ fn render_once(
           fetch_bytes(u, timeout, user_agent, accept_language)
             .map(|(b, ct, _)| decode_css_bytes(&b, ct.as_deref()))
         };
-        let inlined = inline_imports(
-          &rewritten,
-          &css_url,
-          &mut import_fetch,
-          &mut seen_imports,
-        );
+        let inlined = inline_imports(&rewritten, &css_url, &mut import_fetch, &mut seen_imports);
         combined_css.push_str(&inlined);
         combined_css.push('\n');
       }

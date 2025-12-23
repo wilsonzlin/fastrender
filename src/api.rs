@@ -636,7 +636,6 @@ impl FastRenderConfig {
   /// Sets the site compatibility profile applied during box generation.
   pub fn compat_profile(mut self, profile: CompatProfile) -> Self {
     self.compat_profile = profile;
-<<<<<<< HEAD
     self
   }
 
@@ -650,8 +649,6 @@ impl FastRenderConfig {
   /// Enables site-specific compatibility hacks used for internal captures.
   pub fn with_site_compat_hacks(mut self) -> Self {
     self.compat_profile = CompatProfile::SiteCompatibility;
-=======
->>>>>>> 4b4121b (Record stylesheet import failures and harden partial renders)
     self
   }
 }
