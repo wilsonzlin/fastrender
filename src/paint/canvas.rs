@@ -465,9 +465,16 @@ impl Canvas {
 
   /// Sets a clip rectangle with optional corner radii.
   pub fn set_clip_with_radii(&mut self, rect: Rect, radii: Option<BorderRadii>) {
+    let transform = self.current_state.transform;
+    let clip_bounds = if transform == Transform::identity() {
+      rect
+    } else {
+      Self::transform_rect_aabb(rect, transform)
+    };
+
     let base_clip = match self.current_state.clip_rect {
-      Some(existing) => existing.intersection(rect).unwrap_or(Rect::ZERO),
-      None => rect,
+      Some(existing) => existing.intersection(clip_bounds).unwrap_or(Rect::ZERO),
+      None => clip_bounds,
     };
     self.current_state.clip_rect = Some(base_clip);
 
@@ -652,7 +659,19 @@ impl Canvas {
     }
 
     if let Some(clip) = self.current_state.clip_rect {
-      if rect.intersection(clip).is_none() {
+      if clip.width() <= 0.0 || clip.height() <= 0.0 {
+        return;
+      }
+
+      let intersects = if self.current_state.transform == Transform::identity() {
+        rect.intersection(clip).is_some()
+      } else {
+        Self::transform_rect_aabb(rect, self.current_state.transform)
+          .intersection(clip)
+          .is_some()
+      };
+
+      if !intersects {
         return;
       }
     }
@@ -680,7 +699,19 @@ impl Canvas {
     }
 
     if let Some(clip) = self.current_state.clip_rect {
-      if rect.intersection(clip).is_none() {
+      if clip.width() <= 0.0 || clip.height() <= 0.0 {
+        return;
+      }
+
+      let intersects = if self.current_state.transform == Transform::identity() {
+        rect.intersection(clip).is_some()
+      } else {
+        Self::transform_rect_aabb(rect, self.current_state.transform)
+          .intersection(clip)
+          .is_some()
+      };
+
+      if !intersects {
         return;
       }
     }
@@ -880,10 +911,43 @@ impl Canvas {
       if clip.width() <= 0.0 || clip.height() <= 0.0 {
         return None;
       }
-      rect.intersection(clip)
+
+      if self.current_state.transform == Transform::identity() {
+        rect.intersection(clip)
+      } else {
+        let transformed_rect = Self::transform_rect_aabb(rect, self.current_state.transform);
+        if transformed_rect.intersection(clip).is_some() {
+          Some(rect)
+        } else {
+          None
+        }
+      }
     } else {
       Some(rect)
     }
+  }
+
+  #[inline]
+  fn transform_point(transform: Transform, point: Point) -> Point {
+    Point::new(
+      point.x * transform.sx + point.y * transform.kx + transform.tx,
+      point.x * transform.ky + point.y * transform.sy + transform.ty,
+    )
+  }
+
+  #[inline]
+  fn transform_rect_aabb(rect: Rect, transform: Transform) -> Rect {
+    let p1 = Self::transform_point(transform, rect.origin);
+    let p2 = Self::transform_point(transform, Point::new(rect.max_x(), rect.min_y()));
+    let p3 = Self::transform_point(transform, Point::new(rect.min_x(), rect.max_y()));
+    let p4 = Self::transform_point(transform, Point::new(rect.max_x(), rect.max_y()));
+
+    let min_x = p1.x.min(p2.x).min(p3.x).min(p4.x);
+    let max_x = p1.x.max(p2.x).max(p3.x).max(p4.x);
+    let min_y = p1.y.min(p2.y).min(p3.y).min(p4.y);
+    let max_y = p1.y.max(p2.y).max(p3.y).max(p4.y);
+
+    Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
   }
 
   fn build_clip_mask(&self, rect: Rect, radii: BorderRadii) -> Option<Mask> {
@@ -1438,5 +1502,47 @@ mod tests {
 
     assert_eq!(pixel(&pixmap, 6, 6), (0, 0, 255, 255));
     assert_eq!(pixel(&pixmap, 2, 2), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn translated_clip_tracks_device_bounds() {
+    let mut canvas = Canvas::new(10, 10, Rgba::WHITE).unwrap();
+    canvas.translate(2.0, 1.0);
+
+    canvas.set_clip(Rect::from_xywh(1.0, 1.0, 4.0, 4.0));
+
+    if let Some(bounds) = canvas.clip_bounds() {
+      assert_eq!(bounds, Rect::from_xywh(3.0, 2.0, 4.0, 4.0));
+    }
+
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 6.0, 6.0), Rgba::rgb(255, 0, 0));
+    let pixmap = canvas.into_pixmap();
+
+    // Inside the translated clip
+    assert_eq!(pixel(&pixmap, 4, 3), (255, 0, 0, 255));
+    // Inside the draw rect but outside the clip bounds
+    assert_eq!(pixel(&pixmap, 2, 2), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn rotated_clip_bounds_prevents_culling() {
+    let mut canvas = Canvas::new(10, 10, Rgba::WHITE).unwrap();
+    let rotate_90_about_center = Transform::from_row(0.0, 1.0, -1.0, 0.0, 10.0, 0.0);
+    canvas.set_transform(rotate_90_about_center);
+
+    let clip_rect = Rect::from_xywh(6.0, 2.0, 3.0, 5.0);
+    canvas.set_clip(clip_rect);
+
+    if let Some(bounds) = canvas.clip_bounds() {
+      assert_eq!(bounds, Rect::from_xywh(3.0, 6.0, 5.0, 3.0));
+    }
+
+    canvas.draw_rect(Rect::from_xywh(4.0, 0.0, 6.0, 10.0), Rgba::rgb(0, 255, 0));
+    let pixmap = canvas.into_pixmap();
+
+    // Inside the rotated clip area
+    assert_eq!(pixel(&pixmap, 4, 7), (0, 255, 0, 255));
+    // Within the drawn rect but outside the rotated clip
+    assert_eq!(pixel(&pixmap, 2, 7), (255, 255, 255, 255));
   }
 }

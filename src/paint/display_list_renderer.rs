@@ -3516,10 +3516,8 @@ impl DisplayListRenderer {
 
   fn render_image(&mut self, item: &ImageItem) -> Result<()> {
     let mut dest_rect = self.ds_rect(item.dest_rect);
-    if let Some(clip) = self.canvas.clip_bounds() {
-      if clip.width() <= 0.0 || clip.height() <= 0.0 || clip.intersection(dest_rect).is_none() {
-        return Ok(());
-      }
+    if self.canvas.apply_clip(dest_rect).is_none() {
+      return Ok(());
     }
 
     let Some(pixmap) = self.image_to_pixmap(item) else {
