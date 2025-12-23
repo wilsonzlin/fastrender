@@ -48,7 +48,6 @@ use cssparser::ToCss;
 use cssparser::Token;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
-use std::fmt::Write;
 
 // ============================================================================
 // Main parsing functions
@@ -502,20 +501,21 @@ fn parse_supports_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  // Collect the prelude (condition) tokens until the block begins.
-  let mut prelude = String::new();
-  loop {
-    match parser.next_including_whitespace() {
-      Ok(Token::CurlyBracketBlock) => break,
-      Ok(token) => {
-        let token = token.clone();
-        push_supports_token(token, &mut prelude, parser)?;
-      }
-      Err(_) => return Ok(None),
+  let start = parser.position();
+  parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+    while !parser.is_exhausted() {
+      let _ = parser.next_including_whitespace()?;
     }
-  }
+    Ok(())
+  })?;
 
-  let condition = parse_supports_prelude(&prelude);
+  let prelude = parser.slice_from(start);
+
+  parser.expect_curly_bracket_block().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
+  })?;
+
+  let condition = parse_supports_prelude(prelude);
   let rules = parser.parse_nested_block(|nested| {
     Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(parse_rule_list_with_context(
       nested,
@@ -525,295 +525,185 @@ fn parse_supports_rule<'i, 't>(
   Ok(Some(CssRule::Supports(SupportsRule { condition, rules })))
 }
 
-fn push_supports_token<'i, 't>(
-  token: Token<'i>,
-  out: &mut String,
-  parser: &mut Parser<'i, 't>,
-) -> std::result::Result<(), ParseError<'i, SelectorParseErrorKind<'i>>> {
-  match token {
-    Token::WhiteSpace(ws) => out.push_str(ws),
-    Token::Ident(id) => out.push_str(&id),
-    Token::AtKeyword(at) => {
-      out.push('@');
-      out.push_str(&at);
-    }
-    Token::Number { value, .. } => {
-      let _ = write!(out, "{}", value);
-    }
-    Token::Dimension { value, unit, .. } => {
-      let _ = write!(out, "{}{}", value, unit);
-    }
-    Token::Percentage { unit_value, .. } => {
-      let _ = write!(out, "{}%", unit_value);
-    }
-    Token::Colon => out.push(':'),
-    Token::Delim(c) => out.push(c),
-    Token::IDHash(hash) => {
-      out.push('#');
-      out.push_str(&hash);
-    }
-    Token::Hash(hash) => {
-      out.push('#');
-      out.push_str(&hash);
-    }
-    Token::QuotedString(s) => {
-      out.push('"');
-      out.push_str(&s);
-      out.push('"');
-    }
-    Token::UnquotedUrl(url) => {
-      out.push_str("url(");
-      out.push_str(url.as_ref());
-      out.push(')');
-    }
-    Token::ParenthesisBlock => {
-      let inner = parser.parse_nested_block(|nested| collect_supports_tokens(nested))?;
-      out.push('(');
-      out.push_str(&inner);
-      out.push(')');
-    }
-    Token::Function(f) => {
-      let inner = parser.parse_nested_block(|nested| collect_supports_tokens(nested))?;
-      out.push_str(&f);
-      out.push('(');
-      out.push_str(&inner);
-      out.push(')');
-    }
-    Token::SquareBracketBlock => {
-      let inner = parser.parse_nested_block(|nested| collect_supports_tokens(nested))?;
-      out.push('[');
-      out.push_str(&inner);
-      out.push(']');
-    }
-    _ => {}
-  }
-  Ok(())
-}
-
-fn collect_supports_tokens<'i, 't>(
-  parser: &mut Parser<'i, 't>,
-) -> std::result::Result<String, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  let mut buf = String::new();
-  while !parser.is_exhausted() {
-    let token = match parser.next_including_whitespace() {
-      Ok(tok) => tok,
-      Err(_) => break,
-    };
-    let token = token.clone();
-    push_supports_token(token, &mut buf, parser)?;
-  }
-  Ok(buf)
-}
-
 fn parse_supports_prelude(prelude: &str) -> SupportsCondition {
-  parse_supports_or(prelude.trim())
-}
-
-fn parse_supports_or(s: &str) -> SupportsCondition {
-  let mut expr = s.trim();
-  while let Some(stripped) = strip_outer_parens(expr) {
-    expr = stripped.trim();
-  }
-  let mut depth = 0usize;
-  let lower = expr.to_ascii_lowercase();
-  let mut i = 0usize;
-  while i < expr.len() {
-    let ch = expr[i..].chars().next().unwrap();
-    match ch {
-      '(' => depth += 1,
-      ')' => depth = depth.saturating_sub(1),
-      _ => {}
-    }
-    if depth == 0 && lower[i..].starts_with("or") && is_op_boundary(expr, i, 2) {
-      let left = expr[..i].trim_end();
-      let right = expr[i + 2..].trim_start();
-      if !left.is_empty() && !right.is_empty() {
-        let l = parse_supports_or(left);
-        let r = parse_supports_or(right);
-        return SupportsCondition::Or(vec![l, r]);
+  let mut input = ParserInput::new(prelude);
+  let mut parser = Parser::new(&mut input);
+  match parse_supports_condition(&mut parser) {
+    Ok(cond) => {
+      parser.skip_whitespace();
+      if parser.is_exhausted() {
+        cond
+      } else {
+        SupportsCondition::False
       }
     }
-    i += ch.len_utf8();
-  }
-  parse_supports_and(expr)
-}
-
-fn parse_supports_and(s: &str) -> SupportsCondition {
-  let mut expr = s.trim();
-  while let Some(stripped) = strip_outer_parens(expr) {
-    expr = stripped.trim();
-  }
-  let mut depth = 0usize;
-  let lower = expr.to_ascii_lowercase();
-  let mut i = 0usize;
-  while i < expr.len() {
-    let ch = expr[i..].chars().next().unwrap();
-    match ch {
-      '(' => depth += 1,
-      ')' => depth = depth.saturating_sub(1),
-      _ => {}
-    }
-    if depth == 0 && lower[i..].starts_with("and") && is_op_boundary(expr, i, 3) {
-      let left = expr[..i].trim_end();
-      let right = expr[i + 3..].trim_start();
-      if !left.is_empty() && !right.is_empty() {
-        let l = parse_supports_and(left);
-        let r = parse_supports_and(right);
-        return SupportsCondition::And(vec![l, r]);
-      }
-    }
-    i += ch.len_utf8();
-  }
-  parse_supports_not(expr)
-}
-
-fn parse_supports_not(s: &str) -> SupportsCondition {
-  let trimmed = s.trim_start();
-  let lower = trimmed.to_ascii_lowercase();
-  if lower.starts_with("not") && is_op_boundary(trimmed, 0, 3) {
-    let idx = 3;
-    let rest = trimmed[idx..].trim_start();
-    if !rest.is_empty() {
-      return SupportsCondition::Not(Box::new(parse_supports_or(rest)));
-    }
-  }
-  parse_supports_primary(trimmed)
-}
-
-fn parse_supports_primary(s: &str) -> SupportsCondition {
-  let mut target = s.trim();
-  while let Some(stripped) = strip_outer_parens(target) {
-    target = stripped.trim();
-  }
-  if target.is_empty() {
-    return SupportsCondition::False;
-  }
-
-  let lower = target.to_ascii_lowercase();
-  if lower.starts_with("not") && is_op_boundary(target, 0, 3) {
-    let rest = target[3..].trim_start();
-    if !rest.is_empty() {
-      return SupportsCondition::Not(Box::new(parse_supports_or(rest)));
-    }
-  }
-
-  if let Some(selector) = parse_selector_condition(target) {
-    return selector;
-  }
-
-  if let Some((property, value)) = parse_declaration_condition(target) {
-    return SupportsCondition::Declaration { property, value };
-  }
-
-  SupportsCondition::False
-}
-
-fn is_op_boundary(s: &str, start: usize, len: usize) -> bool {
-  let before = if start == 0 {
-    None
-  } else {
-    s[..start].chars().next_back()
-  };
-  let after = s[start + len..].chars().next();
-  matches!(
-    before,
-    None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('(') | Some(')')
-  ) && matches!(
-    after,
-    None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some('(') | Some(')')
-  )
-}
-
-fn strip_outer_parens(s: &str) -> Option<&str> {
-  if !s.starts_with('(') || !s.ends_with(')') {
-    return None;
-  }
-  let mut depth = 0usize;
-  for (i, ch) in s.char_indices() {
-    match ch {
-      '(' => depth += 1,
-      ')' => {
-        if depth == 0 {
-          return None;
-        }
-        depth -= 1;
-        if depth == 0 && i + 1 != s.len() {
-          return None;
-        }
-      }
-      _ => {}
-    }
-  }
-  if depth == 0 {
-    Some(&s[1..s.len() - 1])
-  } else {
-    None
+    Err(_) => SupportsCondition::False,
   }
 }
 
-fn parse_selector_condition(s: &str) -> Option<SupportsCondition> {
-  let trimmed = s.trim();
-  let lower = trimmed.to_ascii_lowercase();
-  if !lower.starts_with("selector") {
-    return None;
-  }
-  let prefix_len = "selector".len();
-  let mut iter = trimmed.char_indices().skip(prefix_len);
-  let mut start_paren: Option<usize> = None;
-  for (idx, ch) in &mut iter {
-    if ch.is_whitespace() {
-      continue;
-    }
-    if ch == '(' {
-      start_paren = Some(idx);
+fn parse_supports_condition<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  parse_supports_disjunction(parser)
+}
+
+fn parse_supports_disjunction<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  let mut conditions = vec![parse_supports_conjunction(parser)?];
+
+  loop {
+    parser.skip_whitespace();
+    if parser.try_parse(|p| p.expect_ident_matching("or")).is_ok() {
+      parser.skip_whitespace();
+      conditions.push(parse_supports_conjunction(parser)?);
+    } else {
       break;
     }
-    return None;
   }
-  let start = start_paren?;
-  let mut depth = 0usize;
-  for (idx, ch) in trimmed.char_indices().skip(start) {
-    match ch {
-      '(' => depth += 1,
-      ')' => {
-        if depth == 0 {
-          return None;
-        }
-        depth -= 1;
-        if depth == 0 {
-          let arg = trimmed[start + 1..idx].trim();
-          if arg.is_empty() || !trimmed[idx + 1..].trim().is_empty() {
-            return None;
-          }
-          return Some(SupportsCondition::Selector(arg.to_string()));
-        }
-      }
-      _ => {}
-    }
+
+  if conditions.len() == 1 {
+    Ok(conditions.pop().unwrap())
+  } else {
+    Ok(SupportsCondition::Or(conditions))
   }
-  None
 }
 
-fn parse_declaration_condition(s: &str) -> Option<(String, String)> {
-  let mut depth = 0usize;
-  for (idx, ch) in s.char_indices() {
-    match ch {
-      '(' => depth += 1,
-      ')' => depth = depth.saturating_sub(1),
-      ':' if depth == 0 => {
-        let property = s[..idx].trim();
-        let value = s[idx + 1..].trim();
-        if property.is_empty() {
-          return None;
-        }
-        if !value.is_empty() || property.starts_with("--") {
-          return Some((property.to_ascii_lowercase(), value.to_string()));
-        }
-      }
-      _ => {}
+fn parse_supports_conjunction<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  let mut conditions = vec![parse_supports_negation(parser)?];
+
+  loop {
+    parser.skip_whitespace();
+    if parser.try_parse(|p| p.expect_ident_matching("and")).is_ok() {
+      parser.skip_whitespace();
+      conditions.push(parse_supports_negation(parser)?);
+    } else {
+      break;
     }
   }
-  None
+
+  if conditions.len() == 1 {
+    Ok(conditions.pop().unwrap())
+  } else {
+    Ok(SupportsCondition::And(conditions))
+  }
+}
+
+fn parse_supports_negation<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  parser.skip_whitespace();
+  if parser.try_parse(|p| p.expect_ident_matching("not")).is_ok() {
+    parser.skip_whitespace();
+    let inner = parse_supports_condition_in_parens(parser)?;
+    return Ok(SupportsCondition::Not(Box::new(inner)));
+  }
+
+  parse_supports_condition_in_parens(parser)
+}
+
+fn parse_supports_condition_in_parens<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  parser.skip_whitespace();
+
+  if let Ok(selector) = parser.try_parse(|p| parse_supports_selector_function(p)) {
+    return Ok(selector);
+  }
+
+  parser
+    .try_parse(|p| parse_supports_parenthesized_condition(p))
+    .map_err(|_| parser.new_custom_error(()))
+}
+
+fn parse_supports_selector_function<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  if let Ok(selector) = parser.try_parse(|p| {
+    p.expect_function_matching("selector")?;
+    parse_supports_selector_arguments(p)
+  }) {
+    return Ok(selector);
+  }
+
+  parser.try_parse(|p| {
+    let ident = p.expect_ident()?;
+    if !ident.as_ref().eq_ignore_ascii_case("selector") {
+      return Err(p.new_custom_error(()));
+    }
+    p.skip_whitespace();
+    match p.next_including_whitespace()? {
+      Token::ParenthesisBlock => parse_supports_selector_arguments(p),
+      _ => Err(p.new_custom_error(())),
+    }
+  })
+}
+
+fn parse_supports_selector_arguments<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  let selector_list = parser.parse_nested_block(|nested| {
+    let start = nested.position();
+    while !nested.is_exhausted() {
+      let _ = nested.next_including_whitespace()?;
+    }
+    Ok::<_, ParseError<'i, ()>>(nested.slice_from(start).trim().to_string())
+  })?;
+
+  if selector_list.is_empty() {
+    return Err(parser.new_custom_error(()));
+  }
+
+  Ok(SupportsCondition::Selector(selector_list))
+}
+
+fn parse_supports_parenthesized_condition<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  match parser.next_including_whitespace() {
+    Ok(Token::ParenthesisBlock) => parser.parse_nested_block(|nested| {
+      if let Ok(cond) = nested.try_parse(|p| parse_supports_condition(p)) {
+        nested.skip_whitespace();
+        if nested.is_exhausted() {
+          return Ok(cond);
+        }
+      }
+
+      if let Some(decl) = parse_supports_declaration_in_parens(nested) {
+        return Ok(decl);
+      }
+
+      Ok(SupportsCondition::False)
+    }),
+    _ => Err(parser.new_custom_error(())),
+  }
+}
+
+fn parse_supports_declaration_in_parens<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> Option<SupportsCondition> {
+  parser.skip_whitespace();
+  let property = parser.expect_ident().ok()?.to_string();
+  parser.skip_whitespace();
+  if parser.expect_colon().is_err() {
+    return None;
+  }
+
+  parser.skip_whitespace();
+  let value_start = parser.position();
+  while parser.next_including_whitespace().is_ok() {}
+  let value = parser.slice_from(value_start).trim();
+
+  if value.is_empty() && !property.starts_with("--") {
+    return None;
+  }
+
+  Some(SupportsCondition::Declaration {
+    property: property.to_ascii_lowercase(),
+    value: value.to_string(),
+  })
 }
 
 fn parse_layer_rule<'i, 't>(
