@@ -6,7 +6,7 @@
 
 mod caching_fetcher;
 
-use caching_fetcher::CachingFetcher;
+use caching_fetcher::DiskCachingFetcher;
 use clap::Parser;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
@@ -306,8 +306,8 @@ fn main() {
     std::process::exit(1);
   }
 
-  // Create shared caching fetcher
-  let fetcher = Arc::new(CachingFetcher::new(
+  // Create shared disk caching fetcher (CLI-only helper; library cache is in-memory)
+  let fetcher = Arc::new(DiskCachingFetcher::new(
     HttpFetcher::new()
       .with_user_agent(args.user_agent.clone())
       .with_accept_language(args.accept_language.clone()),

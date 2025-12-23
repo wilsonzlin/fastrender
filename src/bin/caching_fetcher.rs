@@ -1,7 +1,10 @@
-//! Caching wrapper for ResourceFetcher
+//! Disk-caching wrapper for [`ResourceFetcher`] (CLI helper only).
 //!
-//! This module provides a disk-caching wrapper around any ResourceFetcher.
-//! It's intended for use in test/dev binaries, NOT the library itself.
+//! This module provides a disk-caching wrapper around any [`ResourceFetcher`].
+//! It's intended for use in test/dev binaries where we want to persist assets
+//! between runs. The library ships its own in-memory + single-flight
+//! [`fastrender::resource::CachingFetcher`]; API consumers should prefer that
+//! instead of this disk helper.
 
 use fastrender::resource::FetchedResource;
 use fastrender::resource::ResourceFetcher;
@@ -13,10 +16,11 @@ use std::hash::Hasher;
 use std::path::Path;
 use std::path::PathBuf;
 
-/// A caching wrapper around any ResourceFetcher
+/// Disk-based caching wrapper around any [`ResourceFetcher`].
 ///
-/// Caches fetched resources to disk and serves them from cache on subsequent requests.
-/// This is useful for speeding up repeated renders of the same pages.
+/// Persists fetched resources to disk and serves them from cache on subsequent requests.
+/// This is useful for speeding up repeated renders of the same pages when iterating
+/// locally.
 ///
 /// # Example
 ///
@@ -25,16 +29,16 @@ use std::path::PathBuf;
 /// use std::sync::Arc;
 ///
 /// let inner = HttpFetcher::new();
-/// let caching = CachingFetcher::new(inner, "fetches/assets");
+/// let caching = DiskCachingFetcher::new(inner, "fetches/assets");
 /// let fetcher: Arc<dyn ResourceFetcher> = Arc::new(caching);
 /// ```
-pub struct CachingFetcher<F: ResourceFetcher> {
+pub struct DiskCachingFetcher<F: ResourceFetcher> {
   inner: F,
   cache_dir: PathBuf,
 }
 
-impl<F: ResourceFetcher> CachingFetcher<F> {
-  /// Create a new caching fetcher
+impl<F: ResourceFetcher> DiskCachingFetcher<F> {
+  /// Create a new disk caching fetcher
   ///
   /// The cache directory will be created if it doesn't exist.
   pub fn new(inner: F, cache_dir: impl Into<PathBuf>) -> Self {
@@ -97,7 +101,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
   }
 }
 
-impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
+impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
     // Don't cache data: URLs (they're already embedded)
     if url.starts_with("data:") {
@@ -170,14 +174,14 @@ mod tests {
       content_type: Some("text/plain".to_string()),
     };
 
-    let caching = CachingFetcher::new(fetcher, tmp.path());
+    let disk_cache = DiskCachingFetcher::new(fetcher, tmp.path());
     let url = "https://example.com/resource"; // no extension -> would map to .bin
 
-    let first = caching.fetch(url).expect("first fetch");
+    let first = disk_cache.fetch(url).expect("first fetch");
     assert_eq!(first.content_type.as_deref(), Some("text/plain"));
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
-    let second = caching.fetch(url).expect("cached fetch");
+    let second = disk_cache.fetch(url).expect("cached fetch");
     assert_eq!(second.content_type.as_deref(), Some("text/plain"));
     assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit cache");
   }
@@ -192,14 +196,14 @@ mod tests {
       content_type: None,
     };
 
-    let caching = CachingFetcher::new(fetcher, tmp.path());
+    let disk_cache = DiskCachingFetcher::new(fetcher, tmp.path());
     let url = "https://example.com/image.png";
 
-    let first = caching.fetch(url).expect("first fetch");
+    let first = disk_cache.fetch(url).expect("first fetch");
     assert_eq!(first.content_type.as_deref(), None);
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
-    let second = caching.fetch(url).expect("cached fetch");
+    let second = disk_cache.fetch(url).expect("cached fetch");
     // Meta is absent, but extension should still provide a MIME guess.
     assert_eq!(second.content_type.as_deref(), Some("image/png"));
     assert_eq!(counter.load(Ordering::SeqCst), 1, "should hit cache");
@@ -210,6 +214,6 @@ mod tests {
 #[allow(dead_code)]
 fn main() {
   eprintln!(
-    "caching_fetcher is a library-only helper; use it by wrapping a ResourceFetcher in code."
+    "caching_fetcher is a CLI helper module; use DiskCachingFetcher by wrapping a ResourceFetcher in code."
   );
 }
