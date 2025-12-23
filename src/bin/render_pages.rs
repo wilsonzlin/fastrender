@@ -5,9 +5,12 @@
 //! Summary to fetches/renders/_summary.log
 
 mod caching_fetcher;
+mod common;
 
 use caching_fetcher::DiskCachingFetcher;
 use clap::Parser;
+use common::args::{parse_shard, parse_viewport, MediaPreferenceArgs};
+use common::media_prefs::MediaPreferences;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
 use fastrender::css::loader::extract_css_links;
@@ -66,25 +69,8 @@ struct Args {
   #[arg(long, default_value = "1.0")]
   dpr: f32,
 
-  /// Reduced transparency preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_transparency: Option<bool>,
-
-  /// Reduced motion preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_motion: Option<bool>,
-
-  /// Reduced data preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_data: Option<bool>,
-
-  /// Contrast preference (more|high|less|low|custom|forced|no-preference)
-  #[arg(long, value_parser = parse_contrast)]
-  prefers_contrast: Option<String>,
-
-  /// Color scheme preference (light|dark|no-preference)
-  #[arg(long, value_parser = parse_color_scheme)]
-  prefers_color_scheme: Option<String>,
+  #[command(flatten)]
+  media_prefs: MediaPreferenceArgs,
 
   /// Render only listed pages (comma-separated)
   #[arg(long, value_delimiter = ',')]
@@ -123,72 +109,6 @@ struct Args {
   filter_pages: Vec<String>,
 }
 
-fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
-  let parts: Vec<&str> = s.split('x').collect();
-  if parts.len() != 2 {
-    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
-  }
-  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
-  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
-  if w == 0 || h == 0 {
-    return Err("width and height must be > 0".to_string());
-  }
-  Ok((w, h))
-}
-
-fn parse_bool_preference(s: &str) -> Result<bool, String> {
-  let v = s.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Ok(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Ok(false);
-  }
-  Err(format!("invalid value: {s}"))
-}
-
-fn parse_contrast(s: &str) -> Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid contrast value: {s}")),
-  }
-}
-
-fn parse_color_scheme(s: &str) -> Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "light" | "dark" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid color scheme: {s}")),
-  }
-}
-
-fn parse_shard(s: &str) -> Result<(usize, usize), String> {
-  let parts: Vec<&str> = s.split('/').collect();
-  if parts.len() != 2 {
-    return Err("shard must be index/total (e.g., 0/4)".to_string());
-  }
-  let index = parts[0]
-    .parse::<usize>()
-    .map_err(|_| "invalid shard index".to_string())?;
-  let total = parts[1]
-    .parse::<usize>()
-    .map_err(|_| "invalid shard total".to_string())?;
-  if total == 0 {
-    return Err("shard total must be > 0".to_string());
-  }
-  if index >= total {
-    return Err("shard index must be < total".to_string());
-  }
-  Ok((index, total))
-}
-
 struct PageResult {
   name: String,
   status: Status,
@@ -211,6 +131,7 @@ fn main() {
   }
 
   let args = Args::parse();
+  let media_prefs = MediaPreferences::from(&args.media_prefs);
 
   // Build page filter from --pages and positional args
   let page_filter: Option<HashSet<String>> = {
@@ -232,34 +153,7 @@ fn main() {
     std::env::set_var("FASTR_RENDER_TIMINGS", "1");
   }
 
-  if let Some(reduce) = args.prefers_reduced_transparency {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_TRANSPARENCY",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(reduce) = args.prefers_reduced_motion {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_MOTION",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(reduce) = args.prefers_reduced_data {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_DATA",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(ref contrast) = args.prefers_contrast {
-    std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
-  }
-
-  if let Some(ref color_scheme) = args.prefers_color_scheme {
-    std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
-  }
+  media_prefs.apply_env();
 
   // Create directories
   fs::create_dir_all(RENDER_DIR).expect("create render dir");

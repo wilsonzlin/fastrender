@@ -2,7 +2,10 @@
 //!
 //! Fetches all target pages in parallel and caches to fetches/html/
 
+mod common;
+
 use clap::Parser;
+use common::args::parse_shard;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::extract_js_location_redirect;
 use fastrender::html::meta_refresh::extract_meta_refresh_url;
@@ -249,26 +252,6 @@ fn selected_pages(
   } else {
     filtered
   }
-}
-
-fn parse_shard(s: &str) -> Result<(usize, usize), String> {
-  let parts: Vec<&str> = s.split('/').collect();
-  if parts.len() != 2 {
-    return Err("shard must be index/total (e.g., 0/4)".to_string());
-  }
-  let index = parts[0]
-    .parse::<usize>()
-    .map_err(|_| "invalid shard index".to_string())?;
-  let total = parts[1]
-    .parse::<usize>()
-    .map_err(|_| "invalid shard total".to_string())?;
-  if total == 0 {
-    return Err("shard total must be > 0".to_string());
-  }
-  if index >= total {
-    return Err("shard index must be < total".to_string());
-  }
-  Ok((index, total))
 }
 
 fn write_cached_html(

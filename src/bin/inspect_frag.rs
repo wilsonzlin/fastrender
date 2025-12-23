@@ -1,4 +1,8 @@
+mod common;
+
 use clap::Parser;
+use common::args::{parse_viewport, MediaPreferenceArgs};
+use common::media_prefs::MediaPreferences;
 use fastrender::api::FastRender;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
@@ -26,7 +30,6 @@ use fastrender::style::cascade::apply_styles_with_media_and_target;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::computed::Visibility;
 use fastrender::style::display::Display;
-use fastrender::style::media::MediaContext;
 use fastrender::style::media::MediaType;
 use fastrender::style::position::Position;
 use fastrender::style::ComputedStyle;
@@ -64,25 +67,8 @@ struct Args {
   #[arg(long, default_value = "0.0")]
   scroll_y: f32,
 
-  /// Reduced transparency preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_transparency: Option<bool>,
-
-  /// Reduced motion preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_motion: Option<bool>,
-
-  /// Reduced data preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_data: Option<bool>,
-
-  /// Contrast preference (more|high|less|low|custom|forced|no-preference)
-  #[arg(long, value_parser = parse_contrast)]
-  prefers_contrast: Option<String>,
-
-  /// Color scheme preference (light|dark|no-preference)
-  #[arg(long, value_parser = parse_color_scheme)]
-  prefers_color_scheme: Option<String>,
+  #[command(flatten)]
+  media_prefs: MediaPreferenceArgs,
 
   /// Override the User-Agent header
   #[arg(long, default_value = DEFAULT_USER_AGENT)]
@@ -95,52 +81,6 @@ struct Args {
   /// Abort after this many seconds
   #[arg(long)]
   timeout: Option<u64>,
-}
-
-fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
-  let parts: Vec<&str> = s.split('x').collect();
-  if parts.len() != 2 {
-    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
-  }
-  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
-  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
-  if w == 0 || h == 0 {
-    return Err("width and height must be > 0".to_string());
-  }
-  Ok((w, h))
-}
-
-fn parse_bool_preference(s: &str) -> Result<bool, String> {
-  let v = s.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Ok(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Ok(false);
-  }
-  Err(format!("invalid value: {s}"))
-}
-
-fn parse_contrast(s: &str) -> Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid contrast value: {s}")),
-  }
-}
-
-fn parse_color_scheme(s: &str) -> Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "light" | "dark" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid color scheme: {s}")),
-  }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -161,6 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }));
 
   let args = Args::parse();
+  let media_prefs = MediaPreferences::from(&args.media_prefs);
 
   let (viewport_w, viewport_h) = args.viewport;
 
@@ -197,34 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut html = fs::read_to_string(&path)?;
   let resource_base = infer_base_url(&html, &input_url).into_owned();
 
-  if let Some(reduce) = args.prefers_reduced_transparency {
-    env::set_var(
-      "FASTR_PREFERS_REDUCED_TRANSPARENCY",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(reduce) = args.prefers_reduced_motion {
-    env::set_var(
-      "FASTR_PREFERS_REDUCED_MOTION",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(reduce) = args.prefers_reduced_data {
-    env::set_var(
-      "FASTR_PREFERS_REDUCED_DATA",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(ref contrast) = args.prefers_contrast {
-    env::set_var("FASTR_PREFERS_CONTRAST", contrast);
-  }
-
-  if let Some(ref color_scheme) = args.prefers_color_scheme {
-    env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
-  }
+  media_prefs.apply_env();
 
   if args.scroll_x != 0.0 || args.scroll_y != 0.0 {
     eprintln!(
@@ -288,9 +202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let dom = dom::parse_html(&html)?;
 
-  let media_ctx = MediaContext::screen(viewport_w as f32, viewport_h as f32)
-    .with_device_pixel_ratio(args.dpr)
-    .with_env_overrides();
+  let media_ctx = media_prefs.media_context_with_overrides((viewport_w, viewport_h), args.dpr);
   let stylesheet = extract_css(&dom)?;
   let styled = apply_styles_with_media_and_target(&dom, &stylesheet, &media_ctx, None);
 
