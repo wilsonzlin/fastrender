@@ -65,25 +65,19 @@ use crate::css::loader::infer_base_url;
 use crate::css::loader::inject_css_into_html;
 use crate::css::loader::inline_imports;
 use crate::css::loader::resolve_href_with_base;
-use crate::css::parser::extract_css;
-use crate::css::parser::{
-  extract_css_sources,
-  parse_stylesheet,
-  rel_list_contains_stylesheet,
-  StylesheetSource,
-};
-use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
   inject_css_into_html, inline_imports, resolve_href_with_base,
 };
+use crate::css::parser::extract_css;
 use crate::css::parser::{
-  extract_css,
-  extract_css_sources,
-  parse_stylesheet,
-  rel_list_contains_stylesheet,
+  extract_css, extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
   StylesheetSource,
 };
+use crate::css::parser::{
+  extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
+};
+use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
@@ -663,7 +657,7 @@ impl FastRenderConfig {
     self
   }
 
-  /// Enables site-specific compatibility hacks used for internal page sets.
+  /// Enables site-specific compatibility hacks used for internal captures.
   pub fn with_site_compat_hacks(mut self) -> Self {
     self.compat_profile = CompatProfile::SiteCompatibility;
     self
@@ -2038,10 +2032,10 @@ impl FastRender {
             layout_viewport,
             media_type,
           );
-            crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
-              &styled_tree,
-              &box_gen_options,
-            );
+          crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+            &styled_tree,
+            &box_gen_options,
+          );
           self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
 
           intrinsic_cache_clear();
@@ -2479,8 +2473,7 @@ impl FastRender {
 
         let mut have_resource_dimensions = false;
 
-        let has_image_source =
-          !src.is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
+        let has_image_source = !src.is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
 
         let selected = if has_image_source {
           let media_ctx = self.media_context_for_media(media_type, viewport.width, viewport.height);
