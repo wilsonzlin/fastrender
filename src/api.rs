@@ -58,24 +58,13 @@ use crate::accessibility::AccessibilityNode;
 use crate::animation;
 use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
-use crate::css::loader::absolutize_css_urls;
-use crate::css::loader::extract_css_links;
-use crate::css::loader::extract_embedded_css_urls;
-use crate::css::loader::infer_base_url;
-use crate::css::loader::inject_css_into_html;
-use crate::css::loader::inline_imports;
-use crate::css::loader::resolve_href_with_base;
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
   inject_css_into_html, inline_imports, resolve_href_with_base,
 };
-use crate::css::parser::extract_css;
 use crate::css::parser::{
   extract_css, extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
   StylesheetSource,
-};
-use crate::css::parser::{
-  extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::css::types::{CssImportLoader, StyleSheet};
@@ -90,6 +79,7 @@ use crate::geometry::Rect;
 use crate::geometry::Size;
 use crate::html::encoding::decode_html_bytes;
 use crate::html::viewport::ViewportLength;
+use crate::resource::CachingFetcherConfig;
 use crate::image_loader::ImageCache;
 use crate::image_output::encode_image;
 use crate::image_output::OutputFormat;
@@ -111,8 +101,7 @@ use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
 use crate::paint::painter::paint_tree_with_resources_scaled;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
-use crate::resource::HttpFetcher;
-use crate::resource::ResourceFetcher;
+use crate::resource::{HttpFetcher, ResourceFetcher};
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
 use crate::style::cascade::apply_styles_with_media_target_and_imports_cached;
 use crate::style::cascade::ContainerQueryContext;
