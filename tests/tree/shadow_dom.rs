@@ -19,6 +19,13 @@ fn find_first_slot<'a>(node: &'a DomNode) -> Option<&'a DomNode> {
   }
 }
 
+fn find_shadow_root<'a>(node: &'a DomNode) -> Option<&'a DomNode> {
+  match node.node_type {
+    DomNodeType::ShadowRoot { .. } => Some(node),
+    _ => node.children.iter().find_map(find_shadow_root),
+  }
+}
+
 #[test]
 fn declarative_shadow_dom_attaches_shadow_root() {
   let html =
@@ -106,4 +113,40 @@ fn unmatched_named_content_falls_back_to_default_slot() {
     .collect();
 
   assert_eq!(ids, vec!["named", "plain"]);
+}
+
+#[test]
+fn svg_template_is_not_declarative_shadow_dom() {
+  let html = "<svg id='icon'><template shadowroot='open'><text>ignored</text></template></svg>";
+  let dom = parse_html(html).expect("parse html");
+
+  let svg = find_by_id(&dom, "icon").expect("svg element");
+  assert!(
+    find_shadow_root(svg).is_none(),
+    "Templates in the SVG namespace should not attach shadow roots"
+  );
+}
+
+#[test]
+fn first_template_wins_for_multiple_declarative_shadow_roots() {
+  let html = "<div id='host'><template shadowroot='open'><div id='first'>first</div></template><template shadowroot='closed'><div id='second'>second</div></template></div>";
+  let dom = parse_html(html).expect("parse html");
+
+  let host = find_by_id(&dom, "host").expect("host element");
+  assert_eq!(host.children.len(), 1, "host should expose shadow root child only");
+
+  let shadow_root = &host.children[0];
+  match shadow_root.node_type {
+    DomNodeType::ShadowRoot { mode } => assert_eq!(mode, ShadowRootMode::Open),
+    _ => panic!("expected shadow root child"),
+  }
+
+  assert!(
+    find_by_id(shadow_root, "first").is_some(),
+    "first template content should populate the shadow root"
+  );
+  assert!(
+    find_by_id(shadow_root, "second").is_none(),
+    "subsequent templates should remain light DOM and not populate the shadow root"
+  );
 }

@@ -245,11 +245,17 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
 }
 
 fn parse_shadow_root_mode(template: &DomNode) -> Option<ShadowRootMode> {
-  if !template
-    .tag_name()
-    .map(|t| t.eq_ignore_ascii_case("template"))
-    .unwrap_or(false)
-  {
+  let (tag_name, namespace) = match &template.node_type {
+    DomNodeType::Element {
+      tag_name,
+      namespace,
+      ..
+    } => (tag_name.as_str(), namespace.as_str()),
+    _ => return None,
+  };
+
+  let is_html = namespace.is_empty() || namespace == HTML_NAMESPACE;
+  if !is_html || !tag_name.eq_ignore_ascii_case("template") {
     return None;
   }
 
@@ -290,6 +296,8 @@ fn attach_shadow_roots(node: &mut DomNode) {
     children: template.children,
   };
 
+  // Only the first declarative shadow template is attached; later templates stay in the
+  // light DOM for slot distribution.
   let light_children = std::mem::take(&mut node.children);
   distribute_slots(&mut shadow_root, light_children);
   node.children = vec![shadow_root];
