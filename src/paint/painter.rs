@@ -2063,7 +2063,7 @@ impl Painter {
         let mut layer_pixmap = base_painter.pixmap;
         if let Some(ref clip_path) = clip_path {
           if let Some(size) = IntSize::from_wh(layer_pixmap.width(), layer_pixmap.height()) {
-            if let Some(mask) = clip_path.mask(self.scale, size) {
+            if let Some(mask) = clip_path.mask(self.scale, size, Transform::identity()) {
               layer_pixmap.apply_mask(&mask);
             }
           }

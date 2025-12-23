@@ -1,7 +1,6 @@
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::paint::display_list::BorderRadii;
-use crate::paint::rasterize::fill_rounded_rect;
 use crate::style::types::BackgroundPosition;
 use crate::style::types::BasicShape;
 use crate::style::types::ClipPath;
@@ -19,6 +18,7 @@ use tiny_skia::MaskType;
 use tiny_skia::PathBuilder;
 use tiny_skia::Pixmap;
 use tiny_skia::Rect as SkRect;
+use tiny_skia::Transform;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedClipPath {
@@ -112,11 +112,15 @@ impl ResolvedClipPath {
     }
   }
 
-  pub(crate) fn mask(&self, scale: f32, size: IntSize) -> Option<Mask> {
+  pub(crate) fn mask(&self, scale: f32, size: IntSize, transform: Transform) -> Option<Mask> {
     if size.width() == 0 || size.height() == 0 {
       return None;
     }
     let mut mask_pixmap = Pixmap::new(size.width(), size.height())?;
+    let mut paint = tiny_skia::Paint::default();
+    paint.anti_alias = true;
+    paint.set_color(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+
     match self {
       ResolvedClipPath::Inset { rect, radii } => {
         let scaled = Rect::from_xywh(
@@ -125,6 +129,9 @@ impl ResolvedClipPath {
           rect.width() * scale,
           rect.height() * scale,
         );
+        if scaled.width() <= 0.0 || scaled.height() <= 0.0 {
+          return None;
+        }
         let scaled_radii = BorderRadii {
           top_left: radii.top_left * scale,
           top_right: radii.top_right * scale,
@@ -132,15 +139,10 @@ impl ResolvedClipPath {
           bottom_left: radii.bottom_left * scale,
         }
         .clamped(scaled.width(), scaled.height());
-        let _ = fill_rounded_rect(
-          &mut mask_pixmap,
-          scaled.x(),
-          scaled.y(),
-          scaled.width(),
-          scaled.height(),
-          &scaled_radii,
-          crate::style::color::Rgba::new(255, 255, 255, 1.0),
-        );
+
+        if let Some(path) = build_rounded_rect_path(scaled, scaled_radii) {
+          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
+        }
       }
       ResolvedClipPath::Circle { center, radius } => {
         if *radius <= 0.0 {
@@ -149,10 +151,7 @@ impl ResolvedClipPath {
         let r = *radius * scale;
         let rect = SkRect::from_xywh(center.x * scale - r, center.y * scale - r, r * 2.0, r * 2.0)?;
         if let Some(path) = PathBuilder::from_oval(rect) {
-          let mut paint = tiny_skia::Paint::default();
-          paint.anti_alias = true;
-          paint.set_color(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
-          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, Default::default(), None);
+          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
         }
       }
       ResolvedClipPath::Ellipse {
@@ -170,10 +169,7 @@ impl ResolvedClipPath {
           radius_y * 2.0 * scale,
         )?;
         if let Some(path) = PathBuilder::from_oval(rect) {
-          let mut paint = tiny_skia::Paint::default();
-          paint.anti_alias = true;
-          paint.set_color(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
-          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, Default::default(), None);
+          mask_pixmap.fill_path(&path, &paint, SkFillRule::Winding, transform, None);
         }
       }
       ResolvedClipPath::Polygon { points, fill_rule } => {
@@ -187,16 +183,64 @@ impl ResolvedClipPath {
         }
         builder.close();
         if let Some(path) = builder.finish() {
-          let mut paint = tiny_skia::Paint::default();
-          paint.anti_alias = true;
-          paint.set_color(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
-          mask_pixmap.fill_path(&path, &paint, *fill_rule, Default::default(), None);
+          mask_pixmap.fill_path(&path, &paint, *fill_rule, transform, None);
         }
       }
     }
 
     Some(Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha))
   }
+}
+
+fn build_rounded_rect_path(rect: Rect, radii: BorderRadii) -> Option<tiny_skia::Path> {
+  let x = rect.x();
+  let y = rect.y();
+  let w = rect.width();
+  let h = rect.height();
+
+  let max_radius = (w.min(h) / 2.0).max(0.0);
+  let tl = radii.top_left.min(max_radius);
+  let tr = radii.top_right.min(max_radius);
+  let br = radii.bottom_right.min(max_radius);
+  let bl = radii.bottom_left.min(max_radius);
+
+  let mut pb = PathBuilder::new();
+
+  pb.move_to(x + tl, y);
+  pb.line_to(x + w - tr, y);
+
+  if tr > 0.0 {
+    pb.quad_to(x + w, y, x + w, y + tr);
+  } else {
+    pb.line_to(x + w, y);
+  }
+
+  pb.line_to(x + w, y + h - br);
+
+  if br > 0.0 {
+    pb.quad_to(x + w, y + h, x + w - br, y + h);
+  } else {
+    pb.line_to(x + w, y + h);
+  }
+
+  pb.line_to(x + bl, y + h);
+
+  if bl > 0.0 {
+    pb.quad_to(x, y + h, x, y + h - bl);
+  } else {
+    pb.line_to(x, y + h);
+  }
+
+  pb.line_to(x, y + tl);
+
+  if tl > 0.0 {
+    pb.quad_to(x, y, x + tl, y);
+  } else {
+    pb.line_to(x, y);
+  }
+
+  pb.close();
+  pb.finish()
 }
 
 pub(crate) fn resolve_clip_path(

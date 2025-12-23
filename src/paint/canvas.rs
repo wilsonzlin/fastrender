@@ -492,14 +492,22 @@ impl Canvas {
   /// Sets an arbitrary clip path (basic shapes)
   pub fn set_clip_path(&mut self, path: &ResolvedClipPath, scale: f32) {
     let bounds = path.bounds();
+    let scaled_bounds = Rect::from_xywh(
+      bounds.x() * scale,
+      bounds.y() * scale,
+      bounds.width() * scale,
+      bounds.height() * scale,
+    );
     let base_clip = match self.current_state.clip_rect {
-      Some(existing) => existing.intersection(bounds).unwrap_or(Rect::ZERO),
-      None => bounds,
+      Some(existing) => existing
+        .intersection(scaled_bounds)
+        .unwrap_or(Rect::ZERO),
+      None => scaled_bounds,
     };
     self.current_state.clip_rect = Some(base_clip);
 
     let new_mask = IntSize::from_wh(self.pixmap.width(), self.pixmap.height())
-      .and_then(|size| path.mask(scale, size));
+      .and_then(|size| path.mask(scale, size, self.current_state.transform));
     self.current_state.clip_mask = match (new_mask, self.current_state.clip_mask.take()) {
       (Some(mut next), Some(existing)) => {
         combine_masks(&mut next, &existing);
@@ -907,6 +915,9 @@ impl Canvas {
   /// Applies the current clip to a rectangle
   /// Applies the current clip to a rectangle.
   pub(crate) fn apply_clip(&self, rect: Rect) -> Option<Rect> {
+    if self.current_state.clip_mask.is_some() && !self.current_state.transform.is_identity() {
+      return Some(rect);
+    }
     if let Some(clip) = self.current_state.clip_rect {
       if clip.width() <= 0.0 || clip.height() <= 0.0 {
         return None;

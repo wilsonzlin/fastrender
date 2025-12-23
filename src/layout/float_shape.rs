@@ -283,7 +283,11 @@ fn rasterize_clip_shape(shape: &ResolvedClipPath) -> Option<(Mask, Point)> {
   let height = (bounds.max_y() - origin.y).ceil().max(0.0) as u32;
   let translated = shape.translate(-origin.x, -origin.y);
   translated
-    .mask(1.0, tiny_skia::IntSize::from_wh(width, height)?)
+    .mask(
+      1.0,
+      tiny_skia::IntSize::from_wh(width, height)?,
+      Transform::identity(),
+    )
     .map(|m| (m, origin))
 }
 
