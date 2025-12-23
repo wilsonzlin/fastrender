@@ -93,6 +93,9 @@ pub enum InlineItem {
 
   /// A floating box encountered in the inline stream
   Floating(FloatingItem),
+
+  /// Zero-sized anchor for absolute/fixed positioned children
+  StaticPositionAnchor(StaticPositionAnchor),
 }
 
 impl InlineItem {
@@ -106,6 +109,7 @@ impl InlineItem {
       InlineItem::Ruby(r) => r.width(),
       InlineItem::Replaced(r) => r.total_width(),
       InlineItem::Floating(_) => 0.0,
+      InlineItem::StaticPositionAnchor(_) => 0.0,
     }
   }
 
@@ -119,6 +123,7 @@ impl InlineItem {
       InlineItem::Ruby(r) => r.intrinsic_width(),
       InlineItem::Replaced(r) => r.intrinsic_width(),
       InlineItem::Floating(_) => 0.0,
+      InlineItem::StaticPositionAnchor(_) => 0.0,
     }
   }
 
@@ -132,6 +137,7 @@ impl InlineItem {
       InlineItem::Ruby(r) => r.metrics,
       InlineItem::Replaced(r) => r.metrics,
       InlineItem::Floating(f) => f.metrics,
+      InlineItem::StaticPositionAnchor(_) => StaticPositionAnchor::metrics(),
     }
   }
 
@@ -145,6 +151,7 @@ impl InlineItem {
       InlineItem::Ruby(r) => r.vertical_align,
       InlineItem::Replaced(r) => r.vertical_align,
       InlineItem::Floating(f) => f.vertical_align,
+      InlineItem::StaticPositionAnchor(_) => VerticalAlign::Baseline,
     }
   }
 
@@ -162,6 +169,7 @@ impl InlineItem {
       InlineItem::Ruby(r) => r.direction,
       InlineItem::Replaced(r) => r.direction,
       InlineItem::Floating(f) => f.direction,
+      InlineItem::StaticPositionAnchor(a) => a.direction,
     }
   }
 
@@ -174,6 +182,7 @@ impl InlineItem {
       InlineItem::Ruby(r) => r.unicode_bidi,
       InlineItem::Replaced(r) => r.unicode_bidi,
       InlineItem::Floating(f) => f.unicode_bidi,
+      InlineItem::StaticPositionAnchor(a) => a.unicode_bidi,
     }
   }
 
@@ -191,6 +200,28 @@ impl InlineItem {
         (self, width)
       }
     }
+  }
+}
+
+/// Inline placeholder that marks where a positioned element would appear in flow.
+#[derive(Debug, Clone)]
+pub struct StaticPositionAnchor {
+  pub box_id: usize,
+  pub direction: Direction,
+  pub unicode_bidi: UnicodeBidi,
+}
+
+impl StaticPositionAnchor {
+  pub fn new(box_id: usize, direction: Direction, unicode_bidi: UnicodeBidi) -> Self {
+    Self {
+      box_id,
+      direction,
+      unicode_bidi,
+    }
+  }
+
+  pub fn metrics() -> BaselineMetrics {
+    BaselineMetrics::new(0.0, 0.0, 0.0, 0.0)
   }
 }
 
@@ -1753,6 +1784,7 @@ impl<'a> LineBuilder<'a> {
       InlineItem::Ruby(_) => "ruby",
       InlineItem::Replaced(_) => "replaced",
       InlineItem::Floating(_) => "floating",
+      InlineItem::StaticPositionAnchor(_) => "anchor",
     };
 
     if log_line_width_enabled() {
@@ -2086,6 +2118,7 @@ impl<'a> LineBuilder<'a> {
         }
       }
       InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Tab(_) => true,
+      InlineItem::StaticPositionAnchor(_) => true,
     }
   }
 
@@ -4459,9 +4492,10 @@ mod tests {
         .iter()
         .map(|seg| seg.base_items.iter().map(flatten_text).collect::<String>())
         .collect(),
-      InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
-        String::from("\u{FFFC}")
-      }
+      InlineItem::InlineBlock(_)
+      | InlineItem::Replaced(_)
+      | InlineItem::Floating(_)
+      | InlineItem::StaticPositionAnchor(_) => String::from("\u{FFFC}"),
     }
   }
 

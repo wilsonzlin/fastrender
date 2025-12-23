@@ -121,6 +121,7 @@ use line_builder::ReplacedItem;
 use line_builder::RubyItem;
 use line_builder::RubyLineSpacing;
 use line_builder::RubySegmentLayout;
+use line_builder::StaticPositionAnchor;
 use line_builder::TabItem;
 use line_builder::TextItem;
 use std::collections::HashMap;
@@ -316,6 +317,14 @@ impl InlineFormattingContext {
     }
   }
 
+  fn create_static_position_anchor(&self, child: &BoxNode) -> InlineItem {
+    InlineItem::StaticPositionAnchor(StaticPositionAnchor::new(
+      child.id,
+      child.style.direction,
+      child.style.unicode_bidi,
+    ))
+  }
+
   /// Collects inline items from box node children using the author's base direction.
   #[allow(dead_code)]
   fn collect_inline_items(
@@ -404,6 +413,8 @@ impl InlineFormattingContext {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
         positioned_children.push(child.clone());
+        let anchor = self.create_static_position_anchor(child);
+        current_items.push(anchor);
         continue;
       }
 
@@ -1000,6 +1011,8 @@ impl InlineFormattingContext {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
         positioned_children.push(child.clone());
+        let anchor = self.create_static_position_anchor(child);
+        items.push(anchor);
         continue;
       }
       match &child.box_type {
@@ -3745,6 +3758,8 @@ impl InlineFormattingContext {
     text_justify: TextJustify,
     paragraph_info: &[(bool, bool)],
     inline_vertical: bool,
+    strut_metrics: &BaselineMetrics,
+    mut anchor_positions: Option<&mut HashMap<usize, Point>>,
   ) -> Vec<FragmentNode> {
     let mut fragments = Vec::new();
 
@@ -3803,6 +3818,8 @@ impl InlineFormattingContext {
         resolved_justify,
         indent_offset,
         inline_vertical,
+        strut_metrics,
+        anchor_positions.as_deref_mut(),
       );
       fragments.push(line_fragment);
     }
@@ -3822,6 +3839,8 @@ impl InlineFormattingContext {
     resolved_justify: TextJustify,
     indent_offset: f32,
     inline_vertical: bool,
+    strut_metrics: &BaselineMetrics,
+    mut anchor_positions: Option<&mut HashMap<usize, Point>>,
   ) -> FragmentNode {
     static LOG_BASELINE: OnceLock<Option<AtomicUsize>> = OnceLock::new();
     let log_line = LOG_BASELINE
@@ -3902,6 +3921,8 @@ impl InlineFormattingContext {
             );
     }
 
+    let anchor_block_position = block_offset + line.baseline - strut_metrics.baseline_offset;
+
     for (i, positioned) in items.iter().enumerate() {
       let item_width = positioned.item.width();
       let (block_pos, mut inline_pos) = if inline_vertical {
@@ -3927,15 +3948,26 @@ impl InlineFormattingContext {
         inline_pos += marker_gap;
       }
 
-      let fragment = self.create_item_fragment_oriented(
-        &positioned.item,
-        block_pos,
-        inline_pos,
-        inline_vertical,
-      );
-      if log_line {
-        let metrics = positioned.item.baseline_metrics();
-        eprintln!(
+      if let InlineItem::StaticPositionAnchor(anchor) = &positioned.item {
+        if let Some(map) = anchor_positions.as_deref_mut() {
+          let inline_origin = line.left_offset + inline_pos;
+          let anchor_point = if inline_vertical {
+            Point::new(anchor_block_position, inline_origin)
+          } else {
+            Point::new(inline_origin, anchor_block_position)
+          };
+          map.insert(anchor.box_id, anchor_point);
+        }
+      } else {
+        let fragment = self.create_item_fragment_oriented(
+          &positioned.item,
+          block_pos,
+          inline_pos,
+          inline_vertical,
+        );
+        if log_line {
+          let metrics = positioned.item.baseline_metrics();
+          eprintln!(
                     "  item#{i} width={:.2} block_pos={:.2} baseline_offset={:.2} metrics(base={:.2} h={:.2} asc={:.2} desc={:.2}) kind={:?}",
                     item_width,
                     block_pos,
@@ -3946,8 +3978,9 @@ impl InlineFormattingContext {
                     metrics.descent,
                     positioned.item
                 );
+        }
+        children.push(fragment);
       }
-      children.push(fragment);
 
       if rtl {
         cursor -= item_width;
@@ -3977,6 +4010,11 @@ impl InlineFormattingContext {
   }
 
   fn is_justifiable_boundary(prev: &InlineItem, next: &InlineItem) -> bool {
+    if matches!(prev, InlineItem::StaticPositionAnchor(_))
+      || matches!(next, InlineItem::StaticPositionAnchor(_))
+    {
+      return false;
+    }
     let prev_last = last_char_of_item(prev);
     let next_first = first_char_of_item(next);
     matches!((prev_last, next_first),
@@ -3990,7 +4028,10 @@ impl InlineFormattingContext {
         .filter(|pair| {
           let prev = &pair[0].item;
           let next = &pair[1].item;
-          !is_marker_item(prev) && !is_marker_item(next)
+          !is_marker_item(prev)
+            && !is_marker_item(next)
+            && !matches!(prev, InlineItem::StaticPositionAnchor(_))
+            && !matches!(next, InlineItem::StaticPositionAnchor(_))
         })
         .count();
     }
@@ -4009,7 +4050,11 @@ impl InlineFormattingContext {
       return false;
     }
     if matches!(mode, TextJustify::InterCharacter | TextJustify::Distribute) {
-      if is_marker_item(&items[index].item) || is_marker_item(&items[index + 1].item) {
+      if is_marker_item(&items[index].item)
+        || is_marker_item(&items[index + 1].item)
+        || matches!(items[index].item, InlineItem::StaticPositionAnchor(_))
+        || matches!(items[index + 1].item, InlineItem::StaticPositionAnchor(_))
+      {
         return false;
       }
       return true;
@@ -4642,6 +4687,7 @@ impl InlineFormattingContext {
         InlineItem::Floating(_) => {
           tracker.break_segment();
         }
+        InlineItem::StaticPositionAnchor(_) => {}
       }
     }
   }
@@ -4673,6 +4719,7 @@ impl InlineFormattingContext {
         InlineItem::Floating(_) => {
           tracker.break_segment();
         }
+        InlineItem::StaticPositionAnchor(_) => {}
       }
     }
   }
@@ -7255,6 +7302,7 @@ impl InlineFormattingContext {
     };
     let lines_empty = lines.is_empty();
 
+    let mut anchor_positions: HashMap<usize, Point> = HashMap::new();
     let mut line_fragments = self.create_fragments(
       lines,
       0.0,
@@ -7263,6 +7311,12 @@ impl InlineFormattingContext {
       style.text_justify,
       &paragraph_info,
       inline_vertical,
+      &strut_metrics,
+      if positioned_children.is_empty() {
+        None
+      } else {
+        Some(&mut anchor_positions)
+      },
     );
     if let Some(first_line_style) = box_node.first_line_style.as_ref() {
       if let Some(first_line) = line_fragments.first_mut() {
@@ -7293,6 +7347,18 @@ impl InlineFormattingContext {
     if block_shift.abs() > f32::EPSILON {
       for child in &mut merged_children {
         *child = child.translate(Point::new(block_shift, 0.0));
+      }
+    }
+
+    if inline_vertical
+      && matches!(
+        style.writing_mode,
+        crate::style::types::WritingMode::VerticalRl
+      )
+      && block_shift.abs() > f32::EPSILON
+    {
+      for pos in anchor_positions.values_mut() {
+        pos.x += block_shift;
       }
     }
     let bounds = if inline_vertical {
@@ -7388,7 +7454,7 @@ impl InlineFormattingContext {
       } else {
         self.nearest_positioned_cb
       };
-      let static_position = if lines_empty && style.position.is_positioned() {
+      let default_static_position = if lines_empty && style.position.is_positioned() {
         // Static position starts at the containing block origin; AbsoluteLayout adds
         // padding/border offsets, so use the content origin when no lines were laid out.
         Point::ZERO
@@ -7398,6 +7464,10 @@ impl InlineFormattingContext {
 
       let abs = AbsoluteLayout::with_font_context(self.font_context.clone());
       for child in positioned_children {
+        let child_static_position = anchor_positions
+          .get(&child.id)
+          .copied()
+          .unwrap_or(default_static_position);
         let original_style = child.style.clone();
         let mut layout_child = child.clone();
         let mut child_style = (*layout_child.style).clone();
@@ -7441,7 +7511,7 @@ impl InlineFormattingContext {
         let mut input = AbsoluteLayoutInput::new(
           positioned_style,
           child_fragment.bounds.size,
-          static_position,
+          child_static_position,
         );
         input.is_replaced = child.is_replaced();
         input.preferred_min_inline_size = preferred_min_inline;
@@ -7600,9 +7670,10 @@ fn first_char_of_item(item: &InlineItem) -> Option<char> {
       .iter()
       .find_map(|seg| seg.base_items.iter().find_map(first_char_of_item))
       .or(Some(OBJECT_REPLACEMENT)),
-    InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
-      Some(OBJECT_REPLACEMENT)
-    }
+    InlineItem::InlineBlock(_)
+    | InlineItem::Replaced(_)
+    | InlineItem::Floating(_)
+    | InlineItem::StaticPositionAnchor(_) => Some(OBJECT_REPLACEMENT),
   }
 }
 
@@ -7618,9 +7689,10 @@ fn last_char_of_item(item: &InlineItem) -> Option<char> {
       .rev()
       .find_map(|seg| seg.base_items.iter().rev().find_map(last_char_of_item))
       .or(Some(OBJECT_REPLACEMENT)),
-    InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
-      Some(OBJECT_REPLACEMENT)
-    }
+    InlineItem::InlineBlock(_)
+    | InlineItem::Replaced(_)
+    | InlineItem::Floating(_)
+    | InlineItem::StaticPositionAnchor(_) => Some(OBJECT_REPLACEMENT),
   }
 }
 
@@ -10730,6 +10802,8 @@ mod tests {
       root.style.text_justify,
       &[(true, true)],
       false,
+      &strut,
+      None,
     );
     let line = fragments.first().expect("line fragment");
 
@@ -14074,6 +14148,250 @@ mod tests {
       (abs_fragment.bounds.y() - 8.0).abs() < 0.1,
       "empty inline should align static position with its padding start on the block axis; got {}",
       abs_fragment.bounds.y()
+    );
+  }
+
+  #[test]
+  fn absolute_child_static_position_reflects_inline_offset() {
+    let mut abs_style = ComputedStyle::default();
+    abs_style.position = crate::style::position::Position::Absolute;
+    abs_style.width = Some(Length::px(4.0));
+    abs_style.height = Some(Length::px(4.0));
+    let abs = BoxNode::new_inline(Arc::new(abs_style), vec![]);
+
+    let mut text_style = ComputedStyle::default();
+    text_style.white_space = WhiteSpace::Pre;
+    let hello = BoxNode::new_text(Arc::new(text_style.clone()), "Hello ".to_string());
+    let world = BoxNode::new_text(Arc::new(text_style), "World".to_string());
+
+    let root = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![hello, abs, world],
+    );
+    let constraints = LayoutConstraints::definite_width(200.0);
+
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+    let line = fragment
+      .children
+      .iter()
+      .find(|child| matches!(child.content, FragmentContent::Line { .. }))
+      .expect("line fragment");
+    let hello_fragment = line
+      .children
+      .iter()
+      .find(|child| {
+        matches!(
+          child.content,
+          FragmentContent::Text { ref text, .. } if text == "Hello "
+        )
+      })
+      .expect("hello fragment");
+    let expected_x = line.bounds.x() + hello_fragment.bounds.max_x();
+
+    let abs_fragment = fragment
+      .children
+      .iter()
+      .find(|child| {
+        child
+          .style
+          .as_ref()
+          .map(|s| {
+            matches!(
+              s.position,
+              crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+            )
+          })
+          .unwrap_or(false)
+      })
+      .expect("positioned fragment");
+
+    assert!(
+      (abs_fragment.bounds.x() - expected_x).abs() < 0.5,
+      "static position should track inline advance; expected ~{expected_x} got {}",
+      abs_fragment.bounds.x()
+    );
+    assert!(
+      abs_fragment.bounds.x() > 1.0,
+      "static position should not remain at the origin"
+    );
+  }
+
+  #[test]
+  fn multiple_absolute_children_use_distinct_static_positions() {
+    let mut abs_style = ComputedStyle::default();
+    abs_style.position = crate::style::position::Position::Absolute;
+    abs_style.width = Some(Length::px(4.0));
+    abs_style.height = Some(Length::px(4.0));
+    let abs1 = BoxNode::new_inline(Arc::new(abs_style.clone()), vec![]);
+    let abs2 = BoxNode::new_inline(Arc::new(abs_style), vec![]);
+
+    let mut text_style = ComputedStyle::default();
+    text_style.white_space = WhiteSpace::Pre;
+    let one = BoxNode::new_text(Arc::new(text_style.clone()), "One ".to_string());
+    let two = BoxNode::new_text(Arc::new(text_style.clone()), "Two ".to_string());
+    let three = BoxNode::new_text(Arc::new(text_style), "Three".to_string());
+
+    let root = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![one, abs1, two, abs2, three],
+    );
+    let constraints = LayoutConstraints::definite_width(240.0);
+
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+    let positioned: Vec<_> = fragment
+      .children
+      .iter()
+      .filter(|child| {
+        child
+          .style
+          .as_ref()
+          .map(|s| {
+            matches!(
+              s.position,
+              crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+            )
+          })
+          .unwrap_or(false)
+      })
+      .collect();
+
+    assert_eq!(
+      positioned.len(),
+      2,
+      "should produce two positioned fragments"
+    );
+    assert!(
+      positioned[0].bounds.x() < positioned[1].bounds.x(),
+      "static positions should preserve inline order; got {:?}",
+      positioned.iter().map(|p| p.bounds.x()).collect::<Vec<_>>()
+    );
+  }
+
+  #[test]
+  fn rtl_absolute_static_positions_follow_cursor() {
+    let mut root_style = ComputedStyle::default();
+    root_style.direction = crate::style::types::Direction::Rtl;
+    root_style.text_align = TextAlign::Start;
+
+    let mut abs_style = ComputedStyle::default();
+    abs_style.position = crate::style::position::Position::Absolute;
+    abs_style.width = Some(Length::px(4.0));
+    abs_style.height = Some(Length::px(4.0));
+    let abs1 = BoxNode::new_inline(Arc::new(abs_style.clone()), vec![]);
+    let abs2 = BoxNode::new_inline(Arc::new(abs_style), vec![]);
+
+    let mut text_style = ComputedStyle::default();
+    text_style.direction = crate::style::types::Direction::Rtl;
+    text_style.white_space = WhiteSpace::Pre;
+    let a = BoxNode::new_text(Arc::new(text_style.clone()), "A ".to_string());
+    let b = BoxNode::new_text(Arc::new(text_style), "B".to_string());
+
+    let root = BoxNode::new_block(
+      Arc::new(root_style),
+      FormattingContextType::Block,
+      vec![a, abs1, b, abs2],
+    );
+    let constraints = LayoutConstraints::definite_width(180.0);
+
+    let ifc = InlineFormattingContext::new();
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+    let positioned: Vec<_> = fragment
+      .children
+      .iter()
+      .filter(|child| {
+        child
+          .style
+          .as_ref()
+          .map(|s| {
+            matches!(
+              s.position,
+              crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+            )
+          })
+          .unwrap_or(false)
+      })
+      .collect();
+
+    assert_eq!(positioned.len(), 2, "expected two positioned fragments");
+    assert!(
+      positioned[0].bounds.x() > positioned[1].bounds.x(),
+      "RTL static positions should progress from the right edge; got {:?}",
+      positioned.iter().map(|p| p.bounds.x()).collect::<Vec<_>>()
+    );
+  }
+
+  #[test]
+  fn absolute_static_position_does_not_change_line_breaks() {
+    let mut text_style = ComputedStyle::default();
+    text_style.white_space = WhiteSpace::Normal;
+    let first = BoxNode::new_text(Arc::new(text_style.clone()), "Hello world".to_string());
+    let rest = BoxNode::new_text(Arc::new(text_style.clone()), " from tests".to_string());
+
+    let base_root = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![first.clone(), rest.clone()],
+    );
+    let constraints = LayoutConstraints::definite_width(60.0);
+    let ifc = InlineFormattingContext::new();
+    let base_fragment = ifc.layout(&base_root, &constraints).expect("layout");
+
+    let mut abs_style = ComputedStyle::default();
+    abs_style.position = crate::style::position::Position::Absolute;
+    abs_style.width = Some(Length::px(2.0));
+    abs_style.height = Some(Length::px(2.0));
+    let abs = BoxNode::new_inline(Arc::new(abs_style), vec![]);
+    let with_abs_root = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![first, abs, rest],
+    );
+    let with_abs_fragment = ifc
+      .layout(&with_abs_root, &constraints)
+      .expect("layout with abs");
+
+    fn collect_line_texts(fragment: &FragmentNode) -> Vec<String> {
+      fn gather_text(node: &FragmentNode, out: &mut String) {
+        match &node.content {
+          FragmentContent::Text { text, .. } => out.push_str(text),
+          _ => {
+            for child in &node.children {
+              gather_text(child, out);
+            }
+          }
+        }
+      }
+
+      fragment
+        .children
+        .iter()
+        .filter_map(|child| {
+          if matches!(child.content, FragmentContent::Line { .. }) {
+            let mut text = String::new();
+            gather_text(child, &mut text);
+            Some(text)
+          } else {
+            None
+          }
+        })
+        .collect()
+    }
+
+    let base_lines = collect_line_texts(&base_fragment);
+    let abs_lines = collect_line_texts(&with_abs_fragment);
+
+    assert!(
+      base_lines.len() > 1,
+      "expected base layout to wrap into multiple lines"
+    );
+    assert_eq!(
+      base_lines, abs_lines,
+      "inserting absolute element should not alter line breaks"
     );
   }
 
