@@ -295,6 +295,61 @@ fn attach_shadow_roots(node: &mut DomNode) {
   node.children = vec![shadow_root];
 }
 
+/// Optional DOM compatibility tweaks applied after HTML parsing.
+///
+/// Some documents bootstrap by marking the root with `no-js` and replacing it with a
+/// `js-enabled` class once scripts execute. Others toggle visibility gates like
+/// `jsl10n-visible` after client-side localization. Since we do not run author scripts,
+/// mirror those initializations so content that relies on the class flip (e.g., initial
+/// opacity) is visible in static renders.
+fn apply_dom_compatibility_mutations(node: &mut DomNode) {
+  if let DomNodeType::Element {
+    tag_name,
+    attributes,
+    ..
+  } = &mut node.node_type
+  {
+    let mut classes: Vec<String> = attributes
+      .iter()
+      .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+      .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
+      .unwrap_or_default();
+    let mut changed = false;
+
+    if tag_name.eq_ignore_ascii_case("html") {
+      if classes.iter().any(|c| c == "no-js") {
+        classes.retain(|c| c != "no-js");
+        if !classes.iter().any(|c| c == "js-enabled") {
+          classes.push("js-enabled".to_string());
+        }
+        changed = true;
+      }
+    }
+
+    if tag_name.eq_ignore_ascii_case("html") || tag_name.eq_ignore_ascii_case("body") {
+      if !classes.iter().any(|c| c == "jsl10n-visible") {
+        classes.push("jsl10n-visible".to_string());
+        changed = true;
+      }
+    }
+
+    if changed {
+      let class_value = classes.join(" ");
+      if let Some((_, value)) = attributes
+        .iter_mut()
+        .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+      {
+        *value = class_value;
+      } else {
+        attributes.push(("class".to_string(), class_value));
+      }
+    }
+  }
+
+  for child in &mut node.children {
+    apply_dom_compatibility_mutations(child);
+  }
+}
 fn distribute_slots(shadow_root: &mut DomNode, light_children: Vec<DomNode>) {
   let mut available_slots: HashSet<String> = HashSet::new();
   collect_slot_names(shadow_root, &mut available_slots);
@@ -371,62 +426,6 @@ fn fill_slot_tree(
     if !assigned.is_empty() {
       node.children = assigned;
     }
-  }
-}
-
-/// Optional DOM compatibility tweaks applied after HTML parsing.
-///
-/// Some documents bootstrap by marking the root with `no-js` and replacing it with a
-/// `js-enabled` class once scripts execute. Others toggle visibility gates like
-/// `jsl10n-visible` after client-side localization. Since we do not run author scripts,
-/// mirror those initializations so content that relies on the class flip (e.g., initial
-/// opacity) is visible in static renders.
-fn apply_dom_compatibility_mutations(node: &mut DomNode) {
-  if let DomNodeType::Element {
-    tag_name,
-    attributes,
-    ..
-  } = &mut node.node_type
-  {
-    let mut classes: Vec<String> = attributes
-      .iter()
-      .find(|(k, _)| k.eq_ignore_ascii_case("class"))
-      .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
-      .unwrap_or_default();
-    let mut changed = false;
-
-    if tag_name.eq_ignore_ascii_case("html") {
-      if classes.iter().any(|c| c == "no-js") {
-        classes.retain(|c| c != "no-js");
-        if !classes.iter().any(|c| c == "js-enabled") {
-          classes.push("js-enabled".to_string());
-        }
-        changed = true;
-      }
-    }
-
-    if tag_name.eq_ignore_ascii_case("html") || tag_name.eq_ignore_ascii_case("body") {
-      if !classes.iter().any(|c| c == "jsl10n-visible") {
-        classes.push("jsl10n-visible".to_string());
-        changed = true;
-      }
-    }
-
-    if changed {
-      let class_value = classes.join(" ");
-      if let Some((_, value)) = attributes
-        .iter_mut()
-        .find(|(k, _)| k.eq_ignore_ascii_case("class"))
-      {
-        *value = class_value;
-      } else {
-        attributes.push(("class".to_string(), class_value));
-      }
-    }
-  }
-
-  for child in &mut node.children {
-    apply_dom_compatibility_mutations(child);
   }
 }
 
