@@ -264,7 +264,6 @@ pub struct ForeignObjectInfo {
   pub overflow_x: Overflow,
   pub overflow_y: Overflow,
 }
-}
 
 /// Types of replaced elements
 #[derive(Debug, Clone, PartialEq)]
