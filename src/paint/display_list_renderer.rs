@@ -4866,9 +4866,9 @@ mod tests {
   use crate::paint::display_list::TextEmphasis;
   use crate::paint::display_list::TextItem;
   use crate::paint::display_list::TextShadowItem;
-use crate::paint::display_list::Transform3D;
-use crate::paint::display_list_builder::DisplayListBuilder;
-use crate::style::color::Color;
+  use crate::paint::display_list::Transform3D;
+  use crate::paint::display_list_builder::DisplayListBuilder;
+  use crate::style::color::Color;
   use crate::style::color::{Color, Rgba};
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundRepeat;

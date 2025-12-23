@@ -5696,13 +5696,17 @@ mod tests {
       vec![],
     );
     let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell_a, cell_b,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell_a, cell_b],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(800.0);
@@ -5735,13 +5739,17 @@ mod tests {
       vec![],
     );
     let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell_a, cell_b,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell_a, cell_b],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(800.0);
@@ -5769,13 +5777,17 @@ mod tests {
       vec![],
     );
     let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell_a, cell_b,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell_a, cell_b],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(10.0);
@@ -5808,13 +5820,17 @@ mod tests {
       FormattingContextType::Block,
       vec![],
     );
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell_a, cell_b,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell_a, cell_b],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(400.0);
@@ -5837,12 +5853,16 @@ mod tests {
     cell_style.display = Display::TableCell;
 
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -5871,12 +5891,16 @@ mod tests {
     cell_style.height = Some(Length::px(120.0));
 
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -5931,19 +5955,22 @@ mod tests {
       FormattingContextType::Block,
       vec![padded_cell],
     );
-    let visible_row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      visible_cell,
-    ]);
+    let visible_row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![visible_cell],
+    );
 
     let padded_table = BoxNode::new_block(
       Arc::new(table_style.clone()),
       FormattingContextType::Table,
       vec![padded_row],
     );
-    let visible_table =
-      BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-        visible_row,
-      ]);
+    let visible_table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![visible_row],
+    );
 
     let tfc = TableFormattingContext::new();
     let padded_fragment = tfc
@@ -5991,13 +6018,16 @@ mod tests {
       FormattingContextType::Block,
       vec![],
     );
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      hidden_cell,
-      visible_cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![hidden_cell, visible_cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6050,18 +6080,21 @@ mod tests {
       FormattingContextType::Block,
       vec![span_cell],
     );
-    let row_normal = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell_a, cell_b,
-    ]);
+    let row_normal = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell_a, cell_b],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row_with_span,
-      row_normal,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row_with_span, row_normal],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6110,19 +6143,22 @@ mod tests {
       FormattingContextType::Block,
       vec![span_cell],
     );
-    let row_normal = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell_a, cell_b,
-    ]);
+    let row_normal = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell_a, cell_b],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
     table_style.width = Some(Length::px(200.0));
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row_with_span,
-      row_normal,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row_with_span, row_normal],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let cell_count = structure.cells.len();
@@ -6185,17 +6221,21 @@ mod tests {
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6227,18 +6267,22 @@ mod tests {
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
     table_style.width = Some(Length::px(200.0));
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6270,17 +6314,21 @@ mod tests {
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6311,23 +6359,29 @@ mod tests {
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
     cell_style.max_width = Some(Length::px(40.0));
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-      text,
-    ]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![text],
+    );
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6370,18 +6424,21 @@ mod tests {
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      col.clone(),
-      row.clone(),
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![col.clone(), row.clone()],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6426,18 +6483,21 @@ mod tests {
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      col.clone(),
-      row.clone(),
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![col.clone(), row.clone()],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6480,19 +6540,22 @@ mod tests {
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
     table_style.width = Some(Length::px(200.0));
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      col.clone(),
-      row.clone(),
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![col.clone(), row.clone()],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6527,18 +6590,21 @@ mod tests {
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      col.clone(),
-      row.clone(),
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![col.clone(), row.clone()],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6572,18 +6638,22 @@ mod tests {
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.width = Some(Length::px(200.0));
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6621,17 +6691,21 @@ mod tests {
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -6676,12 +6750,16 @@ mod tests {
     cell_style.border_top_width = Length::px(4.0);
 
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -6710,12 +6788,16 @@ mod tests {
     let right = BoxNode::new_block(Arc::new(cell_right), FormattingContextType::Block, vec![]);
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      left, right,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![left, right],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -6747,12 +6829,16 @@ mod tests {
     cell_style.border_top_color = Rgba::from_rgba8(0, 0, 255, 255);
 
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -6794,12 +6880,16 @@ mod tests {
     );
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      left, right,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![left, right],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -6839,12 +6929,16 @@ mod tests {
     );
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      left, right,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![left, right],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -6883,12 +6977,16 @@ mod tests {
     );
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      left, right,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![left, right],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -6932,12 +7030,16 @@ mod tests {
     );
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      left, right,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![left, right],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -6988,12 +7090,16 @@ mod tests {
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
     let fragment = fc
@@ -7034,15 +7140,24 @@ mod tests {
 
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(ComputedStyle::default()), "data".to_string()),
-    ]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(ComputedStyle::default()),
+        "data".to_string(),
+      )],
+    );
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
     let fragment = fc
@@ -7098,12 +7213,16 @@ mod tests {
       FormattingContextType::Block,
       vec![child.clone()],
     );
-    let cell2 = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-      child,
-    ]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell1, cell2,
-    ]);
+    let cell2 = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![child],
+    );
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell1, cell2],
+    );
 
     let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
     let colgroup = BoxNode::new_block(
@@ -7112,9 +7231,11 @@ mod tests {
       vec![col],
     );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      colgroup, row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![colgroup, row],
+    );
 
     let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
     let fragment = fc
@@ -7163,12 +7284,16 @@ mod tests {
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let fc = TableFormattingContext::with_factory(FormattingContextFactory::new());
     let fragment = fc
@@ -7205,17 +7330,23 @@ mod tests {
     child_style.width = Some(Length::px(50.0));
     let child = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]);
 
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-      child,
-    ]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![child],
+    );
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let mut constraints: Vec<ColumnConstraints> = (0..structure.column_count)
@@ -7275,9 +7406,11 @@ mod tests {
       FormattingContextType::Block,
       vec![left, right],
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -7379,9 +7512,11 @@ mod tests {
       )],
     );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      top_row, bottom_row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![top_row, bottom_row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -7429,9 +7564,11 @@ mod tests {
       FormattingContextType::Block,
       vec![left, right],
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -7467,9 +7604,11 @@ mod tests {
       FormattingContextType::Block,
       vec![left, right],
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let fc = TableFormattingContext::new();
     let fragment = fc
@@ -7539,13 +7678,17 @@ mod tests {
       FormattingContextType::Block,
       vec![],
     );
-    let second_row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      second_cell.clone(),
-    ]);
+    let second_row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![second_cell.clone()],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      first_row, second_row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![first_row, second_row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(200.0);
@@ -7599,13 +7742,17 @@ mod tests {
       vec![cell1],
     );
     let cell2 = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row2 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell2,
-    ]);
+    let row2 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell2],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
@@ -7633,20 +7780,30 @@ mod tests {
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
 
-    let row1 = BoxNode::new_block(Arc::new(row1_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(
+    let row1 = BoxNode::new_block(
+      Arc::new(row1_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
         Arc::new(cell_style.clone()),
         FormattingContextType::Block,
         vec![],
-      ),
-    ]);
-    let row2 = BoxNode::new_block(Arc::new(row2_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]),
-    ]);
+      )],
+    );
+    let row2 = BoxNode::new_block(
+      Arc::new(row2_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
@@ -7678,20 +7835,30 @@ mod tests {
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
 
-    let row1 = BoxNode::new_block(Arc::new(row1_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(
+    let row1 = BoxNode::new_block(
+      Arc::new(row1_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
         Arc::new(cell_style.clone()),
         FormattingContextType::Block,
         vec![],
-      ),
-    ]);
-    let row2 = BoxNode::new_block(Arc::new(row2_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]),
-    ]);
+      )],
+    );
+    let row2 = BoxNode::new_block(
+      Arc::new(row2_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite(100.0, 200.0))
@@ -7729,13 +7896,21 @@ mod tests {
         vec![],
       )],
     );
-    let row2 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]),
-    ]);
+    let row2 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite(100.0, 400.0))
@@ -7768,20 +7943,30 @@ mod tests {
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
 
-    let row1 = BoxNode::new_block(Arc::new(row1_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(
+    let row1 = BoxNode::new_block(
+      Arc::new(row1_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
         Arc::new(cell_style.clone()),
         FormattingContextType::Block,
         vec![],
-      ),
-    ]);
-    let row2 = BoxNode::new_block(Arc::new(row2_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]),
-    ]);
+      )],
+    );
+    let row2 = BoxNode::new_block(
+      Arc::new(row2_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite(100.0, 300.0))
@@ -7823,22 +8008,30 @@ mod tests {
       vec![],
     );
 
-    let row1 = BoxNode::new_block(Arc::new(row1_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(
+    let row1 = BoxNode::new_block(
+      Arc::new(row1_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
         Arc::new(cell_style.clone()),
         FormattingContextType::Block,
         vec![tall_child.clone()],
-      ),
-    ]);
-    let row2 = BoxNode::new_block(Arc::new(row2_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-        tall_child,
-      ]),
-    ]);
+      )],
+    );
+    let row2 = BoxNode::new_block(
+      Arc::new(row2_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![tall_child],
+      )],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite(100.0, 300.0))
@@ -7870,20 +8063,30 @@ mod tests {
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
 
-    let row1 = BoxNode::new_block(Arc::new(row1_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(
+    let row1 = BoxNode::new_block(
+      Arc::new(row1_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
         Arc::new(cell_style.clone()),
         FormattingContextType::Block,
         vec![],
-      ),
-    ]);
-    let row2 = BoxNode::new_block(Arc::new(row2_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]),
-    ]);
+      )],
+    );
+    let row2 = BoxNode::new_block(
+      Arc::new(row2_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite(200.0, 200.0))
@@ -7920,15 +8123,25 @@ mod tests {
     child_style.height = Some(Length::px(8.0));
     child_style.width = Some(Length::px(10.0));
 
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]),
-    ]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(child_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -7965,15 +8178,25 @@ mod tests {
     child_style.height = Some(Length::px(5.0));
     child_style.width = Some(Length::px(10.0));
 
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![]),
-    ]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(child_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -8014,9 +8237,11 @@ mod tests {
       FormattingContextType::Block,
       vec![cell],
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -8056,9 +8281,11 @@ mod tests {
       FormattingContextType::Block,
       vec![cell],
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let min_width = tfc
@@ -8095,12 +8322,16 @@ mod tests {
         vec![],
       )],
     );
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      tall_cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![tall_cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -8156,18 +8387,22 @@ mod tests {
     cell_style.display = Display::TableCell;
 
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
     let row_group = BoxNode::new_block(
       Arc::new(collapsed_group_style),
       FormattingContextType::Block,
       vec![row],
     );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row_group,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row_group],
+    );
     let structure = TableStructure::from_box_tree(&table);
 
     assert_eq!(structure.row_count, 0);
@@ -8195,23 +8430,29 @@ mod tests {
     cell_style.display = Display::TableCell;
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])
       .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      BoxNode::new_block(
-        Arc::new(col_style.clone()),
-        FormattingContextType::Block,
-        vec![],
-      ),
-      BoxNode::new_block(
-        Arc::new(collapsed_col_group_style),
-        FormattingContextType::Block,
-        vec![],
-      ),
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![
+        BoxNode::new_block(
+          Arc::new(col_style.clone()),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        BoxNode::new_block(
+          Arc::new(collapsed_col_group_style),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        row,
+      ],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     assert_eq!(structure.column_count, 1);
@@ -8249,14 +8490,17 @@ mod tests {
       FormattingContextType::Block,
       vec![collapsed_cell],
     );
-    let visible_row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      visible_cell,
-    ]);
+    let visible_row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![visible_cell],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      collapsed_row,
-      visible_row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![collapsed_row, visible_row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     assert_eq!(structure.row_count, 1);
@@ -8290,19 +8534,25 @@ mod tests {
     let spanning_cell =
       BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![])
         .with_debug_info(DebugInfo::new(Some("td".to_string()), None, vec![]).with_spans(2, 1));
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      spanning_cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![spanning_cell],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]),
-      BoxNode::new_block(
-        Arc::new(collapsed_col_style),
-        FormattingContextType::Block,
-        vec![],
-      ),
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![
+        BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]),
+        BoxNode::new_block(
+          Arc::new(collapsed_col_style),
+          FormattingContextType::Block,
+          vec![],
+        ),
+        row,
+      ],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     assert_eq!(structure.column_count, 1);
@@ -8431,9 +8681,11 @@ mod tests {
       FormattingContextType::Block,
       vec![cell],
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -8475,9 +8727,11 @@ mod tests {
       FormattingContextType::Block,
       vec![cell],
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     let borders = compute_collapsed_borders(&table, &structure);
@@ -8585,9 +8839,11 @@ mod tests {
     abs_style.height = Some(Length::px(9.0));
 
     let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      abs_child,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![abs_child],
+    );
 
     let viewport = crate::geometry::Size::new(400.0, 400.0);
     let cb_rect = crate::geometry::Rect::from_xywh(30.0, 40.0, 200.0, 200.0);
@@ -9183,13 +9439,15 @@ mod tests {
     cell_style.display = Display::TableCell;
 
     let make_row = |style: &ComputedStyle| {
-      BoxNode::new_block(Arc::new(style.clone()), FormattingContextType::Block, vec![
-        BoxNode::new_block(
+      BoxNode::new_block(
+        Arc::new(style.clone()),
+        FormattingContextType::Block,
+        vec![BoxNode::new_block(
           Arc::new(cell_style.clone()),
           FormattingContextType::Block,
           vec![],
-        ),
-      ])
+        )],
+      )
     };
 
     let head_group = BoxNode::new_block(
@@ -9209,9 +9467,11 @@ mod tests {
     );
 
     // Intentionally shuffle DOM order: footer, body, header
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      foot_group, body_group, head_group,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![foot_group, body_group, head_group],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -9262,13 +9522,15 @@ mod tests {
     cell_style.display = Display::TableCell;
 
     let make_row = |style: &ComputedStyle| {
-      BoxNode::new_block(Arc::new(style.clone()), FormattingContextType::Block, vec![
-        BoxNode::new_block(
+      BoxNode::new_block(
+        Arc::new(style.clone()),
+        FormattingContextType::Block,
+        vec![BoxNode::new_block(
           Arc::new(cell_style.clone()),
           FormattingContextType::Block,
           vec![],
-        ),
-      ])
+        )],
+      )
     };
 
     let head_a = BoxNode::new_block(
@@ -9300,9 +9562,11 @@ mod tests {
 
     // DOM order: footer, header, body, loose row, header, footer.
     // Layout order should be: header rows (DOM order), body/loose rows, footer rows (DOM order).
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      foot_a, head_a, body, loose_row, head_b, foot_b,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![foot_a, head_a, body, loose_row, head_b, foot_b],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     assert_eq!(structure.row_count, 6);
@@ -9418,9 +9682,14 @@ mod tests {
     let mut caption_style = ComputedStyle::default();
     caption_style.display = Display::TableCaption;
     caption_style.width = Some(Length::px(400.0));
-    let caption = BoxNode::new_block(Arc::new(caption_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(make_style(Display::Inline), "caption".to_string()),
-    ]);
+    let caption = BoxNode::new_block(
+      Arc::new(caption_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        make_style(Display::Inline),
+        "caption".to_string(),
+      )],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
@@ -9434,17 +9703,21 @@ mod tests {
     cell_style.width = Some(Length::px(10.0));
 
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
     let tbody = BoxNode::new_block(
       make_style(Display::TableRowGroup),
       FormattingContextType::Block,
       vec![row],
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      caption, tbody,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![caption, tbody],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -9462,18 +9735,25 @@ mod tests {
     let mut caption_style = ComputedStyle::default();
     caption_style.display = Display::TableCaption;
     caption_style.width = Some(Length::px(120.0));
-    let caption = BoxNode::new_block(Arc::new(caption_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(make_style(Display::Inline), "caption".to_string()),
-    ]);
+    let caption = BoxNode::new_block(
+      Arc::new(caption_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        make_style(Display::Inline),
+        "caption".to_string(),
+      )],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      caption,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![caption],
+    );
 
     let tfc = TableFormattingContext::new();
     let min = tfc
@@ -9491,18 +9771,25 @@ mod tests {
     let mut caption_style = ComputedStyle::default();
     caption_style.display = Display::TableCaption;
     caption_style.width = Some(Length::px(180.0));
-    let caption = BoxNode::new_block(Arc::new(caption_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(make_style(Display::Inline), "caption".to_string()),
-    ]);
+    let caption = BoxNode::new_block(
+      Arc::new(caption_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        make_style(Display::Inline),
+        "caption".to_string(),
+      )],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      caption,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![caption],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite_width(50.0))
@@ -9530,12 +9817,16 @@ mod tests {
     cell_style.display = Display::TableCell;
     cell_style.width = Some(Length::px(300.0));
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let min = tfc
@@ -9554,9 +9845,14 @@ mod tests {
     let mut caption_style = ComputedStyle::default();
     caption_style.display = Display::TableCaption;
     caption_style.width = Some(Length::px(400.0));
-    let caption = BoxNode::new_block(Arc::new(caption_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(make_style(Display::Inline), "caption".to_string()),
-    ]);
+    let caption = BoxNode::new_block(
+      Arc::new(caption_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        make_style(Display::Inline),
+        "caption".to_string(),
+      )],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
@@ -9564,9 +9860,11 @@ mod tests {
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      caption,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![caption],
+    );
     let tfc = TableFormattingContext::new();
     let fragment = tfc
       .layout(&table, &LayoutConstraints::definite_width(800.0))
@@ -9602,9 +9900,14 @@ mod tests {
       FormattingContextType::Block,
       vec![row],
     );
-    let caption = BoxNode::new_block(Arc::new(caption_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(make_style(Display::Inline), "caption".to_string()),
-    ]);
+    let caption = BoxNode::new_block(
+      Arc::new(caption_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        make_style(Display::Inline),
+        "caption".to_string(),
+      )],
+    );
     let table = BoxNode::new_block(
       make_style(Display::Table),
       FormattingContextType::Table,
@@ -9859,23 +10162,29 @@ mod tests {
 
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-      child,
-    ]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![child],
+    );
 
     let mut row_style = ComputedStyle::default();
     row_style.display = Display::TableRow;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell.clone(),
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell.clone()],
+    );
 
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
     table_style.border_spacing_horizontal = Length::px(0.0);
     table_style.border_spacing_vertical = Length::px(0.0);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -9995,15 +10304,21 @@ mod tests {
       FormattingContextType::Block,
       vec![row0_cell],
     );
-    let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      row1_cell,
-    ]);
-    let tbody = BoxNode::new_block(Arc::new(group_style), FormattingContextType::Block, vec![
-      row0, row1,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      tbody,
-    ]);
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![row1_cell],
+    );
+    let tbody = BoxNode::new_block(
+      Arc::new(group_style),
+      FormattingContextType::Block,
+      vec![row0, row1],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![tbody],
+    );
 
     let fc = TableFormattingContext::new();
     let fragment = fc
@@ -10057,15 +10372,21 @@ mod tests {
       FormattingContextType::Block,
       vec![row0_cell],
     );
-    let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      row1_cell,
-    ]);
-    let tbody = BoxNode::new_block(Arc::new(group_style), FormattingContextType::Block, vec![
-      row0, row1,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      tbody,
-    ]);
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![row1_cell],
+    );
+    let tbody = BoxNode::new_block(
+      Arc::new(group_style),
+      FormattingContextType::Block,
+      vec![row0, row1],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![tbody],
+    );
 
     let fc = TableFormattingContext::new();
     let fragment = fc
@@ -10138,10 +10459,11 @@ mod tests {
       vec![row2, row3],
     );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      capped_group,
-      free_group,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![capped_group, free_group],
+    );
 
     let fc = TableFormattingContext::new();
     let fragment = fc
@@ -10286,9 +10608,11 @@ mod tests {
 
     let row0 = make_row(&cell_style);
     let row1 = make_row(&cell_style);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row0, row1,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row0, row1],
+    );
 
     let fc = TableFormattingContext::new();
     let fragment = fc
@@ -10353,12 +10677,16 @@ mod tests {
       FormattingContextType::Block,
       vec![],
     );
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      span_cell, auto_cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![span_cell, auto_cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let structure = TableStructure::from_box_tree(&table);
@@ -10405,15 +10733,24 @@ mod tests {
     cell_style.display = Display::TableCell;
 
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let caption = BoxNode::new_block(Arc::new(caption_style), FormattingContextType::Block, vec![
-      BoxNode::new_text(Arc::new(ComputedStyle::default()), "caption".to_string()),
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      caption, row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let caption = BoxNode::new_block(
+      Arc::new(caption_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(ComputedStyle::default()),
+        "caption".to_string(),
+      )],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![caption, row],
+    );
 
     let fc = TableFormattingContext::new();
     let fragment = fc
@@ -10690,13 +11027,17 @@ mod tests {
       FormattingContextType::Block,
       vec![row0_cell],
     );
-    let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      row1_cell,
-    ]);
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![row1_cell],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row0, row1,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row0, row1],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(200.0);
@@ -10780,13 +11121,17 @@ mod tests {
       FormattingContextType::Block,
       vec![tiny_child],
     );
-    let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      row1_cell,
-    ]);
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![row1_cell],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row0, row1,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row0, row1],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -10873,13 +11218,17 @@ mod tests {
       FormattingContextType::Block,
       vec![short_cell, span_cell],
     );
-    let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      filler_cell,
-    ]);
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![filler_cell],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row0, row1,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row0, row1],
+    );
     let tree = BoxTree::new(table);
     let table = &tree.root;
 
@@ -10956,13 +11305,17 @@ mod tests {
     );
 
     let row1_cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row1 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      row1_cell,
-    ]);
+    let row1 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![row1_cell],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row0, row1,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row0, row1],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -11015,12 +11368,16 @@ mod tests {
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(100.0);
@@ -11058,13 +11415,17 @@ mod tests {
       FormattingContextType::Block,
       vec![cell_a],
     );
-    let row2 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell_b,
-    ]);
+    let row2 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell_b],
+    );
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(10.0);
@@ -11099,12 +11460,16 @@ mod tests {
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
     let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(100.0);
@@ -11162,16 +11527,20 @@ mod tests {
         vec![],
       )],
     );
-    let row2 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(
+    let row2 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
         Arc::new(thick_cell_style),
         FormattingContextType::Block,
         vec![],
-      ),
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+      )],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
 
     let tfc = TableFormattingContext::new();
     let fragment = tfc
@@ -11231,12 +11600,16 @@ mod tests {
       vec![],
     );
     let cell_b = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell_a, cell_b,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell_a, cell_b],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints =
@@ -11306,14 +11679,18 @@ mod tests {
       FormattingContextType::Block,
       vec![span_cell.clone(), top_cell],
     );
-    let row2 = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      bottom_cell,
-    ]);
+    let row2 = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![bottom_cell],
+    );
 
     // Attach debug info to give row/col placement: row1 has two cells, span_cell should be col 0, top_cell col1.
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row1, row2,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row1, row2],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(50.0);
@@ -11419,12 +11796,16 @@ mod tests {
 
     let short_cell =
       BoxNode::new_block(Arc::new(short_style), FormattingContextType::Block, vec![]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      tall_cell, short_cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![tall_cell, short_cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(200.0);
@@ -11463,15 +11844,21 @@ mod tests {
     inner_style.height = Some(Length::px(10.0));
     let inner = BoxNode::new_block(Arc::new(inner_style), FormattingContextType::Block, vec![]);
 
-    let cell = BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![
-      inner,
-    ]);
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      cell,
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      row,
-    ]);
+    let cell = BoxNode::new_block(
+      Arc::new(cell_style),
+      FormattingContextType::Block,
+      vec![inner],
+    );
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![cell],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![row],
+    );
 
     let tfc = TableFormattingContext::new();
     let constraints = LayoutConstraints::definite_width(200.0);
@@ -11538,9 +11925,11 @@ mod tests {
     let col = BoxNode::new_block(Arc::new(col_style), FormattingContextType::Block, vec![]);
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      col,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![col],
+    );
 
     let min = tfc
       .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MinContent)
@@ -11563,9 +11952,11 @@ mod tests {
     col.debug_info.as_mut().unwrap().column_span = 3;
     let mut table_style = ComputedStyle::default();
     table_style.display = Display::Table;
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      col,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![col],
+    );
 
     let min = tfc
       .compute_intrinsic_inline_size(&table, IntrinsicSizingMode::MinContent)
@@ -11622,12 +12013,20 @@ mod tests {
     row_style.display = Display::TableRow;
     let mut cell_style = ComputedStyle::default();
     cell_style.display = Display::TableCell;
-    let row = BoxNode::new_block(Arc::new(row_style), FormattingContextType::Block, vec![
-      BoxNode::new_block(Arc::new(cell_style), FormattingContextType::Block, vec![]),
-    ]);
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      colgroup, row,
-    ]);
+    let row = BoxNode::new_block(
+      Arc::new(row_style),
+      FormattingContextType::Block,
+      vec![BoxNode::new_block(
+        Arc::new(cell_style),
+        FormattingContextType::Block,
+        vec![],
+      )],
+    );
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![colgroup, row],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     assert_eq!(
@@ -11654,9 +12053,11 @@ mod tests {
       FormattingContextType::Block,
       Vec::new(),
     );
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      colgroup,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![colgroup],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     assert_eq!(
@@ -11696,9 +12097,11 @@ mod tests {
     );
     col.debug_info.as_mut().unwrap().column_span = 3;
 
-    let table = BoxNode::new_block(Arc::new(table_style), FormattingContextType::Table, vec![
-      col,
-    ]);
+    let table = BoxNode::new_block(
+      Arc::new(table_style),
+      FormattingContextType::Table,
+      vec![col],
+    );
 
     let structure = TableStructure::from_box_tree(&table);
     assert_eq!(

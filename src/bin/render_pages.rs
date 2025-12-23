@@ -218,7 +218,7 @@ fn main() {
     all_pages.extend(args.filter_pages.clone());
     if all_pages.is_empty() {
       None
-        } else {
+    } else {
       Some(
         all_pages
           .iter()
@@ -316,8 +316,15 @@ fn main() {
 
   let (viewport_w, viewport_h) = args.viewport;
 
-  println!("Rendering {} pages ({} parallel)...", entries.len(), args.jobs);
-  println!("User-Agent: {}", normalize_user_agent_for_log(&args.user_agent));
+  println!(
+    "Rendering {} pages ({} parallel)...",
+    entries.len(),
+    args.jobs
+  );
+  println!(
+    "User-Agent: {}",
+    normalize_user_agent_for_log(&args.user_agent)
+  );
   println!("Accept-Language: {}", args.accept_language);
   if let Some((index, total)) = args.shard {
     println!("Shard: {}/{}", index, total);

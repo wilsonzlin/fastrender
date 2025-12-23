@@ -214,15 +214,15 @@ fn composite_over(foreground: Rgba, background: Rgba) -> Rgba {
     return Rgba::TRANSPARENT;
   }
 
-  let r =
-    (foreground.r as f32 * foreground.a + background.r as f32 * background.a * (1.0 - foreground.a))
-      / out_a;
-  let g =
-    (foreground.g as f32 * foreground.a + background.g as f32 * background.a * (1.0 - foreground.a))
-      / out_a;
-  let b =
-    (foreground.b as f32 * foreground.a + background.b as f32 * background.a * (1.0 - foreground.a))
-      / out_a;
+  let r = (foreground.r as f32 * foreground.a
+    + background.r as f32 * background.a * (1.0 - foreground.a))
+    / out_a;
+  let g = (foreground.g as f32 * foreground.a
+    + background.g as f32 * background.a * (1.0 - foreground.a))
+    / out_a;
+  let b = (foreground.b as f32 * foreground.a
+    + background.b as f32 * background.a * (1.0 - foreground.a))
+    / out_a;
 
   Rgba::new(
     r.round().clamp(0.0, 255.0) as u8,
@@ -1973,7 +1973,11 @@ fn relative_percent_scale(space: RelativeColorSpace, index: usize) -> f32 {
       }
     }
     RelativeColorSpace::Hwb => {
-      if index == 0 { 360.0 } else { 1.0 }
+      if index == 0 {
+        360.0
+      } else {
+        1.0
+      }
     }
     RelativeColorSpace::Lab => 100.0,
     RelativeColorSpace::Lch => match index {
@@ -1982,7 +1986,11 @@ fn relative_percent_scale(space: RelativeColorSpace, index: usize) -> f32 {
     },
     RelativeColorSpace::Oklab => 1.0,
     RelativeColorSpace::Oklch => {
-      if index == 2 { 360.0 } else { 1.0 }
+      if index == 2 {
+        360.0
+      } else {
+        1.0
+      }
     }
     RelativeColorSpace::XyzD50 | RelativeColorSpace::XyzD65 => 1.0,
   }
@@ -2068,9 +2076,15 @@ fn relative_space_to_rgba(space: RelativeColorSpace, values: [f32; 3], alpha: f3
   let alpha = alpha.clamp(0.0, 1.0);
   match space {
     RelativeColorSpace::Srgb => Rgba::new(
-      (values[0].clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8,
-      (values[1].clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8,
-      (values[2].clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8,
+      (values[0].clamp(0.0, 1.0) * 255.0)
+        .round()
+        .clamp(0.0, 255.0) as u8,
+      (values[1].clamp(0.0, 1.0) * 255.0)
+        .round()
+        .clamp(0.0, 255.0) as u8,
+      (values[2].clamp(0.0, 1.0) * 255.0)
+        .round()
+        .clamp(0.0, 255.0) as u8,
       alpha,
     ),
     RelativeColorSpace::SrgbLinear => Rgba::new(
@@ -2930,8 +2944,8 @@ mod tests {
 
   #[test]
   fn color_contrast_considers_alpha_compositing() {
-    let color = Color::parse("color-contrast(white vs rgba(0 0 0 / 0.5), black)")
-      .expect("parsed contrast");
+    let color =
+      Color::parse("color-contrast(white vs rgba(0 0 0 / 0.5), black)").expect("parsed contrast");
     let chosen = color.to_rgba(Rgba::BLACK);
     assert_eq!(chosen, Rgba::BLACK);
   }
@@ -2953,7 +2967,9 @@ mod tests {
   #[test]
   fn relative_color_handles_lch_like_spaces() {
     let derived = Color::parse("color(from lab(60% 30 40) lch l c 270)").unwrap();
-    let expected = Color::parse("lch(60% 50 270)").unwrap().to_rgba(Rgba::BLACK);
+    let expected = Color::parse("lch(60% 50 270)")
+      .unwrap()
+      .to_rgba(Rgba::BLACK);
     let resolved = derived.to_rgba(Rgba::BLACK);
     assert!((resolved.r as i32 - expected.r as i32).abs() <= 2);
     assert!((resolved.g as i32 - expected.g as i32).abs() <= 2);

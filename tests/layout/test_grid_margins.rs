@@ -133,9 +133,11 @@ fn grid_children_are_laid_out_even_when_taffy_reports_zero_width() {
     FormattingContextType::Block,
     vec![text],
   );
-  let grid = BoxNode::new_block(Arc::new(grid_style), FormattingContextType::Grid, vec![
-    child,
-  ]);
+  let grid = BoxNode::new_block(
+    Arc::new(grid_style),
+    FormattingContextType::Grid,
+    vec![child],
+  );
 
   let fc = GridFormattingContext::new();
   let fragment = fc
@@ -180,12 +182,16 @@ fn nested_grid_items_preserve_measured_children() {
     FormattingContextType::Block,
     vec![text],
   );
-  let inner_grid = BoxNode::new_block(Arc::new(inner_style), FormattingContextType::Grid, vec![
-    inner_block,
-  ]);
-  let outer_grid = BoxNode::new_block(Arc::new(outer_style), FormattingContextType::Grid, vec![
-    inner_grid,
-  ]);
+  let inner_grid = BoxNode::new_block(
+    Arc::new(inner_style),
+    FormattingContextType::Grid,
+    vec![inner_block],
+  );
+  let outer_grid = BoxNode::new_block(
+    Arc::new(outer_style),
+    FormattingContextType::Grid,
+    vec![inner_grid],
+  );
 
   let fc = GridFormattingContext::new();
   let fragment = fc

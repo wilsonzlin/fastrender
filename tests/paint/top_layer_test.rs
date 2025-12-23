@@ -19,12 +19,13 @@ fn modal_dialog_adds_backdrop_and_inert() {
     <dialog open data-fastr-modal="true"></dialog>
   "#;
 
-  let pixmap = renderer
-    .render_html(html, 120, 120)
-    .expect("paint dialog");
+  let pixmap = renderer.render_html(html, 120, 120).expect("paint dialog");
   let (r, g, b, _) = pixel_rgba(&pixmap, 5, 5);
 
-  assert!(g > r + 80, "inert background should keep focus state off (r={r}, g={g}, b={b})");
+  assert!(
+    g > r + 80,
+    "inert background should keep focus state off (r={r}, g={g}, b={b})"
+  );
   assert!(g > 120, "backdrop-tinted green should remain visible");
 }
 
@@ -42,12 +43,13 @@ fn non_modal_dialog_allows_focus() {
     <dialog open></dialog>
   "#;
 
-  let pixmap = renderer
-    .render_html(html, 120, 120)
-    .expect("paint dialog");
+  let pixmap = renderer.render_html(html, 120, 120).expect("paint dialog");
   let (r, g, b, _) = pixel_rgba(&pixmap, 5, 5);
 
-  assert!(r > 200 && g < 80 && b < 80, "focus should remain active without modal inertness");
+  assert!(
+    r > 200 && g < 80 && b < 80,
+    "focus should remain active without modal inertness"
+  );
 }
 
 #[test]
@@ -77,7 +79,10 @@ fn popovers_stack_in_dom_order() {
     "second popover should paint its own area, got ({sr},{sg},{sb})"
   );
 
-  assert!(b > 200 && r < 80 && g < 80, "DOM order should stack popovers, got ({r},{g},{b})");
+  assert!(
+    b > 200 && r < 80 && g < 80,
+    "DOM order should stack popovers, got ({r},{g},{b})"
+  );
 }
 
 #[test]
@@ -92,10 +97,11 @@ fn dialog_backdrop_respects_author_styles() {
     <dialog open data-fastr-modal="true"></dialog>
   "#;
 
-  let pixmap = renderer
-    .render_html(html, 200, 200)
-    .expect("paint dialog");
+  let pixmap = renderer.render_html(html, 200, 200).expect("paint dialog");
   let (r, g, b, _) = pixel_rgba(&pixmap, 0, 0);
 
-  assert!(r > 200 && g > 100 && b > 100, "custom backdrop should tint the viewport");
+  assert!(
+    r > 200 && g > 100 && b > 100,
+    "custom backdrop should tint the viewport"
+  );
 }

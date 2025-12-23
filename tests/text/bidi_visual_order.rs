@@ -35,14 +35,18 @@ fn bidi_visual_order_handles_mixed_arabic_ltr() {
   rtl_style.unicode_bidi = UnicodeBidi::Embed;
   let rtl_style = Arc::new(rtl_style);
 
-  let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    BoxNode::new_text(default_style(), "A ".to_string()),
-    BoxNode::new_inline(rtl_style.clone(), vec![BoxNode::new_text(
-      rtl_style.clone(),
-      "123".to_string(),
-    )]),
-    BoxNode::new_text(default_style(), " B".to_string()),
-  ]);
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![
+      BoxNode::new_text(default_style(), "A ".to_string()),
+      BoxNode::new_inline(
+        rtl_style.clone(),
+        vec![BoxNode::new_text(rtl_style.clone(), "123".to_string())],
+      ),
+      BoxNode::new_text(default_style(), " B".to_string()),
+    ],
+  );
 
   let ifc = InlineFormattingContext::new();
   let constraints = LayoutConstraints::definite_width(400.0);
@@ -63,14 +67,18 @@ fn bidi_isolate_keeps_neutral_brackets_outside() {
   rtl_isolate.unicode_bidi = UnicodeBidi::Isolate;
   let rtl_isolate = Arc::new(rtl_isolate);
 
-  let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    BoxNode::new_text(default_style(), "(".to_string()),
-    BoxNode::new_inline(rtl_isolate.clone(), vec![BoxNode::new_text(
-      rtl_isolate.clone(),
-      "אב".to_string(),
-    )]),
-    BoxNode::new_text(default_style(), ")".to_string()),
-  ]);
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![
+      BoxNode::new_text(default_style(), "(".to_string()),
+      BoxNode::new_inline(
+        rtl_isolate.clone(),
+        vec![BoxNode::new_text(rtl_isolate.clone(), "אב".to_string())],
+      ),
+      BoxNode::new_text(default_style(), ")".to_string()),
+    ],
+  );
 
   let ifc = InlineFormattingContext::new();
   let constraints = LayoutConstraints::definite_width(400.0);
@@ -98,14 +106,21 @@ fn bidi_isolate_override_keeps_neutral_brackets_outside() {
   rtl_iso_override.unicode_bidi = UnicodeBidi::IsolateOverride;
   let rtl_iso_override = Arc::new(rtl_iso_override);
 
-  let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    BoxNode::new_text(default_style(), "(".to_string()),
-    BoxNode::new_inline(rtl_iso_override.clone(), vec![BoxNode::new_text(
-      rtl_iso_override.clone(),
-      "אב".to_string(),
-    )]),
-    BoxNode::new_text(default_style(), ")".to_string()),
-  ]);
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![
+      BoxNode::new_text(default_style(), "(".to_string()),
+      BoxNode::new_inline(
+        rtl_iso_override.clone(),
+        vec![BoxNode::new_text(
+          rtl_iso_override.clone(),
+          "אב".to_string(),
+        )],
+      ),
+      BoxNode::new_text(default_style(), ")".to_string()),
+    ],
+  );
 
   let ifc = InlineFormattingContext::new();
   let constraints = LayoutConstraints::definite_width(400.0);

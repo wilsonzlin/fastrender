@@ -17,9 +17,11 @@ fn legend_shrinks_to_content_width() {
   legend_style.display = Display::Block;
   legend_style.width = None;
   legend_style.shrink_to_fit_inline_size = true;
-  let legend = BoxNode::new_block(Arc::new(legend_style), FormattingContextType::Block, vec![
-    BoxNode::new_text(default_style(), "Legend".into()),
-  ]);
+  let legend = BoxNode::new_block(
+    Arc::new(legend_style),
+    FormattingContextType::Block,
+    vec![BoxNode::new_text(default_style(), "Legend".into())],
+  );
 
   let mut fieldset_style = ComputedStyle::default();
   fieldset_style.display = Display::Block;

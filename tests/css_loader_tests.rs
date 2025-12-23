@@ -58,7 +58,8 @@ fn absolutize_handles_uppercase_url_function_and_whitespace() {
 
 #[test]
 fn absolutize_rewrites_inside_parenthesized_blocks() {
-  let css = "@supports (background: url('../check.png')) { body { background: url(./inner.png); } }";
+  let css =
+    "@supports (background: url('../check.png')) { body { background: url(./inner.png); } }";
   let out = absolutize_css_urls(css, "https://example.com/styles/app.css");
   assert!(out.contains("url(\"https://example.com/check.png\")"));
   assert!(out.contains("url(\"https://example.com/styles/inner.png\")"));

@@ -48,11 +48,11 @@ fn align_self_respects_in_flow_child_order() {
   let end_id = end_child.id;
   let start_id = start_child.id;
 
-  let parent = BoxNode::new_block(Arc::new(parent_style), FormattingContextType::Flex, vec![
-    abs_child,
-    end_child,
-    start_child,
-  ]);
+  let parent = BoxNode::new_block(
+    Arc::new(parent_style),
+    FormattingContextType::Flex,
+    vec![abs_child, end_child, start_child],
+  );
 
   let fc = FlexFormattingContext::new();
   let fragment = fc

@@ -8,93 +8,93 @@ use std::sync::Mutex;
 #[doc(hidden)]
 #[cfg(any(feature = "debug", feature = "profile"))]
 pub struct DebugLogger {
-    stack: Mutex<Vec<String>>,
+  stack: Mutex<Vec<String>>,
 }
 
 #[cfg(any(feature = "debug", feature = "profile"))]
 static EMPTY_STRING: String = String::new();
 #[cfg(any(feature = "debug", feature = "profile"))]
 impl DebugLogger {
-    pub const fn new() -> Self {
-        Self {
-            stack: Mutex::new(Vec::new()),
-        }
+  pub const fn new() -> Self {
+    Self {
+      stack: Mutex::new(Vec::new()),
     }
+  }
 
-    pub fn push_node(&self, new_key: crate::NodeId) {
-        let mut stack = self.stack.lock().unwrap();
-        let mut key_string = String::new();
-        write!(&mut key_string, "{:?}", new_key).unwrap();
-        stack.push(key_string);
-    }
+  pub fn push_node(&self, new_key: crate::NodeId) {
+    let mut stack = self.stack.lock().unwrap();
+    let mut key_string = String::new();
+    write!(&mut key_string, "{:?}", new_key).unwrap();
+    stack.push(key_string);
+  }
 
-    pub fn pop_node(&self) {
-        let mut stack = self.stack.lock().unwrap();
-        stack.pop();
-    }
+  pub fn pop_node(&self) {
+    let mut stack = self.stack.lock().unwrap();
+    stack.pop();
+  }
 
-    pub fn log(&self, message: impl Display) {
-        let stack = self.stack.lock().unwrap();
-        let key = stack.last().unwrap_or(&EMPTY_STRING);
-        let level = stack.len() * 4;
-        let space = " ";
-        println!("{space:level$}{key}: {message}");
-    }
+  pub fn log(&self, message: impl Display) {
+    let stack = self.stack.lock().unwrap();
+    let key = stack.last().unwrap_or(&EMPTY_STRING);
+    let level = stack.len() * 4;
+    let space = " ";
+    println!("{space:level$}{key}: {message}");
+  }
 
-    pub fn labelled_log(&self, label: &str, message: impl Display) {
-        let stack = self.stack.lock().unwrap();
-        let key = stack.last().unwrap_or(&EMPTY_STRING);
-        let level = stack.len() * 4;
-        let space = " ";
-        println!("{space:level$}{key}: {label} {message}");
-    }
+  pub fn labelled_log(&self, label: &str, message: impl Display) {
+    let stack = self.stack.lock().unwrap();
+    let key = stack.last().unwrap_or(&EMPTY_STRING);
+    let level = stack.len() * 4;
+    let space = " ";
+    println!("{space:level$}{key}: {label} {message}");
+  }
 
-    pub fn debug_log(&self, message: impl Debug) {
-        let stack = self.stack.lock().unwrap();
-        let key = stack.last().unwrap_or(&EMPTY_STRING);
-        let level = stack.len() * 4;
-        let space = " ";
-        println!("{space:level$}{key}: {message:?}");
-    }
+  pub fn debug_log(&self, message: impl Debug) {
+    let stack = self.stack.lock().unwrap();
+    let key = stack.last().unwrap_or(&EMPTY_STRING);
+    let level = stack.len() * 4;
+    let space = " ";
+    println!("{space:level$}{key}: {message:?}");
+  }
 
-    pub fn labelled_debug_log(&self, label: &str, message: impl Debug) {
-        let stack = self.stack.lock().unwrap();
-        let key = stack.last().unwrap_or(&EMPTY_STRING);
-        let level = stack.len() * 4;
-        let space = " ";
-        println!("{space:level$}{key}: {label} {message:?}");
-    }
+  pub fn labelled_debug_log(&self, label: &str, message: impl Debug) {
+    let stack = self.stack.lock().unwrap();
+    let key = stack.last().unwrap_or(&EMPTY_STRING);
+    let level = stack.len() * 4;
+    let space = " ";
+    println!("{space:level$}{key}: {label} {message:?}");
+  }
 }
 
 #[cfg(any(feature = "debug", feature = "profile"))]
 pub(crate) static NODE_LOGGER: DebugLogger = DebugLogger::new();
 
 macro_rules! debug_log {
-    // String literal label with debug printing
-    ($label:literal, dbg:$item:expr) => {{
-        #[cfg(feature = "debug")]
-        $crate::util::debug::NODE_LOGGER.labelled_debug_log($label, $item);
-    }};
-    // String literal label with display printing
-    ($label:literal, $item:expr) => {{
-        #[cfg(feature = "debug")]
-        $crate::util::debug::NODE_LOGGER.labelled_log($label, $item);
-    }};
-    // Debug printing
-    (dbg:$item:expr) => {{
-        #[cfg(feature = "debug")]
-        $crate::util::debug::NODE_LOGGER.debug_log($item);
-    }};
-    // Display printing
-    ($item:expr) => {{
-        #[cfg(feature = "debug")]
-        $crate::util::debug::NODE_LOGGER.log($item);
-    }};
-    // Blank newline
-    () => {{
-        #[cfg(feature = "debug")]
-        println!();
-    }};
+  // String literal label with debug printing
+  ($label:literal, dbg:$item:expr) => {{
+    #[cfg(feature = "debug")]
+    $crate::util::debug::NODE_LOGGER.labelled_debug_log($label, $item);
+  }};
+  // String literal label with display printing
+  ($label:literal, $item:expr) => {{
+    #[cfg(feature = "debug")]
+    $crate::util::debug::NODE_LOGGER.labelled_log($label, $item);
+  }};
+  // Debug printing
+  (dbg:$item:expr) => {{
+    #[cfg(feature = "debug")]
+    $crate::util::debug::NODE_LOGGER.debug_log($item);
+  }};
+  // Display printing
+  ($item:expr) => {{
+    #[cfg(feature = "debug")]
+    $crate::util::debug::NODE_LOGGER.log($item);
+  }};
+  // Blank newline
+  () => {{
+    #[cfg(feature = "debug")]
+    println!();
+  }};
 }
 
 macro_rules! debug_log_node {
@@ -108,18 +108,18 @@ macro_rules! debug_log_node {
 }
 
 macro_rules! debug_push_node {
-    ($node_id:expr) => {
-        #[cfg(any(feature = "debug", feature = "profile"))]
-        $crate::util::debug::NODE_LOGGER.push_node($node_id);
-        debug_log!("");
-    };
+  ($node_id:expr) => {
+    #[cfg(any(feature = "debug", feature = "profile"))]
+    $crate::util::debug::NODE_LOGGER.push_node($node_id);
+    debug_log!("");
+  };
 }
 
 macro_rules! debug_pop_node {
-    () => {
-        #[cfg(any(feature = "debug", feature = "profile"))]
-        $crate::util::debug::NODE_LOGGER.pop_node();
-    };
+  () => {
+    #[cfg(any(feature = "debug", feature = "profile"))]
+    $crate::util::debug::NODE_LOGGER.pop_node();
+  };
 }
 
 #[cfg(feature = "profile")]

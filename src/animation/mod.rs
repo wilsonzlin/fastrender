@@ -11,6 +11,7 @@ use crate::css::types::{Keyframe, KeyframesRule};
 use crate::geometry::{Point, Rect, Size};
 use crate::paint::display_list::{Transform2D, Transform3D};
 use crate::style::inline_axis_is_horizontal;
+use crate::style::properties::apply_declaration_with_base;
 use crate::style::types::AnimationRange;
 use crate::style::types::AnimationTimeline;
 use crate::style::types::BackgroundPosition;
@@ -24,21 +25,20 @@ use crate::style::types::ClipRadii;
 use crate::style::types::FilterColor;
 use crate::style::types::FilterFunction;
 use crate::style::types::RangeOffset;
+use crate::style::types::ReferenceBox;
 use crate::style::types::ScrollTimeline;
 use crate::style::types::ShapeRadius;
 use crate::style::types::TimelineAxis;
 use crate::style::types::TimelineOffset;
-use crate::style::types::ReferenceBox;
 use crate::style::types::ViewTimeline;
 use crate::style::types::ViewTimelinePhase;
 use crate::style::types::WritingMode;
 use crate::style::values::Length;
-use crate::style::properties::apply_declaration_with_base;
 use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::{FragmentNode, FragmentTree};
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::mem::discriminant;
+use std::sync::Arc;
 
 use crate::style::color::Rgba;
 
@@ -76,7 +76,8 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 fn lerp_color(a: Rgba, b: Rgba, t: f32) -> Rgba {
-  let lerp_chan = |ca: u8, cb: u8| -> u8 { lerp(ca as f32, cb as f32, t).round().clamp(0.0, 255.0) as u8 };
+  let lerp_chan =
+    |ca: u8, cb: u8| -> u8 { lerp(ca as f32, cb as f32, t).round().clamp(0.0, 255.0) as u8 };
   Rgba::new(
     lerp_chan(a.r, b.r),
     lerp_chan(a.g, b.g),
@@ -85,7 +86,12 @@ fn lerp_color(a: Rgba, b: Rgba, t: f32) -> Rgba {
   )
 }
 
-fn resolve_length_px(len: &Length, percent_base: Option<f32>, style: &ComputedStyle, ctx: &AnimationResolveContext) -> f32 {
+fn resolve_length_px(
+  len: &Length,
+  percent_base: Option<f32>,
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> f32 {
   len
     .resolve_with_context(
       percent_base,
@@ -177,7 +183,11 @@ fn resolve_filter_color(color: &FilterColor, current_color: Rgba) -> Rgba {
   }
 }
 
-fn resolve_filter_list(filters: &[FilterFunction], style: &ComputedStyle, ctx: &AnimationResolveContext) -> Vec<ResolvedFilter> {
+fn resolve_filter_list(
+  filters: &[FilterFunction],
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> Vec<ResolvedFilter> {
   filters
     .iter()
     .map(|f| match f {
@@ -214,7 +224,9 @@ fn interpolate_filters(
   let mut out = Vec::with_capacity(a.len());
   for (fa, fb) in a.iter().zip(b.iter()) {
     let next = match (fa, fb) {
-      (ResolvedFilter::Blur(la), ResolvedFilter::Blur(lb)) => ResolvedFilter::Blur(lerp(*la, *lb, t)),
+      (ResolvedFilter::Blur(la), ResolvedFilter::Blur(lb)) => {
+        ResolvedFilter::Blur(lerp(*la, *lb, t))
+      }
       (ResolvedFilter::Brightness(la), ResolvedFilter::Brightness(lb)) => {
         ResolvedFilter::Brightness(lerp(*la, *lb, t))
       }
@@ -239,15 +251,15 @@ fn interpolate_filters(
       (ResolvedFilter::Opacity(la), ResolvedFilter::Opacity(lb)) => {
         ResolvedFilter::Opacity(lerp(*la, *lb, t))
       }
-      (ResolvedFilter::DropShadow(sa), ResolvedFilter::DropShadow(sb)) => ResolvedFilter::DropShadow(
-        ResolvedShadow {
+      (ResolvedFilter::DropShadow(sa), ResolvedFilter::DropShadow(sb)) => {
+        ResolvedFilter::DropShadow(ResolvedShadow {
           offset_x: lerp(sa.offset_x, sb.offset_x, t),
           offset_y: lerp(sa.offset_y, sb.offset_y, t),
           blur: lerp(sa.blur, sb.blur, t),
           spread: lerp(sa.spread, sb.spread, t),
           color: lerp_color(sa.color, sb.color, t),
-        },
-      ),
+        })
+      }
       (ResolvedFilter::Url(a), ResolvedFilter::Url(b)) if a == b => ResolvedFilter::Url(a.clone()),
       _ => return None,
     };
@@ -270,15 +282,15 @@ fn resolved_filters_to_functions(filters: &[ResolvedFilter]) -> Vec<FilterFuncti
       ResolvedFilter::HueRotate(v) => FilterFunction::HueRotate(*v),
       ResolvedFilter::Invert(v) => FilterFunction::Invert(*v),
       ResolvedFilter::Opacity(v) => FilterFunction::Opacity(*v),
-      ResolvedFilter::DropShadow(s) => FilterFunction::DropShadow(Box::new(
-        crate::style::types::FilterShadow {
+      ResolvedFilter::DropShadow(s) => {
+        FilterFunction::DropShadow(Box::new(crate::style::types::FilterShadow {
           offset_x: Length::px(s.offset_x),
           offset_y: Length::px(s.offset_y),
           blur_radius: Length::px(s.blur),
           spread: Length::px(s.spread),
           color: FilterColor::Color(s.color),
-        },
-      )),
+        }))
+      }
       ResolvedFilter::Url(u) => FilterFunction::Url(u.clone()),
     })
     .collect()
@@ -363,7 +375,9 @@ fn interpolate_background_positions(
   Some(out)
 }
 
-fn resolved_positions_to_background(list: &[ResolvedBackgroundPosition]) -> Vec<BackgroundPosition> {
+fn resolved_positions_to_background(
+  list: &[ResolvedBackgroundPosition],
+) -> Vec<BackgroundPosition> {
   list
     .iter()
     .map(|p| BackgroundPosition::Position {
@@ -379,7 +393,9 @@ fn resolved_positions_to_background(list: &[ResolvedBackgroundPosition]) -> Vec<
     .collect()
 }
 
-fn background_positions_to_resolved(list: &[BackgroundPosition]) -> Vec<ResolvedBackgroundPosition> {
+fn background_positions_to_resolved(
+  list: &[BackgroundPosition],
+) -> Vec<ResolvedBackgroundPosition> {
   list
     .iter()
     .map(|p| match p {
@@ -445,13 +461,14 @@ fn interpolate_background_sizes(
           return None;
         }
       }
-      (
-        ResolvedBackgroundSize::Explicit(xa, ya),
-        ResolvedBackgroundSize::Explicit(xb, yb),
-      ) => {
-        let interp_component = |ca: &ResolvedSizeComponent, cb: &ResolvedSizeComponent| -> Option<ResolvedSizeComponent> {
+      (ResolvedBackgroundSize::Explicit(xa, ya), ResolvedBackgroundSize::Explicit(xb, yb)) => {
+        let interp_component = |ca: &ResolvedSizeComponent,
+                                cb: &ResolvedSizeComponent|
+         -> Option<ResolvedSizeComponent> {
           match (ca, cb) {
-            (ResolvedSizeComponent::Auto, ResolvedSizeComponent::Auto) => Some(ResolvedSizeComponent::Auto),
+            (ResolvedSizeComponent::Auto, ResolvedSizeComponent::Auto) => {
+              Some(ResolvedSizeComponent::Auto)
+            }
             (ResolvedSizeComponent::Length(la), ResolvedSizeComponent::Length(lb)) => {
               Some(ResolvedSizeComponent::Length(lerp(*la, *lb, t)))
             }
@@ -540,7 +557,11 @@ fn resolve_shape_radius(
   }
 }
 
-fn resolve_clip_path(path: &ClipPath, style: &ComputedStyle, ctx: &AnimationResolveContext) -> Option<ResolvedClipPath> {
+fn resolve_clip_path(
+  path: &ClipPath,
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> Option<ResolvedClipPath> {
   match path {
     ClipPath::None => Some(ResolvedClipPath::None),
     ClipPath::Box(b) => Some(ResolvedClipPath::Box(*b)),
@@ -605,10 +626,16 @@ fn resolve_clip_path(path: &ClipPath, style: &ComputedStyle, ctx: &AnimationReso
   }
 }
 
-fn interpolate_clip_paths(a: &ResolvedClipPath, b: &ResolvedClipPath, t: f32) -> Option<ResolvedClipPath> {
+fn interpolate_clip_paths(
+  a: &ResolvedClipPath,
+  b: &ResolvedClipPath,
+  t: f32,
+) -> Option<ResolvedClipPath> {
   match (a, b) {
     (ResolvedClipPath::None, ResolvedClipPath::None) => Some(ResolvedClipPath::None),
-    (ResolvedClipPath::Box(a), ResolvedClipPath::Box(b)) if a == b => Some(ResolvedClipPath::Box(*a)),
+    (ResolvedClipPath::Box(a), ResolvedClipPath::Box(b)) if a == b => {
+      Some(ResolvedClipPath::Box(*a))
+    }
     (
       ResolvedClipPath::Inset {
         top: ta,
@@ -866,7 +893,10 @@ fn extract_color(style: &ComputedStyle, _ctx: &AnimationResolveContext) -> Optio
   Some(AnimatedValue::Color(style.color))
 }
 
-fn extract_background_color(style: &ComputedStyle, _ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
+fn extract_background_color(
+  style: &ComputedStyle,
+  _ctx: &AnimationResolveContext,
+) -> Option<AnimatedValue> {
   Some(AnimatedValue::Color(style.background_color))
 }
 
@@ -891,7 +921,10 @@ fn apply_background_color(style: &mut ComputedStyle, value: &AnimatedValue) {
   }
 }
 
-fn extract_transform(style: &ComputedStyle, ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
+fn extract_transform(
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> Option<AnimatedValue> {
   Some(AnimatedValue::Transform(resolve_transform_list(
     &style.transform,
     style,
@@ -927,7 +960,9 @@ fn apply_transform(style: &mut ComputedStyle, value: &AnimatedValue) {
 
 fn extract_filter(style: &ComputedStyle, ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
   let resolved = resolve_filter_list(&style.filter, style, ctx);
-  Some(AnimatedValue::Filter(resolved_filters_to_functions(&resolved)))
+  Some(AnimatedValue::Filter(resolved_filters_to_functions(
+    &resolved,
+  )))
 }
 
 fn extract_backdrop_filter(
@@ -935,7 +970,9 @@ fn extract_backdrop_filter(
   ctx: &AnimationResolveContext,
 ) -> Option<AnimatedValue> {
   let resolved = resolve_filter_list(&style.backdrop_filter, style, ctx);
-  Some(AnimatedValue::BackdropFilter(resolved_filters_to_functions(&resolved)))
+  Some(AnimatedValue::BackdropFilter(
+    resolved_filters_to_functions(&resolved),
+  ))
 }
 
 fn interpolate_filters_value(
@@ -948,13 +985,17 @@ fn interpolate_filters_value(
       let ra = resolved_filters_from_functions(fa);
       let rb = resolved_filters_from_functions(fb);
       let interpolated = interpolate_filters(&ra, &rb, t)?;
-      Some(AnimatedValue::Filter(resolved_filters_to_functions(&interpolated)))
+      Some(AnimatedValue::Filter(resolved_filters_to_functions(
+        &interpolated,
+      )))
     }
     (AnimatedValue::BackdropFilter(fa), AnimatedValue::BackdropFilter(fb)) => {
       let ra = resolved_filters_from_functions(fa);
       let rb = resolved_filters_from_functions(fb);
       let interpolated = interpolate_filters(&ra, &rb, t)?;
-      Some(AnimatedValue::BackdropFilter(resolved_filters_to_functions(&interpolated)))
+      Some(AnimatedValue::BackdropFilter(
+        resolved_filters_to_functions(&interpolated),
+      ))
     }
     _ => None,
   }
@@ -968,7 +1009,10 @@ fn apply_filter(style: &mut ComputedStyle, value: &AnimatedValue) {
   }
 }
 
-fn extract_clip_path(style: &ComputedStyle, ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
+fn extract_clip_path(
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> Option<AnimatedValue> {
   resolve_clip_path(&style.clip_path, style, ctx)
     .map(|resolved| AnimatedValue::ClipPath(resolved_clip_to_clip_path(&resolved)))
 }
@@ -984,7 +1028,9 @@ fn interpolate_clip_path_value(
   let ra = clip_path_to_resolved(pa)?;
   let rb = clip_path_to_resolved(pb)?;
   let interpolated = interpolate_clip_paths(&ra, &rb, t)?;
-  Some(AnimatedValue::ClipPath(resolved_clip_to_clip_path(&interpolated)))
+  Some(AnimatedValue::ClipPath(resolved_clip_to_clip_path(
+    &interpolated,
+  )))
 }
 
 fn apply_clip_path(style: &mut ComputedStyle, value: &AnimatedValue) {
@@ -998,7 +1044,9 @@ fn extract_background_position(
   ctx: &AnimationResolveContext,
 ) -> Option<AnimatedValue> {
   let resolved = resolve_background_positions(&style.background_positions, style, ctx);
-  Some(AnimatedValue::BackgroundPosition(resolved_positions_to_background(&resolved)))
+  Some(AnimatedValue::BackgroundPosition(
+    resolved_positions_to_background(&resolved),
+  ))
 }
 
 fn interpolate_background_position_value(
@@ -1006,15 +1054,16 @@ fn interpolate_background_position_value(
   b: &AnimatedValue,
   t: f32,
 ) -> Option<AnimatedValue> {
-  let (AnimatedValue::BackgroundPosition(pa), AnimatedValue::BackgroundPosition(pb)) = (a, b) else {
+  let (AnimatedValue::BackgroundPosition(pa), AnimatedValue::BackgroundPosition(pb)) = (a, b)
+  else {
     return None;
   };
   let ra = background_positions_to_resolved(pa);
   let rb = background_positions_to_resolved(pb);
   let interpolated = interpolate_background_positions(&ra, &rb, t)?;
-  Some(AnimatedValue::BackgroundPosition(resolved_positions_to_background(
-    &interpolated,
-  )))
+  Some(AnimatedValue::BackgroundPosition(
+    resolved_positions_to_background(&interpolated),
+  ))
 }
 
 fn apply_background_position(style: &mut ComputedStyle, value: &AnimatedValue) {
@@ -1024,9 +1073,14 @@ fn apply_background_position(style: &mut ComputedStyle, value: &AnimatedValue) {
   }
 }
 
-fn extract_background_size(style: &ComputedStyle, ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
+fn extract_background_size(
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> Option<AnimatedValue> {
   let resolved = resolve_background_sizes(&style.background_sizes, style, ctx);
-  Some(AnimatedValue::BackgroundSize(resolved_sizes_to_background(&resolved)))
+  Some(AnimatedValue::BackgroundSize(resolved_sizes_to_background(
+    &resolved,
+  )))
 }
 
 fn interpolate_background_size_value(
@@ -1052,7 +1106,10 @@ fn apply_background_size(style: &mut ComputedStyle, value: &AnimatedValue) {
   }
 }
 
-fn extract_border_radius(style: &ComputedStyle, ctx: &AnimationResolveContext) -> Option<AnimatedValue> {
+fn extract_border_radius(
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> Option<AnimatedValue> {
   let radii = resolve_border_radii(style, ctx);
   Some(AnimatedValue::BorderRadius([
     Length::px(radii[0]),
@@ -1193,7 +1250,12 @@ fn interpolator_for(name: &str) -> Option<&'static PropertyInterpolator> {
   property_interpolators().iter().find(|p| p.name == name)
 }
 
-fn resolve_transform_length(len: &Length, style: &ComputedStyle, ctx: &AnimationResolveContext, base: f32) -> f32 {
+fn resolve_transform_length(
+  len: &Length,
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+  base: f32,
+) -> f32 {
   let reference = if base.is_finite() && base.abs() > f32::EPSILON {
     Some(base)
   } else {
@@ -1216,31 +1278,32 @@ fn resolve_transform_list(
         Length::px(resolve_transform_length(x, style, ctx, width)),
         Length::px(resolve_transform_length(y, style, ctx, height)),
       ),
-      crate::css::types::Transform::TranslateX(x) => crate::css::types::Transform::TranslateX(Length::px(
-        resolve_transform_length(x, style, ctx, width),
-      )),
-      crate::css::types::Transform::TranslateY(y) => crate::css::types::Transform::TranslateY(Length::px(
-        resolve_transform_length(y, style, ctx, height),
-      )),
-      crate::css::types::Transform::TranslateZ(z) => crate::css::types::Transform::TranslateZ(Length::px(
-        resolve_transform_length(z, style, ctx, width),
-      )),
-      crate::css::types::Transform::Translate3d(x, y, z) => crate::css::types::Transform::Translate3d(
+      crate::css::types::Transform::TranslateX(x) => crate::css::types::Transform::TranslateX(
         Length::px(resolve_transform_length(x, style, ctx, width)),
+      ),
+      crate::css::types::Transform::TranslateY(y) => crate::css::types::Transform::TranslateY(
         Length::px(resolve_transform_length(y, style, ctx, height)),
+      ),
+      crate::css::types::Transform::TranslateZ(z) => crate::css::types::Transform::TranslateZ(
         Length::px(resolve_transform_length(z, style, ctx, width)),
       ),
-      crate::css::types::Transform::Scale(sx, sy) => {
-        crate::css::types::Transform::Scale(*sx, *sy)
+      crate::css::types::Transform::Translate3d(x, y, z) => {
+        crate::css::types::Transform::Translate3d(
+          Length::px(resolve_transform_length(x, style, ctx, width)),
+          Length::px(resolve_transform_length(y, style, ctx, height)),
+          Length::px(resolve_transform_length(z, style, ctx, width)),
+        )
       }
+      crate::css::types::Transform::Scale(sx, sy) => crate::css::types::Transform::Scale(*sx, *sy),
       crate::css::types::Transform::ScaleX(sx) => crate::css::types::Transform::ScaleX(*sx),
       crate::css::types::Transform::ScaleY(sy) => crate::css::types::Transform::ScaleY(*sy),
       crate::css::types::Transform::ScaleZ(sz) => crate::css::types::Transform::ScaleZ(*sz),
       crate::css::types::Transform::Scale3d(sx, sy, sz) => {
         crate::css::types::Transform::Scale3d(*sx, *sy, *sz)
       }
-      crate::css::types::Transform::Rotate(deg)
-      | crate::css::types::Transform::RotateZ(deg) => crate::css::types::Transform::Rotate(*deg),
+      crate::css::types::Transform::Rotate(deg) | crate::css::types::Transform::RotateZ(deg) => {
+        crate::css::types::Transform::Rotate(*deg)
+      }
       crate::css::types::Transform::RotateX(deg) => crate::css::types::Transform::RotateX(*deg),
       crate::css::types::Transform::RotateY(deg) => crate::css::types::Transform::RotateY(*deg),
       crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
@@ -1281,8 +1344,9 @@ fn compose_transform_list(list: &[crate::css::types::Transform]) -> Transform3D 
       crate::css::types::Transform::ScaleY(sy) => Transform3D::scale(1.0, *sy, 1.0),
       crate::css::types::Transform::ScaleZ(sz) => Transform3D::scale(1.0, 1.0, *sz),
       crate::css::types::Transform::Scale3d(sx, sy, sz) => Transform3D::scale(*sx, *sy, *sz),
-      crate::css::types::Transform::Rotate(deg)
-      | crate::css::types::Transform::RotateZ(deg) => Transform3D::rotate_z(deg.to_radians()),
+      crate::css::types::Transform::Rotate(deg) | crate::css::types::Transform::RotateZ(deg) => {
+        Transform3D::rotate_z(deg.to_radians())
+      }
       crate::css::types::Transform::RotateX(deg) => Transform3D::rotate_x(deg.to_radians()),
       crate::css::types::Transform::RotateY(deg) => Transform3D::rotate_y(deg.to_radians()),
       crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
@@ -1322,17 +1386,17 @@ fn compose_transform_list(list: &[crate::css::types::Transform]) -> Transform3D 
       crate::css::types::Transform::Skew(ax, ay) => {
         Transform3D::skew(ax.to_radians(), ay.to_radians())
       }
-      crate::css::types::Transform::Perspective(len) => {
-        Transform3D::perspective(len.to_px())
+      crate::css::types::Transform::Perspective(len) => Transform3D::perspective(len.to_px()),
+      crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
+        Transform3D::from_2d(&Transform2D {
+          a: *a,
+          b: *b,
+          c: *c,
+          d: *d,
+          e: *e,
+          f: *f,
+        })
       }
-      crate::css::types::Transform::Matrix(a, b, c, d, e, f) => Transform3D::from_2d(&Transform2D {
-        a: *a,
-        b: *b,
-        c: *c,
-        d: *d,
-        e: *e,
-        f: *f,
-      }),
       crate::css::types::Transform::Matrix3d(values) => Transform3D { m: *values },
     };
     ts = ts.multiply(&next);
@@ -1363,20 +1427,26 @@ fn interpolate_transform_lists(
     }
 
     let next = match (ta, tb) {
-      (crate::css::types::Transform::Translate(ax, ay), crate::css::types::Transform::Translate(bx, by)) => {
+      (
+        crate::css::types::Transform::Translate(ax, ay),
+        crate::css::types::Transform::Translate(bx, by),
+      ) => {
         let x = lerp(ax.to_px(), bx.to_px(), t);
         let y = lerp(ay.to_px(), by.to_px(), t);
         crate::css::types::Transform::Translate(Length::px(x), Length::px(y))
       }
-      (crate::css::types::Transform::TranslateX(ax), crate::css::types::Transform::TranslateX(bx)) => {
-        crate::css::types::Transform::TranslateX(Length::px(lerp(ax.to_px(), bx.to_px(), t)))
-      }
-      (crate::css::types::Transform::TranslateY(ay), crate::css::types::Transform::TranslateY(by)) => {
-        crate::css::types::Transform::TranslateY(Length::px(lerp(ay.to_px(), by.to_px(), t)))
-      }
-      (crate::css::types::Transform::TranslateZ(az), crate::css::types::Transform::TranslateZ(bz)) => {
-        crate::css::types::Transform::TranslateZ(Length::px(lerp(az.to_px(), bz.to_px(), t)))
-      }
+      (
+        crate::css::types::Transform::TranslateX(ax),
+        crate::css::types::Transform::TranslateX(bx),
+      ) => crate::css::types::Transform::TranslateX(Length::px(lerp(ax.to_px(), bx.to_px(), t))),
+      (
+        crate::css::types::Transform::TranslateY(ay),
+        crate::css::types::Transform::TranslateY(by),
+      ) => crate::css::types::Transform::TranslateY(Length::px(lerp(ay.to_px(), by.to_px(), t))),
+      (
+        crate::css::types::Transform::TranslateZ(az),
+        crate::css::types::Transform::TranslateZ(bz),
+      ) => crate::css::types::Transform::TranslateZ(Length::px(lerp(az.to_px(), bz.to_px(), t))),
       (
         crate::css::types::Transform::Translate3d(ax, ay, az),
         crate::css::types::Transform::Translate3d(bx, by, bz),
@@ -1385,9 +1455,10 @@ fn interpolate_transform_lists(
         Length::px(lerp(ay.to_px(), by.to_px(), t)),
         Length::px(lerp(az.to_px(), bz.to_px(), t)),
       ),
-      (crate::css::types::Transform::Scale(ax, ay), crate::css::types::Transform::Scale(bx, by)) => {
-        crate::css::types::Transform::Scale(lerp(*ax, *bx, t), lerp(*ay, *by, t))
-      }
+      (
+        crate::css::types::Transform::Scale(ax, ay),
+        crate::css::types::Transform::Scale(bx, by),
+      ) => crate::css::types::Transform::Scale(lerp(*ax, *bx, t), lerp(*ay, *by, t)),
       (crate::css::types::Transform::ScaleX(ax), crate::css::types::Transform::ScaleX(bx)) => {
         crate::css::types::Transform::ScaleX(lerp(*ax, *bx, t))
       }
@@ -1430,13 +1501,13 @@ fn interpolate_transform_lists(
       (crate::css::types::Transform::SkewY(ay), crate::css::types::Transform::SkewY(by)) => {
         crate::css::types::Transform::SkewY(lerp(*ay, *by, t))
       }
-      (
-        crate::css::types::Transform::Skew(ax, ay),
-        crate::css::types::Transform::Skew(bx, by),
-      ) => crate::css::types::Transform::Skew(lerp(*ax, *bx, t), lerp(*ay, *by, t)),
-      (crate::css::types::Transform::Perspective(pa), crate::css::types::Transform::Perspective(pb)) => {
-        crate::css::types::Transform::Perspective(Length::px(lerp(pa.to_px(), pb.to_px(), t)))
+      (crate::css::types::Transform::Skew(ax, ay), crate::css::types::Transform::Skew(bx, by)) => {
+        crate::css::types::Transform::Skew(lerp(*ax, *bx, t), lerp(*ay, *by, t))
       }
+      (
+        crate::css::types::Transform::Perspective(pa),
+        crate::css::types::Transform::Perspective(pb),
+      ) => crate::css::types::Transform::Perspective(Length::px(lerp(pa.to_px(), pb.to_px(), t))),
       _ => return None,
     };
 
@@ -1477,7 +1548,13 @@ fn resolve_offset_value(
   .clamp(0.0, scroll_range.max(0.0).max(viewport_size))
 }
 
-fn resolve_progress_offset(offset: &RangeOffset, base_start: f32, base_end: f32, view_size: f32, phases: Option<(f32, f32, f32)>) -> f32 {
+fn resolve_progress_offset(
+  offset: &RangeOffset,
+  base_start: f32,
+  base_end: f32,
+  view_size: f32,
+  phases: Option<(f32, f32, f32)>,
+) -> f32 {
   match offset {
     RangeOffset::Progress(p) => base_start + (base_end - base_start) * p.clamp(0.0, 1.0),
     RangeOffset::View(phase, adj) => {
@@ -1578,10 +1655,11 @@ pub fn sample_keyframes(
   if frames.is_empty() {
     return HashMap::new();
   }
-  frames.sort_by(|a, b| a
-    .offset
-    .partial_cmp(&b.offset)
-    .unwrap_or(std::cmp::Ordering::Equal));
+  frames.sort_by(|a, b| {
+    a.offset
+      .partial_cmp(&b.offset)
+      .unwrap_or(std::cmp::Ordering::Equal)
+  });
   let progress = clamp_progress(progress);
 
   let mut prev: &Keyframe = &frames[0];
@@ -1643,17 +1721,22 @@ pub fn sample_keyframes(
 
   let mut result = HashMap::new();
   for prop in properties {
-    let Some(interpolator) = interpolator_for(&prop) else { continue };
-    let Some(from_val) = (interpolator.extract)(&from_style, &ctx) else { continue };
-    let Some(to_val) = (interpolator.extract)(&to_style, &ctx) else { continue };
-    let value = (interpolator.interpolate)(&from_val, &to_val, local_t)
-      .or_else(|| {
-        if (local_t - 1.0).abs() < f32::EPSILON {
-          Some(to_val.clone())
-        } else {
-          Some(from_val.clone())
-        }
-      });
+    let Some(interpolator) = interpolator_for(&prop) else {
+      continue;
+    };
+    let Some(from_val) = (interpolator.extract)(&from_style, &ctx) else {
+      continue;
+    };
+    let Some(to_val) = (interpolator.extract)(&to_style, &ctx) else {
+      continue;
+    };
+    let value = (interpolator.interpolate)(&from_val, &to_val, local_t).or_else(|| {
+      if (local_t - 1.0).abs() < f32::EPSILON {
+        Some(to_val.clone())
+      } else {
+        Some(from_val.clone())
+      }
+    });
     if let Some(v) = value {
       result.insert(prop.clone(), v);
     }
@@ -1663,7 +1746,10 @@ pub fn sample_keyframes(
 }
 
 /// Applies animated property values to the computed style.
-pub fn apply_animated_properties(style: &mut ComputedStyle, values: &HashMap<String, AnimatedValue>) {
+pub fn apply_animated_properties(
+  style: &mut ComputedStyle,
+  values: &HashMap<String, AnimatedValue>,
+) {
   for (name, value) in values {
     if let Some(interpolator) = interpolator_for(name) {
       (interpolator.apply)(style, value);
@@ -1791,11 +1877,7 @@ fn apply_animations_to_node(
       let mut changed = false;
 
       for (idx, name) in names.iter().enumerate() {
-        let timeline_ref = pick(
-          timelines_list,
-          idx,
-          AnimationTimeline::Auto,
-        );
+        let timeline_ref = pick(timelines_list, idx, AnimationTimeline::Auto);
         let range = pick(ranges_list, idx, AnimationRange::default());
         let progress = match timeline_ref {
           AnimationTimeline::Auto => None,
@@ -1807,7 +1889,13 @@ fn apply_animations_to_node(
                 scroll_pos,
                 scroll_range,
                 viewport_size,
-              } => scroll_timeline_progress(timeline, *scroll_pos, *scroll_range, *viewport_size, &range),
+              } => scroll_timeline_progress(
+                timeline,
+                *scroll_pos,
+                *scroll_range,
+                *viewport_size,
+                &range,
+              ),
               TimelineState::View {
                 timeline,
                 target_start,
@@ -1860,10 +1948,22 @@ pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
     return;
   }
 
-  let viewport = Rect::from_xywh(0.0, 0.0, tree.viewport_size().width, tree.viewport_size().height);
+  let viewport = Rect::from_xywh(
+    0.0,
+    0.0,
+    tree.viewport_size().width,
+    tree.viewport_size().height,
+  );
   let content = tree.content_size();
   let mut timelines: HashMap<String, TimelineState> = HashMap::new();
-  collect_timelines(&tree.root, Point::ZERO, viewport, content, scroll, &mut timelines);
+  collect_timelines(
+    &tree.root,
+    Point::ZERO,
+    viewport,
+    content,
+    scroll,
+    &mut timelines,
+  );
   for frag in &tree.additional_fragments {
     collect_timelines(frag, Point::ZERO, viewport, content, scroll, &mut timelines);
   }

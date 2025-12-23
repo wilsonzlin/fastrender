@@ -966,7 +966,12 @@ mod tests {
   fn encode_png(image: &RgbaImage) -> Vec<u8> {
     let mut buffer = Vec::new();
     PngEncoder::new(&mut buffer)
-      .write_image(image.as_raw(), image.width(), image.height(), ColorType::Rgba8)
+      .write_image(
+        image.as_raw(),
+        image.width(),
+        image.height(),
+        ColorType::Rgba8,
+      )
       .unwrap();
     buffer
   }
@@ -979,8 +984,7 @@ mod tests {
   #[test]
   fn test_compare_images_identical() {
     let png = solid_png(2, 2, [10, 20, 30, 255]);
-    let (diff_pixels, total_pixels, diff_percentage) =
-      compare_images(&png, &png, 0, None).unwrap();
+    let (diff_pixels, total_pixels, diff_percentage) = compare_images(&png, &png, 0, None).unwrap();
 
     assert_eq!(diff_pixels, 0);
     assert_eq!(total_pixels, 4);
@@ -1056,7 +1060,8 @@ mod tests {
     // With a 10% max diff threshold (ceil(0.1 * 9) = 1 allowed), we should early exit
     // once we exceed the allowance. The reported diff count may be lower than the true
     // count but must still exceed the threshold percentage.
-    let (limited_diff, _, limited_pct) = compare_images(&rendered, &expected, 0, Some(10.0)).unwrap();
+    let (limited_diff, _, limited_pct) =
+      compare_images(&rendered, &expected, 0, Some(10.0)).unwrap();
     assert!(limited_diff <= full_diff);
     assert!(limited_pct > 10.0);
   }

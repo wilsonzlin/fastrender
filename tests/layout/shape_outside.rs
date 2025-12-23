@@ -3,9 +3,9 @@ use fastrender::geometry::Rect;
 use fastrender::geometry::Size;
 use fastrender::image_loader::ImageCache;
 use fastrender::layout::constraints::LayoutConstraints;
+use fastrender::layout::contexts::inline::InlineFormattingContext;
 use fastrender::layout::float_context::{FloatContext, FloatSide};
 use fastrender::layout::float_shape::build_float_shape;
-use fastrender::layout::contexts::inline::InlineFormattingContext;
 use fastrender::style::color::Color;
 use fastrender::style::color::Rgba;
 use fastrender::style::display::FormattingContextType;
@@ -16,8 +16,8 @@ use fastrender::style::types::BasicShape;
 use fastrender::style::types::Direction;
 use fastrender::style::types::FillRule;
 use fastrender::style::types::LineHeight;
-use fastrender::style::types::ShapeRadius;
 use fastrender::style::types::ShapeOutside;
+use fastrender::style::types::ShapeRadius;
 use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
 use fastrender::text::font_loader::FontContext;
@@ -198,7 +198,10 @@ fn image_shape_respects_threshold() {
   );
 
   let (left_edge, _) = ctx.available_width_at_y(0.0);
-  assert!(left_edge > 35.0 && left_edge < 55.0, "left_edge={left_edge}");
+  assert!(
+    left_edge > 35.0 && left_edge < 55.0,
+    "left_edge={left_edge}"
+  );
 }
 
 #[test]

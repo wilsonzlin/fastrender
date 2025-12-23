@@ -42,7 +42,10 @@ fn background_image_set_renders_avif_candidate() {
   let (r, g, b, _) = pixel_rgba(&pixmap, 4, 4);
 
   assert!(g > 170, "background should preserve green channel (g={g})");
-  assert!(r < 60 && b < 60, "background should favor green over red/blue (r={r}, b={b})");
+  assert!(
+    r < 60 && b < 60,
+    "background should favor green over red/blue (r={r}, b={b})"
+  );
 }
 
 #[test]
@@ -68,5 +71,8 @@ fn img_element_renders_avif_source() {
 
   assert_eq!(a, 255, "image pixels should be opaque");
   assert!(g > 170, "img element should decode avif (g={g})");
-  assert!(r < 60 && b < 60, "img element should preserve green tint (r={r}, b={b})");
+  assert!(
+    r < 60 && b < 60,
+    "img element should preserve green tint (r={r}, b={b})"
+  );
 }

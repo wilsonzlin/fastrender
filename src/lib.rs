@@ -203,13 +203,13 @@ pub mod resource;
 pub use api::FastRender;
 pub use api::FastRenderBuilder;
 pub use api::FastRenderConfig;
-pub use compat::CompatProfile;
 pub use api::Pixmap;
 pub use api::RenderDiagnostics;
 pub use api::RenderOptions;
 pub use api::RenderResult;
 pub use api::ResourceFetchError;
 pub use api::ResourceKind;
+pub use compat::CompatProfile;
 // CSS
 pub use css::parser::parse_stylesheet_with_errors;
 pub use css::types::CssParseError;

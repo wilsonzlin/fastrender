@@ -2,10 +2,10 @@ use fastrender::animation::{
   axis_scroll_state, sample_keyframes, scroll_timeline_progress, view_timeline_progress,
   AnimatedValue,
 };
-use fastrender::css::parser::parse_stylesheet;
 use fastrender::api::FastRender;
+use fastrender::css::parser::parse_stylesheet;
+use fastrender::css::types::Transform as CssTransform;
 use fastrender::dom;
-use fastrender::{ComputedStyle, Size};
 use fastrender::style::cascade::apply_styles_with_media;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::media::MediaContext;
@@ -13,8 +13,8 @@ use fastrender::style::types::{
   AnimationRange, BasicShape, FilterFunction, ScrollTimeline, TimelineAxis, TimelineOffset,
   ViewTimeline, WritingMode,
 };
-use fastrender::css::types::Transform as CssTransform;
 use fastrender::Rgba;
+use fastrender::{ComputedStyle, Size};
 
 fn find_by_tag<'a>(node: &'a StyledNode, tag: &str) -> Option<&'a StyledNode> {
   if let Some(name) = node.node.tag_name() {
@@ -94,7 +94,8 @@ fn view_timeline_progress_respects_entry_and_exit() {
 
 #[test]
 fn keyframes_sample_interpolates_opacity() {
-  let sheet = parse_stylesheet("@keyframes fade { 0% { opacity: 0; } 100% { opacity: 1; } }").unwrap();
+  let sheet =
+    parse_stylesheet("@keyframes fade { 0% { opacity: 0; } 100% { opacity: 1; } }").unwrap();
   let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
   let rule = &keyframes[0];
   let sampled = sample_keyframes(
@@ -165,10 +166,9 @@ fn keyframes_interpolate_transform_lists() {
 
 #[test]
 fn keyframes_interpolate_filters() {
-  let sheet = parse_stylesheet(
-    "@keyframes blur { from { filter: blur(0px); } to { filter: blur(10px); } }",
-  )
-  .unwrap();
+  let sheet =
+    parse_stylesheet("@keyframes blur { from { filter: blur(0px); } to { filter: blur(10px); } }")
+      .unwrap();
   let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
   let rule = &keyframes[0];
   let sampled = sample_keyframes(
@@ -207,7 +207,13 @@ fn clip_path_mismatches_fall_back_to_discrete() {
   match sampled.get("clip-path") {
     Some(AnimatedValue::ClipPath(path)) => match path {
       fastrender::style::types::ClipPath::BasicShape(shape, _) => match shape.as_ref() {
-        BasicShape::Inset { top, right, bottom, left, .. } => {
+        BasicShape::Inset {
+          top,
+          right,
+          bottom,
+          left,
+          ..
+        } => {
           assert_eq!(top.to_px(), 0.0);
           assert_eq!(right.to_px(), 0.0);
           assert_eq!(bottom.to_px(), 0.0);
@@ -280,8 +286,14 @@ fn nested_scroll_timelines_progress_independently() {
   let outer_progress = scroll_timeline_progress(&outer, outer_pos, outer_range, outer_size, &range);
   let inner_progress = scroll_timeline_progress(&inner, inner_pos, inner_range, inner_size, &range);
 
-  assert!((outer_progress - 0.3).abs() < 0.05, "outer progress {outer_progress}");
-  assert!((inner_progress - 0.44).abs() < 0.05, "inner progress {inner_progress}");
+  assert!(
+    (outer_progress - 0.3).abs() < 0.05,
+    "outer progress {outer_progress}"
+  );
+  assert!(
+    (inner_progress - 0.44).abs() < 0.05,
+    "inner progress {inner_progress}"
+  );
   assert!((outer_progress - inner_progress).abs() > 0.05);
 }
 
@@ -321,9 +333,15 @@ fn scroll_timeline_drives_animation_during_render() {
   let dom = renderer.parse_html(html).expect("parse html");
   let tree = renderer.layout_document(&dom, 100, 100).expect("layout");
   let content_height = tree.content_size().height();
-  assert!(content_height > 100.0, "content height must exceed viewport: {content_height}");
+  assert!(
+    content_height > 100.0,
+    "content height must exceed viewport: {content_height}"
+  );
   let max_scroll = (content_height - tree.viewport_size().height).max(0.0);
-  assert!(max_scroll > 0.0, "expected scrollable range, got {max_scroll}");
+  assert!(
+    max_scroll > 0.0,
+    "expected scrollable range, got {max_scroll}"
+  );
   let timeline_check = ScrollTimeline::default();
   let (pos, range, view_size) = axis_scroll_state(
     timeline_check.axis,
@@ -335,20 +353,38 @@ fn scroll_timeline_drives_animation_during_render() {
     tree.content_size().width(),
     tree.content_size().height(),
   );
-  let prog = scroll_timeline_progress(&timeline_check, pos, range, view_size, &AnimationRange::default());
-  assert!(prog > 0.9, "expected near-complete progress ({} / {}) -> {prog}", pos, range);
+  let prog = scroll_timeline_progress(
+    &timeline_check,
+    pos,
+    range,
+    view_size,
+    &AnimationRange::default(),
+  );
+  assert!(
+    prog > 0.9,
+    "expected near-complete progress ({} / {}) -> {prog}",
+    pos,
+    range
+  );
 
   let pixmap_top = renderer
     .render_html_with_scroll(html, 100, 100, 0.0, 0.0)
     .expect("render top");
   assert_eq!(pixel(&pixmap_top, 50, 50), (0, 0, 0, 255));
-  assert_eq!(red_pixels(&pixmap_top), 0, "no red content when progress at start");
+  assert_eq!(
+    red_pixels(&pixmap_top),
+    0,
+    "no red content when progress at start"
+  );
 
   let pixmap_bottom = renderer
     .render_html_with_scroll(html, 100, 100, 0.0, max_scroll)
     .expect("render bottom");
   assert_eq!(pixel(&pixmap_bottom, 50, 50), (255, 0, 0, 255));
-  assert!(red_pixels(&pixmap_bottom) > 0, "red content should appear when fully scrolled");
+  assert!(
+    red_pixels(&pixmap_bottom) > 0,
+    "red content should appear when fully scrolled"
+  );
 }
 
 #[test]

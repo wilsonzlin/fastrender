@@ -12,7 +12,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 fn assert_approx(val: f32, expected: f32, msg: &str) {
-  assert!((val - expected).abs() <= 0.5, "{}: got {} expected {}", msg, val, expected);
+  assert!(
+    (val - expected).abs() <= 0.5,
+    "{}: got {} expected {}",
+    msg,
+    val,
+    expected
+  );
 }
 
 #[test]
@@ -41,16 +47,8 @@ fn row_subgrid_uses_parent_tracks() {
   child2_style.grid_row_start = 2;
   child2_style.grid_row_end = 3;
 
-  let child1 = BoxNode::new_block(
-    Arc::new(child1_style),
-    FormattingContextType::Block,
-    vec![],
-  );
-  let child2 = BoxNode::new_block(
-    Arc::new(child2_style),
-    FormattingContextType::Block,
-    vec![],
-  );
+  let child1 = BoxNode::new_block(Arc::new(child1_style), FormattingContextType::Block, vec![]);
+  let child2 = BoxNode::new_block(Arc::new(child2_style), FormattingContextType::Block, vec![]);
 
   let subgrid = BoxNode::new_block(
     Arc::new(subgrid_style),
@@ -77,7 +75,11 @@ fn row_subgrid_uses_parent_tracks() {
 
   assert_approx(first.bounds.y(), 0.0, "first row starts at 0");
   assert_approx(first.bounds.height(), 10.0, "first row height");
-  assert_approx(second.bounds.y(), 10.0, "second row offset matches first height");
+  assert_approx(
+    second.bounds.y(),
+    10.0,
+    "second row offset matches first height",
+  );
   assert_approx(second.bounds.height(), 50.0, "second row height");
 }
 
@@ -85,7 +87,10 @@ fn row_subgrid_uses_parent_tracks() {
 fn column_subgrid_aligns_with_parent_tracks() {
   let mut parent_style = ComputedStyle::default();
   parent_style.display = Display::Grid;
-  parent_style.grid_template_columns = vec![GridTrack::Length(Length::px(40.0)), GridTrack::Length(Length::px(60.0))];
+  parent_style.grid_template_columns = vec![
+    GridTrack::Length(Length::px(40.0)),
+    GridTrack::Length(Length::px(60.0)),
+  ];
   parent_style.grid_template_rows = vec![GridTrack::Auto];
   parent_style.width = Some(Length::px(100.0));
 
@@ -192,7 +197,10 @@ fn subgrid_autoplacement_uses_parent_rows_and_gaps() {
 fn column_subgrid_inherits_gaps_for_autoplacement() {
   let mut parent_style = ComputedStyle::default();
   parent_style.display = Display::Grid;
-  parent_style.grid_template_columns = vec![GridTrack::Length(Length::px(30.0)), GridTrack::Length(Length::px(40.0))];
+  parent_style.grid_template_columns = vec![
+    GridTrack::Length(Length::px(30.0)),
+    GridTrack::Length(Length::px(40.0)),
+  ];
   parent_style.grid_template_rows = vec![GridTrack::Auto];
   parent_style.grid_column_gap = Length::px(5.0);
   parent_style.width = Some(Length::px(200.0));
@@ -272,8 +280,10 @@ fn nested_subgrid_propagates_descendant_sizes() {
   inner_child2.display = Display::Block;
   inner_child2.height = Some(Length::px(5.0));
 
-  let grandchild1 = BoxNode::new_block(Arc::new(inner_child1), FormattingContextType::Block, vec![]);
-  let grandchild2 = BoxNode::new_block(Arc::new(inner_child2), FormattingContextType::Block, vec![]);
+  let grandchild1 =
+    BoxNode::new_block(Arc::new(inner_child1), FormattingContextType::Block, vec![]);
+  let grandchild2 =
+    BoxNode::new_block(Arc::new(inner_child2), FormattingContextType::Block, vec![]);
 
   let inner_subgrid = BoxNode::new_block(
     Arc::new(inner_subgrid_style),
@@ -307,15 +317,24 @@ fn nested_subgrid_propagates_descendant_sizes() {
 
   assert_approx(first.bounds.y(), 0.0, "first nested row origin");
   assert_approx(second.bounds.y(), 18.0, "second nested row offset");
-  assert!(first.bounds.height() <= 18.1, "first item fits within inherited track");
-  assert!(second.bounds.height() <= 26.1, "second item fits within inherited track");
+  assert!(
+    first.bounds.height() <= 18.1,
+    "first item fits within inherited track"
+  );
+  assert!(
+    second.bounds.height() <= 26.1,
+    "second item fits within inherited track"
+  );
 }
 
 #[test]
 fn subgrid_extends_named_lines() {
   let mut parent_style = ComputedStyle::default();
   parent_style.display = Display::Grid;
-  parent_style.grid_template_columns = vec![GridTrack::Length(Length::px(20.0)), GridTrack::Length(Length::px(30.0))];
+  parent_style.grid_template_columns = vec![
+    GridTrack::Length(Length::px(20.0)),
+    GridTrack::Length(Length::px(30.0)),
+  ];
   parent_style.grid_template_rows = vec![GridTrack::Auto];
   parent_style.width = Some(Length::px(200.0));
   parent_style.grid_column_line_names = vec![vec!["a".into()], Vec::new(), vec!["b".into()]];
@@ -381,7 +400,10 @@ fn column_subgrid_respects_vertical_writing_mode() {
   let mut parent_style = ComputedStyle::default();
   parent_style.display = Display::Grid;
   parent_style.writing_mode = WritingMode::VerticalRl;
-  parent_style.grid_template_columns = vec![GridTrack::Length(Length::px(30.0)), GridTrack::Length(Length::px(40.0))];
+  parent_style.grid_template_columns = vec![
+    GridTrack::Length(Length::px(30.0)),
+    GridTrack::Length(Length::px(40.0)),
+  ];
   parent_style.grid_template_rows = vec![GridTrack::Auto];
   parent_style.width = Some(Length::px(100.0));
 
@@ -432,8 +454,24 @@ fn column_subgrid_respects_vertical_writing_mode() {
   let first = &subgrid_fragment.children[0];
   let second = &subgrid_fragment.children[1];
 
-  assert_approx(first.bounds.y(), 0.0, "first column maps to top in vertical mode");
-  assert_approx(second.bounds.y(), 30.0, "second column starts after first track");
-  assert_approx(first.bounds.height(), 5.0, "item keeps intrinsic height in column track");
-  assert_approx(second.bounds.height(), 5.0, "item keeps intrinsic height in column track");
+  assert_approx(
+    first.bounds.y(),
+    0.0,
+    "first column maps to top in vertical mode",
+  );
+  assert_approx(
+    second.bounds.y(),
+    30.0,
+    "second column starts after first track",
+  );
+  assert_approx(
+    first.bounds.height(),
+    5.0,
+    "item keeps intrinsic height in column track",
+  );
+  assert_approx(
+    second.bounds.height(),
+    5.0,
+    "item keeps intrinsic height in column track",
+  );
 }

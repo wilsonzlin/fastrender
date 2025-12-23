@@ -146,19 +146,19 @@ use crate::compute::grid::DetailedGridInfo;
 ///
 /// However, this trait does *not* require access to any node's other than a single container node's immediate children unless you also intend to implement `TraverseTree`.
 pub trait TraversePartialTree {
-    /// Type representing an iterator of the children of a node
-    type ChildIter<'a>: Iterator<Item = NodeId>
-    where
-        Self: 'a;
+  /// Type representing an iterator of the children of a node
+  type ChildIter<'a>: Iterator<Item = NodeId>
+  where
+    Self: 'a;
 
-    /// Get the list of children IDs for the given node
-    fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_>;
+  /// Get the list of children IDs for the given node
+  fn child_ids(&self, parent_node_id: NodeId) -> Self::ChildIter<'_>;
 
-    /// Get the number of children for the given node
-    fn child_count(&self, parent_node_id: NodeId) -> usize;
+  /// Get the number of children for the given node
+  fn child_count(&self, parent_node_id: NodeId) -> usize;
 
-    /// Get a specific child of a node, where the index represents the nth child
-    fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId;
+  /// Get a specific child of a node, where the index represents the nth child
+  fn get_child_id(&self, parent_node_id: NodeId, child_index: usize) -> NodeId;
 }
 
 /// A marker trait which extends `TraversePartialTree`
@@ -172,59 +172,59 @@ pub trait TraverseTree: TraversePartialTree {}
 /// Note that this trait extends [`TraversePartialTree`] (not [`TraverseTree`]). Taffy's algorithm implementations have been designed such that they can be used for a laying out a single
 /// node that only has access to it's immediate children.
 pub trait LayoutPartialTree: TraversePartialTree {
-    /// The style type representing the core container styles that all containers should have
-    /// Used when laying out the root node of a tree
-    type CoreContainerStyle<'a>: CoreStyle<CustomIdent = Self::CustomIdent>
-    where
-        Self: 'a;
+  /// The style type representing the core container styles that all containers should have
+  /// Used when laying out the root node of a tree
+  type CoreContainerStyle<'a>: CoreStyle<CustomIdent = Self::CustomIdent>
+  where
+    Self: 'a;
 
-    /// String type for representing "custom identifiers" (for example, named grid lines or areas)
-    /// If you are unsure what to use here then consider `Arc<str>`.
-    type CustomIdent: CheapCloneStr;
+  /// String type for representing "custom identifiers" (for example, named grid lines or areas)
+  /// If you are unsure what to use here then consider `Arc<str>`.
+  type CustomIdent: CheapCloneStr;
 
-    /// Get core style
-    fn get_core_container_style(&self, node_id: NodeId) -> Self::CoreContainerStyle<'_>;
+  /// Get core style
+  fn get_core_container_style(&self, node_id: NodeId) -> Self::CoreContainerStyle<'_>;
 
-    /// Resolve calc value
-    #[inline(always)]
-    fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
-        let _ = val;
-        let _ = basis;
-        0.0
-    }
+  /// Resolve calc value
+  #[inline(always)]
+  fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
+    let _ = val;
+    let _ = basis;
+    0.0
+  }
 
-    /// Set the node's unrounded layout
-    fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout);
+  /// Set the node's unrounded layout
+  fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout);
 
-    /// Compute the specified node's size or full layout given the specified constraints
-    fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput;
+  /// Compute the specified node's size or full layout given the specified constraints
+  fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput;
 }
 
 /// Trait used by the `compute_cached_layout` method which allows cached layout results to be stored and retrieved.
 ///
 /// The `Cache` struct implements a per-node cache that is compatible with this trait.
 pub trait CacheTree {
-    /// Try to retrieve a cached result from the cache
-    fn cache_get(
-        &self,
-        node_id: NodeId,
-        known_dimensions: Size<Option<f32>>,
-        available_space: Size<AvailableSpace>,
-        run_mode: RunMode,
-    ) -> Option<LayoutOutput>;
+  /// Try to retrieve a cached result from the cache
+  fn cache_get(
+    &self,
+    node_id: NodeId,
+    known_dimensions: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+    run_mode: RunMode,
+  ) -> Option<LayoutOutput>;
 
-    /// Store a computed size in the cache
-    fn cache_store(
-        &mut self,
-        node_id: NodeId,
-        known_dimensions: Size<Option<f32>>,
-        available_space: Size<AvailableSpace>,
-        run_mode: RunMode,
-        layout_output: LayoutOutput,
-    );
+  /// Store a computed size in the cache
+  fn cache_store(
+    &mut self,
+    node_id: NodeId,
+    known_dimensions: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+    run_mode: RunMode,
+    layout_output: LayoutOutput,
+  );
 
-    /// Clear all cache entries for the node
-    fn cache_clear(&mut self, node_id: NodeId);
+  /// Clear all cache entries for the node
+  fn cache_clear(&mut self, node_id: NodeId);
 }
 
 /// Trait used by the `round_layout` method which takes a tree of unrounded float-valued layouts and performs
@@ -232,93 +232,93 @@ pub trait CacheTree {
 ///
 /// As indicated by it's dependence on `TraverseTree`, it required full recursive access to the tree.
 pub trait RoundTree: TraverseTree {
-    /// Get the node's unrounded layout
-    fn get_unrounded_layout(&self, node_id: NodeId) -> Layout;
-    /// Get a reference to the node's final layout
-    fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout);
+  /// Get the node's unrounded layout
+  fn get_unrounded_layout(&self, node_id: NodeId) -> Layout;
+  /// Get a reference to the node's final layout
+  fn set_final_layout(&mut self, node_id: NodeId, layout: &Layout);
 }
 
 /// Trait used by the `print_tree` method which prints a debug representation
 ///
 /// As indicated by it's dependence on `TraverseTree`, it required full recursive access to the tree.
 pub trait PrintTree: TraverseTree {
-    /// Get a debug label for the node (typically the type of node: flexbox, grid, text, image, etc)
-    fn get_debug_label(&self, node_id: NodeId) -> &'static str;
-    /// Get a reference to the node's final layout
-    fn get_final_layout(&self, node_id: NodeId) -> Layout;
+  /// Get a debug label for the node (typically the type of node: flexbox, grid, text, image, etc)
+  fn get_debug_label(&self, node_id: NodeId) -> &'static str;
+  /// Get a reference to the node's final layout
+  fn get_final_layout(&self, node_id: NodeId) -> Layout;
 }
 
 #[cfg(feature = "flexbox")]
 /// Extends [`LayoutPartialTree`] with getters for the styles required for Flexbox layout
 pub trait LayoutFlexboxContainer: LayoutPartialTree {
-    /// The style type representing the Flexbox container's styles
-    type FlexboxContainerStyle<'a>: FlexboxContainerStyle
-    where
-        Self: 'a;
-    /// The style type representing each Flexbox item's styles
-    type FlexboxItemStyle<'a>: FlexboxItemStyle
-    where
-        Self: 'a;
+  /// The style type representing the Flexbox container's styles
+  type FlexboxContainerStyle<'a>: FlexboxContainerStyle
+  where
+    Self: 'a;
+  /// The style type representing each Flexbox item's styles
+  type FlexboxItemStyle<'a>: FlexboxItemStyle
+  where
+    Self: 'a;
 
-    /// Get the container's styles
-    fn get_flexbox_container_style(&self, node_id: NodeId) -> Self::FlexboxContainerStyle<'_>;
+  /// Get the container's styles
+  fn get_flexbox_container_style(&self, node_id: NodeId) -> Self::FlexboxContainerStyle<'_>;
 
-    /// Get the child's styles
-    fn get_flexbox_child_style(&self, child_node_id: NodeId) -> Self::FlexboxItemStyle<'_>;
+  /// Get the child's styles
+  fn get_flexbox_child_style(&self, child_node_id: NodeId) -> Self::FlexboxItemStyle<'_>;
 }
 
 #[cfg(feature = "grid")]
 /// Extends [`LayoutPartialTree`] with getters for the styles required for CSS Grid layout
 pub trait LayoutGridContainer: LayoutPartialTree {
-    /// The style type representing the CSS Grid container's styles
-    type GridContainerStyle<'a>: GridContainerStyle<CustomIdent = Self::CustomIdent>
-    where
-        Self: 'a;
+  /// The style type representing the CSS Grid container's styles
+  type GridContainerStyle<'a>: GridContainerStyle<CustomIdent = Self::CustomIdent>
+  where
+    Self: 'a;
 
-    /// The style type representing each CSS Grid item's styles
-    type GridItemStyle<'a>: GridItemStyle<CustomIdent = Self::CustomIdent>
-    where
-        Self: 'a;
+  /// The style type representing each CSS Grid item's styles
+  type GridItemStyle<'a>: GridItemStyle<CustomIdent = Self::CustomIdent>
+  where
+    Self: 'a;
 
-    /// Get the container's styles
-    fn get_grid_container_style(&self, node_id: NodeId) -> Self::GridContainerStyle<'_>;
+  /// Get the container's styles
+  fn get_grid_container_style(&self, node_id: NodeId) -> Self::GridContainerStyle<'_>;
 
-    /// Get the child's styles
-    fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_>;
+  /// Get the child's styles
+  fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_>;
 
-    /// Clone the container's style into an owned value
-    fn clone_grid_container_style(&self, node_id: NodeId) -> Style<Self::CustomIdent>;
+  /// Clone the container's style into an owned value
+  fn clone_grid_container_style(&self, node_id: NodeId) -> Style<Self::CustomIdent>;
 
-    /// Clone a child's style into an owned value
-    fn clone_grid_child_style(&self, child_node_id: NodeId) -> Style<Self::CustomIdent>;
+  /// Clone a child's style into an owned value
+  fn clone_grid_child_style(&self, child_node_id: NodeId) -> Style<Self::CustomIdent>;
 
-    /// Set the node's detailed grid information
-    ///
-    /// Implementing this method is optional. Doing so allows you to access details about the the grid such as
-    /// the computed size of each grid track and the computed placement of each grid item.
-    #[cfg(feature = "detailed_layout_info")]
-    fn set_detailed_grid_info(&mut self, _node_id: NodeId, _detailed_grid_info: DetailedGridInfo) {
-        debug_log!("LayoutGridContainer::set_detailed_grid_info called");
-    }
+  /// Set the node's detailed grid information
+  ///
+  /// Implementing this method is optional. Doing so allows you to access details about the the grid such as
+  /// the computed size of each grid track and the computed placement of each grid item.
+  #[cfg(feature = "detailed_layout_info")]
+  fn set_detailed_grid_info(&mut self, _node_id: NodeId, _detailed_grid_info: DetailedGridInfo) {
+    debug_log!("LayoutGridContainer::set_detailed_grid_info called");
+  }
 }
 
 #[cfg(feature = "block_layout")]
 /// Extends [`LayoutPartialTree`] with getters for the styles required for CSS Block layout
 pub trait LayoutBlockContainer: LayoutPartialTree {
-    /// The style type representing the CSS Block container's styles
-    type BlockContainerStyle<'a>: BlockContainerStyle
-    where
-        Self: 'a;
-    /// The style type representing each CSS Block item's styles
-    type BlockItemStyle<'a>: BlockItemStyle
-    where
-        Self: 'a;
+  /// The style type representing the CSS Block container's styles
+  type BlockContainerStyle<'a>: BlockContainerStyle
+  where
+    Self: 'a;
+  /// The style type representing each CSS Block item's styles
+  type BlockItemStyle<'a>: BlockItemStyle
+  where
+    Self: 'a;
 
-    /// Get the container's styles
-    fn get_block_container_style(&self, node_id: NodeId) -> Self::BlockContainerStyle<'_>;
+  /// Get the container's styles
+  fn get_block_container_style(&self, node_id: NodeId) -> Self::BlockContainerStyle<'_>;
 
-    /// Get the child's styles
-    fn get_block_child_style(&self, child_node_id: NodeId) -> Self::BlockItemStyle<'_>;
+  /// Get the child's styles
+  fn get_block_child_style(&self, child_node_id: NodeId) -> Self::BlockItemStyle<'_>;
 }
 
 // --- PRIVATE TRAITS
@@ -326,73 +326,74 @@ pub trait LayoutBlockContainer: LayoutPartialTree {
 /// A private trait which allows us to add extra convenience methods to types which implement
 /// LayoutTree without making those methods public.
 pub(crate) trait LayoutPartialTreeExt: LayoutPartialTree {
-    /// Compute the size of the node given the specified constraints
-    #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
-    fn measure_child_size(
-        &mut self,
-        node_id: NodeId,
-        known_dimensions: Size<Option<f32>>,
-        parent_size: Size<Option<f32>>,
-        available_space: Size<AvailableSpace>,
-        sizing_mode: SizingMode,
-        axis: AbsoluteAxis,
-        vertical_margins_are_collapsible: Line<bool>,
-    ) -> f32 {
-        self.compute_child_layout(
-            node_id,
-            LayoutInput {
-                known_dimensions,
-                parent_size,
-                available_space,
-                sizing_mode,
-                axis: axis.into(),
-                run_mode: RunMode::ComputeSize,
-                vertical_margins_are_collapsible,
-            },
-        )
-        .size
-        .get_abs(axis)
-    }
+  /// Compute the size of the node given the specified constraints
+  #[inline(always)]
+  #[allow(clippy::too_many_arguments)]
+  fn measure_child_size(
+    &mut self,
+    node_id: NodeId,
+    known_dimensions: Size<Option<f32>>,
+    parent_size: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+    sizing_mode: SizingMode,
+    axis: AbsoluteAxis,
+    vertical_margins_are_collapsible: Line<bool>,
+  ) -> f32 {
+    self
+      .compute_child_layout(
+        node_id,
+        LayoutInput {
+          known_dimensions,
+          parent_size,
+          available_space,
+          sizing_mode,
+          axis: axis.into(),
+          run_mode: RunMode::ComputeSize,
+          vertical_margins_are_collapsible,
+        },
+      )
+      .size
+      .get_abs(axis)
+  }
 
-    /// Perform a full layout on the node given the specified constraints
-    #[inline(always)]
-    fn perform_child_layout(
-        &mut self,
-        node_id: NodeId,
-        known_dimensions: Size<Option<f32>>,
-        parent_size: Size<Option<f32>>,
-        available_space: Size<AvailableSpace>,
-        sizing_mode: SizingMode,
-        vertical_margins_are_collapsible: Line<bool>,
-    ) -> LayoutOutput {
-        self.compute_child_layout(
-            node_id,
-            LayoutInput {
-                known_dimensions,
-                parent_size,
-                available_space,
-                sizing_mode,
-                axis: RequestedAxis::Both,
-                run_mode: RunMode::PerformLayout,
-                vertical_margins_are_collapsible,
-            },
-        )
-    }
+  /// Perform a full layout on the node given the specified constraints
+  #[inline(always)]
+  fn perform_child_layout(
+    &mut self,
+    node_id: NodeId,
+    known_dimensions: Size<Option<f32>>,
+    parent_size: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+    sizing_mode: SizingMode,
+    vertical_margins_are_collapsible: Line<bool>,
+  ) -> LayoutOutput {
+    self.compute_child_layout(
+      node_id,
+      LayoutInput {
+        known_dimensions,
+        parent_size,
+        available_space,
+        sizing_mode,
+        axis: RequestedAxis::Both,
+        run_mode: RunMode::PerformLayout,
+        vertical_margins_are_collapsible,
+      },
+    )
+  }
 
-    /// Alias to `resolve_calc_value` with a shorter function name
-    #[inline(always)]
-    #[cfg(feature = "calc")]
-    fn calc(&self, val: *const (), basis: f32) -> f32 {
-        self.resolve_calc_value(val, basis)
-    }
+  /// Alias to `resolve_calc_value` with a shorter function name
+  #[inline(always)]
+  #[cfg(feature = "calc")]
+  fn calc(&self, val: *const (), basis: f32) -> f32 {
+    self.resolve_calc_value(val, basis)
+  }
 
-    /// Alias to `resolve_calc_value` with a shorter function name
-    #[inline(always)]
-    #[cfg(not(feature = "calc"))]
-    fn calc(&self, _val: *const (), _basis: f32) -> f32 {
-        0.0
-    }
+  /// Alias to `resolve_calc_value` with a shorter function name
+  #[inline(always)]
+  #[cfg(not(feature = "calc"))]
+  fn calc(&self, _val: *const (), _basis: f32) -> f32 {
+    0.0
+  }
 }
 
 impl<T: LayoutPartialTree> LayoutPartialTreeExt for T {}

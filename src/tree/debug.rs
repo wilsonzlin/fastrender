@@ -430,9 +430,11 @@ mod tests {
 
   #[test]
   fn test_debug_info_new() {
-    let info = DebugInfo::new(Some("div".to_string()), Some("main".to_string()), vec![
-      "container".to_string(),
-    ]);
+    let info = DebugInfo::new(
+      Some("div".to_string()),
+      Some("main".to_string()),
+      vec!["container".to_string()],
+    );
 
     assert_eq!(info.tag_name.as_deref(), Some("div"));
     assert_eq!(info.id.as_deref(), Some("main"));
@@ -442,10 +444,11 @@ mod tests {
 
   #[test]
   fn test_to_selector() {
-    let info = DebugInfo::new(Some("div".to_string()), Some("header".to_string()), vec![
-      "navbar".to_string(),
-      "fixed".to_string(),
-    ]);
+    let info = DebugInfo::new(
+      Some("div".to_string()),
+      Some("header".to_string()),
+      vec!["navbar".to_string(), "fixed".to_string()],
+    );
 
     assert_eq!(info.to_selector(), "div#header.navbar.fixed");
   }
@@ -466,10 +469,11 @@ mod tests {
 
   #[test]
   fn test_to_selector_classes_only() {
-    let info = DebugInfo::new(None, None, vec![
-      "button".to_string(),
-      "primary".to_string(),
-    ]);
+    let info = DebugInfo::new(
+      None,
+      None,
+      vec!["button".to_string(), "primary".to_string()],
+    );
 
     assert_eq!(info.to_selector(), ".button.primary");
   }
@@ -516,9 +520,11 @@ mod tests {
 
   #[test]
   fn test_short_description() {
-    let info1 = DebugInfo::new(Some("div".to_string()), Some("main".to_string()), vec![
-      "container".to_string(),
-    ]);
+    let info1 = DebugInfo::new(
+      Some("div".to_string()),
+      Some("main".to_string()),
+      vec!["container".to_string()],
+    );
     assert_eq!(info1.short_description(), "div#main");
 
     let info2 = DebugInfo::new(
@@ -534,9 +540,11 @@ mod tests {
 
   #[test]
   fn test_display_trait() {
-    let info = DebugInfo::new(Some("div".to_string()), Some("header".to_string()), vec![
-      "navbar".to_string(),
-    ]);
+    let info = DebugInfo::new(
+      Some("div".to_string()),
+      Some("header".to_string()),
+      vec!["navbar".to_string()],
+    );
 
     assert_eq!(format!("{}", info), "div#header.navbar");
   }
@@ -599,15 +607,21 @@ mod tests {
 
   #[test]
   fn test_debug_info_equality() {
-    let info1 = DebugInfo::new(Some("div".to_string()), Some("main".to_string()), vec![
-      "container".to_string(),
-    ]);
-    let info2 = DebugInfo::new(Some("div".to_string()), Some("main".to_string()), vec![
-      "container".to_string(),
-    ]);
-    let info3 = DebugInfo::new(Some("span".to_string()), Some("main".to_string()), vec![
-      "container".to_string(),
-    ]);
+    let info1 = DebugInfo::new(
+      Some("div".to_string()),
+      Some("main".to_string()),
+      vec!["container".to_string()],
+    );
+    let info2 = DebugInfo::new(
+      Some("div".to_string()),
+      Some("main".to_string()),
+      vec!["container".to_string()],
+    );
+    let info3 = DebugInfo::new(
+      Some("span".to_string()),
+      Some("main".to_string()),
+      vec!["container".to_string()],
+    );
 
     assert_eq!(info1, info2);
     assert_ne!(info1, info3);

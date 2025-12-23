@@ -9,9 +9,9 @@ use fastrender::style::media::ContrastPreference;
 use fastrender::style::media::DisplayMode;
 use fastrender::style::media::LightLevel;
 use fastrender::style::media::MediaContext;
-use fastrender::style::media::MediaType;
 use fastrender::style::media::MediaQuery;
 use fastrender::style::media::MediaQueryCache;
+use fastrender::style::media::MediaType;
 use fastrender::style::media::PointerCapability;
 use fastrender::style::media::Scripting;
 use fastrender::style::media::UpdateFrequency;
@@ -79,24 +79,36 @@ fn test_bootstrap_breakpoints() {
   // xxl: >= 1400px
 
   let breakpoints = [
-    ("(max-width: 575.98px)", vec![320.0, 480.0, 575.0], vec![
-      576.0, 768.0, 1024.0,
-    ]),
-    ("(min-width: 576px)", vec![576.0, 768.0, 1024.0], vec![
-      320.0, 480.0, 575.0,
-    ]),
-    ("(min-width: 768px)", vec![768.0, 992.0, 1200.0], vec![
-      320.0, 576.0, 767.0,
-    ]),
-    ("(min-width: 992px)", vec![992.0, 1024.0, 1200.0], vec![
-      320.0, 768.0, 991.0,
-    ]),
-    ("(min-width: 1200px)", vec![1200.0, 1400.0, 1920.0], vec![
-      320.0, 992.0, 1199.0,
-    ]),
-    ("(min-width: 1400px)", vec![1400.0, 1920.0, 2560.0], vec![
-      320.0, 1200.0, 1399.0,
-    ]),
+    (
+      "(max-width: 575.98px)",
+      vec![320.0, 480.0, 575.0],
+      vec![576.0, 768.0, 1024.0],
+    ),
+    (
+      "(min-width: 576px)",
+      vec![576.0, 768.0, 1024.0],
+      vec![320.0, 480.0, 575.0],
+    ),
+    (
+      "(min-width: 768px)",
+      vec![768.0, 992.0, 1200.0],
+      vec![320.0, 576.0, 767.0],
+    ),
+    (
+      "(min-width: 992px)",
+      vec![992.0, 1024.0, 1200.0],
+      vec![320.0, 768.0, 991.0],
+    ),
+    (
+      "(min-width: 1200px)",
+      vec![1200.0, 1400.0, 1920.0],
+      vec![320.0, 992.0, 1199.0],
+    ),
+    (
+      "(min-width: 1400px)",
+      vec![1400.0, 1920.0, 2560.0],
+      vec![320.0, 1200.0, 1399.0],
+    ),
   ];
 
   for (query_str, should_match, should_not_match) in breakpoints {
@@ -831,10 +843,8 @@ fn media_level5_features_evaluate() {
 
   assert!(washed.evaluate(&MediaQuery::parse("(light-level: washed)").unwrap()));
   assert!(dim.evaluate(&MediaQuery::parse("(light-level: dim)").unwrap()));
-  assert!(
-    MediaContext::screen(640.0, 480.0)
-      .evaluate(&MediaQuery::parse("(light-level: normal)").unwrap())
-  );
+  assert!(MediaContext::screen(640.0, 480.0)
+    .evaluate(&MediaQuery::parse("(light-level: normal)").unwrap()));
 
   let fullscreen = MediaContext::screen(1024.0, 768.0).with_display_mode(DisplayMode::Fullscreen);
   let standalone = MediaContext::screen(1024.0, 768.0).with_display_mode(DisplayMode::Standalone);

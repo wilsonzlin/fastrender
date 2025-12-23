@@ -21,9 +21,9 @@ pub use print::print_tree;
 #[cfg(feature = "serde")]
 pub(crate) fn deserialize_from_str<'de, S, D>(deserializer: D) -> Result<S, D::Error>
 where
-    S: for<'a> From<&'a str>,
-    D: serde::Deserializer<'de>,
+  S: for<'a> From<&'a str>,
+  D: serde::Deserializer<'de>,
 {
-    let s: String = serde::Deserialize::deserialize(deserializer)?;
-    Ok(S::from(&s))
+  let s: String = serde::Deserialize::deserialize(deserializer)?;
+  Ok(S::from(&s))
 }

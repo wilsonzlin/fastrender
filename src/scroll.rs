@@ -5,9 +5,9 @@ use crate::style::types::{
   Direction, Overflow, OverscrollBehavior, ScrollBehavior, ScrollSnapAlign, ScrollSnapAxis,
   ScrollSnapStop, ScrollSnapStrictness, WritingMode,
 };
-use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal, PhysicalSide};
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
+use crate::style::{block_axis_is_horizontal, inline_axis_is_horizontal, PhysicalSide};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 
 /// Viewport and element scroll offsets used when applying scroll snap.
@@ -87,16 +87,20 @@ pub struct ScrollSnapResult {
 fn is_vertical_writing_mode(mode: WritingMode) -> bool {
   matches!(
     mode,
-    WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr
+    WritingMode::VerticalRl
+      | WritingMode::VerticalLr
+      | WritingMode::SidewaysRl
+      | WritingMode::SidewaysLr
   )
 }
 
 fn inline_axis_positive(mode: WritingMode, direction: Direction) -> bool {
   match mode {
     WritingMode::HorizontalTb => direction != Direction::Rtl,
-    WritingMode::VerticalRl | WritingMode::VerticalLr | WritingMode::SidewaysRl | WritingMode::SidewaysLr => {
-      true
-    }
+    WritingMode::VerticalRl
+    | WritingMode::VerticalLr
+    | WritingMode::SidewaysRl
+    | WritingMode::SidewaysLr => true,
   }
 }
 
@@ -107,7 +111,11 @@ fn block_axis_positive(mode: WritingMode) -> bool {
   }
 }
 
-fn axis_sides(mode: WritingMode, direction: Direction, inline_axis: bool) -> (PhysicalSide, PhysicalSide) {
+fn axis_sides(
+  mode: WritingMode,
+  direction: Direction,
+  inline_axis: bool,
+) -> (PhysicalSide, PhysicalSide) {
   let horizontal = if inline_axis {
     inline_axis_is_horizontal(mode)
   } else {
@@ -369,7 +377,7 @@ impl PendingContainer {
     );
 
     Some(Self {
-      origin: origin,
+      origin,
       viewport,
       strictness: style.scroll_snap_type.strictness,
       behavior: style.scroll_behavior,
@@ -432,9 +440,10 @@ impl PendingContainer {
         margin_end,
         self.start_positive_x,
       ) {
-        self
-          .targets_x
-          .push(ScrollSnapTarget { position: pos, stop: style.scroll_snap_stop });
+        self.targets_x.push(ScrollSnapTarget {
+          position: pos,
+          stop: style.scroll_snap_stop,
+        });
       }
     }
 
@@ -463,9 +472,10 @@ impl PendingContainer {
         margin_end,
         self.start_positive_y,
       ) {
-        self
-          .targets_y
-          .push(ScrollSnapTarget { position: pos, stop: style.scroll_snap_stop });
+        self.targets_y.push(ScrollSnapTarget {
+          position: pos,
+          stop: style.scroll_snap_stop,
+        });
       }
     }
   }
@@ -474,14 +484,20 @@ impl PendingContainer {
     let mut min_x = self.content_bounds.min_x();
     let mut max_x = self.content_bounds.max_x();
     if self.snap_x {
-      if let Some(max_target_x) = self.targets_x.iter().map(|t| t.position).max_by(|a, b| {
-        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-      }) {
+      if let Some(max_target_x) = self
+        .targets_x
+        .iter()
+        .map(|t| t.position)
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+      {
         max_x = max_x.max(max_target_x + self.viewport.width);
       }
-      if let Some(min_target_x) = self.targets_x.iter().map(|t| t.position).min_by(|a, b| {
-        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-      }) {
+      if let Some(min_target_x) = self
+        .targets_x
+        .iter()
+        .map(|t| t.position)
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+      {
         min_x = min_x.min(min_target_x);
       }
     }
@@ -489,14 +505,20 @@ impl PendingContainer {
     let mut min_y = self.content_bounds.min_y();
     let mut max_y = self.content_bounds.max_y();
     if self.snap_y {
-      if let Some(max_target_y) = self.targets_y.iter().map(|t| t.position).max_by(|a, b| {
-        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-      }) {
+      if let Some(max_target_y) = self
+        .targets_y
+        .iter()
+        .map(|t| t.position)
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+      {
         max_y = max_y.max(max_target_y + self.viewport.height);
       }
-      if let Some(min_target_y) = self.targets_y.iter().map(|t| t.position).min_by(|a, b| {
-        a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-      }) {
+      if let Some(min_target_y) = self
+        .targets_y
+        .iter()
+        .map(|t| t.position)
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+      {
         min_y = min_y.min(min_target_y);
       }
     }
@@ -542,7 +564,9 @@ fn collect_scroll_metadata(
     } else {
       Size::new(node.bounds.width(), node.bounds.height())
     };
-    if let Some(container) = PendingContainer::new(node, style, origin, uses_viewport_scroll, viewport) {
+    if let Some(container) =
+      PendingContainer::new(node, style, origin, uses_viewport_scroll, viewport)
+    {
       stack.push(container);
       pushed = true;
     }
@@ -582,7 +606,13 @@ pub(crate) fn build_scroll_metadata(tree: &mut FragmentTree) -> ScrollMetadata {
   let mut metadata = ScrollMetadata::default();
   let mut stack = Vec::new();
   let root_viewport = tree.viewport_size();
-  collect_scroll_metadata(&mut tree.root, Point::ZERO, &mut stack, &mut metadata, root_viewport);
+  collect_scroll_metadata(
+    &mut tree.root,
+    Point::ZERO,
+    &mut stack,
+    &mut metadata,
+    root_viewport,
+  );
 
   for fragment in &mut tree.additional_fragments {
     collect_scroll_metadata(
@@ -605,7 +635,11 @@ fn snap_axis(
   bounds: &Rect,
   vertical: bool,
 ) -> f32 {
-  let origin = if vertical { bounds.min_y() } else { bounds.min_x() };
+  let origin = if vertical {
+    bounds.min_y()
+  } else {
+    bounds.min_x()
+  };
   let max_scroll = if vertical {
     (bounds.max_y() - origin - viewport_extent).max(0.0)
   } else {
@@ -615,8 +649,13 @@ fn snap_axis(
     .iter()
     .map(|t| (t.position - origin, t.stop))
     .collect();
-  pick_snap_target(current - origin, max_scroll, strictness, viewport_extent * 0.5, &candidates)
-    + origin
+  pick_snap_target(
+    current - origin,
+    max_scroll,
+    strictness,
+    viewport_extent * 0.5,
+    &candidates,
+  ) + origin
 }
 
 /// Applies scroll snap to all snap containers in the fragment tree.
@@ -833,7 +872,10 @@ impl<'a> ScrollChainState<'a> {
 
     let snap = style.and_then(|s| {
       if s.scroll_snap_type.axis != ScrollSnapAxis::None {
-        Some(ScrollChainSnapInfo { container: node, origin })
+        Some(ScrollChainSnapInfo {
+          container: node,
+          origin,
+        })
       } else {
         None
       }
@@ -974,7 +1016,10 @@ pub fn apply_scroll_chain(
     overscroll.push(over);
   }
 
-  ScrollChainResult { remaining, overscroll }
+  ScrollChainResult {
+    remaining,
+    overscroll,
+  }
 }
 
 fn apply_scroll_snap_for_container(
@@ -1070,8 +1115,16 @@ fn apply_scroll_snap_for_container(
   let max_scroll_x = (snap_bounds.max_x - viewport.width).max(0.0);
   let max_scroll_y = (snap_bounds.max_y - viewport.height).max(0.0);
   let strictness = style.scroll_snap_type.strictness;
-  let shift_x = if min_target_x > 0.0 { min_target_x } else { 0.0 };
-  let shift_y = if min_target_y > 0.0 { min_target_y } else { 0.0 };
+  let shift_x = if min_target_x > 0.0 {
+    min_target_x
+  } else {
+    0.0
+  };
+  let shift_y = if min_target_y > 0.0 {
+    min_target_y
+  } else {
+    0.0
+  };
 
   let snapped_x = if snap_x {
     pick_snap_target(
@@ -1222,8 +1275,8 @@ pub(crate) fn find_snap_container<'a>(
 mod tests {
   use super::*;
   use crate::geometry::{Point, Rect, Size};
-  use std::sync::Arc;
   use crate::tree::fragment_tree::FragmentContent;
+  use std::sync::Arc;
 
   fn container_style(axis: ScrollSnapAxis, strictness: ScrollSnapStrictness) -> Arc<ComputedStyle> {
     let mut style = ComputedStyle::default();
@@ -1264,9 +1317,12 @@ mod tests {
     );
     let mut tree = FragmentTree::with_viewport(container, Size::new(100.0, 100.0));
 
-    let snapped = apply_scroll_snap(&mut tree, &ScrollState::with_viewport(Point::new(90.0, 160.0)))
-      .state
-      .viewport;
+    let snapped = apply_scroll_snap(
+      &mut tree,
+      &ScrollState::with_viewport(Point::new(90.0, 160.0)),
+    )
+    .state
+    .viewport;
     assert!((snapped.x - 120.0).abs() < 0.1);
     assert!((snapped.y - 150.0).abs() < 0.1);
   }
@@ -1334,11 +1390,8 @@ mod tests {
     target_style.scroll_snap_align.inline = ScrollSnapAlign::Start;
     let target_style = Arc::new(target_style);
 
-    let target = FragmentNode::new_block_styled(
-      Rect::from_xywh(80.0, 0.0, 80.0, 50.0),
-      vec![],
-      target_style,
-    );
+    let target =
+      FragmentNode::new_block_styled(Rect::from_xywh(80.0, 0.0, 80.0, 50.0), vec![], target_style);
 
     let container = FragmentNode::new_block_styled(
       Rect::from_xywh(0.0, 0.0, 100.0, 80.0),
@@ -1382,9 +1435,18 @@ mod tests {
     let result = apply_scroll_chain(&mut chain, Point::new(0.0, 400.0), ScrollOptions::default());
 
     assert_eq!(chain.len(), 2, "inner and outer should both participate");
-    assert!((chain[0].scroll.y - 200.0).abs() < 1e-3, "inner should clamp to max");
-    assert!(chain[1].scroll.y.abs() < 1e-3, "outer should not chain past contain");
-    assert!(result.remaining.y.abs() < 1e-3, "no scroll should leak past outer");
+    assert!(
+      (chain[0].scroll.y - 200.0).abs() < 1e-3,
+      "inner should clamp to max"
+    );
+    assert!(
+      chain[1].scroll.y.abs() < 1e-3,
+      "outer should not chain past contain"
+    );
+    assert!(
+      result.remaining.y.abs() < 1e-3,
+      "no scroll should leak past outer"
+    );
   }
 
   #[test]
@@ -1393,9 +1455,18 @@ mod tests {
     let mut chain = build_scroll_chain(&outer, Size::new(100.0, 100.0), &[0]);
     let result = apply_scroll_chain(&mut chain, Point::new(0.0, 400.0), ScrollOptions::default());
 
-    assert!((chain[0].scroll.y - 200.0).abs() < 1e-3, "inner should still clamp");
-    assert!(chain[1].scroll.y > 0.0, "outer should receive chained delta");
-    assert!(result.remaining.y.abs() < 1e-3, "all scroll should be consumed");
+    assert!(
+      (chain[0].scroll.y - 200.0).abs() < 1e-3,
+      "inner should still clamp"
+    );
+    assert!(
+      chain[1].scroll.y > 0.0,
+      "outer should receive chained delta"
+    );
+    assert!(
+      result.remaining.y.abs() < 1e-3,
+      "all scroll should be consumed"
+    );
   }
 
   #[test]
@@ -1406,8 +1477,14 @@ mod tests {
     options.simulate_overscroll = true;
     let result = apply_scroll_chain(&mut chain, Point::new(0.0, 300.0), options);
 
-    assert!(result.overscroll[0].y.abs() < 1e-3, "overscroll glow should be suppressed");
-    assert!(chain[1].scroll.y.abs() < 1e-3, "outer should not chain when none is set");
+    assert!(
+      result.overscroll[0].y.abs() < 1e-3,
+      "overscroll glow should be suppressed"
+    );
+    assert!(
+      chain[1].scroll.y.abs() < 1e-3,
+      "outer should not chain when none is set"
+    );
   }
 
   #[test]
@@ -1438,9 +1515,18 @@ mod tests {
     let mut chain = build_scroll_chain(&outer, Size::new(100.0, 100.0), &[0]);
     let result = apply_scroll_chain(&mut chain, Point::new(400.0, 0.0), ScrollOptions::default());
 
-    assert!((chain[0].scroll.x - 200.0).abs() < 1e-3, "inner should clamp on x");
-    assert!(chain[1].scroll.x.abs() < 1e-3, "outer should not receive chained x scroll");
-    assert!(result.remaining.x.abs() < 1e-3, "scroll should stop at contained edge");
+    assert!(
+      (chain[0].scroll.x - 200.0).abs() < 1e-3,
+      "inner should clamp on x"
+    );
+    assert!(
+      chain[1].scroll.x.abs() < 1e-3,
+      "outer should not receive chained x scroll"
+    );
+    assert!(
+      result.remaining.x.abs() < 1e-3,
+      "scroll should stop at contained edge"
+    );
   }
 
   #[test]
@@ -1497,6 +1583,9 @@ mod tests {
     let result = apply_scroll_chain(&mut chain, Point::new(0.0, 180.0), ScrollOptions::default());
 
     assert!(result.remaining.y.abs() < 1e-3);
-    assert!((chain[1].scroll.y - 200.0).abs() < 1e-2, "outer should snap to next item");
+    assert!(
+      (chain[1].scroll.y - 200.0).abs() < 1e-2,
+      "outer should snap to next item"
+    );
   }
 }

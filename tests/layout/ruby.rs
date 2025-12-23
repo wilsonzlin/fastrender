@@ -80,12 +80,10 @@ fn span_for_text_x(root: &fastrender::FragmentNode, needle: &str) -> Option<(f32
 
   let mut spans = Vec::new();
   collect(root, &mut spans, 0.0, needle);
-  spans
-    .iter()
-    .fold(None, |acc, (x1, x2)| match acc {
-      Some((min, max)) => Some((min.min(*x1), max.max(*x2))),
-      None => Some((*x1, *x2)),
-    })
+  spans.iter().fold(None, |acc, (x1, x2)| match acc {
+    Some((min, max)) => Some((min.min(*x1), max.max(*x2))),
+    None => Some((*x1, *x2)),
+  })
 }
 
 fn count_lines(fragment: &fastrender::FragmentNode) -> usize {
@@ -111,7 +109,10 @@ fn ruby_annotations_position_above_base() {
   let annotation = baseline_for_text(&tree.root, "かん");
 
   let (base_baseline, anno_baseline) = (base.expect("base text"), annotation.expect("annotation"));
-  assert!(anno_baseline < base_baseline, "annotation should sit above base text");
+  assert!(
+    anno_baseline < base_baseline,
+    "annotation should sit above base text"
+  );
 }
 
 #[test]
@@ -151,7 +152,10 @@ fn ruby_inter_character_mode_still_renders_annotations() {
   let base_span = span_for_text_x(&tree.root, "文").expect("base bounds");
   let annotation_span = span_for_text_x(&tree.root, "ぶん").expect("annotation bounds");
 
-  assert!(annotation < base, "annotation should be positioned against the base");
+  assert!(
+    annotation < base,
+    "annotation should be positioned against the base"
+  );
   assert!(
     annotation_span.1 - annotation_span.0 >= base_span.1 - base_span.0 - 0.5,
     "inter-character ruby should distribute annotation across the base"

@@ -15,11 +15,11 @@ pub(crate) fn decode_data_url(url: &str) -> Result<FetchedResource> {
   }
 
   let rest = &url[DATA_URL_PREFIX.len()..];
-  let (metadata, data) = rest.split_once(',').ok_or_else(|| Error::Image(
-    ImageError::InvalidDataUrl {
+  let (metadata, data) = rest.split_once(',').ok_or_else(|| {
+    Error::Image(ImageError::InvalidDataUrl {
       reason: "Missing comma in data URL".to_string(),
-    },
-  ))?;
+    })
+  })?;
 
   let parsed = parse_metadata(metadata);
 
@@ -105,9 +105,11 @@ fn decode_base64_data(data: &str) -> Result<Vec<u8>> {
 
   base64::engine::general_purpose::STANDARD
     .decode(input)
-    .map_err(|e| Error::Image(ImageError::InvalidDataUrl {
-      reason: format!("Invalid base64: {e}"),
-    }))
+    .map_err(|e| {
+      Error::Image(ImageError::InvalidDataUrl {
+        reason: format!("Invalid base64: {e}"),
+      })
+    })
 }
 
 /// Percent-decode a URL payload without treating '+' specially.

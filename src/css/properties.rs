@@ -2781,8 +2781,7 @@ fn parse_round_function<'i, 't>(
   input.skip_whitespace();
   let strategy = input
     .try_parse(|p| {
-      p
-        .expect_ident()
+      p.expect_ident()
         .map(|ident| ident.as_ref().to_ascii_lowercase())
     })
     .ok()

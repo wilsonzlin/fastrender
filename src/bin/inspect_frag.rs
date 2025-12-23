@@ -26,8 +26,8 @@ use fastrender::style::cascade::apply_styles_with_media_and_target;
 use fastrender::style::cascade::StyledNode;
 use fastrender::style::computed::Visibility;
 use fastrender::style::display::Display;
-use fastrender::style::media::MediaType;
 use fastrender::style::media::MediaContext;
+use fastrender::style::media::MediaType;
 use fastrender::style::position::Position;
 use fastrender::style::ComputedStyle;
 use fastrender::tree::box_generation::generate_box_tree_with_anonymous_fixup;
@@ -233,9 +233,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
 
-  let mut renderer = FastRender::builder()
-    .device_pixel_ratio(args.dpr)
-    .build()?;
+  let mut renderer = FastRender::builder().device_pixel_ratio(args.dpr).build()?;
   renderer.set_base_url(resource_base.clone());
 
   if let Ok(val) = env::var("FASTR_TRACE_BOXES") {
@@ -652,7 +650,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
       })
       .collect();
-    println!("  #{idx}: box_id={} {} -> [{}]", box_id, label, ranges.join(" | "));
+    println!(
+      "  #{idx}: box_id={} {} -> [{}]",
+      box_id,
+      label,
+      ranges.join(" | ")
+    );
   }
 
   println!("fragments with transforms: {}", transformed.len());
@@ -679,7 +682,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   if !column_boxes.is_empty() {
     println!("table columns/colgroups: {}", column_boxes.len());
     for (idx, (id, display, span, dbg)) in column_boxes.iter().enumerate().take(8) {
-      println!("  #{idx}: id={} display={:?} span={} {}", id, display, span, dbg);
+      println!(
+        "  #{idx}: id={} display={:?} span={} {}",
+        id, display, span, dbg
+      );
     }
   }
   if !spanning_cells.is_empty() {
@@ -739,13 +745,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(style) = frag.style.as_deref() {
       let bg = style.background_color;
       if bg.a > 0.0 && bg.r == 12 && bg.g == 12 && bg.b == 12 {
-        dark_backgrounds.push((abs.y(), abs.x(), *abs, match &frag.content {
-          FragmentContent::Block { box_id } | FragmentContent::Inline { box_id, .. } => box_id
-            .and_then(|id| box_debug.get(&id))
-            .cloned()
-            .unwrap_or_else(|| format!("{:?}", frag.content)),
-          _ => format!("{:?}", frag.content),
-        }));
+        dark_backgrounds.push((
+          abs.y(),
+          abs.x(),
+          *abs,
+          match &frag.content {
+            FragmentContent::Block { box_id } | FragmentContent::Inline { box_id, .. } => box_id
+              .and_then(|id| box_debug.get(&id))
+              .cloned()
+              .unwrap_or_else(|| format!("{:?}", frag.content)),
+            _ => format!("{:?}", frag.content),
+          },
+        ));
       }
     }
   }
@@ -1760,11 +1771,7 @@ fn collect_column_info(
 ) {
   let display = node.style.display;
   if matches!(display, Display::TableColumn | Display::TableColumnGroup) {
-    let span = node
-      .debug_info
-      .as_ref()
-      .map(|d| d.column_span)
-      .unwrap_or(1);
+    let span = node.debug_info.as_ref().map(|d| d.column_span).unwrap_or(1);
     columns.push((node.id, display, span, format_debug_info(node)));
   }
   if matches!(display, Display::TableCell) {

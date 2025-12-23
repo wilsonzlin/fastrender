@@ -33,10 +33,10 @@
 use crate::layout::utils::content_size_from_box_sizing;
 use crate::layout::utils::resolve_length_with_percentage;
 use crate::layout::utils::resolve_scrollbar_width;
-use crate::style::PhysicalSide;
 use crate::style::types::Overflow;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
+use crate::style::PhysicalSide;
 
 /// Result of width computation
 ///

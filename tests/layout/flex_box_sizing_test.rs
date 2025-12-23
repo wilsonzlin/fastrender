@@ -128,9 +128,11 @@ fn flex_item_auto_min_size_clamps_to_min_content() {
     Arc::new(ComputedStyle::default()),
     "ThisIsALongUnbreakableWord".to_string(),
   );
-  let child_box = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![
-    text,
-  ]);
+  let child_box = BoxNode::new_block(
+    Arc::new(child_style),
+    FormattingContextType::Block,
+    vec![text],
+  );
   let child_for_intrinsic = child_box.clone();
 
   let container = BoxNode::new_block(
@@ -175,9 +177,11 @@ fn flex_item_auto_min_size_column_uses_block_min_content() {
     Arc::new(ComputedStyle::default()),
     "TallContentLine".to_string(),
   );
-  let child_box = BoxNode::new_block(Arc::new(child_style), FormattingContextType::Block, vec![
-    text,
-  ]);
+  let child_box = BoxNode::new_block(
+    Arc::new(child_style),
+    FormattingContextType::Block,
+    vec![text],
+  );
   let child_for_intrinsic = child_box.clone();
 
   let container = BoxNode::new_block(

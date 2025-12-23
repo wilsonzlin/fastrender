@@ -29,7 +29,6 @@ use fastrender::text::font_loader::FontContext;
 use fastrender::text::pipeline::GlyphPosition;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::tree::fragment_tree::FragmentTree;
-use fastrender::TextRasterizer;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
 use fastrender::ClipItem;
@@ -41,6 +40,7 @@ use fastrender::FillRoundedRectItem;
 use fastrender::OpacityItem;
 use fastrender::OptimizationConfig;
 use fastrender::StrokeRectItem;
+use fastrender::TextRasterizer;
 use tiny_skia::Pixmap;
 
 // ============================================================================
@@ -710,8 +710,7 @@ fn bench_text_rasterizer_cache(c: &mut Criterion) {
     b.iter(|| {
       rasterizer.reset_cache_stats();
       // Warm the cache once
-      let _ =
-        rasterizer.render_glyphs(&glyphs, &font, 18.0, 10.0, 50.0, Rgba::BLACK, &mut pixmap);
+      let _ = rasterizer.render_glyphs(&glyphs, &font, 18.0, 10.0, 50.0, Rgba::BLACK, &mut pixmap);
 
       for i in 0..5 {
         let baseline = 20.0 + (i as f32) * 6.0;

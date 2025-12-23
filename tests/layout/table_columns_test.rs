@@ -498,10 +498,10 @@ fn test_min_column_width_setting() {
 #[test]
 fn test_compute_constraints_simple_table() {
   // 2x2 table
-  let cell_widths = vec![vec![(50.0, 100.0, 1), (75.0, 150.0, 1)], vec![
-    (60.0, 120.0, 1),
-    (80.0, 160.0, 1),
-  ]];
+  let cell_widths = vec![
+    vec![(50.0, 100.0, 1), (75.0, 150.0, 1)],
+    vec![(60.0, 120.0, 1), (80.0, 160.0, 1)],
+  ];
 
   let constraints = compute_column_constraints(&cell_widths, 2);
 
@@ -518,9 +518,10 @@ fn test_compute_constraints_simple_table() {
 #[test]
 fn test_compute_constraints_uneven_rows() {
   // First row has 2 cells, second has 1 wide cell
-  let cell_widths = vec![vec![(50.0, 100.0, 1), (50.0, 100.0, 1)], vec![(
-    200.0, 400.0, 2,
-  )]];
+  let cell_widths = vec![
+    vec![(50.0, 100.0, 1), (50.0, 100.0, 1)],
+    vec![(200.0, 400.0, 2)],
+  ];
 
   let constraints = compute_column_constraints(&cell_widths, 2);
 

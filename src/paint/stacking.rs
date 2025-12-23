@@ -741,7 +741,13 @@ fn build_stacking_tree_internal(
   if creates_context {
     // Create a new stacking context
     let z_index = style
-      .map(|s| if s.top_layer.is_some() { i32::MAX } else { s.z_index.unwrap_or(0) })
+      .map(|s| {
+        if s.top_layer.is_some() {
+          i32::MAX
+        } else {
+          s.z_index.unwrap_or(0)
+        }
+      })
       .unwrap_or(0);
     let reason = style
       .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))
@@ -889,7 +895,13 @@ where
 
   if creates_context {
     let z_index = style
-      .map(|s| if s.top_layer.is_some() { i32::MAX } else { s.z_index.unwrap_or(0) })
+      .map(|s| {
+        if s.top_layer.is_some() {
+          i32::MAX
+        } else {
+          s.z_index.unwrap_or(0)
+        }
+      })
       .unwrap_or(0);
     let reason = style
       .and_then(|s| get_stacking_context_reason(s, parent_style, is_root))

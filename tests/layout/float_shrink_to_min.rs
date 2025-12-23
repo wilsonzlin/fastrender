@@ -22,9 +22,11 @@ fn float_auto_width_honors_min_width() {
   float_style.min_width = Some(Length::px(150.0));
   let float_box = BoxNode::new_block(Arc::new(float_style), FormattingContextType::Block, vec![]);
 
-  let container = BoxNode::new_block(container_style, FormattingContextType::Block, vec![
-    float_box,
-  ]);
+  let container = BoxNode::new_block(
+    container_style,
+    FormattingContextType::Block,
+    vec![float_box],
+  );
 
   let bfc = BlockFormattingContext::new();
   let constraints = LayoutConstraints::definite(100.0, 1000.0);
@@ -52,13 +54,17 @@ fn float_auto_width_clamps_to_max_width() {
     Arc::new(ComputedStyle::default()),
     "Hello world".to_string(),
   );
-  let float_box = BoxNode::new_block(Arc::new(float_style), FormattingContextType::Block, vec![
-    text_child,
-  ]);
+  let float_box = BoxNode::new_block(
+    Arc::new(float_style),
+    FormattingContextType::Block,
+    vec![text_child],
+  );
 
-  let container = BoxNode::new_block(container_style, FormattingContextType::Block, vec![
-    float_box,
-  ]);
+  let container = BoxNode::new_block(
+    container_style,
+    FormattingContextType::Block,
+    vec![float_box],
+  );
 
   let bfc = BlockFormattingContext::new();
   let constraints = LayoutConstraints::definite(200.0, 1000.0);

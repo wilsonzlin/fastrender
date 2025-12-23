@@ -243,10 +243,10 @@ pub fn parse_grid_template_shorthand(value: &str) -> Option<ParsedGridTemplate> 
     }
     Some((tracks, vec![Vec::new(); row_sizes_raw.len() + 1]))
   } else {
-    Some((vec![GridTrack::Auto; areas.len()], vec![
-      Vec::new();
-      areas.len() + 1
-    ]))
+    Some((
+      vec![GridTrack::Auto; areas.len()],
+      vec![Vec::new(); areas.len() + 1],
+    ))
   };
 
   // Column tracks: explicit slash wins; otherwise derive auto from area width.

@@ -578,9 +578,11 @@ mod tests {
   #[test]
   fn test_enhanced_printer_with_debug_info() {
     let printer = EnhancedTreePrinter::with_config(PrintConfig::test());
-    let debug_info = DebugInfo::new(Some("div".to_string()), Some("header".to_string()), vec![
-      "navbar".to_string(),
-    ]);
+    let debug_info = DebugInfo::new(
+      Some("div".to_string()),
+      Some("header".to_string()),
+      vec!["navbar".to_string()],
+    );
     let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![])
       .with_debug_info(debug_info);
     let output = printer.print_box_tree(&root);

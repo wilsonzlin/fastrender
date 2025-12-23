@@ -679,9 +679,11 @@ fn test_count_pseudo_boxes_with_pseudos() {
     .unwrap();
   let normal = BoxNode::new_text(default_style(), "Normal".to_string());
 
-  let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    before, normal, after,
-  ]);
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![before, normal, after],
+  );
 
   assert_eq!(count_pseudo_boxes(&root), 2);
 }
@@ -694,17 +696,20 @@ fn test_count_pseudo_boxes_nested() {
   let inner_before = generator
     .generate_box(PseudoElementType::Before, &style)
     .unwrap();
-  let inner_block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    inner_before,
-  ]);
+  let inner_block = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![inner_before],
+  );
 
   let outer_after = generator
     .generate_box(PseudoElementType::After, &style)
     .unwrap();
-  let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    inner_block,
-    outer_after,
-  ]);
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![inner_block, outer_after],
+  );
 
   assert_eq!(count_pseudo_boxes(&root), 2);
 }
@@ -727,9 +732,11 @@ fn test_find_pseudo_boxes_with_pseudos() {
     .generate_box(PseudoElementType::After, &style)
     .unwrap();
 
-  let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    before, after,
-  ]);
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![before, after],
+  );
 
   let found = find_pseudo_boxes(&root);
   assert_eq!(found.len(), 2);
@@ -864,9 +871,11 @@ fn test_multiple_pseudo_in_siblings() {
   let after1 = generator
     .generate_box(PseudoElementType::After, &style)
     .unwrap();
-  let sibling1 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    before1, after1,
-  ]);
+  let sibling1 = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![before1, after1],
+  );
 
   let before2 = generator
     .generate_box(PseudoElementType::Before, &style)
@@ -874,13 +883,17 @@ fn test_multiple_pseudo_in_siblings() {
   let after2 = generator
     .generate_box(PseudoElementType::After, &style)
     .unwrap();
-  let sibling2 = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    before2, after2,
-  ]);
+  let sibling2 = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![before2, after2],
+  );
 
-  let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    sibling1, sibling2,
-  ]);
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![sibling1, sibling2],
+  );
 
   assert_eq!(count_pseudo_boxes(&root), 4);
 }

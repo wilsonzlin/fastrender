@@ -112,9 +112,9 @@ use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use base64::Engine;
 use encoding_rs::Encoding;
-use image::ImageEncoder;
 use image::codecs::png::PngEncoder;
 use image::ColorType;
+use image::ImageEncoder;
 use percent_encoding::percent_decode;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -4298,7 +4298,12 @@ impl Painter {
     Some(svg)
   }
 
-  fn foreign_object_image_tag(&self, info: &ForeignObjectInfo, data_url: &str, idx: usize) -> String {
+  fn foreign_object_image_tag(
+    &self,
+    info: &ForeignObjectInfo,
+    data_url: &str,
+    idx: usize,
+  ) -> String {
     let mut parts: Vec<String> = Vec::new();
     parts.push(format!("x=\"{:.6}\"", info.x));
     parts.push(format!("y=\"{:.6}\"", info.y));

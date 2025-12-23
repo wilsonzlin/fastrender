@@ -2065,10 +2065,10 @@ mod tests {
 
   #[test]
   fn test_compute_column_constraints_simple() {
-    let cell_widths = vec![vec![(50.0, 100.0, 1), (75.0, 150.0, 1)], vec![
-      (60.0, 120.0, 1),
-      (80.0, 160.0, 1),
-    ]];
+    let cell_widths = vec![
+      vec![(50.0, 100.0, 1), (75.0, 150.0, 1)],
+      vec![(60.0, 120.0, 1), (80.0, 160.0, 1)],
+    ];
 
     let constraints = compute_column_constraints(&cell_widths, 2);
 

@@ -22,9 +22,9 @@ use image::DynamicImage;
 use image::GenericImageView;
 use image::ImageFormat;
 use image::RgbaImage;
-use std::convert::TryFrom;
 use roxmltree::Document;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -415,13 +415,13 @@ impl ImageCache {
 
   fn decode_avif(bytes: &[u8]) -> std::result::Result<DynamicImage, image::ImageError> {
     let decoder = AvifDecoder::from_avif(bytes).map_err(|err| Self::avif_error(err))?;
-    let image = decoder
-      .to_image()
-      .map_err(|err| Self::avif_error(err))?;
+    let image = decoder.to_image().map_err(|err| Self::avif_error(err))?;
     Self::avif_image_to_dynamic(image)
   }
 
-  fn avif_image_to_dynamic(image: AvifImage) -> std::result::Result<DynamicImage, image::ImageError> {
+  fn avif_image_to_dynamic(
+    image: AvifImage,
+  ) -> std::result::Result<DynamicImage, image::ImageError> {
     let dimension_error = || {
       image::ImageError::Parameter(image::error::ParameterError::from_kind(
         image::error::ParameterErrorKind::DimensionMismatch,
@@ -941,7 +941,10 @@ mod tests {
     let rgba = image.image.to_rgba8();
     let left_alpha = rgba.get_pixel(5, 10)[3];
     let right_alpha = rgba.get_pixel(15, 10)[3];
-    assert!(left_alpha < right_alpha, "mask should reduce left side opacity");
+    assert!(
+      left_alpha < right_alpha,
+      "mask should reduce left side opacity"
+    );
   }
 
   #[test]
@@ -1091,14 +1094,16 @@ mod tests {
   }
 
   fn avif_fixture_bytes() -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-      .join("tests/fixtures/avif/solid.avif");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/avif/solid.avif");
     std::fs::read(&path).expect("read avif fixture")
   }
 
   fn assert_green_pixel(pixel: [u8; 4]) {
     assert!(pixel[1] >= 180, "expected green channel, got {pixel:?}");
-    assert!(pixel[0] < 50 && pixel[2] < 50, "expected low red/blue, got {pixel:?}");
+    assert!(
+      pixel[0] < 50 && pixel[2] < 50,
+      "expected low red/blue, got {pixel:?}"
+    );
   }
 
   #[test]
@@ -1127,7 +1132,9 @@ mod tests {
     });
     let cache = ImageCache::with_fetcher(fetcher);
 
-    let image = cache.load("test://avif.sniff").expect("decode avif via sniffing");
+    let image = cache
+      .load("test://avif.sniff")
+      .expect("decode avif via sniffing");
     assert_eq!(image.width(), 4);
     assert_eq!(image.height(), 4);
 

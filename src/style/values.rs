@@ -152,7 +152,13 @@ impl LengthUnit {
   pub fn is_viewport_relative(self) -> bool {
     matches!(
       self,
-      Self::Vw | Self::Vh | Self::Vmin | Self::Vmax | Self::Dvw | Self::Dvh | Self::Dvmin
+      Self::Vw
+        | Self::Vh
+        | Self::Vmin
+        | Self::Vmax
+        | Self::Dvw
+        | Self::Dvh
+        | Self::Dvmin
         | Self::Dvmax
     )
   }

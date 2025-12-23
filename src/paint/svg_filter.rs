@@ -2,12 +2,12 @@ use crate::image_loader::ImageCache;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::style::color;
 use crate::Rgba;
+use rayon::prelude::*;
 use roxmltree::Document;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use rayon::prelude::*;
 use tiny_skia::{BlendMode, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
 
 static FILTER_CACHE: OnceLock<Mutex<HashMap<String, Arc<SvgFilter>>>> = OnceLock::new();
@@ -160,7 +160,11 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
   Some(filter)
 }
 
-fn parse_filter_definition(svg: &str, fragment: Option<&str>, image_cache: &ImageCache) -> Option<Arc<SvgFilter>> {
+fn parse_filter_definition(
+  svg: &str,
+  fragment: Option<&str>,
+  image_cache: &ImageCache,
+) -> Option<Arc<SvgFilter>> {
   let doc = Document::parse(svg).ok()?;
   let filter_node = doc.descendants().find(|n| {
     n.has_tag_name("filter")
@@ -291,7 +295,10 @@ fn parse_fe_color_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 fn parse_fe_blend(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input1 = parse_input(node.attribute("in"));
   let input2 = parse_input(node.attribute("in2"));
-  let mode_attr = node.attribute("mode").unwrap_or("normal").to_ascii_lowercase();
+  let mode_attr = node
+    .attribute("mode")
+    .unwrap_or("normal")
+    .to_ascii_lowercase();
   let mode = match mode_attr.as_str() {
     "multiply" => BlendMode::Multiply,
     "screen" => BlendMode::Screen,
@@ -343,7 +350,10 @@ fn parse_fe_component_transfer(node: &roxmltree::Node) -> Option<FilterPrimitive
 }
 
 fn parse_transfer_fn(node: &roxmltree::Node) -> Option<TransferFn> {
-  let ty = node.attribute("type").unwrap_or("identity").to_ascii_lowercase();
+  let ty = node
+    .attribute("type")
+    .unwrap_or("identity")
+    .to_ascii_lowercase();
   match ty.as_str() {
     "linear" => {
       let slope = node

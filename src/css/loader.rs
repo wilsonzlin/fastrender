@@ -271,7 +271,10 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
           out.push_str(block_text);
           last_emitted = parser.position();
         }
-        Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
+        Token::Function(_)
+        | Token::ParenthesisBlock
+        | Token::SquareBracketBlock
+        | Token::CurlyBracketBlock => {
           let parse_result = parser.parse_nested_block(|nested| {
             let start = nested.position();
             let rewritten = rewrite_urls_in_parser(nested, base_url, 0);

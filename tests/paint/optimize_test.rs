@@ -7,6 +7,8 @@ use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list::ResolvedFilter;
+use fastrender::style::types::BackfaceVisibility;
+use fastrender::style::types::TransformStyle;
 use fastrender::BlendMode;
 use fastrender::BlendModeItem;
 use fastrender::BorderRadii;
@@ -34,8 +36,6 @@ use fastrender::StrokeRoundedRectItem;
 use fastrender::Transform2D;
 use fastrender::Transform3D;
 use fastrender::TransformItem;
-use fastrender::style::types::BackfaceVisibility;
-use fastrender::style::types::TransformStyle;
 use std::sync::Arc;
 
 // ============================================================================

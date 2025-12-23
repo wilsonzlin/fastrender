@@ -669,9 +669,11 @@ fn block_intrinsic_width_ignores_floats() {
   float_style.height = Some(Length::px(10.0));
   let float_child = BoxNode::new_block(Arc::new(float_style), FormattingContextType::Block, vec![]);
 
-  let parent = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-    float_child,
-  ]);
+  let parent = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![float_child],
+  );
   let block_fc = factory.create(FormattingContextType::Block);
 
   let min = block_fc

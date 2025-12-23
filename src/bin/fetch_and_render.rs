@@ -132,12 +132,8 @@ fn parse_viewport(s: &str) -> std::result::Result<(u32, u32), String> {
   if parts.len() != 2 {
     return Err("viewport must be WxH (e.g., 1200x800)".to_string());
   }
-  let w = parts[0]
-    .parse::<u32>()
-    .map_err(|_| "invalid width")?;
-  let h = parts[1]
-    .parse::<u32>()
-    .map_err(|_| "invalid height")?;
+  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
+  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
   if w == 0 || h == 0 {
     return Err("width and height must be > 0".to_string());
   }
@@ -383,7 +379,11 @@ mod tests {
                 <link rel="icon" href="/favicon.ico">
             </head><body></body></html>
         "#;
-    let urls = extract_css_links(html, "https://example.com/site/page.html", MediaType::Screen);
+    let urls = extract_css_links(
+      html,
+      "https://example.com/site/page.html",
+      MediaType::Screen,
+    );
     assert_eq!(urls, vec!["https://example.com/styles/a.css".to_string()]);
   }
 

@@ -463,9 +463,11 @@ impl PseudoElementGenerator {
 
     // Add debug info if enabled
     let pseudo_box = if self.include_debug_info {
-      let debug_info = DebugInfo::new(Some(pseudo_type.short_name().to_string()), None, vec![
-        "pseudo-element".to_string(),
-      ]);
+      let debug_info = DebugInfo::new(
+        Some(pseudo_type.short_name().to_string()),
+        None,
+        vec!["pseudo-element".to_string()],
+      );
       pseudo_box.with_debug_info(debug_info)
     } else {
       pseudo_box
@@ -1026,9 +1028,11 @@ mod tests {
 
     let normal = BoxNode::new_text(default_style(), "Normal".to_string());
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      before, normal, after,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![before, normal, after],
+    );
 
     assert_eq!(count_pseudo_boxes(&root), 2);
   }
@@ -1047,9 +1051,11 @@ mod tests {
 
     let normal = BoxNode::new_text(default_style(), "Normal".to_string());
 
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      before, normal, after,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![before, normal, after],
+    );
 
     let found = find_pseudo_boxes(&root);
     assert_eq!(found.len(), 2);
@@ -1132,17 +1138,20 @@ mod tests {
     let inner_pseudo = generator
       .generate_box(PseudoElementType::Before, &style)
       .unwrap();
-    let inner_block = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      inner_pseudo,
-    ]);
+    let inner_block = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![inner_pseudo],
+    );
 
     let outer_pseudo = generator
       .generate_box(PseudoElementType::After, &style)
       .unwrap();
-    let root = BoxNode::new_block(default_style(), FormattingContextType::Block, vec![
-      inner_block,
-      outer_pseudo,
-    ]);
+    let root = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![inner_block, outer_pseudo],
+    );
 
     // Should find both pseudo boxes
     assert_eq!(count_pseudo_boxes(&root), 2);
