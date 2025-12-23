@@ -47,7 +47,10 @@ fn nested_rules_respect_scope_context() {
   let stylesheet = parse_stylesheet(css).unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-  assert_eq!(display(find_by_id(&styled, "scoped").expect("scoped child")), "inline");
+  assert_eq!(
+    display(find_by_id(&styled, "scoped").expect("scoped child")),
+    "inline"
+  );
   assert_eq!(
     display(find_by_id(&styled, "unscoped").expect("unscoped child")),
     "block"
