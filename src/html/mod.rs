@@ -73,3 +73,68 @@ pub fn document_base_url(dom: &DomNode, document_url: Option<&str>) -> Option<St
 
   document_url.map(|url| url.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+  use super::{document_base_url, find_base_href};
+  use crate::dom::parse_html;
+
+  #[test]
+  fn finds_first_base_href_in_head_document_order() {
+    let dom = parse_html(
+      "<html><head><base href=\"https://first.example/\"><base href=\"https://second.example/\"></head><body></body></html>",
+    )
+    .unwrap();
+
+    assert_eq!(
+      find_base_href(&dom),
+      Some("https://first.example/".to_string())
+    );
+  }
+
+  #[test]
+  fn find_base_href_skips_missing_or_empty_values() {
+    let dom = parse_html(
+      "<html><head><base><base href=\"   \" /><base href=\"https://valid.example/\"></head></html>",
+    )
+    .unwrap();
+
+    assert_eq!(
+      find_base_href(&dom),
+      Some("https://valid.example/".to_string())
+    );
+  }
+
+  #[test]
+  fn find_base_href_ignores_fragment_only_href() {
+    let dom = parse_html(
+      "<html><head><base href=\"#frag\"><base href=\"https://example.com/base/\"></head></html>",
+    )
+    .unwrap();
+
+    assert_eq!(
+      find_base_href(&dom),
+      Some("https://example.com/base/".to_string())
+    );
+  }
+
+  #[test]
+  fn document_base_url_resolves_relative_base_against_document_url() {
+    let dom = parse_html("<html><head><base href=\"assets/\"></head></html>").unwrap();
+    let base = document_base_url(&dom, Some("https://example.com/dir/page.html"));
+
+    assert_eq!(base, Some("https://example.com/dir/assets/".to_string()));
+  }
+
+  #[test]
+  fn document_base_url_uses_absolute_base_without_document_url() {
+    let dom =
+      parse_html("<html><head><base href=\"https://cdn.example.com/static/\"></head></html>")
+        .unwrap();
+
+    assert_eq!(
+      document_base_url(&dom, None),
+      Some("https://cdn.example.com/static/".to_string())
+    );
+  }
+}
