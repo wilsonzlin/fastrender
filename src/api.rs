@@ -67,7 +67,6 @@ use crate::css::parser::{
   StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
-use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
