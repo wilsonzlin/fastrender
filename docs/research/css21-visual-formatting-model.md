@@ -51,7 +51,7 @@ This research focuses on the **core layout algorithms** that every browser must 
 - Float layout (shifted boxes with wrapping)
 - Absolute positioning (out-of-flow positioning)
 
-Out of scope for this research (covered by other tasks):
+Out of scope for this research (covered separately):
 - Flexbox and Grid (modern layout modes, handled separately)
 - Table layout (complex enough to warrant its own research)
 - Text shaping and font rendering (separate typography concerns)
@@ -3078,11 +3078,11 @@ fn position_float(
 - Baseline, top, bottom, middle
 - Aligned subtree concept
 
-**Implementation phases:**
-1. **Phase 1: Build inline items** (text runs, inline boxes, atomics)
-2. **Phase 2: Break into lines** (line breaking algorithm)
-3. **Phase 3: Baseline alignment** (compute line box heights)
-4. **Phase 4: Stack lines vertically** (final positioning)
+**Implementation steps:**
+1. **Build inline items** (text runs, inline boxes, atomics)
+2. **Break into lines** (line breaking algorithm)
+3. **Baseline alignment** (compute line box heights)
+4. **Stack lines vertically** (final positioning)
 
 **Key spec sections:** 9.4.2, 10.8, 10.8.1
 
@@ -3298,7 +3298,7 @@ Positioned Layout
     ↓
 Inline Layout (after text shaping)
     ↓
-Paint System (depends on all layout tasks)
+Paint System (depends on all layout components)
 ```
 
 ---
@@ -3633,7 +3633,7 @@ All objectives outlined at the start of this research have been achieved:
 - Document any deviations from spec
 
 **For future research:**
-- Table layout (CSS 2.1 Chapter 17) - separate research task recommended
+- Table layout (CSS 2.1 Chapter 17) - separate research recommended
 - Flexbox (CSS Flexible Box Module Level 1)
 - Grid (CSS Grid Layout Module Level 1)
 
