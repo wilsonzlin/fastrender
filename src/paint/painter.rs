@@ -680,13 +680,17 @@ impl Painter {
       ReplacedType::Image {
         src,
         alt: stored_alt,
+        srcset,
+        picture_sources,
         ..
       } => {
         let needs_intrinsic = replaced_box.intrinsic_size.is_none();
         let needs_ratio = replaced_box.aspect_ratio.is_none();
         let mut have_resource_dimensions = false;
 
-        let selected = if (needs_intrinsic || needs_ratio) && !src.is_empty() {
+        let has_source = !src.is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
+
+        let selected = if (needs_intrinsic || needs_ratio) && has_source {
           let media_ctx =
             crate::style::media::MediaContext::screen(viewport.width, viewport.height)
               .with_device_pixel_ratio(self.scale)
@@ -707,21 +711,23 @@ impl Painter {
         };
 
         if let Some(selected) = selected {
-          if let Ok(img) = self.image_cache.load(selected.url) {
-            let orientation = style.image_orientation.resolve(img.orientation, false);
-            if let Some((w, h)) = img.css_dimensions(
-              orientation,
-              &style.image_resolution,
-              self.scale,
-              selected.resolution,
-            ) {
-              if needs_intrinsic {
-                replaced_box.intrinsic_size = Some(Size::new(w, h));
+          if !selected.url.is_empty() {
+            if let Ok(img) = self.image_cache.load(selected.url) {
+              let orientation = style.image_orientation.resolve(img.orientation, false);
+              if let Some((w, h)) = img.css_dimensions(
+                orientation,
+                &style.image_resolution,
+                self.scale,
+                selected.resolution,
+              ) {
+                if needs_intrinsic {
+                  replaced_box.intrinsic_size = Some(Size::new(w, h));
+                }
+                if needs_ratio && h > 0.0 {
+                  replaced_box.aspect_ratio = Some(w / h);
+                }
+                have_resource_dimensions = true;
               }
-              if needs_ratio && h > 0.0 {
-                replaced_box.aspect_ratio = Some(w / h);
-              }
-              have_resource_dimensions = true;
             }
           }
         }

@@ -2187,7 +2187,10 @@ fn map_cluster_offset(cluster: usize, mapping: &[(usize, usize)]) -> usize {
   match mapping.binary_search_by_key(&cluster, |(shaped, _)| *shaped) {
     Ok(idx) => mapping.get(idx).map(|(_, orig)| *orig).unwrap_or(cluster),
     Err(0) => mapping.first().map(|(_, orig)| *orig).unwrap_or(cluster),
-    Err(idx) => mapping.get(idx.saturating_sub(1)).map(|(_, orig)| *orig).unwrap_or(cluster),
+    Err(idx) => mapping
+      .get(idx.saturating_sub(1))
+      .map(|(_, orig)| *orig)
+      .unwrap_or(cluster),
   }
 }
 

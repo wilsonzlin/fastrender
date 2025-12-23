@@ -2242,7 +2242,6 @@ fn reorder_paragraph(
     line_leaves.push(leaves);
   }
 
-
   let mut paragraph_leaves: Vec<ParagraphLeaf> = Vec::new();
   let mut leaf_contexts: Vec<Vec<(UnicodeBidi, Direction)>> = Vec::new();
   let mut paragraph_text = String::new();
@@ -2367,7 +2366,8 @@ fn reorder_paragraph(
   }
 
   for (leaf, stack) in paragraph_leaves.iter_mut().zip(leaf_contexts.iter()) {
-    leaf.bidi_context = crate::layout::contexts::inline::explicit_bidi_context(paragraph_direction, stack);
+    leaf.bidi_context =
+      crate::layout::contexts::inline::explicit_bidi_context(paragraph_direction, stack);
   }
 
   let mut content_levels: Vec<Level> = Vec::with_capacity(content_map.len());
@@ -2413,7 +2413,10 @@ fn reorder_paragraph(
     for visual_idx in order {
       let content_idx = line_range.start + visual_idx;
       if let Some(entry) = content_map.get(content_idx) {
-        let lvl = content_levels.get(content_idx).copied().unwrap_or(resolved_base);
+        let lvl = content_levels
+          .get(content_idx)
+          .copied()
+          .unwrap_or(resolved_base);
         push_segment(entry, lvl, &mut segments);
       }
     }

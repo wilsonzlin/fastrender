@@ -58,12 +58,30 @@ use crate::accessibility::AccessibilityNode;
 use crate::animation;
 use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
+use crate::css::loader::absolutize_css_urls;
+use crate::css::loader::extract_css_links;
+use crate::css::loader::extract_embedded_css_urls;
+use crate::css::loader::infer_base_url;
+use crate::css::loader::inject_css_into_html;
+use crate::css::loader::inline_imports;
+use crate::css::loader::resolve_href_with_base;
+use crate::css::parser::extract_css;
+use crate::css::parser::{
+  extract_css_sources,
+  parse_stylesheet,
+  rel_list_contains_stylesheet,
+  StylesheetSource,
+};
+use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
   inject_css_into_html, inline_imports, resolve_href_with_base,
 };
 use crate::css::parser::{
-  extract_css, extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
+  extract_css,
+  extract_css_sources,
+  parse_stylesheet,
+  rel_list_contains_stylesheet,
   StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
@@ -99,7 +117,6 @@ use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
 use crate::paint::painter::paint_tree_with_resources_scaled;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
-use crate::resource::CachingFetcherConfig;
 use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
@@ -108,7 +125,10 @@ use crate::style::cascade::ContainerQueryContext;
 use crate::style::cascade::ContainerQueryInfo;
 use crate::style::cascade::StyledNode;
 use crate::style::color::Rgba;
-use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache, MediaType};
+use crate::style::media::MediaContext;
+use crate::style::media::MediaQueryCache;
+use crate::style::media::MediaType;
+use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache};
 use crate::style::page::resolve_page_style;
 use crate::style::page::PageSide;
 use crate::style::types::ContainerType;
@@ -147,8 +167,6 @@ use std::time::Instant;
 // Re-export Pixmap from tiny-skia for public use
 pub use tiny_skia::Pixmap;
 use url::Url;
-
-const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 
 /// Main entry point for the FastRender library
 ///
@@ -300,8 +318,6 @@ pub struct FastRenderConfig {
   /// Whether to honor `<meta name="viewport">` when computing the layout viewport.
   pub apply_meta_viewport: bool,
 }
-
-const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 
 impl Default for FastRenderConfig {
   fn default() -> Self {
@@ -637,6 +653,19 @@ impl FastRenderConfig {
   /// Sets the site compatibility profile applied during box generation.
   pub fn compat_profile(mut self, profile: CompatProfile) -> Self {
     self.compat_profile = profile;
+    self
+  }
+
+  /// Selects a compatibility profile. The default is spec-first rendering with no
+  /// site-specific heuristics.
+  pub fn compat_mode(mut self, profile: CompatProfile) -> Self {
+    self.compat_profile = profile;
+    self
+  }
+
+  /// Enables site-specific compatibility hacks used for internal page sets.
+  pub fn with_site_compat_hacks(mut self) -> Self {
+    self.compat_profile = CompatProfile::SiteCompatibility;
     self
   }
 }
@@ -2009,10 +2038,10 @@ impl FastRender {
             layout_viewport,
             media_type,
           );
-          crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
-            &styled_tree,
-            &box_gen_options,
-          );
+            crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
+              &styled_tree,
+              &box_gen_options,
+            );
           self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, layout_viewport);
 
           intrinsic_cache_clear();
@@ -2432,6 +2461,8 @@ impl FastRender {
       ReplacedType::Image {
         src,
         alt: stored_alt,
+        srcset,
+        picture_sources,
         ..
       } => {
         // If intrinsic dimensions are already known (e.g., width/height attributes), avoid
@@ -2448,7 +2479,11 @@ impl FastRender {
 
         let mut have_resource_dimensions = false;
 
-        let selected = if !src.is_empty() {
+        let has_image_source =
+          !src.is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
+
+        let selected = if has_image_source {
+          let media_ctx = self.media_context_for_media(media_type, viewport.width, viewport.height);
           Some(
             replaced_box
               .replaced_type
@@ -2465,23 +2500,25 @@ impl FastRender {
         };
 
         if let Some(selected) = selected {
-          if let Ok(image) = self.image_cache.load(selected.url) {
-            let orientation = style.image_orientation.resolve(image.orientation, false);
-            explicit_no_ratio = image.aspect_ratio_none;
-            if let Some((w, h)) = image.css_dimensions(
-              orientation,
-              &style.image_resolution,
-              self.device_pixel_ratio,
-              selected.resolution,
-            ) {
-              replaced_box.intrinsic_size = Some(Size::new(w, h));
-              if !explicit_no_ratio {
-                replaced_box.aspect_ratio = replaced_box
-                  .aspect_ratio
-                  .or_else(|| image.intrinsic_ratio(orientation))
-                  .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+          if !selected.url.is_empty() {
+            if let Ok(image) = self.image_cache.load(selected.url) {
+              let orientation = style.image_orientation.resolve(image.orientation, false);
+              explicit_no_ratio = image.aspect_ratio_none;
+              if let Some((w, h)) = image.css_dimensions(
+                orientation,
+                &style.image_resolution,
+                self.device_pixel_ratio,
+                selected.resolution,
+              ) {
+                replaced_box.intrinsic_size = Some(Size::new(w, h));
+                if !explicit_no_ratio {
+                  replaced_box.aspect_ratio = replaced_box
+                    .aspect_ratio
+                    .or_else(|| image.intrinsic_ratio(orientation))
+                    .or_else(|| if h > 0.0 { Some(w / h) } else { None });
+                }
+                have_resource_dimensions = true;
               }
-              have_resource_dimensions = true;
             }
           }
         }
@@ -2816,8 +2853,7 @@ impl FastRender {
   /// * `html` - HTML source code
   /// * `width` - Viewport width in pixels
   /// * `height` - Viewport height in pixels
-  /// * `quality` - WebP quality (0-100, clamped to this range; 100 requests
-  ///   lossless encoding)
+  /// * `quality` - WebP quality (0-100, where 100 is highest quality)
   pub fn render_to_webp(
     &mut self,
     html: &str,
