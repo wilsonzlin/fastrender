@@ -27,3 +27,12 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Purpose: inspect fragment output (and related style/layout state) for a single input.
 - Entry: `src/bin/inspect_frag.rs`
 - Run: `cargo run --release --bin inspect_frag -- --help`
+
+## Caching behavior
+
+- `fetch_pages` caches HTML responses under `fetches/html/`.
+- Asset fetches made by the CLI tools go through the disk-backed `DiskCachingFetcher`
+  helper in `src/bin/caching_fetcher.rs`, which stores responses under `fetches/assets/`
+  so repeated runs avoid re-downloading.
+- API consumers should use the library's in-memory [`fastrender::resource::CachingFetcher`]
+  (single-flight, no disk writes) instead of the CLI-only disk cache.
