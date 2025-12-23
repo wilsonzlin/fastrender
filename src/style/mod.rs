@@ -10,6 +10,7 @@ pub mod content;
 pub mod counter_styles;
 pub mod counter_styles;
 pub mod counters;
+pub mod counter_styles;
 pub mod defaults;
 pub mod display;
 pub mod float;

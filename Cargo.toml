@@ -53,6 +53,7 @@ url = "2.5"
 urlencoding = "2.1"
 ureq = "3.1"
 wuff = "0.2"
+svgtypes = "0.15"
 
 [dev-dependencies]
 criterion = "0.5"

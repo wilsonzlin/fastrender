@@ -144,6 +144,8 @@ use std::mem;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
+
+const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 use std::time::Instant;
 // Re-export Pixmap from tiny-skia for public use
 pub use tiny_skia::Pixmap;

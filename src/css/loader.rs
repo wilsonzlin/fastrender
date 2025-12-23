@@ -6,6 +6,7 @@
 //! tooling binaries so cached pages can be rendered with their real styles.
 
 use crate::error::Result;
+use cssparser::TokenSerializationType::WhiteSpace;
 use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
