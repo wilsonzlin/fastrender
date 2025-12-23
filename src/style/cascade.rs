@@ -518,34 +518,60 @@ struct ScopeMatch<'a> {
   ancestors: Vec<&'a DomNode>,
 }
 
-fn selector_key(selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>) -> SelectorKey {
+fn push_key(keys: &mut Vec<SelectorKey>, key: SelectorKey) {
+  if !keys.contains(&key) {
+    keys.push(key);
+  }
+}
+
+fn merge_alternative_keys<'a, I>(
+  selectors: I,
+  base_keys: &[SelectorKey],
+  out: &mut Vec<SelectorKey>,
+)
+where
+  I: IntoIterator<Item = &'a Selector<crate::css::selectors::FastRenderSelectorImpl>>,
+{
+  for selector in selectors {
+    let nested = selector_keys(selector);
+    if nested.len() == 1 && matches!(nested[0], SelectorKey::Universal) && !base_keys.is_empty() {
+      // Avoid falling back to the universal bucket when the outer compound already
+      // guarantees a more specific key (e.g., div:is(:not(.a))).
+      continue;
+    }
+    for key in nested {
+      push_key(out, key);
+    }
+  }
+}
+
+fn selector_keys(selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>) -> Vec<SelectorKey> {
   use selectors::parser::Component;
 
-  let mut id: Option<String> = None;
-  let mut class: Option<String> = None;
-  let mut tag: Option<String> = None;
-  let mut attr: Option<String> = None;
-
+  let mut base_keys: Vec<SelectorKey> = Vec::new();
   let mut iter = selector.iter();
   loop {
     if let Some(component) = iter.next() {
       match component {
-        Component::ID(ident) => id = Some(ident.0.clone()),
-        Component::Class(cls) => class = Some(cls.0.clone()),
-        Component::LocalName(local) => tag = Some(local.lower_name.0.clone()),
+        Component::ID(ident) => push_key(&mut base_keys, SelectorKey::Id(ident.0.clone())),
+        Component::Class(cls) => push_key(&mut base_keys, SelectorKey::Class(cls.0.clone())),
+        Component::LocalName(local) => {
+          push_key(&mut base_keys, SelectorKey::Tag(local.lower_name.0.clone()))
+        }
         Component::AttributeInNoNamespaceExists {
           local_name_lower, ..
         } => {
-          attr.get_or_insert_with(|| local_name_lower.0.clone());
+          push_key(&mut base_keys, SelectorKey::Attribute(local_name_lower.0.clone()));
         }
         Component::AttributeInNoNamespace { local_name, .. } => {
-          attr.get_or_insert_with(|| local_name.0.clone());
+          push_key(&mut base_keys, SelectorKey::Attribute(local_name.0.clone()));
         }
         Component::AttributeOther(other) => {
           if other.namespace.is_none() {
-            attr.get_or_insert_with(|| other.local_name_lower.0.clone());
+            push_key(&mut base_keys, SelectorKey::Attribute(other.local_name_lower.0.clone()));
           }
         }
+        Component::Is(..) | Component::Where(..) | Component::Negation(..) => {}
         _ => {}
       }
       continue;
@@ -555,20 +581,34 @@ fn selector_key(selector: &Selector<crate::css::selectors::FastRenderSelectorImp
     break;
   }
 
-  if let Some(id) = id {
-    SelectorKey::Id(id)
-  } else if let Some(cls) = class {
-    SelectorKey::Class(cls)
-  } else if let Some(tag) = tag {
-    SelectorKey::Tag(tag)
-  } else if let Some(attr) = attr {
-    SelectorKey::Attribute(attr)
-  } else {
-    SelectorKey::Universal
+  let mut alt_keys: Vec<SelectorKey> = Vec::new();
+  let mut iter = selector.iter();
+  loop {
+    if let Some(component) = iter.next() {
+      match component {
+        Component::Is(list, _) => merge_alternative_keys(list.iter(), &base_keys, &mut alt_keys),
+        Component::Where(list) => merge_alternative_keys(list.iter(), &base_keys, &mut alt_keys),
+        _ => {}
+      }
+      continue;
+    }
+    let _ = iter.next_sequence();
+    break;
   }
+
+  let mut keys = base_keys;
+  for key in alt_keys {
+    push_key(&mut keys, key);
+  }
+
+  if keys.is_empty() {
+    keys.push(SelectorKey::Universal);
+  }
+
+  keys
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum SelectorKey {
   Id(String),
   Class(String),
@@ -626,14 +666,16 @@ impl<'a> RuleIndex<'a> {
             selector,
             specificity: selector.specificity(),
           });
-          match selector_key(selector) {
-            SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
-            SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
-            SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
-            SelectorKey::Attribute(attr) => {
-              bucket.by_attr.entry(attr).or_default().push(selector_idx)
+          for key in selector_keys(selector) {
+            match key {
+              SelectorKey::Id(id) => bucket.by_id.entry(id).or_default().push(selector_idx),
+              SelectorKey::Class(cls) => bucket.by_class.entry(cls).or_default().push(selector_idx),
+              SelectorKey::Tag(tag) => bucket.by_tag.entry(tag).or_default().push(selector_idx),
+              SelectorKey::Attribute(attr) => {
+                bucket.by_attr.entry(attr).or_default().push(selector_idx)
+              }
+              SelectorKey::Universal => bucket.universal.push(selector_idx),
             }
-            SelectorKey::Universal => bucket.universal.push(selector_idx),
           }
           continue;
         }
@@ -644,12 +686,14 @@ impl<'a> RuleIndex<'a> {
           selector,
           specificity: selector.specificity(),
         });
-        match selector_key(selector) {
-          SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
-          SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
-          SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
-          SelectorKey::Attribute(attr) => index.by_attr.entry(attr).or_default().push(selector_idx),
-          SelectorKey::Universal => index.universal.push(selector_idx),
+        for key in selector_keys(selector) {
+          match key {
+            SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
+            SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
+            SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
+            SelectorKey::Attribute(attr) => index.by_attr.entry(attr).or_default().push(selector_idx),
+            SelectorKey::Universal => index.universal.push(selector_idx),
+          }
         }
       }
     }
