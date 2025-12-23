@@ -59,6 +59,7 @@ pub use crate::tree::box_generation_demo::{
   BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode,
 };
 
+#[cfg(any(test, feature = "box_generation_demo"))]
 impl DOMNode {
   /// Creates a new element node
   pub fn new_element(
