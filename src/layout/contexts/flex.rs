@@ -119,6 +119,26 @@ fn trace_flex_text_ids() -> &'static Vec<usize> {
   })
 }
 
+fn fragment_first_baseline(fragment: &FragmentNode) -> Option<f32> {
+  if let Some(baseline) = fragment.baseline {
+    return Some(baseline);
+  }
+
+  match &fragment.content {
+    FragmentContent::Line { baseline } => Some(*baseline),
+    FragmentContent::Text { baseline_offset, .. } => Some(*baseline_offset),
+    FragmentContent::Replaced { .. } => Some(fragment.bounds.height()),
+    _ => {
+      for child in &fragment.children {
+        if let Some(baseline) = fragment_first_baseline(child) {
+          return Some(child.bounds.y() + baseline);
+        }
+      }
+      None
+    }
+  }
+}
+
 #[derive(Clone, Copy)]
 enum Axis {
   Horizontal,
@@ -1465,12 +1485,153 @@ impl FormattingContext for FlexFormattingContext {
         fragment.bounds.height()
       };
 
-      for (child_node, child_fragment) in in_flow_children.iter().zip(fragment.children.iter_mut())
+      let taffy_dir =
+        self.flex_direction_to_taffy(&box_node.style, inline_positive, block_positive);
+      let main_grows_positive = matches!(
+        taffy_dir,
+        taffy::style::FlexDirection::Row | taffy::style::FlexDirection::Column
+      );
+
+      let mut line_indices: Vec<usize> = Vec::with_capacity(fragment.children.len());
+      if matches!(box_node.style.flex_wrap, FlexWrap::NoWrap) {
+        line_indices.resize(fragment.children.len(), 0);
+      } else {
+        let mut current_line = 0usize;
+        let mut prev_main: Option<f32> = None;
+        let wrap_break_eps = 0.5;
+        for child in &fragment.children {
+          let main_pos = if main_is_horizontal {
+            child.bounds.x()
+          } else {
+            child.bounds.y()
+          };
+          if let Some(prev) = prev_main {
+            let delta = main_pos - prev;
+            if (main_grows_positive && delta < -wrap_break_eps)
+              || (!main_grows_positive && delta > wrap_break_eps)
+            {
+              current_line += 1;
+            }
+          }
+          line_indices.push(current_line);
+          prev_main = Some(main_pos);
+        }
+      }
+
+      #[derive(Clone, Copy, Default)]
+      struct LineBaselineData {
+        cross_start: f32,
+        max_above: f32,
+        max_below: f32,
+        baseline: f32,
+        has_baseline: bool,
+      }
+
+      #[derive(Clone, Copy)]
+      struct BaselineItemMetrics {
+        line_index: usize,
+        baseline_pos: f32,
+        baseline_offset: f32,
+        cross_size: f32,
+      }
+
+      let mut baseline_items: Vec<Option<BaselineItemMetrics>> =
+        vec![None; fragment.children.len()];
+      let line_count = line_indices.iter().copied().max().unwrap_or(0) + 1;
+      let mut line_cross_starts = vec![f32::INFINITY; line_count];
+
+      for idx in 0..fragment.children.len() {
+        let child_node = &in_flow_children[idx];
+        let align = child_node
+          .style
+          .align_self
+          .unwrap_or(box_node.style.align_items);
+
+        if matches!(align, AlignItems::Baseline) {
+          let child_fragment = &fragment.children[idx];
+          let cross_start = if cross_is_horizontal {
+            child_fragment.bounds.x()
+          } else {
+            child_fragment.bounds.y()
+          };
+          let cross_size_child = if cross_is_horizontal {
+            child_fragment.bounds.width()
+          } else {
+            child_fragment.bounds.height()
+          };
+          let mut baseline_offset =
+            fragment_first_baseline(child_fragment).unwrap_or(cross_size_child);
+          if !baseline_offset.is_finite() {
+            baseline_offset = cross_size_child;
+          }
+          let baseline_offset = baseline_offset.clamp(0.0, cross_size_child);
+          let baseline_pos = cross_start + baseline_offset;
+          let line_idx = *line_indices.get(idx).unwrap_or(&0);
+          if line_idx >= line_cross_starts.len() {
+            line_cross_starts.resize(line_idx + 1, f32::INFINITY);
+          }
+          line_cross_starts[line_idx] = line_cross_starts[line_idx].min(cross_start);
+          baseline_items[idx] = Some(BaselineItemMetrics {
+            line_index: line_idx,
+            baseline_pos,
+            baseline_offset,
+            cross_size: cross_size_child,
+          });
+        }
+      }
+
+      let mut line_baselines = vec![LineBaselineData::default(); line_cross_starts.len()];
+      for (idx, start) in line_cross_starts.iter().enumerate() {
+        line_baselines[idx].cross_start = if start.is_finite() { *start } else { 0.0 };
+      }
+
+      for (idx, metrics) in baseline_items.iter().enumerate() {
+        if let Some(metrics) = metrics {
+          let line_idx = metrics.line_index;
+          if line_idx >= line_baselines.len() {
+            line_baselines.resize(line_idx + 1, LineBaselineData::default());
+          }
+          let line_start = line_baselines[line_idx].cross_start;
+          let above = metrics.baseline_pos - line_start;
+          let below = metrics.cross_size - metrics.baseline_offset;
+          let line = &mut line_baselines[line_idx];
+          line.max_above = line.max_above.max(above);
+          line.max_below = line.max_below.max(below);
+          line.has_baseline = true;
+        }
+      }
+
+      for (idx, line) in line_baselines.iter_mut().enumerate() {
+        if line.has_baseline {
+          line.cross_start = line.cross_start.max(0.0);
+          line.baseline = line.cross_start + line.max_above;
+        }
+      }
+
+      for (idx, (child_node, child_fragment)) in in_flow_children
+        .iter()
+        .zip(fragment.children.iter_mut())
+        .enumerate()
       {
         let align = child_node
           .style
           .align_self
           .unwrap_or(box_node.style.align_items);
+
+        if let Some(metrics) = baseline_items[idx] {
+          if let Some(line) = line_baselines.get(metrics.line_index) {
+            if line.has_baseline {
+              let delta = line.baseline - metrics.baseline_pos;
+              if cross_is_horizontal {
+                child_fragment.bounds.origin.x += delta;
+              } else {
+                child_fragment.bounds.origin.y += delta;
+              }
+              continue;
+            }
+          }
+        }
+
         let child_cross = if cross_is_horizontal {
           child_fragment.bounds.width()
         } else {
@@ -4474,9 +4635,11 @@ mod tests {
   use crate::style::position::Position;
   use crate::style::types::AlignItems;
   use crate::style::types::AspectRatio;
+  use crate::style::types::FlexWrap;
   use crate::style::types::Overflow;
   use crate::style::types::ScrollbarWidth;
   use crate::style::values::Length;
+  use crate::tree::box_tree::ReplacedType;
   use std::sync::Arc;
 
   fn create_flex_style() -> Arc<ComputedStyle> {
@@ -4499,6 +4662,11 @@ mod tests {
     style.height = Some(Length::px(height));
     style.flex_grow = grow;
     Arc::new(style)
+  }
+
+  fn baseline_position(fragment: &FragmentNode) -> f32 {
+    let offset = fragment_first_baseline(fragment).expect("fragment has no baseline");
+    fragment.bounds.y() + offset
   }
 
   #[test]
@@ -4952,6 +5120,168 @@ mod tests {
     assert_eq!(fragment.children[0].bounds.y(), 25.0); // (100 - 50) / 2
     assert_eq!(fragment.children[1].bounds.y(), 0.0); // Tallest, at top
     assert_eq!(fragment.children[2].bounds.y(), 13.0); // (100 - 74) / 2 = 13
+  }
+
+  #[test]
+  fn flex_align_items_baseline_aligns_text() {
+    let fc = FlexFormattingContext::new();
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.flex_direction = FlexDirection::Row;
+    container_style.align_items = AlignItems::Baseline;
+    container_style.height = Some(Length::px(80.0));
+
+    let mut small_text_style = ComputedStyle::default();
+    small_text_style.font_size = Length::px(12.0);
+    let small_text_style = Arc::new(small_text_style);
+    let small_text = BoxNode::new_text(small_text_style.clone(), "small".to_string());
+    let small_inline = BoxNode::new_inline(small_text_style.clone(), vec![small_text]);
+    let small_item = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![small_inline],
+    );
+
+    let mut large_text_style = ComputedStyle::default();
+    large_text_style.font_size = Length::px(24.0);
+    let large_text_style = Arc::new(large_text_style);
+    let large_text = BoxNode::new_text(large_text_style.clone(), "Large".to_string());
+    let large_inline = BoxNode::new_inline(large_text_style.clone(), vec![large_text]);
+    let large_item = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![large_inline],
+    );
+
+    let container = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Flex,
+      vec![small_item, large_item],
+    );
+
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+    let fragment = fc.layout(&container, &constraints).unwrap();
+
+    let small_baseline = baseline_position(&fragment.children[0]);
+    let large_baseline = baseline_position(&fragment.children[1]);
+    assert!(
+      (small_baseline - large_baseline).abs() < 0.5,
+      "baselines misaligned: {:.2} vs {:.2}",
+      small_baseline,
+      large_baseline
+    );
+  }
+
+  #[test]
+  fn flex_align_items_baseline_handles_replaced_fallback() {
+    let fc = FlexFormattingContext::new();
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.flex_direction = FlexDirection::Row;
+    container_style.align_items = AlignItems::Baseline;
+
+    let mut text_style = ComputedStyle::default();
+    text_style.font_size = Length::px(16.0);
+    let text_style = Arc::new(text_style);
+    let text = BoxNode::new_text(text_style.clone(), "Text".to_string());
+    let inline = BoxNode::new_inline(text_style.clone(), vec![text]);
+    let text_item = BoxNode::new_block(
+      Arc::new(ComputedStyle::default()),
+      FormattingContextType::Block,
+      vec![inline],
+    );
+
+    let mut replaced_style = ComputedStyle::default();
+    replaced_style.width = Some(Length::px(20.0));
+    replaced_style.height = Some(Length::px(10.0));
+    let replaced = BoxNode::new_replaced(
+      Arc::new(replaced_style),
+      ReplacedType::Canvas,
+      None,
+      None,
+    );
+
+    let container = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Flex,
+      vec![text_item, replaced],
+    );
+
+    let constraints = LayoutConstraints::definite(200.0, 100.0);
+    let fragment = fc.layout(&container, &constraints).unwrap();
+
+    let text_baseline = baseline_position(&fragment.children[0]);
+    let replaced_baseline = baseline_position(&fragment.children[1]);
+    assert!(
+      (text_baseline - replaced_baseline).abs() < 0.5,
+      "replaced baseline not aligned: {:.2} vs {:.2}",
+      text_baseline,
+      replaced_baseline
+    );
+  }
+
+  #[test]
+  fn flex_baseline_alignment_is_per_line() {
+    let fc = FlexFormattingContext::new();
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.flex_direction = FlexDirection::Row;
+    container_style.align_items = AlignItems::Baseline;
+    container_style.flex_wrap = FlexWrap::Wrap;
+    container_style.width = Some(Length::px(120.0));
+
+    let make_item = |font_size: f32, width: f32| {
+      let mut text_style = ComputedStyle::default();
+      text_style.font_size = Length::px(font_size);
+      let text_style = Arc::new(text_style);
+      let text = BoxNode::new_text(text_style.clone(), "Wrap".to_string());
+      let inline = BoxNode::new_inline(text_style.clone(), vec![text]);
+      let mut item_style = ComputedStyle::default();
+      item_style.width = Some(Length::px(width));
+      BoxNode::new_block(Arc::new(item_style), FormattingContextType::Block, vec![inline])
+    };
+
+    let item1 = make_item(12.0, 60.0);
+    let item2 = make_item(18.0, 50.0);
+    let item3 = make_item(16.0, 80.0);
+
+    let container = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Flex,
+      vec![item1, item2, item3],
+    );
+
+    let constraints = LayoutConstraints::definite(200.0, 200.0);
+    let fragment = fc.layout(&container, &constraints).unwrap();
+
+    assert!(
+      fragment.children.len() == 3,
+      "expected three flex items, got {}",
+      fragment.children.len()
+    );
+    let line1_first = baseline_position(&fragment.children[0]);
+    let line1_second = baseline_position(&fragment.children[1]);
+    assert!(
+      (line1_first - line1_second).abs() < 0.5,
+      "first line baselines differ: {:.2} vs {:.2}",
+      line1_first,
+      line1_second
+    );
+
+    let line2_baseline = baseline_position(&fragment.children[2]);
+    assert!(
+      (line2_baseline - line1_first).abs() > 0.5,
+      "baselines leaked across lines: {:.2} vs {:.2}",
+      line2_baseline,
+      line1_first
+    );
+    assert!(
+      fragment.children[2].bounds.y() > fragment.children[0].bounds.y(),
+      "wrapped item should appear on a new line"
+    );
   }
 
   #[test]
