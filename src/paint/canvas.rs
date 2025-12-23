@@ -1556,4 +1556,48 @@ mod tests {
     // Within the drawn rect but outside the rotated clip
     assert_eq!(pixel(&pixmap, 2, 7), (255, 255, 255, 255));
   }
+
+  #[test]
+  fn clip_path_scales_with_device_pixels() {
+    let circle = ResolvedClipPath::Circle {
+      center: Point::new(5.0, 5.0),
+      radius: 4.0,
+    };
+
+    let mut canvas = Canvas::new(20, 15, Rgba::WHITE).unwrap();
+    canvas.set_clip_path(&circle, 1.0);
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 20.0, 15.0), Rgba::rgb(255, 0, 0));
+    let pixmap = canvas.into_pixmap();
+
+    assert_eq!(pixel(&pixmap, 5, 5), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 12, 5), (255, 255, 255, 255));
+
+    let mut hidpi = Canvas::new(40, 30, Rgba::WHITE).unwrap();
+    hidpi.set_clip_path(&circle, 2.0);
+    hidpi.draw_rect(Rect::from_xywh(0.0, 0.0, 40.0, 30.0), Rgba::rgb(0, 255, 0));
+    let pixmap = hidpi.into_pixmap();
+
+    assert_eq!(pixel(&pixmap, 15, 5), (0, 255, 0, 255));
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+    assert_eq!(pixel(&pixmap, 20, 5), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn clip_path_follows_transforms() {
+    let triangle = ResolvedClipPath::Polygon {
+      points: vec![Point::new(0.0, 0.0), Point::new(4.0, 0.0), Point::new(0.0, 4.0)],
+      fill_rule: FillRule::Winding,
+    };
+
+    let mut canvas = Canvas::new(20, 15, Rgba::WHITE).unwrap();
+    let transform = Transform::from_rotate(90.0).post_concat(Transform::from_translate(10.0, 0.0));
+    canvas.set_transform(transform);
+    canvas.set_clip_path(&triangle, 1.0);
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 20.0, 15.0), Rgba::rgb(0, 0, 255));
+
+    let pixmap = canvas.into_pixmap();
+
+    assert_eq!(pixel(&pixmap, 9, 2), (0, 0, 255, 255));
+    assert_eq!(pixel(&pixmap, 1, 1), (255, 255, 255, 255));
+  }
 }
