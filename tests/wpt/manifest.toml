@@ -132,3 +132,39 @@ viewport = { width = 420, height = 240 }
 dpr = 1.5
 expected = "pass"
 timeout_ms = 12000
+
+[[tests]]
+id = "style/media-list-or-001"
+path = "style/media-list-or-001.html"
+test_type = "visual"
+viewport = { width = 240, height = 220 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "style/layer-important-inversion-001"
+path = "style/layer-important-inversion-001.html"
+test_type = "visual"
+viewport = { width = 240, height = 220 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "style/scope-basic-001"
+path = "style/scope-basic-001.html"
+test_type = "visual"
+viewport = { width = 280, height = 180 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000
+
+[[tests]]
+id = "style/var-fallback-001"
+path = "style/var-fallback-001.html"
+test_type = "visual"
+viewport = { width = 220, height = 220 }
+dpr = 1.0
+expected = "pass"
+timeout_ms = 12000

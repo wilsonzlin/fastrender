@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>@media query list OR semantics</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    background: white;
+  }
+  #box {
+    width: 160px;
+    height: 160px;
+    background: red;
+  }
+
+  /* The `screen` media type should match, so the OR list applies */
+  @media (max-width: 1px), screen {
+    #box {
+      background: rgb(0, 160, 0);
+    }
+  }
+</style>
+<div id="box"></div>

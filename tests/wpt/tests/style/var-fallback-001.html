@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>var() fallback color</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    background: white;
+  }
+  #var-box {
+    width: 160px;
+    height: 160px;
+    background: var(--missing-color, rgb(210, 0, 0));
+  }
+</style>
+<div id="var-box"></div>

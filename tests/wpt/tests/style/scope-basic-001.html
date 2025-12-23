@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>@scope containment</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    background: white;
+  }
+  .row {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+  }
+  .scope {
+    padding: 6px;
+    background: #dddddd;
+  }
+  .box {
+    width: 90px;
+    height: 90px;
+    background: rgb(200, 0, 0);
+  }
+
+  @scope (.scope) {
+    .box {
+      background: rgb(0, 150, 0);
+    }
+  }
+</style>
+<div class="row">
+  <div class="scope">
+    <div class="box"></div>
+  </div>
+  <div class="box"></div>
+</div>

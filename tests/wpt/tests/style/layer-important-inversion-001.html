@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>@layer !important inversion</title>
+<style>
+  body {
+    margin: 0;
+    padding: 20px;
+    background: white;
+  }
+  #layer-box {
+    width: 160px;
+    height: 160px;
+    background: gray;
+  }
+
+  @layer base, theme;
+
+  /* Earlier layer should win for !important declarations */
+  @layer base {
+    #layer-box {
+      background: rgb(0, 140, 0) !important;
+    }
+  }
+
+  @layer theme {
+    #layer-box {
+      background: rgb(200, 0, 0) !important;
+    }
+  }
+</style>
+<div id="layer-box"></div>
