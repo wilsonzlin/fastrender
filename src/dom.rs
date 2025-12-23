@@ -296,8 +296,10 @@ fn attach_shadow_roots(node: &mut DomNode) {
     children: template.children,
   };
 
-  // Only the first declarative shadow template is attached; later templates stay in the
-  // light DOM for slot distribution.
+  // Only the first declarative shadow template is attached. Remaining light DOM children
+  // (including additional templates) are still considered for slot distribution. If the
+  // shadow tree lacks slots, those light DOM nodes are dropped by design, which matches the
+  // current flattened representation used elsewhere in the pipeline.
   let light_children = std::mem::take(&mut node.children);
   distribute_slots(&mut shadow_root, light_children);
   node.children = vec![shadow_root];

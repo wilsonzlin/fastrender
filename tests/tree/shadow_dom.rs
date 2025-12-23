@@ -133,7 +133,11 @@ fn first_template_wins_for_multiple_declarative_shadow_roots() {
   let dom = parse_html(html).expect("parse html");
 
   let host = find_by_id(&dom, "host").expect("host element");
-  assert_eq!(host.children.len(), 1, "host should expose shadow root child only");
+  assert_eq!(
+    host.children.len(),
+    1,
+    "flattening keeps only the shadow root; remaining templates stay in light DOM assignments and may be dropped"
+  );
 
   let shadow_root = &host.children[0];
   match shadow_root.node_type {
@@ -147,6 +151,10 @@ fn first_template_wins_for_multiple_declarative_shadow_roots() {
   );
   assert!(
     find_by_id(shadow_root, "second").is_none(),
-    "subsequent templates should remain light DOM and not populate the shadow root"
+    "subsequent templates should not populate the shadow root"
+  );
+  assert!(
+    find_by_id(&dom, "second").is_none(),
+    "with no slots, later templates are dropped by the flattened representation"
   );
 }
