@@ -10,8 +10,8 @@ use cssparser::ParseError;
 use cssparser::ParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
-use cssparser::Token;
 use cssparser::ToCss;
+use cssparser::Token;
 use std::collections::HashMap;
 
 /// Maximum depth for recursive var() resolution to prevent infinite loops
@@ -103,7 +103,9 @@ fn resolve_var_recursive(
   }
 
   match value {
-    PropertyValue::Keyword(raw) => resolve_from_string(raw, custom_properties, depth, property_name),
+    PropertyValue::Keyword(raw) => {
+      resolve_from_string(raw, custom_properties, depth, property_name)
+    }
     PropertyValue::Custom(raw) => resolve_from_string(raw, custom_properties, depth, property_name),
     _ => VarResolutionResult::Resolved(Box::new(value.clone())),
   }
@@ -224,7 +226,13 @@ fn parse_var_function<'i, 't>(
   depth: usize,
 ) -> Result<Vec<String>, VarResolutionResult> {
   let (var_name, fallback) = parse_var_function_arguments(parser)?;
-  resolve_variable_reference(&var_name, fallback.as_deref(), custom_properties, stack, depth)
+  resolve_variable_reference(
+    &var_name,
+    fallback.as_deref(),
+    custom_properties,
+    stack,
+    depth,
+  )
 }
 
 fn parse_var_function_arguments<'i, 't>(
@@ -243,7 +251,11 @@ fn parse_var_function_arguments<'i, 't>(
         var_name = Some(name);
         break;
       }
-      other => return Err(VarResolutionResult::InvalidSyntax(token_to_css_string(&other))),
+      other => {
+        return Err(VarResolutionResult::InvalidSyntax(token_to_css_string(
+          &other,
+        )))
+      }
     }
   }
 
@@ -259,7 +271,11 @@ fn parse_var_function_arguments<'i, 't>(
         fallback_start = Some(parser.position());
         break;
       }
-      Ok(other) => return Err(VarResolutionResult::InvalidSyntax(token_to_css_string(&other))),
+      Ok(other) => {
+        return Err(VarResolutionResult::InvalidSyntax(token_to_css_string(
+          &other,
+        )))
+      }
       Err(_) => return Ok((name, None)),
     }
   }
@@ -292,10 +308,12 @@ fn resolve_variable_reference(
   }
 
   if let Some(fallback_value) = fallback {
-    return resolve_value_tokens(fallback_value, custom_properties, stack, depth + 1).map_err(|err| match err {
-      VarResolutionResult::NotFound(_) => VarResolutionResult::NotFound(name.to_string()),
-      other => other,
-    });
+    return resolve_value_tokens(fallback_value, custom_properties, stack, depth + 1).map_err(
+      |err| match err {
+        VarResolutionResult::NotFound(_) => VarResolutionResult::NotFound(name.to_string()),
+        other => other,
+      },
+    );
   }
 
   Err(VarResolutionResult::NotFound(name.to_string()))
@@ -348,8 +366,13 @@ fn contains_var_in_parser<'i, 't>(parser: &mut Parser<'i, 't>) -> bool {
   while let Ok(token) = parser.next_including_whitespace_and_comments() {
     match token {
       Token::Function(name) if name.eq_ignore_ascii_case("var") => return true,
-      Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
-        if let Ok(found) = parser.parse_nested_block(|nested| Ok::<_, ()>(contains_var_in_parser(nested))) {
+      Token::Function(_)
+      | Token::ParenthesisBlock
+      | Token::SquareBracketBlock
+      | Token::CurlyBracketBlock => {
+        if let Ok(found) =
+          parser.parse_nested_block(|nested| Ok::<_, ()>(contains_var_in_parser(nested)))
+        {
           if found {
             return true;
           }
@@ -386,7 +409,10 @@ fn collect_var_references_from_parser<'i, 't>(parser: &mut Parser<'i, 't>, refs:
           Ok::<_, ()>(())
         });
       }
-      Token::Function(_) | Token::ParenthesisBlock | Token::SquareBracketBlock | Token::CurlyBracketBlock => {
+      Token::Function(_)
+      | Token::ParenthesisBlock
+      | Token::SquareBracketBlock
+      | Token::CurlyBracketBlock => {
         let _ = parser.parse_nested_block(|nested| {
           collect_var_references_from_parser(nested, refs);
           Ok::<_, ()>(())

@@ -12,8 +12,8 @@ use fastrender::style::values::LengthUnit;
 use fastrender::style::var_resolution::contains_var;
 use fastrender::style::var_resolution::extract_var_references;
 use fastrender::style::var_resolution::is_valid_custom_property_name;
-use fastrender::style::var_resolution::resolve_var_for_property;
 use fastrender::style::var_resolution::resolve_var;
+use fastrender::style::var_resolution::resolve_var_for_property;
 use fastrender::style::var_resolution::resolve_var_with_depth;
 use fastrender::style::var_resolution::VarResolutionResult;
 use fastrender::Length;
@@ -261,7 +261,10 @@ fn test_replacement_containing_var_continues_resolving() {
       assert!((len.value - 10.0).abs() < f32::EPSILON);
       assert_eq!(len.unit, fastrender::LengthUnit::Px);
     }
-    _ => panic!("Expected Length from nested var replacement, got {:?}", resolved),
+    _ => panic!(
+      "Expected Length from nested var replacement, got {:?}",
+      resolved
+    ),
   }
 }
 
@@ -318,7 +321,10 @@ fn test_resolve_repeated_var_occurrences() {
 
   match resolved {
     PropertyValue::Keyword(kw) => assert_eq!(kw, "8px 8px"),
-    _ => panic!("Expected Keyword with repeated substitution, got {:?}", resolved),
+    _ => panic!(
+      "Expected Keyword with repeated substitution, got {:?}",
+      resolved
+    ),
   }
 }
 
@@ -360,7 +366,10 @@ fn test_two_variable_cycle_reports_limit() {
   let props = make_props(&[("--a", "var(--b)"), ("--b", "var(--a)")]);
   let value = PropertyValue::Keyword("var(--a)".to_string());
   let resolved = resolve_var_for_property(&value, &props, "color");
-  assert!(matches!(resolved, VarResolutionResult::RecursionLimitExceeded));
+  assert!(matches!(
+    resolved,
+    VarResolutionResult::RecursionLimitExceeded
+  ));
 }
 
 #[test]
