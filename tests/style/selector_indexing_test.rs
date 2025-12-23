@@ -50,8 +50,14 @@ fn where_selector_matches_ids_and_classes() {
   let stylesheet = parse_stylesheet(css).unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-  assert_eq!(display(find_by_id(&styled, "match-id").expect("id")), "inline");
-  assert_eq!(display(find_by_id(&styled, "match-class").expect("class")), "inline");
+  assert_eq!(
+    display(find_by_id(&styled, "match-id").expect("id")),
+    "inline"
+  );
+  assert_eq!(
+    display(find_by_id(&styled, "match-class").expect("class")),
+    "inline"
+  );
 }
 
 #[test]
@@ -66,10 +72,19 @@ fn tag_with_is_alternatives_matches_all_options() {
   let stylesheet = parse_stylesheet(css).unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-  assert_eq!(display(find_by_id(&styled, "first").expect("first")), "inline-block");
-  assert_eq!(display(find_by_id(&styled, "second").expect("second")), "inline-block");
+  assert_eq!(
+    display(find_by_id(&styled, "first").expect("first")),
+    "inline-block"
+  );
+  assert_eq!(
+    display(find_by_id(&styled, "second").expect("second")),
+    "inline-block"
+  );
   // Non-div elements should not match even if they share classes.
-  assert_eq!(display(find_by_id(&styled, "other").expect("other")), "inline");
+  assert_eq!(
+    display(find_by_id(&styled, "other").expect("other")),
+    "inline"
+  );
 }
 
 #[test]
@@ -86,6 +101,9 @@ fn negation_does_not_hide_rules() {
   let stylesheet = parse_stylesheet(css).unwrap();
   let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
 
-  assert_eq!(display(find_by_id(&styled, "match").expect("match")), "inline");
+  assert_eq!(
+    display(find_by_id(&styled, "match").expect("match")),
+    "inline"
+  );
   assert_eq!(display(find_by_id(&styled, "skip").expect("skip")), "block");
 }

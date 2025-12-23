@@ -528,8 +528,7 @@ fn merge_alternative_keys<'a, I>(
   selectors: I,
   base_keys: &[SelectorKey],
   out: &mut Vec<SelectorKey>,
-)
-where
+) where
   I: IntoIterator<Item = &'a Selector<crate::css::selectors::FastRenderSelectorImpl>>,
 {
   for selector in selectors {
@@ -545,7 +544,9 @@ where
   }
 }
 
-fn selector_keys(selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>) -> Vec<SelectorKey> {
+fn selector_keys(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> Vec<SelectorKey> {
   use selectors::parser::Component;
 
   let mut base_keys: Vec<SelectorKey> = Vec::new();
@@ -561,14 +562,20 @@ fn selector_keys(selector: &Selector<crate::css::selectors::FastRenderSelectorIm
         Component::AttributeInNoNamespaceExists {
           local_name_lower, ..
         } => {
-          push_key(&mut base_keys, SelectorKey::Attribute(local_name_lower.0.clone()));
+          push_key(
+            &mut base_keys,
+            SelectorKey::Attribute(local_name_lower.0.clone()),
+          );
         }
         Component::AttributeInNoNamespace { local_name, .. } => {
           push_key(&mut base_keys, SelectorKey::Attribute(local_name.0.clone()));
         }
         Component::AttributeOther(other) => {
           if other.namespace.is_none() {
-            push_key(&mut base_keys, SelectorKey::Attribute(other.local_name_lower.0.clone()));
+            push_key(
+              &mut base_keys,
+              SelectorKey::Attribute(other.local_name_lower.0.clone()),
+            );
           }
         }
         Component::Is(..) | Component::Where(..) | Component::Negation(..) => {}
@@ -586,7 +593,9 @@ fn selector_keys(selector: &Selector<crate::css::selectors::FastRenderSelectorIm
   loop {
     if let Some(component) = iter.next() {
       match component {
-        Component::Is(list) => merge_alternative_keys(list.slice().iter(), &base_keys, &mut alt_keys),
+        Component::Is(list) => {
+          merge_alternative_keys(list.slice().iter(), &base_keys, &mut alt_keys)
+        }
         Component::Where(list) => {
           merge_alternative_keys(list.slice().iter(), &base_keys, &mut alt_keys)
         }
@@ -693,7 +702,9 @@ impl<'a> RuleIndex<'a> {
             SelectorKey::Id(id) => index.by_id.entry(id).or_default().push(selector_idx),
             SelectorKey::Class(cls) => index.by_class.entry(cls).or_default().push(selector_idx),
             SelectorKey::Tag(tag) => index.by_tag.entry(tag).or_default().push(selector_idx),
-            SelectorKey::Attribute(attr) => index.by_attr.entry(attr).or_default().push(selector_idx),
+            SelectorKey::Attribute(attr) => {
+              index.by_attr.entry(attr).or_default().push(selector_idx)
+            }
             SelectorKey::Universal => index.universal.push(selector_idx),
           }
         }
