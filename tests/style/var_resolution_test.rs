@@ -12,8 +12,10 @@ use fastrender::style::values::LengthUnit;
 use fastrender::style::var_resolution::contains_var;
 use fastrender::style::var_resolution::extract_var_references;
 use fastrender::style::var_resolution::is_valid_custom_property_name;
+use fastrender::style::var_resolution::resolve_var_for_property;
 use fastrender::style::var_resolution::resolve_var;
 use fastrender::style::var_resolution::resolve_var_with_depth;
+use fastrender::style::var_resolution::VarResolutionResult;
 use fastrender::Length;
 use fastrender::PropertyValue;
 use std::collections::HashMap;
@@ -94,6 +96,18 @@ fn test_resolve_var_with_keyword_value() {
 }
 
 #[test]
+fn test_resolve_var_case_insensitive_function_name() {
+  let props = make_props(&[("--color", "green")]);
+  let value = PropertyValue::Keyword("VAR(--color)".to_string());
+  let resolved = resolve_var(&value, &props);
+
+  match resolved {
+    PropertyValue::Keyword(kw) => assert_eq!(kw, "green"),
+    _ => panic!("Expected Keyword 'green', got {:?}", resolved),
+  }
+}
+
+#[test]
 fn test_resolve_var_not_found_no_fallback() {
   let props = HashMap::new();
   let value = PropertyValue::Keyword("var(--undefined)".to_string());
@@ -123,6 +137,40 @@ fn test_resolve_var_with_fallback_used() {
       assert_eq!(len.value, 20.0);
     }
     _ => panic!("Expected Length (fallback), got {:?}", resolved),
+  }
+}
+
+#[test]
+fn test_resolve_var_fallback_with_commas_and_functions() {
+  let props = HashMap::new();
+  let value = PropertyValue::Keyword("var(--missing, rgb(1, 2, 3))".to_string());
+  let resolved = resolve_var_for_property(&value, &props, "color");
+
+  match resolved {
+    VarResolutionResult::Resolved(v) => match *v {
+      PropertyValue::Color(_) => {}
+      other => panic!("Expected color value, got {:?}", other),
+    },
+    other => panic!("Expected resolved fallback color, got {:?}", other),
+  }
+}
+
+#[test]
+fn test_resolve_var_fallback_with_commas_inside_url() {
+  let props = HashMap::new();
+  let value = PropertyValue::Keyword("var(--missing, url(a,b))".to_string());
+  let resolved = resolve_var_for_property(&value, &props, "background-image");
+
+  match resolved {
+    VarResolutionResult::Resolved(v) => match *v {
+      PropertyValue::Multiple(values) => {
+        assert_eq!(values.len(), 1);
+        assert!(matches!(values[0], PropertyValue::Url(ref url) if url == "a,b"));
+      }
+      PropertyValue::Url(ref url) => assert_eq!(url, "a,b"),
+      other => panic!("Expected Url value, got {:?}", other),
+    },
+    other => panic!("Expected resolved url fallback, got {:?}", other),
   }
 }
 
@@ -203,6 +251,21 @@ fn test_resolve_chained_variables() {
 }
 
 #[test]
+fn test_replacement_containing_var_continues_resolving() {
+  let props = make_props(&[("--a", "calc(var(--b) * 2)"), ("--b", "5px")]);
+  let value = PropertyValue::Keyword("var(--a)".to_string());
+  let resolved = resolve_var(&value, &props);
+
+  match resolved {
+    PropertyValue::Length(len) => {
+      assert!((len.value - 10.0).abs() < f32::EPSILON);
+      assert_eq!(len.unit, fastrender::LengthUnit::Px);
+    }
+    _ => panic!("Expected Length from nested var replacement, got {:?}", resolved),
+  }
+}
+
+#[test]
 fn test_resolve_deeply_nested_fallback() {
   let props = make_props(&[("--level3", "purple")]);
   let value = PropertyValue::Keyword("var(--level1, var(--level2, var(--level3)))".to_string());
@@ -248,6 +311,18 @@ fn test_resolve_multiple_vars_in_value() {
 }
 
 #[test]
+fn test_resolve_repeated_var_occurrences() {
+  let props = make_props(&[("--space", "8px")]);
+  let value = PropertyValue::Keyword("var(--space) var(--space)".to_string());
+  let resolved = resolve_var(&value, &props);
+
+  match resolved {
+    PropertyValue::Keyword(kw) => assert_eq!(kw, "8px 8px"),
+    _ => panic!("Expected Keyword with repeated substitution, got {:?}", resolved),
+  }
+}
+
+#[test]
 fn test_resolve_var_in_box_shadow() {
   let props = make_props(&[("--blur", "4px"), ("--color", "rgba(0,0,0,0.2)")]);
   let value = PropertyValue::Keyword("0 2px var(--blur) var(--color)".to_string());
@@ -281,6 +356,14 @@ fn test_circular_reference_protection() {
 }
 
 #[test]
+fn test_two_variable_cycle_reports_limit() {
+  let props = make_props(&[("--a", "var(--b)"), ("--b", "var(--a)")]);
+  let value = PropertyValue::Keyword("var(--a)".to_string());
+  let resolved = resolve_var_for_property(&value, &props, "color");
+  assert!(matches!(resolved, VarResolutionResult::RecursionLimitExceeded));
+}
+
+#[test]
 fn test_explicit_depth_limit() {
   let props = make_props(&[("--deep", "value")]);
   let value = PropertyValue::Keyword("var(--deep)".to_string());
@@ -310,6 +393,7 @@ fn test_contains_var_positive() {
   assert!(contains_var("color: var(--primary)"));
   assert!(contains_var("calc(var(--size) + 10px)"));
   assert!(contains_var("var(--x) var(--y)"));
+  assert!(contains_var("VAR(--x)"));
 }
 
 #[test]
