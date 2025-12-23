@@ -446,6 +446,8 @@ pub struct RenderOptions {
   pub scroll_x: f32,
   /// Vertical scroll offset applied before painting.
   pub scroll_y: f32,
+  /// Maximum number of external stylesheets to inline. `None` means unlimited.
+  pub css_limit: Option<usize>,
   /// When true, document fetch failures will return a placeholder pixmap with diagnostics instead of an error.
   pub allow_partial: bool,
 }
@@ -458,6 +460,7 @@ impl Default for RenderOptions {
       media_type: MediaType::Screen,
       scroll_x: 0.0,
       scroll_y: 0.0,
+      css_limit: None,
       allow_partial: false,
     }
   }
@@ -491,6 +494,12 @@ impl RenderOptions {
   pub fn with_scroll(mut self, scroll_x: f32, scroll_y: f32) -> Self {
     self.scroll_x = scroll_x;
     self.scroll_y = scroll_y;
+    self
+  }
+
+  /// Limit the number of linked stylesheets to inline.
+  pub fn with_stylesheet_limit(mut self, limit: Option<usize>) -> Self {
+    self.css_limit = limit;
     self
   }
 
@@ -1258,13 +1267,13 @@ impl FastRender {
     url: &str,
     options: RenderOptions,
   ) -> Result<RenderResult> {
-    let mut diagnostics = RenderDiagnostics::default();
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
     let resource = match self.fetcher.fetch(url) {
       Ok(res) => res,
       Err(e) => {
+        let mut diagnostics = RenderDiagnostics::default();
         diagnostics.record(ResourceKind::Document, url, e.to_string());
         diagnostics.document_error = Some(e.to_string());
         if options.allow_partial {
@@ -1280,14 +1289,55 @@ impl FastRender {
         }));
       }
     };
+    self.render_fetched_html_with_options(&resource, Some(url), options)
+  }
 
-    let base_hint = resource.final_url.as_deref().unwrap_or(url);
+  /// Render already-fetched HTML while inlining linked stylesheets using the configured fetcher.
+  pub fn render_fetched_html_with_options(
+    &mut self,
+    resource: &crate::resource::FetchedResource,
+    base_hint: Option<&str>,
+    options: RenderOptions,
+  ) -> Result<RenderResult> {
+    let mut diagnostics = RenderDiagnostics::default();
+    let hint = resource.final_url.as_deref().or(base_hint).unwrap_or("");
     let html = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
-    let base_url = infer_base_url(&html, base_hint).into_owned();
+    let base_url = infer_base_url(&html, hint).into_owned();
     self.set_base_url(base_url.clone());
 
-    let html_with_css =
-      self.inline_stylesheets(&html, &base_url, options.media_type, &mut diagnostics);
+    let html_with_css = self.inline_stylesheets(
+      &html,
+      &base_url,
+      options.media_type,
+      options.css_limit,
+      &mut diagnostics,
+    );
+    let pixmap = self.render_html_with_options(&html_with_css, options)?;
+
+    Ok(RenderResult {
+      pixmap,
+      diagnostics,
+    })
+  }
+
+  /// Renders an HTML string after inlining linked stylesheets.
+  pub fn render_html_with_stylesheets(
+    &mut self,
+    html: &str,
+    base_hint: &str,
+    options: RenderOptions,
+  ) -> Result<RenderResult> {
+    let mut diagnostics = RenderDiagnostics::default();
+    let base_url = infer_base_url(html, base_hint).into_owned();
+    self.set_base_url(base_url.clone());
+
+    let html_with_css = self.inline_stylesheets(
+      html,
+      &base_url,
+      options.media_type,
+      options.css_limit,
+      &mut diagnostics,
+    );
     let pixmap = self.render_html_with_options(&html_with_css, options)?;
 
     Ok(RenderResult {
@@ -2310,9 +2360,46 @@ impl FastRender {
     html: &str,
     base_url: &str,
     media_type: MediaType,
+    css_limit: Option<usize>,
+    diagnostics: &mut RenderDiagnostics,
+  ) -> String {
+    Self::inline_stylesheets_for_html(
+      self.fetcher.as_ref(),
+      html,
+      base_url,
+      media_type,
+      css_limit,
+      diagnostics,
+    )
+  }
+
+  /// Fetch linked stylesheets using the renderer's fetcher and inject them into the HTML.
+  pub fn inline_stylesheets_for_document(
+    &self,
+    html: &str,
+    base_url: &str,
+    media_type: MediaType,
+    css_limit: Option<usize>,
+    diagnostics: &mut RenderDiagnostics,
+  ) -> String {
+    self.inline_stylesheets(html, base_url, media_type, css_limit, diagnostics)
+  }
+
+  /// Fetch linked stylesheets using an arbitrary fetcher and inject them into the HTML.
+  pub fn inline_stylesheets_for_html(
+    fetcher: &dyn ResourceFetcher,
+    html: &str,
+    base_url: &str,
+    media_type: MediaType,
+    css_limit: Option<usize>,
     diagnostics: &mut RenderDiagnostics,
   ) -> String {
     let mut css_links = extract_css_links(html, base_url, media_type);
+    if let Some(limit) = css_limit {
+      if css_links.len() > limit {
+        css_links.truncate(limit);
+      }
+    }
     let mut seen: HashSet<String> = css_links.iter().cloned().collect();
     for extra in extract_embedded_css_urls(html, base_url) {
       if seen.insert(extra.clone()) {
@@ -2325,7 +2412,7 @@ impl FastRender {
 
     for css_url in css_links {
       seen_imports.insert(css_url.clone());
-      match self.fetcher.fetch(&css_url) {
+      match fetcher.fetch(&css_url) {
         Ok(res) => {
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
           let rewritten = absolutize_css_urls(&css_text, &css_url);
