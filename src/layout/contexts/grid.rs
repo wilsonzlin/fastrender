@@ -61,7 +61,7 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use std::collections::HashMap;
 use std::sync::Arc;
-use taffy::compute::grid::DetailedGridTracksInfo;
+use taffy::compute::DetailedGridTracksInfo;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
 use taffy::prelude::TaffyMaxContent;
@@ -82,8 +82,9 @@ use taffy::style::RepetitionCount;
 use taffy::style::Style as TaffyStyle;
 use taffy::style::TrackSizingFunction;
 use taffy::style_helpers::TaffyAuto;
-use taffy::tree::NodeId as TaffyNodeId;
+use taffy::tree::DetailedLayoutInfo;
 use taffy::tree::Layout as TaffyLayout;
+use taffy::tree::NodeId as TaffyNodeId;
 use taffy::tree::TaffyTree;
 
 #[derive(Clone, Copy)]
@@ -1104,13 +1105,7 @@ impl GridFormattingContext {
           child_fragments,
           box_node.style.clone(),
         );
-        self.apply_grid_baseline_alignment(
-          taffy,
-          node_id,
-          layout,
-          &children,
-          &mut fragment,
-        );
+        self.apply_grid_baseline_alignment(taffy, node_id, layout, &children, &mut fragment);
         return Ok(fragment);
       }
 
@@ -1187,11 +1182,7 @@ impl GridFormattingContext {
     }
   }
 
-  fn baseline_offset_with_fallback(
-    &self,
-    fragment: &FragmentNode,
-    axis: Axis,
-  ) -> Option<f32> {
+  fn baseline_offset_with_fallback(&self, fragment: &FragmentNode, axis: Axis) -> Option<f32> {
     if let Some(offset) = first_baseline_offset(fragment) {
       return Some(offset);
     }
@@ -1246,13 +1237,14 @@ impl GridFormattingContext {
     fragment: &mut FragmentNode,
   ) {
     let detailed = match taffy.detailed_layout_info(node_id) {
-      taffy::tree::layout::DetailedLayoutInfo::Grid(info) => info,
+      DetailedLayoutInfo::Grid(info) => info,
       _ => return,
     };
     if fragment.children.is_empty() {
       return;
     }
-    if detailed.items.len() != fragment.children.len() || child_ids.len() != fragment.children.len() {
+    if detailed.items.len() != fragment.children.len() || child_ids.len() != fragment.children.len()
+    {
       return;
     }
 
@@ -1298,41 +1290,45 @@ impl GridFormattingContext {
         Err(_) => continue,
       };
 
-      if self
-        .alignment_for_axis(Axis::Vertical, child_style, container_style)
+      if self.alignment_for_axis(Axis::Vertical, child_style, container_style)
         == taffy::style::AlignItems::Baseline
       {
         if let (Some((area_start, area_end)), Some(baseline)) = (
           grid_area_for_item(&row_offsets, item_info.row_start, item_info.row_end),
           self.baseline_offset_with_fallback(child_fragment, Axis::Vertical),
         ) {
-          row_groups.entry(item_info.row_start).or_default().push(BaselineItem {
-            idx,
-            area_start,
-            area_end,
-            baseline,
-            start: child_fragment.bounds.y(),
-            size: child_fragment.bounds.height(),
-          });
+          row_groups
+            .entry(item_info.row_start)
+            .or_default()
+            .push(BaselineItem {
+              idx,
+              area_start,
+              area_end,
+              baseline,
+              start: child_fragment.bounds.y(),
+              size: child_fragment.bounds.height(),
+            });
         }
       }
 
-      if self
-        .alignment_for_axis(Axis::Horizontal, child_style, container_style)
+      if self.alignment_for_axis(Axis::Horizontal, child_style, container_style)
         == taffy::style::AlignItems::Baseline
       {
         if let (Some((area_start, area_end)), Some(baseline)) = (
           grid_area_for_item(&col_offsets, item_info.column_start, item_info.column_end),
           self.baseline_offset_with_fallback(child_fragment, Axis::Horizontal),
         ) {
-          col_groups.entry(item_info.column_start).or_default().push(BaselineItem {
-            idx,
-            area_start,
-            area_end,
-            baseline,
-            start: child_fragment.bounds.x(),
-            size: child_fragment.bounds.width(),
-          });
+          col_groups
+            .entry(item_info.column_start)
+            .or_default()
+            .push(BaselineItem {
+              idx,
+              area_start,
+              area_end,
+              baseline,
+              start: child_fragment.bounds.x(),
+              size: child_fragment.bounds.width(),
+            });
         }
       }
     }
