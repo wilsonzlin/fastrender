@@ -1,0 +1,204 @@
+//! Shared helpers for CLI render binaries.
+
+use fastrender::api::{
+  FastRender, FastRenderConfig, RenderDiagnostics, RenderOptions, RenderResult,
+};
+use fastrender::css::loader::{infer_base_url, resolve_href};
+use fastrender::html::encoding::decode_html_bytes;
+use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
+use fastrender::resource::{
+  parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher, ResourceKind,
+};
+use fastrender::{Error, Result};
+use std::fmt::Write;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// Bundle of renderer configuration and per-render options parsed from CLI flags.
+#[derive(Debug, Clone)]
+pub struct RenderConfigBundle {
+  pub config: FastRenderConfig,
+  pub options: RenderOptions,
+}
+
+/// Construct render configuration objects from CLI settings.
+pub fn build_render_configs(
+  viewport: (u32, u32),
+  scroll_x: f32,
+  scroll_y: f32,
+  dpr: f32,
+  css_limit: Option<usize>,
+  apply_meta_viewport: bool,
+) -> RenderConfigBundle {
+  let config = FastRenderConfig::new()
+    .with_default_viewport(viewport.0, viewport.1)
+    .with_device_pixel_ratio(dpr)
+    .with_meta_viewport(apply_meta_viewport);
+
+  let options = RenderOptions::new()
+    .with_viewport(viewport.0, viewport.1)
+    .with_device_pixel_ratio(dpr)
+    .with_scroll(scroll_x, scroll_y)
+    .with_stylesheet_limit(css_limit);
+
+  RenderConfigBundle { config, options }
+}
+
+/// Configure an HTTP fetcher with headers and timeout suitable for CLI use.
+pub fn build_http_fetcher(
+  user_agent: &str,
+  accept_language: &str,
+  timeout_secs: Option<u64>,
+) -> HttpFetcher {
+  let mut fetcher = HttpFetcher::new()
+    .with_user_agent(user_agent.to_string())
+    .with_accept_language(accept_language.to_string());
+  if let Some(secs) = timeout_secs {
+    fetcher = fetcher.with_timeout(Duration::from_secs(secs));
+  }
+  fetcher
+}
+
+/// Rendered HTML along with its resolved base information.
+#[derive(Debug, Clone)]
+pub struct PreparedDocument {
+  pub html: String,
+  pub base_hint: String,
+  pub base_url: String,
+}
+
+impl PreparedDocument {
+  pub fn new(html: String, base_hint: String) -> Self {
+    let base_url = infer_base_url(&html, &base_hint).into_owned();
+    Self {
+      html,
+      base_hint,
+      base_url,
+    }
+  }
+}
+
+/// Cached HTML content loaded from disk.
+#[derive(Debug, Clone)]
+pub struct CachedDocument {
+  pub document: PreparedDocument,
+  pub content_type: Option<String>,
+  pub byte_len: usize,
+}
+
+/// Decode a fetched HTML resource using the provided base URL hint.
+pub fn decode_html_resource(resource: &FetchedResource, base_hint: &str) -> PreparedDocument {
+  let html = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
+  PreparedDocument::new(html, base_hint.to_string())
+}
+
+/// Load cached HTML from disk, honoring optional sidecar metadata.
+pub fn read_cached_document(path: &Path) -> Result<CachedDocument> {
+  let bytes = std::fs::read(path).map_err(Error::Io)?;
+
+  let mut meta_path = path.to_path_buf();
+  if let Some(ext) = meta_path.extension().and_then(|e| e.to_str()) {
+    meta_path.set_extension(format!("{ext}.meta"));
+  } else {
+    meta_path.set_extension("meta");
+  }
+  let meta = std::fs::read_to_string(&meta_path).ok();
+  let (content_type, source_url) = meta
+    .as_deref()
+    .map(parse_cached_html_meta)
+    .unwrap_or((None, None));
+
+  let base_hint = source_url.unwrap_or_else(|| format!("file://{}", path.display()));
+  let html = decode_html_bytes(&bytes, content_type.as_deref());
+
+  Ok(CachedDocument {
+    document: PreparedDocument::new(html, base_hint),
+    content_type,
+    byte_len: bytes.len(),
+  })
+}
+
+/// Follow client-side redirects (meta refresh and JS location) once per page.
+pub fn follow_client_redirects(
+  fetcher: &dyn ResourceFetcher,
+  mut doc: PreparedDocument,
+  mut log: impl FnMut(&str),
+) -> PreparedDocument {
+  if let Some(refresh) = extract_meta_refresh_url(&doc.html) {
+    if let Some(target) = resolve_href(&doc.base_url, &refresh) {
+      log(&format!("Following meta refresh to: {target}"));
+      match fetcher.fetch(&target) {
+        Ok(res) => {
+          let base_hint = res.final_url.as_deref().unwrap_or(&target).to_string();
+          doc = decode_html_resource(&res, &base_hint);
+        }
+        Err(err) => log(&format!(
+          "Warning: failed to follow meta refresh {target}: {err}"
+        )),
+      }
+    }
+  }
+
+  if let Some(js_redirect) = extract_js_location_redirect(&doc.html) {
+    if js_redirect.len() <= 2048 {
+      if let Some(target) = resolve_href(&doc.base_url, &js_redirect) {
+        log(&format!("Following JS location redirect to: {target}"));
+        match fetcher.fetch(&target) {
+          Ok(res) => {
+            let base_hint = res.final_url.as_deref().unwrap_or(&target).to_string();
+            doc = decode_html_resource(&res, &base_hint);
+          }
+          Err(err) => log(&format!(
+            "Warning: failed to follow JS redirect {target}: {err}"
+          )),
+        }
+      }
+    } else {
+      log(&format!(
+        "Warning: skipping JS redirect of length {}",
+        js_redirect.len()
+      ));
+    }
+  }
+
+  doc
+}
+
+/// Render prepared HTML using the shared stylesheet inlining path.
+pub fn render_document(
+  renderer: &mut FastRender,
+  doc: PreparedDocument,
+  options: &RenderOptions,
+) -> Result<RenderResult> {
+  renderer.render_html_with_stylesheets(&doc.html, &doc.base_hint, options.clone())
+}
+
+/// Log render diagnostics in a consistent human-readable format.
+pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str)) {
+  if let Some(err) = &diagnostics.document_error {
+    log(&format!("Document error: {err}"));
+  }
+
+  for fetch_error in &diagnostics.fetch_errors {
+    let kind = match fetch_error.kind {
+      ResourceKind::Document => "document",
+      ResourceKind::Stylesheet => "stylesheet",
+      ResourceKind::Image => "image",
+      ResourceKind::Font => "font",
+      ResourceKind::Other => "resource",
+    };
+    log(&format!(
+      "Warning: failed to fetch {kind} {}: {}",
+      fetch_error.url, fetch_error.message
+    ));
+  }
+}
+
+/// Convenience for building a renderer with the provided config and fetcher.
+pub fn build_renderer_with_fetcher(
+  config: FastRenderConfig,
+  fetcher: Arc<dyn ResourceFetcher>,
+) -> Result<FastRender> {
+  FastRender::with_config_and_fetcher(config, fetcher)
+}
