@@ -131,23 +131,35 @@ pub fn parse_meta_viewport_content(content: &str) -> Option<MetaViewport> {
 /// Unknown and malformed directives are skipped until a valid one is found.
 pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
   let mut stack = vec![dom];
+  let mut head: Option<&DomNode> = None;
+
   while let Some(node) = stack.pop() {
-    if let DomNodeType::Element {
-      tag_name,
-      attributes,
-      ..
-    } = &node.node_type
-    {
-      if tag_name.eq_ignore_ascii_case("meta") {
-        let mut name_attr: Option<&str> = None;
-        let mut content_attr: Option<&str> = None;
-        for (k, v) in attributes.iter() {
-          if k.eq_ignore_ascii_case("name") {
-            name_attr = Some(v);
-          } else if k.eq_ignore_ascii_case("content") {
-            content_attr = Some(v);
-          }
-        }
+    if let DomNodeType::ShadowRoot { .. } = node.node_type {
+      continue;
+    }
+
+    if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("head") {
+        head = Some(node);
+        break;
+      }
+    }
+
+    for child in node.children.iter().rev() {
+      stack.push(child);
+    }
+  }
+
+  let Some(head) = head else {
+    return None;
+  };
+
+  let mut stack = vec![head];
+  while let Some(node) = stack.pop() {
+    if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("meta") {
+        let name_attr = node.get_attribute_ref("name");
+        let content_attr = node.get_attribute_ref("content");
 
         if name_attr
           .map(|n| n.eq_ignore_ascii_case("viewport"))
@@ -160,11 +172,9 @@ pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
           }
         }
       }
+    }
 
-      for child in node.children.iter().rev() {
-        stack.push(child);
-      }
-    } else {
+    if !matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       for child in node.children.iter().rev() {
         stack.push(child);
       }
@@ -298,9 +308,24 @@ mod tests {
 
   #[test]
   fn extracts_first_valid_meta_viewport() {
-    let html = "<meta name=viewport content='width=bad'><meta name=viewport content='width=500'>";
+    let html =
+      "<head><meta name=viewport content='width=bad'><meta name=viewport content='width=500'></head>";
     let dom = crate::dom::parse_html(html).unwrap();
     let parsed = extract_viewport(&dom).unwrap();
     assert_eq!(parsed.width, Some(ViewportLength::Absolute(500.0)));
+  }
+
+  #[test]
+  fn ignores_body_viewport_meta() {
+    let html = "<html><head></head><body><meta name=viewport content='width=device-width'></body></html>";
+    let dom = crate::dom::parse_html(html).unwrap();
+    assert!(extract_viewport(&dom).is_none());
+  }
+
+  #[test]
+  fn ignores_shadow_root_viewport_meta() {
+    let html = "<html><head></head><body><div><template shadowroot='open'><meta name=viewport content='width=device-width'></template></div></body></html>";
+    let dom = crate::dom::parse_html(html).unwrap();
+    assert!(extract_viewport(&dom).is_none());
   }
 }
