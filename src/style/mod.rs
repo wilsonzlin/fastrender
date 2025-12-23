@@ -20,7 +20,6 @@ pub mod properties;
 pub mod types;
 pub mod values;
 pub mod var_resolution;
-pub mod variables;
 
 // Internal imports used by ComputedStyle
 use crate::css::types::BoxShadow;
