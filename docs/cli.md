@@ -28,11 +28,16 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Entry: `src/bin/inspect_frag.rs`
 - Run: `cargo run --release --bin inspect_frag -- --help`
 
-## Caching behavior
+## Offline / cached captures
 
-- `fetch_pages` caches HTML responses under `fetches/html/`.
-- Asset fetches made by the CLI tools go through the disk-backed `DiskCachingFetcher`
-  helper in `src/bin/caching_fetcher.rs`, which stores responses under `fetches/assets/`
-  so repeated runs avoid re-downloading.
-- API consumers should use the library's in-memory [`fastrender::resource::CachingFetcher`]
-  (single-flight, no disk writes) instead of the CLI-only disk cache.
+- There is no dedicated "bundle" format. Offline captures are the on-disk caches produced by the existing tools:
+  - `fetch_pages` writes HTML under `fetches/html/` and a `*.html.meta` sidecar with the original content-type and final URL.
+  - `render_pages` uses a disk-caching fetcher for subresources, writing into `fetches/assets/`. After one online render, you can re-run against the same caches without network access (new URLs will still fail).
+- Asset fetches made by the CLI tools go through the disk-backed `DiskCachingFetcher` helper in `src/bin/caching_fetcher.rs`; API consumers should use the library's in-memory [`fastrender::resource::CachingFetcher`] (single-flight, no disk writes).
+- To replay a single saved page, point `fetch_and_render` at a `file://` URL or path; it will read an adjacent `.meta` file (if present) to recover the cached content-type and source URL.
+
+## Diagnostics
+
+- `render_pages` emits per-page logs in `fetches/renders/<page>.log` plus a summary in `_summary.log`. CSS fetch failures show up there and correspond to `ResourceKind::Stylesheet` entries in the library diagnostics model.
+- The library API exposes structured diagnostics via `render_url_with_options` returning `RenderResult { pixmap, diagnostics }`. Set `RenderOptions::allow_partial(true)` to receive a placeholder image and a `document_error` string when the root fetch fails; subresource fetch errors are collected in `diagnostics.fetch_errors`.
+- The shipped binaries do not currently print `RenderDiagnostics`; prefer a small custom harness when you need the structured output, or rely on the per-page logs above for quick investigation.
