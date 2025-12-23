@@ -1,8 +1,6 @@
 # Unicode Text Algorithms Research
 
-**Research Task:** W1.R03 - Unicode Bidi & Line Breaking Research
-**Date:** 2025-11-20
-**Status:** Complete
+Research notes on the Unicode Bidirectional Algorithm (UAX #9) and Unicode Line Breaking Algorithm (UAX #14).
 
 ## Executive Summary
 
@@ -127,7 +125,7 @@ Output: Resolved embedding levels
 **From the spec:**
 > "A maximum explicit level of 125 is far more than sufficient for ordering, even with mechanically generated formatting."
 
-**W1-W7: Weak Type Resolution**
+**W1-W7: Weak Type Resolution** (rule labels from UAX #9)
 ```
 Algorithm: Resolve Weak Types (Simplified)
 Input: Text with resolved levels
@@ -690,7 +688,7 @@ The correct order for text processing:
 
 ### Where These Fit in FastRender
 
-**W4.T01 - Bidi Analyzer (depends on this research):**
+**Bidi analyzer (depends on this research):**
 ```rust
 // src/text/bidi.rs
 use unicode_bidi::{BidiInfo, Level};
@@ -708,7 +706,7 @@ impl BidiAnalyzer {
 }
 ```
 
-**W4.T08 - Break Opportunity Finder (depends on this research):**
+**Break opportunity finder (depends on this research):**
 ```rust
 // src/text/linebreak.rs
 use unicode_linebreak::{linebreaks, BreakOpportunity};

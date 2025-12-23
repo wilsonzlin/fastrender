@@ -1,6 +1,4 @@
 # CSS 2.1 Visual Formatting Model (research notes)
-
-**Research completed:** 2025-11-20
 **Primary sources:**
 - CSS 2.1 Chapter 9 (Visual Formatting Model)
 - CSS 2.1 Chapter 10 (Visual Formatting Model Details)
@@ -77,7 +75,7 @@ Out of scope for this research (covered by other tasks):
 13. [Line Height Calculations (CSS 2.1 Section 10.8)](#line-height)
 14. [Margin Collapsing (CSS 2.1 Section 8.3.1)](#margin-collapsing)
 15. [Ambiguities and Open Questions](#ambiguities)
-16. [Implementation Task Mapping](#task-mapping)
+16. [Implementation Recommendations](#implementation-recommendations)
 17. [Key Spec Quotes](#spec-quotes)
 18. [Glossary](#glossary)
 19. [References](#references)
@@ -213,15 +211,8 @@ Block box (p)
 
 ### Implementation Notes
 
-**For W2.T01 (BoxNode Type):**
-- Need distinct types for: Block, Inline, InlineBlock, ListItem, Table, TableCell, etc.
-- Track whether box is: block-level, inline-level, block container
-- Anonymous boxes must be tracked (for percentage resolution rules)
-
-**For W2.T03 (Box Generation):**
-- Must generate anonymous block boxes for mixed content
-- Must generate anonymous inline boxes for unwrapped text
-- Anonymous boxes inherit selectively (inheritable props only)
+- **Box node type:** Need distinct types for Block, Inline, InlineBlock, ListItem, Table, TableCell, etc. Track whether a box is block-level, inline-level, or a block container. Anonymous boxes must be tracked for percentage resolution rules.
+- **Box generation:** Generate anonymous block boxes for mixed content and anonymous inline boxes for unwrapped text. Anonymous boxes inherit only inheritable properties; other properties take initial values.
 
 ### Edge Cases and Gotchas
 
@@ -430,8 +421,8 @@ The containing block depends on the element's `position` property:
 - May vary per page
 
 ### Implementation Implications
-
-**For W3.T04 (Block Layout):**
+ 
+**Block layout:**
 ```rust
 fn compute_width(box: &BoxNode, containing_block_width: f32) -> f32 {
     // Width percentages resolve against containing block width
@@ -442,7 +433,7 @@ fn compute_width(box: &BoxNode, containing_block_width: f32) -> f32 {
 }
 ```
 
-**For W3.T12 (Positioned Layout):**
+**Positioned layout:**
 ```rust
 fn get_containing_block(box: &BoxNode) -> ContainingBlock {
     match box.style.position {
@@ -615,7 +606,7 @@ When a BFC contains floated children, the BFC's height expands to contain the fl
 
 ### Implementation Notes
 
-**For W3.T04 (Block Layout Implementation):**
+**Block layout implementation sketch:**
 
 ```rust
 pub struct BlockFormattingContext {
@@ -854,7 +845,7 @@ Floats can cause line boxes to be shortened on left or right side.
 
 ### Implementation Notes
 
-**For W4.T12 (Inline Layout Implementation):**
+**Inline layout implementation sketch:**
 
 ```rust
 pub struct InlineFormattingContext {
@@ -1361,7 +1352,7 @@ fn paint_stacking_context(context: &StackingContext, canvas: &mut Canvas) {
 
 ### Implementation Notes
 
-**For W5.T02 (Paint System):**
+**Paint system implementation note:**
 
 ```rust
 pub struct StackingContext {
@@ -1713,18 +1704,9 @@ where:
 
 ### Implementation Notes
 
-**For W3.T04 (Block Layout):**
-- Focus on 10.3.3 (normal flow blocks)
-- Must handle centering (both margins auto)
-- Must handle over-constrained (ignore appropriate margin)
-
-**For W3.T10 (Float Layout):**
-- Must implement shrink-to-fit width
-
-**For W3.T12 (Positioned Layout):**
-- Must handle all absolute positioning cases
-- Static position calculation is critical
-- Shrink-to-fit needed here too
+- **Block layout:** Focus on 10.3.3 (normal flow blocks). Handle centering when both margins are auto and handle over-constrained cases by ignoring the appropriate margin.
+- **Float layout:** Implement shrink-to-fit width.
+- **Positioned layout:** Handle all absolute positioning cases, including static position calculation and shrink-to-fit sizing where required.
 
 ---
 <a name="height-computation"></a>
@@ -2109,10 +2091,7 @@ fn align_line_boxes(line: &Line) -> PositionedLine {
 
 ### Implementation Notes
 
-**For W4.T12 (Inline Layout):**
-- Must integrate with font metrics from FontContext
-- Baseline alignment is iterative (top/bottom boxes affect line height, which affects their positions)
-- The strut is critical for empty lines
+- **Inline layout:** Must integrate with font metrics from FontContext. Baseline alignment is iterative (top/bottom boxes affect line height, which affects their positions). The strut is critical for empty lines.
 
 ---
 <a name="margin-collapsing"></a>
@@ -2356,7 +2335,7 @@ fn compute_clearance(
 
 ### Implementation Notes
 
-**For W3.T04 (Block Layout):**
+**Block layout margin collapsing sketch:**
 
 ```rust
 pub struct MarginCollapseState {
@@ -2895,14 +2874,14 @@ For each ambiguity:
 - Computed style queries (for value resolution)
 
 ---
-<a name="task-mapping"></a>
-## Implementation Task Mapping
+<a name="implementation-recommendations"></a>
+## Implementation Recommendations
 
-This section maps spec sections to FastRender V2 implementation tasks, providing clear guidance on which tasks need which parts of this research.
+This section maps spec sections to FastRender V2 implementation areas, providing clear guidance on which parts of this research support each area.
 
 ---
 
-### W2.T01: BoxNode Type Definition
+### BoxNode Type Definition
 
 **Needs from this research:**
 
@@ -2938,7 +2917,7 @@ pub struct BoxNode {
 
 ---
 
-### W2.T03: Box Generation Algorithm
+### Box Generation Algorithm
 
 **Needs from this research:**
 
@@ -2957,7 +2936,7 @@ pub struct BoxNode {
 
 ---
 
-### W2.T07: FormattingContext Trait Design
+### FormattingContext Trait Design
 
 **Needs from this research:**
 
@@ -2999,7 +2978,7 @@ pub trait FormattingContext {
 
 ---
 
-### W3.T04: Block Layout Implementation
+### Block Layout Implementation
 
 **Needs from this research:**
 
@@ -3038,7 +3017,7 @@ pub trait FormattingContext {
 
 ---
 
-### W3.T10: Float Layout Implementation
+### Float Layout Implementation
 
 **Needs from this research:**
 
@@ -3078,7 +3057,7 @@ fn position_float(
 
 ---
 
-### W4.T12: Inline Layout Implementation
+### Inline Layout Implementation
 
 **Needs from this research:**
 
@@ -3109,7 +3088,7 @@ fn position_float(
 
 ---
 
-### W3.T12: Positioned Layout Implementation
+### Positioned Layout Implementation
 
 **Needs from this research:**
 
@@ -3167,7 +3146,7 @@ impl PositionedLayout {
 
 ---
 
-### W3.T05: Margin Collapsing Implementation
+### Margin Collapsing Implementation
 
 **Needs from this research:**
 
@@ -3199,7 +3178,7 @@ pub struct MarginCollapseState {
 
 ---
 
-### W4.T06: Text Shaping Integration
+### Text Shaping Integration
 
 **Needs from this research:**
 
@@ -3221,7 +3200,7 @@ pub struct MarginCollapseState {
 
 ---
 
-### W5.T02: Paint System and Stacking Contexts
+### Paint System and Stacking Contexts
 
 **Needs from this research:**
 
@@ -3258,7 +3237,7 @@ impl StackingContext {
 
 ---
 
-### W2.T05: Computed Style System
+### Computed Style System
 
 **Needs from this research:**
 
@@ -3300,26 +3279,26 @@ pub fn compute_final_display(
 
 ---
 
-### Cross-Task Dependencies
+### Cross-Area Dependencies
 
 **Dependency graph:**
 
 ```
-W2.T01 (BoxNode Type)
+BoxNode Type
     ↓
-W2.T03 (Box Generation) ← W2.T07 (FormattingContext trait)
+Box Generation ← FormattingContext trait
     ↓                            ↓
-W3.T04 (Block Layout) ←──────────┘
+Block Layout ←──────────┘
     ↓
-W3.T05 (Margin Collapsing) ← (Used by W3.T04)
+Margin Collapsing
     ↓
-W3.T10 (Float Layout) ← (Needs W3.T04)
+Float Layout
     ↓
-W3.T12 (Positioned Layout) ← (Needs W3.T04)
+Positioned Layout
     ↓
-W4.T12 (Inline Layout) ← (Needs W3.T04, W4.T06)
+Inline Layout (after text shaping)
     ↓
-W5.T02 (Paint System) ← (Needs all layout tasks)
+Paint System (depends on all layout tasks)
 ```
 
 ---
@@ -3327,45 +3306,30 @@ W5.T02 (Paint System) ← (Needs all layout tasks)
 ### Critical Paths
 
 **Path 1: Basic block layout**
-- W2.T01 → W2.T03 → W2.T07 → W3.T04 → W3.T05
+- Box node definition → Box generation → Formatting context dispatch → Block layout → Margin collapsing
 - **Enables:** Simple HTML documents with divs and paragraphs
 
 **Path 2: Text rendering**
-- Path 1 + W4.T06 → W4.T12
+- Path 1 + text shaping integration → Inline layout
 - **Enables:** Documents with text content
 
 **Path 3: Complex layouts**
-- Path 2 + W3.T10 (floats) + W3.T12 (positioning)
+- Path 2 + float layout + positioned layout
 - **Enables:** Magazine-style layouts, modals, tooltips
 
 **Path 4: Visual rendering**
-- Path 3 + W5.T02
+- Path 3 + paint system
 - **Enables:** Complete rendering pipeline
 
 ---
 
 ### Recommended Implementation Order
 
-1. **Week 1-2:**
-   - W2.T01: BoxNode type
-   - W2.T03: Box generation
-   - W2.T07: FormattingContext trait
-
-2. **Week 3-4:**
-   - W3.T04: Block layout (basic)
-   - W3.T05: Margin collapsing
-
-3. **Week 5-6:**
-   - W4.T06: Text shaping integration
-   - W4.T12: Inline layout (basic)
-
-4. **Week 7-8:**
-   - W3.T10: Float layout
-   - W3.T12: Positioned layout
-
-5. **Week 9-10:**
-   - W5.T02: Paint system
-   - Integration and testing
+1. Box node type, box generation, formatting context trait
+2. Block layout (basic) plus margin collapsing
+3. Text shaping integration and inline layout
+4. Float layout and positioned layout
+5. Paint system, then integration and testing
 
 ---
 <a name="spec-quotes"></a>
@@ -3599,21 +3563,12 @@ Space inserted above an element's top margin to push it below floats. Used with 
 
 ---
 
-## Research Completion
+## Research Summary
 
-**Status:** ✅ COMPLETE
-
-**Date Completed:** 2025-11-20
-
-**Total Research Time:** ~10 hours
-
-**Pages of Specification Read:** ~150 pages
-
-**Ambiguities Identified:** 12
-
-**Implementation Tasks Mapped:** 10
-
-**Key Algorithms Documented:** 15+
+- **Pages of Specification Read:** ~150 pages
+- **Ambiguities Identified:** 12
+- **Implementation Areas Covered:** 10
+- **Key Algorithms Documented:** 15+
 
 ### Summary Statistics
 
@@ -3649,7 +3604,7 @@ Space inserted above an element's top margin to push it below floats. Used with 
 
 ### Validation
 
-All objectives from the task file have been achieved:
+All objectives outlined at the start of this research have been achieved:
 
 - ✅ Complete notes file with all required sections
 - ✅ Box generation rules documented with examples
@@ -3659,18 +3614,18 @@ All objectives from the task file have been achieved:
 - ✅ Margin collapsing algorithm documented with edge cases
 - ✅ 12 ambiguities/questions identified and documented
 - ✅ Key spec quotes captured with section references
-- ✅ Cross-references to relevant implementation tasks
+- ✅ Cross-references to relevant implementation areas
 - ✅ Notes structured for easy reference during implementation
 
 ### Next Steps
 
 **For implementation teams:**
 
-1. **Start with W2.T01 (BoxNode Type)** - Use Box Generation section
-2. **Proceed to W3.T04 (Block Layout)** - Use BFC, Width, Height, and Margin Collapsing sections
-3. **Then W4.T12 (Inline Layout)** - Use IFC and Line Height sections
-4. **Then W3.T10 and W3.T12** - Use Floats and Positioning sections
-5. **Finally W5.T02 (Paint System)** - Use Layered Presentation section
+1. Define the box node type and box generation rules (see Box Generation section).
+2. Implement block layout (use BFC, Width, Height, and Margin Collapsing sections).
+3. Implement inline layout after integrating text shaping (see IFC and Line Height sections).
+4. Add float and positioned layout support (see Floats and Positioning sections).
+5. Build the paint system and finalize integration (see Layered Presentation section).
 
 **For testing:**
 - Create test cases for each ambiguity identified

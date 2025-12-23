@@ -1,9 +1,7 @@
 # Servo Layout Architecture Study
 
-**Research Date:** 2025-11-20
-**Researcher:** FastRender V2 Agent
-**Purpose:** Deep study of Servo's layout engine to inform FastRender V2 architecture
-**Servo Version:** Main branch (current as of research date)
+Research into Servo's layout engine to inform FastRender V2 architecture.
+**Servo Version:** Main branch (current at time of research)
 
 ## Executive Summary
 
@@ -15,7 +13,7 @@ This document presents a comprehensive analysis of Servo's layout architecture, 
 4. **Two-pass sizing is universal**: Nearly all layout modes compute intrinsic sizes before main layout
 5. **Containing block abstraction**: Layout information flows down through explicit containing block structures
 
-These findings provide actionable guidance for Wave 2-5 implementation tasks, particularly W2.T07 (FormattingContext), W3.T06 (Table Layout), and W4.T12 (Inline Layout).
+These findings provide actionable guidance for formatting context, table layout, and inline layout work.
 
 ---
 
@@ -902,14 +900,14 @@ fn layout_box(
 
 **For FastRender**:
 ```rust
-// Box tree (Wave 2)
+// Box tree (logical model)
 pub struct BoxTree {
     pub style: ComputedValues,
     pub children: Vec<BoxTree>,
     // NO position or size fields!
 }
 
-// Fragment tree (Wave 3-5)
+// Fragment tree (layout output)
 pub struct Fragment {
     pub position: Point,
     pub size: Size,
@@ -928,7 +926,7 @@ pub struct Fragment {
 - Exhaustive matching ensures all cases handled
 - Simpler than trait objects for this use case
 
-**For W2.T07**:
+**Formatting context dispatch example:**
 ```rust
 pub enum FormattingContext {
     Block(BlockFormattingContext),
@@ -973,7 +971,7 @@ trait Layout {
 - O(1) cell lookup
 - Explicit representation matches mental model
 
-**For W3.T06**:
+**Table grid sketch:**
 ```rust
 pub struct TableGrid {
     pub columns: Vec<ColumnTrack>,
@@ -991,7 +989,7 @@ pub struct TableGrid {
 - Handles nested inline boxes correctly
 - Natural representation for text processing
 
-**For W4.T12**:
+**Inline layout linearization example:**
 ```rust
 pub enum InlineItem {
     Text(String),
@@ -1092,9 +1090,9 @@ fn layout(&mut self, cb: &ContainingBlock) -> Fragment;
 
 ---
 
-## 10. Recommendations by Task
+## 10. Implementation Recommendations
 
-### For W2.T07: FormattingContext Trait
+### FormattingContext trait guidance
 
 **Adopt:**
 1. **Enum dispatch pattern** (not trait objects)
@@ -1128,7 +1126,7 @@ impl FormattingContext {
 }
 ```
 
-### For W3.T06: Table Layout
+### Table layout guidance
 
 **Adopt:**
 1. **Explicit TableGrid structure** with 2D cell array
@@ -1153,7 +1151,7 @@ pub fn compute_fixed_layout(&self, width: Au) -> Vec<Au>;
 pub fn compute_auto_layout(&self, width: Au) -> Vec<Au>;
 ```
 
-### For W4.T12: Inline Layout
+### Inline layout guidance
 
 **Adopt:**
 1. **Linearization step** before line breaking
@@ -1208,12 +1206,11 @@ Servo's layout architecture represents **15+ years of browser engineering experi
 4. **Enum dispatch works**: For closed sets, simpler than trait objects
 5. **Explicit is better than implicit**: Grid for tables, linearization for inline
 
-These patterns are **directly applicable** to FastRender V2 and should guide implementation in Waves 2-5.
+These patterns are **directly applicable** to FastRender V2 and should guide implementation across layout modules.
 
 **Total Word Count**: ~4,200 words
 
 ---
 
-**Research Status**: ✅ Complete
 **Confidence Level**: High - Servo patterns well understood
-**Next Steps**: Apply these patterns to W2.T07, W3.T06, W4.T12 implementation tasks
+**Next Steps**: Apply these patterns to formatting context, table layout, and inline layout implementations.

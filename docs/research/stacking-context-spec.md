@@ -1,8 +1,6 @@
 # CSS Stacking Context Specification Research
 
-**Research Task:** W1.R05
-**Date:** 2025-11-20
-**Researcher:** Claude
+Research notes on stacking contexts and paint order.
 **Target Specs:** CSS 2.1 Appendix E, CSS Transforms, CSS Color Module
 
 ---
@@ -17,7 +15,7 @@ This document provides a comprehensive analysis of CSS stacking contexts and pai
 - Stacking contexts are atomic units - child z-index values cannot escape parent context
 - Negative z-index has special behavior - paints after parent background but before normal flow
 
-This research provides the foundation for implementing W5.T03 (Stacking Context Tree), W5.T04 (Paint Order Sorter), and W5.T05 (Display List Builder).
+This research provides the foundation for implementing a stacking context tree, paint order sorting, and display list construction.
 
 ---
 

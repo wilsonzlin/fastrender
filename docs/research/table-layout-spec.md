@@ -1,7 +1,4 @@
 # CSS Table Layout Specification Research
-
-**Task:** W1.R02 - CSS Table Layout Specification Research
-**Date:** 2025-01-21
 **Specifications Studied:**
 - CSS Tables Module Level 3: https://www.w3.org/TR/css-tables-3/
 - CSS 2.1 Chapter 17 (Tables): https://www.w3.org/TR/CSS21/tables.html
@@ -981,61 +978,52 @@ The only correct approach:
 
 ---
 
-## 6. Implementation Roadmap for W3.T06
+## 6. Implementation Roadmap
 
-Based on this research, the implementation should follow this structure:
+Based on this research, a practical implementation should follow this structure:
 
-### Phase 1: Table Structure Analysis (Week 1)
+### Stage 1: Table Structure Analysis
 1. Implement anonymous box generation (3-stage fixup)
 2. Build table grid from row/cell boxes
 3. Handle colspan/rowspan in grid assignment
 4. Track column and row counts
 
-### Phase 2: Fixed Layout (Week 1-2)
+### Stage 2: Fixed Layout
 1. Implement simple first-row analysis
 2. Column width distribution for fixed mode
 3. Test against spec examples
 4. Verify performance (should be very fast)
 
-### Phase 3: Auto Layout - Foundation (Week 2-3)
+### Stage 3: Auto Layout - Foundation
 1. Implement min-content width measurement
 2. Implement max-content width measurement
 3. Single-column cell analysis
 4. Basic width distribution
 
-### Phase 4: Auto Layout - Spanning Cells (Week 3-4)
+### Stage 4: Auto Layout - Spanning Cells
 1. Colspan distribution algorithm
 2. Width propagation across spanned columns
 3. Handle complex spanning scenarios
 4. Test against edge cases
 
-### Phase 5: Border Collapse (Week 4)
+### Stage 5: Border Collapse
 1. Implement conflict resolution algorithm
 2. Border width calculation
 3. Border positioning
 4. Integration with paint system
 
-### Phase 6: Integration & Testing (Week 5-6)
+### Stage 6: Integration & Testing
 1. Wire into main layout system
 2. WPT test suite integration
 3. Performance benchmarking
 4. Edge case fixes
 
-### Critical Success Factors
+### Key Success Factors
 
-✅ **Do:**
-- Follow spec algorithm precisely
-- Implement both fixed and auto as separate paths
-- Test with WPT test suite
-- Handle edge cases explicitly
-- Write comprehensive tests
-
-❌ **Don't:**
-- Try to optimize prematurely
-- Combine fixed and auto logic
-- Skip edge cases
-- Use heuristics instead of spec algorithm
-- Peek at HTML element types (class names, IDs, etc.)
+- Follow spec algorithms precisely
+- Keep fixed and auto layout as distinct paths
+- Cover edge cases with targeted tests
+- Avoid heuristics or layout-mode substitutions
 
 ---
 
@@ -1055,7 +1043,7 @@ Table layout is the most complex CSS layout mode due to its bidirectional constr
 
 6. **Global constraint solving**: Unlike other layout modes which are local and hierarchical, tables require solving a global constraint system where any cell can affect the entire layout.
 
-**For W3.T06 implementers**: Budget at least 4-6 weeks for a complete, spec-compliant table layout implementation. This is not simple and cutting corners will result in broken layouts for real-world content. Follow the specification precisely, test extensively, and resist the temptation to use heuristics or approximations.
+Budget enough time for a complete, spec-compliant table layout implementation. This is not simple and cutting corners will result in broken layouts for real-world content. Follow the specification precisely, test extensively, and resist the temptation to use heuristics or approximations.
 
 ---
 
@@ -1091,9 +1079,4 @@ Table layout is the most complex CSS layout mode due to its bidirectional constr
 - Spec quotes: 27 direct quotes
 - Algorithms: 6 complete pseudocode implementations
 - Code examples: 15+
-- Total research time: 8 hours
 - Confidence level: HIGH - Ready for implementation
-
-**Last Updated:** 2025-01-21
-**Task:** W1.R02 - CSS Table Layout Specification Research
-**Status:** ✅ COMPLETE
