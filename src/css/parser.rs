@@ -426,21 +426,28 @@ fn parse_scope_rule<'i, 't>(
 
       if p.try_parse(|p2| p2.expect_ident_matching("to")).is_ok() {
         p.skip_whitespace();
-        let end =
-          match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::ForScope) {
-            Ok(list) => Some(list),
-            Err(_) => {
-              return Err(p.new_custom_error(
-                SelectorParseErrorKind::UnsupportedPseudoClassOrElement("scope".into()),
-              ))
-            }
-          };
+        let end = match SelectorList::parse(
+          &PseudoClassParser,
+          p,
+          selectors::parser::ParseRelative::ForScope,
+        ) {
+          Ok(list) => Some(list),
+          Err(_) => {
+            return Err(p.new_custom_error(
+              SelectorParseErrorKind::UnsupportedPseudoClassOrElement("scope".into()),
+            ))
+          }
+        };
         p.skip_whitespace();
         return Ok((None, end));
       }
 
       let start =
-        match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::ForScope) {
+        match SelectorList::parse(
+          &PseudoClassParser,
+          p,
+          selectors::parser::ParseRelative::ForScope,
+        ) {
           Ok(list) => Some(list),
           Err(_) => {
             return Err(p.new_custom_error(
@@ -452,7 +459,11 @@ fn parse_scope_rule<'i, 't>(
       p.skip_whitespace();
       let end = if p.try_parse(|p2| p2.expect_ident_matching("to")).is_ok() {
         p.skip_whitespace();
-        match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::ForScope) {
+        match SelectorList::parse(
+          &PseudoClassParser,
+          p,
+          selectors::parser::ParseRelative::ForScope,
+        ) {
           Ok(list) => Some(list),
           Err(_) => {
             return Err(p.new_custom_error(

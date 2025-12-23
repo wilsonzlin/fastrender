@@ -234,7 +234,10 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
   let mut root = convert_handle_to_node(&dom.document);
   attach_shadow_roots(&mut root);
 
-  if matches!(options.compatibility_mode, DomCompatibilityMode::Compatibility) {
+  if matches!(
+    options.compatibility_mode,
+    DomCompatibilityMode::Compatibility
+  ) {
     apply_dom_compatibility_mutations(&mut root);
   }
 

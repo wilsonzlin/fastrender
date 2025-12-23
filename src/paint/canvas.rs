@@ -499,9 +499,7 @@ impl Canvas {
       bounds.height() * scale,
     );
     let base_clip = match self.current_state.clip_rect {
-      Some(existing) => existing
-        .intersection(scaled_bounds)
-        .unwrap_or(Rect::ZERO),
+      Some(existing) => existing.intersection(scaled_bounds).unwrap_or(Rect::ZERO),
       None => scaled_bounds,
     };
     self.current_state.clip_rect = Some(base_clip);
@@ -1585,7 +1583,11 @@ mod tests {
   #[test]
   fn clip_path_follows_transforms() {
     let triangle = ResolvedClipPath::Polygon {
-      points: vec![Point::new(0.0, 0.0), Point::new(4.0, 0.0), Point::new(0.0, 4.0)],
+      points: vec![
+        Point::new(0.0, 0.0),
+        Point::new(4.0, 0.0),
+        Point::new(0.0, 4.0),
+      ],
       fill_rule: FillRule::Winding,
     };
 

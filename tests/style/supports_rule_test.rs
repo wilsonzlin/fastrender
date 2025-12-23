@@ -44,8 +44,7 @@ fn supports_not_negates() {
 
 #[test]
 fn supports_nested_conditions_combine_correctly() {
-  let css =
-    r"@supports ((display: grid) and (color: red)) or (selector(:has(*))) { div { display: inline; } }";
+  let css = r"@supports ((display: grid) and (color: red)) or (selector(:has(*))) { div { display: inline; } }";
   assert_eq!(render_div_display(css), "inline");
 }
 
