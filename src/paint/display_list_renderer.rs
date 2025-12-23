@@ -81,7 +81,7 @@ use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
-use crate::text::shaper::GlyphPosition;
+use crate::text::pipeline::GlyphPosition;
 use rayon::prelude::*;
 use std::sync::Arc;
 use tiny_skia::BlendMode as SkiaBlendMode;
@@ -2812,10 +2812,10 @@ impl DisplayListRenderer {
       .map(|g| GlyphPosition {
         glyph_id: g.glyph_id,
         cluster: 0,
-        advance: g.advance,
-        advance_y: 0.0,
-        offset_x: g.offset.x,
-        offset_y: g.offset.y,
+        x_offset: g.offset.x,
+        y_offset: g.offset.y,
+        x_advance: g.advance,
+        y_advance: 0.0,
       })
       .collect();
 
@@ -3279,18 +3279,18 @@ impl DisplayListRenderer {
             reason: "Unable to resolve font for emphasis string".into(),
           }
         })?;
-        let glyphs: Vec<GlyphPosition> = text
-          .glyphs
-          .iter()
-          .map(|g| GlyphPosition {
-            glyph_id: g.glyph_id,
-            cluster: 0,
-            advance: g.advance,
-            advance_y: 0.0,
-            offset_x: g.offset.x,
-            offset_y: g.offset.y,
-          })
-          .collect();
+    let glyphs: Vec<GlyphPosition> = text
+      .glyphs
+      .iter()
+      .map(|g| GlyphPosition {
+        glyph_id: g.glyph_id,
+        cluster: 0,
+        x_offset: g.offset.x,
+        y_offset: g.offset.y,
+        x_advance: g.advance,
+        y_advance: 0.0,
+      })
+      .collect();
         for mark in &emphasis.marks {
           let mark_origin = if inline_vertical {
             Point::new(

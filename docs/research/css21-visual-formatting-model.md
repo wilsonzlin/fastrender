@@ -849,7 +849,7 @@ Floats can cause line boxes to be shortened on left or right side.
 
 ```rust
 pub struct InlineFormattingContext {
-    text_shaper: TextShaper,
+    shaping_pipeline: ShapingPipeline,
     line_breaker: LineBreaker,
 }
 

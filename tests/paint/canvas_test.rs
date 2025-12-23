@@ -8,11 +8,10 @@ use fastrender::geometry::Rect;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
 use fastrender::Canvas;
+use fastrender::ComputedStyle;
 use fastrender::FontContext;
 use fastrender::Rgba;
-use fastrender::Script;
-use fastrender::TextDirection;
-use fastrender::TextShaper;
+use fastrender::ShapingPipeline;
 
 // ============================================================================
 // Canvas Creation Tests
@@ -454,34 +453,29 @@ fn test_draw_text_with_glyphs() {
   // Get a font
   let font_ctx = FontContext::new();
 
-  // Skip if no fonts available
-  if font_ctx.get_sans_serif().is_none() {
+  if !font_ctx.has_fonts() {
     return;
   }
 
-  let font = font_ctx.get_sans_serif().unwrap();
-
-  // Shape some text
-  let shaper = TextShaper::new();
-  let shaped = shaper
-    .shape_text(
-      "Hello, World!",
-      &font,
-      16.0,
-      Script::Latin,
-      TextDirection::Ltr,
-    )
-    .unwrap();
+  let pipeline = ShapingPipeline::new();
+  let style = ComputedStyle::default();
+  let shaped = match pipeline.shape("Hello, World!", &style, &font_ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+  let Some(run) = shaped.first() else {
+    return;
+  };
 
   // Draw the glyphs
   canvas.draw_text(
     Point::new(10.0, 30.0),
-    &shaped.glyphs,
-    &font,
-    16.0,
+    &run.glyphs,
+    &run.font,
+    run.font_size,
     Rgba::BLACK,
-    0.0,
-    0.0,
+    run.synthetic_bold,
+    run.synthetic_oblique,
   );
 
   let pixmap = canvas.into_pixmap();
@@ -493,24 +487,27 @@ fn test_draw_text_colored() {
   let mut canvas = Canvas::new(200, 50, Rgba::WHITE).unwrap();
 
   let font_ctx = FontContext::new();
-  if font_ctx.get_sans_serif().is_none() {
+  if !font_ctx.has_fonts() {
     return;
   }
 
-  let font = font_ctx.get_sans_serif().unwrap();
-  let shaper = TextShaper::new();
-
-  let shaped = shaper
-    .shape_text("Red Text", &font, 20.0, Script::Latin, TextDirection::Ltr)
-    .unwrap();
+  let pipeline = ShapingPipeline::new();
+  let style = ComputedStyle::default();
+  let shaped = match pipeline.shape("Red Text", &style, &font_ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+  let Some(run) = shaped.first() else {
+    return;
+  };
   canvas.draw_text(
     Point::new(10.0, 35.0),
-    &shaped.glyphs,
-    &font,
-    20.0,
+    &run.glyphs,
+    &run.font,
+    run.font_size,
     Rgba::rgb(255, 0, 0),
-    0.0,
-    0.0,
+    run.synthetic_bold,
+    run.synthetic_oblique,
   );
 
   let _ = canvas.into_pixmap();
@@ -521,26 +518,30 @@ fn test_draw_text_with_opacity() {
   let mut canvas = Canvas::new(200, 50, Rgba::WHITE).unwrap();
 
   let font_ctx = FontContext::new();
-  if font_ctx.get_sans_serif().is_none() {
+  if !font_ctx.has_fonts() {
     return;
   }
 
-  let font = font_ctx.get_sans_serif().unwrap();
-  let shaper = TextShaper::new();
+  let pipeline = ShapingPipeline::new();
+  let style = ComputedStyle::default();
 
   canvas.set_opacity(0.5);
 
-  let shaped = shaper
-    .shape_text("Faded", &font, 24.0, Script::Latin, TextDirection::Ltr)
-    .unwrap();
+  let shaped = match pipeline.shape("Faded", &style, &font_ctx) {
+    Ok(runs) => runs,
+    Err(_) => return,
+  };
+  let Some(run) = shaped.first() else {
+    return;
+  };
   canvas.draw_text(
     Point::new(10.0, 35.0),
-    &shaped.glyphs,
-    &font,
-    24.0,
+    &run.glyphs,
+    &run.font,
+    run.font_size,
     Rgba::BLACK,
-    0.0,
-    0.0,
+    run.synthetic_bold,
+    run.synthetic_oblique,
   );
 
   let _ = canvas.into_pixmap();

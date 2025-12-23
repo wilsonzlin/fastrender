@@ -318,9 +318,13 @@ pub use text::hyphenation::remove_soft_hyphens;
 pub use text::hyphenation::Hyphenator;
 pub use text::hyphenation::HyphensMode;
 pub use text::hyphenation::SupportedLanguage;
-pub use text::shaper::Script;
-pub use text::shaper::TextDirection;
-pub use text::shaper::TextShaper;
+pub use text::pipeline::Direction as TextDirection;
+pub use text::pipeline::BidiAnalysis;
+pub use text::pipeline::BidiRun;
+pub use text::pipeline::GlyphPosition;
+pub use text::pipeline::Script;
+pub use text::pipeline::ShapedRun;
+pub use text::pipeline::ShapingPipeline;
 #[cfg(any(test, feature = "box_generation_demo"))]
 pub use tree::box_generation_demo::{
   BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode,

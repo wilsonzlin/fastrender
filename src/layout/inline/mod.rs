@@ -24,14 +24,10 @@
 //! # Module Organization
 //!
 //! - `baseline` - Baseline alignment algorithm (W4.T13)
-//! - `text_run` - Text run generation from shaped glyphs (W4.T14)
 //! - `float_integration` - Float integration for inline layout (W4.T15)
 
 // W4.T13 - Baseline alignment algorithm
 pub mod baseline;
-
-// W4.T14 - Text run generation
-pub mod text_run;
 
 // W4.T15 - Float integration
 pub mod float_integration;

@@ -51,7 +51,7 @@ use crate::geometry::Size;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::style::color::Rgba;
 use crate::text::font_db::LoadedFont;
-use crate::text::shaper::GlyphPosition;
+use crate::text::pipeline::GlyphPosition;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FillRule;
 use tiny_skia::IntSize;
@@ -754,8 +754,19 @@ impl Canvas {
   /// # Examples
   ///
   /// ```rust,ignore
-  /// let shaped = shaper.shape_text("Hello", &font, 16.0, Script::Latin, TextDirection::Ltr)?;
-  /// canvas.draw_text(Point::new(10.0, 50.0), &shaped.glyphs, &font, 16.0, Rgba::BLACK);
+  /// let pipeline = ShapingPipeline::new();
+  /// let style = ComputedStyle::default();
+  /// let runs = pipeline.shape("Hello", &style, &font_context)?;
+  /// let run = &runs[0];
+  /// canvas.draw_text(
+  ///   Point::new(10.0, 50.0),
+  ///   &run.glyphs,
+  ///   &run.font,
+  ///   run.font_size,
+  ///   Rgba::BLACK,
+  ///   run.synthetic_bold,
+  ///   run.synthetic_oblique,
+  /// );
   /// ```
   pub fn draw_text(
     &mut self,
@@ -784,8 +795,8 @@ impl Canvas {
     let mut x = position.x;
 
     for glyph in glyphs {
-      let glyph_x = x + glyph.offset_x;
-      let glyph_y = position.y + glyph.offset_y;
+      let glyph_x = x + glyph.x_offset;
+      let glyph_y = position.y + glyph.y_offset;
 
       // Get the glyph outline
       if let Some(path) = self.build_glyph_path(
@@ -818,7 +829,7 @@ impl Canvas {
         }
       }
 
-      x += glyph.advance;
+      x += glyph.x_advance;
     }
   }
 

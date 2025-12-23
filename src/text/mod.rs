@@ -29,12 +29,8 @@
 //! - `font_db` - Font database, discovery, and loading
 //! - `font_loader` - High-level font context
 //! - `font_fallback` - Per-character font fallback chain
-//! - `bidi` - Bidirectional text handling (UAX #9)
-//! - `script` - Script itemization (UAX #24)
-//! - `shaper` - Text shaping using HarfBuzz (rustybuzz)
 //! - `emoji` - Emoji detection and sequence parsing (UTS #51)
-//! - `clustering` - Cursor positioning and hit testing utilities
-//! - `pipeline` - Unified text shaping pipeline
+//! - `pipeline` - Unified text shaping pipeline (bidi, script, shaping)
 //! - `line_break` - Line break opportunity detection (UAX #14)
 //! - `hyphenation` - Word hyphenation for improved line breaking
 //!
@@ -75,12 +71,22 @@ pub mod font_loader;
 // Text Shaping Pipeline (Wave 4)
 // ============================================================================
 
-pub mod bidi;
-pub mod clustering;
 pub mod emoji;
 pub mod hyphenation;
 pub mod justify;
 pub mod line_break;
 pub mod pipeline;
-pub mod script;
-pub mod shaper;
+
+pub use pipeline::itemize_text;
+pub use pipeline::BidiAnalysis;
+pub use pipeline::BidiRun;
+pub use pipeline::ClusterMap;
+pub use pipeline::Direction;
+pub use pipeline::ExplicitBidiContext;
+pub use pipeline::GlyphPosition;
+pub use pipeline::ItemizedRun;
+pub use pipeline::ParagraphBoundary;
+pub use pipeline::RunRotation;
+pub use pipeline::Script;
+pub use pipeline::ShapedRun;
+pub use pipeline::ShapingPipeline;

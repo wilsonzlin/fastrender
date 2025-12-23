@@ -386,7 +386,7 @@ impl ExactSizeIterator for BreakIterator {
 // Greedy Line Breaking Algorithm (W4.T09)
 // ============================================================================
 
-use crate::text::shaper::GlyphPosition;
+use crate::text::pipeline::GlyphPosition;
 
 /// A segment within a line
 ///
@@ -525,8 +525,22 @@ impl Default for Line {
 /// use fastrender::text::{break_lines_greedy, GlyphPosition, BreakOpportunity};
 ///
 /// let glyphs = vec![
-///     GlyphPosition { glyph_id: 1, cluster: 0, advance: 10.0, ..Default::default() },
-///     GlyphPosition { glyph_id: 2, cluster: 1, advance: 10.0, ..Default::default() },
+///     GlyphPosition {
+///         glyph_id: 1,
+///         cluster: 0,
+///         x_offset: 0.0,
+///         y_offset: 0.0,
+///         x_advance: 10.0,
+///         y_advance: 0.0,
+///     },
+///     GlyphPosition {
+///         glyph_id: 2,
+///         cluster: 1,
+///         x_offset: 0.0,
+///         y_offset: 0.0,
+///         x_advance: 10.0,
+///         y_advance: 0.0,
+///     },
 /// ];
 ///
 /// let opportunities = vec![
@@ -589,7 +603,7 @@ pub fn break_lines_greedy(
     }
 
     // Try to add glyph to current line
-    let glyph_width = glyph.advance;
+    let glyph_width = glyph.x_advance;
 
     if line_builder.can_fit(glyph_width) {
       line_builder.add_glyph(glyph_idx, glyph_width);
@@ -613,7 +627,7 @@ pub fn break_lines_greedy(
           .take(glyph_idx + 1)
           .skip(brk.glyph_index)
         {
-          line_builder.add_glyph(i, g.advance);
+          line_builder.add_glyph(i, g.x_advance);
         }
       } else {
         // No break opportunity - overflow
@@ -765,7 +779,7 @@ impl LineBuilder {
 
 /// Create a single line containing all glyphs (no wrapping)
 fn create_single_line(glyphs: &[GlyphPosition], max_width: f32) -> Line {
-  let total_width: f32 = glyphs.iter().map(|g| g.advance).sum();
+  let total_width: f32 = glyphs.iter().map(|g| g.x_advance).sum();
 
   Line {
     segments: vec![LineSegment::new(0, glyphs.len(), total_width)],

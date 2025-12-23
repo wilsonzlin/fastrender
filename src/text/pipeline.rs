@@ -77,6 +77,7 @@ use rustybuzz::Language as HbLanguage;
 use rustybuzz::UnicodeBuffer;
 use rustybuzz::Variation;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -334,6 +335,29 @@ impl Script {
     matches!(self, Self::Common | Self::Inherited | Self::Unknown)
   }
 
+  /// Detects the dominant script of a text string.
+  ///
+  /// Neutral codepoints are ignored; if no strong script is found,
+  /// Latin is returned by default.
+  pub fn detect_text(text: &str) -> Self {
+    use std::collections::HashMap;
+
+    let mut counts: HashMap<Script, usize> = HashMap::new();
+    for ch in text.chars() {
+      let script = Script::detect(ch);
+      if script.is_neutral() {
+        continue;
+      }
+      *counts.entry(script).or_insert(0) += 1;
+    }
+
+    counts
+      .into_iter()
+      .max_by_key(|(_, count)| *count)
+      .map(|(script, _)| script)
+      .unwrap_or(Script::Latin)
+  }
+
   /// Converts to rustybuzz Script using ISO 15924 tags.
   ///
   /// Returns None for scripts that should be auto-detected.
@@ -383,7 +407,6 @@ pub struct ExplicitBidiContext {
 #[derive(Debug)]
 pub struct BidiAnalysis {
   /// The original text being analyzed (reserved for future RTL improvements).
-  #[allow(dead_code)]
   text: String,
   /// Bidi levels for each byte position (matching BidiInfo).
   levels: Vec<Level>,
@@ -403,6 +426,31 @@ pub struct ParagraphBoundary {
   pub start_byte: usize,
   pub end_byte: usize,
   pub level: Level,
+}
+
+/// A directional run produced by bidi analysis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BidiRun {
+  /// Start byte offset in the original text.
+  pub start: usize,
+  /// End byte offset (exclusive) in the original text.
+  pub end: usize,
+  /// Bidi embedding level for this run.
+  pub level: u8,
+  /// Direction of the run derived from the level.
+  pub direction: Direction,
+}
+
+impl BidiRun {
+  /// Returns true if the run covers no bytes.
+  pub fn is_empty(&self) -> bool {
+    self.start >= self.end
+  }
+
+  /// Returns the substring covered by this run.
+  pub fn text_slice<'a>(&self, text: &'a str) -> &'a str {
+    &text[self.start.min(text.len())..self.end.min(text.len())]
+  }
 }
 
 impl BidiAnalysis {
@@ -565,6 +613,106 @@ impl BidiAnalysis {
   pub fn paragraphs(&self) -> &[ParagraphBoundary] {
     &self.paragraphs
   }
+
+  /// Returns the original text that was analyzed.
+  pub fn text(&self) -> &str {
+    &self.text
+  }
+
+  /// Returns logical bidi runs in source order.
+  pub fn logical_runs(&self) -> Vec<BidiRun> {
+    if self.text.is_empty() || self.levels.is_empty() {
+      return Vec::new();
+    }
+
+    let mut runs = Vec::new();
+    let mut run_start = 0usize;
+    let mut current_level = self.levels[0];
+
+    for (idx, &level) in self.levels.iter().enumerate().skip(1) {
+      if level != current_level {
+        runs.push(self.build_run(run_start, idx, current_level));
+        run_start = idx;
+        current_level = level;
+      }
+    }
+
+    runs.push(self.build_run(run_start, self.levels.len(), current_level));
+
+    split_bidi_runs_by_paragraph(runs, &self.paragraphs, self.text.len())
+  }
+
+  /// Returns visual runs reordered for display.
+  pub fn visual_runs(&self) -> Vec<BidiRun> {
+    let runs = self.logical_runs();
+    if runs.len() <= 1 {
+      return runs;
+    }
+
+    let levels: Vec<Level> = runs
+      .iter()
+      .filter_map(|run| Level::new(run.level))
+      .collect();
+    if levels.len() != runs.len() {
+      return runs;
+    }
+
+    unicode_bidi::BidiInfo::reorder_visual(&levels)
+      .into_iter()
+      .map(|idx| runs[idx].clone())
+      .collect()
+  }
+
+  fn build_run(&self, start_char: usize, end_char: usize, level: Level) -> BidiRun {
+    let start_byte = *self.char_starts.get(start_char).unwrap_or(&0);
+    let end_byte = if end_char < self.char_starts.len() {
+      self.char_starts[end_char]
+    } else {
+      self.text.len()
+    };
+
+    BidiRun {
+      start: start_byte,
+      end: end_byte,
+      level: level.number(),
+      direction: Direction::from_level(level),
+    }
+  }
+}
+
+fn split_bidi_runs_by_paragraph(
+  runs: Vec<BidiRun>,
+  paragraphs: &[ParagraphBoundary],
+  text_len: usize,
+) -> Vec<BidiRun> {
+  if runs.is_empty() || paragraphs.is_empty() {
+    return runs;
+  }
+
+  let mut out = Vec::with_capacity(runs.len());
+  let mut para_iter = paragraphs.iter().peekable();
+
+  for mut run in runs {
+    while let Some(para) = para_iter.peek().copied() {
+      if run.start >= para.end_byte {
+        para_iter.next();
+        continue;
+      }
+
+      let para_end = para.end_byte.min(text_len);
+      if run.end <= para_end {
+        out.push(run);
+        break;
+      }
+
+      let left = BidiRun { end: para_end, ..run.clone() };
+      run.start = para_end;
+      out.push(left);
+      para_iter.next();
+    }
+  }
+
+  out
 }
 
 // ============================================================================

@@ -24,7 +24,7 @@ use fastrender::geometry::Size;
 use fastrender::style::display::FormattingContextType;
 use fastrender::style::ComputedStyle;
 use fastrender::text::line_break::find_break_opportunities;
-use fastrender::text::shaper::Script;
+use fastrender::text::pipeline::Script;
 use fastrender::tree::box_tree::BoxNode;
 use fastrender::tree::box_tree::BoxTree;
 use fastrender::FastRender;
