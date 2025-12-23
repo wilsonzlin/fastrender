@@ -426,16 +426,17 @@ fn fill_slot_tree(
   assignments: &mut Vec<(Option<String>, DomNode)>,
   available_slots: &HashSet<String>,
 ) {
-  for child in &mut node.children {
-    fill_slot_tree(child, assignments, available_slots);
-  }
-
   if matches!(node.node_type, DomNodeType::Slot { .. }) {
     let slot_name = node.get_attribute_ref("name").unwrap_or("");
     let assigned = take_assignments_for_slot(assignments, slot_name, available_slots);
     if !assigned.is_empty() {
       node.children = assigned;
+      return;
     }
+  }
+
+  for child in &mut node.children {
+    fill_slot_tree(child, assignments, available_slots);
   }
 }
 

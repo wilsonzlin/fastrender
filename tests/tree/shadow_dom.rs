@@ -158,3 +158,45 @@ fn first_template_wins_for_multiple_declarative_shadow_roots() {
     "with no slots, later templates are dropped by the flattened representation"
   );
 }
+
+#[test]
+fn nested_default_slot_in_fallback_prefers_outer_slot() {
+  let html = "<div id='host'><template shadowroot='open'><slot id='outer'><div><slot id='inner'></slot></div></slot></template><span id='light'>X</span></div>";
+  let dom = parse_html(html).expect("parse html");
+  let host = find_by_id(&dom, "host").expect("host element");
+  let shadow_root = host.children.first().expect("shadow root");
+
+  let outer_slot = find_by_id(shadow_root, "outer").expect("outer slot");
+  assert_eq!(outer_slot.children.len(), 1);
+  assert_eq!(
+    outer_slot.children[0].get_attribute_ref("id"),
+    Some("light")
+  );
+  assert!(
+    find_by_id(shadow_root, "inner").is_none(),
+    "fallback subtree should be removed once the slot is assigned"
+  );
+}
+
+#[test]
+fn nested_named_slots_in_fallback_receive_assignments_when_outer_is_unassigned() {
+  let html = "<div id='host'><template shadowroot='open'><slot name='outer' id='outer'><slot name='inner' id='inner'></slot></slot></template><span slot='inner' id='light-inner'>Y</span></div>";
+  let dom = parse_html(html).expect("parse html");
+  let host = find_by_id(&dom, "host").expect("host element");
+  let shadow_root = host.children.first().expect("shadow root");
+
+  let outer_slot = find_by_id(shadow_root, "outer").expect("outer slot");
+  assert_eq!(outer_slot.children.len(), 1);
+  assert_eq!(
+    outer_slot.children[0].get_attribute_ref("id"),
+    Some("inner"),
+    "outer slot should retain fallback when unassigned"
+  );
+
+  let inner_slot = find_by_id(shadow_root, "inner").expect("inner slot");
+  assert_eq!(inner_slot.children.len(), 1);
+  assert_eq!(
+    inner_slot.children[0].get_attribute_ref("id"),
+    Some("light-inner")
+  );
+}
