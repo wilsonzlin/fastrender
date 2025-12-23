@@ -20,13 +20,16 @@ use exif;
 use image::imageops;
 use image::DynamicImage;
 use image::GenericImageView;
+use image::ImageDecoder;
 use image::ImageFormat;
 use image::RgbaImage;
+use std::convert::TryFrom;
 use roxmltree::Document;
 use std::collections::HashMap;
-use std::convert::TryFrom;
+use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::Condvar;
 use std::sync::Mutex;
 use url::Url;
 
@@ -136,6 +139,84 @@ impl CachedImage {
 // ImageCache
 // ============================================================================
 
+/// Configuration for [`ImageCache`].
+#[derive(Debug, Clone, Copy)]
+pub struct ImageCacheConfig {
+  /// Maximum number of decoded pixels (width * height). `0` disables the limit.
+  pub max_decoded_pixels: u64,
+  /// Maximum allowed width or height for a decoded image. `0` disables the limit.
+  pub max_decoded_dimension: u32,
+}
+
+impl Default for ImageCacheConfig {
+  fn default() -> Self {
+    Self {
+      max_decoded_pixels: 100_000_000,
+      max_decoded_dimension: 32768,
+    }
+  }
+}
+
+impl ImageCacheConfig {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  pub fn with_max_decoded_pixels(mut self, max: u64) -> Self {
+    self.max_decoded_pixels = max;
+    self
+  }
+
+  pub fn with_max_decoded_dimension(mut self, max: u32) -> Self {
+    self.max_decoded_dimension = max;
+    self
+  }
+}
+
+#[derive(Clone)]
+enum SharedImageResult {
+  Success(Arc<CachedImage>),
+  Error(Error),
+}
+
+impl SharedImageResult {
+  fn as_result(&self) -> Result<Arc<CachedImage>> {
+    match self {
+      Self::Success(img) => Ok(Arc::clone(img)),
+      Self::Error(err) => Err(err.clone()),
+    }
+  }
+}
+
+struct DecodeInFlight {
+  result: Mutex<Option<SharedImageResult>>,
+  cv: Condvar,
+}
+
+impl DecodeInFlight {
+  fn new() -> Self {
+    Self {
+      result: Mutex::new(None),
+      cv: Condvar::new(),
+    }
+  }
+
+  fn set(&self, result: SharedImageResult) {
+    if let Ok(mut slot) = self.result.lock() {
+      *slot = Some(result);
+      self.cv.notify_all();
+    }
+  }
+
+  fn wait(&self) -> Result<Arc<CachedImage>> {
+    let mut guard = self.result.lock().unwrap();
+    while guard.is_none() {
+      guard = self.cv.wait(guard).unwrap();
+    }
+    guard.as_ref().unwrap().as_result()
+  }
+}
+
 /// Cache for loaded images
 ///
 /// `ImageCache` provides in-memory caching of decoded images, with support for
@@ -157,52 +238,93 @@ impl CachedImage {
 pub struct ImageCache {
   /// In-memory cache of decoded images (keyed by resolved URL)
   cache: Arc<Mutex<HashMap<String, Arc<CachedImage>>>>,
+  /// In-flight decodes keyed by resolved URL to de-duplicate concurrent loads.
+  in_flight: Arc<Mutex<HashMap<String, Arc<DecodeInFlight>>>>,
   /// Base URL for resolving relative image sources
   base_url: Option<String>,
   /// Resource fetcher for loading bytes from URLs
   fetcher: Arc<dyn ResourceFetcher>,
+  /// Decode limits.
+  config: ImageCacheConfig,
 }
 
 impl ImageCache {
   /// Create a new ImageCache with the default HTTP fetcher
   pub fn new() -> Self {
-    Self {
-      cache: Arc::new(Mutex::new(HashMap::new())),
-      base_url: None,
-      fetcher: Arc::new(CachingFetcher::with_config(
-        HttpFetcher::new(),
-        CachingFetcherConfig::default(),
-      )),
-    }
+    Self::with_config(ImageCacheConfig::default())
   }
 
   /// Create a new ImageCache with a custom fetcher
   pub fn with_fetcher(fetcher: Arc<dyn ResourceFetcher>) -> Self {
-    Self {
-      cache: Arc::new(Mutex::new(HashMap::new())),
-      base_url: None,
-      fetcher,
-    }
+    Self::with_fetcher_and_config(fetcher, ImageCacheConfig::default())
+  }
+
+  /// Create a new ImageCache with the default HTTP fetcher and custom limits.
+  pub fn with_config(config: ImageCacheConfig) -> Self {
+    Self::with_base_url_fetcher_and_config(
+      None,
+      Arc::new(CachingFetcher::with_config(
+        HttpFetcher::new(),
+        CachingFetcherConfig::default(),
+      )),
+      config,
+    )
+  }
+
+  /// Create a new ImageCache with a custom fetcher and limits.
+  pub fn with_fetcher_and_config(
+    fetcher: Arc<dyn ResourceFetcher>,
+    config: ImageCacheConfig,
+  ) -> Self {
+    Self::with_base_url_fetcher_and_config(None, fetcher, config)
   }
 
   /// Create a new ImageCache with a base URL and the default HTTP fetcher
   pub fn with_base_url(base_url: String) -> Self {
-    Self {
-      cache: Arc::new(Mutex::new(HashMap::new())),
-      base_url: Some(base_url),
-      fetcher: Arc::new(CachingFetcher::with_config(
+    Self::with_base_url_and_config(base_url, ImageCacheConfig::default())
+  }
+
+  /// Create a new ImageCache with a base URL, default fetcher, and custom limits.
+  pub fn with_base_url_and_config(base_url: String, config: ImageCacheConfig) -> Self {
+    Self::with_base_url_fetcher_and_config(
+      Some(base_url),
+      Arc::new(CachingFetcher::with_config(
         HttpFetcher::new(),
         CachingFetcherConfig::default(),
       )),
-    }
+      config,
+    )
   }
 
   /// Create a new ImageCache with both a base URL and a custom fetcher
   pub fn with_base_url_and_fetcher(base_url: String, fetcher: Arc<dyn ResourceFetcher>) -> Self {
+    Self::with_base_url_fetcher_and_config(
+      Some(base_url),
+      fetcher,
+      ImageCacheConfig::default(),
+    )
+  }
+
+  /// Create a new ImageCache with a base URL, custom fetcher, and limits.
+  pub fn with_base_url_and_fetcher_and_config(
+    base_url: String,
+    fetcher: Arc<dyn ResourceFetcher>,
+    config: ImageCacheConfig,
+  ) -> Self {
+    Self::with_base_url_fetcher_and_config(Some(base_url), fetcher, config)
+  }
+
+  fn with_base_url_fetcher_and_config(
+    base_url: Option<String>,
+    fetcher: Arc<dyn ResourceFetcher>,
+    config: ImageCacheConfig,
+  ) -> Self {
     Self {
       cache: Arc::new(Mutex::new(HashMap::new())),
-      base_url: Some(base_url),
+      in_flight: Arc::new(Mutex::new(HashMap::new())),
+      base_url,
       fetcher,
+      config,
     }
   }
 
@@ -266,21 +388,38 @@ impl ImageCache {
     let resolved_url = self.resolve_url(url);
 
     // Check cache first (using resolved URL as key)
-    {
-      let cache = self.cache.lock().unwrap();
-      if let Some(img) = cache.get(&resolved_url) {
-        return Ok(Arc::clone(img));
-      }
+    if let Some(img) = self.get_cached(&resolved_url) {
+      return Ok(img);
     }
 
-    // Fetch the resource bytes
-    let resource = self.fetcher.fetch(&resolved_url)?;
+    let (flight, is_owner) = self.join_inflight(&resolved_url);
+    if !is_owner {
+      return flight.wait();
+    }
 
-    // Decode the image
+    let result = self.fetch_and_decode(&resolved_url);
+    let shared = match &result {
+      Ok(img) => SharedImageResult::Success(Arc::clone(img)),
+      Err(err) => SharedImageResult::Error(err.clone()),
+    };
+    self.finish_inflight(&resolved_url, &flight, shared);
+
+    result
+  }
+
+  fn get_cached(&self, resolved_url: &str) -> Option<Arc<CachedImage>> {
+    self
+      .cache
+      .lock()
+      .ok()
+      .and_then(|cache| cache.get(resolved_url).cloned())
+  }
+
+  fn fetch_and_decode(&self, resolved_url: &str) -> Result<Arc<CachedImage>> {
+    let resource = self.fetcher.fetch(resolved_url)?;
     let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none) =
-      self.decode_resource(&resource, &resolved_url)?;
+      self.decode_resource(&resource, resolved_url)?;
 
-    // Cache it (using resolved URL as key)
     let img_arc = Arc::new(CachedImage {
       image: Arc::new(img),
       orientation,
@@ -289,12 +428,35 @@ impl ImageCache {
       intrinsic_ratio,
       aspect_ratio_none,
     });
-    {
-      let mut cache = self.cache.lock().unwrap();
-      cache.insert(resolved_url, Arc::clone(&img_arc));
+
+    if let Ok(mut cache) = self.cache.lock() {
+      cache.insert(resolved_url.to_string(), Arc::clone(&img_arc));
     }
 
     Ok(img_arc)
+  }
+
+  fn join_inflight(&self, resolved_url: &str) -> (Arc<DecodeInFlight>, bool) {
+    let mut map = self.in_flight.lock().unwrap();
+    if let Some(existing) = map.get(resolved_url) {
+      return (Arc::clone(existing), false);
+    }
+
+    let flight = Arc::new(DecodeInFlight::new());
+    map.insert(resolved_url.to_string(), Arc::clone(&flight));
+    (flight, true)
+  }
+
+  fn finish_inflight(
+    &self,
+    resolved_url: &str,
+    flight: &Arc<DecodeInFlight>,
+    result: SharedImageResult,
+  ) {
+    flight.set(result);
+    if let Ok(mut map) = self.in_flight.lock() {
+      map.remove(resolved_url);
+    }
   }
 
   /// Render raw SVG content to an image (uncached).
@@ -344,35 +506,37 @@ impl ImageCache {
         })
       })?;
       return self
-        .render_svg_to_image(content)
+        .render_svg_to_image_with_url(content, url)
         .map(|(img, ratio, aspect_none)| (img, None, None, true, ratio, aspect_none));
     }
 
     // Regular image - extract EXIF metadata and decode
     let (orientation, resolution) = Self::exif_metadata(bytes);
-    Self::decode_bitmap(bytes, content_type)
+    self
+      .decode_bitmap(bytes, content_type, url)
       .map(|img| (img, orientation, resolution, false, None, false))
-      .map_err(|e| {
-        Error::Image(ImageError::DecodeFailed {
-          url: url.to_string(),
-          reason: e.to_string(),
-        })
-      })
   }
 
   fn decode_bitmap(
+    &self,
     bytes: &[u8],
     content_type: Option<&str>,
-  ) -> std::result::Result<DynamicImage, image::ImageError> {
+    url: &str,
+  ) -> Result<DynamicImage> {
     let format_from_content_type = Self::format_from_content_type(content_type);
     let sniffed_format = Self::sniff_image_format(bytes);
+    if let Some((width, height)) =
+      self.predecoded_dimensions(bytes, format_from_content_type, sniffed_format)
+    {
+      self.enforce_decode_limits(width, height, url)?;
+    }
     let mut last_error: Option<image::ImageError> = None;
 
     if matches!(format_from_content_type, Some(ImageFormat::Avif))
       || matches!(sniffed_format, Some(ImageFormat::Avif))
     {
       match Self::decode_avif(bytes) {
-        Ok(img) => return Ok(img),
+        Ok(img) => return self.finish_bitmap_decode(img, url),
         Err(err) => last_error = Some(err),
       }
     }
@@ -380,7 +544,7 @@ impl ImageCache {
     if let Some(format) = format_from_content_type {
       if format != ImageFormat::Avif {
         match image::load_from_memory_with_format(bytes, format) {
-          Ok(img) => return Ok(img),
+          Ok(img) => return self.finish_bitmap_decode(img, url),
           Err(err) => last_error = Some(err),
         }
       }
@@ -389,16 +553,21 @@ impl ImageCache {
     if let Some(format) = sniffed_format {
       if Some(format) != format_from_content_type && format != ImageFormat::Avif {
         match image::load_from_memory_with_format(bytes, format) {
-          Ok(img) => return Ok(img),
+          Ok(img) => return self.finish_bitmap_decode(img, url),
           Err(err) => last_error = Some(err),
         }
       }
     }
 
     match image::load_from_memory(bytes) {
-      Ok(img) => Ok(img),
-      Err(err) => Err(last_error.unwrap_or(err)),
+      Ok(img) => self.finish_bitmap_decode(img, url),
+      Err(err) => Err(self.decode_error(url, last_error.unwrap_or(err))),
     }
+  }
+
+  fn finish_bitmap_decode(&self, img: DynamicImage, url: &str) -> Result<DynamicImage> {
+    self.enforce_decode_limits(img.width(), img.height(), url)?;
+    Ok(img)
   }
 
   fn format_from_content_type(content_type: Option<&str>) -> Option<ImageFormat> {
@@ -413,15 +582,80 @@ impl ImageCache {
     image::guess_format(bytes).ok()
   }
 
+  fn decode_error(&self, url: &str, err: image::ImageError) -> Error {
+    Error::Image(ImageError::DecodeFailed {
+      url: url.to_string(),
+      reason: err.to_string(),
+    })
+  }
+
+  fn predecoded_dimensions(
+    &self,
+    bytes: &[u8],
+    format_from_content_type: Option<ImageFormat>,
+    sniffed_format: Option<ImageFormat>,
+  ) -> Option<(u32, u32)> {
+    format_from_content_type
+      .and_then(|format| Self::dimensions_for_format(bytes, format))
+      .or_else(|| sniffed_format.and_then(|format| Self::dimensions_for_format(bytes, format)))
+  }
+
+  fn dimensions_for_format(bytes: &[u8], format: ImageFormat) -> Option<(u32, u32)> {
+    match format {
+      ImageFormat::Png => image::codecs::png::PngDecoder::new(Cursor::new(bytes))
+        .ok()
+        .map(|d| d.dimensions()),
+      ImageFormat::Jpeg => image::codecs::jpeg::JpegDecoder::new(Cursor::new(bytes))
+        .ok()
+        .map(|d| d.dimensions()),
+      ImageFormat::Gif => image::codecs::gif::GifDecoder::new(Cursor::new(bytes))
+        .ok()
+        .map(|d| d.dimensions()),
+      ImageFormat::WebP => image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))
+        .ok()
+        .map(|d| d.dimensions()),
+      _ => None,
+    }
+  }
+
+  fn enforce_decode_limits(&self, width: u32, height: u32, url: &str) -> Result<()> {
+    if self.config.max_decoded_dimension > 0
+      && (width > self.config.max_decoded_dimension || height > self.config.max_decoded_dimension)
+    {
+      return Err(Error::Image(ImageError::DecodeFailed {
+        url: url.to_string(),
+        reason: format!(
+          "Image dimensions {}x{} exceed maximum dimension {}",
+          width, height, self.config.max_decoded_dimension
+        ),
+      }));
+    }
+
+    if self.config.max_decoded_pixels > 0 {
+      let pixels = u64::from(width) * u64::from(height);
+      if pixels > self.config.max_decoded_pixels {
+        return Err(Error::Image(ImageError::DecodeFailed {
+          url: url.to_string(),
+          reason: format!(
+            "Image dimensions {}x{} exceed pixel budget of {}",
+            width, height, self.config.max_decoded_pixels
+          ),
+        }));
+      }
+    }
+
+    Ok(())
+  }
+
   fn decode_avif(bytes: &[u8]) -> std::result::Result<DynamicImage, image::ImageError> {
     let decoder = AvifDecoder::from_avif(bytes).map_err(|err| Self::avif_error(err))?;
-    let image = decoder.to_image().map_err(|err| Self::avif_error(err))?;
+    let image = decoder
+      .to_image()
+      .map_err(|err| Self::avif_error(err))?;
     Self::avif_image_to_dynamic(image)
   }
 
-  fn avif_image_to_dynamic(
-    image: AvifImage,
-  ) -> std::result::Result<DynamicImage, image::ImageError> {
+  fn avif_image_to_dynamic(image: AvifImage) -> std::result::Result<DynamicImage, image::ImageError> {
     let dimension_error = || {
       image::ImageError::Parameter(image::error::ParameterError::from_kind(
         image::error::ParameterErrorKind::DimensionMismatch,
@@ -620,6 +854,14 @@ impl ImageCache {
     &self,
     svg_content: &str,
   ) -> Result<(DynamicImage, Option<f32>, bool)> {
+    self.render_svg_to_image_with_url(svg_content, "SVG content")
+  }
+
+  fn render_svg_to_image_with_url(
+    &self,
+    svg_content: &str,
+    url: &str,
+  ) -> Result<(DynamicImage, Option<f32>, bool)> {
     use resvg::usvg;
 
     const DEFAULT_WIDTH: f32 = 300.0;
@@ -632,7 +874,7 @@ impl ImageCache {
     let options = usvg::Options::default();
     let tree = usvg::Tree::from_str(svg_content, &options).map_err(|e| {
       Error::Image(ImageError::DecodeFailed {
-        url: "SVG content".to_string(),
+        url: url.to_string(),
         reason: format!("Failed to parse SVG: {}", e),
       })
     })?;
@@ -665,6 +907,8 @@ impl ImageCache {
     let render_width = target_width.max(1.0).round() as u32;
     let render_height = target_height.max(1.0).round() as u32;
 
+    self.enforce_decode_limits(render_width, render_height, url)?;
+
     // Render SVG to pixmap, scaling to the target intrinsic dimensions when needed
     let mut pixmap = tiny_skia::Pixmap::new(render_width, render_height).ok_or(Error::Render(
       RenderError::CanvasCreationFailed {
@@ -683,7 +927,7 @@ impl ImageCache {
     let img =
       image::RgbaImage::from_raw(render_width, render_height, rgba_data).ok_or_else(|| {
         Error::Image(ImageError::DecodeFailed {
-          url: "SVG content".to_string(),
+          url: url.to_string(),
           reason: "Failed to create image from SVG pixmap".to_string(),
         })
       })?;
@@ -826,8 +1070,10 @@ impl Clone for ImageCache {
   fn clone(&self) -> Self {
     Self {
       cache: Arc::clone(&self.cache),
+      in_flight: Arc::clone(&self.in_flight),
       base_url: self.base_url.clone(),
       fetcher: Arc::clone(&self.fetcher),
+      config: self.config,
     }
   }
 }
@@ -941,10 +1187,7 @@ mod tests {
     let rgba = image.image.to_rgba8();
     let left_alpha = rgba.get_pixel(5, 10)[3];
     let right_alpha = rgba.get_pixel(15, 10)[3];
-    assert!(
-      left_alpha < right_alpha,
-      "mask should reduce left side opacity"
-    );
+    assert!(left_alpha < right_alpha, "mask should reduce left side opacity");
   }
 
   #[test]
@@ -1094,16 +1337,14 @@ mod tests {
   }
 
   fn avif_fixture_bytes() -> Vec<u8> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/avif/solid.avif");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .join("tests/fixtures/avif/solid.avif");
     std::fs::read(&path).expect("read avif fixture")
   }
 
   fn assert_green_pixel(pixel: [u8; 4]) {
     assert!(pixel[1] >= 180, "expected green channel, got {pixel:?}");
-    assert!(
-      pixel[0] < 50 && pixel[2] < 50,
-      "expected low red/blue, got {pixel:?}"
-    );
+    assert!(pixel[0] < 50 && pixel[2] < 50, "expected low red/blue, got {pixel:?}");
   }
 
   #[test]
@@ -1132,9 +1373,7 @@ mod tests {
     });
     let cache = ImageCache::with_fetcher(fetcher);
 
-    let image = cache
-      .load("test://avif.sniff")
-      .expect("decode avif via sniffing");
+    let image = cache.load("test://avif.sniff").expect("decode avif via sniffing");
     assert_eq!(image.width(), 4);
     assert_eq!(image.height(), 4);
 
