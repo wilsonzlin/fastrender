@@ -69,7 +69,7 @@ pub fn parse_meta_viewport_content(content: &str) -> Option<MetaViewport> {
     match key.as_str() {
       "width" => {
         if viewport.width.is_none() {
-          if let Some(len) = parse_viewport_length(value) {
+          if let Some(len) = parse_viewport_length(value, ViewportAxis::Width) {
             viewport.width = Some(len);
             seen = true;
           }
@@ -77,7 +77,7 @@ pub fn parse_meta_viewport_content(content: &str) -> Option<MetaViewport> {
       }
       "height" => {
         if viewport.height.is_none() {
-          if let Some(len) = parse_viewport_length(value) {
+          if let Some(len) = parse_viewport_length(value, ViewportAxis::Height) {
             viewport.height = Some(len);
             seen = true;
           }
@@ -174,15 +174,33 @@ pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
   None
 }
 
-fn parse_viewport_length(value: &str) -> Option<ViewportLength> {
-  if value.eq_ignore_ascii_case("device-width") {
+#[derive(Clone, Copy)]
+enum ViewportAxis {
+  Width,
+  Height,
+}
+
+fn parse_viewport_length(value: &str, axis: ViewportAxis) -> Option<ViewportLength> {
+  if matches!(axis, ViewportAxis::Width) && value.eq_ignore_ascii_case("device-width") {
     return Some(ViewportLength::Device);
   }
-  if value.eq_ignore_ascii_case("device-height") {
+  if matches!(axis, ViewportAxis::Height) && value.eq_ignore_ascii_case("device-height") {
     return Some(ViewportLength::Device);
   }
 
-  parse_positive_number(value).map(ViewportLength::Absolute)
+  let trimmed = value.trim();
+  let numeric = if trimmed.len() >= 2 {
+    let (number, unit) = trimmed.split_at(trimmed.len() - 2);
+    if unit.eq_ignore_ascii_case("px") {
+      number
+    } else {
+      trimmed
+    }
+  } else {
+    trimmed
+  };
+
+  parse_positive_number(numeric).map(ViewportLength::Absolute)
 }
 
 fn parse_positive_number(value: &str) -> Option<f32> {
@@ -192,6 +210,27 @@ fn parse_positive_number(value: &str) -> Option<f32> {
   }
 
   if let Ok(num) = trimmed.parse::<f32>() {
+    if num.is_finite() && num > 0.0 {
+      return Some(num);
+    }
+  }
+
+  // Accept leading-decimal formats like ".5" that Rust's parser rejects.
+  let mut normalized = None;
+  let normalized_value = if trimmed.starts_with('.') {
+    normalized = Some(format!("0{trimmed}"));
+    normalized.as_ref().unwrap().as_str()
+  } else if trimmed.starts_with("-.") {
+    normalized = Some(format!("-0{}", &trimmed[1..]));
+    normalized.as_ref().unwrap().as_str()
+  } else if trimmed.starts_with("+.") {
+    normalized = Some(format!("+0{}", &trimmed[1..]));
+    normalized.as_ref().unwrap().as_str()
+  } else {
+    trimmed
+  };
+
+  if let Ok(num) = normalized_value.parse::<f32>() {
     if num.is_finite() && num > 0.0 {
       return Some(num);
     }
@@ -228,6 +267,27 @@ mod tests {
     assert_eq!(parsed.height, Some(ViewportLength::Absolute(500.0)));
     assert_eq!(parsed.maximum_scale, Some(2.0));
     assert_eq!(parsed.user_scalable, Some(false));
+  }
+
+  #[test]
+  fn parses_lengths_with_px_suffix() {
+    let parsed = parse_meta_viewport_content("width=320px").unwrap();
+    assert_eq!(parsed.width, Some(ViewportLength::Absolute(320.0)));
+  }
+
+  #[test]
+  fn parses_leading_decimal_scale_values() {
+    let parsed = parse_meta_viewport_content("initial-scale=.5").unwrap();
+    assert_eq!(parsed.initial_scale, Some(0.5));
+  }
+
+  #[test]
+  fn ignores_mismatched_device_lengths() {
+    let parsed =
+      parse_meta_viewport_content("width=device-height, height=400, initial-scale=1").unwrap();
+    assert_eq!(parsed.width, None);
+    assert_eq!(parsed.height, Some(ViewportLength::Absolute(400.0)));
+    assert_eq!(parsed.initial_scale, Some(1.0));
   }
 
   #[test]
