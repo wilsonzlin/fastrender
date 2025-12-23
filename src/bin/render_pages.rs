@@ -358,14 +358,15 @@ fn main() {
             Ok(res) => {
               let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
               let rewritten = absolutize_css_urls(&css_text, &css_url);
+              let mut import_fetch = |u| {
+                fetcher
+                  .fetch(u)
+                  .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
+              };
               let inlined = inline_imports(
                 &rewritten,
                 &css_url,
-                &|u| {
-                  fetcher
-                    .fetch(u)
-                    .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
-                },
+                &mut import_fetch,
                 &mut seen_imports,
               );
               combined_css.push_str(&inlined);

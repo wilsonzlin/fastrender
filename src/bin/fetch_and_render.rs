@@ -287,7 +287,7 @@ mod tests {
 
   #[test]
   fn inlines_imports_with_media_wrapping() {
-    fn fake_fetch(url: &str) -> Result<String> {
+    let mut fake_fetch = |url: &str| -> Result<String> {
       match url {
         "https://example.com/css/imported.css" => Ok("h1 { color: red; }".to_string()),
         _ => Err(Error::Io(std::io::Error::new(
@@ -295,13 +295,13 @@ mod tests {
           "not found",
         ))),
       }
-    }
+    };
     let css = r#"@import url("https://example.com/css/imported.css") screen;"#;
     let mut seen = HashSet::new();
     let inlined = inline_imports(
       css,
       "https://example.com/css/main.css",
-      &fake_fetch,
+      &mut fake_fetch,
       &mut seen,
     );
     assert!(
@@ -964,13 +964,14 @@ fn render_once(
       Ok((bytes, content_type, _)) => {
         let css_text = decode_css_bytes(&bytes, content_type.as_deref());
         let rewritten = absolutize_css_urls(&css_text, &css_url);
+        let mut import_fetch = |u| {
+          fetch_bytes(u, timeout, user_agent, accept_language)
+            .map(|(b, ct, _)| decode_css_bytes(&b, ct.as_deref()))
+        };
         let inlined = inline_imports(
           &rewritten,
           &css_url,
-          &|u| {
-            fetch_bytes(u, timeout, user_agent, accept_language)
-              .map(|(b, ct, _)| decode_css_bytes(&b, ct.as_deref()))
-          },
+          &mut import_fetch,
           &mut seen_imports,
         );
         combined_css.push_str(&inlined);

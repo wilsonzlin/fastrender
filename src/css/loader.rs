@@ -353,12 +353,15 @@ fn parse_import_target(rule: &str) -> Option<(String, String)> {
 /// All fetched stylesheets have their `url(...)` references rewritten against the
 /// stylesheet URL before inlining, so relative asset references continue to work
 /// once the CSS is embedded in the document.
-pub fn inline_imports<S: BuildHasher>(
+pub fn inline_imports<S: BuildHasher, F>(
   css: &str,
   base_url: &str,
-  fetch: &dyn Fn(&str) -> Result<String>,
+  fetch: &mut F,
   seen: &mut HashSet<String, S>,
-) -> String {
+) -> String
+where
+  F: FnMut(&str) -> Result<String>,
+{
   #[derive(PartialEq)]
   enum State {
     Normal,
@@ -1236,14 +1239,14 @@ mod tests {
   fn inline_imports_flattens_nested_imports() {
     let mut seen = HashSet::new();
     let css = "@import \"nested.css\";\nbody { color: black; }";
-    let fetched = |url: &str| -> Result<String> {
+    let mut fetched = |url: &str| -> Result<String> {
       if url.ends_with("nested.css") {
         Ok("p { margin: 0; }".to_string())
       } else {
         Ok(String::new())
       }
     };
-    let out = inline_imports(css, "https://example.com/main.css", &fetched, &mut seen);
+    let out = inline_imports(css, "https://example.com/main.css", &mut fetched, &mut seen);
     if !out.contains("p { margin: 0; }") {
       eprintln!("inline_imports output: {out}");
     }

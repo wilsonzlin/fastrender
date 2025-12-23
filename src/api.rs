@@ -636,6 +636,7 @@ impl FastRenderConfig {
   /// Sets the site compatibility profile applied during box generation.
   pub fn compat_profile(mut self, profile: CompatProfile) -> Self {
     self.compat_profile = profile;
+<<<<<<< HEAD
     self
   }
 
@@ -649,6 +650,8 @@ impl FastRenderConfig {
   /// Enables site-specific compatibility hacks used for internal captures.
   pub fn with_site_compat_hacks(mut self) -> Self {
     self.compat_profile = CompatProfile::SiteCompatibility;
+=======
+>>>>>>> 4b4121b (Record stylesheet import failures and harden partial renders)
     self
   }
 }
@@ -2265,6 +2268,8 @@ impl FastRender {
 
   /// Create a simple placeholder pixmap indicating a render error.
   fn render_error_overlay(&self, width: u32, height: u32) -> Result<Pixmap> {
+    let width = width.max(1);
+    let height = height.max(1);
     let mut pixmap =
       Pixmap::new(width, height).ok_or(Error::Render(RenderError::CanvasCreationFailed {
         width,
@@ -2328,17 +2333,19 @@ impl FastRender {
         Ok(res) => {
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
           let rewritten = absolutize_css_urls(&css_text, &css_url);
-          let inlined = inline_imports(
-            &rewritten,
-            &css_url,
-            &|u| {
-              self
-                .fetcher
-                .fetch(u)
-                .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
-            },
-            &mut seen_imports,
-          );
+          let inlined = {
+            let mut import_fetch = |u: &str| -> Result<String> {
+              match self.fetcher.fetch(u) {
+                Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
+                Err(err) => {
+                  diagnostics.record(ResourceKind::Stylesheet, u, err.to_string());
+                  Err(err)
+                }
+              }
+            };
+
+            inline_imports(&rewritten, &css_url, &mut import_fetch, &mut seen_imports)
+          };
           combined_css.push_str(&inlined);
           combined_css.push('\n');
         }
