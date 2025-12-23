@@ -321,7 +321,13 @@ impl DisplayListOptimizer {
           let (l, t, r, b) = Self::filter_outset(&sc.filters);
           let (bl, bt, br, bb) = Self::filter_outset(&sc.backdrop_filters);
           let max_outset = l.max(t).max(r).max(b).max(bl).max(bt).max(br).max(bb);
-          filter_stack.push(max_outset);
+          let scale = Self::transform_scale_factor(&transform_state.current);
+          let world_outset = if transform_state.culling_disabled() {
+            0.0
+          } else {
+            max_outset * scale
+          };
+          filter_stack.push(world_outset);
 
           let transform_for_bounds = if transform_state.culling_disabled() {
             None
@@ -393,11 +399,7 @@ impl DisplayListOptimizer {
             false
           } else {
             let mut world_bounds = transform_state.current.transform_rect(local_bounds);
-            let inflate = filter_stack
-              .iter()
-              .copied()
-              .sum::<f32>()
-              * Self::transform_scale_factor(&transform_state.current);
+            let inflate = filter_stack.iter().copied().sum::<f32>();
             if inflate > 0.0 {
               world_bounds = world_bounds.inflate(inflate);
             }
@@ -430,11 +432,7 @@ impl DisplayListOptimizer {
         } else {
           transformed_bounds = self.item_bounds(&item).map(|b| {
             let mut bounds = transform_state.current.transform_rect(b);
-            let inflate = filter_stack
-              .iter()
-              .copied()
-              .sum::<f32>()
-              * Self::transform_scale_factor(&transform_state.current);
+            let inflate = filter_stack.iter().copied().sum::<f32>();
             if inflate > 0.0 {
               bounds = bounds.inflate(inflate);
             }
@@ -453,11 +451,7 @@ impl DisplayListOptimizer {
         if transformed_bounds.is_none() && !transform_state.culling_disabled() {
           transformed_bounds = self.item_bounds(result.last().unwrap()).map(|b| {
             let mut bounds = transform_state.current.transform_rect(b);
-            let inflate = filter_stack
-              .iter()
-              .copied()
-              .sum::<f32>()
-              * Self::transform_scale_factor(&transform_state.current);
+            let inflate = filter_stack.iter().copied().sum::<f32>();
             if inflate > 0.0 {
               bounds = bounds.inflate(inflate);
             }
@@ -644,10 +638,6 @@ impl DisplayListOptimizer {
     children: Option<Rect>,
     transform: Option<Transform2D>,
   ) -> Option<Rect> {
-    if let Some(bounds) = children {
-      return Some(bounds);
-    }
-
     let (l, t, r, b) = Self::filter_outset(&item.filters);
     let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
     let expand_left = l.max(bl);
@@ -655,7 +645,7 @@ impl DisplayListOptimizer {
     let expand_right = r.max(br);
     let expand_bottom = b.max(bb);
 
-    let mut bounds = item.bounds;
+    let mut bounds = children.unwrap_or(item.bounds);
     if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
       bounds = Rect::from_xywh(
         bounds.min_x() - expand_left,
