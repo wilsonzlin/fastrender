@@ -694,6 +694,23 @@ impl DisplayListBuilder {
       return;
     }
 
+    self
+      .list
+      .push(DisplayItem::PushStackingContext(StackingContextItem {
+        z_index: context.z_index,
+        creates_stacking_context: true,
+        bounds: context_bounds,
+        mix_blend_mode,
+        is_isolated,
+        transform,
+        transform_style,
+        backface_visibility,
+        filters,
+        backdrop_filters,
+        radii,
+        mask: mask_style,
+      }));
+
     let mut pushed_clips = 0;
     if let Some(path) = clip_path {
       self.list.push(DisplayItem::PushClip(ClipItem {
@@ -741,23 +758,6 @@ impl DisplayListBuilder {
       pushed_clips += 1;
     }
 
-    self
-      .list
-      .push(DisplayItem::PushStackingContext(StackingContextItem {
-        z_index: context.z_index,
-        creates_stacking_context: true,
-        bounds: context_bounds,
-        mix_blend_mode,
-        is_isolated,
-        transform,
-        transform_style,
-        backface_visibility,
-        filters,
-        backdrop_filters,
-        radii,
-        mask: mask_style,
-      }));
-
     for child in neg {
       self.build_stacking_context(child, descendant_offset, false);
     }
@@ -776,10 +776,10 @@ impl DisplayListBuilder {
       self.build_stacking_context(child, descendant_offset, false);
     }
 
-    self.list.push(DisplayItem::PopStackingContext);
     for _ in 0..pushed_clips {
       self.list.push(DisplayItem::PopClip);
     }
+    self.list.push(DisplayItem::PopStackingContext);
   }
 
   fn convert_blend_mode(mode: MixBlendMode) -> BlendMode {
@@ -4350,12 +4350,15 @@ mod tests {
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundLayer;
   use crate::style::types::BackgroundRepeat;
+  use crate::style::types::BasicShape;
+  use crate::style::types::ClipPath;
   use crate::style::types::ImageRendering;
   use crate::style::types::MixBlendMode;
   use crate::style::types::MotionPathCommand;
   use crate::style::types::MotionPosition;
   use crate::style::types::OffsetAnchor;
   use crate::style::types::OffsetPath;
+  use crate::style::types::Overflow;
   use crate::style::types::TextDecorationLine;
   use crate::style::types::TransformBox;
   use crate::style::values::CalcLength;
@@ -4405,6 +4408,45 @@ mod tests {
 
   fn text_fragment_at(x: f32, label: &str) -> FragmentNode {
     FragmentNode::new_text(Rect::from_xywh(x, 0.0, 10.0, 10.0), label.to_string(), 12.0)
+  }
+
+  fn stacking_clip_order(items: &[DisplayItem]) -> (usize, usize, usize, usize) {
+    let push_sc = items
+      .iter()
+      .position(|item| matches!(item, DisplayItem::PushStackingContext(_)))
+      .expect("stacking context push missing");
+    let push_clip = items
+      .iter()
+      .position(|item| matches!(item, DisplayItem::PushClip(_)))
+      .expect("clip push missing");
+    let pop_clip = items
+      .iter()
+      .rposition(|item| matches!(item, DisplayItem::PopClip))
+      .expect("clip pop missing");
+    let pop_sc = items
+      .iter()
+      .rposition(|item| matches!(item, DisplayItem::PopStackingContext))
+      .expect("stacking context pop missing");
+
+    assert!(push_sc < push_clip, "clip should be emitted inside the stacking context");
+    assert!(push_clip < pop_clip, "clip should wrap painted items");
+    assert!(pop_clip < pop_sc, "stacking context should be popped after its clips");
+
+    (push_sc, push_clip, pop_clip, pop_sc)
+  }
+
+  fn has_paint_between(items: &[DisplayItem], start: usize, end: usize) -> bool {
+    items.iter().enumerate().any(|(idx, item)| {
+      idx > start
+        && idx < end
+        && !matches!(
+          item,
+          DisplayItem::PushClip(_)
+            | DisplayItem::PopClip
+            | DisplayItem::PushStackingContext(_)
+            | DisplayItem::PopStackingContext
+        )
+    })
   }
 
   #[test]
@@ -4824,6 +4866,65 @@ mod tests {
       .items()
       .iter()
       .any(|item| matches!(item, DisplayItem::PushClip(_))));
+  }
+
+  #[test]
+  fn clip_path_clip_is_inside_stacking_context() {
+    let mut style = ComputedStyle::default();
+    style.clip_path = ClipPath::BasicShape(
+      Box::new(BasicShape::Inset {
+        top: Length::px(2.0),
+        right: Length::px(2.0),
+        bottom: Length::px(2.0),
+        left: Length::px(2.0),
+        border_radius: Box::new(None),
+      }),
+      None,
+    );
+    style.background_color = Rgba::RED;
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+      vec![],
+      Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let items = list.items();
+    let (_, push_clip, pop_clip, _) = stacking_clip_order(items);
+
+    assert!(
+      has_paint_between(items, push_clip, pop_clip),
+      "expected paint between clip operations inside stacking context"
+    );
+  }
+
+  #[test]
+  fn transformed_overflow_clip_is_inside_stacking_context() {
+    let mut style = ComputedStyle::default();
+    style.transform = vec![Transform::Translate(Length::px(5.0), Length::px(0.0))];
+    style.overflow_x = Overflow::Hidden;
+    style.overflow_y = Overflow::Hidden;
+    style.background_color = Rgba::GREEN;
+
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 30.0, 30.0),
+      vec![],
+      Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
+    let items = list.items();
+    let (push_sc, push_clip, pop_clip, pop_sc) = stacking_clip_order(items);
+
+    if let DisplayItem::PushStackingContext(stacking) = &items[push_sc] {
+      assert!(stacking.transform.is_some(), "stacking context should carry transform");
+    } else {
+      panic!("expected stacking context push item");
+    }
+    assert!(
+      has_paint_between(items, push_clip, pop_clip),
+      "expected painted content to be clipped inside stacking context"
+    );
   }
 
   #[test]
