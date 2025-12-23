@@ -150,7 +150,11 @@ fn save_fixture_artifacts(
 
   let actual_path = output_dir.join(format!("{}_actual.png", name));
   fs::write(&actual_path, rendered_png).map_err(|e| {
-    format!("Failed to write actual image to {}: {}", actual_path.display(), e)
+    format!(
+      "Failed to write actual image to {}: {}",
+      actual_path.display(),
+      e
+    )
   })?;
 
   let expected_path = output_dir.join(format!("{}_expected.png", name));
@@ -164,9 +168,13 @@ fn save_fixture_artifacts(
 
   let diff_path = output_dir.join(format!("{}_diff.png", name));
   let saved_diff_path = if diff.diff_image.is_some() {
-    diff
-      .save_diff_image(&diff_path)
-      .map_err(|e| format!("Failed to write diff image to {}: {}", diff_path.display(), e))?;
+    diff.save_diff_image(&diff_path).map_err(|e| {
+      format!(
+        "Failed to write diff image to {}: {}",
+        diff_path.display(),
+        e
+      )
+    })?;
     Some(diff_path)
   } else {
     None
@@ -199,7 +207,11 @@ fn compare_rendered_to_golden(
 
   let artifact_result = save_fixture_artifacts(name, rendered_png, golden_png, &image_diff);
 
-  let mut message = format!("Fixture '{}' image mismatch: {}", name, image_diff.summary());
+  let mut message = format!(
+    "Fixture '{}' image mismatch: {}",
+    name,
+    image_diff.summary()
+  );
 
   match artifact_result {
     Ok(paths) => {
@@ -270,9 +282,9 @@ fn test_fixture(name: &str) -> Result<(), String> {
     .unwrap()
 }
 
-// 
+//
 // Fixture existence tests (always run)
-// 
+//
 
 #[test]
 fn test_fixtures_directory_exists() {
@@ -373,9 +385,9 @@ fn fixture_text_overflow_vertical() {
   test_fixture("text_overflow_vertical").unwrap();
 }
 
-// 
+//
 // Block Layout Tests
-// 
+//
 
 #[test]
 fn test_fixture_block_simple() {
@@ -397,9 +409,9 @@ fn test_fixture_block_clearance() {
   test_fixture("block_clearance").expect("block_clearance fixture should render");
 }
 
-// 
+//
 // Inline Layout Tests
-// 
+//
 
 #[test]
 fn test_fixture_inline_text_wrap() {
@@ -416,9 +428,9 @@ fn test_fixture_inline_baseline() {
   test_fixture("inline_baseline").expect("inline_baseline fixture should render");
 }
 
-// 
+//
 // Flexbox Tests
-// 
+//
 
 #[test]
 fn test_fixture_flex_direction() {
@@ -435,9 +447,9 @@ fn test_fixture_flex_grow_shrink() {
   test_fixture("flex_grow_shrink").expect("flex_grow_shrink fixture should render");
 }
 
-// 
+//
 // Grid Tests
-// 
+//
 
 #[test]
 fn test_fixture_grid_template() {
@@ -454,9 +466,9 @@ fn test_fixture_grid_gaps() {
   test_fixture("grid_gaps").expect("grid_gaps fixture should render");
 }
 
-// 
+//
 // Table Tests
-// 
+//
 
 #[test]
 fn test_fixture_table_fixed() {
@@ -473,18 +485,18 @@ fn test_fixture_table_span() {
   test_fixture("table_span").expect("table_span fixture should render");
 }
 
-// 
+//
 // Column Layout Tests
-// 
+//
 
 #[test]
 fn test_fixture_columns_multicol() {
   test_fixture("columns_multicol").expect("columns_multicol fixture should render");
 }
 
-// 
+//
 // Float Tests
-// 
+//
 
 #[test]
 fn test_fixture_float_basic() {
@@ -501,9 +513,9 @@ fn test_fixture_float_clearance() {
   test_fixture("float_clearance").expect("float_clearance fixture should render");
 }
 
-// 
+//
 // Positioned Tests
-// 
+//
 
 #[test]
 fn test_fixture_positioned_relative() {
@@ -515,45 +527,45 @@ fn test_fixture_positioned_absolute() {
   test_fixture("positioned_absolute").expect("positioned_absolute fixture should render");
 }
 
-// 
+//
 // Transform Tests
-// 
+//
 
 #[test]
 fn test_fixture_transform_layer() {
   test_fixture("transform_layer").expect("transform_layer fixture should render");
 }
 
-// 
-
+//
 // SVG Tests
-// 
+//
 
 #[test]
 fn test_fixture_svg_foreign_object() {
   test_fixture("svg_foreign_object").expect("svg_foreign_object fixture should render");
+}
 
+//
 // Mask Tests
-// 
+//
 
 #[test]
 fn test_fixture_mask_composite() {
   test_fixture("mask_composite").expect("mask_composite fixture should render");
-
 }
 
-// 
+//
 // Form Tests
-// 
+//
 
 #[test]
 fn test_fixture_form_controls() {
   test_fixture("form_controls").expect("form_controls fixture should render");
 }
 
-// 
+//
 // Text Tests
-// 
+//
 
 #[test]
 fn test_fixture_text_complex_scripts() {
@@ -570,18 +582,18 @@ fn test_fixture_text_line_break() {
   test_fixture("text_line_break").expect("text_line_break fixture should render");
 }
 
-// 
+//
 // Shadow DOM Tests
-// 
+//
 
 #[test]
 fn test_fixture_shadow_dom() {
   test_fixture("shadow_dom").expect("shadow_dom fixture should render");
 }
 
-// 
+//
 // Utility tests
-// 
+//
 
 #[test]
 fn test_fixture_loading() {
@@ -598,9 +610,9 @@ fn test_golden_directory_structure() {
   assert!(golden.exists() || fs::create_dir_all(&golden).is_ok());
 }
 
-// 
+//
 // Fixture metadata
-// 
+//
 
 /// Returns a list of all available fixture names
 pub fn list_fixtures() -> Vec<&'static str> {
@@ -622,10 +634,12 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "grid_template",
     "grid_auto_flow",
     "grid_gaps",
+    "multicol_basic",
     // Tables
     "table_fixed",
     "table_auto",
     "table_span",
+    "columns_multicol",
     // Floats
     "float_basic",
     "float_text_wrap",
@@ -633,22 +647,27 @@ pub fn list_fixtures() -> Vec<&'static str> {
     // Positioned
     "positioned_relative",
     "positioned_absolute",
-    // SVG
-    "svg_foreign_object",
-    "shadow_dom",
+    // Transforms
+    "transform_layer",
+    // Masks
+    "mask_composite",
+    // Forms
+    "form_controls",
     // Text
     "text_complex_scripts",
     "text_bidi",
     "text_line_break",
-    // Masks
-    "mask_composite",
+    "text_overflow_vertical",
+    // Shadow DOM
+    "shadow_dom",
+    // SVG
+    "svg_foreign_object",
   ]
 }
 
 /// Returns fixture metadata for documentation
 pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)> {
   vec![
-    // (name, category, description)
     (
       "block_simple",
       "Block Layout",
@@ -710,6 +729,7 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "grid-auto-flow and auto placement",
     ),
     ("grid_gaps", "Grid", "row-gap and column-gap variations"),
+    ("multicol_basic", "Columns", "Basic multi-column layout"),
     (
       "table_fixed",
       "Tables",
@@ -721,6 +741,11 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "table-layout: auto content-based sizing",
     ),
     ("table_span", "Tables", "colspan and rowspan cell spanning"),
+    (
+      "columns_multicol",
+      "Columns",
+      "Multi-column layout with column span variations",
+    ),
     ("float_basic", "Floats", "Basic left and right floats"),
     (
       "float_text_wrap",
@@ -739,10 +764,16 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "position: absolute with containing blocks",
     ),
     (
-      "svg_foreign_object",
-      "SVG",
-      "Inline SVG with foreignObject HTML content",
+      "transform_layer",
+      "Transforms",
+      "Nested transforms and compositing layers",
     ),
+    (
+      "mask_composite",
+      "Masks",
+      "Compositing multiple CSS mask layers",
+    ),
+    ("form_controls", "Forms", "Default form control styling"),
     (
       "text_complex_scripts",
       "Text",
@@ -759,15 +790,19 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "Line breaking and white-space handling",
     ),
     (
-
+      "text_overflow_vertical",
+      "Text",
+      "Vertical text overflow handling",
+    ),
+    (
       "shadow_dom",
       "Shadow DOM",
       "Declarative shadow DOM slotting",
-
-      "mask_composite",
-      "Masks",
-      "Compositing multiple CSS mask layers",
-
+    ),
+    (
+      "svg_foreign_object",
+      "SVG",
+      "Inline SVG with foreignObject HTML content",
     ),
   ]
 }

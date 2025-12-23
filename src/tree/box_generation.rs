@@ -58,7 +58,251 @@ use std::sync::Arc;
 pub use crate::tree::box_generation_demo::{
   BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode,
 };
- 
+
+impl DOMNode {
+  /// Creates a new element node
+  pub fn new_element(
+    tag_name: impl Into<String>,
+    style: Arc<ComputedStyle>,
+    children: Vec<DOMNode>,
+  ) -> Self {
+    Self {
+      tag_name: Some(tag_name.into()),
+      id: None,
+      classes: Vec::new(),
+      style,
+      text: None,
+      children,
+      intrinsic_size: None,
+      src: None,
+      alt: None,
+      srcset: None,
+      poster: None,
+      srcdoc: None,
+    }
+  }
+
+  /// Creates a new text node
+  pub fn new_text(text: impl Into<String>, style: Arc<ComputedStyle>) -> Self {
+    Self {
+      tag_name: None,
+      id: None,
+      classes: Vec::new(),
+      style,
+      text: Some(text.into()),
+      children: Vec::new(),
+      intrinsic_size: None,
+      src: None,
+      alt: None,
+      srcset: None,
+      poster: None,
+      srcdoc: None,
+    }
+  }
+
+  /// Creates a new replaced element (img, video, canvas, etc.)
+  ///
+  /// # Arguments
+  ///
+  /// * `tag_name` - Element tag (img, video, canvas, svg, iframe)
+  /// * `style` - Computed style for the element
+  /// * `src` - Source URL or data URI
+  /// * `intrinsic_size` - Natural dimensions of the content (if known)
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use std::sync::Arc;
+  /// use fastrender::tree::box_generation::DOMNode;
+  /// use fastrender::ComputedStyle;
+  /// use fastrender::Size;
+  ///
+  /// let style = Arc::new(ComputedStyle::default());
+  /// let img = DOMNode::new_replaced("img", style, "image.png", Some(Size::new(100.0, 50.0)));
+  ///
+  /// assert!(img.is_replaced_element());
+  /// assert_eq!(img.intrinsic_size, Some(Size::new(100.0, 50.0)));
+  /// ```
+  pub fn new_replaced(
+    tag_name: impl Into<String>,
+    style: Arc<ComputedStyle>,
+    src: impl Into<String>,
+    intrinsic_size: Option<Size>,
+  ) -> Self {
+    Self {
+      tag_name: Some(tag_name.into()),
+      id: None,
+      classes: Vec::new(),
+      style,
+      text: None,
+      children: Vec::new(),
+      intrinsic_size,
+      src: Some(src.into()),
+      alt: None,
+      srcset: None,
+      poster: None,
+      srcdoc: None,
+    }
+  }
+
+  /// Creates a new replaced element with optional srcdoc (for iframes).
+  pub fn new_replaced_with_srcdoc(
+    tag_name: impl Into<String>,
+    style: Arc<ComputedStyle>,
+    src: impl Into<String>,
+    intrinsic_size: Option<Size>,
+    srcdoc: Option<String>,
+  ) -> Self {
+    Self {
+      tag_name: Some(tag_name.into()),
+      id: None,
+      classes: Vec::new(),
+      style,
+      text: None,
+      children: Vec::new(),
+      intrinsic_size,
+      src: Some(src.into()),
+      alt: None,
+      srcset: None,
+      poster: None,
+      srcdoc,
+    }
+  }
+
+  /// Sets element ID (builder pattern)
+  pub fn with_id(mut self, id: impl Into<String>) -> Self {
+    self.id = Some(id.into());
+    self
+  }
+
+  /// Adds a class (builder pattern)
+  pub fn with_class(mut self, class: impl Into<String>) -> Self {
+    self.classes.push(class.into());
+    self
+  }
+
+  /// Sets the alt text (builder pattern)
+  pub fn with_alt(mut self, alt: impl Into<String>) -> Self {
+    self.alt = Some(alt.into());
+    self
+  }
+
+  /// Sets poster (builder pattern)
+  pub fn with_poster(mut self, poster: impl Into<String>) -> Self {
+    self.poster = Some(poster.into());
+    self
+  }
+
+  /// Sets intrinsic size (builder pattern)
+  ///
+  /// Used for replaced elements to specify their natural dimensions.
+  pub fn with_intrinsic_size(mut self, size: Size) -> Self {
+    self.intrinsic_size = Some(size);
+    self
+  }
+
+  /// Sets source URL (builder pattern)
+  ///
+  /// Used for replaced elements (img src, video src, etc.)
+  pub fn with_src(mut self, src: impl Into<String>) -> Self {
+    self.src = Some(src.into());
+    self
+  }
+
+  /// Returns true if this is a text node
+  pub fn is_text(&self) -> bool {
+    self.text.is_some()
+  }
+
+  /// Returns true if this is an element node
+  pub fn is_element(&self) -> bool {
+    self.tag_name.is_some()
+  }
+
+  /// Returns true if this is a replaced element
+  ///
+  /// Replaced elements are elements whose content is outside the scope of
+  /// the CSS formatting model. Examples include:
+  /// - `<img>` - Images
+  /// - `<video>` - Video
+  /// - `<canvas>` - Canvas drawing surface
+  /// - `<svg>` - SVG graphics
+  /// - `<iframe>` - Nested browsing contexts
+  /// - `<embed>` - External content
+  /// - `<object>` - External resources
+  ///
+  /// # CSS 2.1 Section 3.1
+  ///
+  /// "An element whose content is outside the scope of the CSS formatting
+  /// model, such as an image, embedded document, or applet."
+  pub fn is_replaced_element(&self) -> bool {
+    if let Some(tag) = &self.tag_name {
+      matches!(
+        tag.as_str(),
+        "img" | "video" | "canvas" | "svg" | "iframe" | "embed" | "object" | "audio" | "math"
+      )
+    } else {
+      false
+    }
+  }
+
+  /// Gets the display value from computed style
+  pub fn display(&self) -> Display {
+    self.style.display
+  }
+
+  /// Computes the aspect ratio from intrinsic size
+  ///
+  /// Returns width / height, or None if intrinsic size is not set
+  /// or height is zero.
+  pub fn aspect_ratio(&self) -> Option<f32> {
+    self.intrinsic_size.and_then(|size| {
+      if size.height > 0.0 {
+        Some(size.width / size.height)
+      } else {
+        None
+      }
+    })
+  }
+
+  /// Gets the replaced element type based on tag name
+  ///
+  /// Returns None if this is not a replaced element.
+  pub fn replaced_type(&self) -> Option<ReplacedType> {
+    if !self.is_replaced_element() {
+      return None;
+    }
+
+    let tag = self.tag_name.as_ref()?;
+    let src = self.src.clone().unwrap_or_default();
+    let alt = self.alt.clone().filter(|s| !s.is_empty());
+    let srcset = self
+      .srcset
+      .as_ref()
+      .map(|v| parse_srcset(v))
+      .unwrap_or_default();
+    let poster = self.poster.clone().filter(|s| !s.is_empty());
+    let srcdoc = self.srcdoc.clone().filter(|s| !s.is_empty());
+
+    match tag.as_str() {
+      "img" => Some(ReplacedType::Image {
+        src,
+        alt,
+        srcset,
+        sizes: None,
+        picture_sources: Vec::new(),
+      }),
+      "video" => Some(ReplacedType::Video { src, poster }),
+      "canvas" => Some(ReplacedType::Canvas),
+      "svg" => Some(ReplacedType::Svg {
+        content: SvgContent::raw(src),
+      }),
+      "iframe" => Some(ReplacedType::Iframe { src, srcdoc }),
+      _ => None,
+    }
+  }
+}
+
 pub(crate) fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
   attr
     .split(',')

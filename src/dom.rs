@@ -234,7 +234,10 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
   let mut root = convert_handle_to_node(&dom.document);
   attach_shadow_roots(&mut root);
 
-  if matches!(options.compatibility_mode, DomCompatibilityMode::Compatibility) {
+  if matches!(
+    options.compatibility_mode,
+    DomCompatibilityMode::Compatibility
+  ) {
     apply_dom_compatibility_mutations(&mut root);
   }
 
@@ -371,6 +374,8 @@ fn fill_slot_tree(
   }
 }
 
+/// Optional DOM compatibility tweaks applied after HTML parsing.
+///
 /// Some documents bootstrap by marking the root with `no-js` and replacing it with a
 /// `js-enabled` class once scripts execute. Others toggle visibility gates like
 /// `jsl10n-visible` after client-side localization. Since we do not run author scripts,
