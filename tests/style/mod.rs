@@ -7,6 +7,7 @@ mod content_generation_test;
 mod counter_style_rules_test;
 mod counters_test;
 mod css_nesting_test;
+mod css_nesting_scope_integration_test;
 mod css_numeric_functions;
 mod defaults_test;
 mod extract_print;
