@@ -1166,7 +1166,10 @@ fn generate_boxes_for_styled(
   // Replaced elements short-circuit to a single replaced box unless they're display: contents.
   if let Some(tag) = styled.node.tag_name() {
     // Non-rendered elements: <source>, <track>, <option>, <optgroup> never create boxes.
-    if matches!(tag.to_ascii_lowercase().as_str(), "source" | "track" | "option" | "optgroup") {
+    if matches!(
+      tag.to_ascii_lowercase().as_str(),
+      "source" | "track" | "option" | "optgroup"
+    ) {
       counters.leave_scope();
       return Vec::new();
     }
