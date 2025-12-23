@@ -208,14 +208,10 @@ pub(crate) fn resolve_clip_path(
   match &style.clip_path {
     ClipPath::None => None,
     ClipPath::Box(reference) => {
-      let rect = select_reference_box(
-        reference_boxes(style, bounds, viewport, font_ctx),
-        *reference,
-      );
-      Some(ResolvedClipPath::Inset {
-        rect,
-        radii: BorderRadii::ZERO,
-      })
+      let boxes = reference_boxes(style, bounds, viewport, font_ctx);
+      let rect = select_reference_box(boxes, *reference);
+      let radii = resolve_reference_box_radii(style, &boxes, *reference, viewport, font_ctx);
+      Some(ResolvedClipPath::Inset { rect, radii })
     }
     ClipPath::BasicShape(shape, reference_override) => {
       let boxes = reference_boxes(style, bounds, viewport, font_ctx);
@@ -473,6 +469,14 @@ struct ReferenceBoxes {
   padding: Rect,
   content: Rect,
   margin: Rect,
+  border_left: f32,
+  border_right: f32,
+  border_top: f32,
+  border_bottom: f32,
+  padding_left: f32,
+  padding_right: f32,
+  padding_top: f32,
+  padding_bottom: f32,
 }
 
 fn reference_boxes(
@@ -538,6 +542,76 @@ fn reference_boxes(
     padding: padding_rect,
     content: content_rect,
     margin: margin_rect,
+    border_left,
+    border_right,
+    border_top,
+    border_bottom,
+    padding_left,
+    padding_right,
+    padding_top,
+    padding_bottom,
+  }
+}
+
+fn resolve_border_radii_from_style(
+  style: &ComputedStyle,
+  border_rect: Rect,
+  viewport: (f32, f32),
+  font_ctx: &FontContext,
+) -> BorderRadii {
+  let width = border_rect.width().max(0.0);
+  let height = border_rect.height().max(0.0);
+  if width <= 0.0 || height <= 0.0 {
+    return BorderRadii::ZERO;
+  }
+
+  let resolve = |len: Length| resolve_clip_length(len, style, width, viewport, font_ctx).max(0.0);
+
+  BorderRadii {
+    top_left: resolve(style.border_top_left_radius),
+    top_right: resolve(style.border_top_right_radius),
+    bottom_right: resolve(style.border_bottom_right_radius),
+    bottom_left: resolve(style.border_bottom_left_radius),
+  }
+  .clamped(width, height)
+}
+
+fn resolve_reference_box_radii(
+  style: &ComputedStyle,
+  boxes: &ReferenceBoxes,
+  reference: ReferenceBox,
+  viewport: (f32, f32),
+  font_ctx: &FontContext,
+) -> BorderRadii {
+  let base = resolve_border_radii_from_style(style, boxes.border, viewport, font_ctx);
+  match reference {
+    ReferenceBox::PaddingBox => {
+      let shrunk = BorderRadii {
+        top_left: (base.top_left - boxes.border_left.max(boxes.border_top)).max(0.0),
+        top_right: (base.top_right - boxes.border_right.max(boxes.border_top)).max(0.0),
+        bottom_right: (base.bottom_right - boxes.border_right.max(boxes.border_bottom)).max(0.0),
+        bottom_left: (base.bottom_left - boxes.border_left.max(boxes.border_bottom)).max(0.0),
+      };
+      shrunk.clamped(boxes.padding.width(), boxes.padding.height())
+    }
+    ReferenceBox::ContentBox => {
+      let shrink_left = boxes.border_left + boxes.padding_left;
+      let shrink_right = boxes.border_right + boxes.padding_right;
+      let shrink_top = boxes.border_top + boxes.padding_top;
+      let shrink_bottom = boxes.border_bottom + boxes.padding_bottom;
+      let shrunk = BorderRadii {
+        top_left: (base.top_left - shrink_left.max(shrink_top)).max(0.0),
+        top_right: (base.top_right - shrink_right.max(shrink_top)).max(0.0),
+        bottom_right: (base.bottom_right - shrink_right.max(shrink_bottom)).max(0.0),
+        bottom_left: (base.bottom_left - shrink_left.max(shrink_bottom)).max(0.0),
+      };
+      shrunk.clamped(boxes.content.width(), boxes.content.height())
+    }
+    ReferenceBox::MarginBox => base.clamped(boxes.margin.width(), boxes.margin.height()),
+    ReferenceBox::BorderBox
+    | ReferenceBox::FillBox
+    | ReferenceBox::StrokeBox
+    | ReferenceBox::ViewBox => base,
   }
 }
 
@@ -560,4 +634,59 @@ fn inset_rect(rect: Rect, left: f32, top: f32, right: f32, bottom: f32) -> Rect 
     (rect.width() - left - right).max(0.0),
     (rect.height() - top - bottom).max(0.0),
   )
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn clip_path_box_uses_border_radius() {
+    let mut style = ComputedStyle::default();
+    style.clip_path = ClipPath::Box(ReferenceBox::BorderBox);
+    style.border_top_left_radius = Length::px(6.0);
+    style.border_top_right_radius = Length::px(6.0);
+    style.border_bottom_right_radius = Length::px(6.0);
+    style.border_bottom_left_radius = Length::px(6.0);
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 50.0, 40.0);
+    let viewport = (100.0, 100.0);
+    let clip = resolve_clip_path(&style, bounds, viewport, &FontContext::new())
+      .expect("expected clip-path to resolve");
+
+    let radii = match clip {
+      ResolvedClipPath::Inset { radii, .. } => radii,
+      _ => panic!("expected inset clip path"),
+    };
+
+    assert!(radii.top_left > 0.0);
+    assert!(!radii.is_zero());
+  }
+
+  #[test]
+  fn clip_path_padding_box_shrinks_radii() {
+    let mut style = ComputedStyle::default();
+    style.clip_path = ClipPath::Box(ReferenceBox::PaddingBox);
+    style.border_top_left_radius = Length::px(12.0);
+    style.border_top_right_radius = Length::px(12.0);
+    style.border_bottom_right_radius = Length::px(12.0);
+    style.border_bottom_left_radius = Length::px(12.0);
+    style.border_left_width = Length::px(3.0);
+    style.border_top_width = Length::px(3.0);
+    style.border_right_width = Length::px(3.0);
+    style.border_bottom_width = Length::px(3.0);
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 40.0, 40.0);
+    let viewport = (100.0, 100.0);
+    let clip = resolve_clip_path(&style, bounds, viewport, &FontContext::new())
+      .expect("expected clip-path to resolve");
+
+    let radii = match clip {
+      ResolvedClipPath::Inset { radii, .. } => radii,
+      _ => panic!("expected inset clip path"),
+    };
+
+    assert!((radii.top_left - 9.0).abs() < 0.01);
+    assert!(radii.top_left < 12.0);
+  }
 }
