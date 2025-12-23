@@ -31,12 +31,10 @@ use super::types::PagePseudoClass;
 use super::types::PageRule;
 use super::types::PageSelector;
 use super::types::ScopeRule;
-use super::types::ScrollTimelineName;
 use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
-use super::types::ViewTimelineName;
 use crate::dom::DomNode;
 use crate::error::Result;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
@@ -429,7 +427,7 @@ fn parse_scope_rule<'i, 't>(
       if p.try_parse(|p2| p2.expect_ident_matching("to")).is_ok() {
         p.skip_whitespace();
         let end =
-          match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::Yes) {
+          match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::ForScope) {
             Ok(list) => Some(list),
             Err(_) => {
               return Err(p.new_custom_error(
@@ -442,7 +440,7 @@ fn parse_scope_rule<'i, 't>(
       }
 
       let start =
-        match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::Yes) {
+        match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::ForScope) {
           Ok(list) => Some(list),
           Err(_) => {
             return Err(p.new_custom_error(
@@ -454,7 +452,7 @@ fn parse_scope_rule<'i, 't>(
       p.skip_whitespace();
       let end = if p.try_parse(|p2| p2.expect_ident_matching("to")).is_ok() {
         p.skip_whitespace();
-        match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::Yes) {
+        match SelectorList::parse(&PseudoClassParser, p, selectors::parser::ParseRelative::ForScope) {
           Ok(list) => Some(list),
           Err(_) => {
             return Err(p.new_custom_error(

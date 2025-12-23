@@ -108,8 +108,6 @@ use crate::style::cascade::ContainerQueryContext;
 use crate::style::cascade::ContainerQueryInfo;
 use crate::style::cascade::StyledNode;
 use crate::style::color::Rgba;
-use crate::style::media::MediaContext;
-use crate::style::media::MediaQueryCache;
 use crate::style::media::MediaType;
 use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache};
 use crate::style::page::resolve_page_style;

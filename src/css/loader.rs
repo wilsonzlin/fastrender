@@ -211,7 +211,7 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
       };
 
       match token {
-        Token::Url(ref url_value) => {
+        Token::UnquotedUrl(ref url_value) => {
           let token_text = parser.slice_from(token_start);
           let chunk = parser.slice_from(last_emitted);
           let prefix_len = chunk.len().saturating_sub(token_text.len());
@@ -233,8 +233,8 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
 
             while !nested.is_exhausted() {
               match nested.next_including_whitespace_and_comments() {
-                Ok(Token::WhiteSpace) | Ok(Token::Comment(_)) => {}
-                Ok(Token::QuotedString(s)) | Ok(Token::Url(s)) => {
+                Ok(Token::WhiteSpace(_)) | Ok(Token::Comment(_)) => {}
+                Ok(Token::QuotedString(s)) | Ok(Token::UnquotedUrl(s)) => {
                   arg = Some(s.as_ref().to_string());
                 }
                 Ok(Token::Ident(s)) => {
