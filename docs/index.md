@@ -10,6 +10,7 @@ If a document can’t be kept accurate, delete it and replace it with something 
 - CLI tools & workflows: [cli.md](cli.md)
 - Library API: [api.md](api.md)
 - Architecture overview: [architecture.md](architecture.md)
+- Conformance targets & support matrix: [conformance.md](conformance.md)
 - Debugging renders: [debugging.md](debugging.md)
 - Profiling & perf logging: [perf-logging.md](perf-logging.md)
 - Runtime environment variables: [env-vars.md](env-vars.md)
