@@ -77,6 +77,10 @@ harness = false
 name = "paint_benches"
 harness = false
 
+[[bench]]
+name = "text_shaping"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true
