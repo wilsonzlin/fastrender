@@ -23,6 +23,7 @@ mod sideways_lr_regressions;
 mod subgrid;
 mod table_anonymous_inheritance;
 mod table_columns_test;
+mod taffy_usage_guards;
 mod test_absolute;
 mod test_baseline;
 mod test_factory;
