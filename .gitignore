@@ -1,11 +1,3 @@
+/fetches/
+Cargo.lock
 target/
-.DS_Store
-fetches/
-.venv/
-venv/
-.claude/
-local_patches/
-/*.patch
-output_*.png
-output_*.jpg
-output_*.webp
