@@ -16,4 +16,3 @@ fn conformance_doc_is_present_and_non_empty() {
     "docs/conformance.md should not be empty"
   );
 }
-
