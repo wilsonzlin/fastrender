@@ -21,7 +21,6 @@ mod media_test;
 mod order_property_test;
 mod root_font_size_percent_test;
 mod scope_rule_test;
-mod style_variables_test;
 mod supports_selector_test;
 mod supports_writing_mode_test;
 mod tab_size_test;
