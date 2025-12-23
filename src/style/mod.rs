@@ -7,6 +7,7 @@ pub mod cascade;
 pub mod color;
 pub mod computed;
 pub mod content;
+pub mod counter_styles;
 pub mod counters;
 pub mod defaults;
 pub mod display;

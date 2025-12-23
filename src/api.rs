@@ -99,6 +99,7 @@ use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
 use crate::paint::painter::paint_tree_with_resources_scaled;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
+use crate::resource::CachingFetcherConfig;
 use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
@@ -107,10 +108,7 @@ use crate::style::cascade::ContainerQueryContext;
 use crate::style::cascade::ContainerQueryInfo;
 use crate::style::cascade::StyledNode;
 use crate::style::color::Rgba;
-use crate::style::media::MediaContext;
-use crate::style::media::MediaQueryCache;
-use crate::style::media::MediaType;
-use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache};
+use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache, MediaType};
 use crate::style::page::resolve_page_style;
 use crate::style::page::PageSide;
 use crate::style::types::ContainerType;
@@ -300,6 +298,8 @@ pub struct FastRenderConfig {
   /// Whether to honor `<meta name="viewport">` when computing the layout viewport.
   pub apply_meta_viewport: bool,
 }
+
+const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 
 impl Default for FastRenderConfig {
   fn default() -> Self {
