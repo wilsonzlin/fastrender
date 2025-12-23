@@ -126,7 +126,7 @@ pub fn parse_meta_viewport_content(content: &str) -> Option<MetaViewport> {
   }
 }
 
-/// Extracts the first valid `<meta name="viewport">` directive in document order.
+/// Extracts the first valid `<meta name="viewport">` directive within the document head.
 ///
 /// Unknown and malformed directives are skipped until a valid one is found.
 pub fn extract_viewport(dom: &DomNode) -> Option<MetaViewport> {
