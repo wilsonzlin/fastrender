@@ -19,6 +19,7 @@ mod mask_properties_test;
 mod media_invalid_calc;
 mod media_invalid_type;
 mod media_test;
+mod layer_important_test;
 mod order_property_test;
 mod root_font_size_percent_test;
 mod scope_rule_test;
