@@ -10,6 +10,7 @@
 //! All errors use the `thiserror` crate for minimal boilerplate and
 //! proper error trait implementations.
 
+use std::io;
 use thiserror::Error;
 
 /// Result type alias for FastRender operations
@@ -85,6 +86,23 @@ pub enum Error {
   /// Generic error for miscellaneous issues
   #[error("{0}")]
   Other(String),
+}
+
+impl Clone for Error {
+  fn clone(&self) -> Self {
+    match self {
+      Error::Parse(err) => Error::Parse(err.clone()),
+      Error::Style(err) => Error::Style(err.clone()),
+      Error::Layout(err) => Error::Layout(err.clone()),
+      Error::Font(err) => Error::Font(err.clone()),
+      Error::Text(err) => Error::Text(err.clone()),
+      Error::Image(err) => Error::Image(err.clone()),
+      Error::Render(err) => Error::Render(err.clone()),
+      Error::Navigation(err) => Error::Navigation(err.clone()),
+      Error::Io(err) => Error::Io(io::Error::new(err.kind(), err.to_string())),
+      Error::Other(msg) => Error::Other(msg.clone()),
+    }
+  }
 }
 
 /// Errors that occur during HTML or CSS parsing
