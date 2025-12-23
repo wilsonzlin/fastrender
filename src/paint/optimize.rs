@@ -861,8 +861,8 @@ pub fn optimize_with_stats(list: DisplayList, viewport: Rect) -> (DisplayList, O
 mod tests {
   use super::*;
   use crate::paint::display_list::OpacityItem;
-  use crate::paint::display_list::TransformItem;
   use crate::paint::display_list::Transform3D;
+  use crate::paint::display_list::TransformItem;
   use crate::style::color::Rgba;
   use std::f32::consts::FRAC_PI_4;
 
