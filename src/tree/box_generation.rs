@@ -131,7 +131,6 @@ pub(crate) fn parse_sizes(attr: &str) -> Option<SizesList> {
     Some(SizesList { entries })
   }
 }
-
 pub(crate) fn parse_sizes_length(value: &str) -> Option<Length> {
   use crate::css::properties::parse_calc_function_length;
   use crate::css::properties::parse_clamp_function_length;
