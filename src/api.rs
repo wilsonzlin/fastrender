@@ -58,26 +58,14 @@ use crate::accessibility::AccessibilityNode;
 use crate::animation;
 use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
-use crate::css::loader::absolutize_css_urls;
-use crate::css::loader::extract_css_links;
-use crate::css::loader::extract_embedded_css_urls;
-use crate::css::loader::infer_base_url;
-use crate::css::loader::inject_css_into_html;
-use crate::css::loader::inline_imports;
-use crate::css::loader::resolve_href_with_base;
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
   inject_css_into_html, inline_imports, resolve_href_with_base,
 };
-use crate::css::parser::extract_css;
 use crate::css::parser::{
   extract_css, extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
   StylesheetSource,
 };
-use crate::css::parser::{
-  extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
-};
-use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
