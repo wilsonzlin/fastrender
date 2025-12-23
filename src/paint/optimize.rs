@@ -639,7 +639,28 @@ impl DisplayListOptimizer {
     transform: Option<Transform2D>,
   ) -> Option<Rect> {
     if let Some(bounds) = children {
-      return Some(bounds);
+      let (l, t, r, b) = Self::filter_outset(&item.filters);
+      let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
+      let expand_left = l.max(bl);
+      let expand_top = t.max(bt);
+      let expand_right = r.max(br);
+      let expand_bottom = b.max(bb);
+
+      let scale = transform
+        .as_ref()
+        .map(Self::transform_scale_factor)
+        .unwrap_or(1.0);
+
+      let mut expanded = bounds;
+      if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
+        expanded = Rect::from_xywh(
+          expanded.min_x() - expand_left * scale,
+          expanded.min_y() - expand_top * scale,
+          expanded.width() + (expand_left + expand_right) * scale,
+          expanded.height() + (expand_top + expand_bottom) * scale,
+        );
+      }
+      return Some(expanded);
     }
 
     let (l, t, r, b) = Self::filter_outset(&item.filters);
@@ -648,19 +669,13 @@ impl DisplayListOptimizer {
     let expand_top = t.max(bt);
     let expand_right = r.max(br);
     let expand_bottom = b.max(bb);
-
-    let scale = transform
-      .as_ref()
-      .map(Self::transform_scale_factor)
-      .unwrap_or(1.0);
-
     let mut bounds = item.bounds;
     if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
       bounds = Rect::from_xywh(
-        bounds.min_x() - expand_left * scale,
-        bounds.min_y() - expand_top * scale,
-        bounds.width() + (expand_left + expand_right) * scale,
-        bounds.height() + (expand_top + expand_bottom) * scale,
+        bounds.min_x() - expand_left,
+        bounds.min_y() - expand_top,
+        bounds.width() + expand_left + expand_right,
+        bounds.height() + expand_top + expand_bottom,
       );
     }
 
