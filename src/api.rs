@@ -148,6 +148,8 @@ use std::time::Instant;
 pub use tiny_skia::Pixmap;
 use url::Url;
 
+const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
+
 /// Main entry point for the FastRender library
 ///
 /// `FastRender` provides a high-level API for rendering HTML/CSS to pixels.

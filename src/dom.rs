@@ -245,17 +245,11 @@ pub fn parse_html_with_options(html: &str, options: DomParseOptions) -> Result<D
 }
 
 fn parse_shadow_root_mode(template: &DomNode) -> Option<ShadowRootMode> {
-  let (tag_name, namespace) = match &template.node_type {
-    DomNodeType::Element {
-      tag_name,
-      namespace,
-      ..
-    } => (tag_name.as_str(), namespace.as_str()),
-    _ => return None,
-  };
-
-  let is_html = namespace.is_empty() || namespace == HTML_NAMESPACE;
-  if !is_html || !tag_name.eq_ignore_ascii_case("template") {
+  if !template
+    .tag_name()
+    .map(|t| t.eq_ignore_ascii_case("template"))
+    .unwrap_or(false)
+  {
     return None;
   }
 
@@ -296,70 +290,11 @@ fn attach_shadow_roots(node: &mut DomNode) {
     children: template.children,
   };
 
-  // Only the first declarative shadow template is attached. Remaining light DOM children
-  // (including additional templates) are still considered for slot distribution. If the
-  // shadow tree lacks slots, those light DOM nodes are dropped by design, which matches the
-  // current flattened representation used elsewhere in the pipeline.
   let light_children = std::mem::take(&mut node.children);
   distribute_slots(&mut shadow_root, light_children);
   node.children = vec![shadow_root];
 }
 
-/// Optional DOM compatibility tweaks applied after HTML parsing.
-///
-/// Some documents bootstrap by marking the root with `no-js` and replacing it with a
-/// `js-enabled` class once scripts execute. Others toggle visibility gates like
-/// `jsl10n-visible` after client-side localization. Since we do not run author scripts,
-/// mirror those initializations so content that relies on the class flip (e.g., initial
-/// opacity) is visible in static renders.
-fn apply_dom_compatibility_mutations(node: &mut DomNode) {
-  if let DomNodeType::Element {
-    tag_name,
-    attributes,
-    ..
-  } = &mut node.node_type
-  {
-    let mut classes: Vec<String> = attributes
-      .iter()
-      .find(|(k, _)| k.eq_ignore_ascii_case("class"))
-      .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
-      .unwrap_or_default();
-    let mut changed = false;
-
-    if tag_name.eq_ignore_ascii_case("html") {
-      if classes.iter().any(|c| c == "no-js") {
-        classes.retain(|c| c != "no-js");
-        if !classes.iter().any(|c| c == "js-enabled") {
-          classes.push("js-enabled".to_string());
-        }
-        changed = true;
-      }
-    }
-
-    if tag_name.eq_ignore_ascii_case("html") || tag_name.eq_ignore_ascii_case("body") {
-      if !classes.iter().any(|c| c == "jsl10n-visible") {
-        classes.push("jsl10n-visible".to_string());
-        changed = true;
-      }
-    }
-
-    if changed {
-      let class_value = classes.join(" ");
-      if let Some((_, value)) = attributes
-        .iter_mut()
-        .find(|(k, _)| k.eq_ignore_ascii_case("class"))
-      {
-        *value = class_value;
-      } else {
-        attributes.push(("class".to_string(), class_value));
-      }
-    }
-  }
-
-  for child in &mut node.children {
-    apply_dom_compatibility_mutations(child);
-  }
-}
 fn distribute_slots(shadow_root: &mut DomNode, light_children: Vec<DomNode>) {
   let mut available_slots: HashSet<String> = HashSet::new();
   collect_slot_names(shadow_root, &mut available_slots);
@@ -426,17 +361,70 @@ fn fill_slot_tree(
   assignments: &mut Vec<(Option<String>, DomNode)>,
   available_slots: &HashSet<String>,
 ) {
+  for child in &mut node.children {
+    fill_slot_tree(child, assignments, available_slots);
+  }
+
   if matches!(node.node_type, DomNodeType::Slot { .. }) {
     let slot_name = node.get_attribute_ref("name").unwrap_or("");
     let assigned = take_assignments_for_slot(assignments, slot_name, available_slots);
     if !assigned.is_empty() {
       node.children = assigned;
-      return;
+    }
+  }
+}
+
+/// Some documents bootstrap by marking the root with `no-js` and replacing it with a
+/// `js-enabled` class once scripts execute. Others toggle visibility gates like
+/// `jsl10n-visible` after client-side localization. Since we do not run author scripts,
+/// mirror those initializations so content that relies on the class flip (e.g., initial
+/// opacity) is visible in static renders.
+fn apply_dom_compatibility_mutations(node: &mut DomNode) {
+  if let DomNodeType::Element {
+    tag_name,
+    attributes,
+    ..
+  } = &mut node.node_type
+  {
+    let mut classes: Vec<String> = attributes
+      .iter()
+      .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+      .map(|(_, v)| v.split_whitespace().map(|s| s.to_string()).collect())
+      .unwrap_or_default();
+    let mut changed = false;
+
+    if tag_name.eq_ignore_ascii_case("html") {
+      if classes.iter().any(|c| c == "no-js") {
+        classes.retain(|c| c != "no-js");
+        if !classes.iter().any(|c| c == "js-enabled") {
+          classes.push("js-enabled".to_string());
+        }
+        changed = true;
+      }
+    }
+
+    if tag_name.eq_ignore_ascii_case("html") || tag_name.eq_ignore_ascii_case("body") {
+      if !classes.iter().any(|c| c == "jsl10n-visible") {
+        classes.push("jsl10n-visible".to_string());
+        changed = true;
+      }
+    }
+
+    if changed {
+      let class_value = classes.join(" ");
+      if let Some((_, value)) = attributes
+        .iter_mut()
+        .find(|(k, _)| k.eq_ignore_ascii_case("class"))
+      {
+        *value = class_value;
+      } else {
+        attributes.push(("class".to_string(), class_value));
+      }
     }
   }
 
   for child in &mut node.children {
-    fill_slot_tree(child, assignments, available_slots);
+    apply_dom_compatibility_mutations(child);
   }
 }
 
