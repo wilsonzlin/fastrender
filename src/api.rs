@@ -724,7 +724,6 @@ fn viewport_length_value(len: ViewportLength, fallback: f32) -> Option<f32> {
 fn sanitize_positive(value: Option<f32>) -> Option<f32> {
   value.filter(|v| v.is_finite() && *v > 0.0)
 }
-
 impl FastRender {
   fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
     let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
