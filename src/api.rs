@@ -638,14 +638,7 @@ impl FastRenderConfig {
     self
   }
 
-  /// Selects a compatibility profile. The default is spec-first rendering with no
-  /// site-specific heuristics.
-  pub fn compat_mode(mut self, profile: CompatProfile) -> Self {
-    self.compat_profile = profile;
-    self
-  }
-
-  /// Enables site-specific compatibility hacks used for internal page sets.
+  /// Enables site-specific compatibility hacks used for internal captures.
   pub fn with_site_compat_hacks(mut self) -> Self {
     self.compat_profile = CompatProfile::SiteCompatibility;
     self
