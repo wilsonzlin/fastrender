@@ -639,12 +639,6 @@ impl FastRenderConfig {
     self.compat_profile = profile;
     self
   }
-
-  /// Enables site-specific compatibility hacks used for internal captures.
-  pub fn with_site_compat_hacks(mut self) -> Self {
-    self.compat_profile = CompatProfile::SiteCompatibility;
-    self
-  }
 }
 
 #[derive(Debug, Clone, Copy)]
