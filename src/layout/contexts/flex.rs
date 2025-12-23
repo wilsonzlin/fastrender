@@ -47,6 +47,7 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
+use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
 use crate::style::display::Display;
@@ -257,6 +258,10 @@ impl FormattingContext for FlexFormattingContext {
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
+    debug_assert!(
+      matches!(box_node.formatting_context(), Some(FormattingContextType::Flex)),
+      "FlexFormattingContext must only layout flex containers",
+    );
     let _profile = layout_timer(LayoutKind::Flex);
     let build_timer = flex_profile::timer();
     let mut constraints = *constraints;
@@ -512,6 +517,7 @@ impl FormattingContext for FlexFormattingContext {
         .and_then(|v| v.parse::<f32>().ok())
         .filter(|v| *v > 0.0)
     });
+    record_taffy_invocation(TaffyAdapterKind::Flex);
     taffy_tree
             .compute_layout_with_measure(
                 root_node,

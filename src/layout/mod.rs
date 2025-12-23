@@ -58,6 +58,9 @@ pub mod contexts;
 pub mod flex_profile;
 pub mod profile;
 
+// Debug-only guardrails for Taffy usage
+pub mod taffy_integration;
+
 // W2.T04 - Layout constraints
 pub mod constraints;
 

@@ -38,6 +38,7 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
+use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
 use crate::style::display::Display as CssDisplay;
@@ -1147,6 +1148,10 @@ impl GridFormattingContext {
     box_node: &BoxNode,
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
+    debug_assert!(
+      matches!(box_node.formatting_context(), Some(FormattingContextType::Grid)),
+      "GridFormattingContext must only query grid containers",
+    );
     let style = &box_node.style;
     if style.containment.size || style.containment.inline_size {
       let edges = self.horizontal_edges_px(style).unwrap_or(0.0);
@@ -1168,6 +1173,7 @@ impl GridFormattingContext {
       },
     };
 
+    record_taffy_invocation(TaffyAdapterKind::Grid);
     taffy
       .compute_layout(root_id, available_space)
       .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
@@ -1275,6 +1281,10 @@ impl FormattingContext for GridFormattingContext {
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
+    debug_assert!(
+      matches!(box_node.formatting_context(), Some(FormattingContextType::Grid)),
+      "GridFormattingContext must only layout grid containers",
+    );
     let _profile = layout_timer(LayoutKind::Grid);
     if let Some(cached) = layout_cache_lookup(
       box_node,
@@ -1320,6 +1330,7 @@ impl FormattingContext for GridFormattingContext {
     };
 
     // Run Taffy layout
+    record_taffy_invocation(TaffyAdapterKind::Grid);
     taffy
       .compute_layout(root_id, available_space)
       .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
