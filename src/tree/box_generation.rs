@@ -58,7 +58,6 @@ use std::sync::Arc;
 pub use crate::tree::box_generation_demo::{
   BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode,
 };
-
 pub(crate) fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
   attr
     .split(',')
@@ -2329,7 +2328,6 @@ mod tests {
     let replaced = BoxGenerator::find_replaced_boxes(&root);
     assert_eq!(replaced.len(), 2);
   }
-
   #[test]
   fn fallback_marker_resets_box_model_but_inherits_color() {
     let mut li_style = ComputedStyle::default();
