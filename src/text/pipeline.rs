@@ -705,7 +705,10 @@ fn split_bidi_runs_by_paragraph(
         break;
       }
 
-      let left = BidiRun { end: para_end, ..run.clone() };
+      let left = BidiRun {
+        end: para_end,
+        ..run.clone()
+      };
       run.start = para_end;
       out.push(left);
       para_iter.next();

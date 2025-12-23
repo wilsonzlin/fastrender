@@ -3279,18 +3279,18 @@ impl DisplayListRenderer {
             reason: "Unable to resolve font for emphasis string".into(),
           }
         })?;
-    let glyphs: Vec<GlyphPosition> = text
-      .glyphs
-      .iter()
-      .map(|g| GlyphPosition {
-        glyph_id: g.glyph_id,
-        cluster: 0,
-        x_offset: g.offset.x,
-        y_offset: g.offset.y,
-        x_advance: g.advance,
-        y_advance: 0.0,
-      })
-      .collect();
+        let glyphs: Vec<GlyphPosition> = text
+          .glyphs
+          .iter()
+          .map(|g| GlyphPosition {
+            glyph_id: g.glyph_id,
+            cluster: 0,
+            x_offset: g.offset.x,
+            y_offset: g.offset.y,
+            x_advance: g.advance,
+            y_advance: 0.0,
+          })
+          .collect();
         for mark in &emphasis.marks {
           let mark_origin = if inline_vertical {
             Point::new(
