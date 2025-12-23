@@ -61,6 +61,7 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use std::collections::HashMap;
 use std::sync::Arc;
+use taffy::compute::grid::DetailedGridTracksInfo;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
 use taffy::prelude::TaffyMaxContent;
@@ -82,6 +83,7 @@ use taffy::style::Style as TaffyStyle;
 use taffy::style::TrackSizingFunction;
 use taffy::style_helpers::TaffyAuto;
 use taffy::tree::NodeId as TaffyNodeId;
+use taffy::tree::Layout as TaffyLayout;
 use taffy::tree::TaffyTree;
 
 #[derive(Clone, Copy)]
@@ -1094,14 +1096,22 @@ impl GridFormattingContext {
         Some(FormattingContextType::Grid)
       );
       if is_grid {
-        return Ok(FragmentNode::new_with_style(
+        let mut fragment = FragmentNode::new_with_style(
           bounds,
           FragmentContent::Block {
             box_id: Some(box_node.id),
           },
           child_fragments,
           box_node.style.clone(),
-        ));
+        );
+        self.apply_grid_baseline_alignment(
+          taffy,
+          node_id,
+          layout,
+          &children,
+          &mut fragment,
+        );
+        return Ok(fragment);
       }
 
       let fc_type = box_node
@@ -1139,6 +1149,199 @@ impl GridFormattingContext {
       Ok(laid_out)
     } else {
       Ok(FragmentNode::new_block(bounds, child_fragments))
+    }
+  }
+
+  fn alignment_for_axis(
+    &self,
+    axis: Axis,
+    child_style: &taffy::style::Style,
+    container_style: &taffy::style::Style,
+  ) -> taffy::style::AlignItems {
+    let fallback = match axis {
+      Axis::Vertical => {
+        if !child_style.size.height.is_auto() || child_style.aspect_ratio.is_some() {
+          taffy::style::AlignItems::Start
+        } else {
+          taffy::style::AlignItems::Stretch
+        }
+      }
+      Axis::Horizontal => {
+        if !child_style.size.width.is_auto() {
+          taffy::style::AlignItems::Start
+        } else {
+          taffy::style::AlignItems::Stretch
+        }
+      }
+    };
+
+    match axis {
+      Axis::Vertical => child_style
+        .align_self
+        .or(container_style.align_items)
+        .unwrap_or(fallback),
+      Axis::Horizontal => child_style
+        .justify_self
+        .or(container_style.justify_items)
+        .unwrap_or(fallback),
+    }
+  }
+
+  fn baseline_offset_with_fallback(
+    &self,
+    fragment: &FragmentNode,
+    axis: Axis,
+  ) -> Option<f32> {
+    if let Some(offset) = first_baseline_offset(fragment) {
+      return Some(offset);
+    }
+
+    let size = match axis {
+      Axis::Vertical => fragment.bounds.height(),
+      Axis::Horizontal => fragment.bounds.width(),
+    };
+    if size.is_finite() && size > 0.0 {
+      Some(size)
+    } else {
+      None
+    }
+  }
+
+  fn apply_baseline_group(&self, axis: Axis, group: &[BaselineItem], fragment: &mut FragmentNode) {
+    if group.is_empty() {
+      return;
+    }
+
+    let mut target = 0.0;
+    for item in group {
+      let area_size = (item.area_end - item.area_start).max(0.0);
+      let clamped = item.baseline.min(area_size);
+      if clamped > target {
+        target = clamped;
+      }
+    }
+
+    for item in group {
+      let area_size = (item.area_end - item.area_start).max(0.0);
+      if area_size <= 0.0 {
+        continue;
+      }
+      let upper = (item.area_end - item.size).max(item.area_start);
+      let desired_start = (item.area_start + target - item.baseline).clamp(item.area_start, upper);
+      let delta = desired_start - item.start;
+      if delta.abs() > 0.01 {
+        if let Some(child) = fragment.children.get_mut(item.idx) {
+          translate_along_axis(child, axis, delta);
+        }
+      }
+    }
+  }
+
+  fn apply_grid_baseline_alignment(
+    &self,
+    taffy: &TaffyTree<()>,
+    node_id: TaffyNodeId,
+    layout: &TaffyLayout,
+    child_ids: &[TaffyNodeId],
+    fragment: &mut FragmentNode,
+  ) {
+    let detailed = match taffy.detailed_layout_info(node_id) {
+      taffy::tree::layout::DetailedLayoutInfo::Grid(info) => info,
+      _ => return,
+    };
+    if fragment.children.is_empty() {
+      return;
+    }
+    if detailed.items.len() != fragment.children.len() || child_ids.len() != fragment.children.len() {
+      return;
+    }
+
+    let container_style = match taffy.style(node_id) {
+      Ok(style) => style,
+      Err(_) => return,
+    };
+
+    let row_offsets = compute_track_offsets(
+      &detailed.rows,
+      layout.size.height,
+      layout.padding.top,
+      layout.padding.bottom,
+      layout.border.top,
+      layout.border.bottom,
+      container_style
+        .align_content
+        .unwrap_or(TaffyAlignContent::Stretch),
+    );
+    let col_offsets = compute_track_offsets(
+      &detailed.columns,
+      layout.size.width,
+      layout.padding.left,
+      layout.padding.right,
+      layout.border.left,
+      layout.border.right,
+      container_style
+        .justify_content
+        .unwrap_or(TaffyAlignContent::Stretch),
+    );
+
+    let mut row_groups: HashMap<u16, Vec<BaselineItem>> = HashMap::new();
+    let mut col_groups: HashMap<u16, Vec<BaselineItem>> = HashMap::new();
+
+    for (idx, ((child_id, item_info), child_fragment)) in child_ids
+      .iter()
+      .zip(detailed.items.iter())
+      .zip(fragment.children.iter())
+      .enumerate()
+    {
+      let child_style = match taffy.style(*child_id) {
+        Ok(style) => style,
+        Err(_) => continue,
+      };
+
+      if self
+        .alignment_for_axis(Axis::Vertical, child_style, container_style)
+        == taffy::style::AlignItems::Baseline
+      {
+        if let (Some((area_start, area_end)), Some(baseline)) = (
+          grid_area_for_item(&row_offsets, item_info.row_start, item_info.row_end),
+          self.baseline_offset_with_fallback(child_fragment, Axis::Vertical),
+        ) {
+          row_groups.entry(item_info.row_start).or_default().push(BaselineItem {
+            idx,
+            area_start,
+            area_end,
+            baseline,
+            start: child_fragment.bounds.y(),
+            size: child_fragment.bounds.height(),
+          });
+        }
+      }
+
+      if self
+        .alignment_for_axis(Axis::Horizontal, child_style, container_style)
+        == taffy::style::AlignItems::Baseline
+      {
+        if let (Some((area_start, area_end)), Some(baseline)) = (
+          grid_area_for_item(&col_offsets, item_info.column_start, item_info.column_end),
+          self.baseline_offset_with_fallback(child_fragment, Axis::Horizontal),
+        ) {
+          col_groups.entry(item_info.column_start).or_default().push(BaselineItem {
+            idx,
+            area_start,
+            area_end,
+            baseline,
+            start: child_fragment.bounds.x(),
+            size: child_fragment.bounds.width(),
+          });
+        }
+      }
+    }
+
+    for group in row_groups.values() {
+      self.apply_baseline_group(Axis::Vertical, group, fragment);
+    }
+    for group in col_groups.values() {
+      self.apply_baseline_group(Axis::Horizontal, group, fragment);
     }
   }
 
@@ -1197,6 +1400,193 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
   for child in &mut fragment.children {
     translate_fragment_tree(child, delta);
   }
+}
+
+fn find_first_baseline_absolute(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
+  let origin = parent_offset + fragment.bounds.y();
+  if let Some(baseline) = fragment.baseline {
+    return Some(origin + baseline);
+  }
+  match &fragment.content {
+    FragmentContent::Line { baseline } => return Some(origin + *baseline),
+    FragmentContent::Text {
+      baseline_offset, ..
+    } => return Some(origin + *baseline_offset),
+    _ => {}
+  }
+
+  for child in &fragment.children {
+    if let Some(b) = find_first_baseline_absolute(child, origin) {
+      return Some(b);
+    }
+  }
+
+  None
+}
+
+fn first_baseline_offset(fragment: &FragmentNode) -> Option<f32> {
+  find_first_baseline_absolute(fragment, 0.0).map(|abs| abs - fragment.bounds.y())
+}
+
+fn apply_alignment_fallback_for_grid(
+  free_space: f32,
+  num_items: usize,
+  alignment_mode: TaffyAlignContent,
+) -> TaffyAlignContent {
+  // Mirrors taffy's alignment fallback, but scoped locally for grid post-processing.
+  if num_items <= 1 || free_space <= 0.0 {
+    return match alignment_mode {
+      TaffyAlignContent::Stretch => TaffyAlignContent::FlexStart,
+      TaffyAlignContent::SpaceBetween => TaffyAlignContent::FlexStart,
+      TaffyAlignContent::SpaceAround => TaffyAlignContent::Center,
+      TaffyAlignContent::SpaceEvenly => TaffyAlignContent::Center,
+      other => other,
+    };
+  }
+
+  alignment_mode
+}
+
+fn compute_alignment_offset_for_grid(
+  free_space: f32,
+  num_items: usize,
+  alignment_mode: TaffyAlignContent,
+  is_first: bool,
+) -> f32 {
+  if is_first {
+    match alignment_mode {
+      TaffyAlignContent::Start => 0.0,
+      TaffyAlignContent::FlexStart => 0.0,
+      TaffyAlignContent::End => free_space,
+      TaffyAlignContent::FlexEnd => free_space,
+      TaffyAlignContent::Center => free_space / 2.0,
+      TaffyAlignContent::Stretch => 0.0,
+      TaffyAlignContent::SpaceBetween => 0.0,
+      TaffyAlignContent::SpaceAround => {
+        if free_space >= 0.0 {
+          (free_space / num_items as f32) / 2.0
+        } else {
+          free_space / 2.0
+        }
+      }
+      TaffyAlignContent::SpaceEvenly => {
+        if free_space >= 0.0 {
+          free_space / (num_items + 1) as f32
+        } else {
+          free_space / 2.0
+        }
+      }
+    }
+  } else {
+    let free_space = free_space.max(0.0);
+    match alignment_mode {
+      TaffyAlignContent::Start
+      | TaffyAlignContent::FlexStart
+      | TaffyAlignContent::End
+      | TaffyAlignContent::FlexEnd
+      | TaffyAlignContent::Center
+      | TaffyAlignContent::Stretch => 0.0,
+      TaffyAlignContent::SpaceBetween => free_space / (num_items.saturating_sub(1).max(1) as f32),
+      TaffyAlignContent::SpaceAround => free_space / (num_items.max(1) as f32),
+      TaffyAlignContent::SpaceEvenly => free_space / (num_items + 1) as f32,
+    }
+  }
+}
+
+fn compute_track_offsets(
+  tracks: &DetailedGridTracksInfo,
+  axis_size: f32,
+  padding_start: f32,
+  padding_end: f32,
+  border_start: f32,
+  border_end: f32,
+  alignment: TaffyAlignContent,
+) -> Vec<f32> {
+  let track_count = tracks.sizes.len();
+  if track_count == 0 {
+    return Vec::new();
+  }
+
+  let mut gutters = tracks.gutters.clone();
+  if gutters.len() < track_count + 1 {
+    gutters.resize(track_count + 1, 0.0);
+  }
+
+  #[derive(Clone, Copy)]
+  struct TrackEntry {
+    size: f32,
+    is_gutter: bool,
+  }
+
+  let mut entries: Vec<TrackEntry> = Vec::with_capacity(track_count * 2 + 1);
+  entries.push(TrackEntry {
+    size: gutters.get(0).copied().unwrap_or(0.0),
+    is_gutter: true,
+  });
+  for i in 0..track_count {
+    entries.push(TrackEntry {
+      size: tracks.sizes[i],
+      is_gutter: false,
+    });
+    entries.push(TrackEntry {
+      size: gutters.get(i + 1).copied().unwrap_or(0.0),
+      is_gutter: true,
+    });
+  }
+
+  let used_size: f32 = entries.iter().map(|t| t.size).sum();
+  let content_size = axis_size - padding_start - padding_end - border_start - border_end;
+  let free_space = content_size - used_size;
+  let aligned = apply_alignment_fallback_for_grid(free_space, track_count, alignment);
+
+  let mut offsets = Vec::with_capacity(entries.len());
+  let mut total_offset = padding_start + border_start;
+  let mut first_track_seen = false;
+  for entry in entries {
+    let is_first_track = !first_track_seen && !entry.is_gutter;
+    if is_first_track {
+      first_track_seen = true;
+    }
+    let offset_within = if entry.is_gutter {
+      0.0
+    } else {
+      compute_alignment_offset_for_grid(free_space, track_count.max(1), aligned, is_first_track)
+    };
+    offsets.push(total_offset + offset_within);
+    total_offset += offset_within + entry.size;
+  }
+
+  offsets
+}
+
+fn grid_area_for_item(offsets: &[f32], start_line: u16, end_line: u16) -> Option<(f32, f32)> {
+  let start_idx = (start_line.saturating_sub(1) as usize).saturating_mul(2);
+  let end_idx = (end_line.saturating_sub(1) as usize).saturating_mul(2);
+  if start_idx + 1 >= offsets.len() || end_idx >= offsets.len() {
+    return None;
+  }
+  Some((offsets[start_idx + 1], offsets[end_idx]))
+}
+
+#[derive(Clone, Copy)]
+struct BaselineItem {
+  idx: usize,
+  area_start: f32,
+  area_end: f32,
+  baseline: f32,
+  start: f32,
+  size: f32,
+}
+
+fn translate_along_axis(fragment: &mut FragmentNode, axis: Axis, delta: f32) {
+  if delta == 0.0 {
+    return;
+  }
+  let delta_point = match axis {
+    Axis::Horizontal => Point::new(delta, 0.0),
+    Axis::Vertical => Point::new(0.0, delta),
+  };
+  translate_fragment_tree(fragment, delta_point);
 }
 
 fn parse_grid_line_placement_raw(raw: &str) -> Line<TaffyGridPlacement<String>> {
@@ -1564,6 +1954,14 @@ mod tests {
     style.grid_template_columns = cols;
     style.grid_template_rows = rows;
     Arc::new(style)
+  }
+
+  fn make_text_item(text: &str, font_size: f32) -> BoxNode {
+    let mut style = ComputedStyle::default();
+    style.font_size = font_size;
+    let style = Arc::new(style);
+    let text_child = BoxNode::new_text(style.clone(), text.to_string());
+    BoxNode::new_block(style, FormattingContextType::Inline, vec![text_child])
   }
 
   #[test]
@@ -2355,5 +2753,88 @@ mod tests {
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
     assert_eq!(fragment.children.len(), 4);
+  }
+
+  #[test]
+  fn grid_align_items_baseline_aligns_children() {
+    let fc = GridFormattingContext::new();
+
+    let mut grid_style = ComputedStyle::default();
+    grid_style.display = CssDisplay::Grid;
+    grid_style.align_items = AlignItems::Baseline;
+    grid_style.grid_template_columns = vec![
+      GridTrack::Length(Length::px(140.0)),
+      GridTrack::Length(Length::px(140.0)),
+    ];
+    let grid_style = Arc::new(grid_style);
+
+    let item_small = make_text_item("small", 14.0);
+    let item_large = make_text_item("large", 28.0);
+
+    let grid = BoxNode::new_block(
+      grid_style,
+      FormattingContextType::Grid,
+      vec![item_small, item_large],
+    );
+
+    let constraints = LayoutConstraints::definite(400.0, 200.0);
+    let fragment = fc.layout(&grid, &constraints).unwrap();
+
+    let baseline0 = super::find_first_baseline_absolute(&fragment.children[0], 0.0).unwrap();
+    let baseline1 = super::find_first_baseline_absolute(&fragment.children[1], 0.0).unwrap();
+
+    assert!(
+      (baseline0 - baseline1).abs() < 0.05,
+      "baselines should align: {:.2} vs {:.2}",
+      baseline0,
+      baseline1
+    );
+    assert!(
+      fragment.children[0].bounds.y() > fragment.children[1].bounds.y(),
+      "smaller baseline item should be offset to align"
+    );
+  }
+
+  #[test]
+  fn grid_justify_items_baseline_aligns_columns() {
+    let fc = GridFormattingContext::new();
+
+    let mut grid_style = ComputedStyle::default();
+    grid_style.display = CssDisplay::Grid;
+    grid_style.justify_items = AlignItems::Baseline;
+    grid_style.grid_template_columns = vec![GridTrack::Length(Length::px(180.0))];
+    grid_style.grid_template_rows = vec![GridTrack::Auto, GridTrack::Auto];
+    let grid_style = Arc::new(grid_style);
+
+    let item_small = make_text_item("small", 12.0);
+    let item_large = make_text_item("large", 24.0);
+
+    let grid = BoxNode::new_block(
+      grid_style,
+      FormattingContextType::Grid,
+      vec![item_small, item_large],
+    );
+
+    let constraints = LayoutConstraints::definite(300.0, 300.0);
+    let fragment = fc.layout(&grid, &constraints).unwrap();
+
+    let baseline_offset0 = super::first_baseline_offset(&fragment.children[0])
+      .unwrap_or_else(|| fragment.children[0].bounds.width());
+    let baseline_offset1 = super::first_baseline_offset(&fragment.children[1])
+      .unwrap_or_else(|| fragment.children[1].bounds.width());
+
+    let baseline0 = fragment.children[0].bounds.x() + baseline_offset0;
+    let baseline1 = fragment.children[1].bounds.x() + baseline_offset1;
+
+    assert!(
+      (baseline0 - baseline1).abs() < 0.05,
+      "inline-axis baselines should align: {:.2} vs {:.2}",
+      baseline0,
+      baseline1
+    );
+    assert!(
+      fragment.children[0].bounds.x() >= 0.0 || fragment.children[1].bounds.x() >= 0.0,
+      "baseline alignment should not move items outside the column"
+    );
   }
 }
