@@ -532,11 +532,7 @@ mod tests {
 
     for (pct, expected) in [(0.0, 0.0), (50.0, 60.0), (100.0, 120.0)] {
       style.offset_distance = Length::percent(pct);
-      let transform = compute_motion_transform(
-        &style,
-        Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-        None,
-      );
+      let transform = compute_motion_transform(&style, Rect::from_xywh(0.0, 0.0, 10.0, 10.0), None);
       let (tx, ty) = match transform {
         Some(t) => (t.e, t.f),
         None => (0.0, 0.0),
@@ -575,7 +571,12 @@ mod tests {
     assert!((transform.e - 50.0).abs() < 0.5);
     assert!((transform.f - 100.0).abs() < 0.5);
     let angle = normalize_degrees(rotation_degrees(transform));
-    assert!((angle - 180.0).abs() < 6.0, "angle {} transform {:?}", angle, transform);
+    assert!(
+      (angle - 180.0).abs() < 6.0,
+      "angle {} transform {:?}",
+      angle,
+      transform
+    );
   }
 
   #[test]
@@ -648,7 +649,12 @@ mod tests {
     assert!((transform.e - 50.0).abs() < 0.1);
     assert!((transform.f - 100.0).abs() < 0.1);
     let angle = normalize_degrees(rotation_degrees(transform));
-    assert!(angle.min(360.0 - angle) < 0.5, "angle {} transform {:?}", angle, transform);
+    assert!(
+      angle.min(360.0 - angle) < 0.5,
+      "angle {} transform {:?}",
+      angle,
+      transform
+    );
   }
 
   #[test]
