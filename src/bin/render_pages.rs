@@ -7,31 +7,19 @@
 mod caching_fetcher;
 mod common;
 
-use caching_fetcher::DiskCachingFetcher;
+use caching_fetcher::CachingFetcher;
 use clap::Parser;
-use common::args::{parse_shard, parse_viewport, MediaPreferenceArgs};
-use common::media_prefs::MediaPreferences;
-use fastrender::css::encoding::decode_css_bytes;
-use fastrender::css::loader::absolutize_css_urls;
-use fastrender::css::loader::extract_css_links;
-use fastrender::css::loader::extract_embedded_css_urls;
-use fastrender::css::loader::infer_base_url;
-use fastrender::css::loader::inject_css_into_html;
-use fastrender::css::loader::inline_imports;
-use fastrender::css::loader::resolve_href;
-use fastrender::html::encoding::decode_html_bytes;
-use fastrender::html::meta_refresh::extract_js_location_redirect;
-use fastrender::html::meta_refresh::extract_meta_refresh_url;
+use common::render_pipeline::{
+  build_render_configs, build_renderer_with_fetcher, follow_client_redirects, log_diagnostics,
+  read_cached_document, render_document, RenderConfigBundle,
+};
+use fastrender::image_output::encode_image;
 use fastrender::resource::normalize_page_name;
 use fastrender::resource::normalize_user_agent_for_log;
-use fastrender::resource::parse_cached_html_meta;
 use fastrender::resource::HttpFetcher;
-use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
-use fastrender::style::media::MediaType;
-use fastrender::FastRender;
-use std::collections::HashSet;
+use fastrender::OutputFormat;
 use std::fmt::Write;
 use std::fs;
 use std::panic::AssertUnwindSafe;
@@ -69,8 +57,25 @@ struct Args {
   #[arg(long, default_value = "1.0")]
   dpr: f32,
 
-  #[command(flatten)]
-  media_prefs: MediaPreferenceArgs,
+  /// Reduced transparency preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_transparency: Option<bool>,
+
+  /// Reduced motion preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_motion: Option<bool>,
+
+  /// Reduced data preference (reduce|no-preference)
+  #[arg(long, value_parser = parse_bool_preference)]
+  prefers_reduced_data: Option<bool>,
+
+  /// Contrast preference (more|high|less|low|custom|forced|no-preference)
+  #[arg(long, value_parser = parse_contrast)]
+  prefers_contrast: Option<String>,
+
+  /// Color scheme preference (light|dark|no-preference)
+  #[arg(long, value_parser = parse_color_scheme)]
+  prefers_color_scheme: Option<String>,
 
   /// Render only listed pages (comma-separated)
   #[arg(long, value_delimiter = ',')]
@@ -109,6 +114,72 @@ struct Args {
   filter_pages: Vec<String>,
 }
 
+fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
+  let parts: Vec<&str> = s.split('x').collect();
+  if parts.len() != 2 {
+    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
+  }
+  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
+  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
+  if w == 0 || h == 0 {
+    return Err("width and height must be > 0".to_string());
+  }
+  Ok((w, h))
+}
+
+fn parse_bool_preference(s: &str) -> Result<bool, String> {
+  let v = s.trim().to_ascii_lowercase();
+  if matches!(
+    v.as_str(),
+    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
+  ) {
+    return Ok(true);
+  }
+  if matches!(
+    v.as_str(),
+    "0" | "false" | "no" | "off" | "none" | "no-preference"
+  ) {
+    return Ok(false);
+  }
+  Err(format!("invalid value: {s}"))
+}
+
+fn parse_contrast(s: &str) -> Result<String, String> {
+  let v = s.trim().to_ascii_lowercase();
+  match v.as_str() {
+    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
+    _ => Err(format!("invalid contrast value: {s}")),
+  }
+}
+
+fn parse_color_scheme(s: &str) -> Result<String, String> {
+  let v = s.trim().to_ascii_lowercase();
+  match v.as_str() {
+    "light" | "dark" | "no-preference" => Ok(v),
+    _ => Err(format!("invalid color scheme: {s}")),
+  }
+}
+
+fn parse_shard(s: &str) -> Result<(usize, usize), String> {
+  let parts: Vec<&str> = s.split('/').collect();
+  if parts.len() != 2 {
+    return Err("shard must be index/total (e.g., 0/4)".to_string());
+  }
+  let index = parts[0]
+    .parse::<usize>()
+    .map_err(|_| "invalid shard index".to_string())?;
+  let total = parts[1]
+    .parse::<usize>()
+    .map_err(|_| "invalid shard total".to_string())?;
+  if total == 0 {
+    return Err("shard total must be > 0".to_string());
+  }
+  if index >= total {
+    return Err("shard index must be < total".to_string());
+  }
+  Ok((index, total))
+}
+
 struct PageResult {
   name: String,
   status: Status,
@@ -131,7 +202,6 @@ fn main() {
   }
 
   let args = Args::parse();
-  let media_prefs = MediaPreferences::from(&args.media_prefs);
 
   // Build page filter from --pages and positional args
   let page_filter: Option<HashSet<String>> = {
@@ -153,7 +223,34 @@ fn main() {
     std::env::set_var("FASTR_RENDER_TIMINGS", "1");
   }
 
-  media_prefs.apply_env();
+  if let Some(reduce) = args.prefers_reduced_transparency {
+    std::env::set_var(
+      "FASTR_PREFERS_REDUCED_TRANSPARENCY",
+      if reduce { "reduce" } else { "no-preference" },
+    );
+  }
+
+  if let Some(reduce) = args.prefers_reduced_motion {
+    std::env::set_var(
+      "FASTR_PREFERS_REDUCED_MOTION",
+      if reduce { "reduce" } else { "no-preference" },
+    );
+  }
+
+  if let Some(reduce) = args.prefers_reduced_data {
+    std::env::set_var(
+      "FASTR_PREFERS_REDUCED_DATA",
+      if reduce { "reduce" } else { "no-preference" },
+    );
+  }
+
+  if let Some(ref contrast) = args.prefers_contrast {
+    std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
+  }
+
+  if let Some(ref color_scheme) = args.prefers_color_scheme {
+    std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
+  }
 
   // Create directories
   fs::create_dir_all(RENDER_DIR).expect("create render dir");
@@ -200,8 +297,8 @@ fn main() {
     std::process::exit(1);
   }
 
-  // Create shared disk caching fetcher (CLI-only helper; library cache is in-memory)
-  let fetcher = Arc::new(DiskCachingFetcher::new(
+  // Create shared caching fetcher
+  let fetcher = Arc::new(CachingFetcher::new(
     HttpFetcher::new()
       .with_user_agent(args.user_agent.clone())
       .with_accept_language(args.accept_language.clone()),
@@ -209,6 +306,14 @@ fn main() {
   ));
 
   let (viewport_w, viewport_h) = args.viewport;
+  let RenderConfigBundle { config, options } = build_render_configs(
+    args.viewport,
+    args.scroll_x,
+    args.scroll_y,
+    args.dpr,
+    args.css_limit,
+    true,
+  );
 
   println!(
     "Rendering {} pages ({} parallel)...",
@@ -235,10 +340,6 @@ fn main() {
     .expect("create thread pool");
 
   let timeout_secs = args.timeout;
-  let device_pixel_ratio = args.dpr;
-  let scroll_x = args.scroll_x;
-  let scroll_y = args.scroll_y;
-  let css_limit = args.css_limit;
 
   pool.scope(|s| {
     for path in &entries {
@@ -246,6 +347,8 @@ fn main() {
       let path = path.clone();
       let fetcher = Arc::clone(&fetcher);
       let user_agent = args.user_agent.clone();
+      let config = config.clone();
+      let options = options.clone();
 
       s.spawn(move |_| {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
@@ -264,9 +367,8 @@ fn main() {
           normalize_user_agent_for_log(&user_agent)
         );
 
-        // Read HTML first (before catch_unwind)
-        let html_bytes = match fs::read(&path) {
-          Ok(bytes) => bytes,
+        let cached = match read_cached_document(&path) {
+          Ok(doc) => doc,
           Err(e) => {
             let _ = writeln!(log, "Read error: {}", e);
             let _ = fs::write(&log_path, &log);
@@ -280,117 +382,28 @@ fn main() {
           }
         };
 
-        let mut meta_path = path.clone();
-        meta_path.set_extension("html.meta");
-        let (content_type, source_url) = fs::read_to_string(meta_path)
-          .ok()
-          .as_deref()
-          .map(parse_cached_html_meta)
-          .unwrap_or((None, None));
-
-        let mut html = decode_html_bytes(&html_bytes, content_type.as_deref());
-        let _ = writeln!(log, "HTML bytes: {}", html_bytes.len());
-        if let Some(ct) = &content_type {
+        let _ = writeln!(log, "HTML bytes: {}", cached.byte_len);
+        if let Some(ct) = &cached.content_type {
           let _ = writeln!(log, "Content-Type: {}", ct);
         }
         let _ = writeln!(log, "Viewport: {}x{}", viewport_w, viewport_h);
-        let _ = writeln!(log, "Scroll-X: {}px", scroll_x);
-        let _ = writeln!(log, "Scroll-Y: {}px", scroll_y);
+        let _ = writeln!(log, "Scroll-X: {}px", options.scroll_x);
+        let _ = writeln!(log, "Scroll-Y: {}px", options.scroll_y);
 
-        let mut input_url = source_url.unwrap_or_else(|| format!("file://{}", path.display()));
-        let mut resource_base = infer_base_url(&html, &input_url).into_owned();
-        let _ = writeln!(log, "Resource base: {}", resource_base);
+        let mut doc = cached.document;
+        let _ = writeln!(log, "Resource base: {}", doc.base_url);
 
-        if let Some(refresh) = extract_meta_refresh_url(&html) {
-          if let Some(target) = resolve_href(&resource_base, &refresh) {
-            let _ = writeln!(log, "Meta refresh to: {}", target);
-            match fetcher.fetch(&target) {
-              Ok(res) => {
-                html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
-                input_url = target.clone();
-                resource_base = infer_base_url(&html, &input_url).into_owned();
-                let _ = writeln!(log, "Followed meta refresh; new base: {}", resource_base);
-              }
-              Err(e) => {
-                let _ = writeln!(log, "Failed to follow meta refresh: {}", e);
-              }
-            }
-          }
-        }
+        doc = follow_client_redirects(fetcher.as_ref(), doc, |line| {
+          let _ = writeln!(log, "{line}");
+        });
 
-        if html.to_ascii_lowercase().contains("<noscript") {
-          if let Some(js_redirect) = extract_js_location_redirect(&html) {
-            if let Some(target) = resolve_href(&resource_base, &js_redirect) {
-              let _ = writeln!(log, "JS redirect to: {}", target);
-              match fetcher.fetch(&target) {
-                Ok(res) => {
-                  html = decode_html_bytes(&res.bytes, res.content_type.as_deref());
-                  input_url = target.clone();
-                  resource_base = infer_base_url(&html, &input_url).into_owned();
-                  let _ = writeln!(log, "Followed JS redirect; new base: {}", resource_base);
-                }
-                Err(e) => {
-                  let _ = writeln!(log, "Failed to follow JS redirect: {}", e);
-                }
-              }
-            }
-          }
-        }
+        let _ = writeln!(log, "Final resource base: {}", doc.base_url);
 
-        let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen);
-        if let Some(limit) = css_limit {
-          if css_links.len() > limit {
-            css_links.truncate(limit);
-          }
-        }
-        let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
-        for extra in extract_embedded_css_urls(&html, &resource_base) {
-          if seen_links.insert(extra.clone()) {
-            css_links.push(extra);
-          }
-        }
-
-        let mut combined_css = String::new();
-        let mut seen_imports = HashSet::new();
-        for css_url in css_links {
-          seen_imports.insert(css_url.clone());
-          match fetcher.fetch(&css_url) {
-            Ok(res) => {
-              let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
-              let rewritten = absolutize_css_urls(&css_text, &css_url);
-              let mut import_fetch = |u| {
-                fetcher
-                  .fetch(u)
-                  .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
-              };
-              let inlined =
-                inline_imports(&rewritten, &css_url, &mut import_fetch, &mut seen_imports);
-              combined_css.push_str(&inlined);
-              combined_css.push('\n');
-            }
-            Err(err) => {
-              let _ = writeln!(log, "CSS fetch error {}: {}", css_url, err);
-            }
-          }
-        }
-        if !combined_css.is_empty() {
-          let _ = writeln!(
-            log,
-            "Inlined CSS: {} bytes from {} link(s)",
-            combined_css.len(),
-            seen_links.len()
-          );
-        }
-
-        let html_for_render = if combined_css.is_empty() {
-          html
-        } else {
-          inject_css_into_html(&html, &combined_css)
-        };
-
-        let html_for_render = html_for_render.clone();
-        let resource_base = resource_base.clone();
         let worker_name = name.clone();
+        let render_opts = options.clone();
+        let render_config = config.clone();
+        let render_fetcher = fetcher.clone() as Arc<dyn fastrender::resource::ResourceFetcher>;
+        let doc_for_render = doc.clone();
         let panic_to_string = |panic: Box<dyn std::any::Any + Send + 'static>| -> String {
           panic
             .downcast_ref::<&str>()
@@ -398,23 +411,15 @@ fn main() {
             .or_else(|| panic.downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "unknown panic".to_string())
         };
-        let run_render = move || -> Result<Vec<u8>, Status> {
-          let render_work = move || -> Result<Vec<u8>, fastrender::Error> {
-            let mut renderer = FastRender::builder()
-              .fetcher(fetcher as Arc<dyn ResourceFetcher>)
-              .base_url(resource_base.clone())
-              .device_pixel_ratio(device_pixel_ratio)
-              .apply_meta_viewport(true)
-              .build()
-              .expect("create renderer");
-            renderer.render_to_png_with_scroll(
-              &html_for_render,
-              viewport_w,
-              viewport_h,
-              scroll_x,
-              scroll_y,
-            )
-          };
+
+        let run_render = move || -> Result<(Vec<u8>, fastrender::RenderDiagnostics), Status> {
+          let render_work =
+            move || -> Result<(Vec<u8>, fastrender::RenderDiagnostics), fastrender::Error> {
+              let mut renderer = build_renderer_with_fetcher(render_config, render_fetcher)?;
+              let result = render_document(&mut renderer, doc_for_render, &render_opts)?;
+              let png = encode_image(&result.pixmap, OutputFormat::Png)?;
+              Ok((png, result.diagnostics))
+            };
 
           let (tx, rx) = channel();
           thread::Builder::new()
@@ -452,7 +457,11 @@ fn main() {
         let time_ms = elapsed.as_millis();
 
         let (status, size) = match result {
-          Ok(png_data) => {
+          Ok((png_data, diagnostics)) => {
+            log_diagnostics(&diagnostics, |line| {
+              let _ = writeln!(log, "{line}");
+            });
+
             let size = png_data.len();
             let _ = writeln!(log, "PNG size: {} bytes", size);
             let _ = writeln!(log, "Time: {}ms", time_ms);
