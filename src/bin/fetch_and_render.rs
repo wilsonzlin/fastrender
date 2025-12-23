@@ -8,7 +8,11 @@
 #![allow(clippy::len_zero)]
 #![allow(clippy::items_after_test_module)]
 
+mod common;
+
 use clap::Parser;
+use common::args::{parse_viewport, MediaPreferenceArgs};
+use common::media_prefs::MediaPreferences;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
 use fastrender::css::loader::extract_css_links;
@@ -86,25 +90,8 @@ struct Args {
   #[arg(long, default_value = "1.0")]
   dpr: f32,
 
-  /// Reduced transparency preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_transparency: Option<bool>,
-
-  /// Reduced motion preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_motion: Option<bool>,
-
-  /// Reduced data preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_data: Option<bool>,
-
-  /// Contrast preference (more|high|less|low|custom|forced|no-preference)
-  #[arg(long, value_parser = parse_contrast)]
-  prefers_contrast: Option<String>,
-
-  /// Color scheme preference (light|dark|no-preference)
-  #[arg(long, value_parser = parse_color_scheme)]
-  prefers_color_scheme: Option<String>,
+  #[command(flatten)]
+  media_prefs: MediaPreferenceArgs,
 
   /// Expand render target to full content size
   #[arg(long)]
@@ -125,52 +112,6 @@ struct Args {
   /// Enable per-stage timing logs
   #[arg(long)]
   timings: bool,
-}
-
-fn parse_viewport(s: &str) -> std::result::Result<(u32, u32), String> {
-  let parts: Vec<&str> = s.split('x').collect();
-  if parts.len() != 2 {
-    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
-  }
-  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
-  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
-  if w == 0 || h == 0 {
-    return Err("width and height must be > 0".to_string());
-  }
-  Ok((w, h))
-}
-
-fn parse_bool_preference(s: &str) -> std::result::Result<bool, String> {
-  let v = s.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Ok(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Ok(false);
-  }
-  Err(format!("invalid value: {s}"))
-}
-
-fn parse_contrast(s: &str) -> std::result::Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid contrast value: {s}")),
-  }
-}
-
-fn parse_color_scheme(s: &str) -> std::result::Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "light" | "dark" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid color scheme: {s}")),
-  }
 }
 
 fn fetch_bytes(
@@ -453,15 +394,6 @@ mod tests {
       "decoded html should respect meta charset: {}",
       decoded
     );
-  }
-
-  #[test]
-  fn parse_prefers_reduced_transparency_values() {
-    assert_eq!(parse_bool_preference("reduce"), Ok(true));
-    assert_eq!(parse_bool_preference("no-preference"), Ok(false));
-    assert_eq!(parse_bool_preference("yes"), Ok(true));
-    assert_eq!(parse_bool_preference("off"), Ok(false));
-    assert!(parse_bool_preference("maybe").is_err());
   }
 
   #[test]
@@ -938,52 +870,6 @@ mod tests {
       combined
     );
   }
-
-  #[test]
-  fn parse_prefers_reduced_data_values() {
-    assert_eq!(parse_bool_preference("reduce"), Ok(true));
-    assert_eq!(parse_bool_preference("no-preference"), Ok(false));
-    assert_eq!(parse_bool_preference("yes"), Ok(true));
-    assert_eq!(parse_bool_preference("off"), Ok(false));
-    assert!(parse_bool_preference("maybe").is_err());
-  }
-
-  #[test]
-  fn parse_prefers_reduced_motion_values() {
-    assert_eq!(parse_bool_preference("reduce"), Ok(true));
-    assert_eq!(parse_bool_preference("no-preference"), Ok(false));
-    assert_eq!(parse_bool_preference("yes"), Ok(true));
-    assert_eq!(parse_bool_preference("off"), Ok(false));
-    assert!(parse_bool_preference("maybe").is_err());
-  }
-
-  #[test]
-  fn parse_prefers_contrast_values() {
-    assert_eq!(parse_contrast("more"), Ok("more".to_string()));
-    assert_eq!(parse_contrast("HIGH"), Ok("high".to_string()));
-    assert_eq!(parse_contrast("forced"), Ok("forced".to_string()));
-    assert!(parse_contrast("maybe").is_err());
-  }
-
-  #[test]
-  fn parse_prefers_color_scheme_values() {
-    assert_eq!(parse_color_scheme("dark"), Ok("dark".to_string()));
-    assert_eq!(parse_color_scheme("LIGHT"), Ok("light".to_string()));
-    assert_eq!(
-      parse_color_scheme("no-preference"),
-      Ok("no-preference".to_string())
-    );
-    assert!(parse_color_scheme("pink").is_err());
-  }
-
-  #[test]
-  fn parse_viewport_values() {
-    assert_eq!(parse_viewport("1200x800"), Ok((1200, 800)));
-    assert_eq!(parse_viewport("800x600"), Ok((800, 600)));
-    assert!(parse_viewport("0x600").is_err());
-    assert!(parse_viewport("800").is_err());
-    assert!(parse_viewport("800x").is_err());
-  }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1138,6 +1024,7 @@ fn render_once(
 
 fn main() -> Result<()> {
   let args = Args::parse();
+  let media_prefs = MediaPreferences::from(&args.media_prefs);
 
   // Resolve dimensions from viewport or deprecated positional args
   let (width, height) = args.viewport;
@@ -1163,35 +1050,7 @@ fn main() -> Result<()> {
     Some(args.timeout)
   };
 
-  // Set environment variables for media preferences
-  if let Some(reduce) = args.prefers_reduced_transparency {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_TRANSPARENCY",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(reduce) = args.prefers_reduced_motion {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_MOTION",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(reduce) = args.prefers_reduced_data {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_DATA",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(contrast) = args.prefers_contrast {
-    std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
-  }
-
-  if let Some(color_scheme) = args.prefers_color_scheme {
-    std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
-  }
+  media_prefs.apply_env();
 
   if args.full_page {
     std::env::set_var("FASTR_FULL_PAGE", "1");
