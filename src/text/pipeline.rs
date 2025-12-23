@@ -76,6 +76,7 @@ use rustybuzz::Feature;
 use rustybuzz::Language as HbLanguage;
 use rustybuzz::UnicodeBuffer;
 use rustybuzz::Variation;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -85,6 +86,7 @@ use ttf_parser::Face as ParserFace;
 use ttf_parser::Tag;
 use unicode_bidi::BidiInfo;
 use unicode_bidi::Level;
+use unicode_bidi_mirroring::get_mirrored;
 use unicode_vo::char_orientation;
 use unicode_vo::Orientation as VerticalOrientation;
 
@@ -2155,6 +2157,40 @@ impl ShapedRun {
   }
 }
 
+fn mirror_text_for_direction<'a>(
+  text: &'a str,
+  direction: Direction,
+) -> (Cow<'a, str>, Option<Vec<(usize, usize)>>) {
+  if !direction.is_rtl() {
+    return (Cow::Borrowed(text), None);
+  }
+
+  let mut mirrored = String::with_capacity(text.len());
+  let mut mapping: Vec<(usize, usize)> = Vec::new();
+  let mut changed = false;
+
+  for (orig_idx, ch) in text.char_indices() {
+    let mapped = get_mirrored(ch).unwrap_or(ch);
+    changed |= mapped != ch;
+    mapping.push((mirrored.len(), orig_idx));
+    mirrored.push(mapped);
+  }
+
+  if changed {
+    (Cow::Owned(mirrored), Some(mapping))
+  } else {
+    (Cow::Borrowed(text), None)
+  }
+}
+
+fn map_cluster_offset(cluster: usize, mapping: &[(usize, usize)]) -> usize {
+  match mapping.binary_search_by_key(&cluster, |(shaped, _)| *shaped) {
+    Ok(idx) => mapping.get(idx).map(|(_, orig)| *orig).unwrap_or(cluster),
+    Err(0) => mapping.first().map(|(_, orig)| *orig).unwrap_or(cluster),
+    Err(idx) => mapping.get(idx.saturating_sub(1)).map(|(_, orig)| *orig).unwrap_or(cluster),
+  }
+}
+
 /// Shapes a single font run into positioned glyphs.
 fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   // Create rustybuzz face from font data
@@ -2169,7 +2205,9 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 
   // Create Unicode buffer
   let mut buffer = UnicodeBuffer::new();
-  buffer.push_str(&run.text);
+
+  let (shape_text, cluster_map_override) = mirror_text_for_direction(&run.text, run.direction);
+  buffer.push_str(&shape_text);
 
   let mut language: Option<HbLanguage> = None;
 
@@ -2201,10 +2239,14 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
   let mut x_position = 0.0_f32;
 
   for (info, pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
-    let cluster = info.cluster as usize;
+    let cluster_in_shape = info.cluster as usize;
+    let logical_cluster = cluster_map_override
+      .as_ref()
+      .map(|map| map_cluster_offset(cluster_in_shape, map))
+      .unwrap_or(cluster_in_shape);
     let is_bidi_control = run
       .text
-      .get(cluster..)
+      .get(logical_cluster..)
       .and_then(|s| s.chars().next())
       .is_some_and(is_bidi_control_char);
 
@@ -2216,7 +2258,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 
       glyphs.push(GlyphPosition {
         glyph_id: info.glyph_id,
-        cluster: info.cluster,
+        cluster: logical_cluster as u32,
         x_offset,
         y_offset,
         x_advance,

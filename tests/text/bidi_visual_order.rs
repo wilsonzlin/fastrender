@@ -138,3 +138,112 @@ fn bidi_isolate_override_keeps_neutral_brackets_outside() {
     .collect();
   assert!(middle.contains('א') && middle.contains('ב'));
 }
+
+#[test]
+fn bidi_embed_allows_neutral_reordering() {
+  let mut rtl_embed = fastrender::ComputedStyle::default();
+  rtl_embed.direction = Direction::Rtl;
+  rtl_embed.unicode_bidi = UnicodeBidi::Embed;
+  let rtl_embed = Arc::new(rtl_embed);
+
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![
+      BoxNode::new_text(default_style(), "(".to_string()),
+      BoxNode::new_inline(
+        rtl_embed.clone(),
+        vec![BoxNode::new_text(rtl_embed.clone(), "אב".to_string())],
+      ),
+      BoxNode::new_text(default_style(), ")".to_string()),
+    ],
+  );
+
+  let ifc = InlineFormattingContext::new();
+  let constraints = LayoutConstraints::definite_width(400.0);
+  let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+  let mut texts = collect_text_with_x(&fragment);
+  texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+  let labels: String = texts.into_iter().map(|(t, _)| t).collect();
+  assert_eq!(labels, ")אב(");
+}
+
+#[test]
+fn bidi_override_reorders_inline_children() {
+  let mut rtl_override = fastrender::ComputedStyle::default();
+  rtl_override.direction = Direction::Rtl;
+  rtl_override.unicode_bidi = UnicodeBidi::BidiOverride;
+  let rtl_override = Arc::new(rtl_override);
+
+  let child_a = BoxNode::new_inline(
+    rtl_override.clone(),
+    vec![BoxNode::new_text(rtl_override.clone(), "A".to_string())],
+  );
+  let child_b = BoxNode::new_inline(
+    rtl_override.clone(),
+    vec![BoxNode::new_text(rtl_override.clone(), "B".to_string())],
+  );
+  let override_span = BoxNode::new_inline(rtl_override.clone(), vec![child_a, child_b]);
+
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![
+      BoxNode::new_text(default_style(), "1".to_string()),
+      override_span,
+      BoxNode::new_text(default_style(), "2".to_string()),
+    ],
+  );
+
+  let ifc = InlineFormattingContext::new();
+  let constraints = LayoutConstraints::definite_width(400.0);
+  let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+  let mut texts = collect_text_with_x(&fragment);
+  texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+  let labels: String = texts.into_iter().map(|(t, _)| t).collect();
+  assert_eq!(labels, "1BA2");
+}
+
+#[test]
+fn isolate_override_reverses_internal_children_only() {
+  let mut rtl_iso_override = fastrender::ComputedStyle::default();
+  rtl_iso_override.direction = Direction::Rtl;
+  rtl_iso_override.unicode_bidi = UnicodeBidi::IsolateOverride;
+  let rtl_iso_override = Arc::new(rtl_iso_override);
+
+  let child_a = BoxNode::new_inline(
+    rtl_iso_override.clone(),
+    vec![BoxNode::new_text(rtl_iso_override.clone(), "A".to_string())],
+  );
+  let child_b = BoxNode::new_inline(
+    rtl_iso_override.clone(),
+    vec![BoxNode::new_text(rtl_iso_override.clone(), "B".to_string())],
+  );
+  let iso_override = BoxNode::new_inline(rtl_iso_override.clone(), vec![child_a, child_b]);
+
+  let root = BoxNode::new_block(
+    default_style(),
+    FormattingContextType::Block,
+    vec![
+      BoxNode::new_text(default_style(), "(".to_string()),
+      iso_override,
+      BoxNode::new_text(default_style(), ")".to_string()),
+    ],
+  );
+
+  let ifc = InlineFormattingContext::new();
+  let constraints = LayoutConstraints::definite_width(400.0);
+  let fragment = ifc.layout(&root, &constraints).expect("layout");
+
+  let mut texts = collect_text_with_x(&fragment);
+  texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+  assert_eq!(texts.first().map(|t| t.0.as_str()), Some("("));
+  assert_eq!(texts.last().map(|t| t.0.as_str()), Some(")"));
+  let middle: String = texts[1..texts.len() - 1]
+    .iter()
+    .map(|(t, _)| t.as_str())
+    .collect();
+  assert_eq!(middle, "BA");
+}

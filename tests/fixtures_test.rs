@@ -337,6 +337,7 @@ fn test_all_fixture_files_exist() {
     // Text
     "text_complex_scripts",
     "text_bidi",
+    "text_bidi_mirror",
     "text_line_break",
     "text_overflow_vertical",
     "shadow_dom",
@@ -578,6 +579,11 @@ fn test_fixture_text_bidi() {
 }
 
 #[test]
+fn test_fixture_text_bidi_mirror() {
+  test_fixture("text_bidi_mirror").expect("text_bidi_mirror fixture should render");
+}
+
+#[test]
 fn test_fixture_text_line_break() {
   test_fixture("text_line_break").expect("text_line_break fixture should render");
 }
@@ -656,6 +662,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     // Text
     "text_complex_scripts",
     "text_bidi",
+    "text_bidi_mirror",
     "text_line_break",
     "text_overflow_vertical",
     // Shadow DOM
@@ -785,14 +792,14 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "Bidirectional text with mixed directions",
     ),
     (
+      "text_bidi_mirror",
+      "Text",
+      "Bidirectional text with mirrored punctuation",
+    ),
+    (
       "text_line_break",
       "Text",
       "Line breaking and white-space handling",
-    ),
-    (
-      "text_overflow_vertical",
-      "Text",
-      "Vertical text overflow handling",
     ),
     (
       "shadow_dom",
@@ -800,9 +807,9 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "Declarative shadow DOM slotting",
     ),
     (
-      "svg_foreign_object",
-      "SVG",
-      "Inline SVG with foreignObject HTML content",
+      "mask_composite",
+      "Masks",
+      "Compositing multiple CSS mask layers",
     ),
   ]
 }

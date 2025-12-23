@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Text - Bidi Mirroring</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: "Noto Sans", "Arial Unicode MS", sans-serif;
+            font-size: 16px;
+            line-height: 1.8;
+        }
+        .container {
+            width: 500px;
+            background-color: #f8f9fa;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            direction: rtl;
+        }
+        .label {
+            margin: 15px 0 5px 0;
+            font-weight: bold;
+            color: #495057;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">RTL text with paired punctuation should mirror</div>
+    <div class="container">
+        <p>שלום (abc) [123] {test} מופיע עם סוגריים ממורכבים.</p>
+    </div>
+
+    <div class="label">Isolate override keeps punctuation outside</div>
+    <div class="container">
+        <p dir="rtl" style="unicode-bidi: isolate-override;">(A) [B] {C} אבג</p>
+    </div>
+
+    <div class="label">Nested brackets with Arabic text</div>
+    <div class="container">
+        <p>مثال (النص) [مع] {أقواس} متداخلة.</p>
+    </div>
+</body>
+</html>
