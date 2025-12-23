@@ -18,4 +18,5 @@ pixmap.save_png("out.png")?;
 
 - `FastRender::render_to_png(html, width, height)` returns encoded PNG bytes
 - `FastRender::render_to_jpeg(html, width, height, quality)`
-- `FastRender::render_to_webp(html, width, height, quality)`
+- `FastRender::render_to_webp(html, width, height, quality)` (quality is clamped to
+  0–100; a value of 100 produces lossless WebP output)

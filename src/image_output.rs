@@ -102,7 +102,7 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
         })
       })?;
     }
-    OutputFormat::WebP(_quality) => {
+    OutputFormat::WebP(quality) => {
       let img = RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
         Error::Render(RenderError::EncodeFailed {
           format: "WebP".to_string(),
@@ -112,13 +112,31 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
 
       // WebP encoding
       let mut cursor = Cursor::new(&mut buffer);
-      let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut cursor);
-      img.write_with_encoder(encoder).map_err(|e| {
-        Error::Render(RenderError::EncodeFailed {
-          format: "WebP".to_string(),
-          reason: e.to_string(),
-        })
-      })?;
+      // Clamp to the supported range and interpret 100 as a request for lossless
+      // encoding to preserve alpha without further loss. Values above 100 are
+      // normalized to 100, matching the documented quality contract.
+      let normalized_quality = quality.clamp(0, 100);
+
+      if normalized_quality == 100 {
+        let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut cursor);
+        img.write_with_encoder(encoder).map_err(|e| {
+          Error::Render(RenderError::EncodeFailed {
+            format: "WebP".to_string(),
+            reason: e.to_string(),
+          })
+        })?;
+      } else {
+        let encoder = image::codecs::webp::WebPEncoder::new_with_quality(
+          &mut cursor,
+          f32::from(normalized_quality),
+        );
+        img.write_with_encoder(encoder).map_err(|e| {
+          Error::Render(RenderError::EncodeFailed {
+            format: "WebP".to_string(),
+            reason: e.to_string(),
+          })
+        })?;
+      }
     }
   }
 

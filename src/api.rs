@@ -637,6 +637,12 @@ impl FastRenderConfig {
     self.compat_profile = profile;
     self
   }
+
+  /// Enables the internal site-compatibility profile used for corpus captures.
+  pub fn with_site_compat_hacks(mut self) -> Self {
+    self.compat_profile = CompatProfile::SiteCompatibility;
+    self
+  }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2814,7 +2820,8 @@ impl FastRender {
   /// * `html` - HTML source code
   /// * `width` - Viewport width in pixels
   /// * `height` - Viewport height in pixels
-  /// * `quality` - WebP quality (0-100, where 100 is highest quality)
+  /// * `quality` - WebP quality (0-100, clamped to this range; 100 requests
+  ///   lossless encoding)
   pub fn render_to_webp(
     &mut self,
     html: &str,
