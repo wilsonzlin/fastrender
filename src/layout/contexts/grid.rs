@@ -1149,7 +1149,10 @@ impl GridFormattingContext {
     mode: IntrinsicSizingMode,
   ) -> Result<f32, LayoutError> {
     debug_assert!(
-      matches!(box_node.formatting_context(), Some(FormattingContextType::Grid)),
+      matches!(
+        box_node.formatting_context(),
+        Some(FormattingContextType::Grid)
+      ),
       "GridFormattingContext must only query grid containers",
     );
     let style = &box_node.style;
@@ -1282,7 +1285,10 @@ impl FormattingContext for GridFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     debug_assert!(
-      matches!(box_node.formatting_context(), Some(FormattingContextType::Grid)),
+      matches!(
+        box_node.formatting_context(),
+        Some(FormattingContextType::Grid)
+      ),
       "GridFormattingContext must only layout grid containers",
     );
     let _profile = layout_timer(LayoutKind::Grid);

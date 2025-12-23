@@ -259,7 +259,10 @@ impl FormattingContext for FlexFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     debug_assert!(
-      matches!(box_node.formatting_context(), Some(FormattingContextType::Flex)),
+      matches!(
+        box_node.formatting_context(),
+        Some(FormattingContextType::Flex)
+      ),
       "FlexFormattingContext must only layout flex containers",
     );
     let _profile = layout_timer(LayoutKind::Flex);
