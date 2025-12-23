@@ -440,6 +440,7 @@ fn collect_rules_recursive<'a>(
             registry,
             current_layer,
             container_conditions,
+            current_scopes,
             out,
           );
         }
