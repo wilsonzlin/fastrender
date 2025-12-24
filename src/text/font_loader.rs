@@ -592,6 +592,8 @@ impl FontContext {
     let filter_by_codepoints = used_codepoints.is_some();
     let used_codepoints = used_codepoints.unwrap_or(&[]);
     let mut started_count = 0usize;
+    let (block_tx, block_rx) = mpsc::channel::<()>();
+    let mut block_expected = 0usize;
     for (order, face) in faces.iter().enumerate() {
       if started_count >= max_fonts {
         break;
@@ -619,19 +621,38 @@ impl FontContext {
       let family_clone = family.clone();
       let base = base_url.map(|b| b.to_string());
       let guard = PendingTask::new(self.pending_async.clone());
-      let (tx, rx) = mpsc::channel();
+      let should_block = matches!(display, FontDisplay::Block | FontDisplay::Auto);
+      if should_block {
+        block_expected += 1;
+      }
+      let done_tx = should_block.then(|| block_tx.clone());
       started_count += 1;
       let ctx = self.clone();
       std::thread::spawn(move || {
         let _pending = guard;
         let start = Instant::now();
-        let loaded =
+        let _ =
           ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
-        let _ = tx.send(loaded);
+        if let Some(tx) = done_tx {
+          let _ = tx.send(());
+        }
       });
-
-      if matches!(display, FontDisplay::Block | FontDisplay::Auto) {
-        let _ = rx.recv_timeout(BLOCK_PERIOD);
+    }
+    drop(block_tx);
+    if block_expected > 0 {
+      let deadline = Instant::now() + BLOCK_PERIOD;
+      let mut completed = 0usize;
+      while completed < block_expected {
+        let now = Instant::now();
+        if now >= deadline {
+          break;
+        }
+        let remaining = deadline - now;
+        match block_rx.recv_timeout(remaining) {
+          Ok(()) => completed += 1,
+          Err(mpsc::RecvTimeoutError::Timeout) => break,
+          Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
       }
     }
     Ok(())

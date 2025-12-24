@@ -5,6 +5,7 @@
 //! builds to avoid any release overhead. They backstop the invariant that
 //! Taffy must only be used for flex/grid layout, never for tables.
 
+#[cfg(any(test, debug_assertions))]
 use std::cell::RefCell;
 
 /// Count of Taffy layout invocations per adapter.
@@ -30,11 +31,11 @@ thread_local! {
 
 /// Records that a Taffy layout was executed. No-ops in release builds.
 #[inline]
-pub(crate) fn record_taffy_invocation(kind: TaffyAdapterKind) {
+pub(crate) fn record_taffy_invocation(_kind: TaffyAdapterKind) {
   #[cfg(any(test, debug_assertions))]
   COUNTERS.with(|counts| {
     let mut counts = counts.borrow_mut();
-    match kind {
+    match _kind {
       TaffyAdapterKind::Flex => counts.flex += 1,
       TaffyAdapterKind::Grid => counts.grid += 1,
     }

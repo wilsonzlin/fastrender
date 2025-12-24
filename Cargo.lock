@@ -736,6 +736,7 @@ name = "fastrender"
 version = "0.1.0"
 dependencies = [
  "avif-decode",
+ "avif-parse",
  "base64",
  "chrono",
  "clap",

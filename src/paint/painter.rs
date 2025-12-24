@@ -121,6 +121,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Read;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -261,6 +263,23 @@ fn dump_fragments_enabled() -> bool {
   })
 }
 
+fn trace_image_paint_limit() -> Option<usize> {
+  static LIMIT: OnceLock<Option<usize>> = OnceLock::new();
+  *LIMIT.get_or_init(|| {
+    let raw = std::env::var("FASTR_TRACE_IMAGE_PAINT").ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+      return Some(50);
+    }
+    if matches!(trimmed, "0" | "false" | "off") {
+      return None;
+    }
+    trimmed.parse::<usize>().ok().or(Some(50))
+  })
+}
+
+static TRACE_IMAGE_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 fn dump_counts_enabled() -> bool {
   static FLAG: OnceLock<bool> = OnceLock::new();
   *FLAG.get_or_init(|| {
@@ -268,6 +287,61 @@ fn dump_counts_enabled() -> bool {
       .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
       .unwrap_or(false)
   })
+}
+
+fn stack_profile_threshold_ms() -> Option<f64> {
+  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
+  THRESHOLD
+    .get_or_init(|| {
+      let raw = std::env::var("FASTR_STACK_PROFILE_MS").ok()?;
+      let trimmed = raw.trim();
+      if trimmed.is_empty() {
+        return None;
+      }
+      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
+    })
+    .as_ref()
+    .copied()
+}
+
+fn text_profile_threshold_ms() -> Option<f64> {
+  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
+  THRESHOLD
+    .get_or_init(|| {
+      let raw = std::env::var("FASTR_TEXT_PROFILE_MS").ok()?;
+      let trimmed = raw.trim();
+      if trimmed.is_empty() || matches!(trimmed, "0" | "false" | "off") {
+        return None;
+      }
+      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
+    })
+    .as_ref()
+    .copied()
+}
+
+fn cmd_profile_threshold_ms() -> Option<f64> {
+  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
+  THRESHOLD
+    .get_or_init(|| {
+      let raw = std::env::var("FASTR_CMD_PROFILE_MS").ok()?;
+      let trimmed = raw.trim();
+      if trimmed.is_empty() || matches!(trimmed, "0" | "false" | "off") {
+        return None;
+      }
+      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
+    })
+    .as_ref()
+    .copied()
+}
+
+fn is_identity_transform(transform: &Transform) -> bool {
+  const EPS: f32 = 1e-6;
+  (transform.sx - 1.0).abs() < EPS
+    && transform.ky.abs() < EPS
+    && transform.kx.abs() < EPS
+    && (transform.sy - 1.0).abs() < EPS
+    && transform.tx.abs() < EPS
+    && transform.ty.abs() < EPS
 }
 
 fn nested_counts(cmds: &[DisplayCommand]) -> (usize, usize) {
@@ -393,10 +467,21 @@ enum DisplayCommand {
     filters: Vec<ResolvedFilter>,
     backdrop_filters: Vec<ResolvedFilter>,
     radii: BorderRadii,
-    clip: Option<(Rect, BorderRadii, bool, bool)>,
+    clip: Option<StackingClip>,
     clip_path: Option<ResolvedClipPath>,
     commands: Vec<DisplayCommand>,
   },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StackingClip {
+  rect: Rect,
+  radii: BorderRadii,
+  clip_x: bool,
+  clip_y: bool,
+  /// Whether this clip should apply to the stacking-context root itself (e.g. CSS `clip`).
+  /// Overflow clipping applies only to descendants.
+  clip_root: bool,
 }
 
 fn is_positioned(style: &ComputedStyle) -> bool {
@@ -1529,7 +1614,7 @@ impl Painter {
       .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx))
       .unwrap_or_default();
     let has_backdrop = !backdrop_filters.is_empty();
-    let clip = style_ref.and_then(|style| {
+    let clip: Option<StackingClip> = style_ref.and_then(|style| {
       // Honor overflow clipping: when overflow is hidden/scroll/clip, restrict painting to the
       // padding box. This prevents offscreen children from flooding the viewport when their
       // layout positions explode.
@@ -1560,7 +1645,13 @@ impl Painter {
             crate::style::types::BackgroundBox::PaddingBox,
             Some((self.css_width, self.css_height)),
           );
-          Some((clip_rect, clip_radii, clip_x, clip_y))
+          Some(StackingClip {
+            rect: clip_rect,
+            radii: clip_radii,
+            clip_x,
+            clip_y,
+            clip_root: false,
+          })
         }
       } else {
         None
@@ -1607,11 +1698,24 @@ impl Painter {
       });
 
       match (overflow_clip, clip_property) {
-        (Some((rect, _radii, _cx, _cy)), Some(prop_rect)) => rect
+        (Some(overflow), Some(prop_rect)) => overflow
+          .rect
           .intersection(prop_rect)
-          .map(|r| (r, BorderRadii::ZERO, true, true)),
-        (Some((rect, radii, cx, cy)), None) => Some((rect, radii, cx, cy)),
-        (None, Some(prop_rect)) => Some((prop_rect, BorderRadii::ZERO, true, true)),
+          .map(|rect| StackingClip {
+            rect,
+            radii: BorderRadii::ZERO,
+            clip_x: true,
+            clip_y: true,
+            clip_root: true,
+          }),
+        (Some(overflow), None) => Some(overflow),
+        (None, Some(prop_rect)) => Some(StackingClip {
+          rect: prop_rect,
+          radii: BorderRadii::ZERO,
+          clip_x: true,
+          clip_y: true,
+          clip_root: true,
+        }),
         (None, None) => None,
       }
     });
@@ -1788,6 +1892,63 @@ impl Painter {
   }
 
   fn execute_command(&mut self, command: DisplayCommand) -> Result<()> {
+    let cmd_profile_threshold_ms = cmd_profile_threshold_ms();
+    let cmd_profile_enabled = cmd_profile_threshold_ms.is_some();
+    let cmd_profile_start = cmd_profile_enabled.then(Instant::now);
+    let cmd_profile_summary = cmd_profile_enabled.then(|| match &command {
+      DisplayCommand::Background { rect, .. } => format!(
+        "background rect=({:.1},{:.1},{:.1},{:.1})",
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height()
+      ),
+      DisplayCommand::Border { rect, .. } => format!(
+        "border rect=({:.1},{:.1},{:.1},{:.1})",
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height()
+      ),
+      DisplayCommand::Outline { rect, .. } => format!(
+        "outline rect=({:.1},{:.1},{:.1},{:.1})",
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height()
+      ),
+      DisplayCommand::Text { rect, text, style, .. } => {
+        let preview: String = text.chars().take(60).collect();
+        format!(
+          "text font_size={:.2} rect=({:.1},{:.1},{:.1},{:.1}) writing_mode={:?} text=\"{}\"",
+          style.font_size,
+          rect.x(),
+          rect.y(),
+          rect.width(),
+          rect.height(),
+          style.writing_mode,
+          preview
+        )
+      }
+      DisplayCommand::Replaced { rect, replaced_type, .. } => format!(
+        "replaced {:?} rect=({:.1},{:.1},{:.1},{:.1})",
+        replaced_type,
+        rect.x(),
+        rect.y(),
+        rect.width(),
+        rect.height()
+      ),
+      DisplayCommand::StackingContext { rect, commands, .. } => {
+        let (nested_cmds, nested_text) = nested_counts(commands);
+        format!(
+          "stack rect=({:.1},{:.1},{:.1},{:.1}) nested_cmds={nested_cmds} nested_text={nested_text}",
+          rect.x(),
+          rect.y(),
+          rect.width(),
+          rect.height()
+        )
+      }
+    });
     match command {
       DisplayCommand::Background { rect, style } => {
         self.paint_background(rect.x(), rect.y(), rect.width(), rect.height(), &style);
@@ -1805,10 +1966,18 @@ impl Painter {
         runs,
         style,
       } => {
+        let text_profile_threshold_ms = text_profile_threshold_ms();
+        let text_profile_enabled = text_profile_threshold_ms.is_some();
+        let text_total_start = text_profile_enabled.then(Instant::now);
+        let shape_start = text_profile_enabled.then(Instant::now);
         let color = style.color;
         let shaped_runs = runs
           .clone()
           .or_else(|| self.shaper.shape(&text, &style, &self.font_ctx).ok());
+        let shape_ms = shape_start
+          .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+          .unwrap_or(0.0);
+        let paint_start = text_profile_enabled.then(Instant::now);
         let inline_vertical = matches!(
           style.writing_mode,
           crate::style::types::WritingMode::VerticalRl
@@ -1870,6 +2039,32 @@ impl Painter {
           block_baseline,
           inline_vertical,
         );
+        let paint_ms = paint_start
+          .map(|start| start.elapsed().as_secs_f64() * 1000.0)
+          .unwrap_or(0.0);
+        if let (Some(threshold_ms), Some(total_start)) =
+          (text_profile_threshold_ms, text_total_start)
+        {
+          let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+          if total_ms >= threshold_ms {
+            let (run_count, glyph_count) = shaped_runs
+              .as_deref()
+              .map(|runs| (runs.len(), runs.iter().map(|r| r.glyphs.len()).sum::<usize>()))
+              .unwrap_or((0, 0));
+            let preview: String = text.chars().take(80).collect();
+            eprintln!(
+              "text_profile total_ms={total_ms:.2} shape_ms={shape_ms:.2} paint_ms={paint_ms:.2} runs={run_count} glyphs={glyph_count} font_size={:.2} rect=({:.1},{:.1},{:.1},{:.1}) baseline_off={:.2} writing_mode={:?} text=\"{}\"",
+              style.font_size,
+              rect.x(),
+              rect.y(),
+              rect.width(),
+              rect.height(),
+              baseline_offset,
+              style.writing_mode,
+              preview
+            );
+          }
+        }
       }
       DisplayCommand::Replaced {
         rect,
@@ -1897,9 +2092,27 @@ impl Painter {
         clip_path,
         commands,
       } => {
+        let profile_threshold_ms = stack_profile_threshold_ms();
+        let profile_enabled = profile_threshold_ms.is_some();
+        let total_start = profile_enabled.then(Instant::now);
+        let transform_identity = transform.as_ref().map_or(false, is_identity_transform);
+        let mut bounds_ms = 0.0;
+        let mut translate_ms = 0.0;
+        let mut base_paint_ms = 0.0;
+        let mut clip_paint_ms = 0.0;
+        let mut overflow_clip_ms = 0.0;
+        let mut clip_path_ms = 0.0;
+        let mut mask_ms = 0.0;
+        let mut outline_ms = 0.0;
+        let mut filter_ms = 0.0;
+        let mut radii_clip_ms = 0.0;
+        let mut backdrop_ms = 0.0;
+        let mut composite_ms = 0.0;
+
         let debug_stack = dump_stack_enabled();
+        let nested_info = (debug_stack || profile_enabled).then(|| nested_counts(&commands));
         if debug_stack {
-          let (nested_cmds, nested_text) = nested_counts(&commands);
+          let (nested_cmds, nested_text) = nested_info.unwrap_or((0, 0));
           eprintln!(
             "stack exec: preclip_bounds=({}, {}, {}, {}) nested_cmds={} nested_text={}",
             context_rect.x(),
@@ -1914,6 +2127,34 @@ impl Painter {
           return Ok(());
         }
 
+        // Fast path: a "transform: (identity)" stacking context with no other effects can be
+        // flattened without affecting pixels. This avoids allocating intermediate layers for
+        // common patterns like `translate3d(0, 0, 0)`.
+        if opacity >= 1.0 - 1e-6
+          && transform_identity
+          && matches!(blend_mode, MixBlendMode::Normal)
+          && !isolated
+          && mask.is_none()
+          && filters.is_empty()
+          && backdrop_filters.is_empty()
+          && clip.is_none()
+          && clip_path.is_none()
+        {
+          let mut outlines = Vec::new();
+          for cmd in commands {
+            if matches!(cmd, DisplayCommand::Outline { .. }) {
+              outlines.push(cmd);
+            } else {
+              self.execute_command(cmd)?;
+            }
+          }
+          for cmd in outlines {
+            self.execute_command(cmd)?;
+          }
+          return Ok(());
+        }
+
+        let bounds_start = profile_enabled.then(Instant::now);
         let Some(mut bounds) = stacking_context_bounds(
           &commands,
           &filters,
@@ -1925,6 +2166,9 @@ impl Painter {
         ) else {
           return Ok(());
         };
+        if let Some(start) = bounds_start {
+          bounds_ms = start.elapsed().as_secs_f64() * 1000.0;
+        }
 
         // Constrain the stacking layer to the visible viewport (expanded by filter outsets).
         // If a context is entirely outside the viewport, skip it.
@@ -1987,7 +2231,11 @@ impl Painter {
 
         // Reduce layer size by translating to the top-left of the local bounds.
         let offset = Point::new(bounds.min_x(), bounds.min_y());
+        let translate_start = profile_enabled.then(Instant::now);
         let translated = translate_commands(commands, -offset.x, -offset.y);
+        if let Some(start) = translate_start {
+          translate_ms = start.elapsed().as_secs_f64() * 1000.0;
+        }
 
         let device_bounds = self.device_rect(bounds);
         let width = device_bounds.width().ceil().max(0.0);
@@ -2010,22 +2258,35 @@ impl Painter {
         };
         let device_root_rect = self.device_rect(root_rect);
         let has_clip = clip.is_some();
+        let clip_root = clip.map(|clip| clip.clip_root).unwrap_or(false);
         let mut outline_commands = Vec::new();
         let mut unclipped = Vec::new();
         let mut clipped = Vec::new();
-        for cmd in translated {
-          match cmd {
-            DisplayCommand::Outline { .. } => outline_commands.push(cmd),
-            DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. }
-              if !has_clip
-                && (rect.x() - root_rect.x()).abs() < f32::EPSILON
-                && (rect.y() - root_rect.y()).abs() < f32::EPSILON
-                && (rect.width() - root_rect.width()).abs() < f32::EPSILON
-                && (rect.height() - root_rect.height()).abs() < f32::EPSILON =>
-            {
+        if has_clip {
+          for cmd in translated {
+            match cmd {
+              DisplayCommand::Outline { .. } => outline_commands.push(cmd),
+              DisplayCommand::Background { rect, .. } | DisplayCommand::Border { rect, .. }
+                if !clip_root
+                  && (rect.x() - root_rect.x()).abs() < f32::EPSILON
+                  && (rect.y() - root_rect.y()).abs() < f32::EPSILON
+                  && (rect.width() - root_rect.width()).abs() < f32::EPSILON
+                  && (rect.height() - root_rect.height()).abs() < f32::EPSILON =>
+              {
+                unclipped.push(cmd);
+              }
+              _ => clipped.push(cmd),
+            }
+          }
+        } else {
+          // Without overflow clipping there's no need for a secondary clip layer; execute
+          // commands directly into the base layer while keeping outlines separate.
+          for cmd in translated {
+            if matches!(cmd, DisplayCommand::Outline { .. }) {
+              outline_commands.push(cmd);
+            } else {
               unclipped.push(cmd);
             }
-            _ => clipped.push(cmd),
           }
         }
 
@@ -2045,8 +2306,12 @@ impl Painter {
           image_cache: self.image_cache.clone(),
           text_shape_cache: Arc::clone(&self.text_shape_cache),
         };
+        let paint_unclipped_start = profile_enabled.then(Instant::now);
         for cmd in unclipped {
           base_painter.execute_command(cmd)?;
+        }
+        if let Some(start) = paint_unclipped_start {
+          base_paint_ms = start.elapsed().as_secs_f64() * 1000.0;
         }
 
         if !clipped.is_empty() {
@@ -2065,11 +2330,19 @@ impl Painter {
             image_cache: self.image_cache.clone(),
             text_shape_cache: Arc::clone(&self.text_shape_cache),
           };
+          let paint_clipped_start = profile_enabled.then(Instant::now);
           for cmd in clipped {
             clip_painter.execute_command(cmd)?;
           }
+          if let Some(start) = paint_clipped_start {
+            clip_paint_ms = start.elapsed().as_secs_f64() * 1000.0;
+          }
           let mut clip_pixmap = clip_painter.pixmap;
-          if let Some((mut clip_rect, mut clip_radii, clip_x, clip_y)) = clip {
+          if let Some(clip) = clip {
+            let mut clip_rect = clip.rect;
+            let mut clip_radii = clip.radii;
+            let clip_x = clip.clip_x;
+            let clip_y = clip.clip_y;
             if !clip_x {
               clip_rect =
                 Rect::from_xywh(offset.x, clip_rect.y(), bounds.width(), clip_rect.height());
@@ -2089,11 +2362,15 @@ impl Painter {
             let layer_bounds = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
             local_clip = clip_rect_axes(local_clip, layer_bounds, true, true);
             if local_clip.width() > 0.0 && local_clip.height() > 0.0 {
+              let clip_apply_start = profile_enabled.then(Instant::now);
               apply_clip_mask_rect(
                 &mut clip_pixmap,
                 self.device_rect(local_clip),
                 self.device_radii(clip_radii),
               );
+              if let Some(start) = clip_apply_start {
+                overflow_clip_ms = start.elapsed().as_secs_f64() * 1000.0;
+              }
               base_painter.pixmap.draw_pixmap(
                 0,
                 0,
@@ -2117,13 +2394,18 @@ impl Painter {
 
         let mut layer_pixmap = base_painter.pixmap;
         if let Some(ref clip_path) = clip_path {
+          let clip_path_start = profile_enabled.then(Instant::now);
           if let Some(size) = IntSize::from_wh(layer_pixmap.width(), layer_pixmap.height()) {
             if let Some(mask) = clip_path.mask(self.scale, size, Transform::identity()) {
               layer_pixmap.apply_mask(&mask);
             }
           }
+          if let Some(start) = clip_path_start {
+            clip_path_ms = start.elapsed().as_secs_f64() * 1000.0;
+          }
         }
         if let Some(ref mask_style) = mask {
+          let mask_start = profile_enabled.then(Instant::now);
           let local_bounds = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
           let local_context_rect = Rect::from_xywh(
             context_rect.x() - offset.x,
@@ -2139,6 +2421,9 @@ impl Painter {
           ) {
             layer_pixmap.apply_mask(&mask);
           }
+          if let Some(start) = mask_start {
+            mask_ms = start.elapsed().as_secs_f64() * 1000.0;
+          }
         }
         if !outline_commands.is_empty() {
           let mut outline_painter = Painter {
@@ -2152,13 +2437,21 @@ impl Painter {
             image_cache: self.image_cache.clone(),
             text_shape_cache: Arc::clone(&self.text_shape_cache),
           };
+          let outline_start = profile_enabled.then(Instant::now);
           for cmd in outline_commands {
             outline_painter.execute_command(cmd)?;
+          }
+          if let Some(start) = outline_start {
+            outline_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
           layer_pixmap = outline_painter.pixmap;
         }
         if !filters.is_empty() {
+          let filter_start = profile_enabled.then(Instant::now);
           apply_filters(&mut layer_pixmap, &filters, self.scale);
+          if let Some(start) = filter_start {
+            filter_ms = start.elapsed().as_secs_f64() * 1000.0;
+          }
         }
 
         let device_radii = self.device_radii(radii);
@@ -2174,7 +2467,11 @@ impl Painter {
             device_root_rect.width() + device_out_l + device_out_r,
             device_root_rect.height() + device_out_t + device_out_b,
           );
+          let radii_clip_start = profile_enabled.then(Instant::now);
           apply_clip_mask_rect(&mut layer_pixmap, clip_rect, device_radii);
+          if let Some(start) = radii_clip_start {
+            radii_clip_ms = start.elapsed().as_secs_f64() * 1000.0;
+          }
         }
 
         let device_offset_x = self.device_length(offset.x);
@@ -2187,6 +2484,7 @@ impl Painter {
 
         if !backdrop_filters.is_empty() {
           let backdrop_bounds = transform_rect(device_root_rect, &final_transform);
+          let backdrop_start = profile_enabled.then(Instant::now);
           apply_backdrop_filters(
             &mut self.pixmap,
             &backdrop_bounds,
@@ -2194,7 +2492,11 @@ impl Painter {
             device_radii,
             self.scale,
           );
+          if let Some(start) = backdrop_start {
+            backdrop_ms = start.elapsed().as_secs_f64() * 1000.0;
+          }
         }
+        let composite_start = profile_enabled.then(Instant::now);
         let fallback_blend = if isolated {
           SkiaBlendMode::SourceOver
         } else {
@@ -2229,6 +2531,40 @@ impl Painter {
             .pixmap
             .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
         }
+        if let Some(start) = composite_start {
+          composite_ms = start.elapsed().as_secs_f64() * 1000.0;
+        }
+
+        if let (Some(threshold_ms), Some(total_start)) = (profile_threshold_ms, total_start) {
+          let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+          if total_ms >= threshold_ms {
+            let (nested_cmds, nested_text) = nested_info.unwrap_or((0, 0));
+            eprintln!(
+              "stack_profile total_ms={total_ms:.2} bounds_ms={bounds_ms:.2} translate_ms={translate_ms:.2} base_paint_ms={base_paint_ms:.2} clip_paint_ms={clip_paint_ms:.2} overflow_clip_ms={overflow_clip_ms:.2} clip_path_ms={clip_path_ms:.2} mask_ms={mask_ms:.2} outline_ms={outline_ms:.2} filter_ms={filter_ms:.2} radii_clip_ms={radii_clip_ms:.2} backdrop_ms={backdrop_ms:.2} composite_ms={composite_ms:.2} layer_px={}x{} nested_cmds={nested_cmds} nested_text={nested_text} filters={} backdrop_filters={} clip={} clip_path={} mask={} opacity={:.2} transform_identity={} blend_mode={:?} isolated={}",
+              layer_pixmap.width(),
+              layer_pixmap.height(),
+              filters.len(),
+              backdrop_filters.len(),
+              clip.is_some(),
+              clip_path.is_some(),
+              mask.is_some(),
+              opacity,
+              transform_identity,
+              blend_mode,
+              isolated
+            );
+          }
+        }
+      }
+    }
+    if let (Some(threshold_ms), Some(start), Some(summary)) = (
+      cmd_profile_threshold_ms,
+      cmd_profile_start,
+      cmd_profile_summary,
+    ) {
+      let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+      if elapsed_ms >= threshold_ms {
+        eprintln!("cmd_profile ms={elapsed_ms:.2} {summary}");
       }
     }
     Ok(())
@@ -4931,6 +5267,22 @@ impl Painter {
       return false;
     }
 
+    if let Some(limit) = trace_image_paint_limit() {
+      let idx = TRACE_IMAGE_PAINT_COUNT.fetch_add(1, Ordering::Relaxed);
+      if idx < limit {
+        let resolved = self.image_cache.resolve_url(src);
+        eprintln!(
+          "[image-paint] #{idx} src={} resolved={} rect=({:.1},{:.1},{:.1},{:.1})",
+          src,
+          resolved,
+          x,
+          y,
+          width,
+          height
+        );
+      }
+    }
+
     static LOG_IMAGE_FAIL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     let log_image_fail = *LOG_IMAGE_FAIL.get_or_init(|| {
       std::env::var("FASTR_LOG_IMAGE_FAIL")
@@ -4954,6 +5306,20 @@ impl Painter {
         }
       }
     };
+
+    if let Some(limit) = trace_image_paint_limit() {
+      let seen = TRACE_IMAGE_PAINT_COUNT.load(Ordering::Relaxed);
+      if seen <= limit {
+        eprintln!(
+          " [image-paint-loaded] src={} cached_image_ptr={:p} dyn_ptr={:p} dims={}x{}",
+          src,
+          Arc::as_ptr(&image),
+          Arc::as_ptr(&image.image),
+          image.width(),
+          image.height()
+        );
+      }
+    }
 
     let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
     let orientation = style
@@ -5089,16 +5455,92 @@ impl Painter {
       return false;
     }
 
-    let image = if content.trim_start().starts_with('<') {
-      match self.image_cache.render_svg(content) {
-        Ok(img) => img,
+    let trimmed = content.trim_start();
+    let inline_svg = trimmed.starts_with("<svg") || trimmed.starts_with("<?xml");
+
+    if inline_svg {
+      let meta = match self.image_cache.probe_svg_content(content, "inline-svg") {
+        Ok(meta) => meta,
         Err(_) => return false,
+      };
+
+      let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
+      let orientation = style
+        .map(|s| s.image_orientation.resolve(meta.orientation, false))
+        .unwrap_or_else(|| ImageOrientation::default().resolve(meta.orientation, false));
+      let (img_w_raw, img_h_raw) = meta.oriented_dimensions(orientation);
+      if img_w_raw == 0 || img_h_raw == 0 {
+        return false;
       }
-    } else {
-      match self.image_cache.load(content) {
-        Ok(img) => img,
+      let Some((img_w_css, img_h_css)) =
+        meta.css_dimensions(orientation, &image_resolution, self.scale, None)
+      else {
+        return false;
+      };
+
+      let fit = style.map(|s| s.object_fit).unwrap_or(ObjectFit::Fill);
+      let pos = style
+        .map(|s| s.object_position)
+        .unwrap_or_else(default_object_position);
+
+      let (dest_x, dest_y, dest_w, dest_h) = match compute_object_fit(
+        fit,
+        pos,
+        width,
+        height,
+        img_w_css,
+        img_h_css,
+        style.map(|s| s.font_size).unwrap_or(16.0),
+        Some((self.css_width, self.css_height)),
+      ) {
+        Some(v) => v,
+        None => return false,
+      };
+
+      let dest_x_device = self.device_length(dest_x);
+      let dest_y_device = self.device_length(dest_y);
+      let dest_w_device = self.device_length(dest_w);
+      let dest_h_device = self.device_length(dest_h);
+      if dest_w_device <= 0.0 || dest_h_device <= 0.0 {
+        return false;
+      }
+
+      let render_w = dest_w_device.ceil().max(1.0) as u32;
+      let render_h = dest_h_device.ceil().max(1.0) as u32;
+      let pixmap = match self
+        .image_cache
+        .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
+      {
+        Ok(pixmap) => pixmap,
         Err(_) => return false,
+      };
+
+      let scale_x = dest_w_device / render_w as f32;
+      let scale_y = dest_h_device / render_h as f32;
+      if !scale_x.is_finite() || !scale_y.is_finite() {
+        return false;
       }
+
+      let mut paint = PixmapPaint::default();
+      paint.quality = Self::filter_quality_for_image(style);
+
+      let transform = Transform::from_row(
+        scale_x,
+        0.0,
+        0.0,
+        scale_y,
+        self.device_length(x) + dest_x_device,
+        self.device_length(y) + dest_y_device,
+      );
+      self
+        .pixmap
+        .draw_pixmap(0, 0, pixmap.as_ref().as_ref(), &paint, transform, None);
+      return true;
+    }
+
+    let image = match self.image_cache.load(content) {
+      Ok(img) => img,
+      Err(_) => return false,
     };
 
     let image_resolution = style.map(|s| s.image_resolution).unwrap_or_default();
@@ -7076,14 +7518,14 @@ fn stacking_context_bounds(
   backdrop_filters: &[ResolvedFilter],
   rect: Rect,
   transform: Option<&Transform>,
-  clip: Option<&(Rect, BorderRadii, bool, bool)>,
+  clip: Option<&StackingClip>,
   clip_path: Option<&ResolvedClipPath>,
 ) -> Option<Rect> {
   let mut base = rect;
   let outline_bounds = compute_outline_bounds(commands);
   if let Some(desc) = compute_descendant_bounds(commands, rect) {
-    let clipped = if let Some((clip_rect, _, clip_x, clip_y)) = clip {
-      clip_non_outline(commands, desc, *clip_rect, *clip_x, *clip_y)
+    let clipped = if let Some(clip) = clip {
+      clip_non_outline(commands, desc, clip.rect, clip.clip_x, clip.clip_y)
     } else {
       desc
     };
@@ -7244,7 +7686,10 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         filters,
         backdrop_filters,
         radii,
-        clip: clip.map(|(rect, r, cx, cy)| (rect.translate(offset), r, cx, cy)),
+        clip: clip.map(|clip| StackingClip {
+          rect: clip.rect.translate(offset),
+          ..clip
+        }),
         clip_path: clip_path.map(|cp| cp.translate(dx, dy)),
         commands: translate_commands(commands, dx, dy),
       },
@@ -11280,7 +11725,13 @@ mod tests {
         style,
       },
     ];
-    let clip = Some((root_rect, BorderRadii::ZERO, true, true));
+    let clip = Some(StackingClip {
+      rect: root_rect,
+      radii: BorderRadii::ZERO,
+      clip_x: true,
+      clip_y: true,
+      clip_root: false,
+    });
     let bounds = stacking_context_bounds(&commands, &[], &[], root_rect, None, clip.as_ref(), None)
       .expect("bounds");
     assert!((bounds.width() - 1010.0).abs() < 0.01);

@@ -12,10 +12,12 @@ use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchedResource;
 use crate::resource::HttpFetcher;
 use crate::resource::ResourceFetcher;
+use crate::style::color::Rgba;
 use crate::style::types::ImageResolution;
 use crate::style::types::OrientationTransform;
 use avif_decode::Decoder as AvifDecoder;
 use avif_decode::Image as AvifImage;
+use avif_parse::AvifData;
 use exif;
 use image::imageops;
 use image::DynamicImage;
@@ -24,14 +26,682 @@ use image::ImageDecoder;
 use image::ImageFormat;
 use image::RgbaImage;
 use roxmltree::Document;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::Instant;
 use url::Url;
+
+fn image_profile_threshold_ms() -> Option<f64> {
+  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
+  THRESHOLD
+    .get_or_init(|| {
+      let raw = std::env::var("FASTR_IMAGE_PROFILE_MS").ok()?;
+      let trimmed = raw.trim();
+      if trimmed.is_empty() {
+        return None;
+      }
+      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
+    })
+    .as_ref()
+    .copied()
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct SvgPixmapKey {
+  hash: u64,
+  len: usize,
+  width: u32,
+  height: u32,
+}
+
+fn svg_pixmap_key(svg_content: &str, width: u32, height: u32) -> SvgPixmapKey {
+  let mut hasher = DefaultHasher::new();
+  svg_content.hash(&mut hasher);
+  SvgPixmapKey {
+    hash: hasher.finish(),
+    len: svg_content.len(),
+    width,
+    height,
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SvgViewBox {
+  min_x: f32,
+  min_y: f32,
+  width: f32,
+  height: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SvgAlign {
+  XMinYMin,
+  XMidYMin,
+  XMaxYMin,
+  XMinYMid,
+  XMidYMid,
+  XMaxYMid,
+  XMinYMax,
+  XMidYMax,
+  XMaxYMax,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SvgMeetOrSlice {
+  Meet,
+  Slice,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SvgPreserveAspectRatio {
+  none: bool,
+  align: SvgAlign,
+  meet_or_slice: SvgMeetOrSlice,
+}
+
+impl SvgPreserveAspectRatio {
+  fn parse(value: Option<&str>) -> Self {
+    let mut parsed = Self {
+      none: false,
+      align: SvgAlign::XMidYMid,
+      meet_or_slice: SvgMeetOrSlice::Meet,
+    };
+
+    let raw = value.unwrap_or("").trim();
+    if raw.is_empty() {
+      return parsed;
+    }
+    let mut parts = raw.split_whitespace();
+    let first = parts.next().unwrap_or("");
+    if first.eq_ignore_ascii_case("none") {
+      parsed.none = true;
+      return parsed;
+    }
+
+    parsed.align = match first {
+      "xMinYMin" => SvgAlign::XMinYMin,
+      "xMidYMin" => SvgAlign::XMidYMin,
+      "xMaxYMin" => SvgAlign::XMaxYMin,
+      "xMinYMid" => SvgAlign::XMinYMid,
+      "xMidYMid" => SvgAlign::XMidYMid,
+      "xMaxYMid" => SvgAlign::XMaxYMid,
+      "xMinYMax" => SvgAlign::XMinYMax,
+      "xMidYMax" => SvgAlign::XMidYMax,
+      "xMaxYMax" => SvgAlign::XMaxYMax,
+      _ => SvgAlign::XMidYMid,
+    };
+
+    if let Some(second) = parts.next() {
+      if second.eq_ignore_ascii_case("slice") {
+        parsed.meet_or_slice = SvgMeetOrSlice::Slice;
+      } else if second.eq_ignore_ascii_case("meet") {
+        parsed.meet_or_slice = SvgMeetOrSlice::Meet;
+      }
+    }
+
+    parsed
+  }
+}
+
+fn parse_svg_view_box(value: &str) -> Option<SvgViewBox> {
+  let mut nums = value
+    .split(|c: char| c == ',' || c.is_whitespace())
+    .filter(|s| !s.is_empty())
+    .filter_map(|s| s.parse::<f32>().ok());
+  let min_x = nums.next()?;
+  let min_y = nums.next()?;
+  let width = nums.next()?;
+  let height = nums.next()?;
+  if !(min_x.is_finite()
+    && min_y.is_finite()
+    && width.is_finite()
+    && height.is_finite()
+    && width > 0.0
+    && height > 0.0)
+  {
+    return None;
+  }
+  Some(SvgViewBox {
+    min_x,
+    min_y,
+    width,
+    height,
+  })
+}
+
+fn map_svg_aspect_ratio(
+  view_box: SvgViewBox,
+  preserve: SvgPreserveAspectRatio,
+  render_width: f32,
+  render_height: f32,
+) -> tiny_skia::Transform {
+  let sx = render_width / view_box.width;
+  let sy = render_height / view_box.height;
+  if preserve.none {
+    return tiny_skia::Transform::from_row(
+      sx,
+      0.0,
+      0.0,
+      sy,
+      -view_box.min_x * sx,
+      -view_box.min_y * sy,
+    );
+  }
+
+  let scale = match preserve.meet_or_slice {
+    SvgMeetOrSlice::Meet => sx.min(sy),
+    SvgMeetOrSlice::Slice => sx.max(sy),
+  };
+  let scaled_w = view_box.width * scale;
+  let scaled_h = view_box.height * scale;
+
+  let (align_x, align_y) = match preserve.align {
+    SvgAlign::XMinYMin => (0.0, 0.0),
+    SvgAlign::XMidYMin => ((render_width - scaled_w) * 0.5, 0.0),
+    SvgAlign::XMaxYMin => (render_width - scaled_w, 0.0),
+    SvgAlign::XMinYMid => (0.0, (render_height - scaled_h) * 0.5),
+    SvgAlign::XMidYMid => ((render_width - scaled_w) * 0.5, (render_height - scaled_h) * 0.5),
+    SvgAlign::XMaxYMid => (render_width - scaled_w, (render_height - scaled_h) * 0.5),
+    SvgAlign::XMinYMax => (0.0, render_height - scaled_h),
+    SvgAlign::XMidYMax => ((render_width - scaled_w) * 0.5, render_height - scaled_h),
+    SvgAlign::XMaxYMax => (render_width - scaled_w, render_height - scaled_h),
+  };
+
+  tiny_skia::Transform::from_row(
+    scale,
+    0.0,
+    0.0,
+    scale,
+    align_x - view_box.min_x * scale,
+    align_y - view_box.min_y * scale,
+  )
+}
+
+fn svg_parse_fill_color(value: &str) -> Option<Rgba> {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  if trimmed.eq_ignore_ascii_case("none") {
+    return Some(Rgba::new(0, 0, 0, 0.0));
+  }
+  if trimmed.eq_ignore_ascii_case("currentColor") {
+    return None;
+  }
+  if let Some(hex) = crate::style::defaults::parse_color_attribute(trimmed) {
+    return Some(hex);
+  }
+  trimmed
+    .parse::<csscolorparser::Color>()
+    .ok()
+    .map(|c| {
+      Rgba::new(
+        (c.r * 255.0).round() as u8,
+        (c.g * 255.0).round() as u8,
+        (c.b * 255.0).round() as u8,
+        c.a as f32,
+      )
+    })
+}
+
+fn multiply_alpha(mut color: Rgba, alpha: f32) -> Rgba {
+  if !alpha.is_finite() {
+    return color;
+  }
+  color.a = (color.a * alpha).clamp(0.0, 1.0);
+  color
+}
+
+fn build_tiny_skia_path_from_svg_path_data(data: &str) -> Option<tiny_skia::Path> {
+  use svgtypes::PathParser;
+  use svgtypes::PathSegment;
+  use tiny_skia::PathBuilder;
+
+  let mut pb = PathBuilder::new();
+  let mut current = (0.0f32, 0.0f32);
+  let mut subpath_start = (0.0f32, 0.0f32);
+  let mut last_cubic_ctrl: Option<(f32, f32)> = None;
+  let mut last_quad_ctrl: Option<(f32, f32)> = None;
+
+  for segment in PathParser::from(data) {
+    let seg = segment.ok()?;
+    match seg {
+      PathSegment::MoveTo { abs, x, y } => {
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        pb.move_to(nx, ny);
+        current = (nx, ny);
+        subpath_start = current;
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      PathSegment::LineTo { abs, x, y } => {
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        pb.line_to(nx, ny);
+        current = (nx, ny);
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      PathSegment::HorizontalLineTo { abs, x } => {
+        let nx = if abs { x as f32 } else { current.0 + x as f32 };
+        pb.line_to(nx, current.1);
+        current.0 = nx;
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      PathSegment::VerticalLineTo { abs, y } => {
+        let ny = if abs { y as f32 } else { current.1 + y as f32 };
+        pb.line_to(current.0, ny);
+        current.1 = ny;
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      PathSegment::CurveTo {
+        abs,
+        x1,
+        y1,
+        x2,
+        y2,
+        x,
+        y,
+      } => {
+        let (cx1, cy1) = if abs {
+          (x1 as f32, y1 as f32)
+        } else {
+          (current.0 + x1 as f32, current.1 + y1 as f32)
+        };
+        let (cx2, cy2) = if abs {
+          (x2 as f32, y2 as f32)
+        } else {
+          (current.0 + x2 as f32, current.1 + y2 as f32)
+        };
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        pb.cubic_to(cx1, cy1, cx2, cy2, nx, ny);
+        current = (nx, ny);
+        last_cubic_ctrl = Some((cx2, cy2));
+        last_quad_ctrl = None;
+      }
+      PathSegment::SmoothCurveTo { abs, x2, y2, x, y } => {
+        let (cx1, cy1) = match last_cubic_ctrl {
+          Some((px, py)) => (2.0 * current.0 - px, 2.0 * current.1 - py),
+          None => current,
+        };
+        let (cx2, cy2) = if abs {
+          (x2 as f32, y2 as f32)
+        } else {
+          (current.0 + x2 as f32, current.1 + y2 as f32)
+        };
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        pb.cubic_to(cx1, cy1, cx2, cy2, nx, ny);
+        current = (nx, ny);
+        last_cubic_ctrl = Some((cx2, cy2));
+        last_quad_ctrl = None;
+      }
+      PathSegment::Quadratic { abs, x1, y1, x, y } => {
+        let (cx1, cy1) = if abs {
+          (x1 as f32, y1 as f32)
+        } else {
+          (current.0 + x1 as f32, current.1 + y1 as f32)
+        };
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        pb.quad_to(cx1, cy1, nx, ny);
+        current = (nx, ny);
+        last_quad_ctrl = Some((cx1, cy1));
+        last_cubic_ctrl = None;
+      }
+      PathSegment::SmoothQuadratic { abs, x, y } => {
+        let (cx1, cy1) = match last_quad_ctrl {
+          Some((px, py)) => (2.0 * current.0 - px, 2.0 * current.1 - py),
+          None => current,
+        };
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+        pb.quad_to(cx1, cy1, nx, ny);
+        current = (nx, ny);
+        last_quad_ctrl = Some((cx1, cy1));
+        last_cubic_ctrl = None;
+      }
+      PathSegment::EllipticalArc {
+        abs,
+        rx,
+        ry,
+        x_axis_rotation,
+        large_arc,
+        sweep,
+        x,
+        y,
+      } => {
+        let (nx, ny) = if abs {
+          (x as f32, y as f32)
+        } else {
+          (current.0 + x as f32, current.1 + y as f32)
+        };
+
+        if !arc_to_cubic_beziers(
+          &mut pb,
+          current,
+          (rx as f32).abs(),
+          (ry as f32).abs(),
+          x_axis_rotation as f32,
+          large_arc,
+          sweep,
+          (nx, ny),
+        ) {
+          pb.line_to(nx, ny);
+        }
+
+        current = (nx, ny);
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+      PathSegment::ClosePath { .. } => {
+        pb.close();
+        current = subpath_start;
+        last_cubic_ctrl = None;
+        last_quad_ctrl = None;
+      }
+    }
+  }
+
+  pb.finish()
+}
+
+fn arc_to_cubic_beziers(
+  pb: &mut tiny_skia::PathBuilder,
+  start: (f32, f32),
+  rx: f32,
+  ry: f32,
+  x_axis_rotation_deg: f32,
+  large_arc: bool,
+  sweep: bool,
+  end: (f32, f32),
+) -> bool {
+  if !start.0.is_finite()
+    || !start.1.is_finite()
+    || !end.0.is_finite()
+    || !end.1.is_finite()
+    || !rx.is_finite()
+    || !ry.is_finite()
+    || !x_axis_rotation_deg.is_finite()
+  {
+    return false;
+  }
+  if (start.0 - end.0).abs() < f32::EPSILON && (start.1 - end.1).abs() < f32::EPSILON {
+    return true;
+  }
+  if rx <= 0.0 || ry <= 0.0 {
+    return false;
+  }
+
+  let x0 = start.0 as f64;
+  let y0 = start.1 as f64;
+  let x1 = end.0 as f64;
+  let y1 = end.1 as f64;
+  let mut rx = rx as f64;
+  let mut ry = ry as f64;
+
+  let phi = (x_axis_rotation_deg as f64).to_radians();
+  let (sin_phi, cos_phi) = phi.sin_cos();
+
+  let dx2 = (x0 - x1) * 0.5;
+  let dy2 = (y0 - y1) * 0.5;
+  let x1p = cos_phi * dx2 + sin_phi * dy2;
+  let y1p = -sin_phi * dx2 + cos_phi * dy2;
+
+  let rx_sq = rx * rx;
+  let ry_sq = ry * ry;
+  let x1p_sq = x1p * x1p;
+  let y1p_sq = y1p * y1p;
+
+  let lambda = (x1p_sq / rx_sq) + (y1p_sq / ry_sq);
+  if lambda > 1.0 {
+    let scale = lambda.sqrt();
+    rx *= scale;
+    ry *= scale;
+  }
+
+  let rx_sq = rx * rx;
+  let ry_sq = ry * ry;
+  let denom = rx_sq * y1p_sq + ry_sq * x1p_sq;
+  if denom.abs() < f64::EPSILON {
+    return false;
+  }
+  let mut num = rx_sq * ry_sq - rx_sq * y1p_sq - ry_sq * x1p_sq;
+  if num < 0.0 {
+    num = 0.0;
+  }
+  let sign = if large_arc == sweep { -1.0 } else { 1.0 };
+  let coef = sign * (num / denom).sqrt();
+  let cxp = coef * (rx * y1p) / ry;
+  let cyp = coef * (-ry * x1p) / rx;
+
+  let cx = cos_phi * cxp - sin_phi * cyp + (x0 + x1) * 0.5;
+  let cy = sin_phi * cxp + cos_phi * cyp + (y0 + y1) * 0.5;
+
+  let v1x = (x1p - cxp) / rx;
+  let v1y = (y1p - cyp) / ry;
+  let v2x = (-x1p - cxp) / rx;
+  let v2y = (-y1p - cyp) / ry;
+
+  fn vector_angle(ux: f64, uy: f64, vx: f64, vy: f64) -> f64 {
+    let dot = ux * vx + uy * vy;
+    let det = ux * vy - uy * vx;
+    det.atan2(dot)
+  }
+
+  let mut start_angle = vector_angle(1.0, 0.0, v1x, v1y);
+  let mut delta_angle = vector_angle(v1x, v1y, v2x, v2y);
+
+  if !sweep && delta_angle > 0.0 {
+    delta_angle -= std::f64::consts::TAU;
+  } else if sweep && delta_angle < 0.0 {
+    delta_angle += std::f64::consts::TAU;
+  }
+
+  // Split the arc into segments no larger than 90 degrees.
+  let segments = (delta_angle.abs() / (std::f64::consts::FRAC_PI_2)).ceil().max(1.0) as usize;
+  let seg_angle = delta_angle / segments as f64;
+
+  for _ in 0..segments {
+    let theta1 = start_angle;
+    let theta2 = theta1 + seg_angle;
+    start_angle = theta2;
+
+    let (sin_t1, cos_t1) = theta1.sin_cos();
+    let (sin_t2, cos_t2) = theta2.sin_cos();
+
+    let alpha = (4.0 / 3.0) * ((theta2 - theta1) * 0.25).tan();
+
+    let x1 = cos_t1;
+    let y1 = sin_t1;
+    let x2 = cos_t2;
+    let y2 = sin_t2;
+
+    let cp1x = x1 - alpha * y1;
+    let cp1y = y1 + alpha * x1;
+    let cp2x = x2 + alpha * y2;
+    let cp2y = y2 - alpha * x2;
+
+    let map = |x: f64, y: f64| -> (f64, f64) {
+      (
+        cx + cos_phi * rx * x - sin_phi * ry * y,
+        cy + sin_phi * rx * x + cos_phi * ry * y,
+      )
+    };
+
+    let (c1x, c1y) = map(cp1x, cp1y);
+    let (c2x, c2y) = map(cp2x, cp2y);
+    let (ex, ey) = map(x2, y2);
+    pb.cubic_to(c1x as f32, c1y as f32, c2x as f32, c2y as f32, ex as f32, ey as f32);
+  }
+
+  true
+}
+
+fn try_render_simple_svg_pixmap(
+  svg_content: &str,
+  render_width: u32,
+  render_height: u32,
+) -> Option<tiny_skia::Pixmap> {
+  use tiny_skia::FillRule;
+  use tiny_skia::Paint;
+  use tiny_skia::Pixmap;
+
+  if render_width == 0 || render_height == 0 {
+    return None;
+  }
+
+  let doc = Document::parse(svg_content).ok()?;
+  let root = doc.root_element();
+  if !root.tag_name().name().eq_ignore_ascii_case("svg") {
+    return None;
+  }
+
+  for node in root.descendants().filter(|n| n.is_element()) {
+    let name = node.tag_name().name();
+    let allowed = matches!(
+      name,
+      "svg" | "g" | "path" | "title" | "desc" | "metadata"
+    );
+    if !allowed {
+      return None;
+    }
+    if node.attribute("transform").is_some()
+      || node.attribute("filter").is_some()
+      || node.attribute("mask").is_some()
+      || node.attribute("clip-path").is_some()
+      || node.attribute("style").is_some()
+    {
+      return None;
+    }
+    if name.eq_ignore_ascii_case("path") {
+      if node.attribute("d").is_none() {
+        return None;
+      }
+      if node.attribute("stroke").is_some_and(|v| !v.trim().eq_ignore_ascii_case("none")) {
+        return None;
+      }
+      if node.attribute("stroke-width").is_some()
+        || node.attribute("stroke-linecap").is_some()
+        || node.attribute("stroke-linejoin").is_some()
+        || node.attribute("stroke-miterlimit").is_some()
+        || node.attribute("stroke-dasharray").is_some()
+        || node.attribute("stroke-dashoffset").is_some()
+      {
+        return None;
+      }
+    }
+  }
+
+  let view_box = root
+    .attribute("viewBox")
+    .and_then(parse_svg_view_box)
+    .or_else(|| {
+      let w = root.attribute("width").and_then(parse_svg_length)?;
+      let h = root.attribute("height").and_then(parse_svg_length)?;
+      Some(SvgViewBox {
+        min_x: 0.0,
+        min_y: 0.0,
+        width: w,
+        height: h,
+      })
+    })
+    .unwrap_or(SvgViewBox {
+      min_x: 0.0,
+      min_y: 0.0,
+      width: render_width as f32,
+      height: render_height as f32,
+    });
+  if !(view_box.width.is_finite()
+    && view_box.height.is_finite()
+    && view_box.width > 0.0
+    && view_box.height > 0.0)
+  {
+    return None;
+  }
+
+  let preserve = SvgPreserveAspectRatio::parse(root.attribute("preserveAspectRatio"));
+  let transform = map_svg_aspect_ratio(
+    view_box,
+    preserve,
+    render_width as f32,
+    render_height as f32,
+  );
+
+  let mut pixmap = Pixmap::new(render_width, render_height)?;
+  for node in root.descendants().filter(|n| n.is_element()) {
+    if !node.tag_name().name().eq_ignore_ascii_case("path") {
+      continue;
+    }
+    let d = node.attribute("d")?;
+    let path = build_tiny_skia_path_from_svg_path_data(d)?;
+
+    let fill = node.attribute("fill");
+    let mut color = match fill {
+      Some(v) => svg_parse_fill_color(v)?,
+      None => Rgba::new(0, 0, 0, 1.0),
+    };
+    if color.a <= 0.0 {
+      continue;
+    }
+
+    if let Some(opacity_raw) = node.attribute("opacity") {
+      if let Ok(alpha) = opacity_raw.trim().parse::<f32>() {
+        color = multiply_alpha(color, alpha);
+      }
+    }
+    if let Some(opacity_raw) = node.attribute("fill-opacity") {
+      if let Ok(alpha) = opacity_raw.trim().parse::<f32>() {
+        color = multiply_alpha(color, alpha);
+      }
+    }
+
+    let fill_rule = match node.attribute("fill-rule").map(|v| v.trim()) {
+      None => FillRule::Winding,
+      Some(v) if v.eq_ignore_ascii_case("nonzero") => FillRule::Winding,
+      Some(v) if v.eq_ignore_ascii_case("evenodd") => FillRule::EvenOdd,
+      Some(_) => return None,
+    };
+
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, color.alpha_u8());
+    paint.anti_alias = true;
+    pixmap.fill_path(&path, &paint, fill_rule, transform, None);
+  }
+
+  Some(pixmap)
+}
 
 // ============================================================================
 // CachedImage
@@ -135,6 +805,85 @@ impl CachedImage {
   }
 }
 
+#[derive(Debug, Clone)]
+pub struct CachedImageMetadata {
+  pub width: u32,
+  pub height: u32,
+  pub orientation: Option<OrientationTransform>,
+  pub resolution: Option<f32>,
+  pub is_vector: bool,
+  pub intrinsic_ratio: Option<f32>,
+  pub aspect_ratio_none: bool,
+}
+
+impl CachedImageMetadata {
+  pub fn dimensions(&self) -> (u32, u32) {
+    (self.width, self.height)
+  }
+
+  pub fn oriented_dimensions(&self, transform: OrientationTransform) -> (u32, u32) {
+    transform.oriented_dimensions(self.width, self.height)
+  }
+
+  pub fn css_dimensions(
+    &self,
+    transform: OrientationTransform,
+    resolution: &ImageResolution,
+    device_pixel_ratio: f32,
+    override_resolution: Option<f32>,
+  ) -> Option<(f32, f32)> {
+    let (w, h) = self.oriented_dimensions(transform);
+    if w == 0 || h == 0 {
+      return None;
+    }
+    if self.is_vector {
+      return Some((w as f32, h as f32));
+    }
+    let used = resolution.used_resolution(override_resolution, self.resolution, device_pixel_ratio);
+    if used <= 0.0 || !used.is_finite() {
+      return None;
+    }
+    Some((w as f32 / used, h as f32 / used))
+  }
+
+  pub fn intrinsic_ratio(&self, transform: OrientationTransform) -> Option<f32> {
+    if self.aspect_ratio_none {
+      return None;
+    }
+
+    let mut ratio = self.intrinsic_ratio;
+    if ratio.is_none() {
+      let (w, h) = self.oriented_dimensions(transform);
+      if h > 0 {
+        ratio = Some(w as f32 / h as f32);
+      }
+    }
+
+    if let Some(r) = ratio {
+      if transform.quarter_turns % 2 == 1 {
+        return Some(1.0 / r);
+      }
+    }
+
+    ratio
+  }
+}
+
+impl From<&CachedImage> for CachedImageMetadata {
+  fn from(image: &CachedImage) -> Self {
+    let (width, height) = image.dimensions();
+    Self {
+      width,
+      height,
+      orientation: image.orientation,
+      resolution: image.resolution,
+      is_vector: image.is_vector,
+      intrinsic_ratio: image.intrinsic_ratio,
+      aspect_ratio_none: image.aspect_ratio_none,
+    }
+  }
+}
+
 // ============================================================================
 // ImageCache
 // ============================================================================
@@ -217,6 +966,50 @@ impl DecodeInFlight {
   }
 }
 
+#[derive(Clone)]
+enum SharedMetaResult {
+  Success(Arc<CachedImageMetadata>),
+  Error(Error),
+}
+
+impl SharedMetaResult {
+  fn as_result(&self) -> Result<Arc<CachedImageMetadata>> {
+    match self {
+      Self::Success(meta) => Ok(Arc::clone(meta)),
+      Self::Error(err) => Err(err.clone()),
+    }
+  }
+}
+
+struct ProbeInFlight {
+  result: Mutex<Option<SharedMetaResult>>,
+  cv: Condvar,
+}
+
+impl ProbeInFlight {
+  fn new() -> Self {
+    Self {
+      result: Mutex::new(None),
+      cv: Condvar::new(),
+    }
+  }
+
+  fn set(&self, result: SharedMetaResult) {
+    if let Ok(mut slot) = self.result.lock() {
+      *slot = Some(result);
+      self.cv.notify_all();
+    }
+  }
+
+  fn wait(&self) -> Result<Arc<CachedImageMetadata>> {
+    let mut guard = self.result.lock().unwrap();
+    while guard.is_none() {
+      guard = self.cv.wait(guard).unwrap();
+    }
+    guard.as_ref().unwrap().as_result()
+  }
+}
+
 /// Cache for loaded images
 ///
 /// `ImageCache` provides in-memory caching of decoded images, with support for
@@ -240,6 +1033,12 @@ pub struct ImageCache {
   cache: Arc<Mutex<HashMap<String, Arc<CachedImage>>>>,
   /// In-flight decodes keyed by resolved URL to de-duplicate concurrent loads.
   in_flight: Arc<Mutex<HashMap<String, Arc<DecodeInFlight>>>>,
+  /// In-memory cache of probed metadata (keyed by resolved URL).
+  meta_cache: Arc<Mutex<HashMap<String, Arc<CachedImageMetadata>>>>,
+  /// In-flight probes keyed by resolved URL to de-duplicate concurrent metadata loads.
+  meta_in_flight: Arc<Mutex<HashMap<String, Arc<ProbeInFlight>>>>,
+  /// In-memory cache of rendered inline SVG pixmaps keyed by (hash, size).
+  svg_pixmap_cache: Arc<Mutex<HashMap<SvgPixmapKey, Arc<tiny_skia::Pixmap>>>>,
   /// Base URL for resolving relative image sources
   base_url: Option<String>,
   /// Resource fetcher for loading bytes from URLs
@@ -318,6 +1117,9 @@ impl ImageCache {
     Self {
       cache: Arc::new(Mutex::new(HashMap::new())),
       in_flight: Arc::new(Mutex::new(HashMap::new())),
+      meta_cache: Arc::new(Mutex::new(HashMap::new())),
+      meta_in_flight: Arc::new(Mutex::new(HashMap::new())),
+      svg_pixmap_cache: Arc::new(Mutex::new(HashMap::new())),
       base_url,
       fetcher,
       config,
@@ -403,6 +1205,34 @@ impl ImageCache {
     result
   }
 
+  /// Probe image metadata (dimensions, EXIF orientation/resolution, SVG intrinsic ratio)
+  /// without fully decoding the image.
+  pub fn probe(&self, url: &str) -> Result<Arc<CachedImageMetadata>> {
+    let resolved_url = self.resolve_url(url);
+
+    if let Some(img) = self.get_cached(&resolved_url) {
+      return Ok(Arc::new(CachedImageMetadata::from(&*img)));
+    }
+
+    if let Some(meta) = self.get_cached_meta(&resolved_url) {
+      return Ok(meta);
+    }
+
+    let (flight, is_owner) = self.join_meta_inflight(&resolved_url);
+    if !is_owner {
+      return flight.wait();
+    }
+
+    let result = self.fetch_and_probe(&resolved_url);
+    let shared = match &result {
+      Ok(meta) => SharedMetaResult::Success(Arc::clone(meta)),
+      Err(err) => SharedMetaResult::Error(err.clone()),
+    };
+    self.finish_meta_inflight(&resolved_url, &flight, shared);
+
+    result
+  }
+
   fn get_cached(&self, resolved_url: &str) -> Option<Arc<CachedImage>> {
     self
       .cache
@@ -411,10 +1241,25 @@ impl ImageCache {
       .and_then(|cache| cache.get(resolved_url).cloned())
   }
 
+  fn get_cached_meta(&self, resolved_url: &str) -> Option<Arc<CachedImageMetadata>> {
+    self
+      .meta_cache
+      .lock()
+      .ok()
+      .and_then(|cache| cache.get(resolved_url).cloned())
+  }
+
   fn fetch_and_decode(&self, resolved_url: &str) -> Result<Arc<CachedImage>> {
+    let threshold_ms = image_profile_threshold_ms();
+    let profile_enabled = threshold_ms.is_some();
+    let total_start = profile_enabled.then(Instant::now);
+    let fetch_start = profile_enabled.then(Instant::now);
     let resource = self.fetcher.fetch(resolved_url)?;
+    let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+    let decode_start = profile_enabled.then(Instant::now);
     let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none) =
       self.decode_resource(&resource, resolved_url)?;
+    let decode_ms = decode_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
 
     let img_arc = Arc::new(CachedImage {
       image: Arc::new(img),
@@ -429,7 +1274,74 @@ impl ImageCache {
       cache.insert(resolved_url.to_string(), Arc::clone(&img_arc));
     }
 
+    if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
+      let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+      if total_ms >= threshold_ms {
+        let content_type = resource
+          .content_type
+          .as_deref()
+          .unwrap_or("<unknown>")
+          .split(';')
+          .next()
+          .unwrap_or("<unknown>");
+        eprintln!(
+          "image_profile kind=decode total_ms={total_ms:.2} fetch_ms={:.2} decode_ms={:.2} bytes={} dims={}x{} vector={} url={}",
+          fetch_ms.unwrap_or(0.0),
+          decode_ms.unwrap_or(0.0),
+          resource.bytes.len(),
+          img_arc.image.width(),
+          img_arc.image.height(),
+          img_arc.is_vector,
+          resolved_url
+        );
+        eprintln!(" image_profile content_type={content_type}");
+      }
+    }
+
     Ok(img_arc)
+  }
+
+  fn fetch_and_probe(&self, resolved_url: &str) -> Result<Arc<CachedImageMetadata>> {
+    let threshold_ms = image_profile_threshold_ms();
+    let profile_enabled = threshold_ms.is_some();
+    let total_start = profile_enabled.then(Instant::now);
+    let fetch_start = profile_enabled.then(Instant::now);
+    let resource = self.fetcher.fetch(resolved_url)?;
+    let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+    let probe_start = profile_enabled.then(Instant::now);
+    let meta = self.probe_resource(&resource, resolved_url)?;
+    let probe_ms = probe_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+    let meta = Arc::new(meta);
+
+    if let Ok(mut cache) = self.meta_cache.lock() {
+      cache.insert(resolved_url.to_string(), Arc::clone(&meta));
+    }
+
+    if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
+      let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+      if total_ms >= threshold_ms {
+        let content_type = resource
+          .content_type
+          .as_deref()
+          .unwrap_or("<unknown>")
+          .split(';')
+          .next()
+          .unwrap_or("<unknown>");
+        eprintln!(
+          "image_profile kind=probe total_ms={total_ms:.2} fetch_ms={:.2} probe_ms={:.2} bytes={} dims={}x{} vector={} url={}",
+          fetch_ms.unwrap_or(0.0),
+          probe_ms.unwrap_or(0.0),
+          resource.bytes.len(),
+          meta.width,
+          meta.height,
+          meta.is_vector,
+          resolved_url
+        );
+        eprintln!(" image_profile content_type={content_type}");
+      }
+    }
+
+    Ok(meta)
   }
 
   fn join_inflight(&self, resolved_url: &str) -> (Arc<DecodeInFlight>, bool) {
@@ -439,6 +1351,17 @@ impl ImageCache {
     }
 
     let flight = Arc::new(DecodeInFlight::new());
+    map.insert(resolved_url.to_string(), Arc::clone(&flight));
+    (flight, true)
+  }
+
+  fn join_meta_inflight(&self, resolved_url: &str) -> (Arc<ProbeInFlight>, bool) {
+    let mut map = self.meta_in_flight.lock().unwrap();
+    if let Some(existing) = map.get(resolved_url) {
+      return (Arc::clone(existing), false);
+    }
+
+    let flight = Arc::new(ProbeInFlight::new());
     map.insert(resolved_url.to_string(), Arc::clone(&flight));
     (flight, true)
   }
@@ -455,6 +1378,18 @@ impl ImageCache {
     }
   }
 
+  fn finish_meta_inflight(
+    &self,
+    resolved_url: &str,
+    flight: &Arc<ProbeInFlight>,
+    result: SharedMetaResult,
+  ) {
+    flight.set(result);
+    if let Ok(mut map) = self.meta_in_flight.lock() {
+      map.remove(resolved_url);
+    }
+  }
+
   /// Render raw SVG content to an image (uncached).
   pub fn render_svg(&self, svg_content: &str) -> Result<Arc<CachedImage>> {
     let (img, intrinsic_ratio, aspect_ratio_none) = self.render_svg_to_image(svg_content)?;
@@ -466,6 +1401,114 @@ impl ImageCache {
       intrinsic_ratio,
       aspect_ratio_none,
     }))
+  }
+
+  pub(crate) fn render_svg_pixmap_at_size(
+    &self,
+    svg_content: &str,
+    render_width: u32,
+    render_height: u32,
+    url: &str,
+  ) -> Result<Arc<tiny_skia::Pixmap>> {
+    use resvg::usvg;
+
+    let key = svg_pixmap_key(svg_content, render_width, render_height);
+    if let Ok(cache) = self.svg_pixmap_cache.lock() {
+      if let Some(cached) = cache.get(&key) {
+        return Ok(Arc::clone(cached));
+      }
+    }
+
+    self.enforce_decode_limits(render_width, render_height, url)?;
+
+    if let Some(pixmap) = try_render_simple_svg_pixmap(svg_content, render_width, render_height) {
+      let pixmap = Arc::new(pixmap);
+      if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
+        cache.insert(key, Arc::clone(&pixmap));
+      }
+      return Ok(pixmap);
+    }
+
+    let options = usvg::Options::default();
+    let tree = usvg::Tree::from_str(svg_content, &options).map_err(|e| {
+      Error::Image(ImageError::DecodeFailed {
+        url: url.to_string(),
+        reason: format!("Failed to parse SVG: {}", e),
+      })
+    })?;
+
+    let size = tree.size();
+    let source_width = size.width();
+    let source_height = size.height();
+    if source_width <= 0.0 || source_height <= 0.0 {
+      return Err(Error::Render(RenderError::CanvasCreationFailed {
+        width: source_width as u32,
+        height: source_height as u32,
+      }));
+    }
+
+    let Some(mut pixmap) = tiny_skia::Pixmap::new(render_width, render_height) else {
+      return Err(Error::Render(RenderError::CanvasCreationFailed {
+        width: render_width,
+        height: render_height,
+      }));
+    };
+
+    let scale_x = render_width as f32 / source_width;
+    let scale_y = render_height as f32 / source_height;
+    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    let pixmap = Arc::new(pixmap);
+    if let Ok(mut cache) = self.svg_pixmap_cache.lock() {
+      cache.insert(key, Arc::clone(&pixmap));
+    }
+
+    Ok(pixmap)
+  }
+
+  /// Probe intrinsic SVG metadata (dimensions/aspect ratio) from raw markup without rasterizing.
+  pub fn probe_svg_content(&self, svg_content: &str, url_hint: &str) -> Result<CachedImageMetadata> {
+    const DEFAULT_WIDTH: f32 = 300.0;
+    const DEFAULT_HEIGHT: f32 = 150.0;
+
+    let (meta_width, meta_height, meta_ratio, aspect_ratio_none) =
+      svg_intrinsic_metadata(svg_content).unwrap_or((None, None, None, false));
+
+    let ratio = meta_ratio.filter(|r| *r > 0.0);
+    let (target_width, target_height) = match (
+      meta_width.filter(|w| *w > 0.0),
+      meta_height.filter(|h| *h > 0.0),
+      ratio,
+    ) {
+      (Some(w), Some(h), _) => (w, h),
+      (Some(w), None, Some(r)) => (w, (w / r).max(1.0)),
+      (None, Some(h), Some(r)) => ((h * r).max(1.0), h),
+      (Some(w), None, None) => (w, DEFAULT_HEIGHT),
+      (None, Some(h), None) => (DEFAULT_WIDTH, h),
+      (None, None, Some(r)) => (DEFAULT_WIDTH, (DEFAULT_WIDTH / r).max(1.0)),
+      (None, None, None) => (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+    };
+
+    let width = target_width.max(1.0).round() as u32;
+    let height = target_height.max(1.0).round() as u32;
+    self.enforce_decode_limits(width, height, url_hint)?;
+
+    let intrinsic_ratio = if aspect_ratio_none {
+      None
+    } else {
+      ratio.or_else(|| if height > 0 { Some(width as f32 / height as f32) } else { None })
+    };
+
+    Ok(CachedImageMetadata {
+      width,
+      height,
+      orientation: None,
+      resolution: None,
+      is_vector: true,
+      intrinsic_ratio,
+      aspect_ratio_none,
+    })
   }
 
   /// Decode a fetched resource into an image
@@ -511,6 +1554,89 @@ impl ImageCache {
     self
       .decode_bitmap(bytes, content_type, url)
       .map(|img| (img, orientation, resolution, false, None, false))
+  }
+
+  fn probe_resource(&self, resource: &FetchedResource, url: &str) -> Result<CachedImageMetadata> {
+    let bytes = &resource.bytes;
+    let content_type = resource.content_type.as_deref();
+
+    // SVG: parse intrinsic metadata without rasterizing.
+    let mime_is_svg = content_type
+      .map(|m| m.contains("image/svg"))
+      .unwrap_or(false);
+    let is_svg = mime_is_svg
+      || std::str::from_utf8(bytes)
+        .ok()
+        .map(|s| s.trim_start().starts_with("<svg") || s.trim_start().starts_with("<?xml"))
+        .unwrap_or(false);
+    if is_svg {
+      let content = std::str::from_utf8(bytes).map_err(|e| {
+        Error::Image(ImageError::DecodeFailed {
+          url: url.to_string(),
+          reason: format!("SVG not valid UTF-8: {}", e),
+        })
+      })?;
+
+      const DEFAULT_WIDTH: f32 = 300.0;
+      const DEFAULT_HEIGHT: f32 = 150.0;
+      let (meta_width, meta_height, meta_ratio, aspect_ratio_none) =
+        svg_intrinsic_metadata(content).unwrap_or((None, None, None, false));
+      let ratio = meta_ratio.filter(|r| *r > 0.0);
+      let (target_width, target_height) = match (
+        meta_width.filter(|w| *w > 0.0),
+        meta_height.filter(|h| *h > 0.0),
+        ratio,
+      ) {
+        (Some(w), Some(h), _) => (w, h),
+        (Some(w), None, Some(r)) => (w, (w / r).max(1.0)),
+        (None, Some(h), Some(r)) => ((h * r).max(1.0), h),
+        (Some(w), None, None) => (w, DEFAULT_HEIGHT),
+        (None, Some(h), None) => (DEFAULT_WIDTH, h),
+        (None, None, Some(r)) => (DEFAULT_WIDTH, (DEFAULT_WIDTH / r).max(1.0)),
+        (None, None, None) => (DEFAULT_WIDTH, DEFAULT_HEIGHT),
+      };
+
+      let width = target_width.max(1.0).round() as u32;
+      let height = target_height.max(1.0).round() as u32;
+      self.enforce_decode_limits(width, height, url)?;
+
+      let ratio = if aspect_ratio_none {
+        None
+      } else {
+        ratio.or_else(|| if height > 0 { Some(width as f32 / height as f32) } else { None })
+      };
+
+      return Ok(CachedImageMetadata {
+        width,
+        height,
+        orientation: None,
+        resolution: None,
+        is_vector: true,
+        intrinsic_ratio: ratio,
+        aspect_ratio_none,
+      });
+    }
+
+    let (orientation, resolution) = Self::exif_metadata(bytes);
+    let format_from_content_type = Self::format_from_content_type(content_type);
+    let sniffed_format = Self::sniff_image_format(bytes);
+    let (width, height) = self
+      .predecoded_dimensions(bytes, format_from_content_type, sniffed_format)
+      .ok_or_else(|| Error::Image(ImageError::DecodeFailed {
+        url: url.to_string(),
+        reason: "Unable to determine image dimensions".to_string(),
+      }))?;
+    self.enforce_decode_limits(width, height, url)?;
+
+    Ok(CachedImageMetadata {
+      width,
+      height,
+      orientation,
+      resolution,
+      is_vector: false,
+      intrinsic_ratio: None,
+      aspect_ratio_none: false,
+    })
   }
 
   fn decode_bitmap(
@@ -610,6 +1736,12 @@ impl ImageCache {
       ImageFormat::WebP => image::codecs::webp::WebPDecoder::new(Cursor::new(bytes))
         .ok()
         .map(|d| d.dimensions()),
+      ImageFormat::Avif => {
+        let mut cursor = Cursor::new(bytes);
+        let data = AvifData::from_reader(&mut cursor).ok()?;
+        let meta = data.primary_item_metadata().ok()?;
+        Some((meta.max_frame_width.get(), meta.max_frame_height.get()))
+      }
       _ => None,
     }
   }
@@ -1067,6 +2199,9 @@ impl Clone for ImageCache {
     Self {
       cache: Arc::clone(&self.cache),
       in_flight: Arc::clone(&self.in_flight),
+      meta_cache: Arc::clone(&self.meta_cache),
+      meta_in_flight: Arc::clone(&self.meta_in_flight),
+      svg_pixmap_cache: Arc::clone(&self.svg_pixmap_cache),
       base_url: self.base_url.clone(),
       fetcher: Arc::clone(&self.fetcher),
       config: self.config,

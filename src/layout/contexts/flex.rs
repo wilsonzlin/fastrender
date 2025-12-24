@@ -271,7 +271,7 @@ impl FormattingContext for FlexFormattingContext {
     let container_inline_base = constraints
       .inline_percentage_base
       .or_else(|| constraints.width());
-    if !constraints.is_width_definite() {
+    if matches!(constraints.available_width, CrateAvailableSpace::Indefinite) {
       let fallback = container_inline_base.unwrap_or(self.viewport_size.width);
       constraints.available_width = CrateAvailableSpace::Definite(fallback);
       if constraints.inline_percentage_base.is_none() {
@@ -362,9 +362,23 @@ impl FormattingContext for FlexFormattingContext {
     )?;
     flex_profile::record_build_time(build_timer);
 
+    // Block-level flex containers with `width:auto` fill the available inline space. Root flex
+    // nodes have no parent for percentage resolution, so translate the definite available width
+    // into an explicit Taffy size to ensure flex-shrink/grow runs against the correct line size.
+    if box_node.style.width.is_none() && matches!(box_node.style.display, Display::Flex) {
+      if let CrateAvailableSpace::Definite(w) = constraints.available_width {
+        if let Ok(existing) = taffy_tree.style(root_node) {
+          let mut updated = existing.clone();
+          updated.size.width = Dimension::length(w.max(0.0));
+          taffy_tree
+            .set_style(root_node, updated)
+            .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+        }
+      }
+    }
+
     // Phase 2: Compute layout using Taffy
     let available_space = self.constraints_to_available_space(&constraints);
-    let parent_inline_base = constraints.inline_percentage_base.or(container_inline_base);
     let viewport_size = self.viewport_size;
     let nearest_positioned_cb = self.nearest_positioned_cb;
     let measured_fragments = self.measured_fragments.clone();
@@ -914,6 +928,17 @@ impl FormattingContext for FlexFormattingContext {
                             style.max_width = None;
                         }
                     }
+                    // Flexbox automatic minimum sizes use the min-content size suggestion, which is
+                    // content-driven (specified sizes are handled separately by Taffy). When Taffy
+                    // requests a min-content measurement, clear authored sizes on that axis so the
+                    // formatting context can compute the content size suggestion instead of
+                    // echoing a fixed `width`/`height`.
+                    if matches!(avail.width, AvailableSpace::MinContent) && known_dimensions.width.is_none() {
+                        let style = cloned_style.get_or_insert_with(|| (*box_node.style).clone());
+                        style.width = None;
+                        style.min_width = None;
+                        style.max_width = None;
+                    }
                     if matches!(avail.height, AvailableSpace::MinContent | AvailableSpace::MaxContent) {
                         let style = cloned_style.get_or_insert_with(|| (*box_node.style).clone());
                         if matches!(style.height, Some(len) if len.unit.is_percentage()) {
@@ -925,6 +950,12 @@ impl FormattingContext for FlexFormattingContext {
                         if matches!(style.max_height, Some(len) if len.unit.is_percentage()) {
                             style.max_height = None;
                         }
+                    }
+                    if matches!(avail.height, AvailableSpace::MinContent) && known_dimensions.height.is_none() {
+                        let style = cloned_style.get_or_insert_with(|| (*box_node.style).clone());
+                        style.height = None;
+                        style.min_height = None;
+                        style.max_height = None;
                     }
                     if known_dimensions.width.is_none()
                         && matches!(avail.width, AvailableSpace::MinContent)
@@ -1058,7 +1089,7 @@ impl FormattingContext for FlexFormattingContext {
                             );
                         }
                     }
-                    let constraints = this.constraints_from_taffy(known_dimensions, avail, parent_inline_base);
+                    let constraints = this.constraints_from_taffy(known_dimensions, avail, None);
                     if log_small_avail {
                         if let CrateAvailableSpace::Definite(w) = constraints.available_width {
                             if w > 0.0 && w <= 100.0 {
@@ -1369,6 +1400,31 @@ impl FormattingContext for FlexFormattingContext {
             )
             .map_err(|e| LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)))?;
     flex_profile::record_compute_time(compute_timer);
+    if std::env::var("FASTR_DEBUG_FLEX_CHILD")
+      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+      .unwrap_or(false)
+    {
+      if let Ok(style) = taffy_tree.style(root_node) {
+        eprintln!(
+          "[flex-taffy-root-style] size=({:?},{:?}) min=({:?},{:?}) max=({:?},{:?})",
+          style.size.width,
+          style.size.height,
+          style.min_size.width,
+          style.min_size.height,
+          style.max_size.width,
+          style.max_size.height,
+        );
+      }
+      if let Ok(layout) = taffy_tree.layout(root_node) {
+        eprintln!(
+          "[flex-taffy-root-layout] size=({:.2},{:.2}) loc=({:.2},{:.2})",
+          layout.size.width,
+          layout.size.height,
+          layout.location.x,
+          layout.location.y,
+        );
+      }
+    }
 
     // Phase 3: Convert Taffy layout back to FragmentNode
     let convert_timer = flex_profile::timer();
@@ -1409,86 +1465,6 @@ impl FormattingContext for FlexFormattingContext {
       } else {
         inline_positive
       };
-
-      // If Taffy failed to shrink items enough (common with zero-availability fallbacks), redistribute
-      // the deficit along the main axis using the flex-shrink weights.
-      let available_main = if main_is_horizontal {
-        constraints
-          .width()
-          .unwrap_or_else(|| fragment.bounds.width())
-      } else {
-        constraints
-          .height()
-          .unwrap_or_else(|| fragment.bounds.height())
-      };
-      if available_main.is_finite() {
-        let mut total_main = 0.0;
-        let mut total_weight = 0.0;
-        let child_count = fragment.children.len().max(1) as f32;
-        let mut box_lookup: std::collections::HashMap<usize, &BoxNode> =
-          std::collections::HashMap::new();
-        for child in &box_node.children {
-          box_lookup.insert(child.id, child);
-        }
-        let mut frag_box_ids: Vec<(usize, usize)> = Vec::new();
-        for (idx, frag) in fragment.children.iter().enumerate() {
-          if let Some(box_id) = match &frag.content {
-            FragmentContent::Block { box_id }
-            | FragmentContent::Inline { box_id, .. }
-            | FragmentContent::Text { box_id, .. }
-            | FragmentContent::Replaced { box_id, .. } => *box_id,
-            FragmentContent::Line { .. } => None,
-          } {
-            frag_box_ids.push((idx, box_id));
-          }
-        }
-        for (frag_idx, box_id) in &frag_box_ids {
-          if let Some(child_node) = box_lookup.get(box_id) {
-            let child_fragment = &fragment.children[*frag_idx];
-            let base = if main_is_horizontal {
-              child_fragment.bounds.width()
-            } else {
-              child_fragment.bounds.height()
-            };
-            let weight = child_node.style.flex_shrink.max(0.0) * base;
-            total_main += base;
-            total_weight += weight;
-          }
-        }
-        if total_main > available_main + 0.01 {
-          let deficit = total_main - available_main;
-          let mut cursor = 0.0;
-          for (frag_idx, box_id) in &frag_box_ids {
-            if let Some(child_node) = box_lookup.get(box_id) {
-              let child_fragment = &mut fragment.children[*frag_idx];
-              let base = if main_is_horizontal {
-                child_fragment.bounds.width()
-              } else {
-                child_fragment.bounds.height()
-              };
-              let weight = child_node.style.flex_shrink.max(0.0) * base;
-              let share = if total_weight > 0.0 {
-                deficit * (weight / total_weight)
-              } else {
-                deficit / child_count
-              };
-              let new_size = (base - share).max(0.0);
-              if main_is_horizontal {
-                child_fragment.bounds = Rect::new(
-                  Point::new(cursor, child_fragment.bounds.y()),
-                  Size::new(new_size, child_fragment.bounds.height()),
-                );
-              } else {
-                child_fragment.bounds = Rect::new(
-                  Point::new(child_fragment.bounds.x(), cursor),
-                  Size::new(child_fragment.bounds.width(), new_size),
-                );
-              }
-              cursor += new_size;
-            }
-          }
-        }
-      }
 
       let cross_size = if cross_is_horizontal {
         fragment.bounds.width()
@@ -1721,29 +1697,51 @@ impl FormattingContext for FlexFormattingContext {
         Size::new(self.viewport_size.width, fragment.bounds.height()),
       );
     }
-    // If we clamped the container width/height, ensure children do not sit far outside the
-    // new bounds (e.g., when Taffy laid out a very wide row). Reuse the overflow clamp used
-    // earlier but against the updated fragment bounds.
+    // Keep child layout positions intact even when they overflow the container; overflow handling
+    // is a paint concern (via overflow clipping). Only sanitize clearly invalid or runaway values.
     if fragment.bounds.width().is_finite() && fragment.bounds.height().is_finite() {
       let max_w = fragment.bounds.width().max(0.0);
       let max_h = fragment.bounds.height().max(0.0);
-      let eps = 0.5;
+      let runaway_x = max_w.max(1.0) * 20.0;
+      let runaway_y = max_h.max(1.0) * 20.0;
       for child in &mut fragment.children {
         let mut x = child.bounds.x();
         let mut y = child.bounds.y();
         let mut w = child.bounds.width();
         let mut h = child.bounds.height();
-        let overflow_x = x < -eps || x + w > max_w + eps;
-        let overflow_y = y < -eps || y + h > max_h + eps;
-        if overflow_x {
+        let mut changed = false;
+
+        if !x.is_finite() {
+          x = 0.0;
+          changed = true;
+        }
+        if !y.is_finite() {
+          y = 0.0;
+          changed = true;
+        }
+        if !w.is_finite() || w < 0.0 {
+          w = 0.0;
+          changed = true;
+        }
+        if !h.is_finite() || h < 0.0 {
+          h = 0.0;
+          changed = true;
+        }
+
+        let max_x = x + w;
+        let max_y = y + h;
+        if x.abs() > runaway_x || max_x.abs() > runaway_x {
           w = w.min(max_w);
           x = x.clamp(0.0, (max_w - w).max(0.0));
+          changed = true;
         }
-        if overflow_y {
+        if y.abs() > runaway_y || max_y.abs() > runaway_y {
           h = h.min(max_h);
           y = y.clamp(0.0, (max_h - h).max(0.0));
+          changed = true;
         }
-        if overflow_x || overflow_y {
+
+        if changed {
           child.bounds = Rect::new(Point::new(x, y), Size::new(w, h));
         }
       }
@@ -2300,6 +2298,12 @@ fn flex_style_fingerprint(style: &ComputedStyle) -> u64 {
 fn flex_cache_key(box_node: &BoxNode) -> u64 {
   let mut h = DefaultHasher::new();
   box_node.styled_node_id.hash(&mut h);
+  // Anonymous boxes (no originating styled node) must not share cached fragments across
+  // different instances: their descendants may differ (e.g. different `<img src>`), and
+  // reusing would clone the wrong subtree.
+  if box_node.styled_node_id.is_none() {
+    box_node.id.hash(&mut h);
+  }
   let fingerprint = flex_style_fingerprint(&box_node.style);
   fingerprint.hash(&mut h);
   // Incorporate a simplified key for common carousel templates to merge otherwise identical
@@ -2567,13 +2571,26 @@ impl FlexFormattingContext {
     let mut min_height_dimension =
       self.length_option_to_dimension_box_sizing(style.min_height.as_ref(), style, Axis::Vertical);
 
-    // Flexbox default minimum size is 'auto', which maps to the min-content size for the inline axis
-    // when the author hasn't provided an explicit min-width. Taffy treats `auto` as zero, so we
-    // compute the min-content inline size ourselves to avoid zero-width flex items.
+    // Flexbox automatic minimum size (min-width/min-height: auto) applies on the flex item's *main*
+    // axis (driven by the containing flex container), not the item's own flex-direction. Taffy
+    // treats `auto` as zero, so compute the content-based minimum size to prevent shrink-to-zero
+    // flex items on real pages. Flexbox specifies that scroll containers use a 0 automatic minimum.
     if !is_root {
-      match style.flex_direction {
-        FlexDirection::Row | FlexDirection::RowReverse => {
-          if min_width_dimension == Dimension::AUTO {
+      if let Some(container) = containing_flex {
+        let container_inline_is_horizontal = matches!(container.writing_mode, WritingMode::HorizontalTb);
+        let container_main_is_inline = matches!(
+          container.flex_direction,
+          FlexDirection::Row | FlexDirection::RowReverse
+        );
+        let container_main_is_horizontal = if container_inline_is_horizontal {
+          container_main_is_inline
+        } else {
+          !container_main_is_inline
+        };
+
+        if container_main_is_horizontal {
+          if min_width_dimension == Dimension::AUTO && matches!(style.overflow_x, CssOverflow::Visible)
+          {
             if let Ok(min_content) =
               self.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
             {
@@ -2582,15 +2599,14 @@ impl FlexFormattingContext {
               }
             }
           }
-        }
-        FlexDirection::Column | FlexDirection::ColumnReverse => {
-          if min_height_dimension == Dimension::AUTO {
-            if let Ok(min_content) =
-              self.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
-            {
-              if min_content.is_finite() && min_content > 0.0 {
-                min_height_dimension = Dimension::length(min_content);
-              }
+        } else if min_height_dimension == Dimension::AUTO
+          && matches!(style.overflow_y, CssOverflow::Visible)
+        {
+          if let Ok(min_content) =
+            self.compute_intrinsic_block_size(box_node, IntrinsicSizingMode::MinContent)
+          {
+            if min_content.is_finite() && min_content > 0.0 {
+              min_height_dimension = Dimension::length(min_content);
             }
           }
         }
@@ -2692,9 +2708,10 @@ impl FlexFormattingContext {
   /// For the root flex container without explicit size, we use 100% to fill
   /// available space (simulating block-level behavior).
   fn compute_size(&self, style: &ComputedStyle, is_root: bool) -> taffy::geometry::Size<Dimension> {
+    let is_block_level_root = is_root && matches!(style.display, Display::Flex);
     let width = match style.width.as_ref() {
       Some(len) => self.dimension_for_box_sizing(len, style, Axis::Horizontal),
-      None if is_root => {
+      None if is_block_level_root => {
         // Root flex container without explicit width: expand to fill
         // available space (100% of containing block)
         Dimension::percent(1.0)
@@ -2824,6 +2841,12 @@ impl FlexFormattingContext {
       box_node.style.flex_direction,
       crate::style::types::FlexDirection::Row | crate::style::types::FlexDirection::RowReverse
     );
+    let allow_overflow_fallback = !matches!(box_node.style.flex_wrap, FlexWrap::NoWrap)
+      && if main_axis_is_row {
+        matches!(box_node.style.overflow_x, CssOverflow::Visible)
+      } else {
+        matches!(box_node.style.overflow_y, CssOverflow::Visible)
+      };
     let mut fallback_cursor_x = 0.0;
     let mut fallback_cursor_y = 0.0;
     let mut last_layout_x: Option<f32> = None;
@@ -3007,7 +3030,7 @@ impl FlexFormattingContext {
                 if resolved_height <= eps && !main_axis_is_row {
                   manual_col_positions = true;
                 }
-                if main_axis_is_row && rect_w.is_finite() && rect_w > wrap_eps {
+                if allow_overflow_fallback && main_axis_is_row && rect_w.is_finite() && rect_w > wrap_eps {
                   let runaway = child_loc_x.abs() > rect_w * 2.0;
                   if runaway {
                     manual_row_positions = true;
@@ -3019,26 +3042,30 @@ impl FlexFormattingContext {
                     .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
                     .unwrap_or(true);
                   if same_row {
-                    if child_loc_x > rect.width() + wrap_eps {
-                      manual_row_positions = true;
-                      fallback_cursor_x = rect.origin.x;
-                    }
-                    if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
-                      manual_row_positions = true;
-                      fallback_cursor_x = rect.origin.x;
-                    }
-                    if let Some(prev) = last_layout_x {
-                      if child_loc_x <= prev + 0.1 {
+                    if allow_overflow_fallback {
+                      if child_loc_x > rect.width() + wrap_eps {
                         manual_row_positions = true;
+                        fallback_cursor_x = rect.origin.x;
                       }
-                    } else if !manual_row_positions {
+                      if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
+                        manual_row_positions = true;
+                        fallback_cursor_x = rect.origin.x;
+                      }
+                      if let Some(prev) = last_layout_x {
+                        if child_loc_x <= prev + 0.1 {
+                          manual_row_positions = true;
+                        }
+                      }
+                    }
+                    if last_layout_x.is_none() && !manual_row_positions {
                       fallback_cursor_x = child_loc_x;
                     }
                   } else {
                     manual_row_positions = false;
                     fallback_cursor_x = child_loc_x;
                   }
-                  if manual_row_positions {
+                  let use_manual_row = allow_overflow_fallback && manual_row_positions;
+                  if use_manual_row {
                     let cap_base = if rect.width().is_finite() && rect.width() > wrap_eps {
                       rect.width()
                     } else {
@@ -3050,7 +3077,7 @@ impl FlexFormattingContext {
                       last_layout_x = None;
                     }
                   }
-                  if manual_row_positions {
+                  if use_manual_row {
                     origin_x = fallback_cursor_x;
                     fallback_cursor_x += resolved_width;
                   } else {
@@ -3173,11 +3200,6 @@ impl FlexFormattingContext {
           }
           layout_child.style = std::sync::Arc::new(layout_style);
           let rect_main_def = if main_axis_is_row { rect_w } else { rect_h };
-          let inline_base = if rect_w.is_finite() && rect_w > eps {
-            Some(rect_w)
-          } else {
-            None
-          };
           let child_constraints = if needs_intrinsic_main {
             let width = if main_axis_is_row {
               if raw_layout_width > eps {
@@ -3205,13 +3227,12 @@ impl FlexFormattingContext {
             } else {
               CrateAvailableSpace::MaxContent
             };
-            LayoutConstraints::new(width, height).with_inline_percentage_base(inline_base)
+            LayoutConstraints::new(width, height)
           } else {
             LayoutConstraints::new(
               CrateAvailableSpace::Definite(layout_width),
               CrateAvailableSpace::Definite(layout_height),
             )
-            .with_inline_percentage_base(inline_base)
           };
           let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
           flex_profile::record_node_layout(
@@ -3270,7 +3291,7 @@ impl FlexFormattingContext {
                 CrateAvailableSpace::MaxContent,
               )
             }
-            .with_inline_percentage_base(inline_base);
+            ;
             let mc_timer = flex_profile::node_timer();
             let mc_selector = mc_timer
               .as_ref()
@@ -3358,26 +3379,30 @@ impl FlexFormattingContext {
                 .map(|prev_y| (child_loc_y - prev_y).abs() < wrap_eps)
                 .unwrap_or(true);
               if same_row {
-                if child_loc_x > rect.width() + wrap_eps {
-                  manual_row_positions = true;
-                  fallback_cursor_x = rect.origin.x;
-                }
-                if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
-                  manual_row_positions = true;
-                  fallback_cursor_x = rect.origin.x;
-                }
-                if let Some(prev) = last_layout_x {
-                  if child_loc_x <= prev + 0.1 {
+                if allow_overflow_fallback {
+                  if child_loc_x > rect.width() + wrap_eps {
                     manual_row_positions = true;
+                    fallback_cursor_x = rect.origin.x;
                   }
-                } else if !manual_row_positions {
+                  if child_loc_x < rect.origin.x - rect.width().abs().max(wrap_eps) {
+                    manual_row_positions = true;
+                    fallback_cursor_x = rect.origin.x;
+                  }
+                  if let Some(prev) = last_layout_x {
+                    if child_loc_x <= prev + 0.1 {
+                      manual_row_positions = true;
+                    }
+                  }
+                }
+                if last_layout_x.is_none() && !manual_row_positions {
                   fallback_cursor_x = child_loc_x;
                 }
               } else {
                 manual_row_positions = false;
                 fallback_cursor_x = child_loc_x;
               }
-              if manual_row_positions {
+              let use_manual_row = allow_overflow_fallback && manual_row_positions;
+              if use_manual_row {
                 let cap_base = if rect.width().is_finite() && rect.width() > wrap_eps {
                   rect.width()
                 } else {
@@ -3389,7 +3414,7 @@ impl FlexFormattingContext {
                   last_layout_x = None;
                 }
               }
-              if manual_row_positions {
+              if use_manual_row {
                 origin_x = fallback_cursor_x;
                 fallback_cursor_x += resolved_width;
               } else {
@@ -3539,7 +3564,7 @@ impl FlexFormattingContext {
       });
       let log_this_shrink = !log_shrink_ids.is_empty() && log_shrink_ids.contains(&box_node.id);
 
-      if max_child_x > container_w + 0.5 {
+      if allow_overflow_fallback && max_child_x > container_w + 0.5 {
         let available = container_w.max(1.0).min(self.viewport_size.width);
         // Apply flex-shrink distribution to bring the total width back to the available span.
         let mut total_main = 0.0;
@@ -4720,6 +4745,64 @@ mod tests {
       "scrollbar width should affect flex style fingerprint"
     );
     assert_ne!(fp_a, fp_c, "overflow should affect flex style fingerprint");
+  }
+
+  #[test]
+  fn flex_cache_key_distinguishes_anonymous_boxes() {
+    let style = Arc::new(ComputedStyle::default());
+
+    let mut a = BoxNode::new_block(style.clone(), FormattingContextType::Block, vec![]);
+    let mut b = BoxNode::new_block(style, FormattingContextType::Block, vec![]);
+    a.id = 1;
+    b.id = 2;
+    a.styled_node_id = None;
+    b.styled_node_id = None;
+    a.debug_info = None;
+    b.debug_info = None;
+
+    assert_ne!(
+      super::flex_cache_key(&a),
+      super::flex_cache_key(&b),
+      "anonymous boxes must not share flex cache keys"
+    );
+  }
+
+  #[test]
+  fn flex_does_not_shrink_below_min_width_when_overflowing() {
+    let fc = FlexFormattingContext::new();
+
+    let mut container_style = ComputedStyle::default();
+    container_style.display = Display::Flex;
+    container_style.flex_direction = FlexDirection::Row;
+    container_style.flex_wrap = FlexWrap::NoWrap;
+    container_style.overflow_x = Overflow::Scroll;
+    container_style.width = Some(Length::px(400.0));
+
+    let mut items = Vec::new();
+    for _ in 0..5 {
+      let mut item_style = ComputedStyle::default();
+      item_style.width = Some(Length::px(300.0));
+      item_style.height = Some(Length::px(50.0));
+      item_style.min_width = Some(Length::px(152.0));
+      item_style.flex_shrink = 1.0;
+      items.push(BoxNode::new_block(
+        Arc::new(item_style),
+        FormattingContextType::Block,
+        vec![],
+      ));
+    }
+
+    let container =
+      BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, items);
+    let fragment = fc.layout(&container, &LayoutConstraints::definite(400.0, 200.0)).unwrap();
+
+    for (idx, child) in fragment.children.iter().enumerate() {
+      assert!(
+        child.bounds.width() >= 151.9,
+        "child {idx} shrank below min-width: {:.2}",
+        child.bounds.width()
+      );
+    }
   }
 
   #[test]

@@ -1067,10 +1067,11 @@ impl BlockFormattingContext {
     };
     let inline_percentage_base = match inline_space {
       AvailableSpace::Definite(_) => {
+        // Child percentage sizes resolve against the parent’s used inline size (its content box),
+        // not the parent’s containing block (which can differ for flex/grid items where we stash
+        // the containing block inline size in `inline_percentage_base`).
         let base = if inline_is_horizontal {
-          constraints
-            .inline_percentage_base
-            .or_else(|| constraints.width())
+          constraints.width()
         } else {
           constraints.height()
         };
@@ -1358,11 +1359,8 @@ impl BlockFormattingContext {
               self.viewport_size,
               &self.font_context,
             );
-            fragment = PositionedLayout::new().apply_relative_positioning(
-              &fragment,
-              &positioned_style,
-              &relative_cb,
-            )?;
+            fragment = PositionedLayout::with_font_context(self.font_context.clone())
+              .apply_relative_positioning(&fragment, &positioned_style, &relative_cb)?;
           }
           fragments.push(fragment);
         }
@@ -1729,11 +1727,8 @@ impl BlockFormattingContext {
             self.viewport_size,
             &self.font_context,
           );
-          fragment = PositionedLayout::new().apply_relative_positioning(
-            &fragment,
-            &positioned_style,
-            &relative_cb,
-          )?;
+          fragment = PositionedLayout::with_font_context(self.font_context.clone())
+            .apply_relative_positioning(&fragment, &positioned_style, &relative_cb)?;
         }
         fragments.push(fragment);
         continue;
@@ -1832,11 +1827,8 @@ impl BlockFormattingContext {
             self.viewport_size,
             &self.font_context,
           );
-          fragment = PositionedLayout::new().apply_relative_positioning(
-            &fragment,
-            &positioned_style,
-            &relative_cb,
-          )?;
+          fragment = PositionedLayout::with_font_context(self.font_context.clone())
+            .apply_relative_positioning(&fragment, &positioned_style, &relative_cb)?;
         }
         fragments.push(fragment);
       } else {
@@ -1871,11 +1863,8 @@ impl BlockFormattingContext {
               self.viewport_size,
               &self.font_context,
             );
-            fragment = PositionedLayout::new().apply_relative_positioning(
-              &fragment,
-              &positioned_style,
-              &relative_cb,
-            )?;
+            fragment = PositionedLayout::with_font_context(self.font_context.clone())
+              .apply_relative_positioning(&fragment, &positioned_style, &relative_cb)?;
           }
           fragments.push(fragment);
         } else {
@@ -3044,11 +3033,8 @@ impl FormattingContext for BlockFormattingContext {
         self.viewport_size,
         &self.font_context,
       );
-      fragment = PositionedLayout::new().apply_relative_positioning(
-        &fragment,
-        &positioned_style,
-        &containing_block,
-      )?;
+      fragment = PositionedLayout::with_font_context(self.font_context.clone())
+        .apply_relative_positioning(&fragment, &positioned_style, &containing_block)?;
     }
     let converted = convert_fragment_axes(
       fragment,

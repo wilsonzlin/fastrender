@@ -1230,7 +1230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
       if let Some(node) = find_box_by_id(&box_tree.root, id) {
         println!(
-                    "box {} info: display={:?} position={:?} visibility={:?} opacity={} width={:?} height={:?} order={} selector={:?}",
+                    "box {} info: display={:?} position={:?} visibility={:?} opacity={} size=({:?},{:?}) min=({:?},{:?}) max=({:?},{:?}) overflow=({:?},{:?}) flex=({:.2},{:.2},{:?}) order={} selector={:?}",
                     id,
                     node.style.display,
                     node.style.position,
@@ -1238,6 +1238,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     node.style.opacity,
                     node.style.width,
                     node.style.height,
+                    node.style.min_width,
+                    node.style.min_height,
+                    node.style.max_width,
+                    node.style.max_height,
+                    node.style.overflow_x,
+                    node.style.overflow_y,
+                    node.style.flex_grow,
+                    node.style.flex_shrink,
+                    node.style.flex_basis,
                     node.style.order,
                     node.debug_info.as_ref().map(|d| d.to_selector())
                 );

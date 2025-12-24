@@ -266,9 +266,14 @@ impl Default for PositionedLayout {
 impl PositionedLayout {
   /// Creates a new positioned layout handler
   pub fn new() -> Self {
-    Self {
-      font_context: FontContext::new(),
-    }
+    Self::with_font_context(FontContext::new())
+  }
+
+  /// Creates a positioned layout handler using an existing [`FontContext`].
+  ///
+  /// Layout code should prefer this to avoid repeatedly scanning/loading system fonts.
+  pub fn with_font_context(font_context: FontContext) -> Self {
+    Self { font_context }
   }
 
   /// Applies relative positioning to a fragment

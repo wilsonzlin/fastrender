@@ -1,7 +1,10 @@
 use tiny_skia::Pixmap;
 
+const FAST_GAUSS_THRESHOLD_SIGMA: f32 = 4.0;
+
 pub(crate) fn gaussian_kernel(sigma: f32) -> (Vec<f32>, usize) {
-  let radius = (sigma.abs() * 3.0).ceil() as usize;
+  let sigma = sigma.abs();
+  let radius = (sigma * 3.0).ceil() as usize;
   if radius == 0 {
     return (Vec::new(), 0);
   }
@@ -27,9 +30,282 @@ pub(crate) fn gaussian_kernel(sigma: f32) -> (Vec<f32>, usize) {
   (kernel, radius)
 }
 
-pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
-  let radius = (sigma.abs() * 3.0).ceil() as usize;
+fn gaussian_kernel_fixed(sigma: f32) -> (Vec<i32>, usize, i32) {
+  let sigma = sigma.abs();
+  let radius = (sigma * 3.0).ceil() as usize;
   if radius == 0 {
+    return (Vec::new(), 0, 0);
+  }
+
+  // Fixed-point scale chosen to keep accumulators in i32.
+  const SCALE: i32 = 1 << 16;
+  let mut weights = Vec::with_capacity(radius * 2 + 1);
+  let sigma_sq = sigma as f64 * sigma as f64;
+  let denom = 2.0 * sigma_sq;
+  let mut sum = 0.0f64;
+  for i in 0..=radius * 2 {
+    let x = i as i32 - radius as i32;
+    let w = (-(x as f64 * x as f64) / denom).exp();
+    weights.push(w);
+    sum += w;
+  }
+  if sum == 0.0 {
+    return (Vec::new(), 0, 0);
+  }
+
+  let mut fixed = Vec::with_capacity(weights.len());
+  let mut fixed_sum: i32 = 0;
+  for (idx, w) in weights.iter().enumerate() {
+    let mut v = ((*w / sum) * SCALE as f64).round() as i32;
+    if idx == weights.len().saturating_sub(1) {
+      v = SCALE - fixed_sum;
+    }
+    fixed_sum += v;
+    fixed.push(v);
+  }
+
+  (fixed, radius, SCALE)
+}
+
+#[inline]
+fn clamp_channel_to_alpha(channel: i32, alpha: i32) -> u8 {
+  channel.clamp(0, alpha).clamp(0, 255) as u8
+}
+
+fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) {
+  let (kernel, radius, scale) = gaussian_kernel_fixed(sigma);
+  if radius == 0 || kernel.is_empty() || scale <= 0 {
+    return;
+  }
+
+  let width = pixmap.width() as usize;
+  let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return;
+  }
+
+  let len = width * height * 4;
+  let mut tmp = pixmap.data().to_vec();
+  let mut buf = vec![0u8; len];
+
+  // Horizontal pass: tmp -> buf
+  for y in 0..height {
+    let row_start = y * width * 4;
+    for x in 0..width {
+      let mut acc_r: i32 = 0;
+      let mut acc_g: i32 = 0;
+      let mut acc_b: i32 = 0;
+      let mut acc_a: i32 = 0;
+      for (i, &w) in kernel.iter().enumerate() {
+        let offset = i as isize - radius as isize;
+        let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+        let idx = row_start + cx * 4;
+        acc_r += w * tmp[idx] as i32;
+        acc_g += w * tmp[idx + 1] as i32;
+        acc_b += w * tmp[idx + 2] as i32;
+        acc_a += w * tmp[idx + 3] as i32;
+      }
+      let out_idx = row_start + x * 4;
+      let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
+      let r = (acc_r + scale / 2) / scale;
+      let g = (acc_g + scale / 2) / scale;
+      let b = (acc_b + scale / 2) / scale;
+      buf[out_idx] = clamp_channel_to_alpha(r, a);
+      buf[out_idx + 1] = clamp_channel_to_alpha(g, a);
+      buf[out_idx + 2] = clamp_channel_to_alpha(b, a);
+      buf[out_idx + 3] = a as u8;
+    }
+  }
+
+  // Vertical pass: buf -> tmp (reuse tmp storage)
+  for y in 0..height {
+    for x in 0..width {
+      let mut acc_r: i32 = 0;
+      let mut acc_g: i32 = 0;
+      let mut acc_b: i32 = 0;
+      let mut acc_a: i32 = 0;
+      for (i, &w) in kernel.iter().enumerate() {
+        let offset = i as isize - radius as isize;
+        let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+        let idx = (cy * width + x) * 4;
+        acc_r += w * buf[idx] as i32;
+        acc_g += w * buf[idx + 1] as i32;
+        acc_b += w * buf[idx + 2] as i32;
+        acc_a += w * buf[idx + 3] as i32;
+      }
+      let out_idx = (y * width + x) * 4;
+      let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
+      let r = (acc_r + scale / 2) / scale;
+      let g = (acc_g + scale / 2) / scale;
+      let b = (acc_b + scale / 2) / scale;
+      tmp[out_idx] = clamp_channel_to_alpha(r, a);
+      tmp[out_idx + 1] = clamp_channel_to_alpha(g, a);
+      tmp[out_idx + 2] = clamp_channel_to_alpha(b, a);
+      tmp[out_idx + 3] = a as u8;
+    }
+  }
+
+  pixmap.data_mut().copy_from_slice(&tmp);
+}
+
+fn box_sizes_for_gauss(sigma: f32, n: usize) -> [usize; 3] {
+  debug_assert!(n == 3);
+  let sigma = sigma.abs().max(0.0) as f64;
+  if sigma <= 0.0 {
+    return [1, 1, 1];
+  }
+  // From: https://www.peterkovesi.com/matlabfns/Spatial/gaussfilt.m
+  let n = n as f64;
+  let w_ideal = ((12.0 * sigma * sigma / n) + 1.0).sqrt();
+  let mut wl = w_ideal.floor() as i32;
+  if wl % 2 == 0 {
+    wl -= 1;
+  }
+  let wu = wl + 2;
+
+  let m_ideal = (12.0 * sigma * sigma - n * (wl * wl) as f64 - 4.0 * n * wl as f64 - 3.0 * n)
+    / (-4.0 * wl as f64 - 4.0);
+  let m = m_ideal.round().clamp(0.0, n) as usize;
+
+  let mut sizes = [wu as usize; 3];
+  for s in sizes.iter_mut().take(m) {
+    *s = wl as usize;
+  }
+  sizes
+}
+
+fn box_blur_h(src: &[u8], dst: &mut [u8], width: usize, height: usize, radius: usize) {
+  if radius == 0 {
+    dst.copy_from_slice(src);
+    return;
+  }
+  let window = (radius * 2 + 1) as i32;
+  let half = window / 2;
+  for y in 0..height {
+    let row_start = y * width * 4;
+    let mut sum_r: i32 = 0;
+    let mut sum_g: i32 = 0;
+    let mut sum_b: i32 = 0;
+    let mut sum_a: i32 = 0;
+    for dx in -(radius as isize)..=(radius as isize) {
+      let cx = dx.clamp(0, width as isize - 1) as usize;
+      let idx = row_start + cx * 4;
+      sum_r += src[idx] as i32;
+      sum_g += src[idx + 1] as i32;
+      sum_b += src[idx + 2] as i32;
+      sum_a += src[idx + 3] as i32;
+    }
+
+    for x in 0..width {
+      let out_idx = row_start + x * 4;
+      let a = ((sum_a + half) / window).clamp(0, 255);
+      let r = (sum_r + half) / window;
+      let g = (sum_g + half) / window;
+      let b = (sum_b + half) / window;
+      dst[out_idx] = clamp_channel_to_alpha(r, a);
+      dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
+      dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
+      dst[out_idx + 3] = a as u8;
+
+      let remove_x = (x as isize - radius as isize).clamp(0, width as isize - 1) as usize;
+      let add_x = (x as isize + radius as isize + 1).clamp(0, width as isize - 1) as usize;
+      let rem_idx = row_start + remove_x * 4;
+      let add_idx = row_start + add_x * 4;
+      sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
+      sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
+      sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
+      sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
+    }
+  }
+}
+
+fn box_blur_v(src: &[u8], dst: &mut [u8], width: usize, height: usize, radius: usize) {
+  if radius == 0 {
+    dst.copy_from_slice(src);
+    return;
+  }
+  let window = (radius * 2 + 1) as i32;
+  let half = window / 2;
+  for x in 0..width {
+    let mut sum_r: i32 = 0;
+    let mut sum_g: i32 = 0;
+    let mut sum_b: i32 = 0;
+    let mut sum_a: i32 = 0;
+    for dy in -(radius as isize)..=(radius as isize) {
+      let cy = dy.clamp(0, height as isize - 1) as usize;
+      let idx = (cy * width + x) * 4;
+      sum_r += src[idx] as i32;
+      sum_g += src[idx + 1] as i32;
+      sum_b += src[idx + 2] as i32;
+      sum_a += src[idx + 3] as i32;
+    }
+
+    for y in 0..height {
+      let out_idx = (y * width + x) * 4;
+      let a = ((sum_a + half) / window).clamp(0, 255);
+      let r = (sum_r + half) / window;
+      let g = (sum_g + half) / window;
+      let b = (sum_b + half) / window;
+      dst[out_idx] = clamp_channel_to_alpha(r, a);
+      dst[out_idx + 1] = clamp_channel_to_alpha(g, a);
+      dst[out_idx + 2] = clamp_channel_to_alpha(b, a);
+      dst[out_idx + 3] = a as u8;
+
+      let remove_y = (y as isize - radius as isize).clamp(0, height as isize - 1) as usize;
+      let add_y = (y as isize + radius as isize + 1).clamp(0, height as isize - 1) as usize;
+      let rem_idx = (remove_y * width + x) * 4;
+      let add_idx = (add_y * width + x) * 4;
+      sum_r += src[add_idx] as i32 - src[rem_idx] as i32;
+      sum_g += src[add_idx + 1] as i32 - src[rem_idx + 1] as i32;
+      sum_b += src[add_idx + 2] as i32 - src[rem_idx + 2] as i32;
+      sum_a += src[add_idx + 3] as i32 - src[rem_idx + 3] as i32;
+    }
+  }
+}
+
+fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) {
+  let sigma = sigma.abs();
+  if sigma <= 0.0 {
+    return;
+  }
+  let width = pixmap.width() as usize;
+  let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return;
+  }
+  let len = width * height * 4;
+  let mut a = pixmap.data().to_vec();
+  let mut b = vec![0u8; len];
+
+  let sizes = box_sizes_for_gauss(sigma, 3);
+  for size in sizes {
+    let radius = size.saturating_sub(1) / 2;
+    if radius == 0 {
+      continue;
+    }
+    box_blur_h(&a, &mut b, width, height, radius);
+    box_blur_v(&b, &mut a, width, height, radius);
+  }
+
+  pixmap.data_mut().copy_from_slice(&a);
+}
+
+pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
+  let sigma = sigma.abs();
+  let radius = (sigma * 3.0).ceil() as usize;
+  if radius == 0 {
+    return;
+  }
+
+  let fast_enabled = std::env::var("FASTR_FAST_BLUR")
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false);
+  if fast_enabled {
+    if sigma <= FAST_GAUSS_THRESHOLD_SIGMA {
+      gaussian_convolve_premultiplied(pixmap, sigma);
+    } else {
+      gaussian_blur_box_approx(pixmap, sigma);
+    }
     return;
   }
 
@@ -40,6 +316,10 @@ pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
 
   let width = pixmap.width() as usize;
   let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return;
+  }
+
   let src: Vec<[f32; 4]> = pixmap
     .pixels()
     .iter()

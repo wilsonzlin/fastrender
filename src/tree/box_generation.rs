@@ -571,6 +571,8 @@ fn format_css_color(color: crate::style::color::Rgba) -> String {
 }
 
 fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent {
+  const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
+
   fn merge_style_attribute(attrs: &mut Vec<(String, String)>, extra: &str) {
     if extra.trim().is_empty() {
       return;
@@ -591,6 +593,8 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
   fn root_style(style: &ComputedStyle) -> String {
     let mut parts: Vec<String> = Vec::new();
     parts.push(format!("color: {}", format_css_color(style.color)));
+    // Make unstyled shapes pick up the computed text color (common for icon SVGs).
+    parts.push("fill: currentColor".to_string());
 
     if !style.font_family.is_empty() {
       let families: Vec<String> = style
@@ -618,6 +622,28 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
 
     parts.join("; ")
   }
+
+  fn svg_uses_document_css(styled: &StyledNode) -> bool {
+    let mut stack = vec![styled];
+    while let Some(node) = stack.pop() {
+      if node.node.get_attribute("class").is_some() || node.node.get_attribute("id").is_some() {
+        return true;
+      }
+      if let Some(tag) = node.node.tag_name() {
+        if tag.eq_ignore_ascii_case("foreignObject") {
+          return true;
+        }
+      }
+      for child in &node.children {
+        stack.push(child);
+      }
+    }
+    false
+  }
+
+  let embed_document_css = !document_css.trim().is_empty()
+    && document_css.len() <= MAX_EMBEDDED_SVG_CSS_BYTES
+    && svg_uses_document_css(styled);
 
   fn serialize_foreign_object_placeholder(
     styled: &StyledNode,
@@ -776,6 +802,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
   fn serialize_node(
     styled: &StyledNode,
     document_css: &str,
+    embed_document_css: bool,
     parent_ns: Option<&str>,
     is_root: bool,
     out: &mut String,
@@ -788,6 +815,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           serialize_node(
             child,
             document_css,
+            embed_document_css,
             parent_ns,
             false,
             out,
@@ -801,6 +829,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           serialize_node(
             child,
             document_css,
+            embed_document_css,
             parent_ns,
             false,
             out,
@@ -874,7 +903,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
         out.push('>');
         fallback_out.push('>');
 
-        if is_root && !document_css.trim().is_empty() {
+        if is_root && embed_document_css {
           out.push_str("<style>");
           out.push_str(document_css);
           out.push_str("</style>");
@@ -887,6 +916,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
           serialize_node(
             child,
             document_css,
+            embed_document_css,
             Some(current_ns.as_str()),
             false,
             out,
@@ -911,6 +941,7 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
   serialize_node(
     styled,
     document_css,
+    embed_document_css,
     None,
     true,
     &mut out,

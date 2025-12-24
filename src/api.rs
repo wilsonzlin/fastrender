@@ -133,6 +133,7 @@ use crate::tree::box_tree::SrcsetDescriptor;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -149,6 +150,33 @@ use std::time::Instant;
 // Re-export Pixmap from tiny-skia for public use
 pub use tiny_skia::Pixmap;
 use url::Url;
+
+#[derive(Default, Debug, Clone)]
+struct ReplacedIntrinsicProfileState {
+  depth: usize,
+  start: Option<Instant>,
+  replaced_nodes: usize,
+  image_nodes: usize,
+  form_controls: usize,
+  videos: usize,
+  svgs: usize,
+  embeds: usize,
+  selection_calls: usize,
+  selection_ms: f64,
+  probe_calls: usize,
+  probe_ms: f64,
+  probe_ok: usize,
+  probe_err: usize,
+  load_calls: usize,
+  load_ms: f64,
+  render_svg_calls: usize,
+  render_svg_ms: f64,
+}
+
+thread_local! {
+  static REPLACED_INTRINSIC_PROFILE: RefCell<ReplacedIntrinsicProfileState> =
+    RefCell::new(ReplacedIntrinsicProfileState::default());
+}
 
 /// Main entry point for the FastRender library
 ///
@@ -1712,18 +1740,26 @@ impl FastRender {
 
     // Generate box tree
     let box_gen_options = self.box_generation_options();
+    let box_gen_start = timings_enabled.then(Instant::now);
     let mut box_tree =
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled_tree,
         &box_gen_options,
       );
+    if let Some(start) = box_gen_start {
+      eprintln!("timing:box_gen {:?}", start.elapsed());
+    }
 
     // Resolve intrinsic sizes for replaced elements using the image cache
+    let intrinsic_start = timings_enabled.then(Instant::now);
     self.resolve_replaced_intrinsic_sizes_for_media(
       &mut box_tree.root,
       layout_viewport,
       media_type,
     );
+    if let Some(start) = intrinsic_start {
+      eprintln!("timing:intrinsic_sizes {:?}", start.elapsed());
+    }
 
     if let Some(start) = stage_start.as_mut() {
       let now = Instant::now();
@@ -1851,8 +1887,16 @@ impl FastRender {
       dump_box_tree(&box_tree.root, 0);
     }
 
-    // Update layout engine config for this viewport
-    let config = LayoutConfig::for_viewport(layout_viewport);
+    // Update layout engine config for this viewport.
+    //
+    // Enable the layout result cache by default. This significantly reduces repeated layout
+    // work during flex/grid measurement (Taffy) on real pages. The cache is run-scoped and
+    // guarded by conservative eligibility rules.
+    let mut config = LayoutConfig::for_viewport(layout_viewport);
+    let disable_cache = std::env::var("FASTR_DISABLE_LAYOUT_CACHE")
+      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+      .unwrap_or(false);
+    config.enable_cache = !disable_cache;
     self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
     intrinsic_cache_clear();
     let report_intrinsic = std::env::var_os("FASTR_INTRINSIC_STATS").is_some();
@@ -2459,12 +2503,33 @@ impl FastRender {
     self.resolve_replaced_intrinsic_sizes_for_media(node, viewport, MediaType::Screen);
   }
 
+  fn replaced_intrinsic_profile_enabled() -> bool {
+    static FLAG: OnceLock<bool> = OnceLock::new();
+    *FLAG.get_or_init(|| {
+      std::env::var("FASTR_REPLACED_INTRINSIC_PROFILE")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+    })
+  }
+
   fn resolve_replaced_intrinsic_sizes_for_media(
     &self,
     node: &mut BoxNode,
     viewport: Size,
     media_type: MediaType,
   ) {
+    let profile_enabled = Self::replaced_intrinsic_profile_enabled();
+    if profile_enabled {
+      REPLACED_INTRINSIC_PROFILE.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.depth == 0 {
+          *state = ReplacedIntrinsicProfileState::default();
+          state.start = Some(Instant::now());
+        }
+        state.depth += 1;
+      });
+    }
+
     if let BoxType::Marker(marker_box) = &mut node.box_type {
       if let MarkerContent::Image(replaced) = &mut marker_box.content {
         self.resolve_intrinsic_for_replaced_for_media(
@@ -2493,6 +2558,39 @@ impl FastRender {
 
     for child in &mut node.children {
       self.resolve_replaced_intrinsic_sizes_for_media(child, viewport, media_type);
+    }
+
+    if profile_enabled {
+      REPLACED_INTRINSIC_PROFILE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.depth = state.depth.saturating_sub(1);
+        if state.depth == 0 {
+          let total_ms = state
+            .start
+            .take()
+            .map(|s| s.elapsed().as_secs_f64() * 1000.0)
+            .unwrap_or(0.0);
+          eprintln!(
+            "replaced_intrinsic_profile total_ms={total_ms:.2} replaced={} images={} form_controls={} videos={} svgs={} embeds={} selection_calls={} selection_ms={:.2} probe_calls={} probe_ms={:.2} probe_ok={} probe_err={} load_calls={} load_ms={:.2} render_svg_calls={} render_svg_ms={:.2}",
+            state.replaced_nodes,
+            state.image_nodes,
+            state.form_controls,
+            state.videos,
+            state.svgs,
+            state.embeds,
+            state.selection_calls,
+            state.selection_ms,
+            state.probe_calls,
+            state.probe_ms,
+            state.probe_ok,
+            state.probe_err,
+            state.load_calls,
+            state.load_ms,
+            state.render_svg_calls,
+            state.render_svg_ms
+          );
+        }
+      });
     }
   }
 
@@ -2538,10 +2636,21 @@ impl FastRender {
       return;
     }
 
+    let profile_enabled = Self::replaced_intrinsic_profile_enabled();
+    if profile_enabled {
+      REPLACED_INTRINSIC_PROFILE.with(|state| {
+        state.borrow_mut().replaced_nodes += 1;
+      });
+    }
+
     let mut explicit_no_ratio = false;
-    let replaced_type_snapshot = replaced_box.replaced_type.clone();
-    match replaced_type_snapshot {
+    match &replaced_box.replaced_type {
       ReplacedType::FormControl(control) => {
+        if profile_enabled {
+          REPLACED_INTRINSIC_PROFILE.with(|state| {
+            state.borrow_mut().form_controls += 1;
+          });
+        }
         explicit_no_ratio = true;
         if replaced_box.intrinsic_size.is_none() {
           let metrics_scaled = self.resolve_scaled_metrics(style);
@@ -2595,6 +2704,11 @@ impl FastRender {
         picture_sources,
         ..
       } => {
+        if profile_enabled {
+          REPLACED_INTRINSIC_PROFILE.with(|state| {
+            state.borrow_mut().image_nodes += 1;
+          });
+        }
         // If intrinsic dimensions are already known (e.g., width/height attributes), avoid
         // fetching the image just to rederive them. This keeps box tree construction fast
         // on image-heavy pages while still honoring provided intrinsic sizes/aspect ratios.
@@ -2612,25 +2726,48 @@ impl FastRender {
         let has_image_source = !src.is_empty() || !srcset.is_empty() || !picture_sources.is_empty();
 
         let selected = if has_image_source {
+          let select_start = profile_enabled.then(Instant::now);
           let media_ctx = self.media_context_for_media(media_type, viewport.width, viewport.height);
-          Some(
-            replaced_box
-              .replaced_type
-              .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
-                scale: self.device_pixel_ratio,
-                slot_width: None,
-                viewport: Some(viewport),
-                media_context: Some(&media_ctx),
-                font_size: Some(style.font_size),
-              }),
-          )
+          let selected = replaced_box
+            .replaced_type
+            .selected_image_source_for_context(crate::tree::box_tree::ImageSelectionContext {
+              scale: self.device_pixel_ratio,
+              slot_width: None,
+              viewport: Some(viewport),
+              media_context: Some(&media_ctx),
+              font_size: Some(style.font_size),
+            });
+          if let Some(start) = select_start {
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            REPLACED_INTRINSIC_PROFILE.with(|state| {
+              let mut state = state.borrow_mut();
+              state.selection_calls += 1;
+              state.selection_ms += ms;
+            });
+          }
+          Some(selected)
         } else {
           None
         };
 
         if let Some(selected) = selected {
           if !selected.url.is_empty() {
-            if let Ok(image) = self.image_cache.load(selected.url) {
+            let probe_start = profile_enabled.then(Instant::now);
+            let probe_result = self.image_cache.probe(selected.url);
+            if let Some(start) = probe_start {
+              let ms = start.elapsed().as_secs_f64() * 1000.0;
+              REPLACED_INTRINSIC_PROFILE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.probe_calls += 1;
+                state.probe_ms += ms;
+                if probe_result.is_ok() {
+                  state.probe_ok += 1;
+                } else {
+                  state.probe_err += 1;
+                }
+              });
+            }
+            if let Ok(image) = probe_result {
               let orientation = style.image_orientation.resolve(image.orientation, false);
               explicit_no_ratio = image.aspect_ratio_none;
               if let Some((w, h)) = image.css_dimensions(
@@ -2664,20 +2801,31 @@ impl FastRender {
           }
         }
       }
-      ReplacedType::Video { src: _, poster } => {
+      ReplacedType::Video { poster, .. } => {
+        if profile_enabled {
+          REPLACED_INTRINSIC_PROFILE.with(|state| {
+            state.borrow_mut().videos += 1;
+          });
+        }
         let needs_intrinsic = replaced_box.intrinsic_size.is_none();
         let needs_ratio = replaced_box.aspect_ratio.is_none();
         if needs_intrinsic || needs_ratio {
           if let Some(candidate) = poster.as_deref().filter(|s| !s.is_empty()) {
-            let image = if candidate.trim_start().starts_with('<') {
-              self.image_cache.render_svg(candidate)
+            let candidate_trimmed = candidate.trim_start();
+            let inline_svg = candidate_trimmed.starts_with("<svg")
+              || candidate_trimmed.starts_with("<?xml");
+            let meta = if inline_svg {
+              self.image_cache.probe_svg_content(candidate, "video-poster")
             } else {
-              self.image_cache.load(candidate)
+              self
+                .image_cache
+                .probe(candidate)
+                .map(|meta| (*meta).clone())
             };
-            if let Ok(image) = image {
-              let orientation = style.image_orientation.resolve(image.orientation, false);
-              explicit_no_ratio = image.aspect_ratio_none;
-              if let Some((w, h)) = image.css_dimensions(
+            if let Ok(meta) = meta {
+              let orientation = style.image_orientation.resolve(meta.orientation, false);
+              explicit_no_ratio = meta.aspect_ratio_none;
+              if let Some((w, h)) = meta.css_dimensions(
                 orientation,
                 &style.image_resolution,
                 self.device_pixel_ratio,
@@ -2687,7 +2835,7 @@ impl FastRender {
                   replaced_box.intrinsic_size = Some(Size::new(w, h));
                 }
                 if needs_ratio && !explicit_no_ratio {
-                  replaced_box.aspect_ratio = image.intrinsic_ratio(orientation).or_else(|| {
+                  replaced_box.aspect_ratio = meta.intrinsic_ratio(orientation).or_else(|| {
                     if h > 0.0 {
                       Some(w / h)
                     } else {
@@ -2701,29 +2849,35 @@ impl FastRender {
         }
       }
       ReplacedType::Svg { content } => {
+        if profile_enabled {
+          REPLACED_INTRINSIC_PROFILE.with(|state| {
+            state.borrow_mut().svgs += 1;
+          });
+        }
         let needs_intrinsic = replaced_box.intrinsic_size.is_none();
         let needs_ratio = replaced_box.aspect_ratio.is_none();
 
         if needs_intrinsic || needs_ratio {
           // Inline SVG content can be rendered directly; otherwise try to load via URL/data URI.
           let source = content.svg.trim_start();
-          let image = if source.starts_with('<') {
-            self.image_cache.render_svg(&content.svg)
+          let meta = if source.starts_with('<') {
+            self.image_cache.probe_svg_content(&content.svg, "svg")
           } else if !content.svg.is_empty() {
-            self.image_cache.load(&content.svg)
+            self
+              .image_cache
+              .probe(content.svg.as_str())
+              .map(|meta| (*meta).clone())
           } else {
-            Err(crate::error::Error::Image(
-              crate::error::ImageError::LoadFailed {
-                url: "svg".to_string(),
-                reason: "empty content".to_string(),
-              },
-            ))
+            Err(crate::error::Error::Image(crate::error::ImageError::LoadFailed {
+              url: "svg".to_string(),
+              reason: "empty content".to_string(),
+            }))
           };
 
-          if let Ok(image) = image {
-            let orientation = style.image_orientation.resolve(image.orientation, false);
-            explicit_no_ratio = image.aspect_ratio_none;
-            if let Some((w, h)) = image.css_dimensions(
+          if let Ok(meta) = meta {
+            let orientation = style.image_orientation.resolve(meta.orientation, false);
+            explicit_no_ratio = meta.aspect_ratio_none;
+            if let Some((w, h)) = meta.css_dimensions(
               orientation,
               &style.image_resolution,
               self.device_pixel_ratio,
@@ -2733,7 +2887,7 @@ impl FastRender {
                 replaced_box.intrinsic_size = Some(Size::new(w, h));
               }
               if needs_ratio && !explicit_no_ratio {
-                replaced_box.aspect_ratio = image.intrinsic_ratio(orientation).or_else(|| {
+                replaced_box.aspect_ratio = meta.intrinsic_ratio(orientation).or_else(|| {
                   if h > 0.0 {
                     Some(w / h)
                   } else {
@@ -2748,18 +2902,25 @@ impl FastRender {
       ReplacedType::Embed { src }
       | ReplacedType::Object { data: src }
       | ReplacedType::Iframe { src, .. } => {
+        if profile_enabled {
+          REPLACED_INTRINSIC_PROFILE.with(|state| {
+            state.borrow_mut().embeds += 1;
+          });
+        }
         let needs_intrinsic = replaced_box.intrinsic_size.is_none();
         let needs_ratio = replaced_box.aspect_ratio.is_none();
         if (needs_intrinsic || needs_ratio) && !src.is_empty() {
-          let image = if src.trim_start().starts_with('<') {
-            self.image_cache.render_svg(&src)
+          let src_trimmed = src.trim_start();
+          let inline_svg = src_trimmed.starts_with("<svg") || src_trimmed.starts_with("<?xml");
+          let meta = if inline_svg {
+            self.image_cache.probe_svg_content(src, "embed")
           } else {
-            self.image_cache.load(&src)
+            self.image_cache.probe(src).map(|meta| (*meta).clone())
           };
-          if let Ok(image) = image {
-            let orientation = style.image_orientation.resolve(image.orientation, false);
-            explicit_no_ratio = image.aspect_ratio_none;
-            if let Some((w, h)) = image.css_dimensions(
+          if let Ok(meta) = meta {
+            let orientation = style.image_orientation.resolve(meta.orientation, false);
+            explicit_no_ratio = meta.aspect_ratio_none;
+            if let Some((w, h)) = meta.css_dimensions(
               orientation,
               &style.image_resolution,
               self.device_pixel_ratio,
@@ -2769,7 +2930,7 @@ impl FastRender {
                 replaced_box.intrinsic_size = Some(Size::new(w, h));
               }
               if needs_ratio && !explicit_no_ratio {
-                replaced_box.aspect_ratio = image.intrinsic_ratio(orientation).or_else(|| {
+                replaced_box.aspect_ratio = meta.intrinsic_ratio(orientation).or_else(|| {
                   if h > 0.0 {
                     Some(w / h)
                   } else {

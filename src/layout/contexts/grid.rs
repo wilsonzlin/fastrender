@@ -62,6 +62,7 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
 use taffy::prelude::TaffyMaxContent;
@@ -2021,6 +2022,15 @@ impl FormattingContext for GridFormattingContext {
     ) {
       return Ok(cached);
     }
+
+    static TRACE_GRID_LAYOUT: OnceLock<bool> = OnceLock::new();
+    let trace_grid_layout = *TRACE_GRID_LAYOUT.get_or_init(|| {
+      std::env::var("FASTR_TRACE_GRID_LAYOUT")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+    });
+    let grid_trace_start = trace_grid_layout.then(std::time::Instant::now);
+
     // Create fresh Taffy tree for this layout
     let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
 
@@ -2038,6 +2048,20 @@ impl FormattingContext for GridFormattingContext {
 
     // Build Taffy tree from in-flow children
     let root_id = self.build_taffy_tree_children(&mut taffy, box_node, &in_flow_children)?;
+
+    if trace_grid_layout {
+      let selector = box_node
+        .debug_info
+        .as_ref()
+        .map(|d| d.to_selector())
+        .unwrap_or_else(|| "<anon>".to_string());
+      eprintln!(
+        "[grid-layout] start id={} in_flow_children={} selector={}",
+        box_node.id,
+        in_flow_children.len(),
+        selector
+      );
+    }
 
     // Block-level grid containers with `width: auto` should stretch to the available inline size.
     // Taffy treats `size: auto` as shrink-to-fit in some grid cases, so force a definite width
@@ -2206,6 +2230,51 @@ impl FormattingContext for GridFormattingContext {
 	              .unwrap_or(FormattingContextType::Block);
 	            let fc = factory.create(fc_type);
 
+	            // Taffy frequently probes min/max-content sizes during track sizing.
+	            // Avoid running full layout for these probes; use intrinsic sizing APIs instead.
+	            if known_dimensions.width.is_none() {
+	              let intrinsic_mode = match available_space.width {
+	                taffy::style::AvailableSpace::MinContent => Some(IntrinsicSizingMode::MinContent),
+	                taffy::style::AvailableSpace::MaxContent => Some(IntrinsicSizingMode::MaxContent),
+	                _ => None,
+	              };
+	              if let Some(mode) = intrinsic_mode {
+	                let border_width = fc.compute_intrinsic_inline_size(box_node, mode).unwrap_or(0.0);
+	                let percentage_base = match available_space.width {
+	                  taffy::style::AvailableSpace::Definite(w) => w,
+	                  _ => parent_inline_base.unwrap_or(0.0),
+	                };
+	                let padding_left = this.resolve_length_for_width(
+	                  box_node.style.padding_left,
+	                  percentage_base,
+	                  &box_node.style,
+	                );
+	                let padding_right = this.resolve_length_for_width(
+	                  box_node.style.padding_right,
+	                  percentage_base,
+	                  &box_node.style,
+	                );
+	                let border_left = this.resolve_length_for_width(
+	                  box_node.style.border_left_width,
+	                  percentage_base,
+	                  &box_node.style,
+	                );
+	                let border_right = this.resolve_length_for_width(
+	                  box_node.style.border_right_width,
+	                  percentage_base,
+	                  &box_node.style,
+	                );
+	                let edges_inline = padding_left + padding_right + border_left + border_right;
+	                let width = (border_width - edges_inline).max(0.0);
+	                let size = taffy::geometry::Size {
+	                  width,
+	                  height: fallback_size(known_dimensions.height, available_space.height).max(0.0),
+	                };
+	                cache.insert(key, size);
+	                return size;
+	              }
+	            }
+
 	            let mut constraints = constraints_from_taffy(
 	              viewport_size,
 	              known_dimensions,
@@ -2255,6 +2324,11 @@ impl FormattingContext for GridFormattingContext {
 	        },
 	      )
       .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
+
+    if let Some(start) = grid_trace_start {
+      let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+      eprintln!("[grid-layout] done id={} ms={elapsed_ms:.2}", box_node.id);
+    }
 
     // Convert back to FragmentNode tree and layout each in-flow child using its formatting context.
     let mut fragment = self.convert_to_fragments(&taffy, root_id, root_id, &constraints)?;
