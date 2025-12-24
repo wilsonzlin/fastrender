@@ -1,5 +1,6 @@
 //! CLI integration tests.
 
+mod diff_renders_test;
 mod fetch_and_render_exit_test;
 mod fetch_and_render_help_test;
 mod fetch_and_render_output_paths;
