@@ -6,6 +6,10 @@ description = "High-performance Rust HTML/CSS to image renderer"
 rust-version = "1.70"
 publish = false
 
+[workspace]
+members = ["xtask"]
+resolver = "2"
+
 [features]
 default = []
 box_generation_demo = []
