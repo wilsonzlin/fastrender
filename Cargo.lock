@@ -762,6 +762,7 @@ dependencies = [
  "selectors",
  "serde",
  "serde_json",
+ "svgtypes",
  "taffy",
  "tempfile",
  "thiserror 1.0.69",
@@ -769,14 +770,15 @@ dependencies = [
  "toml",
  "ttf-parser 0.25.1",
  "unicode-bidi",
+ "unicode-bidi-mirroring 0.4.0",
  "unicode-general-category",
  "unicode-linebreak",
- "unicode-script",
  "unicode-segmentation",
  "unicode-vo",
  "ureq",
  "url",
  "urlencoding",
+ "webp",
  "wuff",
 ]
 
@@ -927,6 +929,12 @@ dependencies = [
  "color_quant",
  "weezl",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "grid"
@@ -1340,6 +1348,16 @@ name = "libm"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
+
+[[package]]
+name = "libwebp-sys"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54cd30df7c7165ce74a456e4ca9732c603e8dc5e60784558c1c6dc047f876733"
+dependencies = [
+ "cc",
+ "glob",
+]
 
 [[package]]
 name = "linux-raw-sys"
@@ -2846,6 +2864,15 @@ dependencies = [
  "phf_codegen",
  "string_cache",
  "string_cache_codegen",
+]
+
+[[package]]
+name = "webp"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c071456adef4aca59bf6a583c46b90ff5eb0b4f758fc347cea81290288f37ce1"
+dependencies = [
+ "libwebp-sys",
 ]
 
 [[package]]

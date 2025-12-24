@@ -886,7 +886,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
     let mut shared: Option<SharedResult> = None;
 
     let result = match fetch_result {
-      Ok(mut res) => {
+      Ok(res) => {
         if res.is_not_modified() {
           if let Some(snapshot) = cached.as_ref() {
             let value = snapshot.value.as_result();

@@ -266,7 +266,7 @@ pub(crate) fn resolve_clip_path(
   }
 }
 
-fn resolve_basic_shape(
+pub(crate) fn resolve_basic_shape(
   shape: &BasicShape,
   reference: Rect,
   style: &ComputedStyle,

@@ -1,7 +1,9 @@
 use base64::prelude::BASE64_STANDARD;
+use base64::Engine as _;
 use fastrender::api::FastRender;
 use image::codecs::png::PngEncoder;
 use image::ExtendedColorType;
+use image::ImageEncoder;
 
 fn solid_color_png(r: u8, g: u8, b: u8, a: u8) -> String {
   let mut buf = Vec::new();

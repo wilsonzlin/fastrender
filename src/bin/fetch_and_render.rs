@@ -19,6 +19,7 @@ use common::render_pipeline::{
 use fastrender::image_output::encode_image;
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::url_to_filename;
+use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::OutputFormat;
@@ -246,6 +247,8 @@ fn render_page(
 fn main() -> Result<()> {
   let args = Args::parse();
 
+  set_media_environment(&args);
+
   // Resolve dimensions from viewport or deprecated positional args
   let (viewport_w, viewport_h) = args.viewport;
   let width = args.width.unwrap_or(viewport_w);
@@ -269,8 +272,6 @@ fn main() -> Result<()> {
   } else {
     Some(args.timeout)
   };
-
-  set_media_environment(&args);
 
   eprintln!(
     "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",

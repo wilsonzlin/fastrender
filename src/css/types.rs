@@ -6,6 +6,7 @@ use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
+use crate::style::counter_styles::CounterStyleRule;
 use crate::style::media::MediaContext;
 use crate::style::media::MediaQuery;
 use crate::style::media::MediaQueryCache;
@@ -176,6 +177,15 @@ pub struct CollectedPageRule<'a> {
   pub order: usize,
 }
 
+/// Flattened @counter-style rule with cascade-layer ordering preserved.
+#[derive(Debug, Clone)]
+pub struct CollectedCounterStyleRule<'a> {
+  pub rule: &'a CounterStyleRule,
+  /// Cascade layer order (lexicographic; unlayered rules use a sentinel of u32::MAX).
+  pub layer_order: Vec<u32>,
+  pub order: usize,
+}
+
 /// Stylesheet containing CSS rules
 #[derive(Debug, Clone)]
 pub struct StyleSheet {
@@ -328,6 +338,33 @@ impl StyleSheet {
     result
   }
 
+  /// Collects all @counter-style rules that apply to the current media context.
+  pub fn collect_counter_style_rules(
+    &self,
+    media_ctx: &MediaContext,
+  ) -> Vec<CollectedCounterStyleRule<'_>> {
+    self.collect_counter_style_rules_with_cache(media_ctx, None)
+  }
+
+  /// Collects @counter-style rules using an optional media-query cache for reuse.
+  pub fn collect_counter_style_rules_with_cache(
+    &self,
+    media_ctx: &MediaContext,
+    cache: Option<&mut MediaQueryCache>,
+  ) -> Vec<CollectedCounterStyleRule<'_>> {
+    let mut result = Vec::new();
+    let mut registry = LayerRegistry::new();
+    collect_counter_styles_recursive(
+      &self.rules,
+      media_ctx,
+      cache,
+      &mut registry,
+      &[],
+      &mut result,
+    );
+    result
+  }
+
   /// Resolve @import rules by fetching external stylesheets and inlining their rules.
   ///
   /// Imports are processed in order; only imports whose media lists match the provided
@@ -394,7 +431,11 @@ impl StyleSheet {
               return true;
             }
           }
-          CssRule::Page(_) | CssRule::Import(_) | CssRule::FontFace(_) | CssRule::Keyframes(_) => {}
+          CssRule::Page(_)
+          | CssRule::CounterStyle(_)
+          | CssRule::Import(_)
+          | CssRule::FontFace(_)
+          | CssRule::Keyframes(_) => {}
         }
       }
       false
@@ -492,6 +533,7 @@ fn collect_rules_recursive<'a>(
         }
       }
       CssRule::Page(_) => {}
+      CssRule::CounterStyle(_) => {}
       CssRule::Import(_) => {
         // Imports are resolved before collection; nothing to add here.
       }
@@ -649,6 +691,7 @@ fn collect_page_rules_recursive<'a>(
         );
       }
       CssRule::Container(_) => {}
+      CssRule::Keyframes(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_page_rules_recursive(
@@ -690,6 +733,7 @@ fn collect_font_faces_recursive(
         }
       }
       CssRule::Page(_) => {}
+      CssRule::CounterStyle(_) => {}
       CssRule::Layer(layer_rule) => {
         if layer_rule.rules.is_empty() {
           continue;
@@ -743,10 +787,136 @@ fn collect_keyframes_recursive(
         }
         collect_keyframes_recursive(&layer_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
+      CssRule::Page(_) | CssRule::CounterStyle(_) => {}
       CssRule::Style(_) | CssRule::Import(_) | CssRule::FontFace(_) => {}
       CssRule::Scope(scope_rule) => {
         collect_keyframes_recursive(&scope_rule.rules, media_ctx, cache.as_deref_mut(), out);
       }
+    }
+  }
+}
+
+fn collect_counter_styles_recursive<'a>(
+  rules: &'a [CssRule],
+  media_ctx: &MediaContext,
+  cache: Option<&mut MediaQueryCache>,
+  registry: &mut LayerRegistry,
+  current_layer: &[u32],
+  out: &mut Vec<CollectedCounterStyleRule<'a>>,
+) {
+  let mut cache = cache;
+  for rule in rules {
+    match rule {
+      CssRule::CounterStyle(counter) => {
+        let layer_order = if current_layer.is_empty() {
+          vec![u32::MAX]
+        } else {
+          current_layer.to_vec()
+        };
+        let order = out.len();
+        out.push(CollectedCounterStyleRule {
+          rule: counter,
+          layer_order,
+          order,
+        });
+      }
+      CssRule::Media(media_rule) => {
+        if media_ctx.evaluate_with_cache(&media_rule.query, cache.as_deref_mut()) {
+          collect_counter_styles_recursive(
+            &media_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Supports(supports_rule) => {
+        if supports_rule.condition.matches() {
+          collect_counter_styles_recursive(
+            &supports_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Layer(layer_rule) => {
+        if layer_rule.rules.is_empty() {
+          for name in &layer_rule.names {
+            registry.ensure_path(current_layer, name);
+          }
+          if layer_rule.anonymous {
+            registry.ensure_anonymous(current_layer);
+          }
+          continue;
+        }
+
+        if layer_rule.anonymous {
+          let path = registry.ensure_anonymous(current_layer);
+          collect_counter_styles_recursive(
+            &layer_rule.rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            &path,
+            out,
+          );
+          continue;
+        }
+
+        if layer_rule.names.len() != 1 {
+          continue;
+        }
+        let path = registry.ensure_path(current_layer, &layer_rule.names[0]);
+        collect_counter_styles_recursive(
+          &layer_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          &path,
+          out,
+        );
+      }
+      CssRule::Style(style_rule) => {
+        if !style_rule.nested_rules.is_empty() {
+          collect_counter_styles_recursive(
+            &style_rule.nested_rules,
+            media_ctx,
+            cache.as_deref_mut(),
+            registry,
+            current_layer,
+            out,
+          );
+        }
+      }
+      CssRule::Scope(scope_rule) => {
+        collect_counter_styles_recursive(
+          &scope_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
+      CssRule::Container(container_rule) => {
+        collect_counter_styles_recursive(
+          &container_rule.rules,
+          media_ctx,
+          cache.as_deref_mut(),
+          registry,
+          current_layer,
+          out,
+        );
+      }
+      CssRule::Import(_) => {}
+      CssRule::Page(_) => {}
+      CssRule::FontFace(_) => {}
+      CssRule::Keyframes(_) => {}
     }
   }
 }
@@ -939,15 +1109,7 @@ fn supports_selector_is_valid(selector_list: &str) -> bool {
     selectors::parser::ParseRelative::No,
   ) {
     Ok(_) => true,
-    Err(err) => {
-      #[cfg(test)]
-      eprintln!(
-        "selector() query parse failed for `{}`: {:?}",
-        selector_list, err
-      );
-      let _ = err;
-      false
-    }
+    Err(_) => false,
   }
 }
 
@@ -1029,6 +1191,8 @@ pub enum CssRule {
   Supports(SupportsRule),
   /// A @page rule controlling paged-media page boxes
   Page(PageRule),
+  /// A @counter-style rule defining a custom counter style.
+  CounterStyle(CounterStyleRule),
   /// An @import rule (href + optional media list)
   Import(ImportRule),
   /// A @layer rule establishing cascade layers
@@ -1314,7 +1478,11 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
 
   for rule in rules {
     match rule {
-      CssRule::Style(_) | CssRule::Media(_) | CssRule::Keyframes(_) => out.push(rule.clone()),
+      CssRule::Style(_)
+      | CssRule::Media(_)
+      | CssRule::FontFace(_)
+      | CssRule::Keyframes(_)
+      | CssRule::CounterStyle(_) => out.push(rule.clone()),
       CssRule::Container(container_rule) => {
         let mut resolved_children = Vec::new();
         resolve_rules(
@@ -1350,6 +1518,23 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
       }
       CssRule::Page(page_rule) => {
         out.push(CssRule::Page(page_rule.clone()));
+      }
+      CssRule::Scope(scope_rule) => {
+        let mut resolved_children = Vec::new();
+        resolve_rules(
+          &scope_rule.rules,
+          loader,
+          base_url,
+          media_ctx,
+          cache.as_deref_mut(),
+          seen,
+          &mut resolved_children,
+        );
+        out.push(CssRule::Scope(ScopeRule {
+          start: scope_rule.start.clone(),
+          end: scope_rule.end.clone(),
+          rules: resolved_children,
+        }));
       }
       CssRule::Layer(layer_rule) => {
         let mut resolved_children = Vec::new();
@@ -1409,24 +1594,6 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
             // Per spec, failed imports are ignored.
           }
         }
-      }
-      CssRule::FontFace(_) => out.push(rule.clone()),
-      CssRule::Scope(scope_rule) => {
-        let mut resolved_children = Vec::new();
-        resolve_rules(
-          &scope_rule.rules,
-          loader,
-          base_url,
-          media_ctx,
-          cache.as_deref_mut(),
-          seen,
-          &mut resolved_children,
-        );
-        out.push(CssRule::Scope(ScopeRule {
-          start: scope_rule.start.clone(),
-          end: scope_rule.end.clone(),
-          rules: resolved_children,
-        }));
       }
     }
   }

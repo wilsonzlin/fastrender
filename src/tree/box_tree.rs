@@ -900,6 +900,12 @@ pub struct BoxNode {
 
   /// Styled node identifier that produced this box (pre-order traversal id).
   pub styled_node_id: Option<usize>,
+
+  /// Optional computed style overrides for `::first-line`.
+  pub first_line_style: Option<Arc<ComputedStyle>>,
+
+  /// Optional computed style overrides for `::first-letter`.
+  pub first_letter_style: Option<Arc<ComputedStyle>>,
 }
 
 impl BoxNode {
@@ -935,6 +941,8 @@ impl BoxNode {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -949,6 +957,8 @@ impl BoxNode {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -967,6 +977,8 @@ impl BoxNode {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -979,6 +991,8 @@ impl BoxNode {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -991,6 +1005,8 @@ impl BoxNode {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -1012,6 +1028,8 @@ impl BoxNode {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -1026,6 +1044,8 @@ impl BoxNode {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -1040,6 +1060,8 @@ impl BoxNode {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 

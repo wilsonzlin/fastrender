@@ -77,7 +77,7 @@ pub fn get_default_styles_for_element(node: &DomNode) -> ComputedStyle {
     // Force minimal spacing for table elements (consistent with user-agent.css)
     match tag {
       "html" => {
-        // Canvas default background per UA stylesheet
+        // Canvas default background per UA stylesheet.
         styles.background_color = Rgba::WHITE;
       }
       "body" => {

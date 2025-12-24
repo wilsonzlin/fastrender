@@ -231,6 +231,8 @@ impl TableStructureFixer {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -247,6 +249,8 @@ impl TableStructureFixer {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -263,6 +267,8 @@ impl TableStructureFixer {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -279,6 +285,8 @@ impl TableStructureFixer {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -622,6 +630,8 @@ mod tests {
       children: cells,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -636,6 +646,8 @@ mod tests {
       children: content,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -650,6 +662,8 @@ mod tests {
       children: rows,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -664,6 +678,8 @@ mod tests {
       children: content,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 

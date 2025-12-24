@@ -32,8 +32,10 @@ fn background_image_set_renders_avif_candidate() {
         background-size: cover;
       }}
     </style>
-    <div style="width: 8px; height: 8px;"></div>
-    "#
+	    <div style="width: 8px; height: 8px;"></div>
+	    "#,
+    avif = avif_url,
+    webp = webp_url
   );
 
   let pixmap = renderer

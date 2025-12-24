@@ -29,6 +29,7 @@
 
 use crate::geometry::Point;
 use crate::geometry::Rect;
+use crate::geometry::Size;
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::layout_cache_lookup;
@@ -61,7 +62,6 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use std::collections::HashMap;
 use std::sync::Arc;
-use taffy::compute::DetailedGridTracksInfo;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
 use taffy::prelude::TaffyMaxContent;
@@ -86,11 +86,95 @@ use taffy::tree::DetailedLayoutInfo;
 use taffy::tree::Layout as TaffyLayout;
 use taffy::tree::NodeId as TaffyNodeId;
 use taffy::tree::TaffyTree;
+use taffy::DetailedGridTracksInfo;
 
 #[derive(Clone, Copy)]
 enum Axis {
   Horizontal,
   Vertical,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum MeasureAvailKey {
+  Definite(u32),
+  MinContent,
+  MaxContent,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct MeasureKey {
+  node_ptr: usize,
+  known_width: Option<u32>,
+  known_height: Option<u32>,
+  available_width: MeasureAvailKey,
+  available_height: MeasureAvailKey,
+}
+
+impl MeasureKey {
+  fn new(
+    node_ptr: *const BoxNode,
+    known_dimensions: taffy::geometry::Size<Option<f32>>,
+    available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
+  ) -> Self {
+    fn avail_key(space: taffy::style::AvailableSpace) -> MeasureAvailKey {
+      match space {
+        taffy::style::AvailableSpace::Definite(v) => MeasureAvailKey::Definite(v.to_bits()),
+        taffy::style::AvailableSpace::MinContent => MeasureAvailKey::MinContent,
+        taffy::style::AvailableSpace::MaxContent => MeasureAvailKey::MaxContent,
+      }
+    }
+
+    Self {
+      node_ptr: node_ptr as usize,
+      known_width: known_dimensions.width.map(|v| v.to_bits()),
+      known_height: known_dimensions.height.map(|v| v.to_bits()),
+      available_width: avail_key(available_space.width),
+      available_height: avail_key(available_space.height),
+    }
+  }
+}
+
+fn constraints_from_taffy(
+  viewport_size: crate::geometry::Size,
+  known: taffy::geometry::Size<Option<f32>>,
+  available: taffy::geometry::Size<taffy::style::AvailableSpace>,
+  inline_percentage_base: Option<f32>,
+) -> LayoutConstraints {
+  let clamp_def_width = |w: f32| w.min(viewport_size.width);
+  let width = match (known.width, available.width) {
+    (Some(w), _) => CrateAvailableSpace::Definite(clamp_def_width(w)),
+    (_, taffy::style::AvailableSpace::Definite(w)) => {
+      if w <= 1.0 {
+        CrateAvailableSpace::Indefinite
+      } else {
+        CrateAvailableSpace::Definite(clamp_def_width(w))
+      }
+    }
+    (_, taffy::style::AvailableSpace::MinContent) => CrateAvailableSpace::MinContent,
+    (_, taffy::style::AvailableSpace::MaxContent) => CrateAvailableSpace::MaxContent,
+  };
+  let height = match (known.height, available.height) {
+    (Some(h), _) => CrateAvailableSpace::Definite(h),
+    (_, taffy::style::AvailableSpace::Definite(h)) => {
+      if h <= 1.0 {
+        CrateAvailableSpace::Indefinite
+      } else {
+        CrateAvailableSpace::Definite(h)
+      }
+    }
+    (_, taffy::style::AvailableSpace::MinContent) => CrateAvailableSpace::MinContent,
+    (_, taffy::style::AvailableSpace::MaxContent) => CrateAvailableSpace::MaxContent,
+  };
+
+  let mut constraints = LayoutConstraints::new(width, height);
+  constraints.inline_percentage_base = constraints
+    .inline_percentage_base
+    .or(inline_percentage_base)
+    .or(match available.width {
+      taffy::style::AvailableSpace::Definite(w) => Some(w),
+      _ => None,
+    });
+  constraints
 }
 
 /// Grid Formatting Context
@@ -113,6 +197,7 @@ enum Axis {
 /// let fc = GridFormattingContext::new();
 /// let fragment = fc.layout(&box_node, &constraints)?;
 /// ```
+#[derive(Clone)]
 pub struct GridFormattingContext {
   viewport_size: crate::geometry::Size,
   font_context: crate::text::font_loader::FontContext,
@@ -257,76 +342,102 @@ impl GridFormattingContext {
     .unwrap_or(0.0)
   }
 
+  fn content_box_size(
+    &self,
+    fragment: &FragmentNode,
+    style: &ComputedStyle,
+    percentage_base: f32,
+  ) -> Size {
+    let padding_left = self.resolve_length_for_width(style.padding_left, percentage_base, style);
+    let padding_right = self.resolve_length_for_width(style.padding_right, percentage_base, style);
+    let padding_top = self.resolve_length_for_width(style.padding_top, percentage_base, style);
+    let padding_bottom =
+      self.resolve_length_for_width(style.padding_bottom, percentage_base, style);
+
+    let border_left =
+      self.resolve_length_for_width(style.border_left_width, percentage_base, style);
+    let border_right =
+      self.resolve_length_for_width(style.border_right_width, percentage_base, style);
+    let border_top = self.resolve_length_for_width(style.border_top_width, percentage_base, style);
+    let border_bottom =
+      self.resolve_length_for_width(style.border_bottom_width, percentage_base, style);
+
+    let content_width =
+      (fragment.bounds.width() - padding_left - padding_right - border_left - border_right)
+        .max(0.0);
+    let content_height =
+      (fragment.bounds.height() - padding_top - padding_bottom - border_top - border_bottom)
+        .max(0.0);
+
+    Size::new(content_width, content_height)
+  }
+
   /// Builds a Taffy tree from a BoxNode tree
   ///
   /// Recursively converts the BoxNode tree to Taffy nodes, returning
   /// the root node ID and a mapping from Taffy nodes to BoxNodes.
-  fn build_taffy_tree<'a>(
+  fn build_taffy_tree(
     &self,
-    taffy: &mut TaffyTree<()>,
-    box_node: &'a BoxNode,
-  ) -> Result<(TaffyNodeId, HashMap<TaffyNodeId, &'a BoxNode>), LayoutError> {
-    self.build_taffy_tree_children(
-      taffy,
-      box_node,
-      &box_node.children.iter().collect::<Vec<_>>(),
-    )
+    taffy: &mut TaffyTree<*const BoxNode>,
+    box_node: &BoxNode,
+  ) -> Result<TaffyNodeId, LayoutError> {
+    let root_children: Vec<&BoxNode> = box_node.children.iter().collect();
+    self.build_taffy_tree_children(taffy, box_node, &root_children)
   }
 
   /// Builds a Taffy tree using an explicit slice of root children (used to exclude out-of-flow boxes).
-  fn build_taffy_tree_children<'a>(
+  fn build_taffy_tree_children(
     &self,
-    taffy: &mut TaffyTree<()>,
-    box_node: &'a BoxNode,
-    root_children: &[&'a BoxNode],
-  ) -> Result<(TaffyNodeId, HashMap<TaffyNodeId, &'a BoxNode>), LayoutError> {
-    let mut node_map = HashMap::new();
-    let root_id =
-      self.build_node_recursive(taffy, box_node, &mut node_map, None, Some(root_children))?;
-    Ok((root_id, node_map))
+    taffy: &mut TaffyTree<*const BoxNode>,
+    box_node: &BoxNode,
+    root_children: &[&BoxNode],
+  ) -> Result<TaffyNodeId, LayoutError> {
+    self.build_taffy_tree_inner(taffy, box_node, true, None, Some(root_children))
   }
 
-  /// Recursively builds a Taffy node and its children
-  fn build_node_recursive<'a>(
+  fn build_taffy_tree_inner(
     &self,
-    taffy: &mut TaffyTree<()>,
-    box_node: &'a BoxNode,
-    node_map: &mut HashMap<TaffyNodeId, &'a BoxNode>,
-    containing_grid: Option<&'a ComputedStyle>,
-    root_children: Option<&[&'a BoxNode]>,
+    taffy: &mut TaffyTree<*const BoxNode>,
+    box_node: &BoxNode,
+    is_root: bool,
+    containing_grid: Option<&ComputedStyle>,
+    root_children: Option<&[&BoxNode]>,
   ) -> Result<TaffyNodeId, LayoutError> {
-    // Convert children first
-    let children_iter: Vec<&BoxNode> = root_children
-      .map(|c| c.to_vec())
-      .unwrap_or_else(|| box_node.children.iter().collect());
-    let child_ids: Vec<TaffyNodeId> = children_iter
-      .iter()
-      .map(|child| {
-        let next_containing_grid = match box_node.style.display {
-          CssDisplay::Grid | CssDisplay::InlineGrid => Some(box_node.style.as_ref()),
-          _ => None,
-        };
-        self.build_node_recursive(taffy, child, node_map, next_containing_grid, None)
-      })
-      .collect::<Result<_, _>>()?;
+    let children_iter: Vec<&BoxNode> = if is_root {
+      root_children
+        .map(|c| c.to_vec())
+        .unwrap_or_else(|| box_node.children.iter().collect())
+    } else {
+      Vec::new()
+    };
 
-    let simple_grid = self.is_simple_grid(&box_node.style, &children_iter);
+    let simple_grid = is_root && self.is_simple_grid(&box_node.style, &children_iter);
+    let taffy_style = self.convert_style(&box_node.style, containing_grid, simple_grid, is_root);
 
-    // Convert style
-    let taffy_style = self.convert_style(&box_node.style, containing_grid, simple_grid);
-
-    // Create Taffy node
-    let node_id = if child_ids.is_empty() {
+    let node_id = if is_root {
+      let mut taffy_children = Vec::with_capacity(children_iter.len());
+      for child in children_iter {
+        taffy_children.push(self.build_taffy_tree_inner(
+          taffy,
+          child,
+          false,
+          Some(&*box_node.style),
+          None,
+        )?);
+      }
+      let node_id = taffy
+        .new_with_children(taffy_style, &taffy_children)
+        .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
       taffy
-        .new_leaf(taffy_style)
-        .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?
+        .set_node_context(node_id, Some(box_node as *const BoxNode))
+        .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+      node_id
     } else {
       taffy
-        .new_with_children(taffy_style, &child_ids)
+        .new_leaf_with_context(taffy_style, box_node as *const BoxNode)
         .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?
     };
 
-    node_map.insert(node_id, box_node);
     Ok(node_id)
   }
 
@@ -336,6 +447,7 @@ impl GridFormattingContext {
     style: &ComputedStyle,
     containing_grid: Option<&ComputedStyle>,
     simple_grid: bool,
+    is_root: bool,
   ) -> TaffyStyle {
     let mut taffy_style = TaffyStyle::default();
     let inline_positive_container = self.inline_axis_positive(style);
@@ -367,8 +479,7 @@ impl GridFormattingContext {
     let inline_is_horizontal_item = self.inline_axis_is_horizontal(item_axis_style);
 
     // Display mode
-    let is_grid =
-      matches!(style.display, CssDisplay::Grid | CssDisplay::InlineGrid) && !simple_grid;
+    let is_grid = is_root && !simple_grid;
     if is_grid {
       taffy_style.display = Display::Grid;
     } else {
@@ -1060,9 +1171,9 @@ impl GridFormattingContext {
   /// Converts Taffy layout results to FragmentNode tree
   fn convert_to_fragments(
     &self,
-    taffy: &TaffyTree<()>,
+    taffy: &TaffyTree<*const BoxNode>,
     node_id: TaffyNodeId,
-    node_map: &HashMap<TaffyNodeId, &BoxNode>,
+    root_id: TaffyNodeId,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     let layout = taffy
@@ -1076,7 +1187,7 @@ impl GridFormattingContext {
 
     let child_fragments: Vec<FragmentNode> = children
       .iter()
-      .map(|&child_id| self.convert_to_fragments(taffy, child_id, node_map, constraints))
+      .map(|&child_id| self.convert_to_fragments(taffy, child_id, root_id, constraints))
       .collect::<Result<_, _>>()?;
 
     // Create fragment bounds from Taffy layout
@@ -1087,16 +1198,10 @@ impl GridFormattingContext {
       layout.size.height,
     );
 
-    // Get style from node_map if available
-    if let Some(box_node) = node_map.get(&node_id) {
-      let is_grid = matches!(
-        box_node.style.display,
-        CssDisplay::Grid | CssDisplay::InlineGrid
-      ) || matches!(
-        box_node.formatting_context(),
-        Some(FormattingContextType::Grid)
-      );
-      if is_grid {
+    // Get style from node context if available
+    if let Some(&box_node_ptr) = taffy.get_node_context(node_id) {
+      let box_node = unsafe { &*box_node_ptr };
+      if node_id == root_id {
         let mut fragment = FragmentNode::new_with_style(
           bounds,
           FragmentContent::Block {
@@ -1112,15 +1217,105 @@ impl GridFormattingContext {
       let fc_type = box_node
         .formatting_context()
         .unwrap_or(FormattingContextType::Block);
-      let factory = crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
-                self.font_context.clone(),
-                self.viewport_size,
-                self.nearest_positioned_cb,
-            );
+      let factory =
+        crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+          self.font_context.clone(),
+          self.viewport_size,
+          self.nearest_positioned_cb,
+        );
       let fc = factory.create(fc_type);
 
       let mut layout_child = (*box_node).clone();
       let mut layout_style = (*layout_child.style).clone();
+      if matches!(fc_type, FormattingContextType::Grid)
+        && (layout_style.grid_row_subgrid || layout_style.grid_column_subgrid)
+      {
+        if let Some(&container_ptr) = taffy.get_node_context(root_id) {
+          let container_style = unsafe { &*container_ptr }.style.as_ref();
+          let resolve_range = |start: i32, end: i32, track_count: usize| -> (usize, usize) {
+            if track_count == 0 {
+              return (0, 0);
+            }
+            let start_line = if start > 0 { start as usize } else { 1 };
+            let end_line = if end > 0 {
+              end as usize
+            } else {
+              track_count.saturating_add(1)
+            };
+            let start_idx = start_line.saturating_sub(1).min(track_count);
+            let end_idx = end_line.saturating_sub(1).min(track_count);
+            if end_idx < start_idx {
+              (0, track_count)
+            } else {
+              (start_idx, end_idx)
+            }
+          };
+
+          let merge_line_names = |parent: &[Vec<String>],
+                                  extra: &[Vec<String>],
+                                  start_idx: usize,
+                                  end_idx: usize|
+           -> Vec<Vec<String>> {
+            let line_count = end_idx.saturating_sub(start_idx).saturating_add(1);
+            let mut merged: Vec<Vec<String>> = if parent.is_empty() {
+              vec![Vec::new(); line_count]
+            } else {
+              let max_line = end_idx.min(parent.len().saturating_sub(1));
+              let start_line = start_idx.min(max_line);
+              parent[start_line..=max_line].to_vec()
+            };
+            if merged.len() < line_count {
+              merged.resize_with(line_count, Vec::new);
+            }
+            for (idx, target) in merged.iter_mut().enumerate() {
+              if let Some(names) = extra.get(idx) {
+                for name in names {
+                  if !target.iter().any(|n| n == name) {
+                    target.push(name.clone());
+                  }
+                }
+              }
+            }
+            merged
+          };
+
+          if layout_style.grid_row_subgrid {
+            let (start_idx, end_idx) = resolve_range(
+              layout_style.grid_row_start,
+              layout_style.grid_row_end,
+              container_style.grid_template_rows.len(),
+            );
+            layout_style.grid_template_rows =
+              container_style.grid_template_rows[start_idx..end_idx].to_vec();
+            layout_style.grid_row_gap = container_style.grid_row_gap;
+            layout_style.grid_row_line_names = merge_line_names(
+              &container_style.grid_row_line_names,
+              &layout_style.subgrid_row_line_names,
+              start_idx,
+              end_idx,
+            );
+            layout_style.grid_row_subgrid = false;
+          }
+
+          if layout_style.grid_column_subgrid {
+            let (start_idx, end_idx) = resolve_range(
+              layout_style.grid_column_start,
+              layout_style.grid_column_end,
+              container_style.grid_template_columns.len(),
+            );
+            layout_style.grid_template_columns =
+              container_style.grid_template_columns[start_idx..end_idx].to_vec();
+            layout_style.grid_column_gap = container_style.grid_column_gap;
+            layout_style.grid_column_line_names = merge_line_names(
+              &container_style.grid_column_line_names,
+              &layout_style.subgrid_column_line_names,
+              start_idx,
+              end_idx,
+            );
+            layout_style.grid_column_subgrid = false;
+          }
+        }
+      }
       layout_style.width = Some(Length::px(bounds.width()));
       layout_style.height = Some(Length::px(bounds.height()));
       layout_child.style = Arc::new(layout_style);
@@ -1203,6 +1398,8 @@ impl GridFormattingContext {
       return;
     }
 
+    let debug_baseline = std::env::var_os("FASTR_DEBUG_GRID_BASELINE").is_some();
+
     let mut target = 0.0;
     for item in group {
       let area_size = (item.area_end - item.area_start).max(0.0);
@@ -1212,25 +1409,69 @@ impl GridFormattingContext {
       }
     }
 
+    if debug_baseline {
+      let axis_name = match axis {
+        Axis::Horizontal => "horizontal",
+        Axis::Vertical => "vertical",
+      };
+      eprintln!(
+        "[grid-baseline] axis={} group_len={} target={:.2}",
+        axis_name,
+        group.len(),
+        target
+      );
+    }
+
     for item in group {
       let area_size = (item.area_end - item.area_start).max(0.0);
       if area_size <= 0.0 {
+        if debug_baseline {
+          eprintln!(
+            "[grid-baseline] idx={} non-positive area (area_start={:.2} area_end={:.2})",
+            item.idx, item.area_start, item.area_end
+          );
+        }
         continue;
       }
       let upper = (item.area_end - item.size).max(item.area_start);
       let desired_start = (item.area_start + target - item.baseline).clamp(item.area_start, upper);
       let delta = desired_start - item.start;
       if delta.abs() > 0.01 {
+        if debug_baseline {
+          eprintln!(
+            "[grid-baseline] idx={} area=({:.2},{:.2}) baseline={:.2} start={:.2} size={:.2} desired_start={:.2} delta={:.2}",
+            item.idx,
+            item.area_start,
+            item.area_end,
+            item.baseline,
+            item.start,
+            item.size,
+            desired_start,
+            delta
+          );
+        }
         if let Some(child) = fragment.children.get_mut(item.idx) {
           translate_along_axis(child, axis, delta);
         }
+      } else if debug_baseline {
+        eprintln!(
+          "[grid-baseline] idx={} area=({:.2},{:.2}) baseline={:.2} start={:.2} size={:.2} desired_start={:.2} delta={:.4}",
+          item.idx,
+          item.area_start,
+          item.area_end,
+          item.baseline,
+          item.start,
+          item.size,
+          desired_start,
+          delta
+        );
       }
     }
   }
 
   fn apply_grid_baseline_alignment(
     &self,
-    taffy: &TaffyTree<()>,
+    taffy: &TaffyTree<*const BoxNode>,
     node_id: TaffyNodeId,
     layout: &TaffyLayout,
     child_ids: &[TaffyNodeId],
@@ -1276,6 +1517,18 @@ impl GridFormattingContext {
         .unwrap_or(TaffyAlignContent::Stretch),
     );
 
+    let debug_baseline = std::env::var_os("FASTR_DEBUG_GRID_BASELINE").is_some();
+    if debug_baseline {
+      eprintln!(
+        "[grid-baseline] rows sizes={:?} gutters={:?} offsets={:?}",
+        detailed.rows.sizes, detailed.rows.gutters, row_offsets
+      );
+      eprintln!(
+        "[grid-baseline] cols sizes={:?} gutters={:?} offsets={:?}",
+        detailed.columns.sizes, detailed.columns.gutters, col_offsets
+      );
+    }
+
     let mut row_groups: HashMap<u16, Vec<BaselineItem>> = HashMap::new();
     let mut col_groups: HashMap<u16, Vec<BaselineItem>> = HashMap::new();
 
@@ -1297,6 +1550,19 @@ impl GridFormattingContext {
           grid_area_for_item(&row_offsets, item_info.row_start, item_info.row_end),
           self.baseline_offset_with_fallback(child_fragment, Axis::Vertical),
         ) {
+          if debug_baseline {
+            eprintln!(
+              "[grid-baseline] idx={} row=({},{}) area=({:.2},{:.2}) start={:.2} size={:.2} baseline={:.2}",
+              idx,
+              item_info.row_start,
+              item_info.row_end,
+              area_start,
+              area_end,
+              child_fragment.bounds.y(),
+              child_fragment.bounds.height(),
+              baseline
+            );
+          }
           row_groups
             .entry(item_info.row_start)
             .or_default()
@@ -1318,6 +1584,19 @@ impl GridFormattingContext {
           grid_area_for_item(&col_offsets, item_info.column_start, item_info.column_end),
           self.baseline_offset_with_fallback(child_fragment, Axis::Horizontal),
         ) {
+          if debug_baseline {
+            eprintln!(
+              "[grid-baseline] idx={} col=({},{}) area=({:.2},{:.2}) start={:.2} size={:.2} baseline={:.2}",
+              idx,
+              item_info.column_start,
+              item_info.column_end,
+              area_start,
+              area_end,
+              child_fragment.bounds.x(),
+              child_fragment.bounds.width(),
+              baseline
+            );
+          }
           col_groups
             .entry(item_info.column_start)
             .or_default()
@@ -1360,8 +1639,8 @@ impl GridFormattingContext {
       return Ok(edges.max(0.0));
     }
 
-    let mut taffy = TaffyTree::new();
-    let (root_id, _node_map) = self.build_taffy_tree(&mut taffy, box_node)?;
+    let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
+    let root_id = self.build_taffy_tree(&mut taffy, box_node)?;
 
     // Use appropriate available space for intrinsic sizing
     let available_space = match mode {
@@ -1377,7 +1656,64 @@ impl GridFormattingContext {
 
     record_taffy_invocation(TaffyAdapterKind::Grid);
     taffy
-      .compute_layout(root_id, available_space)
+      .compute_layout_with_measure(
+        root_id,
+        available_space,
+        {
+          let factory =
+            crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+              self.font_context.clone(),
+              self.viewport_size,
+              self.nearest_positioned_cb,
+            );
+          let viewport_size = self.viewport_size;
+          let mut cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
+          move |known_dimensions,
+                available_space,
+                node_id,
+                node_context,
+                _style: &taffy::style::Style| {
+            if node_id == root_id {
+              return taffy::geometry::Size::ZERO;
+            }
+            let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
+              return taffy::geometry::Size::ZERO;
+            };
+            let box_node = unsafe { &*node_ptr };
+            let mut available_space = available_space;
+            if known_dimensions.width.is_none()
+              && matches!(
+                available_space.width,
+                taffy::style::AvailableSpace::Definite(_)
+              )
+              && box_node.style.width.is_none()
+            {
+              available_space.width = taffy::style::AvailableSpace::MaxContent;
+            }
+
+            let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
+            if let Some(size) = cache.get(&key) {
+              return *size;
+            }
+            let fc_type = box_node
+              .formatting_context()
+              .unwrap_or(FormattingContextType::Block);
+            let fc = factory.create(fc_type);
+            let constraints =
+              constraints_from_taffy(viewport_size, known_dimensions, available_space, None);
+            let fragment = match fc.layout(box_node, &constraints) {
+              Ok(fragment) => fragment,
+              Err(_) => return taffy::geometry::Size::ZERO,
+            };
+            let size = taffy::geometry::Size {
+              width: fragment.bounds.width().max(0.0),
+              height: fragment.bounds.height().max(0.0),
+            };
+            cache.insert(key, size);
+            size
+          }
+        },
+      )
       .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
 
     let layout = taffy
@@ -1398,21 +1734,20 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
   }
 }
 
-fn find_first_baseline_absolute(fragment: &FragmentNode, parent_offset: f32) -> Option<f32> {
-  let origin = parent_offset + fragment.bounds.y();
+fn find_first_baseline_absolute(fragment: &FragmentNode) -> Option<f32> {
   if let Some(baseline) = fragment.baseline {
-    return Some(origin + baseline);
+    return Some(fragment.bounds.y() + baseline);
   }
   match &fragment.content {
-    FragmentContent::Line { baseline } => return Some(origin + *baseline),
+    FragmentContent::Line { baseline } => return Some(fragment.bounds.y() + *baseline),
     FragmentContent::Text {
       baseline_offset, ..
-    } => return Some(origin + *baseline_offset),
+    } => return Some(fragment.bounds.y() + *baseline_offset),
     _ => {}
   }
 
   for child in &fragment.children {
-    if let Some(b) = find_first_baseline_absolute(child, origin) {
+    if let Some(b) = find_first_baseline_absolute(child) {
       return Some(b);
     }
   }
@@ -1421,7 +1756,7 @@ fn find_first_baseline_absolute(fragment: &FragmentNode, parent_offset: f32) -> 
 }
 
 fn first_baseline_offset(fragment: &FragmentNode) -> Option<f32> {
-  find_first_baseline_absolute(fragment, 0.0).map(|abs| abs - fragment.bounds.y())
+  find_first_baseline_absolute(fragment).map(|abs| abs - fragment.bounds.y())
 }
 
 fn apply_alignment_fallback_for_grid(
@@ -1687,7 +2022,7 @@ impl FormattingContext for GridFormattingContext {
       return Ok(cached);
     }
     // Create fresh Taffy tree for this layout
-    let mut taffy = TaffyTree::new();
+    let mut taffy: TaffyTree<*const BoxNode> = TaffyTree::new();
 
     // Partition children into in-flow vs. out-of-flow positioned.
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
@@ -1702,8 +2037,51 @@ impl FormattingContext for GridFormattingContext {
     }
 
     // Build Taffy tree from in-flow children
-    let (root_id, node_map) =
-      self.build_taffy_tree_children(&mut taffy, box_node, &in_flow_children)?;
+    let root_id = self.build_taffy_tree_children(&mut taffy, box_node, &in_flow_children)?;
+
+    // Block-level grid containers with `width: auto` should stretch to the available inline size.
+    // Taffy treats `size: auto` as shrink-to-fit in some grid cases, so force a definite width
+    // when we have one from the parent constraints.
+    if let CrateAvailableSpace::Definite(outer_width) = constraints.available_width {
+      if outer_width.is_finite()
+        && box_node.style.width.is_none()
+        && box_node.box_type.is_block_level()
+        && self.inline_axis_is_horizontal(&box_node.style)
+      {
+        let percentage_base = outer_width;
+        let padding_left = self.resolve_length_for_width(
+          box_node.style.padding_left,
+          percentage_base,
+          &box_node.style,
+        );
+        let padding_right = self.resolve_length_for_width(
+          box_node.style.padding_right,
+          percentage_base,
+          &box_node.style,
+        );
+        let border_left = self.resolve_length_for_width(
+          box_node.style.border_left_width,
+          percentage_base,
+          &box_node.style,
+        );
+        let border_right = self.resolve_length_for_width(
+          box_node.style.border_right_width,
+          percentage_base,
+          &box_node.style,
+        );
+        let content_width =
+          (outer_width - padding_left - padding_right - border_left - border_right).max(0.0);
+        if let Ok(existing) = taffy.style(root_id) {
+          if existing.size.width.is_auto() {
+            let mut updated = existing.clone();
+            updated.size.width = Dimension::length(content_width);
+            taffy
+              .set_style(root_id, updated)
+              .map_err(|e| LayoutError::MissingContext(format!("Taffy error: {:?}", e)))?;
+          }
+        }
+      }
+    }
 
     // Convert constraints to Taffy available space
     let available_space = taffy::geometry::Size {
@@ -1724,11 +2102,162 @@ impl FormattingContext for GridFormattingContext {
     // Run Taffy layout
     record_taffy_invocation(TaffyAdapterKind::Grid);
     taffy
-      .compute_layout(root_id, available_space)
+	      .compute_layout_with_measure(
+	        root_id,
+	        available_space,
+	        {
+	          let this = self.clone();
+	          let factory =
+	            crate::layout::contexts::factory::FormattingContextFactory::with_font_context_viewport_and_cb(
+	              self.font_context.clone(),
+	              self.viewport_size,
+	              self.nearest_positioned_cb,
+	            );
+	          let viewport_size = self.viewport_size;
+	          let parent_inline_base = constraints.inline_percentage_base;
+	          let container_justify_items = box_node.style.justify_items;
+	          let mut cache: HashMap<MeasureKey, taffy::geometry::Size<f32>> = HashMap::new();
+	          move |known_dimensions,
+	                available_space,
+	                node_id,
+	                node_context,
+	                _style: &taffy::style::Style| {
+	            let fallback_size =
+	              |known: Option<f32>, avail_dim: taffy::style::AvailableSpace| {
+	                known.unwrap_or(match avail_dim {
+	                  taffy::style::AvailableSpace::Definite(v) => v,
+	                  _ => 0.0,
+	                })
+	              };
+
+	            if node_id == root_id {
+	              let outer_width = fallback_size(known_dimensions.width, available_space.width);
+	              let outer_height = known_dimensions.height.unwrap_or(0.0);
+	              let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
+	                return taffy::geometry::Size {
+	                  width: outer_width,
+	                  height: outer_height,
+	                };
+	              };
+	              let root_box_node = unsafe { &*node_ptr };
+	              let percentage_base = outer_width;
+	              let padding_left = this.resolve_length_for_width(
+	                root_box_node.style.padding_left,
+	                percentage_base,
+	                &root_box_node.style,
+	              );
+	              let padding_right = this.resolve_length_for_width(
+	                root_box_node.style.padding_right,
+	                percentage_base,
+	                &root_box_node.style,
+	              );
+	              let padding_top = this.resolve_length_for_width(
+	                root_box_node.style.padding_top,
+	                percentage_base,
+	                &root_box_node.style,
+	              );
+	              let padding_bottom = this.resolve_length_for_width(
+	                root_box_node.style.padding_bottom,
+	                percentage_base,
+	                &root_box_node.style,
+	              );
+	              let border_left = this.resolve_length_for_width(
+	                root_box_node.style.border_left_width,
+	                percentage_base,
+	                &root_box_node.style,
+	              );
+	              let border_right = this.resolve_length_for_width(
+	                root_box_node.style.border_right_width,
+	                percentage_base,
+	                &root_box_node.style,
+	              );
+	              let border_top = this.resolve_length_for_width(
+	                root_box_node.style.border_top_width,
+	                percentage_base,
+	                &root_box_node.style,
+	              );
+	              let border_bottom = this.resolve_length_for_width(
+	                root_box_node.style.border_bottom_width,
+	                percentage_base,
+	                &root_box_node.style,
+	              );
+	              let content_width =
+	                (outer_width - padding_left - padding_right - border_left - border_right).max(0.0);
+	              let content_height =
+	                (outer_height - padding_top - padding_bottom - border_top - border_bottom)
+	                  .max(0.0);
+	              return taffy::geometry::Size {
+	                width: content_width,
+	                height: content_height,
+	              };
+	            }
+
+	            let Some(node_ptr) = node_context.as_ref().map(|p| **p) else {
+	              return taffy::geometry::Size::ZERO;
+	            };
+	            let box_node = unsafe { &*node_ptr };
+
+	            let key = MeasureKey::new(node_ptr, known_dimensions, available_space);
+	            if let Some(size) = cache.get(&key) {
+	              return *size;
+	            }
+	            let fc_type = box_node
+	              .formatting_context()
+	              .unwrap_or(FormattingContextType::Block);
+	            let fc = factory.create(fc_type);
+
+	            let mut constraints = constraints_from_taffy(
+	              viewport_size,
+	              known_dimensions,
+	              available_space,
+	              parent_inline_base,
+	            );
+
+	            if known_dimensions.width.is_none()
+	              && matches!(
+	                available_space.width,
+	                taffy::style::AvailableSpace::Definite(_)
+	              )
+	              && box_node.style.width.is_none()
+	            {
+	              if let taffy::style::AvailableSpace::Definite(area_width) = available_space.width {
+	                let justify = box_node.style.justify_self.unwrap_or(container_justify_items);
+	                if justify != AlignItems::Stretch {
+	                  if let Ok(intrinsic_width) = fc
+	                    .compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MaxContent)
+	                  {
+	                    let used_width = intrinsic_width.min(area_width);
+	                    constraints.available_width = CrateAvailableSpace::Definite(used_width);
+	                    constraints.inline_percentage_base = Some(area_width);
+	                  }
+	                }
+	              }
+	            }
+
+	            let fragment = match fc.layout(box_node, &constraints) {
+	              Ok(fragment) => fragment,
+	              Err(_) => return taffy::geometry::Size::ZERO,
+	            };
+	            let percentage_base = match available_space.width {
+	              taffy::style::AvailableSpace::Definite(w) => w,
+	              _ => constraints
+	                .width()
+	                .unwrap_or_else(|| fragment.bounds.width()),
+	            };
+	            let content_size = this.content_box_size(&fragment, &box_node.style, percentage_base);
+	            let size = taffy::geometry::Size {
+	              width: content_size.width.max(0.0),
+	              height: content_size.height.max(0.0),
+	            };
+	            cache.insert(key, size);
+	            size
+	          }
+	        },
+	      )
       .map_err(|e| LayoutError::MissingContext(format!("Taffy compute error: {:?}", e)))?;
 
     // Convert back to FragmentNode tree and layout each in-flow child using its formatting context.
-    let mut fragment = self.convert_to_fragments(&taffy, root_id, &node_map, &constraints)?;
+    let mut fragment = self.convert_to_fragments(&taffy, root_id, root_id, &constraints)?;
 
     if let Some(trace_id) = std::env::var("FASTR_TRACE_GRID_TEXT")
       .ok()
@@ -1970,7 +2499,7 @@ mod tests {
 
     let node = BoxNode::new_block(Arc::new(style), FormattingContextType::Grid, vec![]);
     let gc = GridFormattingContext::new();
-    let taffy_style = gc.convert_style(&node.style, None, false);
+    let taffy_style = gc.convert_style(&node.style, None, false, true);
 
     assert_eq!(taffy_style.overflow.x, TaffyOverflow::Scroll);
     assert_eq!(taffy_style.overflow.y, TaffyOverflow::Clip);
@@ -2002,11 +2531,11 @@ mod tests {
     parent.children.push(child2);
 
     let gc = GridFormattingContext::new();
-    let (_root_id, _map) = gc
+    let _root_id = gc
       .build_taffy_tree(&mut TaffyTree::new(), &parent)
       .expect("grid conversion");
     // If the fast path is taken, the parent container style should have been converted to block.
-    let taffy_style = gc.convert_style(&parent.style, None, true);
+    let taffy_style = gc.convert_style(&parent.style, None, true, true);
     assert_eq!(taffy_style.display, Display::Block);
   }
 
@@ -2776,8 +3305,8 @@ mod tests {
     let constraints = LayoutConstraints::definite(400.0, 200.0);
     let fragment = fc.layout(&grid, &constraints).unwrap();
 
-    let baseline0 = super::find_first_baseline_absolute(&fragment.children[0], 0.0).unwrap();
-    let baseline1 = super::find_first_baseline_absolute(&fragment.children[1], 0.0).unwrap();
+    let baseline0 = super::find_first_baseline_absolute(&fragment.children[0]).unwrap();
+    let baseline1 = super::find_first_baseline_absolute(&fragment.children[1]).unwrap();
 
     assert!(
       (baseline0 - baseline1).abs() < 0.05,

@@ -6,6 +6,7 @@ use image::Rgba;
 use image::RgbaImage;
 use std::io::Cursor;
 use tiny_skia::Pixmap;
+use webp::Encoder as WebpEncoder;
 
 /// Summary of a pixel diff operation.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,40 +104,15 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
       })?;
     }
     OutputFormat::WebP(quality) => {
-      let img = RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| {
+      let quality = (quality as f32).clamp(0.0, 100.0);
+      let encoder = WebpEncoder::from_rgba(&rgba_data, width, height);
+      let webp = encoder.encode_simple(false, quality).map_err(|e| {
         Error::Render(RenderError::EncodeFailed {
           format: "WebP".to_string(),
-          reason: "Failed to create RGBA image".to_string(),
+          reason: format!("WebP encode failed: {e:?}"),
         })
       })?;
-
-      // WebP encoding
-      let mut cursor = Cursor::new(&mut buffer);
-      // Clamp to the supported range and interpret 100 as a request for lossless
-      // encoding to preserve alpha without further loss. Values above 100 are
-      // normalized to 100, matching the documented quality contract.
-      let normalized_quality = quality.clamp(0, 100);
-
-      if normalized_quality == 100 {
-        let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut cursor);
-        img.write_with_encoder(encoder).map_err(|e| {
-          Error::Render(RenderError::EncodeFailed {
-            format: "WebP".to_string(),
-            reason: e.to_string(),
-          })
-        })?;
-      } else {
-        let encoder = image::codecs::webp::WebPEncoder::new_with_quality(
-          &mut cursor,
-          f32::from(normalized_quality),
-        );
-        img.write_with_encoder(encoder).map_err(|e| {
-          Error::Render(RenderError::EncodeFailed {
-            format: "WebP".to_string(),
-            reason: e.to_string(),
-          })
-        })?;
-      }
+      buffer.extend_from_slice(&webp);
     }
   }
 

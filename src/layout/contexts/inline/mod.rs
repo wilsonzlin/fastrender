@@ -47,7 +47,6 @@ use crate::layout::absolute_positioning::AbsoluteLayout;
 use crate::layout::absolute_positioning::AbsoluteLayoutInput;
 use crate::layout::constraints::AvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
-use crate::layout::contexts::block::BlockFormattingContext;
 use crate::layout::contexts::factory::FormattingContextFactory;
 use crate::layout::contexts::inline::line_builder::InlineBoxItem;
 use crate::layout::contexts::positioned::ContainingBlock;
@@ -194,6 +193,22 @@ enum FlowChunk {
   Inline { start: usize, end: usize },
   Float { index: usize },
   Block { index: usize },
+}
+
+#[derive(Debug, Clone)]
+struct PositionedChild {
+  node: BoxNode,
+  /// Box id of the nearest positioned ancestor that establishes this child's containing block.
+  /// `None` means to use the formatting context's `nearest_positioned_cb`.
+  containing_block_id: Option<usize>,
+}
+
+fn ensure_box_id(node: &BoxNode) -> usize {
+  if node.id != 0 {
+    return node.id;
+  }
+  const EPHEMERAL_ID_BASE: usize = 1usize << (usize::BITS - 1);
+  EPHEMERAL_ID_BASE | (node as *const BoxNode as usize)
 }
 
 impl InlineFormattingContext {
@@ -351,10 +366,11 @@ impl InlineFormattingContext {
     available_width: f32,
     available_height: Option<f32>,
     base_direction: crate::style::types::Direction,
-    positioned_children: &mut Vec<BoxNode>,
+    positioned_children: &mut Vec<PositionedChild>,
   ) -> Result<Vec<InlineItem>, LayoutError> {
     let mut pending_space: Option<PendingSpace> = None;
     let mut bidi_stack = vec![(box_node.style.unicode_bidi, box_node.style.direction)];
+    let mut positioned_cb_stack = Vec::new();
     self.collect_inline_items_internal(
       box_node,
       available_width,
@@ -363,6 +379,7 @@ impl InlineFormattingContext {
       base_direction,
       positioned_children,
       &mut bidi_stack,
+      &mut positioned_cb_stack,
       CombineBoundary::default(),
     )
   }
@@ -374,8 +391,9 @@ impl InlineFormattingContext {
     available_width: f32,
     available_height: Option<f32>,
     base_direction: crate::style::types::Direction,
-    positioned_children: &mut Vec<BoxNode>,
+    positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+    positioned_cb_stack: &mut Vec<usize>,
     boundary: CombineBoundary,
   ) -> Result<Vec<InlineFlowSegment>, LayoutError> {
     let mut pending_space: Option<PendingSpace> = None;
@@ -412,8 +430,21 @@ impl InlineFormattingContext {
         child.style.position,
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
-        positioned_children.push(child.clone());
-        let anchor = self.create_static_position_anchor(child);
+        let mut positioned = child.clone();
+        positioned.id = ensure_box_id(child);
+        let containing_block_id = if matches!(
+          child.style.position,
+          crate::style::position::Position::Fixed
+        ) {
+          None
+        } else {
+          positioned_cb_stack.last().copied()
+        };
+        let anchor = self.create_static_position_anchor(&positioned);
+        positioned_children.push(PositionedChild {
+          node: positioned,
+          containing_block_id,
+        });
         current_items.push(anchor);
         continue;
       }
@@ -537,6 +568,7 @@ impl InlineFormattingContext {
               base_direction,
               positioned_children,
               bidi_stack,
+              positioned_cb_stack,
             )?;
             current_items.push(item);
             continue;
@@ -630,6 +662,11 @@ impl InlineFormattingContext {
           let end_edge = padding_right + border_right;
           let content_offset_y = padding_top + border_top;
 
+          let box_id = ensure_box_id(child);
+          let establishes_containing_block = child.style.position.is_positioned();
+          if establishes_containing_block {
+            positioned_cb_stack.push(box_id);
+          }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
           let mut child_boundary = CombineBoundary::default();
           if Some(idx) == first_combinable {
@@ -646,6 +683,7 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             bidi_stack,
+            positioned_cb_stack,
             child_boundary,
           )?;
           if dump_text_enabled() {
@@ -688,6 +726,9 @@ impl InlineFormattingContext {
             }
           }
           bidi_stack.pop();
+          if establishes_containing_block {
+            positioned_cb_stack.pop();
+          }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
           let metrics = compute_inline_box_metrics(
             &child_items,
@@ -712,6 +753,11 @@ impl InlineFormattingContext {
             },
             child.style.unicode_bidi,
           );
+          inline_box.box_id = box_id;
+          inline_box.border_left = border_left;
+          inline_box.border_right = border_right;
+          inline_box.border_top = border_top;
+          inline_box.border_bottom = border_bottom;
           inline_box.vertical_align = self.convert_vertical_align(
             child.style.vertical_align,
             child.style.font_size,
@@ -813,6 +859,11 @@ impl InlineFormattingContext {
           let end_edge = padding_right + border_right;
           let content_offset_y = padding_top + border_top;
 
+          let box_id = ensure_box_id(child);
+          let establishes_containing_block = child.style.position.is_positioned();
+          if establishes_containing_block {
+            positioned_cb_stack.push(box_id);
+          }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
           let mut child_boundary = CombineBoundary::default();
           if Some(idx) == first_combinable {
@@ -829,6 +880,7 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             bidi_stack,
+            positioned_cb_stack,
             child_boundary,
           )?;
           if dump_text_enabled() {
@@ -885,6 +937,9 @@ impl InlineFormattingContext {
             }
           }
           bidi_stack.pop();
+          if establishes_containing_block {
+            positioned_cb_stack.pop();
+          }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
           let metrics = compute_inline_box_metrics(
             &child_items,
@@ -909,6 +964,11 @@ impl InlineFormattingContext {
             },
             child.style.unicode_bidi,
           );
+          inline_box.box_id = box_id;
+          inline_box.border_left = border_left;
+          inline_box.border_right = border_right;
+          inline_box.border_top = border_top;
+          inline_box.border_bottom = border_bottom;
           inline_box.vertical_align = self.convert_vertical_align(
             child.style.vertical_align,
             child.style.font_size,
@@ -951,8 +1011,9 @@ impl InlineFormattingContext {
     available_height: Option<f32>,
     pending_space: &mut Option<PendingSpace>,
     base_direction: crate::style::types::Direction,
-    positioned_children: &mut Vec<BoxNode>,
+    positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+    positioned_cb_stack: &mut Vec<usize>,
     boundary: CombineBoundary,
   ) -> Result<Vec<InlineItem>, LayoutError> {
     if dump_text_enabled() {
@@ -1010,8 +1071,21 @@ impl InlineFormattingContext {
         child.style.position,
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
-        positioned_children.push(child.clone());
-        let anchor = self.create_static_position_anchor(child);
+        let mut positioned = child.clone();
+        positioned.id = ensure_box_id(child);
+        let containing_block_id = if matches!(
+          child.style.position,
+          crate::style::position::Position::Fixed
+        ) {
+          None
+        } else {
+          positioned_cb_stack.last().copied()
+        };
+        let anchor = self.create_static_position_anchor(&positioned);
+        positioned_children.push(PositionedChild {
+          node: positioned,
+          containing_block_id,
+        });
         items.push(anchor);
         continue;
       }
@@ -1166,6 +1240,7 @@ impl InlineFormattingContext {
               base_direction,
               positioned_children,
               bidi_stack,
+              positioned_cb_stack,
             )?;
             items.push(item);
             continue;
@@ -1261,6 +1336,11 @@ impl InlineFormattingContext {
           let content_offset_y = padding_top + border_top;
 
           // Recursively collect children first
+          let box_id = ensure_box_id(child);
+          let establishes_containing_block = child.style.position.is_positioned();
+          if establishes_containing_block {
+            positioned_cb_stack.push(box_id);
+          }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
           let child_items = self.collect_inline_items_internal(
             child,
@@ -1270,6 +1350,7 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             bidi_stack,
+            positioned_cb_stack,
             CombineBoundary::default(),
           )?;
           if dump_text_enabled() {
@@ -1323,6 +1404,9 @@ impl InlineFormattingContext {
             }
           }
           bidi_stack.pop();
+          if establishes_containing_block {
+            positioned_cb_stack.pop();
+          }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
           let metrics = compute_inline_box_metrics(
             &child_items,
@@ -1341,6 +1425,11 @@ impl InlineFormattingContext {
             child.style.direction,
             child.style.unicode_bidi,
           );
+          inline_box.box_id = box_id;
+          inline_box.border_left = border_left;
+          inline_box.border_right = border_right;
+          inline_box.border_top = border_top;
+          inline_box.border_bottom = border_bottom;
           inline_box.vertical_align = self.convert_vertical_align(
             child.style.vertical_align,
             child.style.font_size,
@@ -1442,6 +1531,11 @@ impl InlineFormattingContext {
           let end_edge = padding_right + border_right;
           let content_offset_y = padding_top + border_top;
 
+          let box_id = ensure_box_id(child);
+          let establishes_containing_block = child.style.position.is_positioned();
+          if establishes_containing_block {
+            positioned_cb_stack.push(box_id);
+          }
           bidi_stack.push((child.style.unicode_bidi, child.style.direction));
           let child_items = self.collect_inline_items_internal(
             child,
@@ -1451,6 +1545,7 @@ impl InlineFormattingContext {
             base_direction,
             positioned_children,
             bidi_stack,
+            positioned_cb_stack,
             CombineBoundary::default(),
           )?;
           if dump_text_enabled() {
@@ -1507,6 +1602,9 @@ impl InlineFormattingContext {
             }
           }
           bidi_stack.pop();
+          if establishes_containing_block {
+            positioned_cb_stack.pop();
+          }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
           let metrics = compute_inline_box_metrics(
             &child_items,
@@ -1525,6 +1623,11 @@ impl InlineFormattingContext {
             child.style.direction,
             child.style.unicode_bidi,
           );
+          inline_box.box_id = box_id;
+          inline_box.border_left = border_left;
+          inline_box.border_right = border_right;
+          inline_box.border_top = border_top;
+          inline_box.border_bottom = border_bottom;
           inline_box.vertical_align = self.convert_vertical_align(
             child.style.vertical_align,
             child.style.font_size,
@@ -1824,8 +1927,9 @@ impl InlineFormattingContext {
     available_width: f32,
     available_height: Option<f32>,
     base_direction: Direction,
-    positioned_children: &mut Vec<BoxNode>,
+    positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+    positioned_cb_stack: &mut Vec<usize>,
   ) -> Result<Vec<InlineItem>, LayoutError> {
     let container = BoxNode {
       style,
@@ -1836,6 +1940,8 @@ impl InlineFormattingContext {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     };
     let mut pending_space: Option<PendingSpace> = None;
     self.collect_inline_items_internal(
@@ -1846,6 +1952,7 @@ impl InlineFormattingContext {
       base_direction,
       positioned_children,
       bidi_stack,
+      positioned_cb_stack,
       CombineBoundary::default(),
     )
   }
@@ -1856,8 +1963,9 @@ impl InlineFormattingContext {
     available_width: f32,
     available_height: Option<f32>,
     base_direction: Direction,
-    positioned_children: &mut Vec<BoxNode>,
+    positioned_children: &mut Vec<PositionedChild>,
     bidi_stack: &mut Vec<(UnicodeBidi, Direction)>,
+    positioned_cb_stack: &mut Vec<usize>,
   ) -> Result<InlineItem, LayoutError> {
     #[derive(Clone)]
     struct RubyAnnotationGroup {
@@ -2090,6 +2198,7 @@ impl InlineFormattingContext {
         base_direction,
         positioned_children,
         bidi_stack,
+        positioned_cb_stack,
       )?;
 
       if base_items.is_empty() && seg.annotations.is_empty() {
@@ -2109,6 +2218,7 @@ impl InlineFormattingContext {
           base_direction,
           positioned_children,
           bidi_stack,
+          positioned_cb_stack,
         )?;
         if items.is_empty() {
           continue;
@@ -3760,6 +3870,7 @@ impl InlineFormattingContext {
     inline_vertical: bool,
     strut_metrics: &BaselineMetrics,
     mut anchor_positions: Option<&mut HashMap<usize, Point>>,
+    mut positioned_containing_blocks: Option<&mut HashMap<usize, ContainingBlock>>,
   ) -> Vec<FragmentNode> {
     let mut fragments = Vec::new();
 
@@ -3820,6 +3931,7 @@ impl InlineFormattingContext {
         inline_vertical,
         strut_metrics,
         anchor_positions.as_deref_mut(),
+        positioned_containing_blocks.as_deref_mut(),
       );
       fragments.push(line_fragment);
     }
@@ -3841,6 +3953,7 @@ impl InlineFormattingContext {
     inline_vertical: bool,
     strut_metrics: &BaselineMetrics,
     mut anchor_positions: Option<&mut HashMap<usize, Point>>,
+    mut positioned_containing_blocks: Option<&mut HashMap<usize, ContainingBlock>>,
   ) -> FragmentNode {
     static LOG_BASELINE: OnceLock<Option<AtomicUsize>> = OnceLock::new();
     let log_line = LOG_BASELINE
@@ -3922,6 +4035,11 @@ impl InlineFormattingContext {
     }
 
     let anchor_block_position = block_offset + line.baseline - strut_metrics.baseline_offset;
+    let line_origin = if inline_vertical {
+      Point::new(block_offset, line.left_offset)
+    } else {
+      Point::new(line.left_offset, block_offset)
+    };
 
     for (i, positioned) in items.iter().enumerate() {
       let item_width = positioned.item.width();
@@ -3964,6 +4082,9 @@ impl InlineFormattingContext {
           block_pos,
           inline_pos,
           inline_vertical,
+          line_origin,
+          anchor_positions.as_deref_mut(),
+          positioned_containing_blocks.as_deref_mut(),
         );
         if log_line {
           let metrics = positioned.item.baseline_metrics();
@@ -4181,6 +4302,9 @@ impl InlineFormattingContext {
     block_pos: f32,
     inline_pos: f32,
     inline_vertical: bool,
+    line_origin: Point,
+    mut anchor_positions: Option<&mut HashMap<usize, Point>>,
+    mut positioned_containing_blocks: Option<&mut HashMap<usize, ContainingBlock>>,
   ) -> FragmentNode {
     match item {
       InlineItem::Text(text_item) => {
@@ -4245,29 +4369,93 @@ impl InlineFormattingContext {
         }
       }
       InlineItem::InlineBox(box_item) => {
+        let record_containing_block = |bounds: Rect,
+                                       positioned_containing_blocks: &mut Option<
+          &mut HashMap<usize, ContainingBlock>,
+        >| {
+          if box_item.box_id == 0 || !box_item.style.position.is_positioned() {
+            return;
+          }
+          let Some(map) = positioned_containing_blocks.as_deref_mut() else {
+            return;
+          };
+          let border_rect = bounds.translate(line_origin);
+          let padding_width =
+            (border_rect.size.width - box_item.border_left - box_item.border_right).max(0.0);
+          let padding_height =
+            (border_rect.size.height - box_item.border_top - box_item.border_bottom).max(0.0);
+          let padding_rect = Rect::new(
+            Point::new(
+              border_rect.origin.x + box_item.border_left,
+              border_rect.origin.y + box_item.border_top,
+            ),
+            Size::new(padding_width, padding_height),
+          );
+          let cb_block_base = if box_item.style.height.is_some() {
+            Some(padding_rect.size.height)
+          } else {
+            None
+          };
+          let new_cb = ContainingBlock::with_viewport_and_bases(
+            padding_rect,
+            self.viewport_size,
+            Some(padding_rect.size.width),
+            cb_block_base,
+          );
+
+          map
+            .entry(box_item.box_id)
+            .and_modify(|existing| {
+              let union = Rect::from_points(
+                Point::new(
+                  existing.rect.min_x().min(padding_rect.min_x()),
+                  existing.rect.min_y().min(padding_rect.min_y()),
+                ),
+                Point::new(
+                  existing.rect.max_x().max(padding_rect.max_x()),
+                  existing.rect.max_y().max(padding_rect.max_y()),
+                ),
+              );
+              let block_base =
+                if existing.block_percentage_base().is_some() || cb_block_base.is_some() {
+                  Some(union.size.height)
+                } else {
+                  None
+                };
+              *existing = ContainingBlock::with_viewport_and_bases(
+                union,
+                existing.viewport_size(),
+                Some(union.size.width),
+                block_base,
+              );
+            })
+            .or_insert(new_cb);
+        };
+
         if inline_vertical {
           let mut child_inline = box_item.start_edge + inline_pos;
           let child_block = box_item.content_offset_y + block_pos;
-          let children: Vec<_> = box_item
-            .children
-            .iter()
-            .map(|child| {
-              let fragment = self.create_item_fragment_oriented(
-                child,
-                child_block,
-                child_inline,
-                inline_vertical,
-              );
-              child_inline += child.width();
-              fragment
-            })
-            .collect();
+          let mut children = Vec::with_capacity(box_item.children.len());
+          for child in &box_item.children {
+            let fragment = self.create_item_fragment_oriented(
+              child,
+              child_block,
+              child_inline,
+              inline_vertical,
+              line_origin,
+              anchor_positions.as_deref_mut(),
+              positioned_containing_blocks.as_deref_mut(),
+            );
+            child_inline += child.width();
+            children.push(fragment);
+          }
           let bounds = Rect::from_xywh(
             block_pos,
             inline_pos,
             box_item.metrics.height,
             box_item.width(),
           );
+          record_containing_block(bounds, &mut positioned_containing_blocks);
           FragmentNode::new_inline_styled(
             bounds,
             box_item.box_index,
@@ -4277,15 +4465,20 @@ impl InlineFormattingContext {
         } else {
           let mut child_x = box_item.start_edge + inline_pos;
           let child_y = box_item.content_offset_y + block_pos;
-          let children: Vec<_> = box_item
-            .children
-            .iter()
-            .map(|child| {
-              let fragment = self.create_item_fragment(child, child_x, child_y);
-              child_x += child.width();
-              fragment
-            })
-            .collect();
+          let mut children = Vec::with_capacity(box_item.children.len());
+          for child in &box_item.children {
+            let fragment = self.create_item_fragment_oriented(
+              child,
+              child_y,
+              child_x,
+              inline_vertical,
+              line_origin,
+              anchor_positions.as_deref_mut(),
+              positioned_containing_blocks.as_deref_mut(),
+            );
+            child_x += child.width();
+            children.push(fragment);
+          }
 
           let bounds = Rect::from_xywh(
             inline_pos,
@@ -4293,6 +4486,7 @@ impl InlineFormattingContext {
             box_item.width(),
             box_item.metrics.height,
           );
+          record_containing_block(bounds, &mut positioned_containing_blocks);
           FragmentNode::new_inline_styled(
             bounds,
             box_item.box_index,
@@ -4359,6 +4553,19 @@ impl InlineFormattingContext {
       }
       InlineItem::Floating(_) => {
         // Floats are laid out separately by the float integration logic; skip any stray placeholders.
+        FragmentNode::new_inline(Rect::from_xywh(inline_pos, block_pos, 0.0, 0.0), 0, vec![])
+      }
+      InlineItem::StaticPositionAnchor(anchor) => {
+        if let Some(map) = anchor_positions.as_deref_mut() {
+          // Nested anchors must include any inline box offsets (e.g. padding) that affect where the
+          // positioned element would have appeared in flow.
+          let anchor_point = if inline_vertical {
+            Point::new(line_origin.x + block_pos, line_origin.y + inline_pos)
+          } else {
+            Point::new(line_origin.x + inline_pos, line_origin.y + block_pos)
+          };
+          map.insert(anchor.box_id, anchor_point);
+        }
         FragmentNode::new_inline(Rect::from_xywh(inline_pos, block_pos, 0.0, 0.0), 0, vec![])
       }
     }
@@ -4570,6 +4777,9 @@ impl InlineFormattingContext {
       }
       InlineItem::Floating(_) => {
         // Floats should have been extracted before fragment creation.
+        FragmentNode::new_inline(Rect::from_xywh(x, y, 0.0, 0.0), 0, vec![])
+      }
+      InlineItem::StaticPositionAnchor(_) => {
         FragmentNode::new_inline(Rect::from_xywh(x, y, 0.0, 0.0), 0, vec![])
       }
     }
@@ -4943,7 +5153,17 @@ fn compute_inline_box_metrics(
   bottom_inset: f32,
   fallback: BaselineMetrics,
 ) -> BaselineMetrics {
-  if children.is_empty() {
+  let effective_children: Vec<&InlineItem> = children
+    .iter()
+    .filter(|child| {
+      !matches!(
+        child,
+        InlineItem::StaticPositionAnchor(_) | InlineItem::Floating(_)
+      )
+    })
+    .collect();
+
+  if effective_children.is_empty() {
     let mut metrics = fallback;
     metrics.baseline_offset += content_offset_y;
     metrics.ascent += content_offset_y;
@@ -4956,7 +5176,7 @@ fn compute_inline_box_metrics(
   }
 
   let mut content_height: f32 = 0.0;
-  for child in children {
+  for child in &effective_children {
     let child_metrics = child.baseline_metrics();
     // Guard against fonts whose ascent exceeds the authored line-height by using the larger of
     // the line box height and the font’s intrinsic ascent+descent. This avoids negative
@@ -4968,10 +5188,11 @@ fn compute_inline_box_metrics(
     content_height = content_height.max(child_height);
   }
 
-  let baseline_child = children
+  let baseline_child = effective_children
     .iter()
+    .copied()
     .find(|c| c.vertical_align().is_baseline_relative())
-    .unwrap_or(&children[0]);
+    .unwrap_or(effective_children[0]);
   let child_metrics = baseline_child.baseline_metrics();
 
   let baseline_offset = content_offset_y + child_metrics.baseline_offset;
@@ -6097,32 +6318,35 @@ impl InlineFormattingContext {
     min_y: f32,
     float_ctx: &mut FloatContext,
   ) -> Result<(FragmentNode, f32, f32), LayoutError> {
-    let inline_root = matches!(
-      floating.box_node.box_type,
-      crate::tree::box_tree::BoxType::Inline(_)
-    );
     let mut float_node = floating.box_node.clone();
-    if !inline_root
-      && matches!(
-        float_node.style.display,
-        crate::style::display::Display::Inline
-          | crate::style::display::Display::InlineBlock
-          | crate::style::display::Display::InlineTable
-      )
-    {
-      Arc::make_mut(&mut float_node.style).display = crate::style::display::Display::Block;
-      if matches!(
-        float_node.box_type,
-        crate::tree::box_tree::BoxType::Inline(_)
-      ) {
-        float_node.box_type =
-          crate::tree::box_tree::BoxType::Block(crate::tree::box_tree::BlockBox {
-            formatting_context: FormattingContextType::Block,
-          });
-      }
+    // Floats generate block-level boxes. Normalize inline-level display/box types so intrinsic
+    // sizing and fragment layout match the float formatting rules.
+    let resolved_display = match float_node.style.display {
+      crate::style::display::Display::Inline => crate::style::display::Display::Block,
+      crate::style::display::Display::InlineBlock => crate::style::display::Display::Block,
+      crate::style::display::Display::InlineFlex => crate::style::display::Display::Flex,
+      crate::style::display::Display::InlineGrid => crate::style::display::Display::Grid,
+      crate::style::display::Display::InlineTable => crate::style::display::Display::Table,
+      other => other,
+    };
+    if resolved_display != float_node.style.display {
+      Arc::make_mut(&mut float_node.style).display = resolved_display;
     }
-
-    debug_assert!(!float_node.children.is_empty());
+    if let crate::tree::box_tree::BoxType::Inline(inline_box) = &float_node.box_type {
+      let formatting_context =
+        inline_box
+          .formatting_context
+          .unwrap_or_else(|| match resolved_display {
+            crate::style::display::Display::Flex => FormattingContextType::Flex,
+            crate::style::display::Display::Grid => FormattingContextType::Grid,
+            crate::style::display::Display::Table => FormattingContextType::Table,
+            _ => FormattingContextType::Block,
+          });
+      float_node.box_type =
+        crate::tree::box_tree::BoxType::Block(crate::tree::box_tree::BlockBox {
+          formatting_context,
+        });
+    }
 
     let percentage_base = containing_width;
     let margin_left = float_node
@@ -6241,22 +6465,7 @@ impl InlineFormattingContext {
       AvailableSpace::Definite(content_width),
       AvailableSpace::Indefinite,
     );
-    let mut fragment = if inline_root {
-      let ifc = InlineFormattingContext::with_font_context_viewport_cb_and_pipeline(
-        self.font_context.clone(),
-        self.viewport_size,
-        self.nearest_positioned_cb,
-        self.pipeline.clone(),
-      );
-      ifc.layout(&float_node, &child_constraints)?
-    } else {
-      let bfc = BlockFormattingContext::with_font_context_viewport_and_cb(
-        self.font_context.clone(),
-        self.viewport_size,
-        self.nearest_positioned_cb,
-      );
-      bfc.layout(&float_node, &child_constraints)?
-    };
+    let mut fragment = fc.layout(&float_node, &child_constraints)?;
 
     let margin_top = float_node
       .style
@@ -6815,8 +7024,9 @@ impl InlineFormattingContext {
     let base_direction = resolve_base_direction_for_box(box_node);
 
     // Collect inline items and block segments
-    let mut positioned_children = Vec::new();
+    let mut positioned_children: Vec<PositionedChild> = Vec::new();
     let mut bidi_stack = vec![(box_node.style.unicode_bidi, box_node.style.direction)];
+    let mut positioned_cb_stack: Vec<usize> = Vec::new();
     let segments = self.collect_inline_flow_segments_with_base(
       box_node,
       available_inline,
@@ -6824,6 +7034,7 @@ impl InlineFormattingContext {
       base_direction,
       &mut positioned_children,
       &mut bidi_stack,
+      &mut positioned_cb_stack,
       CombineBoundary::default(),
     )?;
     if dump_text_enabled() {
@@ -6878,6 +7089,7 @@ impl InlineFormattingContext {
                   InlineItem::InlineBlock(_) => "InlineBlock".to_string(),
                   InlineItem::Replaced(_) => "Replaced".to_string(),
                   InlineItem::Floating(_) => "Floating".to_string(),
+                  InlineItem::StaticPositionAnchor(_) => "StaticPositionAnchor".to_string(),
                 };
                 kinds.push(label);
               }
@@ -6917,6 +7129,7 @@ impl InlineFormattingContext {
               }
               InlineItem::Ruby(r) => format!("Ruby({} segments)", r.segments.len()),
               InlineItem::Floating(_) => "Floating".to_string(),
+              InlineItem::StaticPositionAnchor(_) => "StaticPositionAnchor".to_string(),
             }
           }
           let mut verbose_segments = Vec::new();
@@ -6976,6 +7189,15 @@ impl InlineFormattingContext {
                          order: &mut Vec<FlowChunk>|
      -> Option<(f32, f32, f32)> {
       if pending.is_empty() {
+        return None;
+      }
+      if pending
+        .iter()
+        .all(|item| matches!(item, InlineItem::StaticPositionAnchor(_)))
+      {
+        // Static-position anchors are bookkeeping-only and should not create line boxes when
+        // there is otherwise no in-flow content.
+        pending.clear();
         return None;
       }
       let paragraph_direction = base_direction;
@@ -7303,6 +7525,7 @@ impl InlineFormattingContext {
     let lines_empty = lines.is_empty();
 
     let mut anchor_positions: HashMap<usize, Point> = HashMap::new();
+    let mut positioned_containing_blocks: HashMap<usize, ContainingBlock> = HashMap::new();
     let mut line_fragments = self.create_fragments(
       lines,
       0.0,
@@ -7316,6 +7539,11 @@ impl InlineFormattingContext {
         None
       } else {
         Some(&mut anchor_positions)
+      },
+      if positioned_children.is_empty() {
+        None
+      } else {
+        Some(&mut positioned_containing_blocks)
       },
     );
     if let Some(first_line_style) = box_node.first_line_style.as_ref() {
@@ -7359,6 +7587,9 @@ impl InlineFormattingContext {
     {
       for pos in anchor_positions.values_mut() {
         pos.x += block_shift;
+      }
+      for cb in positioned_containing_blocks.values_mut() {
+        cb.rect.origin.x += block_shift;
       }
     }
     let bounds = if inline_vertical {
@@ -7463,11 +7694,40 @@ impl InlineFormattingContext {
       };
 
       let abs = AbsoluteLayout::with_font_context(self.font_context.clone());
-      for child in positioned_children {
-        let child_static_position = anchor_positions
+      for PositionedChild {
+        node: child,
+        containing_block_id,
+      } in positioned_children
+      {
+        let custom_cb = containing_block_id
+          .and_then(|id| positioned_containing_blocks.get(&id))
+          .copied();
+        let (child_cb, adjust_static_position) = if matches!(
+          child.style.position,
+          crate::style::position::Position::Fixed
+        ) {
+          (
+            ContainingBlock::viewport(self.viewport_size),
+            custom_cb.is_some(),
+          )
+        } else if let Some(cb) = custom_cb {
+          (cb, true)
+        } else {
+          (cb, false)
+        };
+
+        let mut child_static_position = anchor_positions
           .get(&child.id)
           .copied()
           .unwrap_or(default_static_position);
+        if adjust_static_position {
+          let origin = child_cb.origin();
+          child_static_position = Point::new(
+            child_static_position.x - origin.x,
+            child_static_position.y - origin.y,
+          );
+        }
+
         let original_style = child.style.clone();
         let mut layout_child = child.clone();
         let mut child_style = (*layout_child.style).clone();
@@ -7481,21 +7741,26 @@ impl InlineFormattingContext {
         let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
           self.font_context.clone(),
           self.viewport_size,
-          cb,
+          child_cb,
         );
         let fc_type = layout_child
           .formatting_context()
           .unwrap_or(crate::style::display::FormattingContextType::Block);
         let fc = factory.create(fc_type);
         let child_constraints = LayoutConstraints::new(
-          AvailableSpace::Definite(cb.rect.size.width),
-          cb_block_base
+          AvailableSpace::Definite(child_cb.rect.size.width),
+          child_cb
+            .block_percentage_base()
             .map(AvailableSpace::Definite)
             .unwrap_or(AvailableSpace::Indefinite),
         );
         let mut child_fragment = fc.layout(&layout_child, &child_constraints)?;
-        let positioned_style =
-          resolve_positioned_style(&child.style, &cb, self.viewport_size, &self.font_context);
+        let positioned_style = resolve_positioned_style(
+          &child.style,
+          &child_cb,
+          self.viewport_size,
+          &self.font_context,
+        );
         let preferred_min_inline = fc
           .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
           .ok();
@@ -7518,7 +7783,7 @@ impl InlineFormattingContext {
         input.preferred_inline_size = preferred_inline;
         input.preferred_min_block_size = preferred_min_block;
         input.preferred_block_size = preferred_block;
-        let result = abs.layout_absolute(&input, &cb)?;
+        let result = abs.layout_absolute(&input, &child_cb)?;
         child_fragment.bounds = Rect::new(result.position, result.size);
         child_fragment.style = Some(original_style);
         merged_children.push(child_fragment);
@@ -8097,6 +8362,7 @@ fn determine_paragraph_direction(items: &[InlineItem]) -> Option<crate::style::t
       InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {
         out.push(OBJECT_REPLACEMENT);
       }
+      InlineItem::StaticPositionAnchor(_) => {}
     }
   }
 
@@ -8291,6 +8557,7 @@ pub(crate) fn apply_plaintext_paragraph_direction(
       InlineItem::Floating(f) => {
         f.direction = direction;
       }
+      InlineItem::StaticPositionAnchor(_) => {}
     }
   }
 }
@@ -8362,7 +8629,10 @@ fn item_has_interchar_opportunity(item: &InlineItem) -> bool {
       .segments
       .iter()
       .any(|seg| seg.base_items.iter().any(item_has_interchar_opportunity)),
-    InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
+    InlineItem::InlineBlock(_)
+    | InlineItem::Replaced(_)
+    | InlineItem::Floating(_)
+    | InlineItem::StaticPositionAnchor(_) => false,
     InlineItem::Tab(_) => false,
   }
 }
@@ -8375,7 +8645,10 @@ fn item_has_space_boundary(item: &InlineItem) -> bool {
       .segments
       .iter()
       .any(|seg| seg.base_items.iter().any(item_has_space_boundary)),
-    InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
+    InlineItem::InlineBlock(_)
+    | InlineItem::Replaced(_)
+    | InlineItem::Floating(_)
+    | InlineItem::StaticPositionAnchor(_) => false,
     InlineItem::Tab(_) => false,
   }
 }
@@ -8442,6 +8715,7 @@ fn accumulate_scripts(item: &InlineItem, counts: &mut ScriptCounts) {
       }
     }
     InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {}
+    InlineItem::StaticPositionAnchor(_) => {}
   }
 }
 
@@ -8513,7 +8787,15 @@ fn inline_item_ends_with_hyphen(item: &InlineItem) -> bool {
       .children
       .last()
       .map_or(false, inline_item_ends_with_hyphen),
-    InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => false,
+    InlineItem::Ruby(r) => r
+      .segments
+      .last()
+      .and_then(|seg| seg.base_items.last())
+      .map_or(false, inline_item_ends_with_hyphen),
+    InlineItem::InlineBlock(_)
+    | InlineItem::Replaced(_)
+    | InlineItem::Floating(_)
+    | InlineItem::StaticPositionAnchor(_) => false,
     InlineItem::Tab(_) => false,
   }
 }
@@ -8567,7 +8849,17 @@ fn append_text_content(item: &InlineItem, out: &mut String) {
         append_text_content(child, out);
       }
     }
-    InlineItem::InlineBlock(_) | InlineItem::Replaced(_) | InlineItem::Floating(_) => {}
+    InlineItem::Ruby(ruby) => {
+      for segment in &ruby.segments {
+        for base in &segment.base_items {
+          append_text_content(base, out);
+        }
+      }
+    }
+    InlineItem::StaticPositionAnchor(_)
+    | InlineItem::InlineBlock(_)
+    | InlineItem::Replaced(_)
+    | InlineItem::Floating(_) => {}
     InlineItem::Tab(_) => out.push('\t'),
   }
 }
@@ -10804,6 +11096,7 @@ mod tests {
       false,
       &strut,
       None,
+      None,
     );
     let line = fragments.first().expect("line fragment");
 
@@ -11973,7 +12266,11 @@ mod tests {
         BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
         BoxNode::new_inline(
           rtl_style.clone(),
-          vec![BoxNode::new_text(rtl_style.clone(), "DEF".to_string())],
+          vec![
+            BoxNode::new_text(rtl_style.clone(), "D".to_string()),
+            BoxNode::new_text(rtl_style.clone(), "E".to_string()),
+            BoxNode::new_text(rtl_style.clone(), "F".to_string()),
+          ],
         ),
         BoxNode::new_text(default_style(), "\u{00A0}GHI".to_string()),
       ],
@@ -12022,7 +12319,11 @@ mod tests {
         BoxNode::new_text(default_style(), "ABC\u{00A0}".to_string()),
         BoxNode::new_inline(
           rtl_override.clone(),
-          vec![BoxNode::new_text(rtl_override.clone(), "DEF".to_string())],
+          vec![
+            BoxNode::new_text(rtl_override.clone(), "D".to_string()),
+            BoxNode::new_text(rtl_override.clone(), "E".to_string()),
+            BoxNode::new_text(rtl_override.clone(), "F".to_string()),
+          ],
         ),
         BoxNode::new_text(default_style(), "\u{00A0}GHI".to_string()),
       ],
@@ -12069,7 +12370,11 @@ mod tests {
         BoxNode::new_text(default_style(), "AAA ".to_string()),
         BoxNode::new_inline(
           rtl_override.clone(),
-          vec![BoxNode::new_text(rtl_override.clone(), "DEF".to_string())],
+          vec![
+            BoxNode::new_text(rtl_override.clone(), "D".to_string()),
+            BoxNode::new_text(rtl_override.clone(), "E".to_string()),
+            BoxNode::new_text(rtl_override.clone(), "F".to_string()),
+          ],
         ),
         BoxNode::new_text(default_style(), " BBB".to_string()),
       ],
@@ -14104,10 +14409,10 @@ mod tests {
     let ifc = InlineFormattingContext::new();
     let fragment = ifc.layout(&root, &constraints).expect("layout");
     let positioned_fragment = fragment.children.last().expect("positioned fragment");
-    // text-align right with 20px inline-block in 100px box -> start at 80px.
+    // text-align start (right in RTL): the line's start edge is at the right edge (100px).
     assert!(
-      (positioned_fragment.bounds.x() - 80.0).abs() < 0.1,
-      "RTL start alignment should place static position at right-aligned start; got {}",
+      (positioned_fragment.bounds.x() - 100.0).abs() < 0.1,
+      "RTL start alignment should place static position at the line start edge; got {}",
       positioned_fragment.bounds.x()
     );
   }
@@ -14140,8 +14445,8 @@ mod tests {
     let abs_fragment = fragment.children.last().expect("positioned fragment");
 
     assert!(
-      abs_fragment.bounds.x().abs() < 0.1,
-      "empty inline should fall back to content origin on the inline axis; got {}",
+      (abs_fragment.bounds.x() - 12.0).abs() < 0.1,
+      "empty inline should align static position with its content start on the inline axis; got {}",
       abs_fragment.bounds.x()
     );
     assert!(

@@ -596,19 +596,10 @@ enum RangeValueKey {
 #[derive(Debug, Default)]
 pub struct MediaQueryCache {
   results: HashMap<MediaQueryKey, bool>,
-  key_cache: HashMap<usize, MediaQueryKey>,
   context: Option<MediaContextFingerprint>,
 }
 
 impl MediaQueryCache {
-  fn key_for(&mut self, query: &MediaQuery) -> &MediaQueryKey {
-    let ptr = query as *const MediaQuery as usize;
-    self
-      .key_cache
-      .entry(ptr)
-      .or_insert_with(|| MediaQueryKey::from(query))
-  }
-
   fn get(&self, key: &MediaQueryKey) -> Option<bool> {
     self.results.get(key).copied()
   }
@@ -628,7 +619,6 @@ impl MediaQueryCache {
   fn ensure_context(&mut self, fingerprint: MediaContextFingerprint) {
     if self.context.as_ref() != Some(&fingerprint) {
       self.results.clear();
-      self.key_cache.clear();
       self.context = Some(fingerprint);
     }
   }
@@ -2339,7 +2329,7 @@ impl MediaContext {
   ) -> bool {
     if let Some(cache) = cache {
       cache.ensure_context(self.fingerprint());
-      let key = cache.key_for(query).clone();
+      let key = MediaQueryKey::from(query);
       if let Some(hit) = cache.get(&key) {
         return hit;
       }

@@ -417,60 +417,47 @@ fn parse_scope_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  let parsed =
-    parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |p| {
+  fn parse_selector_list<'i, 't>(
+    parser: &mut Parser<'i, 't>,
+  ) -> std::result::Result<
+    SelectorList<FastRenderSelectorImpl>,
+    ParseError<'i, SelectorParseErrorKind<'i>>,
+  > {
+    parser.skip_whitespace();
+    match parser.next_including_whitespace()? {
+      Token::ParenthesisBlock => parser.parse_nested_block(|nested| {
+        Ok::<_, ParseError<'i, SelectorParseErrorKind<'i>>>(SelectorList::parse(
+          &PseudoClassParser,
+          nested,
+          selectors::parser::ParseRelative::ForScope,
+        )?)
+      }),
+      _ => Err(
+        parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+          "expected scope selector list in parentheses".into(),
+        )),
+      ),
+    }
+  }
+
+  let parsed: std::result::Result<_, ParseError<'i, SelectorParseErrorKind<'i>>> = parser
+    .parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |p| {
       p.skip_whitespace();
       if p.is_exhausted() {
         return Ok((None, None));
       }
 
       if p.try_parse(|p2| p2.expect_ident_matching("to")).is_ok() {
-        p.skip_whitespace();
-        let end = match SelectorList::parse(
-          &PseudoClassParser,
-          p,
-          selectors::parser::ParseRelative::ForScope,
-        ) {
-          Ok(list) => Some(list),
-          Err(_) => {
-            return Err(p.new_custom_error(
-              SelectorParseErrorKind::UnsupportedPseudoClassOrElement("scope".into()),
-            ))
-          }
-        };
+        let end = Some(parse_selector_list(p)?);
         p.skip_whitespace();
         return Ok((None, end));
       }
 
-      let start =
-        match SelectorList::parse(
-          &PseudoClassParser,
-          p,
-          selectors::parser::ParseRelative::ForScope,
-        ) {
-          Ok(list) => Some(list),
-          Err(_) => {
-            return Err(p.new_custom_error(
-              SelectorParseErrorKind::UnsupportedPseudoClassOrElement("scope".into()),
-            ))
-          }
-        };
+      let start = Some(parse_selector_list(p)?);
 
       p.skip_whitespace();
       let end = if p.try_parse(|p2| p2.expect_ident_matching("to")).is_ok() {
-        p.skip_whitespace();
-        match SelectorList::parse(
-          &PseudoClassParser,
-          p,
-          selectors::parser::ParseRelative::ForScope,
-        ) {
-          Ok(list) => Some(list),
-          Err(_) => {
-            return Err(p.new_custom_error(
-              SelectorParseErrorKind::UnsupportedPseudoClassOrElement("scope".into()),
-            ))
-          }
-        }
+        Some(parse_selector_list(p)?)
       } else {
         None
       };
@@ -556,6 +543,12 @@ fn parse_supports_condition<'i, 't>(
   parse_supports_disjunction(parser)
 }
 
+fn parse_supports_bare_condition<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  parse_supports_bare_disjunction(parser)
+}
+
 fn parse_supports_disjunction<'i, 't>(
   parser: &mut Parser<'i, 't>,
 ) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
@@ -566,6 +559,12 @@ fn parse_supports_disjunction<'i, 't>(
     if parser.try_parse(|p| p.expect_ident_matching("or")).is_ok() {
       parser.skip_whitespace();
       conditions.push(parse_supports_conjunction(parser)?);
+    } else if parser
+      .try_parse(|p| p.expect_function_matching("or"))
+      .is_ok()
+    {
+      let term = parser.parse_nested_block(parse_supports_parenthesized_contents)?;
+      conditions.push(parse_supports_conjunction_tail(parser, term)?);
     } else {
       break;
     }
@@ -588,6 +587,12 @@ fn parse_supports_conjunction<'i, 't>(
     if parser.try_parse(|p| p.expect_ident_matching("and")).is_ok() {
       parser.skip_whitespace();
       conditions.push(parse_supports_negation(parser)?);
+    } else if parser
+      .try_parse(|p| p.expect_function_matching("and"))
+      .is_ok()
+    {
+      let term = parser.parse_nested_block(parse_supports_parenthesized_contents)?;
+      conditions.push(term);
     } else {
       break;
     }
@@ -607,6 +612,13 @@ fn parse_supports_negation<'i, 't>(
   if parser.try_parse(|p| p.expect_ident_matching("not")).is_ok() {
     parser.skip_whitespace();
     let inner = parse_supports_condition_in_parens(parser)?;
+    return Ok(SupportsCondition::Not(Box::new(inner)));
+  }
+  if parser
+    .try_parse(|p| p.expect_function_matching("not"))
+    .is_ok()
+  {
+    let inner = parser.parse_nested_block(parse_supports_parenthesized_contents)?;
     return Ok(SupportsCondition::Not(Box::new(inner)));
   }
 
@@ -655,9 +667,7 @@ fn parse_supports_selector_arguments<'i, 't>(
 ) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
   let selector_list = parser.parse_nested_block(|nested| {
     let start = nested.position();
-    while !nested.is_exhausted() {
-      let _ = nested.next_including_whitespace()?;
-    }
+    consume_nested_tokens(nested)?;
     Ok::<_, ParseError<'i, ()>>(nested.slice_from(start).trim().to_string())
   })?;
 
@@ -668,26 +678,209 @@ fn parse_supports_selector_arguments<'i, 't>(
   Ok(SupportsCondition::Selector(selector_list))
 }
 
+fn consume_nested_tokens<'i, 't, E>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<(), ParseError<'i, E>> {
+  while !parser.is_exhausted() {
+    let token = parser.next_including_whitespace()?;
+    match token {
+      Token::CurlyBracketBlock
+      | Token::ParenthesisBlock
+      | Token::SquareBracketBlock
+      | Token::Function(_) => {
+        parser.parse_nested_block(consume_nested_tokens)?;
+      }
+      _ => {}
+    }
+  }
+  Ok(())
+}
+
 fn parse_supports_parenthesized_condition<'i, 't>(
   parser: &mut Parser<'i, 't>,
 ) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
   match parser.next_including_whitespace() {
-    Ok(Token::ParenthesisBlock) => parser.parse_nested_block(|nested| {
-      if let Ok(cond) = nested.try_parse(|p| parse_supports_condition(p)) {
-        nested.skip_whitespace();
-        if nested.is_exhausted() {
-          return Ok(cond);
-        }
-      }
-
-      if let Some(decl) = parse_supports_declaration_in_parens(nested) {
-        return Ok(decl);
-      }
-
-      Ok(SupportsCondition::False)
-    }),
+    Ok(Token::ParenthesisBlock) => parser.parse_nested_block(parse_supports_parenthesized_contents),
     _ => Err(parser.new_custom_error(())),
   }
+}
+
+fn parse_supports_parenthesized_contents<'i, 't>(
+  nested: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  let state = nested.state();
+  if let Ok(cond) = nested.try_parse(|p| parse_supports_condition(p)) {
+    nested.skip_whitespace();
+    if nested.is_exhausted() {
+      return Ok(cond);
+    }
+  }
+  nested.reset(&state);
+
+  if let Ok(cond) = nested.try_parse(|p| parse_supports_bare_condition(p)) {
+    nested.skip_whitespace();
+    if nested.is_exhausted() {
+      return Ok(cond);
+    }
+  }
+  nested.reset(&state);
+
+  if let Some(decl) = parse_supports_declaration_in_parens(nested) {
+    nested.skip_whitespace();
+    if nested.is_exhausted() {
+      return Ok(decl);
+    }
+  }
+  Ok(SupportsCondition::False)
+}
+
+fn parse_supports_conjunction_tail<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  first: SupportsCondition,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  let mut conditions = vec![first];
+
+  loop {
+    parser.skip_whitespace();
+    if parser.try_parse(|p| p.expect_ident_matching("and")).is_ok() {
+      parser.skip_whitespace();
+      conditions.push(parse_supports_negation(parser)?);
+    } else if parser
+      .try_parse(|p| p.expect_function_matching("and"))
+      .is_ok()
+    {
+      let term = parser.parse_nested_block(parse_supports_parenthesized_contents)?;
+      conditions.push(term);
+    } else {
+      break;
+    }
+  }
+
+  if conditions.len() == 1 {
+    Ok(conditions.pop().unwrap())
+  } else {
+    Ok(SupportsCondition::And(conditions))
+  }
+}
+
+fn parse_supports_bare_disjunction<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  let mut conditions = vec![parse_supports_bare_conjunction(parser)?];
+
+  loop {
+    parser.skip_whitespace();
+    if parser.try_parse(|p| p.expect_ident_matching("or")).is_ok() {
+      parser.skip_whitespace();
+      conditions.push(parse_supports_bare_conjunction(parser)?);
+    } else {
+      break;
+    }
+  }
+
+  if conditions.len() == 1 {
+    Ok(conditions.pop().unwrap())
+  } else {
+    Ok(SupportsCondition::Or(conditions))
+  }
+}
+
+fn parse_supports_bare_conjunction<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  let mut conditions = vec![parse_supports_bare_negation(parser)?];
+
+  loop {
+    parser.skip_whitespace();
+    if parser.try_parse(|p| p.expect_ident_matching("and")).is_ok() {
+      parser.skip_whitespace();
+      conditions.push(parse_supports_bare_negation(parser)?);
+    } else {
+      break;
+    }
+  }
+
+  if conditions.len() == 1 {
+    Ok(conditions.pop().unwrap())
+  } else {
+    Ok(SupportsCondition::And(conditions))
+  }
+}
+
+fn parse_supports_bare_negation<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  parser.skip_whitespace();
+  if parser.try_parse(|p| p.expect_ident_matching("not")).is_ok() {
+    parser.skip_whitespace();
+    let inner = parse_supports_bare_term(parser)?;
+    return Ok(SupportsCondition::Not(Box::new(inner)));
+  }
+
+  parse_supports_bare_term(parser)
+}
+
+fn parse_supports_bare_term<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SupportsCondition, ParseError<'i, ()>> {
+  parser.skip_whitespace();
+
+  if let Ok(selector) = parser.try_parse(|p| parse_supports_selector_function(p)) {
+    return Ok(selector);
+  }
+
+  parse_supports_bare_declaration(parser).ok_or_else(|| parser.new_custom_error(()))
+}
+
+fn parse_supports_bare_declaration<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> Option<SupportsCondition> {
+  parser.skip_whitespace();
+  let property = parser.expect_ident().ok()?.to_string();
+  parser.skip_whitespace();
+  if parser.expect_colon().is_err() {
+    return None;
+  }
+
+  parser.skip_whitespace();
+  let value_start = parser.position();
+
+  loop {
+    parser.skip_whitespace();
+    let state = parser.state();
+
+    let operator = match parser.next() {
+      Ok(Token::Ident(kw)) if kw.eq_ignore_ascii_case("and") || kw.eq_ignore_ascii_case("or") => {
+        Some(kw.to_ascii_lowercase())
+      }
+      _ => None,
+    };
+
+    if operator.is_some() {
+      parser.skip_whitespace();
+      let boundary = parser.expect_ident().is_ok() && parser.expect_colon().is_ok();
+      parser.reset(&state);
+      if boundary {
+        break;
+      }
+    } else {
+      parser.reset(&state);
+    }
+
+    if parser.next_including_whitespace().is_err() {
+      break;
+    }
+  }
+
+  let value = parser.slice_from(value_start).trim();
+  if value.is_empty() && !property.starts_with("--") {
+    return None;
+  }
+
+  Some(SupportsCondition::Declaration {
+    property: property.to_ascii_lowercase(),
+    value: value.to_string(),
+  })
 }
 
 fn parse_supports_declaration_in_parens<'i, 't>(
@@ -1117,16 +1310,7 @@ fn parse_counter_style_descriptors<'i, 't>(
         rule.pad = Some(parse_counter_style_pad(parser)?);
       }
       "fallback" => {
-        parser.skip_whitespace();
-        if let Ok(Token::Ident(id)) = parser.next_including_whitespace() {
-          rule.fallback = Some(id.to_string());
-        } else {
-          return Err(
-            parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
-              "expected ident".into(),
-            )),
-          );
-        }
+        rule.fallback = Some(parse_counter_style_fallback(parser)?);
       }
       "speak-as" => {
         rule.speak_as = Some(parse_counter_style_speak_as(parser)?);
@@ -1142,6 +1326,150 @@ fn parse_counter_style_descriptors<'i, 't>(
   }
 
   Ok(Some(rule))
+}
+
+fn parse_counter_style_descriptor_value<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<String, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  if parser.expect_colon().is_err() {
+    skip_to_semicolon(parser);
+    return Err(
+      parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+        "expected ':'".into(),
+      )),
+    );
+  }
+
+  let value_start = parser.position();
+  let mut important = false;
+  loop {
+    match parser.next() {
+      Ok(Token::Semicolon) | Err(_) => break,
+      Ok(Token::Delim('!')) => {
+        if parser
+          .try_parse(|p| p.expect_ident_matching("important"))
+          .is_ok()
+        {
+          important = true;
+          skip_to_semicolon(parser);
+          break;
+        }
+      }
+      _ => {}
+    }
+  }
+
+  let full_value = parser.slice_from(value_start);
+  let trimmed_value = if important {
+    full_value
+      .rsplit_once("!important")
+      .map(|(before, _)| before.trim_end_matches(';').trim())
+      .unwrap_or_else(|| full_value.trim_end_matches(';').trim())
+  } else {
+    full_value.trim_end_matches(';').trim()
+  };
+  Ok(trimmed_value.to_string())
+}
+
+fn parse_counter_style_system<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<CounterSystem, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  parse_counter_system(&value).ok_or_else(|| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+      "invalid system".into(),
+    ))
+  })
+}
+
+fn parse_counter_style_symbols<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Vec<String>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  parse_symbols_descriptor(&value).ok_or_else(|| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+      "invalid symbols".into(),
+    ))
+  })
+}
+
+fn parse_counter_style_additive_symbols<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Vec<(i32, String)>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  parse_additive_symbols_descriptor(&value).ok_or_else(|| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+      "invalid additive-symbols".into(),
+    ))
+  })
+}
+
+fn parse_counter_style_negative<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<(String, String), ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  parse_negative_descriptor(&value).ok_or_else(|| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+      "invalid negative".into(),
+    ))
+  })
+}
+
+fn parse_counter_style_component<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<String, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  parse_symbols_descriptor(&value)
+    .and_then(|mut list| list.drain(..).next())
+    .ok_or_else(|| {
+      parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+        "invalid component".into(),
+      ))
+    })
+}
+
+fn parse_counter_style_range<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<Vec<(i64, i64)>, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  Ok(parse_range_descriptor(&value).unwrap_or_default())
+}
+
+fn parse_counter_style_pad<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<(u32, String), ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  parse_pad_descriptor(&value).ok_or_else(|| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+      "invalid pad".into(),
+    ))
+  })
+}
+
+fn parse_counter_style_fallback<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<String, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return Err(
+      parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+        "expected ident".into(),
+      )),
+    );
+  }
+  Ok(trimmed.to_string())
+}
+
+fn parse_counter_style_speak_as<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<SpeakAs, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let value = parse_counter_style_descriptor_value(parser)?;
+  parse_speak_as_descriptor(&value).ok_or_else(|| {
+    parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+      "invalid speak-as".into(),
+    ))
+  })
 }
 
 fn parse_counter_system<'i>(value: &'i str) -> Option<CounterSystem> {
@@ -1896,8 +2224,15 @@ fn parse_nested_at_rule<'i, 't>(
   parent_selectors: &SelectorList<FastRenderSelectorImpl>,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
   parser.skip_whitespace();
-  let Ok(Token::AtKeyword(kw)) = parser.next() else {
-    return Ok(None);
+  let kw = match parser.next() {
+    Ok(Token::AtKeyword(kw)) => kw,
+    _ => {
+      return Err(
+        parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+          "not at-rule".into(),
+        )),
+      )
+    }
   };
   let kw_lower = kw.to_ascii_lowercase();
   match kw_lower.as_str() {
@@ -1950,20 +2285,41 @@ fn parse_style_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
 ) -> std::result::Result<Option<StyleRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
-  let start = parser.position();
-  parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
-    while !parser.is_exhausted() {
-      let _ = parser.next_including_whitespace()?;
-    }
-    Ok(())
-  })?;
-
-  let selector_text = parser.slice_from(start).trim();
-  if selector_text.is_empty() {
-    return Ok(None);
-  }
-
   let selectors = if let Some(parent) = parent_selectors {
+    let start = parser.position();
+    parser.parse_until_before(
+      cssparser::Delimiter::CurlyBracketBlock | cssparser::Delimiter::Semicolon,
+      |parser| {
+        while !parser.is_exhausted() {
+          let _ = parser.next_including_whitespace()?;
+        }
+        Ok(())
+      },
+    )?;
+
+    let selector_text = parser.slice_from(start).trim();
+    if selector_text.is_empty() {
+      return Err(
+        parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+          "expected nested selector".into(),
+        )),
+      );
+    }
+
+    let state = parser.state();
+    let next_token = parser.next_including_whitespace().map(|t| t.clone());
+    parser.reset(&state);
+    match next_token {
+      Ok(Token::CurlyBracketBlock) => {}
+      _ => {
+        return Err(
+          parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
+            "expected nested rule block".into(),
+          )),
+        )
+      }
+    }
+
     let combined = combine_nested_selectors(parent, selector_text);
     if combined.is_none() {
       if parser.expect_curly_bracket_block().is_ok() {
@@ -1978,13 +2334,13 @@ fn parse_style_rule<'i, 't>(
     }
     combined.unwrap()
   } else {
-    let mut selector_input = ParserInput::new(selector_text);
-    let mut selector_parser = Parser::new(&mut selector_input);
-    SelectorList::parse(
-      &PseudoClassParser,
-      &mut selector_parser,
-      selectors::parser::ParseRelative::No,
-    )?
+    parser.parse_until_before(cssparser::Delimiter::CurlyBracketBlock, |parser| {
+      SelectorList::parse(
+        &PseudoClassParser,
+        parser,
+        selectors::parser::ParseRelative::No,
+      )
+    })?
   };
 
   parser.expect_curly_bracket_block().map_err(|_| {
@@ -2282,6 +2638,42 @@ mod tests {
   use crate::css::types::FontFaceStyle;
   use crate::css::types::FontSourceFormat;
   use crate::PropertyValue;
+
+  #[test]
+  fn debug_parse_rule_body_style() {
+    let css = "body { color: red; }";
+    let mut input = ParserInput::new(css);
+    let mut parser = Parser::new(&mut input);
+    assert!(!parser.is_exhausted(), "parser should see input tokens");
+    let rule = parse_rule(&mut parser, None).expect("parse_rule");
+    assert!(
+      matches!(rule, Some(CssRule::Style(_))),
+      "expected a style rule, got {:?}",
+      rule
+    );
+
+    let mut input = ParserInput::new(css);
+    let mut parser = Parser::new(&mut input);
+    let mut errors = Vec::new();
+    let rules = parse_rule_list_collecting(&mut parser, &mut errors, None);
+    assert!(
+      errors.is_empty(),
+      "expected no parse errors, got {:?}",
+      errors
+    );
+    assert_eq!(
+      rules.len(),
+      1,
+      "expected rule list to include the style rule"
+    );
+
+    let sheet = parse_stylesheet(css).expect("parse_stylesheet");
+    assert_eq!(
+      sheet.rules.len(),
+      1,
+      "parse_stylesheet should return 1 rule"
+    );
+  }
 
   #[test]
   fn test_parse_simple_stylesheet() {

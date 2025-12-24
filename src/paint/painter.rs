@@ -27,15 +27,14 @@ use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
 use crate::css::types::Transform as CssTransform;
-use crate::dom;
 use crate::error::RenderError;
 use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::html::encoding::decode_html_bytes;
 use crate::image_loader::CachedImage;
 use crate::image_loader::ImageCache;
-use crate::layout;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem;
 use crate::layout::utils::resolve_font_relative_length;
@@ -50,13 +49,11 @@ use crate::paint::stacking::creates_stacking_context;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
-use crate::style;
+use crate::resource::ResourceFetcher;
 #[cfg(test)]
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::display::Display;
-use crate::style::media::MediaContext;
-use crate::style::media::MediaQueryCache;
 use crate::style::position::Position;
 use crate::style::types::AccentColor;
 use crate::style::types::Appearance;
@@ -82,6 +79,10 @@ use crate::style::types::FilterFunction;
 use crate::style::types::FontStyle as CssFontStyle;
 use crate::style::types::ImageOrientation;
 use crate::style::types::ImageRendering;
+use crate::style::types::MaskClip;
+use crate::style::types::MaskComposite;
+use crate::style::types::MaskMode;
+use crate::style::types::MaskOrigin;
 use crate::style::types::MixBlendMode;
 use crate::style::types::ObjectFit;
 use crate::style::types::OrientationTransform;
@@ -388,6 +389,7 @@ enum DisplayCommand {
     transform: Option<Transform>,
     blend_mode: MixBlendMode,
     isolated: bool,
+    mask: Option<Arc<ComputedStyle>>,
     filters: Vec<ResolvedFilter>,
     backdrop_filters: Vec<ResolvedFilter>,
     radii: BorderRadii,
@@ -626,6 +628,22 @@ impl Painter {
     alt: Option<&str>,
     viewport: Size,
   ) {
+    if let ReplacedType::Math(math) = &mut replaced_box.replaced_type {
+      if math.layout.is_none() {
+        let layout = crate::math::layout_mathml(&math.root, style, &self.font_ctx);
+        math.layout = Some(Arc::new(layout));
+      }
+      if replaced_box.intrinsic_size.is_none() {
+        if let Some(layout) = &math.layout {
+          replaced_box.intrinsic_size = Some(layout.size());
+          if layout.height > 0.0 {
+            replaced_box.aspect_ratio = Some(layout.width / layout.height);
+          }
+        }
+      }
+      return;
+    }
+
     let replaced_type_snapshot = replaced_box.replaced_type.clone();
     match replaced_type_snapshot {
       ReplacedType::FormControl(control) => {
@@ -843,6 +861,7 @@ impl Painter {
         }
       }
       ReplacedType::Iframe { .. } => {}
+      ReplacedType::Math(_) => {}
     }
   }
 
@@ -979,7 +998,15 @@ impl Painter {
     // Build display list in stacking-context order then paint
     let mut items = Vec::new();
     let collect_start = Instant::now();
-    self.collect_stacking_context(&tree.root, offset, None, true, &mut items);
+    let treat_root_as_canvas = tree.has_explicit_viewport();
+    self.collect_stacking_context(
+      &tree.root,
+      offset,
+      None,
+      true,
+      treat_root_as_canvas,
+      &mut items,
+    );
     if profiling {
       stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
     }
@@ -1194,10 +1221,11 @@ impl Painter {
     offset: Point,
     parent_style: Option<&ComputedStyle>,
     is_root_context: bool,
+    treat_root_as_canvas: bool,
     items: &mut Vec<DisplayCommand>,
   ) {
     let debug_fragments = dump_fragments_enabled();
-    let is_root_fragment = is_root_context && parent_style.is_none();
+    let is_root_fragment = treat_root_as_canvas && is_root_context && parent_style.is_none();
     if let Some(style) = fragment.style.as_deref() {
       if !matches!(
         style.visibility,
@@ -1299,6 +1327,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
+          treat_root_as_canvas,
           &mut local_commands,
         );
       }
@@ -1309,6 +1338,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
+          treat_root_as_canvas,
           &mut local_commands,
         );
       }
@@ -1318,6 +1348,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
+          treat_root_as_canvas,
           &mut local_commands,
         );
       }
@@ -1327,6 +1358,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
+          treat_root_as_canvas,
           &mut local_commands,
         );
       }
@@ -1338,6 +1370,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
+          treat_root_as_canvas,
           &mut local_commands,
         );
       }
@@ -1349,6 +1382,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
+          treat_root_as_canvas,
           &mut local_commands,
         );
       }
@@ -1415,6 +1449,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
+        treat_root_as_canvas,
         &mut local_commands,
       );
     }
@@ -1427,6 +1462,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
+        treat_root_as_canvas,
         &mut local_commands,
       );
     }
@@ -1436,6 +1472,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
+        treat_root_as_canvas,
         &mut local_commands,
       );
     }
@@ -1445,6 +1482,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
+        treat_root_as_canvas,
         &mut local_commands,
       );
     }
@@ -1456,6 +1494,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
+        treat_root_as_canvas,
         &mut local_commands,
       );
     }
@@ -1467,6 +1506,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
+        treat_root_as_canvas,
         &mut local_commands,
       );
     }
@@ -1583,6 +1623,10 @@ impl Painter {
         &self.font_ctx,
       )
     });
+    let mask = fragment
+      .style
+      .clone()
+      .filter(|s| s.mask_layers.iter().any(|layer| layer.image.is_some()));
     if opacity < 1.0
       || transform.is_some()
       || !matches!(blend_mode, MixBlendMode::Normal)
@@ -1591,6 +1635,7 @@ impl Painter {
       || has_backdrop
       || clip.is_some()
       || clip_path.is_some()
+      || mask.is_some()
     {
       let radii = resolve_border_radii(style_ref, abs_bounds);
       items.push(DisplayCommand::StackingContext {
@@ -1599,6 +1644,7 @@ impl Painter {
         transform,
         blend_mode,
         isolated,
+        mask,
         filters,
         backdrop_filters,
         radii,
@@ -1628,12 +1674,11 @@ impl Painter {
 
     let has_background = Self::has_paintable_background(&style);
     if has_background {
-      let background_rect =
-        if is_root_fragment && (abs_bounds.width() <= 0.0 || abs_bounds.height() <= 0.0) {
-          Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
-        } else {
-          abs_bounds
-        };
+      let background_rect = if is_root_fragment {
+        Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
+      } else {
+        abs_bounds
+      };
       items.push(DisplayCommand::Background {
         rect: background_rect,
         style: style.clone(),
@@ -1680,20 +1725,29 @@ impl Painter {
   }
 
   fn root_background_style(fragment: &FragmentNode) -> Option<Arc<ComputedStyle>> {
-    let own_style = fragment.style.clone();
-    if let Some(style) = own_style.as_ref() {
-      if Self::has_paintable_background(style) {
-        return own_style;
-      }
-    }
-    if let Some(html) = fragment.children.first() {
-      if let Some(style) = html.style.clone() {
+    let html = if fragment.children.len() == 1 {
+      fragment.children.first().unwrap_or(fragment)
+    } else {
+      fragment
+    };
+
+    // HTML canvas background propagation: prefer a non-transparent body background (usually the
+    // first renderable child) over the html element's own background.
+    for child in &html.children {
+      if let Some(style) = child.style.clone() {
         if Self::has_paintable_background(&style) {
           return Some(style);
         }
       }
     }
-    own_style
+
+    if let Some(style) = html.style.clone() {
+      if Self::has_paintable_background(&style) {
+        return Some(style);
+      }
+    }
+
+    fragment.style.clone()
   }
 
   /// Enqueue paint commands for the fragment's own content (text/replaced).
@@ -1835,6 +1889,7 @@ impl Painter {
         transform,
         blend_mode,
         isolated,
+        mask,
         filters,
         backdrop_filters,
         radii,
@@ -2068,6 +2123,23 @@ impl Painter {
             }
           }
         }
+        if let Some(ref mask_style) = mask {
+          let local_bounds = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
+          let local_context_rect = Rect::from_xywh(
+            context_rect.x() - offset.x,
+            context_rect.y() - offset.y,
+            context_rect.width(),
+            context_rect.height(),
+          );
+          if let Some(mask) = self.render_mask(
+            mask_style,
+            local_context_rect,
+            local_bounds,
+            (layer_pixmap.width(), layer_pixmap.height()),
+          ) {
+            layer_pixmap.apply_mask(&mask);
+          }
+        }
         if !outline_commands.is_empty() {
           let mut outline_painter = Painter {
             pixmap: layer_pixmap,
@@ -2160,6 +2232,162 @@ impl Painter {
       }
     }
     Ok(())
+  }
+
+  fn render_mask(
+    &self,
+    style: &ComputedStyle,
+    css_bounds: Rect,
+    layer_bounds: Rect,
+    device_size: (u32, u32),
+  ) -> Option<Mask> {
+    let viewport = (self.css_width, self.css_height);
+    let rects = background_rects(
+      css_bounds.x(),
+      css_bounds.y(),
+      css_bounds.width(),
+      css_bounds.height(),
+      style,
+      Some(viewport),
+    );
+    let mut combined: Option<Mask> = None;
+    let canvas_clip = layer_bounds;
+
+    for layer in style.mask_layers.iter().rev() {
+      let Some(image) = &layer.image else { continue };
+
+      let origin_rect_css = match layer.origin {
+        MaskOrigin::BorderBox => rects.border,
+        MaskOrigin::PaddingBox => rects.padding,
+        MaskOrigin::ContentBox => rects.content,
+      };
+      let clip_rect_css = match layer.clip {
+        MaskClip::BorderBox => rects.border,
+        MaskClip::PaddingBox => rects.padding,
+        MaskClip::ContentBox | MaskClip::Text => rects.content,
+        MaskClip::NoClip => canvas_clip,
+      };
+      if origin_rect_css.width() <= 0.0
+        || origin_rect_css.height() <= 0.0
+        || clip_rect_css.width() <= 0.0
+        || clip_rect_css.height() <= 0.0
+      {
+        continue;
+      }
+
+      let mut dummy = BackgroundLayer::default();
+      dummy.size = layer.size;
+      let (mut tile_w, mut tile_h) = compute_background_size(
+        &dummy,
+        style.font_size,
+        style.root_font_size,
+        viewport,
+        origin_rect_css.width(),
+        origin_rect_css.height(),
+        0.0,
+        0.0,
+      );
+      if tile_w <= 0.0 || tile_h <= 0.0 {
+        continue;
+      }
+
+      let mut rounded_x = false;
+      let mut rounded_y = false;
+      if layer.repeat.x == BackgroundRepeatKeyword::Round {
+        tile_w = round_tile_length(origin_rect_css.width(), tile_w);
+        rounded_x = true;
+      }
+      if layer.repeat.y == BackgroundRepeatKeyword::Round {
+        tile_h = round_tile_length(origin_rect_css.height(), tile_h);
+        rounded_y = true;
+      }
+      if rounded_x ^ rounded_y
+        && matches!(
+          layer.size,
+          BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
+        )
+      {
+        let aspect = 1.0;
+        if rounded_x {
+          tile_h = tile_w / aspect;
+        } else {
+          tile_w = tile_h * aspect;
+        }
+      }
+
+      let (offset_x, offset_y) = resolve_background_offset(
+        layer.position,
+        origin_rect_css.width(),
+        origin_rect_css.height(),
+        tile_w,
+        tile_h,
+        style.font_size,
+        style.root_font_size,
+        viewport,
+      );
+
+      let positions_x = tile_positions(
+        layer.repeat.x,
+        origin_rect_css.x(),
+        origin_rect_css.width(),
+        tile_w,
+        offset_x,
+        clip_rect_css.min_x(),
+        clip_rect_css.max_x(),
+      );
+      let positions_y = tile_positions(
+        layer.repeat.y,
+        origin_rect_css.y(),
+        origin_rect_css.height(),
+        tile_h,
+        offset_y,
+        clip_rect_css.min_y(),
+        clip_rect_css.max_y(),
+      );
+
+      let pixmap_w = tile_w.ceil().max(1.0) as u32;
+      let pixmap_h = tile_h.ceil().max(1.0) as u32;
+      let tile = match image {
+        BackgroundImage::LinearGradient { .. }
+        | BackgroundImage::RepeatingLinearGradient { .. }
+        | BackgroundImage::RadialGradient { .. }
+        | BackgroundImage::RepeatingRadialGradient { .. }
+        | BackgroundImage::ConicGradient { .. }
+        | BackgroundImage::RepeatingConicGradient { .. } => {
+          self.render_generated_image(image, style, pixmap_w, pixmap_h)
+        }
+        BackgroundImage::Url(_) | BackgroundImage::None => None,
+      };
+      let Some(tile) = tile else { continue };
+      let Some(mask_tile) = mask_tile_from_image(&tile, layer.mode) else {
+        continue;
+      };
+
+      let mut mask_pixmap = Pixmap::new(device_size.0, device_size.1)?;
+      for ty in positions_y.iter().copied() {
+        for tx in positions_x.iter().copied() {
+          paint_mask_tile(
+            &mut mask_pixmap,
+            &mask_tile,
+            tx,
+            ty,
+            tile_w,
+            tile_h,
+            clip_rect_css,
+            self.scale,
+          );
+        }
+      }
+
+      let layer_mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
+      if let Some(dest) = combined.as_mut() {
+        apply_mask_composite(dest, &layer_mask, layer.composite);
+      } else {
+        combined = Some(layer_mask);
+      }
+    }
+
+    combined
   }
 
   /// Paints the background of a fragment
@@ -4202,12 +4430,47 @@ impl Painter {
           return;
         }
       }
-      ReplacedType::Embed { src: content }
-      | ReplacedType::Object { data: content }
-      | ReplacedType::Iframe {
+      ReplacedType::Iframe {
         src: content,
         srcdoc: None,
       } => {
+        if let Some(pixmap) = self.render_iframe_src(content, content_rect, style) {
+          let device_x = self.device_length(content_rect.x());
+          let device_y = self.device_length(content_rect.y());
+          let paint = PixmapPaint::default();
+          self.pixmap.draw_pixmap(
+            device_x as i32,
+            device_y as i32,
+            pixmap.as_ref(),
+            &paint,
+            Transform::identity(),
+            None,
+          );
+          return;
+        }
+
+        if self.paint_svg(
+          content,
+          style,
+          content_rect.x(),
+          content_rect.y(),
+          content_rect.width(),
+          content_rect.height(),
+        ) {
+          return;
+        }
+        if self.paint_image_from_src(
+          content,
+          style,
+          content_rect.x(),
+          content_rect.y(),
+          content_rect.width(),
+          content_rect.height(),
+        ) {
+          return;
+        }
+      }
+      ReplacedType::Embed { src: content } | ReplacedType::Object { data: content } => {
         if self.paint_svg(
           content,
           style,
@@ -4575,64 +4838,81 @@ impl Painter {
     content_rect: Rect,
     style: Option<&ComputedStyle>,
   ) -> Option<Pixmap> {
-    if content_rect.width() <= 0.0 || content_rect.height() <= 0.0 {
+    let width = content_rect.width().ceil() as u32;
+    let height = content_rect.height().ceil() as u32;
+    if width == 0 || height == 0 {
       return None;
     }
-    let dom = dom::parse_html(html).ok()?;
-    let used_codepoints = dom::collect_text_codepoints(&dom);
-    let stylesheet = css::parser::extract_css(&dom).ok()?;
-    let media_ctx = MediaContext::screen(content_rect.width(), content_rect.height())
-      .with_device_pixel_ratio(self.scale)
-      .with_env_overrides();
-    let import_loader = EmbeddedImportFetcher {
-      base_url: self.image_cache.base_url(),
-    };
-    let mut media_query_cache = MediaQueryCache::default();
-    let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
-      &import_loader,
-      self.image_cache.base_url().as_deref(),
-      &media_ctx,
-      Some(&mut media_query_cache),
-    );
-    let target_fragment = self
-      .image_cache
-      .base_url()
-      .as_ref()
-      .and_then(|url| url.split('#').nth(1))
-      .map(String::from);
-    let font_faces = resolved_stylesheet
-      .collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
-    let _ = self.font_ctx.load_web_fonts(
-      &font_faces,
-      self.image_cache.base_url().as_deref(),
-      Some(&used_codepoints),
-    );
-    let styled_tree = style::cascade::apply_styles_with_media_target_and_imports_cached(
-      &dom,
-      &resolved_stylesheet,
-      &media_ctx,
-      target_fragment.as_deref(),
-      None,
-      None,
-      None,
-      None,
-      None,
-      Some(&mut media_query_cache),
-    );
-    let mut box_tree = tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
-    let viewport = Size::new(content_rect.width(), content_rect.height());
-    self.resolve_replaced_intrinsic_sizes(&mut box_tree.root, viewport);
-    let config = layout::engine::LayoutConfig::for_viewport(viewport);
-    let layout_engine =
-      layout::engine::LayoutEngine::with_font_context(config, self.font_ctx.clone());
-    let fragment_tree = layout_engine.layout_tree(&box_tree).ok()?;
-    paint_tree_with_resources_scaled(
-      &fragment_tree,
-      content_rect.width().ceil() as u32,
-      content_rect.height().ceil() as u32,
-      style.map(|s| s.background_color).unwrap_or(Rgba::WHITE),
-      self.font_ctx.clone(),
-      self.image_cache.clone(),
+
+    let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
+    let base_url = self.image_cache.base_url();
+    let mut image_cache = self.image_cache.clone();
+    if let Some(base_url) = base_url.clone() {
+      image_cache.set_base_url(base_url);
+    }
+    render_html_with_shared_resources(
+      html,
+      width,
+      height,
+      background,
+      &self.font_ctx,
+      &image_cache,
+      Arc::clone(image_cache.fetcher()),
+      base_url,
+      self.scale,
+    )
+    .ok()
+  }
+
+  fn render_iframe_src(
+    &self,
+    src: &str,
+    content_rect: Rect,
+    style: Option<&ComputedStyle>,
+  ) -> Option<Pixmap> {
+    if src.is_empty() {
+      return None;
+    }
+    let width = content_rect.width().ceil() as u32;
+    let height = content_rect.height().ceil() as u32;
+    if width == 0 || height == 0 {
+      return None;
+    }
+
+    let resolved = self.image_cache.resolve_url(src);
+    let fetcher = Arc::clone(self.image_cache.fetcher());
+    let resource = fetcher.fetch(&resolved).ok()?;
+    let content_type = resource.content_type.as_deref();
+    let is_html = content_type
+      .map(|ct| {
+        let ct = ct.to_ascii_lowercase();
+        ct.starts_with("text/html")
+          || ct.starts_with("application/xhtml+xml")
+          || ct.starts_with("application/html")
+          || ct.contains("+html")
+      })
+      .unwrap_or_else(|| {
+        let lower = resolved.to_ascii_lowercase();
+        lower.ends_with(".html") || lower.ends_with(".htm") || lower.ends_with(".xhtml")
+      });
+    if !is_html {
+      return None;
+    }
+
+    let html = decode_html_bytes(&resource.bytes, content_type);
+    let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
+    let mut image_cache = self.image_cache.clone();
+    image_cache.set_base_url(resolved.clone());
+
+    render_html_with_shared_resources(
+      &html,
+      width,
+      height,
+      background,
+      &self.font_ctx,
+      &image_cache,
+      fetcher,
+      Some(resolved),
       self.scale,
     )
     .ok()
@@ -6947,6 +7227,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         transform,
         blend_mode,
         isolated,
+        mask,
         filters,
         backdrop_filters,
         radii,
@@ -6959,6 +7240,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         transform,
         blend_mode,
         isolated,
+        mask,
         filters,
         backdrop_filters,
         radii,
@@ -7051,6 +7333,7 @@ fn resolve_filters(
           color,
         })
       }
+      FilterFunction::Url(_) => None,
     })
     .collect()
 }
@@ -7680,6 +7963,15 @@ fn map_blend_mode(mode: MixBlendMode) -> SkiaBlendMode {
     MixBlendMode::Color => SkiaBlendMode::Color,
     MixBlendMode::Luminosity => SkiaBlendMode::Luminosity,
     MixBlendMode::PlusLighter => SkiaBlendMode::Plus,
+    MixBlendMode::PlusDarker
+    | MixBlendMode::HueHsv
+    | MixBlendMode::SaturationHsv
+    | MixBlendMode::ColorHsv
+    | MixBlendMode::LuminosityHsv
+    | MixBlendMode::HueOklch
+    | MixBlendMode::ChromaOklch
+    | MixBlendMode::ColorOklch
+    | MixBlendMode::LuminosityOklch => SkiaBlendMode::SourceOver,
   }
 }
 
@@ -7907,6 +8199,123 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
         data[idx + 3] = 0;
       }
     }
+  }
+}
+
+fn mask_value_from_pixel(pixel: &[u8], mode: MaskMode) -> u8 {
+  let a = pixel.get(3).copied().unwrap_or(0) as f32 / 255.0;
+  let value = match mode {
+    MaskMode::Alpha => a,
+    MaskMode::Luminance => {
+      if a <= 0.0 {
+        0.0
+      } else {
+        let r = pixel.get(0).copied().unwrap_or(0) as f32 / 255.0 / a;
+        let g = pixel.get(1).copied().unwrap_or(0) as f32 / 255.0 / a;
+        let b = pixel.get(2).copied().unwrap_or(0) as f32 / 255.0 / a;
+        (0.2126 * r + 0.7152 * g + 0.0722 * b) * a
+      }
+    }
+  };
+  (value * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+fn mask_tile_from_image(tile: &Pixmap, mode: MaskMode) -> Option<Pixmap> {
+  let size = IntSize::from_wh(tile.width(), tile.height())?;
+  let mut data = Vec::with_capacity(tile.data().len());
+  for chunk in tile.data().chunks(4) {
+    let v = mask_value_from_pixel(chunk, mode);
+    data.extend_from_slice(&[v, v, v, v]);
+  }
+  Pixmap::from_vec(data, size)
+}
+
+fn paint_mask_tile(
+  dest: &mut Pixmap,
+  tile: &Pixmap,
+  tx: f32,
+  ty: f32,
+  tile_w: f32,
+  tile_h: f32,
+  clip_rect: Rect,
+  scale: f32,
+) {
+  if tile_w <= 0.0 || tile_h <= 0.0 {
+    return;
+  }
+  let tile_rect = Rect::from_xywh(tx, ty, tile_w, tile_h);
+  let Some(intersection) = tile_rect.intersection(clip_rect) else {
+    return;
+  };
+  if intersection.width() <= 0.0 || intersection.height() <= 0.0 {
+    return;
+  }
+
+  let device_clip = Rect::from_xywh(
+    intersection.x() * scale,
+    intersection.y() * scale,
+    intersection.width() * scale,
+    intersection.height() * scale,
+  );
+  if device_clip.width() <= 0.0 || device_clip.height() <= 0.0 {
+    return;
+  }
+  let device_bounds = Rect::from_xywh(0.0, 0.0, dest.width() as f32, dest.height() as f32);
+  let Some(device_clip) = device_clip.intersection(device_bounds) else {
+    return;
+  };
+  let Some(src_rect) = SkiaRect::from_xywh(
+    device_clip.x(),
+    device_clip.y(),
+    device_clip.width(),
+    device_clip.height(),
+  ) else {
+    return;
+  };
+
+  let scale_x = tile_w / tile.width() as f32;
+  let scale_y = tile_h / tile.height() as f32;
+
+  let mut paint = Paint::default();
+  paint.shader = Pattern::new(
+    tile.as_ref(),
+    SpreadMode::Pad,
+    FilterQuality::Bilinear,
+    1.0,
+    Transform::from_row(
+      scale_x * scale,
+      0.0,
+      0.0,
+      scale_y * scale,
+      tx * scale,
+      ty * scale,
+    ),
+  );
+  paint.anti_alias = false;
+  dest.fill_rect(src_rect, &paint, Transform::identity(), None);
+}
+
+fn apply_mask_composite(dest: &mut Mask, src: &Mask, op: MaskComposite) {
+  if dest.width() != src.width() || dest.height() != src.height() {
+    return;
+  }
+
+  let dest_data = dest.data_mut();
+  let src_data = src.data();
+  for (d, s) in dest_data.iter_mut().zip(src_data.iter()) {
+    let src = *s as u16;
+    let dst = *d as u16;
+    let out = match op {
+      MaskComposite::Add => src + dst.saturating_mul(255 - src) / 255,
+      MaskComposite::Subtract => src.saturating_mul(255 - dst) / 255,
+      MaskComposite::Intersect => src.saturating_mul(dst) / 255,
+      MaskComposite::Exclude => {
+        let src_out = src.saturating_mul(255 - dst) / 255;
+        let dst_out = dst.saturating_mul(255 - src) / 255;
+        src_out + dst_out
+      }
+    };
+    *d = out.min(255) as u8;
   }
 }
 
@@ -8845,7 +9254,7 @@ fn escape_attr_value(value: &str) -> String {
     .replace('\'', "&apos;")
 }
 
-fn pixmap_to_data_url(mut pixmap: Pixmap) -> Option<String> {
+fn pixmap_to_data_url(pixmap: Pixmap) -> Option<String> {
   let width = pixmap.width();
   let height = pixmap.height();
   let data = pixmap.take();
@@ -9098,7 +9507,7 @@ mod tests {
 
     let painter = Painter::new(100, 10, Rgba::WHITE).expect("painter");
     let mut commands = Vec::new();
-    painter.collect_stacking_context(&root, Point::ZERO, None, true, &mut commands);
+    painter.collect_stacking_context(&root, Point::ZERO, None, true, false, &mut commands);
 
     // Background commands occur in paint order; filter child backgrounds to check ordering.
     let xs: Vec<f32> = commands
@@ -10164,6 +10573,7 @@ mod tests {
           alt: Some("alt".to_string()),
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
         box_id: None,
       },
@@ -10300,6 +10710,7 @@ mod tests {
           descriptor: SrcsetDescriptor::Density(2.0),
         },
       ],
+      picture_sources: Vec::new(),
     };
 
     let style = ComputedStyle::default();
@@ -10341,6 +10752,7 @@ mod tests {
           descriptor: SrcsetDescriptor::Width(300),
         },
       ],
+      picture_sources: Vec::new(),
     };
 
     let style = ComputedStyle::default();
@@ -10834,7 +11246,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.position = Position::Absolute;
     style.background_color = Rgba::RED;
-    style.clip = Some(style::types::ClipRect {
+    style.clip = Some(crate::style::types::ClipRect {
       top: ClipComponent::Length(Length::px(5.0)),
       right: ClipComponent::Length(Length::px(15.0)),
       bottom: ClipComponent::Length(Length::px(15.0)),
@@ -11506,6 +11918,7 @@ mod tests {
       transform: None,
       blend_mode: MixBlendMode::Normal,
       isolated: true,
+      mask: None,
       filters: vec![ResolvedFilter::Blur(1.0)],
       backdrop_filters: Vec::new(),
       radii: BorderRadii::uniform(0.5),
@@ -11540,6 +11953,7 @@ mod tests {
       transform: Some(Transform::from_translate(12.0, 8.0)),
       blend_mode: MixBlendMode::Normal,
       isolated: false,
+      mask: None,
       filters: Vec::new(),
       backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
       radii: BorderRadii::ZERO,

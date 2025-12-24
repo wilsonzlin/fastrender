@@ -153,6 +153,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   if let Ok(val) = env::var("FASTR_TRACE_BOXES") {
     eprintln!("FASTR_TRACE_BOXES env in inspect_frag: {val}");
   }
+  let inspect_mask = env::var("FASTR_INSPECT_MASK")
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false);
 
   // Optionally fetch and inline external CSS links to mirror the render_pages pipeline.
   let fetch_css = env::var("FASTR_FETCH_LINK_CSS")
@@ -178,8 +181,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           Ok(res) => {
             let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
             let rewritten = absolutize_css_urls(&css_text, &link);
-            let mut import_fetch = |u| {
-              fetcher
+            let fetcher_for_imports = fetcher.clone();
+            let mut import_fetch = move |u: &str| {
+              fetcher_for_imports
                 .fetch(u)
                 .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
             };
@@ -226,6 +230,68 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       }
     }
     if let DomNodeType::Element { ref tag_name, .. } = node.node_type {
+      if inspect_mask {
+        if let Some(id) = node.get_attribute("id") {
+          if id == "target" || style.mask_layers.iter().any(|layer| layer.image.is_some()) {
+            let layer_summary = style
+              .mask_layers
+              .iter()
+              .enumerate()
+              .map(|(idx, layer)| {
+                let image_summary = match layer.image.as_ref() {
+                  None => "none".to_string(),
+                  Some(fastrender::style::types::BackgroundImage::LinearGradient {
+                    angle,
+                    stops,
+                  }) => format!("linear-gradient(angle={angle} stops={})", stops.len()),
+                  Some(fastrender::style::types::BackgroundImage::RepeatingLinearGradient {
+                    angle,
+                    stops,
+                  }) => format!(
+                    "repeating-linear-gradient(angle={angle} stops={})",
+                    stops.len()
+                  ),
+                  Some(fastrender::style::types::BackgroundImage::RadialGradient { stops, .. }) => {
+                    format!("radial-gradient(stops={})", stops.len())
+                  }
+                  Some(fastrender::style::types::BackgroundImage::RepeatingRadialGradient {
+                    stops,
+                    ..
+                  }) => format!("repeating-radial-gradient(stops={})", stops.len()),
+                  Some(fastrender::style::types::BackgroundImage::ConicGradient { stops, .. }) => {
+                    format!("conic-gradient(stops={})", stops.len())
+                  }
+                  Some(fastrender::style::types::BackgroundImage::RepeatingConicGradient {
+                    stops,
+                    ..
+                  }) => format!("repeating-conic-gradient(stops={})", stops.len()),
+                  Some(fastrender::style::types::BackgroundImage::Url(url)) => {
+                    format!("url({url})")
+                  }
+                  Some(fastrender::style::types::BackgroundImage::None) => "none".to_string(),
+                };
+
+                format!(
+                  "#{idx} img={image_summary} size={:?} repeat={:?} pos={:?} composite={:?} mode={:?} origin={:?} clip={:?}",
+                  layer.size,
+                  layer.repeat,
+                  layer.position,
+                  layer.composite,
+                  layer.mode,
+                  layer.origin,
+                  layer.clip
+                )
+              })
+              .collect::<Vec<_>>()
+              .join(", ");
+            eprintln!(
+              "mask debug: <{tag_name} id=\"{id}\"> mask_layers={} [{}]",
+              style.mask_layers.len(),
+              layer_summary
+            );
+          }
+        }
+      }
       if tag_name == "nav" {
         if let Some(id) = node.get_attribute("id") {
           if id == "pageHeader" {

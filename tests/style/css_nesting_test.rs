@@ -39,7 +39,7 @@ fn nested_rules_cross_product_selector_lists() {
 
   assert_eq!(
     selector_strings(collected[0].rule),
-    vec![".a".into(), ".b".into()]
+    vec![".a".to_string(), ".b".to_string()]
   );
 
   let mut nested = selector_strings(collected[1].rule);
@@ -59,11 +59,14 @@ fn nested_rules_inside_media_inherit_parent_selector() {
 
   let narrow = sheet.collect_style_rules(&MediaContext::screen(320.0, 480.0));
   assert_eq!(narrow.len(), 1);
-  assert_eq!(selector_strings(narrow[0].rule), vec![".wrap".into()]);
+  assert_eq!(selector_strings(narrow[0].rule), vec![".wrap".to_string()]);
 
   let wide = sheet.collect_style_rules(&MediaContext::screen(800.0, 600.0));
   assert_eq!(wide.len(), 2);
-  assert_eq!(selector_strings(wide[1].rule), vec![".wrap .child".into()]);
+  assert_eq!(
+    selector_strings(wide[1].rule),
+    vec![".wrap .child".to_string()]
+  );
 }
 
 #[test]
@@ -103,10 +106,10 @@ fn nesting_with_is_parent_preserves_selector() {
 
   assert_eq!(
     selector_strings(collected[0].rule),
-    vec![":is(.foo, .bar)".into()]
+    vec![":is(.foo, .bar)".to_string()]
   );
   assert_eq!(
     selector_strings(collected[1].rule),
-    vec![":is(.foo, .bar) .child".into()]
+    vec![":is(.foo, .bar) .child".to_string()]
   );
 }

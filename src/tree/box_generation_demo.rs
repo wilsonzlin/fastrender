@@ -13,9 +13,7 @@ use crate::style::types::TextTransform;
 use crate::style::ComputedStyle;
 use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_generation::{marker_content_from_style, parse_srcset};
-use crate::tree::box_tree::{
-  BoxNode, BoxTree, BoxType, MarkerContent, ReplacedType, SrcsetCandidate, SrcsetDescriptor,
-};
+use crate::tree::box_tree::{BoxNode, BoxTree, ReplacedType, SvgContent};
 use crate::tree::debug::DebugInfo;
 use std::sync::Arc;
 
@@ -248,10 +246,13 @@ impl DOMNode {
         alt,
         srcset,
         sizes: None,
+        picture_sources: Vec::new(),
       }),
       "video" => Some(ReplacedType::Video { src, poster }),
       "canvas" => Some(ReplacedType::Canvas),
-      "svg" => Some(ReplacedType::Svg { content: src }),
+      "svg" => Some(ReplacedType::Svg {
+        content: SvgContent::raw(src),
+      }),
       "iframe" => Some(ReplacedType::Iframe { src, srcdoc }),
       _ => None,
     }
@@ -1377,6 +1378,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
       Some(Size::new(100.0, 100.0)),
       Some(1.0),

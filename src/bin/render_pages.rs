@@ -7,7 +7,7 @@
 mod caching_fetcher;
 mod common;
 
-use caching_fetcher::CachingFetcher;
+use caching_fetcher::DiskCachingFetcher;
 use clap::Parser;
 use common::render_pipeline::{
   build_render_configs, build_renderer_with_fetcher, follow_client_redirects, log_diagnostics,
@@ -20,6 +20,7 @@ use fastrender::resource::HttpFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::OutputFormat;
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::fs;
 use std::panic::AssertUnwindSafe;
@@ -298,7 +299,7 @@ fn main() {
   }
 
   // Create shared caching fetcher
-  let fetcher = Arc::new(CachingFetcher::new(
+  let fetcher = Arc::new(DiskCachingFetcher::new(
     HttpFetcher::new()
       .with_user_agent(args.user_agent.clone())
       .with_accept_language(args.accept_language.clone()),

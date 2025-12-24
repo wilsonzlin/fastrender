@@ -111,6 +111,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "caption-side",
   "caret-color",
   "clear",
+  "clip",
   "clip-path",
   "color",
   "color-scheme",
@@ -217,6 +218,15 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "list-style-image",
   "list-style-position",
   "list-style-type",
+  "mask",
+  "mask-image",
+  "mask-position",
+  "mask-size",
+  "mask-repeat",
+  "mask-clip",
+  "mask-origin",
+  "mask-composite",
+  "mask-mode",
   "margin",
   "margin-block",
   "margin-block-end",
@@ -267,6 +277,7 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "overflow",
   "overflow-x",
   "overflow-y",
+  "overflow-anchor",
   "padding",
   "padding-block",
   "padding-block-end",
@@ -799,7 +810,8 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
   }
 
   let is_background_longhand = property.starts_with("background-") || property == "background";
-  let allow_commas = is_background_longhand || property == "cursor";
+  let is_mask_longhand = property.starts_with("mask-") || property == "mask";
+  let allow_commas = is_background_longhand || is_mask_longhand || property == "cursor";
 
   if property == "text-shadow" {
     if let Some(shadows) = parse_text_shadow_list(value_str) {
@@ -871,6 +883,15 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         | "background-attachment"
         | "background-origin"
         | "background-clip"
+        | "mask"
+        | "mask-image"
+        | "mask-position"
+        | "mask-size"
+        | "mask-repeat"
+        | "mask-mode"
+        | "mask-origin"
+        | "mask-clip"
+        | "mask-composite"
         | "border"
         | "border-top"
         | "border-right"
@@ -1071,23 +1092,66 @@ fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
 }
 
 fn parse_gradient(value: &str) -> Option<PropertyValue> {
+  fn is_single_function_call(value: &str, name: &str) -> bool {
+    let trimmed = value.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let prefix = format!("{name}(");
+    if !lower.starts_with(&prefix) {
+      return false;
+    }
+
+    let mut depth: usize = 0;
+    let mut in_string: Option<char> = None;
+    let mut escape = false;
+
+    for (idx, ch) in trimmed.char_indices() {
+      if escape {
+        escape = false;
+        continue;
+      }
+      if ch == '\\' {
+        escape = true;
+        continue;
+      }
+      if let Some(q) = in_string {
+        if ch == q {
+          in_string = None;
+        }
+        continue;
+      }
+      match ch {
+        '"' | '\'' => in_string = Some(ch),
+        '(' => depth += 1,
+        ')' => {
+          depth = depth.saturating_sub(1);
+          if depth == 0 {
+            return trimmed[idx + 1..].trim().is_empty();
+          }
+        }
+        _ => {}
+      }
+    }
+
+    false
+  }
+
   let lower = value.trim().to_ascii_lowercase();
-  if lower.starts_with("linear-gradient(") {
+  if is_single_function_call(value, "linear-gradient") {
     return parse_linear_gradient(&lower, false);
   }
-  if lower.starts_with("radial-gradient(") {
+  if is_single_function_call(value, "radial-gradient") {
     return parse_radial_gradient(&lower, false);
   }
-  if lower.starts_with("repeating-linear-gradient(") {
+  if is_single_function_call(value, "repeating-linear-gradient") {
     return parse_linear_gradient(&lower, true);
   }
-  if lower.starts_with("repeating-radial-gradient(") {
+  if is_single_function_call(value, "repeating-radial-gradient") {
     return parse_radial_gradient(&lower, true);
   }
-  if lower.starts_with("conic-gradient(") {
+  if is_single_function_call(value, "conic-gradient") {
     return parse_conic_gradient(&lower, false);
   }
-  if lower.starts_with("repeating-conic-gradient(") {
+  if is_single_function_call(value, "repeating-conic-gradient") {
     return parse_conic_gradient(&lower, true);
   }
   None
@@ -1112,13 +1176,13 @@ fn parse_linear_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
 
   let mut stops = Vec::new();
   if let Some(stop) = first_stop {
-    if let Some(cs) = parse_color_stop(stop) {
-      stops.push(cs);
+    if let Some(cs) = parse_color_stops(stop) {
+      stops.extend(cs);
     }
   }
   for part in iter {
-    if let Some(cs) = parse_color_stop(part) {
-      stops.push(cs);
+    if let Some(cs) = parse_color_stops(part) {
+      stops.extend(cs);
     }
   }
 
@@ -1158,8 +1222,8 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
 
   let mut stops = Vec::new();
   let mut start_idx = 1;
-  if let Some(cs) = parse_color_stop(parts[0]) {
-    stops.push(cs);
+  if let Some(cs) = parse_color_stops(parts[0]) {
+    stops.extend(cs);
   } else {
     start_idx = 1;
     let lower = parts[0].to_ascii_lowercase();
@@ -1208,8 +1272,8 @@ fn parse_radial_gradient(value: &str, repeating: bool) -> Option<PropertyValue> 
   }
 
   for part in parts.iter().skip(start_idx) {
-    if let Some(cs) = parse_color_stop(part) {
-      stops.push(cs);
+    if let Some(cs) = parse_color_stops(part) {
+      stops.extend(cs);
     }
   }
 
@@ -1417,7 +1481,7 @@ fn parse_conic_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
 
   let prelude = parts[0].trim();
   let mut first_stop_idx = 0;
-  if let Some(_cs) = parse_color_stop(prelude) {
+  if parse_color_stops(prelude).is_some() {
     // No prelude; this is a stop.
   } else {
     first_stop_idx = 1;
@@ -1446,14 +1510,9 @@ fn parse_conic_gradient(value: &str, repeating: bool) -> Option<PropertyValue> {
   }
 
   let mut stops = Vec::new();
-  if first_stop_idx == 0 {
-    if let Some(cs) = parse_color_stop(parts[0]) {
-      stops.push(cs);
-    }
-  }
   for part in parts.iter().skip(first_stop_idx) {
-    if let Some(cs) = parse_color_stop(part) {
-      stops.push(cs);
+    if let Some(cs) = parse_color_stops(part) {
+      stops.extend(cs);
     }
   }
   if stops.len() < 2 {
@@ -1593,45 +1652,79 @@ fn parse_angle(token: &str) -> Option<f32> {
   }
 }
 
-fn parse_color_stop(token: &str) -> Option<crate::css::types::ColorStop> {
+fn parse_color_stops(token: &str) -> Option<Vec<crate::css::types::ColorStop>> {
   let trimmed = token.trim();
   if trimmed.is_empty() {
     return None;
   }
 
-  let (color_part, position_part) = split_color_and_position(trimmed);
+  let (color_part, position_parts) = split_color_and_positions(trimmed);
   let color = Color::parse(color_part).ok()?;
-  let position = position_part.and_then(parse_stop_position);
 
-  Some(crate::css::types::ColorStop { color, position })
+  match position_parts.len() {
+    0 => Some(vec![crate::css::types::ColorStop {
+      color,
+      position: None,
+    }]),
+    1 => Some(vec![crate::css::types::ColorStop {
+      color,
+      position: parse_stop_position(position_parts[0]),
+    }]),
+    2 => {
+      let first = parse_stop_position(position_parts[0])?;
+      let second = parse_stop_position(position_parts[1])?;
+      Some(vec![
+        crate::css::types::ColorStop {
+          color: color.clone(),
+          position: Some(first),
+        },
+        crate::css::types::ColorStop {
+          color,
+          position: Some(second),
+        },
+      ])
+    }
+    _ => None,
+  }
 }
 
-fn split_color_and_position(token: &str) -> (&str, Option<&str>) {
-  let mut depth = 0i32;
-  let mut split = None;
-  for (idx, ch) in token.char_indices().rev() {
-    match ch {
-      ')' => depth += 1,
-      '(' => depth -= 1,
-      ' ' | '\t' if depth == 0 => {
-        split = Some(idx);
-        break;
+fn split_color_and_positions(token: &str) -> (&str, Vec<&str>) {
+  fn split_last_segment(input: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    for (idx, ch) in input.char_indices().rev() {
+      match ch {
+        ')' => depth += 1,
+        '(' => depth -= 1,
+        ' ' | '\t' if depth == 0 => {
+          let head = input[..idx].trim_end();
+          let tail = input[idx..].trim();
+          if head.is_empty() || tail.is_empty() {
+            return None;
+          }
+          return Some((head, tail));
+        }
+        _ => {}
       }
-      _ => {}
+    }
+    None
+  }
+
+  let mut remainder = token;
+  let mut positions = Vec::new();
+  for _ in 0..2 {
+    let Some((head, tail)) = split_last_segment(remainder) else {
+      break;
+    };
+    if parse_stop_position(tail).is_some() {
+      positions.push(tail);
+      remainder = head;
+    } else {
+      break;
     }
   }
 
-  if let Some(idx) = split {
-    let color = token[..idx].trim_end();
-    let pos = token[idx..].trim();
-    if pos.is_empty() {
-      (color, None)
-    } else {
-      (color, Some(pos))
-    }
-  } else {
-    (token, None)
-  }
+  positions.reverse();
+  (remainder, positions)
 }
 
 fn parse_stop_position(token: &str) -> Option<f32> {
@@ -1756,6 +1849,21 @@ mod tests {
     };
     assert!((angle - 270.0).abs() < 0.01);
     assert_eq!(stops.len(), 2);
+  }
+
+  #[test]
+  fn parses_two_position_gradient_color_stop() {
+    let value = "linear-gradient(to right, black 0 50%, transparent 50%)";
+    let PropertyValue::LinearGradient { stops, .. } =
+      parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+
+    assert_eq!(stops.len(), 3);
+    assert_eq!(stops[0].position, Some(0.0));
+    assert_eq!(stops[1].position, Some(0.5));
+    assert_eq!(stops[2].position, Some(0.5));
   }
 
   #[test]
@@ -2293,7 +2401,9 @@ fn calc_component_to_length_with_numbers(
       }
     }
     CalcComponent::Length(calc) => {
-      if let Some(term) = calc.single_term() {
+      if calc.is_zero() {
+        Some(Length::px(0.0))
+      } else if let Some(term) = calc.single_term() {
         Some(Length::new(term.value, term.unit))
       } else {
         Some(Length::calc(calc))

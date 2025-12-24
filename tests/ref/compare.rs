@@ -758,7 +758,7 @@ mod tests {
     image
       .write_to(
         &mut std::io::Cursor::new(&mut buffer),
-        image::ImageOutputFormat::Png,
+        image::ImageFormat::Png,
       )
       .unwrap();
 

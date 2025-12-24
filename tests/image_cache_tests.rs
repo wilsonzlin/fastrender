@@ -2,7 +2,7 @@ use fastrender::error::ImageError;
 use fastrender::image_loader::{CachedImage, ImageCache, ImageCacheConfig};
 use fastrender::resource::{FetchedResource, ResourceFetcher};
 use fastrender::Result;
-use image::{DynamicImage, ImageOutputFormat, Rgba, RgbaImage};
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
@@ -51,11 +51,11 @@ fn small_png() -> Vec<u8> {
 
 fn png_with_dimensions(width: u32, height: u32) -> Vec<u8> {
   let image = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
-  let mut bytes = Vec::new();
+  let mut cursor = std::io::Cursor::new(Vec::new());
   DynamicImage::ImageRgba8(image)
-    .write_to(&mut bytes, ImageOutputFormat::Png)
+    .write_to(&mut cursor, ImageFormat::Png)
     .expect("encode png");
-  bytes
+  cursor.into_inner()
 }
 
 #[test]
@@ -105,7 +105,10 @@ fn rejects_image_exceeding_limits() {
   let cache =
     ImageCache::with_fetcher_and_config(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>, config);
 
-  let err = cache.load("test://too-big.png").unwrap_err();
+  let err = match cache.load("test://too-big.png") {
+    Ok(_) => panic!("expected decode failure"),
+    Err(err) => err,
+  };
   match err {
     fastrender::Error::Image(ImageError::DecodeFailed { reason, .. }) => {
       assert!(reason.contains("pixel"), "unexpected error: {reason}");

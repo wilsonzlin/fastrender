@@ -418,6 +418,7 @@ fn backdrop_filter_isolates_blend_mode() {
     filters: Vec::new(),
     backdrop_filters: vec![ResolvedFilter::Blur(0.1)],
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
@@ -2022,6 +2023,7 @@ fn stacking_context_hsl_blend_preserves_backdrop_luminance() {
     filters: Vec::new(),
     backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
+    mask: None,
   }));
   list.push(DisplayItem::FillRect(FillRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),

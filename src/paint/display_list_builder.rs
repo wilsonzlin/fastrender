@@ -635,14 +635,14 @@ impl DisplayListBuilder {
           | crate::style::types::Overflow::Scroll
           | crate::style::types::Overflow::Auto
           | crate::style::types::Overflow::Clip
-      ) || style.containment.paint;
+      );
       let clip_y = matches!(
         style.overflow_y,
         crate::style::types::Overflow::Hidden
           | crate::style::types::Overflow::Scroll
           | crate::style::types::Overflow::Auto
           | crate::style::types::Overflow::Clip
-      ) || style.containment.paint;
+      );
       if !clip_x && !clip_y {
         return None;
       }
@@ -660,6 +660,39 @@ impl DisplayListBuilder {
         },
       })
     });
+    let paint_containment_clip = if paint_contained {
+      root_fragment
+        .and_then(|fragment| {
+          let style = root_style?;
+          let rect = Rect::new(
+            Point::new(
+              fragment.bounds.origin.x + offset.x,
+              fragment.bounds.origin.y + offset.y,
+            ),
+            fragment.bounds.size,
+          );
+          let rects = Self::background_rects(rect, style, self.viewport);
+          let radii =
+            Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
+          Some(ClipItem {
+            shape: ClipShape::Rect {
+              rect: rects.padding,
+              radii: if radii.is_zero() { None } else { Some(radii) },
+            },
+          })
+        })
+        .or_else(|| {
+          Some(ClipItem {
+            shape: ClipShape::Rect {
+              rect: context_bounds,
+              radii: None,
+            },
+          })
+        })
+    } else {
+      None
+    };
+    let has_paint_containment_clip = paint_containment_clip.is_some();
 
     let has_effects = is_isolated
       || transform.is_some()
@@ -694,6 +727,10 @@ impl DisplayListBuilder {
       return;
     }
 
+    if let Some(clip) = paint_containment_clip {
+      self.list.push(DisplayItem::PushClip(clip));
+    }
+
     self
       .list
       .push(DisplayItem::PushStackingContext(StackingContextItem {
@@ -726,38 +763,6 @@ impl DisplayListBuilder {
       self.list.push(DisplayItem::PushClip(clip));
       pushed_clips += 1;
     }
-    if paint_contained {
-      let clip = root_fragment
-        .and_then(|fragment| {
-          let style = root_style?;
-          let rect = Rect::new(
-            Point::new(
-              fragment.bounds.origin.x + offset.x,
-              fragment.bounds.origin.y + offset.y,
-            ),
-            fragment.bounds.size,
-          );
-          let rects = Self::background_rects(rect, style, self.viewport);
-          let radii =
-            Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
-          Some(ClipItem {
-            shape: ClipShape::Rect {
-              rect: rects.padding,
-              radii: if radii.is_zero() { None } else { Some(radii) },
-            },
-          })
-        })
-        .unwrap_or(ClipItem {
-          shape: ClipShape::Rect {
-            rect: context_bounds,
-            radii: None,
-          },
-        });
-
-      self.list.push(DisplayItem::PushClip(clip));
-      pushed_clips += 1;
-    }
-
     for child in neg {
       self.build_stacking_context(child, descendant_offset, false);
     }
@@ -780,6 +785,9 @@ impl DisplayListBuilder {
       self.list.push(DisplayItem::PopClip);
     }
     self.list.push(DisplayItem::PopStackingContext);
+    if has_paint_containment_clip {
+      self.list.push(DisplayItem::PopClip);
+    }
   }
 
   fn convert_blend_mode(mode: MixBlendMode) -> BlendMode {
@@ -801,6 +809,15 @@ impl DisplayListBuilder {
       MixBlendMode::Color => BlendMode::Color,
       MixBlendMode::Luminosity => BlendMode::Luminosity,
       MixBlendMode::PlusLighter => BlendMode::PlusLighter,
+      MixBlendMode::PlusDarker => BlendMode::PlusDarker,
+      MixBlendMode::HueHsv => BlendMode::HueHsv,
+      MixBlendMode::SaturationHsv => BlendMode::SaturationHsv,
+      MixBlendMode::ColorHsv => BlendMode::ColorHsv,
+      MixBlendMode::LuminosityHsv => BlendMode::LuminosityHsv,
+      MixBlendMode::HueOklch => BlendMode::HueOklch,
+      MixBlendMode::ChromaOklch => BlendMode::ChromaOklch,
+      MixBlendMode::ColorOklch => BlendMode::ColorOklch,
+      MixBlendMode::LuminosityOklch => BlendMode::LuminosityOklch,
     }
   }
 
@@ -1388,6 +1405,7 @@ impl DisplayListBuilder {
             color,
           })
         }
+        crate::style::types::FilterFunction::Url(_) => None,
       })
       .collect()
   }
@@ -4920,7 +4938,7 @@ mod tests {
 
     let list = DisplayListBuilder::new().build_with_stacking_tree(&fragment);
     let items = list.items();
-    let (push_sc, push_clip, pop_clip, pop_sc) = stacking_clip_order(items);
+    let (push_sc, push_clip, pop_clip, _pop_sc) = stacking_clip_order(items);
 
     if let DisplayItem::PushStackingContext(stacking) = &items[push_sc] {
       assert!(
@@ -5583,6 +5601,7 @@ mod tests {
           alt: None,
           sizes: None,
           srcset: Vec::new(),
+          picture_sources: Vec::new(),
         },
       },
       vec![],

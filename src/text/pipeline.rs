@@ -77,7 +77,6 @@ use rustybuzz::Language as HbLanguage;
 use rustybuzz::UnicodeBuffer;
 use rustybuzz::Variation;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
 use std::str::FromStr;
@@ -412,8 +411,6 @@ pub struct BidiAnalysis {
   levels: Vec<Level>,
   /// Paragraph boundaries in byte offsets with their base level.
   paragraphs: Vec<ParagraphBoundary>,
-  /// Byte offsets for each character in the source text.
-  char_starts: Vec<usize>,
   /// Base paragraph level.
   base_level: Level,
   /// Whether the text contains RTL content requiring reordering.
@@ -500,7 +497,6 @@ impl BidiAnalysis {
         text: String::new(),
         levels: Vec::new(),
         paragraphs: Vec::new(),
-        char_starts: Vec::new(),
         base_level,
         needs_reordering: false,
       };
@@ -519,7 +515,6 @@ impl BidiAnalysis {
     // Clone owned text for storage
     let text = text.to_string();
     let mut levels = bidi_info.levels.clone();
-    let char_starts: Vec<usize> = text.char_indices().map(|(idx, _)| idx).collect();
     let para_level = bidi_info
       .paragraphs
       .first()
@@ -546,18 +541,10 @@ impl BidiAnalysis {
     let paragraphs = bidi_info
       .paragraphs
       .iter()
-      .map(|p| {
-        let start_byte = *char_starts.get(p.range.start).unwrap_or(&text_len);
-        let end_byte = if p.range.end < char_starts.len() {
-          char_starts[p.range.end]
-        } else {
-          text_len
-        };
-        ParagraphBoundary {
-          start_byte,
-          end_byte,
-          level: p.level,
-        }
+      .map(|p| ParagraphBoundary {
+        start_byte: p.range.start.min(text_len),
+        end_byte: p.range.end.min(text_len),
+        level: p.level,
       })
       .collect();
 
@@ -565,7 +552,6 @@ impl BidiAnalysis {
       text,
       levels,
       paragraphs,
-      char_starts,
       base_level,
       needs_reordering,
     }
@@ -583,11 +569,8 @@ impl BidiAnalysis {
     if self.levels.is_empty() {
       return self.base_level;
     }
-    let pos = match self.char_starts.binary_search(&index) {
-      Ok(idx) => idx,
-      Err(idx) => idx.saturating_sub(1),
-    };
-    self.levels.get(pos).copied().unwrap_or(self.base_level)
+    let idx = index.min(self.levels.len().saturating_sub(1));
+    self.levels.get(idx).copied().unwrap_or(self.base_level)
   }
 
   /// Gets the direction at a byte index.
@@ -649,31 +632,55 @@ impl BidiAnalysis {
       return runs;
     }
 
-    let levels: Vec<Level> = runs
-      .iter()
-      .filter_map(|run| Level::new(run.level))
-      .collect();
-    if levels.len() != runs.len() {
-      return runs;
+    fn reorder_slice(slice: &[BidiRun]) -> Vec<BidiRun> {
+      if slice.len() <= 1 {
+        return slice.to_vec();
+      }
+
+      let mut levels: Vec<Level> = Vec::with_capacity(slice.len());
+      for run in slice {
+        let Ok(level) = Level::new(run.level) else {
+          return slice.to_vec();
+        };
+        levels.push(level);
+      }
+
+      unicode_bidi::BidiInfo::reorder_visual(&levels)
+        .into_iter()
+        .map(|idx| slice[idx].clone())
+        .collect()
     }
 
-    unicode_bidi::BidiInfo::reorder_visual(&levels)
-      .into_iter()
-      .map(|idx| runs[idx].clone())
-      .collect()
+    if self.paragraphs.is_empty() {
+      return reorder_slice(&runs);
+    }
+
+    let mut out = Vec::with_capacity(runs.len());
+    let mut idx = 0usize;
+    for para in &self.paragraphs {
+      while idx < runs.len() && runs[idx].end <= para.start_byte {
+        idx += 1;
+      }
+      let start = idx;
+      while idx < runs.len() && runs[idx].start < para.end_byte {
+        idx += 1;
+      }
+      if start < idx {
+        out.extend(reorder_slice(&runs[start..idx]));
+      }
+    }
+
+    if idx < runs.len() {
+      out.extend(reorder_slice(&runs[idx..]));
+    }
+
+    out
   }
 
-  fn build_run(&self, start_char: usize, end_char: usize, level: Level) -> BidiRun {
-    let start_byte = *self.char_starts.get(start_char).unwrap_or(&0);
-    let end_byte = if end_char < self.char_starts.len() {
-      self.char_starts[end_char]
-    } else {
-      self.text.len()
-    };
-
+  fn build_run(&self, start_byte: usize, end_byte: usize, level: Level) -> BidiRun {
     BidiRun {
-      start: start_byte,
-      end: end_byte,
+      start: start_byte.min(self.text.len()),
+      end: end_byte.min(self.text.len()),
       level: level.number(),
       direction: Direction::from_level(level),
     }
@@ -1500,6 +1507,10 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
   }
 
   if style.font_synthesis.style && matches!(font.style, FontStyle::Normal) {
+    let Some(angle) = requested_slant_angle(style) else {
+      return (synthetic_bold, synthetic_oblique);
+    };
+
     let (has_slnt_axis, has_ital_axis) = if let Ok(face) = font.as_ttf_face() {
       let mut has_slnt = false;
       let mut has_ital = false;
@@ -1522,9 +1533,7 @@ fn compute_synthetic_styles(style: &ComputedStyle, font: &LoadedFont) -> (f32, f
     };
 
     if !variation_covers_slant {
-      if let Some(angle) = requested_slant_angle(style) {
-        synthetic_oblique = angle.to_radians().tan();
-      }
+      synthetic_oblique = angle.to_radians().tan();
     }
   }
 
@@ -2608,7 +2617,7 @@ struct FontResolverCacheKey {
   emoji_pref: EmojiPreference,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct FontResolverCache {
   inner: Arc<Mutex<LruCache<FontResolverCacheKey, Option<LoadedFont>>>>,
 }
@@ -4084,9 +4093,8 @@ mod tests {
   #[cfg(debug_assertions)]
   #[test]
   fn face_parse_counts_stop_scaling_with_length() {
-    std::env::set_var("FASTRENDER_COUNT_FACE_PARSE", "1");
     let ctx = FontContext::new();
-    crate::text::font_db::reset_face_parse_counter_for_tests();
+    let _guard = crate::text::font_db::FaceParseCountGuard::start();
 
     let mut style = ComputedStyle::default();
     style.font_family = vec!["sans-serif".to_string()];

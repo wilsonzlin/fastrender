@@ -6,7 +6,6 @@
 //! tooling binaries so cached pages can be rendered with their real styles.
 
 use crate::error::Result;
-use cssparser::TokenSerializationType::WhiteSpace;
 use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -27,6 +26,15 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
   if href.is_empty() {
     return None;
   }
+
+  // CSS/HTML authors sometimes escape path characters with backslashes. The WHATWG URL parser
+  // treats `\` as a path separator for special schemes, but for our resource fetching and URL
+  // rewriting we want a stable percent-encoded representation instead.
+  let href = if href.contains('\\') {
+    Cow::Owned(href.replace('\\', "%5C"))
+  } else {
+    Cow::Borrowed(href)
+  };
 
   // Ignore fragment-only hrefs (e.g., "#section") since they don't resolve to fetchable stylesheets.
   if href.starts_with('#') {
@@ -49,7 +57,7 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
     return None;
   }
 
-  if let Ok(abs) = Url::parse(href) {
+  if let Ok(abs) = Url::parse(href.as_ref()) {
     return Some(abs.to_string());
   }
 
@@ -66,7 +74,7 @@ pub fn resolve_href(base: &str, href: &str) -> Option<String> {
       Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase)
     })
     .ok()?
-    .join(href)
+    .join(href.as_ref())
     .ok()
     .map(|u| u.to_string())
 }
@@ -212,13 +220,14 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
       };
 
       match token {
-        Token::UnquotedUrl(ref url_value) => {
+        Token::UnquotedUrl(url_value) => {
+          let url_value = url_value.as_ref().to_string();
           let token_text = parser.slice_from(token_start);
           let chunk = parser.slice_from(last_emitted);
           let prefix_len = chunk.len().saturating_sub(token_text.len());
           out.push_str(&chunk[..prefix_len]);
 
-          if let Some(resolved) = resolve_href(base_url, url_value.as_ref()) {
+          if let Some(resolved) = resolve_href(base_url, &url_value) {
             let escaped = escape_url_for_css(&resolved);
             out.push_str(&format!("url(\"{}\")", escaped));
           } else {
@@ -250,7 +259,7 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
             }
 
             let original_inner = nested.slice_from(start);
-            Ok((arg, original_inner.len()))
+            Ok::<_, cssparser::ParseError<'i, ()>>((arg, original_inner.len()))
           });
 
           let block_text = parser.slice_from(token_start);
@@ -280,7 +289,8 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
             let start = nested.position();
             let rewritten = rewrite_urls_in_parser(nested, base_url, 0);
             let original = nested.slice_from(start);
-            Ok((rewritten, original.len()))
+            let changed = rewritten != original;
+            Ok::<_, cssparser::ParseError<'i, ()>>((rewritten, original.len(), changed))
           });
 
           let block_text = parser.slice_from(token_start);
@@ -288,8 +298,13 @@ pub fn absolutize_css_urls(css: &str, base_url: &str) -> String {
           let prefix_len = chunk.len().saturating_sub(block_text.len());
           out.push_str(&chunk[..prefix_len]);
 
-          if let Ok((inner_rewritten, inner_len)) = parse_result {
+          if let Ok((inner_rewritten, inner_len, changed)) = parse_result {
             const CLOSING_LEN: usize = 1;
+            if !changed {
+              out.push_str(block_text);
+              last_emitted = parser.position();
+              continue;
+            }
             if block_text.len() >= inner_len + CLOSING_LEN {
               let open_len = block_text.len() - inner_len - CLOSING_LEN;
               if open_len <= block_text.len() {
@@ -810,38 +825,34 @@ pub fn extract_css_links(
         if debug {
           eprintln!("[css] found <link>: {}", link_tag);
         }
+        let mut allowed = true;
+
         if let Some(media) = extract_attr_value(link_tag, "media") {
-          let allowed = media_attr_allows_target(&media, media_type);
+          allowed = media_attr_allows_target(&media, media_type);
           if debug {
             eprintln!(
               "[css] media attr: {} (target={:?}, allow={})",
               media, media_type, allowed
             );
           }
-          if !allowed {
-            pos = abs_start + link_end + 1;
-            continue;
-          }
         } else if link_tag_lower.contains("media") {
           let has_screen = link_tag_lower.contains("screen") || link_tag_lower.contains("all");
           let has_print = link_tag_lower.contains("print");
           let has_speech = link_tag_lower.contains("speech");
-          let allowed = media_flags_allow_target(has_screen, has_print, has_speech, media_type);
+          allowed = media_flags_allow_target(has_screen, has_print, has_speech, media_type);
           if debug {
             eprintln!(
               "[css] media substring in tag (no attr parsed), print={}, screen={}, speech={}, allow={}",
               has_print, has_screen, has_speech, allowed
             );
           }
-          if !allowed {
-            pos = abs_start + link_end + 1;
-            continue;
-          }
         }
         if let Some(href) = extract_attr_value(link_tag, "href") {
           let href = normalize_scheme_slashes(&href);
           if let Some(full_url) = resolve_href(base_url, &href) {
-            css_urls.push(full_url);
+            if allowed {
+              css_urls.push(full_url);
+            }
           }
         }
       }
@@ -1194,9 +1205,13 @@ pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
     if url.scheme() == "file" {
       if let Some(seg) = url.path_segments().and_then(|mut s| s.next_back()) {
         if let Some(host) = seg.strip_suffix(".html") {
-          let guess = format!("https://{host}/");
-          if Url::parse(&guess).is_ok() {
-            return Cow::Owned(guess);
+          // Heuristic: cached pages typically use a `{host}.html` filename. Avoid applying this
+          // to local files like `page.html` by requiring the host portion to look like a domain.
+          if host.contains('.') {
+            let guess = format!("https://{host}/");
+            if Url::parse(&guess).is_ok() {
+              return Cow::Owned(guess);
+            }
           }
         }
       }
@@ -1501,21 +1516,21 @@ mod tests {
   }
 
   #[test]
-  fn falls_back_to_print_styles_when_no_screen_stylesheets() {
+  fn does_not_fall_back_to_print_styles_when_no_screen_stylesheets() {
     let html = r#"
             <link rel="stylesheet" media="print" href="/print.css">
         "#;
     let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
-    assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
+    assert!(urls.is_empty());
   }
 
   #[test]
-  fn falls_back_to_unquoted_print_stylesheets() {
+  fn does_not_fall_back_to_unquoted_print_stylesheets() {
     let html = r#"
             <link rel=stylesheet media=print href=/print.css>
         "#;
     let urls = extract_css_links(html, "https://example.com/", MediaType::Screen);
-    assert_eq!(urls, vec!["https://example.com/print.css".to_string()]);
+    assert!(urls.is_empty());
   }
 
   #[test]

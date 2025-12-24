@@ -38,8 +38,10 @@
 //! - CSS 2.1 Section 9.5.2: <https://www.w3.org/TR/CSS21/visuren.html#propdef-clear>
 
 use crate::geometry::Rect;
+use crate::layout::float_shape::FloatShape;
 use crate::style::float::Clear;
 use crate::style::float::Float;
+use std::sync::Arc;
 
 /// Side on which a float is placed
 ///
@@ -67,7 +69,7 @@ impl From<Float> for Option<FloatSide> {
 ///
 /// Stores the position and dimensions of a floated box within a BFC.
 /// All coordinates are relative to the BFC's origin.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FloatInfo {
   /// The side on which this float is placed
   pub side: FloatSide,
@@ -77,12 +79,23 @@ pub struct FloatInfo {
   /// Coordinates are relative to the containing block formatting context.
   /// This is the margin box of the float, including margins.
   pub rect: Rect,
+
+  /// Optional wrapping shape from `shape-outside`.
+  pub shape: Option<Arc<FloatShape>>,
 }
 
 impl FloatInfo {
   /// Create a new float info
   pub fn new(side: FloatSide, rect: Rect) -> Self {
-    Self { side, rect }
+    Self {
+      side,
+      rect,
+      shape: None,
+    }
+  }
+
+  pub fn new_with_shape(side: FloatSide, rect: Rect, shape: Option<Arc<FloatShape>>) -> Self {
+    Self { side, rect, shape }
   }
 
   /// Create a left float at the given position
@@ -90,6 +103,7 @@ impl FloatInfo {
     Self {
       side: FloatSide::Left,
       rect: Rect::from_xywh(x, y, width, height),
+      shape: None,
     }
   }
 
@@ -98,6 +112,7 @@ impl FloatInfo {
     Self {
       side: FloatSide::Right,
       rect: Rect::from_xywh(x, y, width, height),
+      shape: None,
     }
   }
 
@@ -271,6 +286,24 @@ impl FloatContext {
     self.add_float(float_info);
   }
 
+  /// Add a float at the specified position with an optional `shape-outside` wrapping shape.
+  pub fn add_float_with_shape(
+    &mut self,
+    side: FloatSide,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    shape: Option<FloatShape>,
+  ) {
+    let float_info = FloatInfo::new_with_shape(
+      side,
+      Rect::from_xywh(x, y, width, height),
+      shape.map(Arc::new),
+    );
+    self.add_float(float_info);
+  }
+
   /// Add a float with the given FloatInfo
   pub fn add_float(&mut self, float_info: FloatInfo) {
     match float_info.side {
@@ -297,7 +330,11 @@ impl FloatContext {
     let mut left_edge: f32 = 0.0;
 
     for float in &self.left_floats {
-      if float.contains_y(y) {
+      if let Some(shape) = float.shape.as_ref() {
+        if let Some((_min_x, max_x)) = shape.span_at(y) {
+          left_edge = left_edge.max(max_x);
+        }
+      } else if float.contains_y(y) {
         left_edge = left_edge.max(float.right_edge());
       }
     }
@@ -312,7 +349,11 @@ impl FloatContext {
     let mut right_edge = self.containing_block_width;
 
     for float in &self.right_floats {
-      if float.contains_y(y) {
+      if let Some(shape) = float.shape.as_ref() {
+        if let Some((min_x, _max_x)) = shape.span_at(y) {
+          right_edge = right_edge.min(min_x);
+        }
+      } else if float.contains_y(y) {
         right_edge = right_edge.min(float.left_edge());
       }
     }
@@ -371,14 +412,22 @@ impl FloatContext {
 
     // Check all left floats that overlap this range
     for float in &self.left_floats {
-      if float.overlaps_y_range(y_start, y_end) {
+      if let Some(shape) = float.shape.as_ref() {
+        if let Some((_min_x, max_x)) = shape.span_in_range(y_start, y_end) {
+          max_left_edge = max_left_edge.max(max_x);
+        }
+      } else if float.overlaps_y_range(y_start, y_end) {
         max_left_edge = max_left_edge.max(float.right_edge());
       }
     }
 
     // Check all right floats that overlap this range
     for float in &self.right_floats {
-      if float.overlaps_y_range(y_start, y_end) {
+      if let Some(shape) = float.shape.as_ref() {
+        if let Some((min_x, _max_x)) = shape.span_in_range(y_start, y_end) {
+          min_right_edge = min_right_edge.min(min_x);
+        }
+      } else if float.overlaps_y_range(y_start, y_end) {
         min_right_edge = min_right_edge.min(float.left_edge());
       }
     }

@@ -139,10 +139,11 @@ fn axis_sides(horizontal: bool, positive: bool) -> (PhysicalSide, PhysicalSide) 
 }
 
 fn inline_axis_sides(style: &ComputedStyle) -> (PhysicalSide, PhysicalSide) {
-  axis_sides(
-    inline_axis_is_horizontal(style.writing_mode),
-    inline_axis_positive(style.writing_mode, style.direction),
-  )
+  if inline_axis_is_horizontal(style.writing_mode) {
+    (PhysicalSide::Left, PhysicalSide::Right)
+  } else {
+    (PhysicalSide::Top, PhysicalSide::Bottom)
+  }
 }
 
 fn block_axis_sides(style: &ComputedStyle) -> (PhysicalSide, PhysicalSide) {
@@ -554,6 +555,7 @@ impl BlockFormattingContext {
       }
     }
 
+    let use_columns = Self::is_multicol_container(style);
     let (mut child_fragments, content_height, positioned_children) = if let Some(fc_type) = fc_type
     {
       if fc_type != FormattingContextType::Block {
@@ -596,11 +598,29 @@ impl BlockFormattingContext {
         (vec![child_frag], height, Vec::new())
       } else {
         // Block FC - layout children normally
-        self.layout_children(child, &child_constraints, nearest_positioned_cb)?
+        if use_columns {
+          self.layout_multicolumn(
+            child,
+            &child_constraints,
+            nearest_positioned_cb,
+            computed_width.content_width,
+          )?
+        } else {
+          self.layout_children(child, &child_constraints, nearest_positioned_cb)?
+        }
       }
     } else {
       // No FC (inline, text, etc.) - layout children normally
-      self.layout_children(child, &child_constraints, nearest_positioned_cb)?
+      if use_columns {
+        self.layout_multicolumn(
+          child,
+          &child_constraints,
+          nearest_positioned_cb,
+          computed_width.content_width,
+        )?
+      } else {
+        self.layout_children(child, &child_constraints, nearest_positioned_cb)?
+      }
     };
 
     // Compute height (resolve em/rem units with font-size)

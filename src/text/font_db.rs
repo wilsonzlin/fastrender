@@ -47,6 +47,8 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 #[cfg(debug_assertions)]
+use std::cell::Cell;
+#[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
@@ -54,17 +56,51 @@ const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
 #[cfg(debug_assertions)]
 static FACE_PARSE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(debug_assertions)]
+thread_local! {
+  static TEST_FACE_PARSE_COUNTING_ENABLED: Cell<bool> = Cell::new(false);
+  static TEST_FACE_PARSE_COUNTER: Cell<u64> = Cell::new(0);
+}
+
 #[inline]
 fn record_face_parse() {
   #[cfg(debug_assertions)]
-  if std::env::var("FASTRENDER_COUNT_FACE_PARSE").is_ok() {
-    FACE_PARSE_COUNTER.fetch_add(1, Ordering::Relaxed);
+  {
+    if std::env::var("FASTRENDER_COUNT_FACE_PARSE").is_ok() {
+      FACE_PARSE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    }
+    TEST_FACE_PARSE_COUNTING_ENABLED.with(|enabled| {
+      if enabled.get() {
+        TEST_FACE_PARSE_COUNTER.with(|counter| counter.set(counter.get().saturating_add(1)));
+      }
+    });
+  }
+}
+
+#[cfg(debug_assertions)]
+pub(crate) struct FaceParseCountGuard {
+  _private: (),
+}
+
+#[cfg(debug_assertions)]
+impl FaceParseCountGuard {
+  pub(crate) fn start() -> Self {
+    TEST_FACE_PARSE_COUNTER.with(|counter| counter.set(0));
+    TEST_FACE_PARSE_COUNTING_ENABLED.with(|enabled| enabled.set(true));
+    Self { _private: () }
+  }
+}
+
+#[cfg(debug_assertions)]
+impl Drop for FaceParseCountGuard {
+  fn drop(&mut self) {
+    TEST_FACE_PARSE_COUNTING_ENABLED.with(|enabled| enabled.set(false));
   }
 }
 
 #[cfg(debug_assertions)]
 pub(crate) fn face_parse_count() -> u64 {
-  FACE_PARSE_COUNTER.load(Ordering::Relaxed)
+  TEST_FACE_PARSE_COUNTER.with(|counter| counter.get())
 }
 
 #[cfg(not(debug_assertions))]
@@ -75,7 +111,7 @@ pub(crate) fn face_parse_count() -> u64 {
 
 #[cfg(debug_assertions)]
 pub(crate) fn reset_face_parse_counter_for_tests() {
-  FACE_PARSE_COUNTER.store(0, Ordering::Relaxed);
+  TEST_FACE_PARSE_COUNTER.with(|counter| counter.set(0));
 }
 
 #[cfg(not(debug_assertions))]
@@ -86,7 +122,7 @@ pub(crate) fn reset_face_parse_counter_for_tests() {}
 fn parse_face_with_counter<'a>(
   data: &'a [u8],
   index: u32,
-) -> Result<ttf_parser::Face<'a>, ttf_parser::FaceParsingError> {
+) -> std::result::Result<ttf_parser::Face<'a>, ttf_parser::FaceParsingError> {
   record_face_parse();
   ttf_parser::Face::parse(data, index)
 }
@@ -98,7 +134,10 @@ struct CachedFace {
 }
 
 impl CachedFace {
-  fn parse(data: Arc<Vec<u8>>, index: u32) -> Result<Self, ttf_parser::FaceParsingError> {
+  fn parse(
+    data: Arc<Vec<u8>>,
+    index: u32,
+  ) -> std::result::Result<Self, ttf_parser::FaceParsingError> {
     // SAFETY: the Arc keeps the font data alive for the lifetime of the cached face.
     let static_data: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(&*data) };
     let face = parse_face_with_counter(static_data, index)?;

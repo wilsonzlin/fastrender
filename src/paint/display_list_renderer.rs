@@ -4866,7 +4866,6 @@ mod tests {
   use crate::paint::display_list::TextShadowItem;
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list_builder::DisplayListBuilder;
-  use crate::style::color::Color;
   use crate::style::color::{Color, Rgba};
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundRepeat;
@@ -5622,6 +5621,7 @@ mod tests {
       ],
       backdrop_filters: Vec::new(),
       radii: BorderRadii::ZERO,
+      mask: None,
     }));
     list.push(DisplayItem::FillRect(FillRectItem {
       rect: Rect::from_xywh(1.0, 1.0, 8.0, 8.0),
@@ -6329,7 +6329,7 @@ mod tests {
 
     let pixmap = renderer.render(&list).unwrap();
     assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
-    assert_eq!(pixel(&pixmap, 1, 1), (0, 128, 0, 255));
+    assert_eq!(pixel(&pixmap, 1, 1), (0, 255, 0, 255));
   }
 
   #[test]
@@ -6424,6 +6424,64 @@ mod tests {
     assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
     assert_eq!(pixel(&pixmap, 3, 0), (255, 255, 255, 255));
     assert_eq!(pixel(&pixmap, 0, 3), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn mask_gradient_without_terminal_stop_masks() {
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+
+    let mut mask_style = ComputedStyle::default();
+    let horizontal = BackgroundImage::LinearGradient {
+      angle: 90.0,
+      stops: vec![
+        ColorStop {
+          color: Color::Rgba(Rgba::BLACK),
+          position: Some(0.0),
+        },
+        ColorStop {
+          color: Color::Rgba(Rgba::BLACK),
+          position: Some(0.5),
+        },
+        ColorStop {
+          color: Color::Rgba(Rgba::TRANSPARENT),
+          position: Some(0.5),
+        },
+      ],
+    };
+
+    let mut layer = MaskLayer::default();
+    layer.image = Some(horizontal);
+    layer.repeat = BackgroundRepeat::no_repeat();
+    layer.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    );
+    mask_style.set_mask_layers(vec![layer]);
+
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: true,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: Some(Arc::new(mask_style)),
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+      color: Rgba::BLUE,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
+    assert_eq!(pixel(&pixmap, 3, 0), (255, 255, 255, 255));
   }
 
   #[test]

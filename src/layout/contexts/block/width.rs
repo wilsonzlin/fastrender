@@ -461,11 +461,10 @@ mod tests {
   fn inline_params(style: &ComputedStyle) -> ((PhysicalSide, PhysicalSide), bool) {
     let horizontal = inline_axis_is_horizontal(style.writing_mode);
     let positive = inline_axis_positive(style.writing_mode, style.direction);
-    let sides = match (horizontal, positive) {
-      (true, true) => (PhysicalSide::Left, PhysicalSide::Right),
-      (true, false) => (PhysicalSide::Right, PhysicalSide::Left),
-      (false, true) => (PhysicalSide::Top, PhysicalSide::Bottom),
-      (false, false) => (PhysicalSide::Bottom, PhysicalSide::Top),
+    let sides = if horizontal {
+      (PhysicalSide::Left, PhysicalSide::Right)
+    } else {
+      (PhysicalSide::Top, PhysicalSide::Bottom)
     };
     (sides, positive)
   }

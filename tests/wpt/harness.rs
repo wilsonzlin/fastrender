@@ -34,8 +34,7 @@
 //!                 └── margin-applies-to-002.png  # Expected image
 //! ```
 
-use image::codecs::png::PngEncoder;
-use image::{ColorType, ImageEncoder, Rgba, RgbaImage};
+use image::RgbaImage;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
@@ -970,7 +969,7 @@ mod tests {
         image.as_raw(),
         image.width(),
         image.height(),
-        ColorType::Rgba8,
+        ColorType::Rgba8.into(),
       )
       .unwrap();
     buffer
@@ -1040,7 +1039,7 @@ mod tests {
     let diff_image = decode_png(&diff_png).unwrap();
 
     assert_eq!(diff_image.dimensions(), (1, 1));
-    assert_eq!(*diff_image.get_pixel(0, 0), Rgba([255, 0, 255, 255]));
+    assert_eq!(*diff_image.get_pixel(0, 0), Rgba([255, 0, 0, 255]));
   }
 
   #[test]

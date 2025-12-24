@@ -253,6 +253,11 @@ fn parse_shadow_root_mode(template: &DomNode) -> Option<ShadowRootMode> {
     return None;
   }
 
+  // Declarative shadow DOM only applies to HTML templates, not e.g. SVG <template>.
+  if !matches!(template.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE) {
+    return None;
+  }
+
   let mode_attr = template
     .get_attribute_ref("shadowroot")
     .or_else(|| template.get_attribute_ref("shadowrootmode"))?;
@@ -361,16 +366,17 @@ fn fill_slot_tree(
   assignments: &mut Vec<(Option<String>, DomNode)>,
   available_slots: &HashSet<String>,
 ) {
-  for child in &mut node.children {
-    fill_slot_tree(child, assignments, available_slots);
-  }
-
   if matches!(node.node_type, DomNodeType::Slot { .. }) {
     let slot_name = node.get_attribute_ref("name").unwrap_or("");
     let assigned = take_assignments_for_slot(assignments, slot_name, available_slots);
     if !assigned.is_empty() {
       node.children = assigned;
+      return;
     }
+  }
+
+  for child in &mut node.children {
+    fill_slot_tree(child, assignments, available_slots);
   }
 }
 /// Optional DOM compatibility tweaks applied after HTML parsing.
@@ -434,12 +440,7 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
 
   let node_type = match &node.data {
     NodeData::Document => DomNodeType::Document,
-    NodeData::Element {
-      name,
-      attrs,
-      template_contents,
-      ..
-    } => {
+    NodeData::Element { name, attrs, .. } => {
       let tag_name = name.local.to_string();
       let namespace = name.ns.to_string();
       let attributes = attrs
@@ -773,10 +774,10 @@ impl<'a> ElementRef<'a> {
   fn subtree_has_content(node: &DomNode) -> bool {
     match node.node_type {
       DomNodeType::Text { .. } => true,
-      DomNodeType::Element { .. }
-      | DomNodeType::Slot { .. }
-      | DomNodeType::ShadowRoot { .. }
-      | DomNodeType::Document => node.children.iter().any(Self::subtree_has_content),
+      DomNodeType::Element { .. } | DomNodeType::Slot { .. } => true,
+      DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
+        node.children.iter().any(Self::subtree_has_content)
+      }
     }
   }
 

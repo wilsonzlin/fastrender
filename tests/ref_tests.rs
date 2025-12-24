@@ -16,6 +16,22 @@ use r#ref::harness::RefTestResults;
 use std::path::Path;
 use std::time::Duration;
 
+fn with_large_stack<F, R>(f: F) -> R
+where
+  F: FnOnce() -> R + Send + 'static,
+  R: Send + 'static,
+{
+  const STACK_SIZE: usize = 16 * 1024 * 1024;
+  let handle = std::thread::Builder::new()
+    .stack_size(STACK_SIZE)
+    .spawn(f)
+    .expect("failed to spawn test thread");
+  match handle.join() {
+    Ok(result) => result,
+    Err(payload) => std::panic::resume_unwind(payload),
+  }
+}
+
 // =============================================================================
 // Compare Module Tests
 // =============================================================================
@@ -408,23 +424,25 @@ fn test_ref_harness_run_ref_test_missing_html() {
 
 #[test]
 fn form_controls_reference_image_matches_golden() {
-  let fixture = Path::new("tests/ref/fixtures/form_controls");
-  let reference = fixture.join("reference.png");
-  let mut harness = RefTestHarness::new();
+  with_large_stack(|| {
+    let fixture = Path::new("tests/ref/fixtures/form_controls");
+    let reference = fixture.join("reference.png");
+    let mut harness = RefTestHarness::new();
 
-  if std::env::var("UPDATE_GOLDEN").is_ok() {
-    let html = std::fs::read_to_string(fixture.join("input.html")).expect("read html");
-    harness
-      .create_reference(&html, &reference)
-      .expect("create reference image");
-  }
+    if std::env::var("UPDATE_GOLDEN").is_ok() {
+      let html = std::fs::read_to_string(fixture.join("input.html")).expect("read html");
+      harness
+        .create_reference(&html, &reference)
+        .expect("create reference image");
+    }
 
-  let result = harness.run_ref_test(fixture, &reference);
-  assert!(
-    result.passed,
-    "form control rendering regressed: {}",
-    result.summary()
-  );
+    let result = harness.run_ref_test(fixture, &reference);
+    assert!(
+      result.passed,
+      "form control rendering regressed: {}",
+      result.summary()
+    );
+  });
 }
 
 #[test]

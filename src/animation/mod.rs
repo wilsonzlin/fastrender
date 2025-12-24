@@ -680,7 +680,7 @@ fn interpolate_clip_paths(
         reference: refb,
       },
     ) if refa == refb => {
-      let pos = interpolate_background_positions(&[*pa], &[*pb], t)?;
+      let pos = interpolate_background_positions(&[pa.clone()], &[pb.clone()], t)?;
       Some(ResolvedClipPath::Circle {
         radius: lerp(*ra, *rb, t),
         position: pos[0].clone(),
@@ -701,7 +701,7 @@ fn interpolate_clip_paths(
         reference: refb,
       },
     ) if refa == refb => {
-      let pos = interpolate_background_positions(&[*pa], &[*pb], t)?;
+      let pos = interpolate_background_positions(&[pa.clone()], &[pb.clone()], t)?;
       Some(ResolvedClipPath::Ellipse {
         radius_x: lerp(*rxa, *rxb, t),
         radius_y: lerp(*rya, *ryb, t),

@@ -1734,7 +1734,8 @@ mod tests {
     if !path.exists() {
       return;
     }
-    let url = Url::from_file_path(path).expect("url for fixture");
+    let path = path.canonicalize().expect("canonical fixture path");
+    let url = Url::from_file_path(&path).expect("url for fixture");
     let css = format!(
       "@font-face {{ font-family: \"SubsetWoff2\"; src: url(\"{}\") format(\"woff2\"); font-style: normal; font-weight: 400; }}",
       url

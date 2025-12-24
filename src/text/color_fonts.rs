@@ -137,7 +137,9 @@ fn render_colr_glyph(
   text_color: Rgba,
   synthetic_oblique: f32,
 ) -> Option<ColorGlyphRaster> {
-  let colr_data = face.table_data(ttf_parser::Tag::from_bytes(b"COLR"))?;
+  let colr_data = face
+    .raw_face()
+    .table(ttf_parser::Tag::from_bytes(b"COLR"))?;
   let (base_offset, num_base, layer_offset, num_layers) = parse_colr_header(colr_data)?;
 
   let base_size = 6usize;
@@ -298,7 +300,9 @@ struct LayerRecord {
 // ----------------------------------------------------------------------------
 
 fn parse_cpal_palette(face: &ttf_parser::Face<'_>, palette_index: u16) -> Option<Vec<Rgba>> {
-  let data = face.table_data(ttf_parser::Tag::from_bytes(b"CPAL"))?;
+  let data = face
+    .raw_face()
+    .table(ttf_parser::Tag::from_bytes(b"CPAL"))?;
   if data.len() < 12 {
     return None;
   }

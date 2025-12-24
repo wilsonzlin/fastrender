@@ -866,16 +866,18 @@ fn media_level5_invalid_values_reject() {
 
 #[test]
 fn dynamic_viewport_units_in_media_queries() {
-  let query = MediaQuery::parse("(min-width: 50dvw)").unwrap();
+  // Use cross-axis comparisons so the query isn't degenerate (e.g. `min-width: 50dvw` is always
+  // true for positive widths, since `dvw` is derived from the same width being queried).
+  let width_query = MediaQuery::parse("(min-width: 30dvh)").unwrap();
   let tall = MediaContext::screen(200.0, 500.0);
-  assert!(tall.evaluate(&query)); // 50dvw == 100px, width 200px
+  assert!(tall.evaluate(&width_query)); // 30dvh == 150px, width 200px
 
   let small = MediaContext::screen(80.0, 500.0);
-  assert!(!small.evaluate(&query));
+  assert!(!small.evaluate(&width_query)); // 30dvh == 150px, width 80px
 
-  let height_query = MediaQuery::parse("(max-height: 25dvh)").unwrap();
+  let height_query = MediaQuery::parse("(max-height: 25dvw)").unwrap();
   let ctx = MediaContext::screen(400.0, 100.0);
-  assert!(ctx.evaluate(&height_query)); // 25dvh == 25px
+  assert!(ctx.evaluate(&height_query)); // 25dvw == 100px, height 100px
 }
 
 #[test]

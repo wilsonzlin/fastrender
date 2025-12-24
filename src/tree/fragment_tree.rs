@@ -750,6 +750,11 @@ impl FragmentTree {
     self.viewport.unwrap_or(self.root.bounds.size)
   }
 
+  /// Returns true when the tree tracks an explicit viewport size separate from the root fragment.
+  pub fn has_explicit_viewport(&self) -> bool {
+    self.viewport.is_some()
+  }
+
   /// Computes the total bounding box of all content
   pub fn content_size(&self) -> Rect {
     let mut bbox = self.root.bounding_box();

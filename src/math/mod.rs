@@ -500,7 +500,6 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         _ => Some(MathNode::Row(parse_children(node))),
       }
     }
-    DomNodeType::Document => node.children.iter().find_map(parse_mathml),
   }
 }
 

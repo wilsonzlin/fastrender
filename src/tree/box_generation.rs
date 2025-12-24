@@ -9,7 +9,6 @@
 use crate::compat::CompatProfile;
 use crate::dom::DomNode;
 use crate::dom::DomNodeType;
-use crate::dom::HTML_NAMESPACE;
 use crate::dom::SVG_NAMESPACE;
 use crate::geometry::Size;
 use crate::style::computed::Visibility;
@@ -59,44 +58,107 @@ pub use crate::tree::box_generation_demo::{
   BoxGenerationConfig, BoxGenerationError, BoxGenerator, DOMNode,
 };
 pub(crate) fn parse_srcset(attr: &str) -> Vec<SrcsetCandidate> {
-  attr
-    .split(',')
-    .filter_map(|candidate| {
-      let trimmed = candidate.trim();
-      if trimmed.is_empty() {
-        return None;
-      }
-      let mut parts = trimmed.split_whitespace();
-      let url = parts.next()?.to_string();
-      let mut descriptor: Option<SrcsetDescriptor> = None;
+  fn is_data_url(bytes: &[u8], start: usize) -> bool {
+    if start + 5 > bytes.len() {
+      return false;
+    }
+    let matches =
+      |offset: usize, expected: u8| bytes[start + offset].to_ascii_lowercase() == expected;
+    matches(0, b'd')
+      && matches(1, b'a')
+      && matches(2, b't')
+      && matches(3, b'a')
+      && bytes[start + 4] == b':'
+  }
 
-      for desc in parts {
-        if descriptor.is_some() {
-          // Multiple descriptors are invalid; ignore this candidate.
-          return None;
+  let bytes = attr.as_bytes();
+  let mut out = Vec::new();
+  let mut idx = 0;
+
+  while idx < bytes.len() {
+    while idx < bytes.len() && (bytes[idx].is_ascii_whitespace() || bytes[idx] == b',') {
+      idx += 1;
+    }
+    if idx >= bytes.len() {
+      break;
+    }
+
+    let url_start = idx;
+    let data_url = is_data_url(bytes, url_start);
+    let mut data_commas_seen = 0usize;
+
+    while idx < bytes.len() {
+      let b = bytes[idx];
+      if b.is_ascii_whitespace() {
+        break;
+      }
+      if b == b',' {
+        if data_url && data_commas_seen == 0 {
+          // Data URLs contain a required comma separating metadata and payload.
+          // Treat the first comma as part of the URL.
+          data_commas_seen = 1;
+          idx += 1;
+          continue;
         }
-        let d = desc.trim();
-        if let Some(raw) = d.strip_suffix('x') {
-          if let Ok(val) = raw.parse::<f32>() {
-            descriptor = Some(SrcsetDescriptor::Density(val));
-          }
-        } else if let Some(raw) = d.strip_suffix("dppx") {
-          if let Ok(val) = raw.parse::<f32>() {
-            descriptor = Some(SrcsetDescriptor::Density(val));
-          }
-        } else if let Some(raw) = d.strip_suffix('w') {
-          if let Ok(val) = raw.parse::<u32>() {
-            descriptor = Some(SrcsetDescriptor::Width(val));
-          }
+        // Candidate separator (no descriptors).
+        break;
+      }
+      idx += 1;
+    }
+
+    let url = attr[url_start..idx].trim();
+    if url.is_empty() {
+      while idx < bytes.len() && bytes[idx] != b',' {
+        idx += 1;
+      }
+      continue;
+    }
+
+    while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+      idx += 1;
+    }
+
+    let desc_start = idx;
+    while idx < bytes.len() && bytes[idx] != b',' {
+      idx += 1;
+    }
+    let desc_str = attr[desc_start..idx].trim();
+
+    let mut descriptor: Option<SrcsetDescriptor> = None;
+    let mut valid = true;
+    for desc in desc_str.split_whitespace() {
+      if descriptor.is_some() {
+        valid = false;
+        break;
+      }
+      let d = desc.trim();
+      if let Some(raw) = d.strip_suffix('x') {
+        if let Ok(val) = raw.parse::<f32>() {
+          descriptor = Some(SrcsetDescriptor::Density(val));
+        }
+      } else if let Some(raw) = d.strip_suffix("dppx") {
+        if let Ok(val) = raw.parse::<f32>() {
+          descriptor = Some(SrcsetDescriptor::Density(val));
+        }
+      } else if let Some(raw) = d.strip_suffix('w') {
+        if let Ok(val) = raw.parse::<u32>() {
+          descriptor = Some(SrcsetDescriptor::Width(val));
         }
       }
-
-      Some(SrcsetCandidate {
-        url,
+    }
+    if valid {
+      out.push(SrcsetCandidate {
+        url: url.to_string(),
         descriptor: descriptor.unwrap_or(SrcsetDescriptor::Density(1.0)),
-      })
-    })
-    .collect()
+      });
+    }
+
+    if idx < bytes.len() && bytes[idx] == b',' {
+      idx += 1;
+    }
+  }
+
+  out
 }
 
 pub(crate) fn parse_sizes(attr: &str) -> Option<SizesList> {
@@ -448,6 +510,27 @@ fn parse_svg_number(value: &str) -> Option<f32> {
 fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
   match &node.node_type {
     crate::dom::DomNodeType::Text { content } => escape_text(content),
+    crate::dom::DomNodeType::ShadowRoot { .. } => {
+      node.children.iter().map(serialize_dom_subtree).collect()
+    }
+    crate::dom::DomNodeType::Slot { attributes, .. } => {
+      let mut out = String::new();
+      out.push_str("<slot");
+      for (name, value) in attributes {
+        out.push(' ');
+        out.push_str(name);
+        out.push('=');
+        out.push('"');
+        out.push_str(&escape_attr(value));
+        out.push('"');
+      }
+      out.push('>');
+      for child in &node.children {
+        out.push_str(&serialize_dom_subtree(child));
+      }
+      out.push_str("</slot>");
+      out
+    }
     crate::dom::DomNodeType::Element {
       tag_name,
       attributes,
@@ -700,6 +783,32 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     foreign_objects: &mut Vec<ForeignObjectInfo>,
   ) {
     match &styled.node.node_type {
+      crate::dom::DomNodeType::Document | crate::dom::DomNodeType::ShadowRoot { .. } => {
+        for child in &styled.children {
+          serialize_node(
+            child,
+            document_css,
+            parent_ns,
+            false,
+            out,
+            fallback_out,
+            foreign_objects,
+          );
+        }
+      }
+      crate::dom::DomNodeType::Slot { .. } => {
+        for child in &styled.children {
+          serialize_node(
+            child,
+            document_css,
+            parent_ns,
+            false,
+            out,
+            fallback_out,
+            foreign_objects,
+          );
+        }
+      }
       crate::dom::DomNodeType::Text { content } => {
         out.push_str(&escape_text(content));
         fallback_out.push_str(&escape_text(content));
@@ -792,19 +901,6 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
         fallback_out.push_str(tag_name);
         out.push('>');
         fallback_out.push('>');
-      }
-      crate::dom::DomNodeType::Document => {
-        for child in &styled.children {
-          serialize_node(
-            child,
-            document_css,
-            parent_ns,
-            false,
-            out,
-            fallback_out,
-            foreign_objects,
-          );
-        }
       }
     }
   }
@@ -1226,6 +1322,8 @@ fn create_pseudo_element_box(
           id: 0,
           debug_info: None,
           styled_node_id: Some(styled.node_id),
+          first_line_style: None,
+          first_letter_style: None,
         });
       }
     }
@@ -1892,6 +1990,8 @@ fn create_replaced_box_from_styled(
     id: 0,
     debug_info: None,
     styled_node_id: None,
+    first_line_style: None,
+    first_letter_style: None,
   }
 }
 
@@ -1899,12 +1999,11 @@ fn create_replaced_box_from_styled(
 mod tests {
   use super::*;
   use crate::dom;
+  use crate::dom::HTML_NAMESPACE;
   use crate::geometry::Size;
   use crate::style;
   use crate::style::counter_styles::{CounterStyleRegistry, CounterStyleRule, CounterSystem};
   use crate::style::counters::CounterSet;
-  use crate::style::types::CaseTransform;
-  use crate::style::types::ListStylePosition;
   use crate::tree::box_tree::FormControl;
   use crate::tree::box_tree::FormControlKind;
   use crate::tree::box_tree::MarkerContent;
@@ -1914,10 +2013,23 @@ mod tests {
     Arc::new(ComputedStyle::default())
   }
 
-  fn style_with_display(display: Display) -> Arc<ComputedStyle> {
-    let mut style = ComputedStyle::default();
-    style.display = display;
-    Arc::new(style)
+  fn styled_element(tag: &str) -> StyledNode {
+    StyledNode {
+      node_id: 0,
+      node: DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: tag.to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![],
+        },
+        children: vec![],
+      },
+      styles: ComputedStyle::default(),
+      before_styles: None,
+      after_styles: None,
+      marker_styles: None,
+      children: vec![],
+    }
   }
 
   #[test]

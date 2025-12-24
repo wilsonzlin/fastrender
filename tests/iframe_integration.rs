@@ -1,4 +1,7 @@
+mod r#ref;
+
 use fastrender::FastRender;
+use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
 use std::path::PathBuf;
 use tempfile::tempdir;
 use url::Url;
@@ -32,5 +35,12 @@ fn iframe_file_src_renders_nested_document() {
   }
 
   let expected = std::fs::read(&golden_path).expect("golden image");
-  assert_eq!(rendered, expected, "iframe rendering should match golden");
+  let rendered_pixmap = load_png_from_bytes(&rendered).expect("rendered image should decode");
+  let expected_pixmap = load_png_from_bytes(&expected).expect("golden image should decode");
+  let diff = compare_images(&rendered_pixmap, &expected_pixmap, &CompareConfig::strict());
+  assert!(
+    diff.is_match(),
+    "iframe rendering should match golden: {}",
+    diff.summary()
+  );
 }

@@ -1369,6 +1369,55 @@ pub struct TransformOrigin {
   pub y: Length,
 }
 
+/// A position used by the `offset-path: path(...)` function.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MotionPosition {
+  pub x: Length,
+  pub y: Length,
+}
+
+/// A simplified path command list used by `offset-path: path(...)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MotionPathCommand {
+  MoveTo(MotionPosition),
+  LineTo(MotionPosition),
+  ClosePath,
+}
+
+/// Parameters for the `ray()` function used by `offset-path`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ray {
+  /// Angle in degrees.
+  pub angle: f32,
+  /// Optional ray length.
+  pub length: Option<Length>,
+  /// Whether to clamp the ray within the element bounds.
+  pub contain: bool,
+}
+
+/// Computed value for `offset-path` (CSS Motion Path Module).
+#[derive(Debug, Clone, PartialEq)]
+pub enum OffsetPath {
+  None,
+  Ray(Ray),
+  Path(Vec<MotionPathCommand>),
+  BasicShape(Box<BasicShape>),
+}
+
+/// Computed value for `offset-rotate` (CSS Motion Path Module).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OffsetRotate {
+  Auto { angle: f32, reverse: bool },
+  Angle(f32),
+}
+
+/// Computed value for `offset-anchor` (CSS Motion Path Module).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OffsetAnchor {
+  Auto,
+  Position { x: Length, y: Length },
+}
+
 /// Main axis alignment for flex items
 ///
 /// CSS: `justify-content`
@@ -2324,6 +2373,8 @@ pub enum ListStyleType {
   LowerGreek,
   DisclosureOpen,
   DisclosureClosed,
+  /// Custom counter style name (via `@counter-style`).
+  Custom(String),
   /// Custom marker string value from list-style-type: "<string>"
   String(String),
   None,
@@ -2669,6 +2720,15 @@ pub enum ClipPath {
   None,
   Box(ReferenceBox),
   BasicShape(Box<BasicShape>, Option<ReferenceBox>),
+}
+
+/// CSS shape-outside computed value
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShapeOutside {
+  None,
+  Box(ReferenceBox),
+  BasicShape(Box<BasicShape>, Option<ReferenceBox>),
+  Image(BackgroundImage),
 }
 
 /// Reference box used by transforms

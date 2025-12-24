@@ -1037,6 +1037,9 @@ impl TextItem {
 /// An inline box item (non-atomic, contains children)
 #[derive(Debug, Clone)]
 pub struct InlineBoxItem {
+  /// Identifier for the source box node (0 when unknown/anonymous)
+  pub box_id: usize,
+
   /// Child items within this inline box
   pub children: Vec<InlineItem>,
 
@@ -1048,6 +1051,12 @@ pub struct InlineBoxItem {
 
   /// Vertical offset applied to children (padding + borders on top)
   pub content_offset_y: f32,
+
+  /// Border widths used to derive the padding box for positioned descendants.
+  pub border_left: f32,
+  pub border_right: f32,
+  pub border_top: f32,
+  pub border_bottom: f32,
 
   /// Baseline metrics for this box
   pub metrics: BaselineMetrics,
@@ -1081,10 +1090,15 @@ impl InlineBoxItem {
     unicode_bidi: UnicodeBidi,
   ) -> Self {
     Self {
+      box_id: 0,
       children: Vec::new(),
       start_edge,
       end_edge,
       content_offset_y,
+      border_left: 0.0,
+      border_right: 0.0,
+      border_top: 0.0,
+      border_bottom: 0.0,
       metrics,
       vertical_align: VerticalAlign::Baseline,
       box_index,
@@ -1867,6 +1881,9 @@ impl<'a> LineBuilder<'a> {
           }
 
           // Start new line for the rest
+          if matches!(break_opportunity.break_type, BreakType::Mandatory) {
+            self.current_line.ends_with_hard_break = true;
+          }
           self.finish_line();
 
           // Add remaining text (may need further breaking)
@@ -2167,7 +2184,7 @@ fn reorder_paragraph(
     leaf_index: usize,
     local_start: usize,
     local_end: usize,
-    char_index: usize,
+    bidi_byte_index: usize,
   }
 
   #[derive(Clone, Copy)]
@@ -2188,12 +2205,11 @@ fn reorder_paragraph(
     const PDF: char = '\u{202C}';
     const LRI: char = '\u{2066}';
     const RLI: char = '\u{2067}';
-    const FSI: char = '\u{2068}';
     const PDI: char = '\u{2069}';
 
     let (open, close) = match unicode_bidi {
       Normal => return None,
-      Plaintext => (&[FSI][..], &[PDI][..]),
+      Plaintext => return None,
       Embed => {
         if matches!(direction, Direction::Rtl) {
           (&[RLE][..], &[PDF][..])
@@ -2248,7 +2264,6 @@ fn reorder_paragraph(
   let mut open_scopes: Vec<BidiScope> = Vec::new();
   let mut content_map: Vec<ContentChar> = Vec::new();
   let mut line_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(lines.len());
-  let mut char_index = 0usize;
   let mut content_index = 0usize;
   let root_context = (root_unicode_bidi, root_direction);
 
@@ -2278,14 +2293,12 @@ fn reorder_paragraph(
       for scope in open_scopes.drain(common..).rev() {
         for ch in scope.close {
           paragraph_text.push(*ch);
-          char_index += 1;
         }
       }
 
       for scope in desired_scopes.iter().skip(common) {
         for ch in scope.open {
           paragraph_text.push(*ch);
-          char_index += 1;
         }
         open_scopes.push(scope.clone());
       }
@@ -2293,38 +2306,38 @@ fn reorder_paragraph(
       match &leaf.item {
         InlineItem::Text(t) => {
           for (byte_idx, ch) in t.text.char_indices() {
+            let bidi_byte_index = paragraph_text.len();
             content_map.push(ContentChar {
               leaf_index,
               local_start: byte_idx,
               local_end: byte_idx + ch.len_utf8(),
-              char_index,
+              bidi_byte_index,
             });
             paragraph_text.push(ch);
-            char_index += 1;
             content_index += 1;
           }
         }
         InlineItem::Tab(_) => {
+          let bidi_byte_index = paragraph_text.len();
           content_map.push(ContentChar {
             leaf_index,
             local_start: 0,
             local_end: 0,
-            char_index,
+            bidi_byte_index,
           });
           paragraph_text.push('\t');
-          char_index += 1;
           content_index += 1;
         }
         InlineItem::InlineBox(_) => {}
         _ => {
+          let bidi_byte_index = paragraph_text.len();
           content_map.push(ContentChar {
             leaf_index,
             local_start: 0,
             local_end: 0,
-            char_index,
+            bidi_byte_index,
           });
           paragraph_text.push('\u{FFFC}');
-          char_index += 1;
           content_index += 1;
         }
       }
@@ -2374,7 +2387,7 @@ fn reorder_paragraph(
   for entry in &content_map {
     let lvl = bidi
       .levels
-      .get(entry.char_index)
+      .get(entry.bidi_byte_index)
       .copied()
       .unwrap_or(resolved_base);
     content_levels.push(lvl);
@@ -3319,7 +3332,9 @@ mod tests {
       Direction::Rtl,
       UnicodeBidi::Isolate,
     );
-    inline_box.add_child(InlineItem::Text(make_text_item("אבג", 30.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("א", 10.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("ב", 10.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("ג", 10.0)));
     builder.add_item(InlineItem::InlineBox(inline_box));
 
     builder.add_item(InlineItem::Text(make_text_item(" DEF", 40.0)));
@@ -3363,10 +3378,11 @@ mod tests {
       Direction::Rtl,
       UnicodeBidi::Isolate,
     );
-    inline_box.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("א", 10.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("ב", 10.0)));
     inline_box.add_child(InlineItem::Text(make_text_item("ג", 10.0)));
 
-    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L", 10.0)));
     builder.add_item(InlineItem::InlineBox(inline_box));
     builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
 
@@ -3393,7 +3409,7 @@ mod tests {
     // child earlier in visual order.
     assert_eq!(
       texts,
-      vec!["L ".to_string(), "גבא".to_string(), " R".to_string()]
+      vec!["L".to_string(), "גבא".to_string(), " R".to_string()]
     );
   }
 
@@ -3622,7 +3638,7 @@ mod tests {
   fn bidi_nested_isolates_close_properly() {
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L", 10.0)));
 
     let mut inner = InlineBoxItem::new(
       0.0,
@@ -3683,7 +3699,7 @@ mod tests {
 
     assert_eq!(
       texts,
-      vec!["L ".to_string(), "אמ".to_string(), " R".to_string()]
+      vec!["L".to_string(), "אמ".to_string(), " R".to_string()]
     );
   }
 
@@ -3787,7 +3803,7 @@ mod tests {
     // Outer isolate keeps its children grouped; the inner isolate-override reverses its content.
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L", 10.0)));
 
     let mut inner = InlineBoxItem::new(
       0.0,
@@ -3849,10 +3865,21 @@ mod tests {
       })
       .collect();
 
-    // Outer isolate stays a single unit; inner override reverses its content (yx).
+    let expected_inner = reorder_with_controls(
+      &format!(
+        "{}a{}{}xy{}{}b{}",
+        '\u{2067}', // RLI (outer isolate)
+        '\u{2067}', // RLI (inner isolate)
+        '\u{202e}', // RLO
+        '\u{202c}', // PDF
+        '\u{2069}', // PDI (inner isolate)
+        '\u{2069}'  // PDI (outer isolate)
+      ),
+      Some(Level::ltr()),
+    );
     assert_eq!(
       texts,
-      vec!["L ".to_string(), "byxa".to_string(), " R".to_string()]
+      vec!["L".to_string(), expected_inner, " R".to_string()]
     );
   }
 
@@ -3861,7 +3888,7 @@ mod tests {
     // An isolate-override should reverse its own content while keeping nested isolates grouped.
     let mut builder = make_builder(200.0);
 
-    builder.add_item(InlineItem::Text(make_text_item("L ", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("L", 10.0)));
 
     let mut inner = InlineBoxItem::new(
       0.0,
@@ -3902,7 +3929,7 @@ mod tests {
       .collect();
 
     let logical = format!(
-      "L {}{}A{}BD{}C{}{} R",
+      "L{}{}A{}BD{}C{}{} R",
       '\u{2067}', // RLI (rtl isolate)
       '\u{202e}', // RLO (rtl override)
       '\u{2066}', // LRI (ltr isolate)
@@ -3928,7 +3955,8 @@ mod tests {
       Direction::Ltr,
       UnicodeBidi::Isolate,
     );
-    inner.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+    inner.add_child(InlineItem::Text(make_text_item("א", 10.0)));
+    inner.add_child(InlineItem::Text(make_text_item("ב", 10.0)));
 
     let mut outer = InlineBoxItem::new(
       0.0,
@@ -3979,7 +4007,8 @@ mod tests {
       Direction::Ltr,
       UnicodeBidi::Isolate,
     );
-    inner.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+    inner.add_child(InlineItem::Text(make_text_item("א", 10.0)));
+    inner.add_child(InlineItem::Text(make_text_item("ב", 10.0)));
 
     let mut outer = InlineBoxItem::new(
       0.0,
@@ -4035,7 +4064,9 @@ mod tests {
       Direction::Ltr,
       UnicodeBidi::Embed,
     );
-    inner.add_child(InlineItem::Text(make_text_item("abc", 30.0)));
+    inner.add_child(InlineItem::Text(make_text_item("a", 10.0)));
+    inner.add_child(InlineItem::Text(make_text_item("b", 10.0)));
+    inner.add_child(InlineItem::Text(make_text_item("c", 10.0)));
 
     let mut outer = InlineBoxItem::new(
       0.0,
@@ -4047,12 +4078,12 @@ mod tests {
       Direction::Rtl,
       UnicodeBidi::BidiOverride,
     );
-    outer.add_child(InlineItem::Text(make_text_item("X ", 20.0)));
+    outer.add_child(InlineItem::Text(make_text_item("X", 10.0)));
     outer.add_child(InlineItem::InlineBox(inner));
-    outer.add_child(InlineItem::Text(make_text_item(" Y", 20.0)));
+    outer.add_child(InlineItem::Text(make_text_item("Y", 10.0)));
 
     builder.add_item(InlineItem::InlineBox(outer));
-    builder.add_item(InlineItem::Text(make_text_item(" R", 10.0)));
+    builder.add_item(InlineItem::Text(make_text_item("R", 10.0)));
 
     let lines = builder.finish();
     assert_eq!(lines.len(), 1);
@@ -4064,7 +4095,7 @@ mod tests {
       .collect();
 
     let logical = format!(
-      "L {}X {}abc{} Y{} R",
+      "L {}X{}abc{}Y{}R",
       '\u{202e}', // RLO
       '\u{202a}', // LRE
       '\u{202c}', // PDF
@@ -4090,7 +4121,9 @@ mod tests {
       Direction::Rtl,
       UnicodeBidi::BidiOverride,
     );
-    para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+    para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("C", 10.0)));
     builder.add_item(InlineItem::InlineBox(para1));
     builder.force_break();
 
@@ -4149,7 +4182,9 @@ mod tests {
       Direction::Rtl,
       UnicodeBidi::BidiOverride,
     );
-    para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+    para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("C", 10.0)));
     builder.add_item(InlineItem::InlineBox(para1));
     builder.force_break();
 
@@ -4193,7 +4228,9 @@ mod tests {
       Direction::Rtl,
       UnicodeBidi::BidiOverride,
     );
-    para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+    para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("C", 10.0)));
     builder.add_item(InlineItem::InlineBox(para1));
     builder.force_break();
 
@@ -4252,7 +4289,8 @@ mod tests {
       Direction::Rtl,
       UnicodeBidi::BidiOverride,
     );
-    para1.add_child(InlineItem::Text(make_text_item("AB", 20.0)));
+    para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
     para1.add_child(InlineItem::Text(make_text_item_with_bidi(
       "cd",
       20.0,
@@ -4319,7 +4357,9 @@ mod tests {
       Direction::Rtl,
       UnicodeBidi::Isolate,
     );
-    para1.add_child(InlineItem::Text(make_text_item("ABC", 30.0)));
+    para1.add_child(InlineItem::Text(make_text_item("A", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("B", 10.0)));
+    para1.add_child(InlineItem::Text(make_text_item("C", 10.0)));
     builder.add_item(InlineItem::InlineBox(para1));
     builder.force_break();
 
@@ -4501,7 +4541,8 @@ mod tests {
       UnicodeBidi::Isolate,
     );
     inline_box.add_child(InlineItem::Text(make_text_item("X", 10.0)));
-    inline_box.add_child(InlineItem::Text(make_text_item("אב", 20.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("א", 10.0)));
+    inline_box.add_child(InlineItem::Text(make_text_item("ב", 10.0)));
     builder.add_item(InlineItem::InlineBox(inline_box));
 
     builder.add_item(InlineItem::Text(make_text_item(" Z", 20.0)));

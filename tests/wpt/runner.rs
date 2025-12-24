@@ -427,8 +427,16 @@ impl WptRunner {
     let manifest: ManifestFile = match manifest_path.extension().and_then(|e| e.to_str()) {
       Some("json") => serde_json::from_slice(&data)
         .map_err(|e| format!("Failed to parse JSON manifest {:?}: {}", manifest_path, e))?,
-      Some("toml") => toml::from_slice(&data)
-        .map_err(|e| format!("Failed to parse TOML manifest {:?}: {}", manifest_path, e))?,
+      Some("toml") => {
+        let manifest_str = std::str::from_utf8(&data).map_err(|e| {
+          format!(
+            "Failed to parse TOML manifest {:?} (invalid UTF-8): {}",
+            manifest_path, e
+          )
+        })?;
+        toml::from_str(manifest_str)
+          .map_err(|e| format!("Failed to parse TOML manifest {:?}: {}", manifest_path, e))?
+      }
       _ => {
         return Err(format!(
           "Unsupported manifest format for {:?}",
@@ -815,8 +823,8 @@ impl WptRunner {
     match compare_images(
       &rendered,
       &expected,
-      self.config.pixel_tolerance,
-      Some(self.config.max_diff_percentage),
+      config.pixel_tolerance,
+      Some(config.max_diff_percentage),
     ) {
       Ok((diff_pixels, _total_pixels, diff_percentage)) => {
         if diff_percentage <= config.max_diff_percentage {

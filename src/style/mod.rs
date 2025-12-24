@@ -8,7 +8,6 @@ pub mod color;
 pub mod computed;
 pub mod content;
 pub mod counter_styles;
-pub mod counter_styles;
 pub mod counters;
 pub mod defaults;
 pub mod display;
@@ -30,6 +29,7 @@ use crate::style::computed::Visibility;
 use crate::style::float::Clear;
 use crate::style::float::Float;
 use color::Rgba;
+use counter_styles::CounterStyleRegistry;
 use counters::CounterProperties;
 use display::Display;
 use position::Position;
@@ -112,6 +112,9 @@ use types::MaskOrigin;
 use types::MixBlendMode;
 use types::ObjectFit;
 use types::ObjectPosition;
+use types::OffsetAnchor;
+use types::OffsetPath;
+use types::OffsetRotate;
 use types::OutlineColor;
 use types::OutlineStyle;
 use types::Overflow;
@@ -131,6 +134,7 @@ use types::ScrollTimeline;
 use types::ScrollbarColor;
 use types::ScrollbarGutter;
 use types::ScrollbarWidth;
+use types::ShapeOutside;
 use types::TabSize;
 use types::TableLayout;
 use types::TextAlign;
@@ -442,6 +446,9 @@ pub struct ComputedStyle {
   pub left: Option<Length>,
   pub float: Float,
   pub clear: Clear,
+  pub shape_outside: ShapeOutside,
+  pub shape_margin: Length,
+  pub shape_image_threshold: f32,
   pub break_before: BreakBetween,
   pub break_after: BreakBetween,
   pub break_inside: BreakInside,
@@ -645,6 +652,8 @@ pub struct ComputedStyle {
   pub list_style_image: ListStyleImage,
   /// Counter properties (reset/increment/set)
   pub counters: CounterProperties,
+  /// Registry of counter styles available for formatting counters/markers.
+  pub counter_styles: Arc<CounterStyleRegistry>,
 
   // Color and background
   pub forced_color_adjust: ForcedColorAdjust,
@@ -700,6 +709,10 @@ pub struct ComputedStyle {
   pub box_shadow: Vec<BoxShadow>,
   pub text_shadow: Vec<TextShadow>,
   pub transform: Vec<Transform>,
+  pub offset_path: OffsetPath,
+  pub offset_distance: Length,
+  pub offset_rotate: OffsetRotate,
+  pub offset_anchor: OffsetAnchor,
   pub transform_box: TransformBox,
   pub transform_origin: TransformOrigin,
   pub transform_style: TransformStyle,
@@ -770,6 +783,9 @@ impl Default for ComputedStyle {
       left: None,
       float: Float::None,
       clear: Clear::None,
+      shape_outside: ShapeOutside::None,
+      shape_margin: Length::px(0.0),
+      shape_image_threshold: 0.0,
       break_before: BreakBetween::Auto,
       break_after: BreakBetween::Auto,
       break_inside: BreakInside::Auto,
@@ -937,6 +953,7 @@ impl Default for ComputedStyle {
       list_style_position: ListStylePosition::Outside,
       list_style_image: ListStyleImage::None,
       counters: CounterProperties::default(),
+      counter_styles: Arc::new(CounterStyleRegistry::with_builtins()),
       forced_color_adjust: ForcedColorAdjust::Auto,
       color_scheme: ColorSchemePreference::Normal,
       caret_color: CaretColor::Auto,
@@ -984,6 +1001,13 @@ impl Default for ComputedStyle {
       box_shadow: Vec::new(),
       text_shadow: Vec::new(),
       transform: Vec::new(),
+      offset_path: OffsetPath::None,
+      offset_distance: Length::px(0.0),
+      offset_rotate: OffsetRotate::Auto {
+        angle: 0.0,
+        reverse: false,
+      },
+      offset_anchor: OffsetAnchor::Auto,
       transform_box: TransformBox::BorderBox,
       transform_origin: TransformOrigin {
         x: Length::percent(50.0),
@@ -1016,6 +1040,10 @@ impl Default for ComputedStyle {
 }
 
 impl ComputedStyle {
+  pub fn has_motion_path(&self) -> bool {
+    !matches!(self.offset_path, OffsetPath::None)
+  }
+
   fn ensure_background_lists(&mut self) {
     let defaults = BackgroundLayer::default();
     if self.background_images.is_empty() {

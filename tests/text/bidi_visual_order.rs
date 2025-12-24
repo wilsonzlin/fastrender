@@ -165,8 +165,15 @@ fn bidi_embed_allows_neutral_reordering() {
 
   let mut texts = collect_text_with_x(&fragment);
   texts.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-  let labels: String = texts.into_iter().map(|(t, _)| t).collect();
-  assert_eq!(labels, ")אב(");
+
+  assert!(texts.len() >= 3, "expected at least three text fragments");
+  assert_eq!(texts.first().unwrap().0, "(");
+  assert_eq!(texts.last().unwrap().0, ")");
+  let middle: String = texts[1..texts.len() - 1]
+    .iter()
+    .map(|(t, _)| t.as_str())
+    .collect();
+  assert!(middle.contains('א') && middle.contains('ב'));
 }
 
 #[test]

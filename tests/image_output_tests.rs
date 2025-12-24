@@ -4,7 +4,7 @@ use fastrender::image_output::encode_image;
 use fastrender::image_output::OutputFormat;
 use fastrender::Pixmap;
 use image::DynamicImage;
-use tiny_skia::PremultipliedColorU8;
+use tiny_skia::ColorU8;
 
 fn create_test_pixmap() -> Pixmap {
   let width = 8;
@@ -20,8 +20,7 @@ fn create_test_pixmap() -> Pixmap {
     let g = y.saturating_mul(18).wrapping_add(30);
     let b = r ^ g ^ 0xAA;
 
-    *pixel =
-      PremultipliedColorU8::from_rgba(r, g, b, alpha).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    *pixel = ColorU8::from_rgba(r, g, b, alpha).premultiply();
   }
 
   pixmap

@@ -73,6 +73,9 @@ pub mod engine;
 // W3.T10 - Float context for BFC float management
 pub mod float_context;
 
+// Shape resolution for shape-outside
+pub mod float_shape;
+
 // W4 - Inline layout module (W4.T13 Baseline, W4.T14 Text Run, W4.T15 Float Integration)
 pub mod inline;
 

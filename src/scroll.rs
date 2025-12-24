@@ -481,19 +481,20 @@ impl PendingContainer {
   }
 
   fn finalize(self) -> ScrollSnapContainer {
+    let mut targets_x = self.targets_x;
+    let mut targets_y = self.targets_y;
+
     let mut min_x = self.content_bounds.min_x();
     let mut max_x = self.content_bounds.max_x();
     if self.snap_x {
-      if let Some(max_target_x) = self
-        .targets_x
+      if let Some(max_target_x) = targets_x
         .iter()
         .map(|t| t.position)
         .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
       {
         max_x = max_x.max(max_target_x + self.viewport.width);
       }
-      if let Some(min_target_x) = self
-        .targets_x
+      if let Some(min_target_x) = targets_x
         .iter()
         .map(|t| t.position)
         .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
@@ -505,16 +506,14 @@ impl PendingContainer {
     let mut min_y = self.content_bounds.min_y();
     let mut max_y = self.content_bounds.max_y();
     if self.snap_y {
-      if let Some(max_target_y) = self
-        .targets_y
+      if let Some(max_target_y) = targets_y
         .iter()
         .map(|t| t.position)
         .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
       {
         max_y = max_y.max(max_target_y + self.viewport.height);
       }
-      if let Some(min_target_y) = self
-        .targets_y
+      if let Some(min_target_y) = targets_y
         .iter()
         .map(|t| t.position)
         .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
@@ -523,12 +522,22 @@ impl PendingContainer {
       }
     }
 
-    let scroll_bounds = Rect::from_xywh(
+    let mut scroll_bounds = Rect::from_xywh(
       min_x,
       min_y,
       (max_x - min_x).max(0.0),
       (max_y - min_y).max(0.0),
     );
+
+    if !self.uses_viewport_scroll {
+      scroll_bounds = scroll_bounds.translate(self.origin);
+      for target in &mut targets_x {
+        target.position += self.origin.x;
+      }
+      for target in &mut targets_y {
+        target.position += self.origin.y;
+      }
+    }
 
     ScrollSnapContainer {
       box_id: self.box_id,
@@ -540,8 +549,8 @@ impl PendingContainer {
       padding_x: self.padding_x,
       padding_y: self.padding_y,
       scroll_bounds,
-      targets_x: self.targets_x,
-      targets_y: self.targets_y,
+      targets_x,
+      targets_y,
       uses_viewport_scroll: self.uses_viewport_scroll,
     }
   }
@@ -1196,15 +1205,26 @@ pub(crate) fn collect_snap_targets(
       } else {
         style.scroll_snap_align.inline
       };
+      let axis_positive = if inline_vertical {
+        // Physical x maps to the block axis in vertical writing modes.
+        !matches!(
+          style.writing_mode,
+          WritingMode::VerticalRl | WritingMode::SidewaysRl
+        )
+      } else {
+        // Physical x maps to the inline axis in horizontal writing modes.
+        matches!(style.direction, Direction::Ltr)
+      };
       if let Some(pos) = snap_position(
         align_x,
         abs_bounds.x(),
-        abs_bounds.width(),
+        abs_bounds.max_x(),
         viewport.width,
         padding_start,
         padding_end,
         margin_start,
         margin_end,
+        axis_positive,
       ) {
         targets_x.push((pos, style.scroll_snap_stop));
       }
@@ -1218,15 +1238,23 @@ pub(crate) fn collect_snap_targets(
       } else {
         style.scroll_snap_align.block
       };
+      let axis_positive = if inline_vertical {
+        // Physical y maps to the inline axis in vertical writing modes.
+        matches!(style.direction, Direction::Ltr)
+      } else {
+        // Physical y maps to the block axis in horizontal writing modes.
+        true
+      };
       if let Some(pos) = snap_position(
         align_y,
         abs_bounds.y(),
-        abs_bounds.height(),
+        abs_bounds.max_y(),
         viewport.height,
         padding_start,
         padding_end,
         margin_start,
         margin_end,
+        axis_positive,
       ) {
         targets_y.push((pos, style.scroll_snap_stop));
       }

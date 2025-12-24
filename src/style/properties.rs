@@ -6517,12 +6517,18 @@ pub fn apply_declaration_with_base(
       let mut list_image = ListStyleImage::None;
 
       for token in tokens {
-        if let Some(t) = parse_list_style_type(&token) {
-          list_type = t;
+        if matches!(&token, PropertyValue::Keyword(kw) if kw == "none") {
+          list_type = ListStyleType::None;
+          list_image = ListStyleImage::None;
           continue;
         }
+
         if let Some(p) = parse_list_style_position(&token) {
           list_pos = p;
+          continue;
+        }
+        if let Some(t) = parse_list_style_type(&token) {
+          list_type = t;
           continue;
         }
         if let Some(img) = parse_list_style_image(&token) {
@@ -11643,7 +11649,8 @@ fn parse_list_style_type(value: &PropertyValue) -> Option<ListStyleType> {
       "disclosure-open" => Some(ListStyleType::DisclosureOpen),
       "disclosure-closed" => Some(ListStyleType::DisclosureClosed),
       "none" => Some(ListStyleType::None),
-      _ => None,
+      _ if kw.contains('(') => None,
+      _ => Some(ListStyleType::Custom(kw.to_ascii_lowercase())),
     },
     PropertyValue::String(s) => Some(ListStyleType::String(s.clone())),
     _ => None,

@@ -328,18 +328,16 @@ impl GlyphCache {
     if let Some(entry) = self.glyphs.get_mut(&key) {
       self.hits += 1;
       entry.last_used = generation;
-      self.usage_queue.push_back((key, generation));
-      return Some(entry);
+    } else {
+      self.misses += 1;
+      let mut cached = self.build_glyph_path(font, glyph_id)?;
+      cached.last_used = generation;
+      self.current_bytes = self.current_bytes.saturating_add(cached.estimated_size);
+      self.glyphs.insert(key, cached);
     }
 
-    self.misses += 1;
-    let mut cached = self.build_glyph_path(font, glyph_id)?;
-    cached.last_used = generation;
-    self.current_bytes = self.current_bytes.saturating_add(cached.estimated_size);
-    self.glyphs.insert(key, cached);
     self.usage_queue.push_back((key, generation));
     self.evict_if_needed();
-
     self.glyphs.get(&key)
   }
 
@@ -900,7 +898,7 @@ fn draw_color_glyph(
   glyph_y: f32,
   rotation: Option<Transform>,
 ) {
-  let mut paint = PixmapPaint::default();
+  let paint = PixmapPaint::default();
   let transform = rotation.unwrap_or_else(Transform::identity);
   let dx = (glyph_x + glyph.left).round() as i32;
   let dy = (glyph_y + glyph.top).round() as i32;

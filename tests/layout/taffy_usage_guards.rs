@@ -10,6 +10,22 @@ use fastrender::{
   LayoutConstraints,
 };
 
+fn with_large_stack<F, R>(f: F) -> R
+where
+  F: FnOnce() -> R + Send + 'static,
+  R: Send + 'static,
+{
+  const STACK_SIZE: usize = 16 * 1024 * 1024;
+  let handle = std::thread::Builder::new()
+    .stack_size(STACK_SIZE)
+    .spawn(f)
+    .expect("failed to spawn test thread");
+  match handle.join() {
+    Ok(result) => result,
+    Err(payload) => std::panic::resume_unwind(payload),
+  }
+}
+
 #[test]
 fn flex_and_grid_route_through_taffy() {
   reset_taffy_counters();
@@ -38,21 +54,23 @@ fn flex_and_grid_route_through_taffy() {
 
 #[test]
 fn tables_do_not_invoke_taffy() {
-  reset_taffy_counters();
+  with_large_stack(|| {
+    reset_taffy_counters();
 
-  let fixture =
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/html/table_auto.html");
-  let html = std::fs::read_to_string(&fixture)
-    .unwrap_or_else(|e| panic!("failed to load table fixture {}: {}", fixture.display(), e));
+    let fixture =
+      PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/html/table_auto.html");
+    let html = std::fs::read_to_string(&fixture)
+      .unwrap_or_else(|e| panic!("failed to load table fixture {}: {}", fixture.display(), e));
 
-  let mut renderer = FastRender::new().expect("renderer");
-  renderer
-    .render_html(&html, 800, 800)
-    .expect("table fixture should render");
+    let mut renderer = FastRender::new().expect("renderer");
+    renderer
+      .render_html(&html, 800, 800)
+      .expect("table fixture should render");
 
-  assert_eq!(
-    total_taffy_invocations(),
-    0,
-    "table layout must not call into the Taffy adapter",
-  );
+    assert_eq!(
+      total_taffy_invocations(),
+      0,
+      "table layout must not call into the Taffy adapter",
+    );
+  });
 }

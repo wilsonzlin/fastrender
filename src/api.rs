@@ -63,8 +63,7 @@ use crate::css::loader::{
   inject_css_into_html, inline_imports, resolve_href_with_base,
 };
 use crate::css::parser::{
-  extract_css, extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
-  StylesheetSource,
+  extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::dom::DomNode;
@@ -123,6 +122,7 @@ use crate::tree::box_generation::BoxGenerationOptions;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::box_tree::BoxType;
+use crate::tree::box_tree::FormControlKind;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::box_tree::ReplacedBox;
 use crate::tree::box_tree::ReplacedType;
@@ -684,7 +684,7 @@ fn resolve_viewport(
   base_dpr: f32,
   meta: Option<&crate::html::viewport::MetaViewport>,
 ) -> ResolvedViewport {
-  let mut resolved = ResolvedViewport::new(requested, base_dpr);
+  let resolved = ResolvedViewport::new(requested, base_dpr);
   let Some(meta) = meta else {
     return resolved;
   };
@@ -1517,20 +1517,41 @@ impl FastRender {
       .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
     let stylesheet = self.collect_document_stylesheet(dom, &media_ctx, &mut media_query_cache);
-    let styled_tree = apply_styles_with_media_target_and_imports_cached(
-      dom,
-      &stylesheet,
-      &media_ctx,
-      target_fragment.as_deref(),
-      None,
-      None,
-      None,
-      None,
-      None,
-      Some(&mut media_query_cache),
-    );
+    // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
+    // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
+    std::thread::scope(|scope| {
+      let handle = std::thread::Builder::new()
+        .name("fastr-accessibility".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn_scoped(scope, || {
+          let mut local_media_query_cache = MediaQueryCache::default();
+          let styled_tree = apply_styles_with_media_target_and_imports_cached(
+            dom,
+            &stylesheet,
+            &media_ctx,
+            target_fragment.as_deref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(&mut local_media_query_cache),
+          );
 
-    Ok(crate::accessibility::build_accessibility_tree(&styled_tree))
+          crate::accessibility::build_accessibility_tree(&styled_tree)
+        })
+        .map_err(|e| {
+          Error::Render(RenderError::InvalidParameters {
+            message: format!("Failed to spawn accessibility worker: {e}"),
+          })
+        })?;
+
+      handle.join().map_err(|_| {
+        Error::Render(RenderError::InvalidParameters {
+          message: "Accessibility worker thread panicked".to_string(),
+        })
+      })
+    })
   }
 
   /// Convenience helper to serialize the accessibility tree to JSON.
@@ -1601,10 +1622,18 @@ impl FastRender {
     let modal_open = modal_dialog_present(&dom_with_state);
     apply_top_layer_state(&mut dom_with_state, modal_open, false);
 
-    let target_fragment = self.current_target_fragment();
-    let media_ctx = MediaContext::screen(width as f32, height as f32)
-      .with_device_pixel_ratio(self.device_pixel_ratio)
-      .with_env_overrides();
+    let viewport_size = Size::new(width as f32, height as f32);
+    let device_size = self.pending_device_size.take().unwrap_or(viewport_size);
+    let media_ctx = match media_type {
+      MediaType::Print => MediaContext::print(viewport_size.width, viewport_size.height),
+      MediaType::Screen => MediaContext::screen(viewport_size.width, viewport_size.height),
+      other => {
+        MediaContext::screen(viewport_size.width, viewport_size.height).with_media_type(other)
+      }
+    }
+    .with_device_size(device_size.width, device_size.height)
+    .with_device_pixel_ratio(self.device_pixel_ratio)
+    .with_env_overrides();
 
     let css_parse_start = timings_enabled.then(Instant::now);
     let mut media_query_cache = MediaQueryCache::default();
@@ -1621,28 +1650,7 @@ impl FastRender {
 
     // Apply styles to create styled tree
     let target_fragment = self.current_target_fragment();
-    let viewport_size = Size::new(width as f32, height as f32);
-    let device_size = self.pending_device_size.take().unwrap_or(viewport_size);
-    let media_ctx = MediaContext::screen(viewport_size.width, viewport_size.height)
-      .with_device_size(device_size.width, device_size.height)
-      .with_device_pixel_ratio(self.device_pixel_ratio)
-      .with_env_overrides();
-    let import_loader = CssImportFetcher::new(self.base_url.clone(), Arc::clone(&self.fetcher));
-    let mut media_query_cache = MediaQueryCache::default();
     let style_load_start = timings_enabled.then(Instant::now);
-    let resolved_stylesheet = stylesheet.resolve_imports_with_cache(
-      &import_loader,
-      self.base_url.as_deref(),
-      &media_ctx,
-      Some(&mut media_query_cache),
-    );
-    let keyframes =
-      resolved_stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
-    let has_container_queries = resolved_stylesheet.has_container_rules();
-    let style_load_start = timings_enabled.then(Instant::now);
-    let keyframes =
-      stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
-    let has_container_queries = stylesheet.has_container_rules();
     self.font_context.clear_web_fonts();
     let font_faces =
       stylesheet.collect_font_face_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
@@ -1652,6 +1660,9 @@ impl FastRender {
       self.base_url.as_deref(),
       Some(&used_codepoints),
     );
+    let keyframes =
+      stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
+    let has_container_queries = stylesheet.has_container_rules();
     if let Some(start) = style_load_start {
       eprintln!("timing:style_prepare {:?}", start.elapsed());
     }
@@ -2418,7 +2429,7 @@ impl FastRender {
           let rewritten = absolutize_css_urls(&css_text, &css_url);
           let inlined = {
             let mut import_fetch = |u: &str| -> Result<String> {
-              match self.fetcher.fetch(u) {
+              match fetcher.fetch(u) {
                 Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
                 Err(err) => {
                   diagnostics.record(ResourceKind::Stylesheet, u, err.to_string());
@@ -2530,6 +2541,53 @@ impl FastRender {
     let mut explicit_no_ratio = false;
     let replaced_type_snapshot = replaced_box.replaced_type.clone();
     match replaced_type_snapshot {
+      ReplacedType::FormControl(control) => {
+        explicit_no_ratio = true;
+        if replaced_box.intrinsic_size.is_none() {
+          let metrics_scaled = self.resolve_scaled_metrics(style);
+          let char_width = metrics_scaled
+            .as_ref()
+            .and_then(|m| m.x_height)
+            .unwrap_or(style.font_size * 0.6)
+            * 0.6;
+          let line_height = compute_line_height_with_metrics_viewport(
+            style,
+            metrics_scaled.as_ref(),
+            Some(viewport),
+          );
+
+          let size = match &control.control {
+            FormControlKind::Text { size_attr, .. } => {
+              let cols = size_attr.unwrap_or(20) as f32;
+              Size::new(char_width * cols.max(1.0), line_height)
+            }
+            FormControlKind::TextArea { rows, cols, .. } => {
+              let row_count = rows.unwrap_or(2) as f32;
+              let col_count = cols.unwrap_or(20) as f32;
+              Size::new(
+                char_width * col_count.max(1.0),
+                line_height * row_count.max(1.0),
+              )
+            }
+            FormControlKind::Button { label } => {
+              let text_len = label.chars().count().max(1) as f32;
+              Size::new(char_width * text_len + char_width * 2.0, line_height)
+            }
+            FormControlKind::Select { label, .. } => {
+              let text_len = label.chars().count().max(4) as f32;
+              Size::new(char_width * text_len + 20.0, line_height)
+            }
+            FormControlKind::Checkbox { .. } => {
+              let edge = (style.font_size * 1.1).clamp(12.0, 20.0);
+              Size::new(edge, edge)
+            }
+            FormControlKind::Range { .. } => Size::new(char_width * 12.0, line_height.max(12.0)),
+            FormControlKind::Unknown { .. } => Size::new(char_width * 10.0, line_height),
+          };
+
+          replaced_box.intrinsic_size = Some(size);
+        }
+      }
       ReplacedType::Image {
         src,
         alt: stored_alt,
@@ -3268,6 +3326,7 @@ fn hash_text_size_adjust(value: &crate::style::types::TextSizeAdjust, hasher: &m
 fn hash_list_style_type(value: &crate::style::types::ListStyleType, hasher: &mut DefaultHasher) {
   use crate::style::types::ListStyleType::Armenian;
   use crate::style::types::ListStyleType::Circle;
+  use crate::style::types::ListStyleType::Custom;
   use crate::style::types::ListStyleType::Decimal;
   use crate::style::types::ListStyleType::DecimalLeadingZero;
   use crate::style::types::ListStyleType::Disc;
@@ -3299,6 +3358,10 @@ fn hash_list_style_type(value: &crate::style::types::ListStyleType, hasher: &mut
     LowerGreek => 12u8.hash(hasher),
     DisclosureOpen => 13u8.hash(hasher),
     DisclosureClosed => 14u8.hash(hasher),
+    Custom(name) => {
+      17u8.hash(hasher);
+      name.hash(hasher);
+    }
     String(s) => {
       15u8.hash(hasher);
       s.hash(hasher);
@@ -4452,10 +4515,14 @@ pub(crate) fn render_html_with_shared_resources(
     default_width: width,
     default_height: height,
     device_pixel_ratio,
+    apply_meta_viewport: false,
+    pending_device_size: None,
     base_url,
+    compat_profile: CompatProfile::default(),
+    dom_compat_mode: DomCompatibilityMode::Standard,
   };
 
-  renderer.render_html_internal(html, width, height, 0.0, 0.0)
+  renderer.render_html_internal(html, width, height, 0.0, 0.0, MediaType::Screen)
 }
 
 #[cfg(test)]
@@ -5449,6 +5516,7 @@ mod tests {
         alt: Some(alt_text.to_string()),
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
       None,
       None,
@@ -5664,6 +5732,7 @@ mod tests {
         alt: None,
         sizes: None,
         srcset: Vec::new(),
+        picture_sources: Vec::new(),
       },
       None,
       None,
@@ -5710,6 +5779,7 @@ mod tests {
           url: data_url.clone(),
           descriptor: SrcsetDescriptor::Density(2.0),
         }],
+        picture_sources: Vec::new(),
       },
       None,
       None,
@@ -6214,7 +6284,7 @@ mod tests {
       "#target { background-image: url(\"../images/bg.png\"); }",
     );
 
-    let mut renderer = FastRender::builder()
+    let renderer = FastRender::builder()
       .base_url(base_url.to_string())
       .fetcher(Arc::new(fetcher) as Arc<dyn ResourceFetcher>)
       .build()

@@ -226,18 +226,15 @@ fn parse_positive_number(value: &str) -> Option<f32> {
   }
 
   // Accept leading-decimal formats like ".5" that Rust's parser rejects.
-  let mut normalized = None;
-  let normalized_value = if trimmed.starts_with('.') {
-    normalized = Some(format!("0{trimmed}"));
-    normalized.as_ref().unwrap().as_str()
+  use std::borrow::Cow;
+  let normalized_value: Cow<'_, str> = if trimmed.starts_with('.') {
+    Cow::Owned(format!("0{trimmed}"))
   } else if trimmed.starts_with("-.") {
-    normalized = Some(format!("-0{}", &trimmed[1..]));
-    normalized.as_ref().unwrap().as_str()
+    Cow::Owned(format!("-0{}", &trimmed[1..]))
   } else if trimmed.starts_with("+.") {
-    normalized = Some(format!("+0{}", &trimmed[1..]));
-    normalized.as_ref().unwrap().as_str()
+    Cow::Owned(format!("+0{}", &trimmed[1..]))
   } else {
-    trimmed
+    Cow::Borrowed(trimmed)
   };
 
   if let Ok(num) = normalized_value.parse::<f32>() {

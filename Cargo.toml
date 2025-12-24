@@ -52,6 +52,7 @@ unicode-general-category = "0.6"
 url = "2.5"
 urlencoding = "2.1"
 ureq = "3.1"
+webp = { version = "0.3.1", default-features = false }
 wuff = "0.2"
 
 [dev-dependencies]

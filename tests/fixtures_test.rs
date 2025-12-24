@@ -248,12 +248,18 @@ fn test_fixture(name: &str) -> Result<(), String> {
       let compare_config = fixture_compare_config()?;
       let name = name_owned;
       let html = load_fixture(&name);
+      let golden = load_golden(&name);
+      let (render_width, render_height) = golden
+        .as_ref()
+        .and_then(|bytes| load_png_from_bytes(bytes).ok())
+        .map(|png| (png.width(), png.height()))
+        .unwrap_or((FIXTURE_WIDTH, FIXTURE_HEIGHT));
       let mut renderer =
         FastRender::new().map_err(|e| format!("Failed to create renderer: {:?}", e))?;
 
       // Render the fixture
       let rendered = renderer
-        .render_to_png(&html, FIXTURE_WIDTH, FIXTURE_HEIGHT)
+        .render_to_png(&html, render_width, render_height)
         .map_err(|e| format!("Render failed for {}: {:?}", name, e))?;
 
       // Handle golden image comparison/update
@@ -264,7 +270,7 @@ fn test_fixture(name: &str) -> Result<(), String> {
       }
 
       // If golden exists, compare
-      if let Some(golden) = load_golden(&name) {
+      if let Some(golden) = golden {
         compare_rendered_to_golden(&name, &rendered, &golden, &compare_config)
       } else {
         // No golden exists - just verify rendering succeeds

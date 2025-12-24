@@ -164,12 +164,13 @@ fn resolve_tokens_from_parser<'i, 't>(
         output.extend(resolved);
       }
       Token::Function(name) => {
+        let name = name.as_ref().to_string();
         let nested = parser.parse_nested_block(|nested| {
           resolve_tokens_from_parser(nested, custom_properties, stack, depth)
             .map_err(|err| nested.new_custom_error(err))
         });
-        let resolved = map_nested_result(nested, name.as_ref())?;
-        let mut text = name.as_ref().to_string();
+        let resolved = map_nested_result(nested, &name)?;
+        let mut text = name;
         text.push('(');
         text.push_str(&tokens_to_css_string(&resolved));
         text.push(')');
@@ -263,14 +264,10 @@ fn parse_var_function_arguments<'i, 't>(
     return Err(VarResolutionResult::InvalidSyntax(String::new()));
   };
 
-  let mut fallback_start = None;
-  loop {
+  let fallback_start = loop {
     match parser.next_including_whitespace_and_comments() {
       Ok(Token::WhiteSpace(_) | Token::Comment(_)) => continue,
-      Ok(Token::Comma) => {
-        fallback_start = Some(parser.position());
-        break;
-      }
+      Ok(Token::Comma) => break parser.position(),
       Ok(other) => {
         return Err(VarResolutionResult::InvalidSyntax(token_to_css_string(
           &other,
@@ -278,10 +275,10 @@ fn parse_var_function_arguments<'i, 't>(
       }
       Err(_) => return Ok((name, None)),
     }
-  }
+  };
 
   while let Ok(_) = parser.next_including_whitespace_and_comments() {}
-  let fallback_slice = parser.slice_from(fallback_start.unwrap());
+  let fallback_slice = parser.slice_from(fallback_start);
   Ok((name, Some(fallback_slice.to_string())))
 }
 
@@ -363,25 +360,32 @@ pub fn contains_var(value: &str) -> bool {
 }
 
 fn contains_var_in_parser<'i, 't>(parser: &mut Parser<'i, 't>) -> bool {
+  let mut found = false;
+
   while let Ok(token) = parser.next_including_whitespace_and_comments() {
     match token {
-      Token::Function(name) if name.eq_ignore_ascii_case("var") => return true,
+      Token::Function(name) if name.eq_ignore_ascii_case("var") => {
+        found = true;
+        let _ = parser
+          .parse_nested_block(|nested| Ok::<_, ParseError<'i, ()>>(contains_var_in_parser(nested)));
+      }
       Token::Function(_)
       | Token::ParenthesisBlock
       | Token::SquareBracketBlock
       | Token::CurlyBracketBlock => {
-        if let Ok(found) =
-          parser.parse_nested_block(|nested| Ok::<_, ()>(contains_var_in_parser(nested)))
+        if let Ok(nested_found) = parser
+          .parse_nested_block(|nested| Ok::<_, ParseError<'i, ()>>(contains_var_in_parser(nested)))
         {
-          if found {
-            return true;
+          if nested_found {
+            found = true;
           }
         }
       }
       _ => {}
     }
   }
-  false
+
+  found
 }
 
 /// Extracts all custom property names referenced in a value
@@ -406,7 +410,7 @@ fn collect_var_references_from_parser<'i, 't>(parser: &mut Parser<'i, 't>, refs:
               collect_var_references_from_parser(&mut nested_parser, refs);
             }
           }
-          Ok::<_, ()>(())
+          Ok::<_, ParseError<'i, ()>>(())
         });
       }
       Token::Function(_)
@@ -415,7 +419,7 @@ fn collect_var_references_from_parser<'i, 't>(parser: &mut Parser<'i, 't>, refs:
       | Token::CurlyBracketBlock => {
         let _ = parser.parse_nested_block(|nested| {
           collect_var_references_from_parser(nested, refs);
-          Ok::<_, ()>(())
+          Ok::<_, ParseError<'i, ()>>(())
         });
       }
       _ => {}

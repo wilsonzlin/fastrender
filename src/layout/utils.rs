@@ -404,14 +404,20 @@ pub fn compute_replaced_size(
     crate::style::types::AspectRatio::Ratio(r) if r > 0.0 => Some(r),
     _ => None,
   };
+  let allow_intrinsic_ratio_from_size = !matches!(
+    &replaced.replaced_type,
+    crate::tree::box_tree::ReplacedType::FormControl(_)
+  );
 
-  let intrinsic_ratio =
-    specified_ratio
-      .or(replaced.aspect_ratio)
-      .or_else(|| match (intrinsic_w, intrinsic_h) {
-        (Some(w), Some(h)) if h > 0.0 => Some(w / h),
-        _ => None,
-      });
+  let intrinsic_ratio = specified_ratio.or(replaced.aspect_ratio).or_else(|| {
+    if !allow_intrinsic_ratio_from_size {
+      return None;
+    }
+    match (intrinsic_w, intrinsic_h) {
+      (Some(w), Some(h)) if h > 0.0 => Some(w / h),
+      _ => None,
+    }
+  });
 
   let width_base = percentage_base.and_then(|s| s.width.is_finite().then_some(s.width));
   let height_base = percentage_base.and_then(|s| s.height.is_finite().then_some(s.height));

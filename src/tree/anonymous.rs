@@ -307,6 +307,8 @@ impl AnonymousBoxCreator {
         id: 0,
         debug_info: debug_info.cloned(),
         styled_node_id,
+        first_line_style: None,
+        first_letter_style: None,
       },
       BoxType::Anonymous(anon) if matches!(anon.anonymous_type, AnonymousType::Inline) => BoxNode {
         style: style.clone(),
@@ -315,6 +317,8 @@ impl AnonymousBoxCreator {
         id: 0,
         debug_info: debug_info.cloned(),
         styled_node_id,
+        first_line_style: None,
+        first_letter_style: None,
       },
       _ => {
         let mut node = BoxNode::new_inline(style.clone(), children);
@@ -488,6 +492,8 @@ impl AnonymousBoxCreator {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -510,6 +516,8 @@ impl AnonymousBoxCreator {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -526,6 +534,8 @@ impl AnonymousBoxCreator {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 
@@ -542,6 +552,8 @@ impl AnonymousBoxCreator {
       id: 0,
       debug_info: None,
       styled_node_id: None,
+      first_line_style: None,
+      first_letter_style: None,
     }
   }
 

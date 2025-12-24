@@ -830,17 +830,10 @@ mod tests {
 
   #[test]
   fn test_engine_stats() {
-    crate::layout::formatting_context::intrinsic_cache_reset_counters();
-    crate::layout::formatting_context::layout_cache_reset_counters();
     let engine = LayoutEngine::with_defaults();
     let stats = engine.stats();
 
-    // Currently all zeros (no layout executed)
-    assert_eq!(stats.cache_hits, 0);
-    assert_eq!(stats.cache_misses, 0);
-    assert_eq!(stats.layout_cache_hits, 0);
-    assert_eq!(stats.layout_cache_misses, 0);
-    assert_eq!(stats.layout_cache_evictions, 0);
+    // Cache counters are global and may be updated by other tests running in parallel.
     assert_eq!(stats.total_layouts, 0);
   }
 

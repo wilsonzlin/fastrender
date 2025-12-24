@@ -291,6 +291,15 @@ impl DisplayListOptimizer {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
 
+          if !clip_stack.is_empty() {
+            // A transform within a clip scope can reposition descendants; be conservative and avoid
+            // culling based solely on the clip's initial bounds.
+            for clip in &mut clip_stack {
+              clip.can_cull = false;
+            }
+            refresh_context_clipping(&mut context_stack, &clip_stack);
+          }
+
           if let Some(transform) = Self::extract_2d_transform(&t.transform) {
             if !transform_state.culling_disabled() {
               transform_state.current = transform_state.current.multiply(&transform);
@@ -310,6 +319,12 @@ impl DisplayListOptimizer {
           let pushed_transform = sc.transform.is_some();
           if let Some(transform) = sc.transform.as_ref() {
             transform_stack.push(transform_state.clone());
+            if !clip_stack.is_empty() {
+              for clip in &mut clip_stack {
+                clip.can_cull = false;
+              }
+              refresh_context_clipping(&mut context_stack, &clip_stack);
+            }
             if let Some(transform) = Self::extract_2d_transform(transform) {
               if !transform_state.culling_disabled() {
                 transform_state.current = transform_state.current.multiply(&transform);

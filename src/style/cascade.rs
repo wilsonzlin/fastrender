@@ -1155,6 +1155,47 @@ pub fn apply_styles_with_media_target_and_imports_cached(
   }
 
   let rule_index = RuleIndex::new(all_rules);
+
+  let counter_styles = {
+    let mut registry = crate::style::counter_styles::CounterStyleRegistry::with_builtins();
+
+    let ua_counter_styles = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_counter_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_counter_style_rules(media_ctx)
+    };
+    let author_counter_styles = if let Some(cache) = media_cache.as_deref_mut() {
+      author_sheet.collect_counter_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      author_sheet.collect_counter_style_rules(media_ctx)
+    };
+
+    fn register_collected(
+      registry: &mut crate::style::counter_styles::CounterStyleRegistry,
+      mut collected: Vec<crate::css::types::CollectedCounterStyleRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    // Cascade order: UA first, then author. Within an origin, layer order and source order decide.
+    register_collected(&mut registry, ua_counter_styles);
+    register_collected(&mut registry, author_counter_styles);
+
+    std::sync::Arc::new(registry)
+  };
+
+  let mut base_styles = ComputedStyle::default();
+  base_styles.counter_styles = counter_styles.clone();
+  let mut base_ua_styles = ComputedStyle::default();
+  base_ua_styles.counter_styles = counter_styles;
+
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
       let mut selector_caches = SelectorCaches::default();
@@ -1174,8 +1215,8 @@ pub fn apply_styles_with_media_target_and_imports_cached(
         &rule_index,
         &mut selector_caches,
         &mut scratch,
-        &ComputedStyle::default(),
-        &ComputedStyle::default(),
+        &base_styles,
+        &base_ua_styles,
         16.0,
         16.0,
         Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
@@ -2199,6 +2240,7 @@ fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
   styles.list_style_type = parent.list_style_type.clone();
   styles.list_style_position = parent.list_style_position;
   styles.list_style_image = parent.list_style_image.clone();
+  styles.counter_styles = parent.counter_styles.clone();
   styles.image_orientation = parent.image_orientation;
   styles.quotes = parent.quotes.clone();
   styles.cursor = parent.cursor;
@@ -6923,7 +6965,7 @@ fn resolve_scopes<'a>(
           continue;
         }
         let candidate_ref = ElementRef::with_ancestors(candidate, &path[..idx]);
-        let matches = context.nest_for_relative_selector(base_ref.opaque(), |ctx| {
+        let matches = context.nest_for_scope_condition(Some(base_ref.opaque()), |ctx| {
           start_selectors
             .iter()
             .any(|sel| matches_selector(sel, 0, None, &candidate_ref, ctx))
@@ -6947,7 +6989,7 @@ fn resolve_scopes<'a>(
           continue;
         }
         let candidate_ref = ElementRef::with_ancestors(candidate, &path[..idx]);
-        let blocked = context.nest_for_relative_selector(scope_ref.opaque(), |ctx| {
+        let blocked = context.nest_for_scope_condition(Some(scope_ref.opaque()), |ctx| {
           limit_selectors
             .iter()
             .any(|sel| matches_selector(sel, 0, None, &candidate_ref, ctx))
@@ -7037,7 +7079,7 @@ fn find_matching_rules<'a>(
     let selector = indexed.selector;
     let selector_matches = if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      context.nest_for_relative_selector(scope_ref.opaque(), |ctx| {
+      context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
         matches_selector(selector, 0, None, &element_ref, ctx)
       })
     } else {
@@ -7164,7 +7206,7 @@ fn find_pseudo_element_rules<'a>(
     let selector = indexed.selector;
     let selector_matches = if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      context.nest_for_relative_selector(scope_ref.opaque(), |ctx| {
+      context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
         matches_selector(selector, 0, None, &element_ref, ctx)
       })
     } else {

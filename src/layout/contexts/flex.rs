@@ -134,7 +134,7 @@ fn fragment_first_baseline(fragment: &FragmentNode) -> Option<f32> {
     _ => {
       for child in &fragment.children {
         if let Some(baseline) = fragment_first_baseline(child) {
-          return Some(child.bounds.y() + baseline);
+          return Some(child.bounds.y() - fragment.bounds.y() + baseline);
         }
       }
       None
@@ -1596,23 +1596,21 @@ impl FormattingContext for FlexFormattingContext {
         line_baselines[idx].cross_start = if start.is_finite() { *start } else { 0.0 };
       }
 
-      for (idx, metrics) in baseline_items.iter().enumerate() {
-        if let Some(metrics) = metrics {
-          let line_idx = metrics.line_index;
-          if line_idx >= line_baselines.len() {
-            line_baselines.resize(line_idx + 1, LineBaselineData::default());
-          }
-          let line_start = line_baselines[line_idx].cross_start;
-          let above = metrics.baseline_pos - line_start;
-          let below = metrics.cross_size - metrics.baseline_offset;
-          let line = &mut line_baselines[line_idx];
-          line.max_above = line.max_above.max(above);
-          line.max_below = line.max_below.max(below);
-          line.has_baseline = true;
+      for metrics in baseline_items.iter().flatten() {
+        let line_idx = metrics.line_index;
+        if line_idx >= line_baselines.len() {
+          line_baselines.resize(line_idx + 1, LineBaselineData::default());
         }
+        let line_start = line_baselines[line_idx].cross_start;
+        let above = metrics.baseline_pos - line_start;
+        let below = metrics.cross_size - metrics.baseline_offset;
+        let line = &mut line_baselines[line_idx];
+        line.max_above = line.max_above.max(above);
+        line.max_below = line.max_below.max(below);
+        line.has_baseline = true;
       }
 
-      for (idx, line) in line_baselines.iter_mut().enumerate() {
+      for line in line_baselines.iter_mut() {
         if line.has_baseline {
           line.cross_start = line.cross_start.max(0.0);
           line.baseline = line.cross_start + line.max_above;
@@ -1634,9 +1632,9 @@ impl FormattingContext for FlexFormattingContext {
             if line.has_baseline {
               let delta = line.baseline - metrics.baseline_pos;
               if cross_is_horizontal {
-                child_fragment.bounds.origin.x += delta;
+                translate_fragment_tree(child_fragment, Point::new(delta, 0.0));
               } else {
-                child_fragment.bounds.origin.y += delta;
+                translate_fragment_tree(child_fragment, Point::new(0.0, delta));
               }
               continue;
             }
@@ -5144,7 +5142,7 @@ mod tests {
     container_style.height = Some(Length::px(80.0));
 
     let mut small_text_style = ComputedStyle::default();
-    small_text_style.font_size = Length::px(12.0);
+    small_text_style.font_size = 12.0;
     let small_text_style = Arc::new(small_text_style);
     let small_text = BoxNode::new_text(small_text_style.clone(), "small".to_string());
     let small_inline = BoxNode::new_inline(small_text_style.clone(), vec![small_text]);
@@ -5155,7 +5153,7 @@ mod tests {
     );
 
     let mut large_text_style = ComputedStyle::default();
-    large_text_style.font_size = Length::px(24.0);
+    large_text_style.font_size = 24.0;
     let large_text_style = Arc::new(large_text_style);
     let large_text = BoxNode::new_text(large_text_style.clone(), "Large".to_string());
     let large_inline = BoxNode::new_inline(large_text_style.clone(), vec![large_text]);
@@ -5194,7 +5192,7 @@ mod tests {
     container_style.align_items = AlignItems::Baseline;
 
     let mut text_style = ComputedStyle::default();
-    text_style.font_size = Length::px(16.0);
+    text_style.font_size = 16.0;
     let text_style = Arc::new(text_style);
     let text = BoxNode::new_text(text_style.clone(), "Text".to_string());
     let inline = BoxNode::new_inline(text_style.clone(), vec![text]);
@@ -5242,7 +5240,7 @@ mod tests {
 
     let make_item = |font_size: f32, width: f32| {
       let mut text_style = ComputedStyle::default();
-      text_style.font_size = Length::px(font_size);
+      text_style.font_size = font_size;
       let text_style = Arc::new(text_style);
       let text = BoxNode::new_text(text_style.clone(), "Wrap".to_string());
       let inline = BoxNode::new_inline(text_style.clone(), vec![text]);
