@@ -144,6 +144,64 @@ fn positioned_children_follow_fragmentainers() {
 }
 
 #[test]
+fn column_fragmentation_places_fragments_in_grid() {
+  let mut children = Vec::new();
+  let mut y = 0.0;
+  for _ in 0..5 {
+    children.push(FragmentNode::new_block(
+      Rect::from_xywh(0.0, y, 180.0, 40.0),
+      vec![],
+    ));
+    y += 40.0;
+  }
+
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, y), children);
+  let options = FragmentationOptions::new(80.0)
+    .with_gap(15.0)
+    .with_columns(2, 10.0);
+
+  let fragments = fragment_tree(&root, &options);
+
+  assert_eq!(fragments.len(), 3);
+
+  let column_width = ((root.bounds.width()
+    - (options.column_count.saturating_sub(1) as f32 * options.column_gap))
+    .max(0.0))
+    / options.column_count as f32;
+  let expected_xs = [0.0, column_width + options.column_gap, 0.0];
+  let expected_ys = [
+    0.0,
+    0.0,
+    options.fragmentainer_size + options.fragmentainer_gap,
+  ];
+
+  for (fragment, (&expected_x, &expected_y)) in
+    fragments.iter().zip(expected_xs.iter().zip(expected_ys.iter()))
+  {
+    assert!((fragment.bounds.width() - column_width).abs() < 0.01);
+    assert!((fragment.bounds.x() - expected_x).abs() < 0.01);
+    assert!((fragment.bounds.y() - expected_y).abs() < 0.01);
+
+    assert_eq!(fragment.fragmentainer_index, fragment.fragment_index);
+    for child in &fragment.children {
+      assert_eq!(child.fragmentainer_index, fragment.fragmentainer_index);
+      let relative_start = child.bounds.y() - fragment.bounds.y();
+      let relative_end = child.bounds.max_y() - fragment.bounds.y();
+      assert!(
+        relative_start >= -0.01 && relative_end <= fragment.bounds.height() + 0.01,
+        "child extends outside fragment: child {:?} fragment {:?}",
+        child.bounds,
+        fragment.bounds
+      );
+    }
+  }
+
+  assert_eq!(fragments[0].children.len(), 2);
+  assert_eq!(fragments[1].children.len(), 2);
+  assert_eq!(fragments[2].children.len(), 1);
+}
+
+#[test]
 fn layout_engine_pagination_splits_pages() {
   let mut style = ComputedStyle::default();
   style.height = Some(Length::px(150.0));
