@@ -130,6 +130,9 @@ impl LayoutConfig {
   }
 
   /// Enables fragmentation of the resulting fragment tree.
+  ///
+  /// `FragmentationOptions` can express pagination (single column) or multi-column
+  /// fragmentation (`with_columns`) with independent gaps for fragmentainers and columns.
   pub fn with_fragmentation(mut self, fragmentation: FragmentationOptions) -> Self {
     self.fragmentation = Some(fragmentation);
     self
