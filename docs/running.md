@@ -2,6 +2,17 @@
 
 This page describes how to build, test, and run the renderer using the repo as it exists today.
 
+## Quick workflows (`cargo xtask`)
+
+Use the `xtask` wrapper for common local loops:
+
+- Test: `cargo xtask test [core|style|fixtures|wpt|all]` (default: `core`)
+- Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]`
+- Render a page: `cargo xtask render-page --url https://example.com --output out.png`
+- Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new`
+
+`cargo xtask --help` and per-subcommand help describe available flags and defaults. All commands run offline unless you explicitly pass a network URL to `render-page`.
+
 ## Build & test
 
 - Build: `cargo build`

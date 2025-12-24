@@ -2,6 +2,18 @@
 
 FastRender ships a few small binaries/examples intended for internal debugging and regression work. Prefer `--help` output for the source of truth.
 
+## `cargo xtask`
+
+`cargo xtask` is the preferred entry point for common workflows; it wraps the binaries below but keeps them usable directly.
+
+- Help: `cargo xtask --help`
+- Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
+- Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
+- Render one page: `cargo xtask render-page --url https://example.com --output out.png [--viewport 1200x800 --dpr 1.0 --full-page]`
+- Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new [--output target/render-diffs]`
+
+`render-page` wraps `fetch_and_render` in release mode by default (add `--debug` to keep a debug build).
+
 ## `fetch_pages`
 
 - Purpose: fetch a curated set of real pages and cache HTML under `fetches/html/` (and metadata alongside).
