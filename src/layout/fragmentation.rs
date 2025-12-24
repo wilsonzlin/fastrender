@@ -87,6 +87,15 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     return vec![root.clone()];
   }
 
+  let column_count = options.column_count.max(1);
+  let column_gap = options.column_gap.max(0.0);
+  let column_width = if column_count > 1 {
+    let total_gap = (column_count.saturating_sub(1)) as f32 * column_gap;
+    (root.bounds.width() - total_gap).max(0.0) / column_count as f32
+  } else {
+    root.bounds.width()
+  };
+
   let total_height = root.bounding_box().height().max(options.fragmentainer_size);
   let mut plan = BreakPlan::default();
   collect_break_plan(root, 0.0, &mut plan);
@@ -121,12 +130,19 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     }
 
     if let Some(mut clipped) = clip_node(root, start, end, 0.0, start, index, fragment_count) {
+      if column_count > 1 {
+        clipped.bounds.size.width = column_width;
+      }
       propagate_fragment_metadata(&mut clipped, index, fragment_count);
 
       // Translate fragments to account for fragmentainer gaps so downstream consumers
-      // can reason about the absolute position of each fragmentainer stack.
-      let vertical_offset = index as f32 * (options.fragmentainer_size + options.fragmentainer_gap);
-      let translated = clipped.translate(Point::new(0.0, vertical_offset));
+      // can reason about the absolute position of each fragmentainer stack. When multiple
+      // columns are requested, place fragmentainers in reading order across columns then rows.
+      let col = index % column_count;
+      let row = index / column_count;
+      let dx = col as f32 * (column_width + column_gap);
+      let dy = row as f32 * (options.fragmentainer_size + options.fragmentainer_gap);
+      let translated = clipped.translate(Point::new(dx, dy));
 
       fragments.push(translated);
     }
