@@ -28,6 +28,15 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Entry: `src/bin/inspect_frag.rs`
 - Run: `cargo run --release --bin inspect_frag -- --help`
 
+## `diff_renders`
+
+- Purpose: compare two render output directories (e.g., `fetches/renders` from two revisions) and summarize pixel diffs.
+- Entry: `src/bin/diff_renders.rs`
+- Run: `cargo run --release --bin diff_renders -- --before <dir> --after <dir>`
+- Outputs: `diff_report.json` and `diff_report.html` plus per-page diff PNGs alongside the HTML report.
+- Tuning: `--tolerance` and `--max-diff-percent` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_FUZZY` env vars are honored when flags are omitted).
+- Supports deterministic sharding with `--shard <index>/<total>` to split large sets across workers.
+
 ## Offline / cached captures
 
 - There is no dedicated "bundle" format. Offline captures are the on-disk caches produced by the existing tools:
