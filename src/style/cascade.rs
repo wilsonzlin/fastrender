@@ -11,6 +11,7 @@ use crate::css::parser::parse_stylesheet;
 use crate::css::selectors::FastRenderSelectorImpl;
 use crate::css::selectors::PseudoClass;
 use crate::css::selectors::PseudoElement;
+use crate::css::selectors::ShadowMatchData;
 use crate::css::selectors::TextDirection;
 use crate::css::types::ContainerCondition;
 use crate::css::types::CssImportLoader;
@@ -7454,6 +7455,7 @@ mod tests {
       selectors::matching::NeedsSelectorFlags::No,
       selectors::matching::MatchingForInvalidation::No,
     );
+    context.extra_data = ShadowMatchData::for_document();
     let selector = rule_index.rules[0]
       .rule
       .selectors
@@ -8146,6 +8148,7 @@ fn find_matching_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
+  context.extra_data = ShadowMatchData::for_document();
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
@@ -8412,6 +8415,7 @@ fn find_pseudo_element_rules<'a>(
     selectors::matching::NeedsSelectorFlags::No,
     selectors::matching::MatchingForInvalidation::No,
   );
+  context.extra_data = ShadowMatchData::for_document();
 
   let mut scoped_rule_idx: Option<usize> = None;
   let mut scoped_match: Option<Option<ScopeMatch<'_>>> = None;
