@@ -34,6 +34,8 @@ Comparisons are strict by default. To allow small local differences (fonts, GPU,
 - `FIXTURE_TOLERANCE=5` (per-channel tolerance)
 - `FIXTURE_MAX_DIFFERENT_PERCENT=0.5` (percent of pixels allowed to differ)
 - `FIXTURE_FUZZY=1` (preset: tolerance 10, up to 1% different, no alpha compare)
+- `FIXTURE_IGNORE_ALPHA=1` (ignore alpha differences even without fuzzy)
+- `FIXTURE_MAX_PERCEPTUAL_DISTANCE=0.05` (allow minor perceptual differences using SSIM-style scoring)
 
 New columns/transform/form fixtures ship with checked-in goldens; keep these up to date when adjusting layouts.
 
@@ -45,6 +47,7 @@ There is a self-contained WPT-style runner under `tests/wpt/` for local “rende
 - Expected images live under `tests/wpt/expected/` following the same relative path structure. Missing images are auto-generated on first run; set `UPDATE_WPT_EXPECTED=1 cargo test wpt_local_suite_passes -- --exact` to refresh everything.
 - Artifacts land in `target/wpt-output/<relative>.actual.png` and `<relative>.diff.png` with a `report.md` summary linking expected/actual/diff for failures.
 - The runner supports parallel execution and per-test timeouts (see `HarnessConfig`).
+- Comparisons use the shared image comparison module (same as fixtures/ref tests) with configurable tolerance, alpha handling, pixel difference thresholds, and perceptual distance thresholds to reduce platform noise.
 
 ## Fuzzing (CSS parsing and selectors)
 
