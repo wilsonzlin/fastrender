@@ -3286,7 +3286,7 @@ impl FastRender {
               }
             }
           }
-          let mut box_tree =
+          box_tree =
             crate::tree::box_generation::generate_box_tree_with_anonymous_fixup(&styled_tree);
           self.resolve_replaced_intrinsic_sizes_for_media(
             &mut box_tree.root,
@@ -3343,16 +3343,26 @@ impl FastRender {
         .map(|s| s.total_size)
         .unwrap_or(layout_viewport);
       let pages = paginate_fragment_tree_with_options(
-        &fragment_tree.root,
+        &box_tree,
+        first_page_style
+          .as_ref()
+          .map(|style| (style, &fragment_tree.root)),
         &page_rules,
         fallback_page_size,
         &self.font_context,
+        &box_tree.root.style,
         styled_tree.styles.root_font_size,
         page_name_hint.clone(),
+        config.enable_cache,
         PaginateOptions {
           stacking: options.page_stacking,
         },
-      );
+      )
+      .map_err(|e| {
+        Error::Render(RenderError::InvalidParameters {
+          message: format!("Layout failed: {:?}", e),
+        })
+      })?;
       fragment_tree = FragmentTree::from_fragments(pages, viewport);
     }
 
