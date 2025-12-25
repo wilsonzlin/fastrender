@@ -446,7 +446,16 @@ impl LayoutEngine {
         }
       })
       .unwrap_or(icb.height);
-    let constraints = LayoutConstraints::definite(icb.width, constraint_height);
+    let constraint_width = if let Some(options) = &self.config.fragmentation {
+      if options.column_count > 1 {
+        fragmentation::column_inline_size(icb.width, options)
+      } else {
+        icb.width
+      }
+    } else {
+      icb.width
+    };
+    let constraints = LayoutConstraints::definite(constraint_width, constraint_height);
 
     // Layout the root box
     let root_fragment = self.layout_subtree_internal(&box_tree.root, &constraints, trace)?;
