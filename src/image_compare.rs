@@ -448,8 +448,8 @@ fn compute_ssim(actual: &[f64], expected: &[f64]) -> f64 {
   variance_expected /= len_f;
   covariance /= len_f;
 
-  let c1 = (0.01 * 255.0).powi(2);
-  let c2 = (0.03 * 255.0).powi(2);
+  let c1 = (0.01f64 * 255.0f64).powi(2);
+  let c2 = (0.03f64 * 255.0f64).powi(2);
 
   let numerator = (2.0 * mean_actual * mean_expected + c1) * (2.0 * covariance + c2);
   let denominator =

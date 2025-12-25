@@ -3,7 +3,6 @@ use crate::error::RenderError;
 use crate::error::Result;
 use crate::image_compare::{self, CompareConfig};
 use image::ImageFormat;
-use image::Rgba;
 use image::RgbaImage;
 use std::io::Cursor;
 use tiny_skia::Pixmap;

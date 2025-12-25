@@ -686,7 +686,7 @@ fn apply_backdrop_filters(
 
   let src_start_x = (write_x as i32 - clamped_x as i32) as u32;
   let src_start_y = (write_y as i32 - clamped_y as i32) as u32;
-  let mut dest_data = pixmap.data_mut();
+  let dest_data = pixmap.data_mut();
   let src_data = region.data();
   let region_width = region.width() as usize;
   let clip_mask_data =
