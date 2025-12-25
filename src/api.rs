@@ -3030,12 +3030,7 @@ impl FastRender {
 
       animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
 
-      self.apply_sticky_offsets(
-        &mut fragment_tree.root,
-        Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
-        scroll,
-        viewport_size,
-      );
+      self.apply_sticky_offsets_for_all_roots(&mut fragment_tree, viewport_size, scroll);
 
       let viewport_width_px = viewport_size.width.max(1.0).ceil() as u32;
       let viewport_height_px = viewport_size.height.max(1.0).ceil() as u32;
@@ -6167,6 +6162,33 @@ impl FastRender {
     viewport: Size,
   ) {
     apply_sticky_offsets_with_context(&self.font_context, fragment, parent_rect, scroll, viewport);
+  }
+
+  fn apply_sticky_offsets_for_all_roots(
+    &self,
+    fragment_tree: &mut FragmentTree,
+    viewport_size: Size,
+    scroll: Point,
+  ) {
+    let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height);
+    self.apply_sticky_offsets(
+      &mut fragment_tree.root,
+      viewport_rect,
+      scroll,
+      viewport_size,
+    );
+    for fragment in &mut fragment_tree.additional_fragments {
+      self.apply_sticky_offsets(fragment, viewport_rect, scroll, viewport_size);
+    }
+  }
+
+  /// Applies sticky positioning adjustments to a fragment tree for the given scroll offset.
+  ///
+  /// This mirrors the post-layout sticky handling performed during rendering and can be used to
+  /// update fragment bounds when consuming layout results directly.
+  pub fn apply_sticky_offsets_for_tree(&self, fragment_tree: &mut FragmentTree, scroll: Point) {
+    let viewport_size = fragment_tree.viewport_size();
+    self.apply_sticky_offsets_for_all_roots(fragment_tree, viewport_size, scroll);
   }
 
   // ===  // Convenience methods for encoding to image formats
