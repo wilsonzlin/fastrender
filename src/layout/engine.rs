@@ -370,7 +370,7 @@ impl LayoutEngine {
   }
 
   /// Performs layout while emitting trace spans to the provided handle.
-  pub fn layout_tree_with_trace(
+  pub(crate) fn layout_tree_with_trace(
     &self,
     box_tree: &BoxTree,
     trace: &TraceHandle,
@@ -401,7 +401,7 @@ impl LayoutEngine {
   }
 
   /// Performs layout while reusing caches and emitting trace spans.
-  pub fn layout_tree_reuse_caches_with_trace(
+  pub(crate) fn layout_tree_reuse_caches_with_trace(
     &self,
     box_tree: &BoxTree,
     trace: &TraceHandle,

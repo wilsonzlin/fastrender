@@ -1096,7 +1096,7 @@ impl Painter {
   }
 
   /// Attach a trace handle used for Chrome trace export.
-  pub fn with_trace(mut self, trace: TraceHandle) -> Self {
+  fn with_trace(mut self, trace: TraceHandle) -> Self {
     self.trace = trace;
     self
   }
@@ -2482,6 +2482,7 @@ impl Painter {
           font_ctx: self.font_ctx.clone(),
           image_cache: self.image_cache.clone(),
           text_shape_cache: Arc::clone(&self.text_shape_cache),
+          trace: self.trace.clone(),
         };
         let paint_unclipped_start = profile_enabled.then(Instant::now);
         for cmd in unclipped {
@@ -2506,6 +2507,7 @@ impl Painter {
             font_ctx: self.font_ctx.clone(),
             image_cache: self.image_cache.clone(),
             text_shape_cache: Arc::clone(&self.text_shape_cache),
+            trace: self.trace.clone(),
           };
           let paint_clipped_start = profile_enabled.then(Instant::now);
           for cmd in clipped {
@@ -2613,6 +2615,7 @@ impl Painter {
             font_ctx: self.font_ctx.clone(),
             image_cache: self.image_cache.clone(),
             text_shape_cache: Arc::clone(&self.text_shape_cache),
+            trace: self.trace.clone(),
           };
           let outline_start = profile_enabled.then(Instant::now);
           for cmd in outline_commands {
@@ -9629,7 +9632,7 @@ pub fn paint_tree_with_resources_scaled_offset(
 }
 
 /// Paints a fragment tree with tracing enabled.
-pub fn paint_tree_with_resources_scaled_offset_with_trace(
+pub(crate) fn paint_tree_with_resources_scaled_offset_with_trace(
   tree: &FragmentTree,
   width: u32,
   height: u32,

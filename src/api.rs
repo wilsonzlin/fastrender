@@ -152,7 +152,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 #[cfg(test)]
 use url::Url;
@@ -3270,7 +3270,7 @@ impl FastRender {
     base_hint: Option<&str>,
     mut options: RenderOptions,
     artifacts: RenderArtifactRequest,
-    mut stats: Option<&mut RenderStatsRecorder>,
+    stats: Option<&mut RenderStatsRecorder>,
     trace: &TraceHandle,
   ) -> Result<RenderReport> {
     let had_sink = self.diagnostics.is_some();

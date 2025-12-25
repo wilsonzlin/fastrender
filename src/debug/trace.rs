@@ -1,9 +1,26 @@
 use serde::Serialize;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
+
+fn current_thread_numeric_id() -> u64 {
+  static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+  static IDS: OnceLock<Mutex<HashMap<std::thread::ThreadId, u64>>> = OnceLock::new();
+
+  let thread_id = std::thread::current().id();
+  let ids = IDS.get_or_init(|| Mutex::new(HashMap::new()));
+  let mut ids = match ids.lock() {
+    Ok(guard) => guard,
+    Err(err) => err.into_inner(),
+  };
+  *ids
+    .entry(thread_id)
+    .or_insert_with(|| NEXT_ID.fetch_add(1, Ordering::Relaxed))
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct TraceHandle {
@@ -79,7 +96,7 @@ impl TraceState {
   fn push_event(&self, name: Cow<'static, str>, cat: &'static str, start: Instant, end: Instant) {
     let ts = start.duration_since(self.start).as_micros() as u64;
     let dur = end.duration_since(start).as_micros() as u64;
-    let tid = std::thread::current().id().as_u64();
+    let tid = current_thread_numeric_id();
     if let Ok(mut events) = self.events.lock() {
       events.push(TraceEvent {
         name: name.into_owned(),
