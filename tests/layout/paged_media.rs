@@ -56,6 +56,25 @@ fn find_fragment_by_background<'a>(node: &'a FragmentNode, color: Rgba) -> Optio
   None
 }
 
+fn find_fragment_with_background<'a>(
+  node: &'a FragmentNode,
+  color: Rgba,
+) -> Option<&'a FragmentNode> {
+  if node
+    .style
+    .as_ref()
+    .is_some_and(|style| style.background_color == color)
+  {
+    return Some(node);
+  }
+  for child in &node.children {
+    if let Some(found) = find_fragment_with_background(child, color) {
+      return Some(found);
+    }
+  }
+  None
+}
+
 fn assert_bounds_close(bounds: &fastrender::geometry::Rect, expected: (f32, f32, f32, f32)) {
   let (x, y, width, height) = expected;
   let epsilon = 0.01;
@@ -824,4 +843,69 @@ fn break_before_column_does_not_force_page_without_columns() {
   let page = page_roots[0];
   assert!(find_text(page, "A").is_some());
   assert!(find_text(page, "B").is_some());
+}
+
+#[test]
+fn margin_box_without_content_is_not_generated() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 10px;
+            @top-center { background: rgb(255, 0, 0); }
+          }
+        </style>
+      </head>
+      <body></body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let red = Rgba::rgb(255, 0, 0);
+
+  for page in pages(&tree) {
+    assert!(
+      find_fragment_with_background(page, red).is_none(),
+      "margin boxes without content should not generate fragments"
+    );
+  }
+}
+
+#[test]
+fn margin_box_with_empty_string_content_is_generated() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 10px;
+            @top-center { background: rgb(255, 0, 0); content: ""; }
+          }
+        </style>
+      </head>
+      <body></body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let red = Rgba::rgb(255, 0, 0);
+
+  let mut found = None;
+  for page in pages(&tree) {
+    if let Some(fragment) = find_fragment_with_background(page, red) {
+      found = Some(fragment);
+      break;
+    }
+  }
+
+  let fragment = found.expect("margin box with empty content should generate a fragment");
+  assert!(fragment.bounds.width() > 0.0);
+  assert!(fragment.bounds.height() > 0.0);
 }
