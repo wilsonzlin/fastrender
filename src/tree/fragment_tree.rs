@@ -659,10 +659,11 @@ impl FragmentNode {
     bbox
   }
 
-  /// Translates this fragment and all children by the given offset
+  /// Translates this fragment's bounds by the given offset.
   ///
-  /// This is useful when repositioning a subtree during layout or
-  /// when computing absolute positions.
+  /// Offsets are applied in the coordinate space of the containing fragment.
+  /// Child fragments remain in their existing local coordinate space; this
+  /// preserves relative positioning within the subtree.
   ///
   /// # Examples
   ///
@@ -686,10 +687,34 @@ impl FragmentNode {
       logical_override: self.logical_override.map(|r| r.translate(offset)),
       content: self.content.clone(),
       baseline: self.baseline,
+      children: self.children.clone(),
+      style: self.style.clone(),
+      fragment_index: self.fragment_index,
+      fragment_count: self.fragment_count,
+      fragmentainer_index: self.fragmentainer_index,
+      fragmentainer: self.fragmentainer,
+      slice_info: self.slice_info,
+      scroll_overflow: self.scroll_overflow,
+      fragmentation: self.fragmentation.clone(),
+    }
+  }
+
+  /// Translates this fragment and all descendants by the given offset.
+  ///
+  /// This applies the offset in absolute space, adjusting every fragment in the
+  /// subtree. Use sparingly; most callers should prefer [`translate`], which
+  /// keeps child coordinates relative to their parent.
+  pub fn translate_subtree_absolute(&self, offset: Point) -> Self {
+    Self {
+      bounds: self.bounds.translate(offset),
+      block_metadata: self.block_metadata.clone(),
+      logical_override: self.logical_override.map(|r| r.translate(offset)),
+      content: self.content.clone(),
+      baseline: self.baseline,
       children: self
         .children
         .iter()
-        .map(|child| child.translate(offset))
+        .map(|child| child.translate_subtree_absolute(offset))
         .collect(),
       style: self.style.clone(),
       fragment_index: self.fragment_index,
@@ -1113,11 +1138,24 @@ mod tests {
   }
 
   #[test]
-  fn test_translate_with_children() {
+  fn test_translate_preserves_children_positions() {
     let child = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 30.0, 30.0), vec![]);
     let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child]);
 
-    let translated = parent.translate(Point::new(50.0, 50.0));
+    let translated = parent.translate(Point::new(5.0, 0.0));
+    assert_eq!(translated.bounds.x(), 5.0);
+    assert_eq!(translated.bounds.y(), 0.0);
+    // Children remain in the parent's coordinate space.
+    assert_eq!(translated.children[0].bounds.x(), 10.0);
+    assert_eq!(translated.children[0].bounds.y(), 10.0);
+  }
+
+  #[test]
+  fn test_translate_subtree_absolute_shifts_descendants() {
+    let child = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 30.0, 30.0), vec![]);
+    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![child]);
+
+    let translated = parent.translate_subtree_absolute(Point::new(50.0, 50.0));
     assert_eq!(translated.bounds.x(), 50.0);
     assert_eq!(translated.bounds.y(), 50.0);
     assert_eq!(translated.children[0].bounds.x(), 60.0);
