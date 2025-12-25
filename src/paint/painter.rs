@@ -42,7 +42,7 @@ use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::BorderRadii;
-use crate::paint::filter_outset::compute_filter_outset;
+use crate::paint::filter_outset::{compute_filter_outset, FilterOutset};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::rasterize::fill_rounded_rect;
@@ -430,6 +430,42 @@ enum ResolvedFilter {
     spread: f32,
     color: Rgba,
   },
+}
+
+impl FilterOutset for ResolvedFilter {
+  fn expand_outset(&self, _bbox: Rect, scale: f32, out: &mut (f32, f32, f32, f32)) {
+    match self {
+      ResolvedFilter::Blur(radius) => {
+        let delta = (radius * scale).abs() * 3.0;
+        out.0 += delta;
+        out.1 += delta;
+        out.2 += delta;
+        out.3 += delta;
+      }
+      ResolvedFilter::DropShadow {
+        offset_x,
+        offset_y,
+        blur_radius,
+        spread,
+        ..
+      } => {
+        let dx = offset_x * scale;
+        let dy = offset_y * scale;
+        let blur = blur_radius * scale;
+        let spread = spread * scale;
+        let delta = (blur.abs() * 3.0 + spread).max(0.0);
+        let shadow_left = out.0 + delta - dx;
+        let shadow_right = out.2 + delta + dx;
+        let shadow_top = out.1 + delta - dy;
+        let shadow_bottom = out.3 + delta + dy;
+        out.0 = out.0.max(shadow_left);
+        out.2 = out.2.max(shadow_right);
+        out.1 = out.1.max(shadow_top);
+        out.3 = out.3.max(shadow_bottom);
+      }
+      _ => {}
+    }
+  }
 }
 
 #[derive(Debug, Clone)]

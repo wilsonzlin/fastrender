@@ -1,5 +1,6 @@
 use fastrender::paint::svg_filter::{
   apply_svg_filter, ChannelSelector, FilterInput, FilterPrimitive, FilterStep, SvgFilter,
+  SvgFilterRegion, SvgFilterUnits, SvgLength,
 };
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
@@ -46,6 +47,13 @@ fn displacement_filter(scale: f32) -> SvgFilter {
         },
       },
     ],
+    region: SvgFilterRegion {
+      x: SvgLength::Percent(-0.1),
+      y: SvgLength::Percent(-0.1),
+      width: SvgLength::Percent(1.2),
+      height: SvgLength::Percent(1.2),
+      units: SvgFilterUnits::ObjectBoundingBox,
+    },
   }
 }
 

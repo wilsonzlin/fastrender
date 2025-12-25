@@ -1,29 +1,43 @@
 use crate::geometry::Rect;
 use crate::paint::display_list::ResolvedFilter;
 
+pub trait FilterOutset {
+  fn expand_outset(&self, bbox: Rect, scale: f32, out: &mut (f32, f32, f32, f32));
+}
+
 /// Compute the maximum outset needed to accommodate the provided filters.
 ///
 /// `bbox` is the bounding box of the filtered content in CSS pixels. `scale`
 /// is the device scale to convert CSS lengths to the target coordinate space.
-pub fn compute_filter_outset(
-  filters: &[ResolvedFilter],
+pub fn compute_filter_outset<F: FilterOutset>(
+  filters: &[F],
   bbox: Rect,
   scale: f32,
 ) -> (f32, f32, f32, f32) {
-  let mut left: f32 = 0.0;
-  let mut top: f32 = 0.0;
-  let mut right: f32 = 0.0;
-  let mut bottom: f32 = 0.0;
+  let mut out = (0.0, 0.0, 0.0, 0.0);
   let scale = if scale.is_finite() { scale.abs() } else { 0.0 };
 
   for filter in filters {
-    match filter {
+    filter.expand_outset(bbox, scale, &mut out);
+  }
+
+  (
+    out.0.max(0.0),
+    out.1.max(0.0),
+    out.2.max(0.0),
+    out.3.max(0.0),
+  )
+}
+
+impl FilterOutset for ResolvedFilter {
+  fn expand_outset(&self, bbox: Rect, scale: f32, out: &mut (f32, f32, f32, f32)) {
+    match self {
       ResolvedFilter::Blur(radius) => {
         let delta = (radius * scale).abs() * 3.0;
-        left += delta;
-        right += delta;
-        top += delta;
-        bottom += delta;
+        out.0 += delta;
+        out.1 += delta;
+        out.2 += delta;
+        out.3 += delta;
       }
       ResolvedFilter::DropShadow {
         offset_x,
@@ -37,14 +51,14 @@ pub fn compute_filter_outset(
         let blur = blur_radius * scale;
         let spread = spread * scale;
         let delta = (blur.abs() * 3.0 + spread).max(0.0);
-        let shadow_left = left + delta - dx;
-        let shadow_right = right + delta + dx;
-        let shadow_top = top + delta - dy;
-        let shadow_bottom = bottom + delta + dy;
-        left = left.max(shadow_left);
-        right = right.max(shadow_right);
-        top = top.max(shadow_top);
-        bottom = bottom.max(shadow_bottom);
+        let shadow_left = out.0 + delta - dx;
+        let shadow_right = out.2 + delta + dx;
+        let shadow_top = out.1 + delta - dy;
+        let shadow_bottom = out.3 + delta + dy;
+        out.0 = out.0.max(shadow_left);
+        out.2 = out.2.max(shadow_right);
+        out.1 = out.1.max(shadow_top);
+        out.3 = out.3.max(shadow_bottom);
       }
       ResolvedFilter::SvgFilter(filter) => {
         let region = filter.resolve_region(bbox);
@@ -52,16 +66,14 @@ pub fn compute_filter_outset(
         let delta_top = (bbox.min_y() - region.min_y()).max(0.0) * scale;
         let delta_right = (region.max_x() - bbox.max_x()).max(0.0) * scale;
         let delta_bottom = (region.max_y() - bbox.max_y()).max(0.0) * scale;
-        left = left.max(delta_left);
-        top = top.max(delta_top);
-        right = right.max(delta_right);
-        bottom = bottom.max(delta_bottom);
+        out.0 = out.0.max(delta_left);
+        out.1 = out.1.max(delta_top);
+        out.2 = out.2.max(delta_right);
+        out.3 = out.3.max(delta_bottom);
       }
       _ => {}
     }
   }
-
-  (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
 }
 
 #[cfg(test)]

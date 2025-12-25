@@ -31,7 +31,6 @@ use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::DisplayItem;
 use crate::paint::display_list::DisplayList;
 use crate::paint::display_list::FillRectItem;
-use crate::paint::display_list::ResolvedFilter;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;

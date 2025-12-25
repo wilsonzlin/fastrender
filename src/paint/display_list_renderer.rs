@@ -2505,17 +2505,17 @@ impl DisplayListRenderer {
     let pending = record.pending_backdrop.take().unwrap();
     let clip_mask = self.canvas.clip_mask().cloned();
     let clip_bounds = self.canvas.clip_bounds();
-  apply_backdrop_filters(
-    self.canvas.backdrop_pixmap_mut(),
-    &pending.bounds,
-    &pending.filters,
-    pending.radii,
-    self.scale,
-    clip_mask.as_ref(),
-    clip_bounds,
-    pending.filter_bounds,
-  );
-}
+    apply_backdrop_filters(
+      self.canvas.backdrop_pixmap_mut(),
+      &pending.bounds,
+      &pending.filters,
+      pending.radii,
+      self.scale,
+      clip_mask.as_ref(),
+      clip_bounds,
+      pending.filter_bounds,
+    );
+  }
 
   fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
     if self.culled_depth > 0 {
