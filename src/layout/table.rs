@@ -4872,9 +4872,6 @@ impl FormattingContext for TableFormattingContext {
 
     for (start, end, style) in row_groups {
       let style = strip_borders(&style);
-      if !style_paints_background_or_border(&style, false) {
-        continue;
-      }
       if start >= row_offsets.len() {
         break;
       }
@@ -4904,9 +4901,6 @@ impl FormattingContext for TableFormattingContext {
     for (idx, style) in row_styles.into_iter().enumerate() {
       if let Some(style) = style {
         let style = strip_borders(&style);
-        if !style_paints_background_or_border(&style, false) {
-          continue;
-        }
         let top = row_offsets.get(idx).copied().unwrap_or(0.0);
         let height = row_metrics.get(idx).map(|r| r.height).unwrap_or(0.0);
         let rect = Rect::from_xywh(content_origin_x, top, content_width, height);

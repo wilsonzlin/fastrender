@@ -10,6 +10,7 @@
 use std::sync::OnceLock;
 
 use crate::geometry::{Point, Rect};
+use crate::style::display::Display;
 use crate::style::types::{BreakBetween, BreakInside};
 use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentainerPath};
@@ -269,6 +270,48 @@ pub(crate) fn clip_node(
     return None;
   }
 
+  let default_style = default_style();
+  let style = node
+    .style
+    .as_ref()
+    .map(|s| s.as_ref())
+    .unwrap_or(default_style);
+  let is_table_row_like = matches!(
+    style.display,
+    Display::TableRow
+      | Display::TableRowGroup
+      | Display::TableHeaderGroup
+      | Display::TableFooterGroup
+  );
+  let mut avoid_inside = matches!(style.break_inside, BreakInside::Avoid) || is_table_row_like;
+  if avoid_inside && node.bounds.height() > (fragment_end - fragment_start) + 0.01 {
+    avoid_inside = false;
+  }
+
+  // Honor break-inside/line constraints by keeping the fragment intact within a single fragmentainer.
+  let node_overlaps = node_abs_end > fragment_start && node_abs_start < fragment_end;
+  if avoid_inside
+    && node_overlaps
+    && (node_abs_start < fragment_start || node_abs_end > fragment_end)
+  {
+    if (fragment_start..fragment_end).contains(&node_abs_start) {
+      let mut cloned = clone_without_children(node);
+      let new_y = node_abs_start - parent_clipped_abs_start;
+      cloned.bounds = Rect::from_xywh(
+        node.bounds.x(),
+        new_y,
+        node.bounds.width(),
+        node.bounds.height(),
+      );
+      cloned.fragment_index = fragment_index;
+      cloned.fragment_count = fragment_count.max(1);
+      cloned.fragmentainer_index = fragment_index;
+      cloned.children = node.children.clone();
+      return Some(cloned);
+    }
+    return None;
+  }
+
   let clipped_abs_start = node_abs_start.max(fragment_start);
   let clipped_abs_end = node_abs_end.min(fragment_end);
   let new_height = (clipped_abs_end - clipped_abs_start).max(0.0);
@@ -323,6 +366,10 @@ pub(crate) fn clip_node(
     }
   }
 
+  if matches!(style.display, Display::Table | Display::InlineTable) {
+    inject_table_headers_and_footers(node, &mut cloned, fragment_index, fragment_count);
+  }
+
   Some(cloned)
 }
 
@@ -341,6 +388,105 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     scroll_overflow: node.scroll_overflow,
     fragmentation: node.fragmentation.clone(),
   }
+}
+
+fn is_table_header_fragment(node: &FragmentNode) -> bool {
+  node
+    .style
+    .as_ref()
+    .is_some_and(|s| matches!(s.display, Display::TableHeaderGroup))
+}
+
+fn is_table_footer_fragment(node: &FragmentNode) -> bool {
+  node
+    .style
+    .as_ref()
+    .is_some_and(|s| matches!(s.display, Display::TableFooterGroup))
+}
+
+fn inject_table_headers_and_footers(
+  original: &FragmentNode,
+  clipped: &mut FragmentNode,
+  fragment_index: usize,
+  fragment_count: usize,
+) {
+  let headers: Vec<FragmentNode> = original
+    .children
+    .iter()
+    .filter(|c| is_table_header_fragment(c))
+    .cloned()
+    .collect();
+  let footers: Vec<FragmentNode> = original
+    .children
+    .iter()
+    .filter(|c| is_table_footer_fragment(c))
+    .cloned()
+    .collect();
+  if headers.is_empty() && footers.is_empty() {
+    return;
+  }
+
+  let has_header = clipped.children.iter().any(is_table_header_fragment);
+  let has_footer = clipped.children.iter().any(is_table_footer_fragment);
+
+  let mut max_y = clipped.bounds.height();
+
+  if !headers.is_empty() && (!has_header || fragment_index > 0) {
+    let header_height: f32 = headers.iter().map(|h| h.bounds.height()).sum();
+    for child in &mut clipped.children {
+      child.bounds = child.bounds.translate(Point::new(0.0, header_height));
+    }
+    let mut offset = 0.0;
+    let mut clones = Vec::new();
+    for mut header in headers {
+      header.bounds = Rect::from_xywh(
+        header.bounds.x(),
+        offset,
+        header.bounds.width(),
+        header.bounds.height(),
+      );
+      offset += header.bounds.height();
+      propagate_fragment_metadata(&mut header, fragment_index, fragment_count);
+      clones.push(header);
+    }
+    max_y = max_y.max(offset);
+    clipped.children.splice(0..0, clones);
+  }
+
+  if !footers.is_empty() && (!has_footer || fragment_index + 1 < fragment_count) {
+    let mut footer_offset = clipped
+      .children
+      .iter()
+      .map(|c| c.bounds.max_y())
+      .fold(0.0, f32::max);
+    let mut clones = Vec::new();
+    for mut footer in footers {
+      footer.bounds = Rect::from_xywh(
+        footer.bounds.x(),
+        footer_offset,
+        footer.bounds.width(),
+        footer.bounds.height(),
+      );
+      footer_offset += footer.bounds.height();
+      propagate_fragment_metadata(&mut footer, fragment_index, fragment_count);
+      clones.push(footer);
+    }
+    max_y = max_y.max(footer_offset);
+    clipped.children.extend(clones);
+  }
+
+  clipped.bounds = Rect::from_xywh(
+    clipped.bounds.x(),
+    clipped.bounds.y(),
+    clipped.bounds.width(),
+    clipped.bounds.height().max(max_y),
+  );
+  clipped.scroll_overflow = Rect::from_xywh(
+    clipped.scroll_overflow.x(),
+    clipped.scroll_overflow.y(),
+    clipped.scroll_overflow.width().max(clipped.bounds.width()),
+    max_y.max(clipped.scroll_overflow.height()),
+  );
 }
 
 fn collect_break_opportunities(
