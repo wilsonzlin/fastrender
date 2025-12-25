@@ -210,10 +210,7 @@ fn column_fragmentation_places_columns_side_by_side() {
   let epsilon = 0.01;
 
   let tall_child = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 260.0), vec![]);
-  let root = FragmentNode::new_block(
-    Rect::from_xywh(0.0, 0.0, 100.0, 260.0),
-    vec![tall_child],
-  );
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 260.0), vec![tall_child]);
 
   let options = FragmentationOptions::new(fragmentainer_size)
     .with_gap(fragmentainer_gap)
