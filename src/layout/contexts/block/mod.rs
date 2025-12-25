@@ -2072,7 +2072,7 @@ impl BlockFormattingContext {
       ColumnFill::Balance => 0.0,
     };
 
-    let (mut column_fragments, used_column_height) = if column_height > 0.0 {
+    let (column_fragments, used_column_height) = if column_height > 0.0 {
       let options = FragmentationOptions::new(column_height).with_columns(column_count, column_gap);
       let fragments = fragment_tree(&flow_root, &options);
       let max_height = fragments
