@@ -15,6 +15,7 @@ use crate::resource::ResourceFetcher;
 use crate::style::color::Rgba;
 use crate::style::types::ImageResolution;
 use crate::style::types::OrientationTransform;
+use crate::svg::parse_svg_length_px;
 use avif_decode::Decoder as AvifDecoder;
 use avif_decode::Image as AvifImage;
 use avif_parse::AvifData;
@@ -660,8 +661,8 @@ fn try_render_simple_svg_pixmap(
     .attribute("viewBox")
     .and_then(parse_svg_view_box)
     .or_else(|| {
-      let w = root.attribute("width").and_then(parse_svg_length)?;
-      let h = root.attribute("height").and_then(parse_svg_length)?;
+      let w = root.attribute("width").and_then(parse_svg_length_px)?;
+      let h = root.attribute("height").and_then(parse_svg_length_px)?;
       Some(SvgViewBox {
         min_x: 0.0,
         min_y: 0.0,
@@ -2157,28 +2158,6 @@ impl ImageCache {
   }
 }
 
-fn parse_svg_length(value: &str) -> Option<f32> {
-  let trimmed = value.trim();
-  if trimmed.is_empty() || trimmed.ends_with('%') {
-    return None;
-  }
-
-  let mut end = 0;
-  for (idx, ch) in trimmed.char_indices() {
-    if matches!(ch, '0'..='9' | '+' | '-' | '.' | 'e' | 'E') {
-      end = idx + ch.len_utf8();
-    } else {
-      break;
-    }
-  }
-
-  if end == 0 {
-    return None;
-  }
-
-  trimmed[..end].parse::<f32>().ok()
-}
-
 /// Returns intrinsic metadata extracted from the SVG root element: explicit width/height when
 /// present (absolute units only), an intrinsic aspect ratio (if not disabled), and whether
 /// preserveAspectRatio="none" was specified.
@@ -2197,8 +2176,8 @@ fn svg_intrinsic_metadata(
     .map(|v| v.eq_ignore_ascii_case("none"))
     .unwrap_or(false);
 
-  let width = root.attribute("width").and_then(parse_svg_length);
-  let height = root.attribute("height").and_then(parse_svg_length);
+  let width = root.attribute("width").and_then(parse_svg_length_px);
+  let height = root.attribute("height").and_then(parse_svg_length_px);
 
   let mut ratio = None;
   if !aspect_ratio_none {
@@ -2436,6 +2415,42 @@ mod tests {
       img.intrinsic_ratio(OrientationTransform::IDENTITY),
       Some(2.0)
     );
+  }
+
+  #[test]
+  fn svg_absolute_units_convert_to_px() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='1in' height='0.5in'></svg>";
+
+    let meta = cache
+      .probe_svg_content(svg, "inline inches")
+      .expect("probe inches svg");
+    assert_eq!(meta.width, 96);
+    assert_eq!(meta.height, 48);
+
+    let img = cache.render_svg(svg).expect("rendered");
+    assert_eq!(img.width(), 96);
+    assert_eq!(img.height(), 48);
+    assert_eq!(
+      img.intrinsic_ratio(OrientationTransform::IDENTITY),
+      Some(2.0)
+    );
+  }
+
+  #[test]
+  fn svg_metric_units_convert_to_px() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='2.54cm' height='25.4mm'></svg>";
+
+    let meta = cache
+      .probe_svg_content(svg, "inline metric")
+      .expect("probe metric svg");
+    assert_eq!(meta.width, 96);
+    assert_eq!(meta.height, 96);
+
+    let img = cache.render_svg(svg).expect("rendered");
+    assert_eq!(img.width(), 96);
+    assert_eq!(img.height(), 96);
   }
 
   #[test]
