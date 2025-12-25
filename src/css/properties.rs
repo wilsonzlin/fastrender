@@ -11,9 +11,14 @@ use super::types::TextShadow;
 use super::types::Transform;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
+use crate::style::display::Display;
+use crate::style::float::Clear;
+use crate::style::float::Float;
+use crate::style::position::Position;
 use crate::style::values::CalcLength;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
+use crate::style::ComputedStyle;
 use cssparser::BasicParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
@@ -454,6 +459,13 @@ fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
       '}' => {
         brace -= 1;
         current.push(ch);
+      }
+      '/' if paren == 0 && bracket == 0 && brace == 0 => {
+        if !current.trim().is_empty() {
+          tokens.push(current.trim().to_string());
+        }
+        tokens.push("/".to_string());
+        current.clear();
       }
       ',' if allow_commas && paren == 0 && bracket == 0 && brace == 0 => {
         if !current.trim().is_empty() {
@@ -939,6 +951,8 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         | "border-spacing"
         | "shape-outside"
         | "background-position"
+        | "background-position-x"
+        | "background-position-y"
         | "transform-origin"
         | "touch-action"
         | "cursor"
@@ -951,10 +965,16 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         | "background-attachment"
         | "background-origin"
         | "background-clip"
+        | "background-position-inline"
+        | "background-position-block"
+        | "background-size-inline"
+        | "background-size-block"
         | "border-image"
+        | "border-image-source"
         | "border-image-slice"
         | "border-image-width"
         | "border-image-outset"
+        | "border-image-repeat"
         | "mask"
         | "mask-image"
         | "mask-position"
@@ -1049,6 +1069,277 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
 
   // Fallback: treat remaining tokens as keywords/numbers/percentages.
   parse_simple_value(value_str)
+}
+
+fn keyword_in_list(value: &PropertyValue, allowed: &[&str]) -> bool {
+  if let PropertyValue::Keyword(kw) = value {
+    let kw_lower = kw.to_ascii_lowercase();
+    allowed.iter().any(|v| kw_lower == *v)
+  } else {
+    false
+  }
+}
+
+fn keyword_parse<T>(value: &PropertyValue, parse: impl Fn(&str) -> Option<T>) -> bool {
+  if let PropertyValue::Keyword(kw) = value {
+    parse(kw.as_str()).is_some()
+  } else {
+    false
+  }
+}
+
+fn length_or_auto(value: &PropertyValue) -> bool {
+  match value {
+    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => true,
+    _ => extract_length(value).is_some(),
+  }
+}
+
+fn background_shorthand_is_valid(value: &PropertyValue) -> bool {
+  let tokens: Vec<PropertyValue> = match value {
+    PropertyValue::Multiple(parts) => parts.clone(),
+    other => vec![other.clone()],
+  };
+  if tokens.is_empty() {
+    return false;
+  }
+
+  let layers = split_layers(&tokens);
+  if layers.is_empty() {
+    return false;
+  }
+
+  let current_color = ComputedStyle::default().color;
+  layers
+    .into_iter()
+    .all(|layer_tokens| parse_background_shorthand(&layer_tokens, current_color).is_some())
+}
+
+pub(crate) fn supports_parsed_declaration_is_valid(
+  property: &str,
+  raw_value: &str,
+  parsed: &PropertyValue,
+) -> bool {
+  if property.starts_with("--") {
+    return true;
+  }
+
+  let prop = property.to_ascii_lowercase();
+  match prop.as_str() {
+    // Color properties
+    "color"
+    | "background-color"
+    | "border-color"
+    | "border-top-color"
+    | "border-right-color"
+    | "border-bottom-color"
+    | "border-left-color"
+    | "caret-color"
+    | "outline-color"
+    | "text-decoration-color"
+    | "text-emphasis-color"
+    | "column-rule-color" => return Color::parse(raw_value).is_ok(),
+
+    // Basic keywords
+    "display" => return keyword_parse(parsed, |kw| Display::parse(kw).ok()),
+    "position" => return keyword_parse(parsed, |kw| Position::parse(kw).ok()),
+    "float" => return keyword_parse(parsed, |kw| Float::parse(kw).ok()),
+    "clear" => return keyword_parse(parsed, |kw| Clear::parse(kw).ok()),
+    "overflow" | "overflow-x" | "overflow-y" => {
+      return keyword_in_list(parsed, &["visible", "hidden", "scroll", "auto", "clip"])
+    }
+    "text-orientation" => {
+      return keyword_in_list(
+        parsed,
+        &[
+          "mixed",
+          "upright",
+          "sideways",
+          "sideways-right",
+          "sideways-left",
+        ],
+      )
+    }
+    "text-combine-upright" => {
+      if let PropertyValue::Keyword(kw) = parsed {
+        let lower = kw.to_ascii_lowercase();
+        if lower == "none" || lower == "all" || lower == "digits" {
+          return true;
+        }
+        if let Some(rest) = lower.strip_prefix("digits") {
+          return rest
+            .parse::<u8>()
+            .map(|n| (2..=4).contains(&n))
+            .unwrap_or(false);
+        }
+      }
+      return false;
+    }
+    "writing-mode" => {
+      return keyword_in_list(
+        parsed,
+        &[
+          "horizontal-tb",
+          "vertical-rl",
+          "vertical-lr",
+          "sideways-rl",
+          "sideways-lr",
+        ],
+      )
+    }
+    "direction" => return keyword_in_list(parsed, &["ltr", "rtl"]),
+    "visibility" => return keyword_in_list(parsed, &["visible", "hidden", "collapse"]),
+    "flex-direction" => {
+      return keyword_in_list(parsed, &["row", "row-reverse", "column", "column-reverse"])
+    }
+    "flex-wrap" => return keyword_in_list(parsed, &["nowrap", "wrap", "wrap-reverse"]),
+    "align-items" | "align-self" | "align-content" | "justify-items" | "justify-self"
+    | "justify-content" => {
+      return keyword_in_list(
+        parsed,
+        &[
+          "flex-start",
+          "flex-end",
+          "center",
+          "start",
+          "end",
+          "self-start",
+          "self-end",
+          "baseline",
+          "stretch",
+          "space-between",
+          "space-around",
+          "space-evenly",
+        ],
+      )
+    }
+    "text-align" => {
+      return keyword_in_list(
+        parsed,
+        &[
+          "left",
+          "right",
+          "center",
+          "justify",
+          "start",
+          "end",
+          "match-parent",
+        ],
+      )
+    }
+
+    // Numeric types
+    "opacity" => return matches!(parsed, PropertyValue::Number(_)),
+    "z-index" => {
+      return matches!(parsed, PropertyValue::Number(_)) || keyword_in_list(parsed, &["auto"]);
+    }
+
+    // Backgrounds and masks
+    "background" => return background_shorthand_is_valid(parsed),
+    "background-image" => return parse_background_image_list(parsed).is_some(),
+    "background-size" => return parse_layer_list(parsed, parse_background_size).is_some(),
+    "background-size-inline" => {
+      return parse_layer_list(parsed, parse_background_size_component).is_some()
+    }
+    "background-size-block" => {
+      return parse_layer_list(parsed, parse_background_size_component).is_some()
+    }
+    "background-position" => return parse_layer_list(parsed, parse_background_position).is_some(),
+    "background-position-x" | "background-position-y" => {
+      return parse_background_position(parsed).is_some()
+    }
+    "background-repeat" => return parse_layer_list(parsed, parse_background_repeat).is_some(),
+    "background-attachment" => {
+      return parse_layer_list(parsed, |v| {
+        keyword_in_list(v, &["scroll", "fixed", "local"])
+      })
+      .is_some()
+    }
+    "background-origin" | "background-clip" => {
+      return parse_layer_list(parsed, parse_background_box).is_some()
+    }
+    "background-blend-mode" => {
+      return parse_layer_list(parsed, |v| {
+        if let PropertyValue::Keyword(kw) = v {
+          parse_mix_blend_mode(kw).is_some()
+        } else {
+          false
+        }
+      })
+      .is_some()
+    }
+    "background-color" => return Color::parse(raw_value).is_ok(),
+    "mask" => return parse_background_image_list(parsed).is_some(),
+    "mask-image" => return parse_background_image_list(parsed).is_some(),
+    "mask-position" => return parse_layer_list(parsed, parse_background_position).is_some(),
+    "mask-size" => return parse_layer_list(parsed, parse_background_size).is_some(),
+    "mask-repeat" => return parse_layer_list(parsed, parse_background_repeat).is_some(),
+    "mask-mode" => return parse_layer_list(parsed, parse_mask_mode).is_some(),
+    "mask-origin" => return parse_layer_list(parsed, parse_mask_origin).is_some(),
+    "mask-clip" => return parse_layer_list(parsed, parse_mask_clip).is_some(),
+    "mask-composite" => return parse_layer_list(parsed, parse_mask_composite).is_some(),
+
+    // Border image
+    "border-image" => return parse_border_image_shorthand(parsed).is_some(),
+    "border-image-source" => return parse_border_image_source(parsed).is_some(),
+    "border-image-slice" => return parse_border_image_slice(parsed).is_some(),
+    "border-image-width" => return parse_border_image_width(parsed).is_some(),
+    "border-image-outset" => return parse_border_image_outset(parsed).is_some(),
+    "border-image-repeat" => return parse_border_image_repeat(parsed).is_some(),
+
+    // Box model basics
+    "margin"
+    | "margin-top"
+    | "margin-right"
+    | "margin-bottom"
+    | "margin-left"
+    | "margin-inline"
+    | "margin-inline-start"
+    | "margin-inline-end"
+    | "margin-block"
+    | "margin-block-start"
+    | "margin-block-end" => return extract_margin_values(parsed).is_some(),
+    "padding"
+    | "padding-top"
+    | "padding-right"
+    | "padding-bottom"
+    | "padding-left"
+    | "padding-inline"
+    | "padding-inline-start"
+    | "padding-inline-end"
+    | "padding-block"
+    | "padding-block-start"
+    | "padding-block-end" => return extract_box_values(parsed).is_some(),
+    "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height"
+    | "inline-size" | "block-size" | "min-inline-size" | "min-block-size" | "max-inline-size"
+    | "max-block-size" => {
+      if let PropertyValue::Keyword(kw) = parsed {
+        let lower = kw.to_ascii_lowercase();
+        if lower == "max-content" || lower == "-webkit-max-content" || lower == "-moz-max-content" {
+          return true;
+        }
+      }
+      return length_or_auto(parsed);
+    }
+    "top" | "right" | "bottom" | "left" | "inset" | "inset-inline" | "inset-block"
+    | "inset-inline-start" | "inset-inline-end" | "inset-block-start" | "inset-block-end" => {
+      return extract_margin_values(parsed).is_some()
+    }
+
+    // Transform
+    "transform" => {
+      return matches!(parsed, PropertyValue::Transform(_))
+        || keyword_in_list(parsed, &["none"])
+        || keyword_parse(parsed, |kw| parse_transform_list(kw).map(|_| ()));
+    }
+
+    _ => {}
+  }
+
+  match parsed {
+    PropertyValue::Keyword(_) => true,
+    _ => true,
+  }
 }
 
 fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {

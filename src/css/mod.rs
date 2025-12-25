@@ -8,4 +8,5 @@ pub mod loader;
 pub mod parser;
 pub mod properties;
 pub mod selectors;
+pub mod supports;
 pub mod types;

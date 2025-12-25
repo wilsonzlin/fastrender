@@ -5,6 +5,7 @@
 use super::properties::{parse_property_value_in_context, DeclarationContext};
 use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
+use super::supports;
 use crate::css::loader::resolve_href_with_base;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
@@ -963,7 +964,7 @@ impl SupportsCondition {
   pub fn matches(&self) -> bool {
     match self {
       SupportsCondition::Declaration { property, value } => {
-        supports_value_is_valid(property, value)
+        supports::supports_declaration(property, value)
       }
       SupportsCondition::Selector(selector_list) => supports_selector_is_valid(selector_list),
       SupportsCondition::Not(cond) => !cond.matches(),
@@ -975,6 +976,7 @@ impl SupportsCondition {
   }
 }
 
+<<<<<<< HEAD
 /// Determines whether a property/value pair is supported for @supports feature queries.
 ///
 /// This follows the CSS Conditional Rules requirement that the declaration must be recognized
@@ -1131,6 +1133,8 @@ fn supports_value_is_valid(property: &str, value: &str) -> bool {
   }
 }
 
+=======
+>>>>>>> 996b1ac (Improve @supports declaration validation)
 /// Determines whether a selector list is supported for @supports selector() queries.
 ///
 /// The selector is considered supported when it parses successfully with the engine's selector
@@ -1207,6 +1211,7 @@ mod tests {
   }
 
   #[test]
+<<<<<<< HEAD
   fn supports_rejects_page_only_properties() {
     let cond = SupportsCondition::Declaration {
       property: "size".into(),
@@ -1215,6 +1220,52 @@ mod tests {
     assert!(
       !cond.matches(),
       "page-only properties should be unsupported in style @supports"
+=======
+  fn supports_declaration_rejects_invalid_opacity() {
+    let cond = SupportsCondition::Declaration {
+      property: "opacity".into(),
+      value: "foo".into(),
+    };
+    assert!(
+      !cond.matches(),
+      "invalid opacity value should not be supported"
+    );
+  }
+
+  #[test]
+  fn supports_declaration_accepts_background_with_slash() {
+    let cond = SupportsCondition::Declaration {
+      property: "background".into(),
+      value: "center/cover".into(),
+    };
+    assert!(
+      cond.matches(),
+      "background shorthand with slash-separated position and size should be supported"
+    );
+  }
+
+  #[test]
+  fn supports_declaration_accepts_border_image_slice_fill() {
+    let cond = SupportsCondition::Declaration {
+      property: "border-image-slice".into(),
+      value: "30 30 fill".into(),
+    };
+    assert!(
+      cond.matches(),
+      "border-image-slice should accept numeric values with fill keyword"
+    );
+  }
+
+  #[test]
+  fn supports_declaration_rejects_unknown_properties() {
+    let cond = SupportsCondition::Declaration {
+      property: "not-a-property".into(),
+      value: "1".into(),
+    };
+    assert!(
+      !cond.matches(),
+      "unknown properties should not be considered supported"
+>>>>>>> 996b1ac (Improve @supports declaration validation)
     );
   }
 }
