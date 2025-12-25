@@ -143,3 +143,36 @@ fn margin_box_content_is_positioned_in_margins() {
   assert!(header.bounds.y() < content.bounds.y());
   assert!(footer.bounds.y() > content.bounds.y());
 }
+
+#[test]
+fn margin_box_page_counters_page_and_pages() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 100px;
+            margin: 10px;
+            @bottom-center { content: "Page " counter(page) " / " counter(pages); }
+          }
+        </style>
+      </head>
+      <body>
+        <div style="height: 150px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2);
+
+  let first = page_roots[0];
+  let second = page_roots[1];
+
+  find_text(first, "Page 1 / 2").expect("first page counter");
+  find_text(second, "Page 2 / 2").expect("second page counter");
+}
