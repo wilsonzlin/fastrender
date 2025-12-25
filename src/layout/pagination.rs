@@ -168,7 +168,7 @@ pub fn paginate_fragment_tree(
 
   loop {
     let start_in_base = consumed_base;
-    let page_name =
+    let mut page_name =
       page_name_for_position(&base_spans, start_in_base, initial_page_name.as_deref());
     let side = if (page_index + 1) % 2 == 0 {
       PageSide::Left
@@ -176,7 +176,7 @@ pub fn paginate_fragment_tree(
       PageSide::Right
     };
 
-    let page_style = resolve_page_style(
+    let mut page_style = resolve_page_style(
       rules,
       page_index,
       page_name.as_deref(),
@@ -184,8 +184,8 @@ pub fn paginate_fragment_tree(
       fallback_page_size,
       root_font_size,
     );
-    let key = PageLayoutKey::new(&page_style, style_hash, font_generation);
-    let layout = layout_for_style(
+    let mut key = PageLayoutKey::new(&page_style, style_hash, font_generation);
+    let mut layout = layout_for_style(
       &page_style,
       key,
       &mut layouts,
@@ -195,12 +195,41 @@ pub fn paginate_fragment_tree(
       fallback_page_size,
     )?;
 
-    let total_height = layout.total_height;
+    let mut total_height = layout.total_height;
     if total_height <= EPSILON {
       break;
     }
 
     let mut start = ((consumed_base / base_total_height) * total_height).min(total_height);
+    let actual_page_name = page_name_for_position(
+      &layout.page_name_spans,
+      start,
+      initial_page_name.as_deref(),
+    );
+    if actual_page_name != page_name {
+      page_name = actual_page_name;
+      page_style = resolve_page_style(
+        rules,
+        page_index,
+        page_name.as_deref(),
+        side,
+        fallback_page_size,
+        root_font_size,
+      );
+      key = PageLayoutKey::new(&page_style, style_hash, font_generation);
+      layout = layout_for_style(
+        &page_style,
+        key,
+        &mut layouts,
+        box_tree,
+        font_ctx,
+        enable_layout_cache,
+        fallback_page_size,
+      )?;
+      total_height = layout.total_height;
+      start = ((consumed_base / base_total_height) * total_height).min(total_height);
+    }
+
     if start >= total_height - EPSILON {
       break;
     }
