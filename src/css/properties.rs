@@ -1337,7 +1337,10 @@ pub(crate) fn supports_parsed_declaration_is_valid(
   }
 
   match parsed {
-    PropertyValue::Keyword(_) => true,
+    // For properties not explicitly handled above, fall back to accepting parsed values
+    // that produced concrete types. Keywords are rejected here because our generic parser
+    // often returns Keyword for unknown tokens, which would be too permissive for @supports.
+    PropertyValue::Keyword(_) => false,
     _ => true,
   }
 }
