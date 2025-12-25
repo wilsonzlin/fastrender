@@ -12,6 +12,7 @@ use selectors::parser::SelectorImpl;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use selectors::parser::{Combinator, RelativeSelector, RelativeSelectorMatchHint};
+use selectors::OpaqueElement;
 use std::fmt;
 
 /// Direction keyword for :dir()
@@ -29,11 +30,43 @@ pub enum TextDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FastRenderSelectorImpl;
 
+/// Additional per-match context needed for shadow-aware selector evaluation.
+#[derive(Debug, Default)]
+pub struct ShadowMatchData<'a> {
+  /// The shadow host for the stylesheet being matched, or None for document styles.
+  pub shadow_host: Option<OpaqueElement>,
+  /// Mapping from slot elements to their assigned nodes for ::slotted() resolution.
+  pub slot_map: Option<&'a SlotAssignmentMap>,
+  /// Exported part mappings for resolving ::part() across shadow boundaries.
+  pub part_export_map: Option<&'a PartExportMap>,
+}
+
+impl<'a> ShadowMatchData<'a> {
+  pub fn for_document() -> Self {
+    Self::default()
+  }
+
+  pub fn for_shadow_host(shadow_host: OpaqueElement) -> Self {
+    Self {
+      shadow_host: Some(shadow_host),
+      ..Self::default()
+    }
+  }
+}
+
+/// Placeholder for future ::slotted() resolution data.
+#[derive(Debug)]
+pub struct SlotAssignmentMap;
+
+/// Placeholder for future ::part() export chain data.
+#[derive(Debug)]
+pub struct PartExportMap;
+
 impl SelectorImpl for FastRenderSelectorImpl {
   type AttrValue = CssString;
   type BorrowedLocalName = str;
   type BorrowedNamespaceUrl = str;
-  type ExtraMatchingData<'a> = ();
+  type ExtraMatchingData<'a> = ShadowMatchData<'a>;
   type Identifier = CssString;
   type LocalName = CssString;
   type NamespacePrefix = CssString;

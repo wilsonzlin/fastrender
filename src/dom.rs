@@ -2076,6 +2076,9 @@ impl<'a> Element for ElementRef<'a> {
         matches_has_relative(self, relative, _context)
       }
       PseudoClass::Host(selectors) => {
+        if !_context.shadow_host().is_some_and(|host| host == self.opaque()) {
+          return false;
+        }
         if !self.is_shadow_host() {
           return false;
         }
@@ -2090,6 +2093,9 @@ impl<'a> Element for ElementRef<'a> {
         })
       }
       PseudoClass::HostContext(selectors) => {
+        if !_context.shadow_host().is_some_and(|host| host == self.opaque()) {
+          return false;
+        }
         if !self.is_shadow_host() {
           return false;
         }
