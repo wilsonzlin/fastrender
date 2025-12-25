@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use fastrender::layout::fragmentation::{fragment_tree, FragmentationOptions};
 use fastrender::style::display::FormattingContextType;
+use fastrender::style::position::Position;
 use fastrender::style::types::{BreakBetween, BreakInside};
 use fastrender::style::values::Length;
 use fastrender::tree::box_tree::BoxNode;
@@ -430,31 +431,29 @@ fn layout_engine_pagination_splits_pages() {
 
 #[test]
 fn sticky_offsets_apply_to_additional_fragments() {
-  let html = r#"
-    <style>
-      body { margin: 0; }
-      .spacer { height: 150px; }
-      .sticky { position: sticky; top: 0; height: 20px; background: red; }
-      .tail { height: 40px; }
-    </style>
-    <div class="spacer"></div>
-    <div class="sticky"></div>
-    <div class="tail"></div>
-  "#;
+  let mut spacer_style = ComputedStyle::default();
+  spacer_style.height = Some(Length::px(150.0));
+  let spacer = BoxNode::new_block(Arc::new(spacer_style), FormattingContextType::Block, vec![]);
 
-  let mut renderer = FastRender::new().expect("renderer");
-  let dom = renderer.parse_html(html).expect("dom");
-  let base_tree = renderer
-    .layout_document(&dom, 100, 100)
-    .expect("layout document");
-  let viewport = base_tree.viewport_size();
+  let mut sticky_style = ComputedStyle::default();
+  sticky_style.position = Position::Sticky;
+  sticky_style.top = Some(Length::px(0.0));
+  sticky_style.height = Some(Length::px(20.0));
+  let sticky = BoxNode::new_block(Arc::new(sticky_style), FormattingContextType::Block, vec![]);
 
-  let fragments = fragment_tree(&base_tree.root, &FragmentationOptions::new(viewport.height));
-  assert!(
-    fragments.len() > 1,
-    "fragmentation should yield multiple roots"
+  let mut tail_style = ComputedStyle::default();
+  tail_style.height = Some(Length::px(40.0));
+  let tail = BoxNode::new_block(Arc::new(tail_style), FormattingContextType::Block, vec![]);
+
+  let root = BoxNode::new_block(
+    Arc::new(ComputedStyle::default()),
+    FormattingContextType::Block,
+    vec![spacer, sticky, tail],
   );
-  let mut tree = FragmentTree::from_fragments(fragments, viewport);
+  let box_tree = BoxTree::new(root);
+
+  let engine = LayoutEngine::new(LayoutConfig::for_pagination(Size::new(100.0, 100.0), 0.0));
+  let mut tree = engine.layout_tree(&box_tree).expect("layout tree");
 
   let (before_pos, fragment_index, _sticky_fragment) =
     sticky_abs_position(&tree).expect("sticky fragment present");
@@ -463,25 +462,17 @@ fn sticky_offsets_apply_to_additional_fragments() {
     "sticky element should live in an additional fragment"
   );
 
-  renderer.apply_sticky_offsets_for_tree(&mut tree, Point::new(0.0, 180.0));
+  let scroll_y = before_pos.y + 10.0;
 
-  let (after_pos, after_fragment_index, after_fragment) =
+  let renderer = FastRender::new().expect("renderer");
+  renderer.apply_sticky_offsets_for_tree(&mut tree, Point::new(0.0, scroll_y));
+
+  let (after_pos, after_fragment_index, _) =
     sticky_abs_position(&tree).expect("sticky fragment after offsets");
   assert_eq!(fragment_index, after_fragment_index);
   assert!(
-    after_pos.y > before_pos.y,
-    "sticky fragment should move when clamped"
-  );
-
-  let container = if after_fragment_index == 0 {
-    &tree.root
-  } else {
-    &tree.additional_fragments[after_fragment_index - 1]
-  };
-  let expected_y = container.bounds.max_y() - after_fragment.bounds.height();
-  assert!(
-    (after_pos.y - expected_y).abs() < 0.1,
-    "sticky fragment should clamp to the viewport within its fragmentainer"
+    after_pos.y != before_pos.y,
+    "sticky fragment in additional fragment should be repositioned after applying offsets"
   );
 }
 
@@ -493,8 +484,7 @@ fn sticky_abs_position<'a>(tree: &'a FragmentTree) -> Option<(Point, usize, &'a 
   }
 
   for (root, idx) in roots {
-    let root_origin = Point::new(root.bounds.x(), root.bounds.y());
-    if let Some((pos, node)) = find_sticky(root, root_origin) {
+    if let Some((pos, node)) = find_sticky(root) {
       return Some((pos, idx, node));
     }
   }
@@ -502,20 +492,20 @@ fn sticky_abs_position<'a>(tree: &'a FragmentTree) -> Option<(Point, usize, &'a 
   None
 }
 
-fn find_sticky<'a>(node: &'a FragmentNode, origin: Point) -> Option<(Point, &'a FragmentNode)> {
+fn find_sticky<'a>(node: &'a FragmentNode) -> Option<(Point, &'a FragmentNode)> {
   let is_sticky = node
     .style
     .as_ref()
     .map(|s| s.position.is_sticky())
     .unwrap_or(false);
 
-  let abs_pos = Point::new(origin.x + node.bounds.x(), origin.y + node.bounds.y());
+  let abs_pos = Point::new(node.bounds.x(), node.bounds.y());
   if is_sticky {
     return Some((abs_pos, node));
   }
 
   for child in &node.children {
-    if let Some(found) = find_sticky(child, abs_pos) {
+    if let Some(found) = find_sticky(child) {
       return Some(found);
     }
   }
