@@ -14,12 +14,8 @@ use crate::geometry::{Point, Rect};
 use crate::style::types::WritingMode;
 use crate::style::types::{BreakBetween, BreakInside};
 use crate::style::ComputedStyle;
-<<<<<<< HEAD
 use crate::style::{block_axis_is_horizontal, block_axis_positive};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentainerPath};
-=======
-use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentainerPath};
->>>>>>> 50fdf49 (Add structured fragmentainer metadata)
 
 /// Options controlling how fragments are split across fragmentainers.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -430,11 +426,20 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       continue;
     }
 
-<<<<<<< HEAD
     let path = FragmentainerPath::new(index);
-    if let Some(mut clipped) =
-      clip_node(root, start, end, 0.0, start, root_block_size, end - start, &axis, index, fragment_count, path)
-    {
+    if let Some(mut clipped) = clip_node(
+      root,
+      start,
+      end,
+      0.0,
+      start,
+      root_block_size,
+      end - start,
+      &axis,
+      index,
+      fragment_count,
+      path,
+    ) {
       if column_count > 1 {
         if axis.horizontal {
           clipped.bounds.size.height = column_width;
@@ -443,12 +448,6 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
         }
       }
       propagate_fragment_metadata(&mut clipped, index, fragment_count, path);
-=======
-    let path = FragmentainerPath::new(index);
-    if let Some(mut clipped) = clip_node(root, start, end, 0.0, start, index, fragment_count, path)
-    {
-      propagate_fragment_metadata(&mut clipped, index, fragment_count, path);
->>>>>>> 50fdf49 (Add structured fragmentainer metadata)
 
       // Translate fragments to account for fragmentainer gaps so downstream consumers
       // can reason about the absolute position of each fragmentainer stack. When multiple

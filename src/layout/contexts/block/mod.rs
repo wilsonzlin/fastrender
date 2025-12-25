@@ -46,7 +46,6 @@ use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
-<<<<<<< HEAD
 use crate::layout::fragmentation::{
   fragment_tree, propagate_fragment_metadata, FragmentationOptions,
 };
@@ -2094,42 +2093,12 @@ impl BlockFormattingContext {
       column_height = flow_height.max(0.0);
     }
 
-<<<<<<< HEAD
     let fragment_heights: Vec<f32> = column_fragments.iter().map(|f| f.bounds.height()).collect();
     let mut fragment_starts = Vec::with_capacity(fragment_heights.len());
     let mut cursor = 0.0;
     for h in &fragment_heights {
       fragment_starts.push(cursor);
       cursor += *h;
-=======
-    let mut fragments = Vec::new();
-    let mut column_heights = vec![0.0f32; column_count.max(1)];
-    let mut prev_flow_y = 0.0;
-    let mut col_idx: usize = 0;
-    let mut col_height = 0.0;
-
-    for mut fragment in flow_fragments {
-      let delta = fragment.bounds.y() - prev_flow_y;
-      let height = fragment.bounds.height();
-      if col_height + delta + height > column_height && col_idx + 1 < column_count {
-        col_idx += 1;
-        col_height = 0.0;
-      }
-      let new_y = col_height + delta;
-      let new_x = col_idx as f32 * (column_width + column_gap) + fragment.bounds.x();
-      fragment.bounds = Rect::from_xywh(new_x, new_y, fragment.bounds.width(), height);
-      col_height = new_y + height;
-      column_heights[col_idx] = column_heights[col_idx].max(col_height);
-      prev_flow_y += delta + height;
-      let column_path = fragmentainer.with_columns(column_set_index, col_idx);
-      propagate_fragment_metadata(
-        &mut fragment,
-        fragment.fragment_index,
-        fragment.fragment_count,
-        column_path,
-      );
-      fragments.push(fragment);
->>>>>>> f62f006 (Annotate multicol fragments with fragmentainer path)
     }
 
     let mut set_heights = Vec::new();
@@ -2164,9 +2133,11 @@ impl BlockFormattingContext {
         col as f32 * (column_width + column_gap),
         set_offsets.get(set).copied().unwrap_or(0.0) - frag.bounds.y(),
       );
+      let frag_index = frag.fragment_index;
+      let frag_count = frag.fragment_count;
       let mut frag = frag.translate(offset);
-      let path = FragmentainerPath::new(frag.fragmentainer.page_index).with_columns(set, col);
-      propagate_fragment_metadata(&mut frag, frag.fragment_index, frag.fragment_count, path);
+      let path = fragmentainer.with_columns(column_set_index + set, col);
+      propagate_fragment_metadata(&mut frag, frag_index, frag_count, path);
       fragments.push(frag);
     }
 
