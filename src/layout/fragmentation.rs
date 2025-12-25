@@ -154,6 +154,10 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       &collection.line_containers,
       &mut line_starts,
     );
+    debug_assert!(
+      next + BREAK_EPSILON >= start,
+      "boundaries must not move backwards"
+    );
     if (next - start).abs() < BREAK_EPSILON {
       boundaries.push(total_height);
       break;
