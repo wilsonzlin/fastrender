@@ -1,16 +1,125 @@
+//! Filter outset computation helpers.
+//!
+//! These utilities estimate how far a chain of CSS filters can extend content
+//! beyond its original bounds. Calculations are conservative to avoid culling
+//! or clipping visible pixels when filters are applied.
+
 use crate::geometry::Rect;
 use crate::paint::display_list::ResolvedFilter;
 
-pub trait FilterOutset {
-  fn expand_outset(&self, bbox: Rect, scale: f32, out: &mut (f32, f32, f32, f32));
+/// Outset distances on each side of a rectangle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FilterOutset {
+  pub left: f32,
+  pub top: f32,
+  pub right: f32,
+  pub bottom: f32,
 }
 
-/// Compute the maximum outset needed to accommodate the provided filters.
+impl FilterOutset {
+  pub const ZERO: Self = Self {
+    left: 0.0,
+    top: 0.0,
+    right: 0.0,
+    bottom: 0.0,
+  };
+
+  pub fn max_side(&self) -> f32 {
+    self.left.max(self.top).max(self.right).max(self.bottom)
+  }
+
+  pub fn as_tuple(self) -> (f32, f32, f32, f32) {
+    (self.left, self.top, self.right, self.bottom)
+  }
+}
+
+/// Compute a conservative outset for a chain of resolved filters without needing a bbox.
+///
+/// The calculation accumulates blurs across the chain (radius * 3 per blur) and unions drop
+/// shadows with the current bounds including existing outsets. SVG filters are treated as
+/// in-bounds; callers that need region awareness should provide a bbox to
+/// `filter_outset_with_bounds`.
+pub fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> FilterOutset {
+  filter_outset_with_bounds(filters, scale, None)
+}
+
+/// Compute a conservative outset for a chain of resolved filters using an optional bounding box.
+///
+/// When `bbox` is provided, SVG filters expand according to their resolved filter region in CSS
+/// pixels.
+pub fn filter_outset_with_bounds(
+  filters: &[ResolvedFilter],
+  scale: f32,
+  bbox: Option<Rect>,
+) -> FilterOutset {
+  let mut outset = FilterOutset::ZERO;
+  let scale = if scale.is_finite() { scale.abs() } else { 0.0 };
+
+  for filter in filters {
+    match filter {
+      ResolvedFilter::Blur(radius) => {
+        let delta = (*radius * scale).abs() * 3.0;
+        outset.left += delta;
+        outset.top += delta;
+        outset.right += delta;
+        outset.bottom += delta;
+      }
+      ResolvedFilter::DropShadow {
+        offset_x,
+        offset_y,
+        blur_radius,
+        spread,
+        ..
+      } => {
+        let dx = offset_x * scale;
+        let dy = offset_y * scale;
+        let blur = blur_radius * scale;
+        let spread = spread * scale;
+        let delta = (blur.abs() * 3.0 + spread).max(0.0);
+
+        // Union the existing bounds with the new shadow bounds, taking the
+        // current outset as the base rectangle.
+        let shadow_left = outset.left + delta - dx;
+        let shadow_right = outset.right + delta + dx;
+        let shadow_top = outset.top + delta - dy;
+        let shadow_bottom = outset.bottom + delta + dy;
+
+        outset.left = outset.left.max(shadow_left);
+        outset.top = outset.top.max(shadow_top);
+        outset.right = outset.right.max(shadow_right);
+        outset.bottom = outset.bottom.max(shadow_bottom);
+      }
+      ResolvedFilter::SvgFilter(filter) => {
+        if let Some(bbox) = bbox {
+          let region = filter.resolve_region(bbox);
+          let delta_left = (bbox.min_x() - region.min_x()).max(0.0) * scale;
+          let delta_top = (bbox.min_y() - region.min_y()).max(0.0) * scale;
+          let delta_right = (region.max_x() - bbox.max_x()).max(0.0) * scale;
+          let delta_bottom = (region.max_y() - bbox.max_y()).max(0.0) * scale;
+          outset.left = outset.left.max(delta_left);
+          outset.top = outset.top.max(delta_top);
+          outset.right = outset.right.max(delta_right);
+          outset.bottom = outset.bottom.max(delta_bottom);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  FilterOutset {
+    left: outset.left.max(0.0),
+    top: outset.top.max(0.0),
+    right: outset.right.max(0.0),
+    bottom: outset.bottom.max(0.0),
+  }
+}
+
+/// Compute the maximum outset needed to accommodate the provided filters, returning a tuple.
 ///
 /// `bbox` is the bounding box of the filtered content in CSS pixels. `scale`
 /// is the device scale to convert CSS lengths to the target coordinate space.
-pub fn compute_filter_outset<F: FilterOutset>(
-  filters: &[F],
+pub fn compute_filter_outset(
+  filters: &[impl FilterOutsetExt],
   bbox: Rect,
   scale: f32,
 ) -> (f32, f32, f32, f32) {
@@ -29,7 +138,12 @@ pub fn compute_filter_outset<F: FilterOutset>(
   )
 }
 
-impl FilterOutset for ResolvedFilter {
+/// Trait implemented by filters that can contribute to an outset.
+pub trait FilterOutsetExt {
+  fn expand_outset(&self, bbox: Rect, scale: f32, out: &mut (f32, f32, f32, f32));
+}
+
+impl FilterOutsetExt for ResolvedFilter {
   fn expand_outset(&self, bbox: Rect, scale: f32, out: &mut (f32, f32, f32, f32)) {
     match self {
       ResolvedFilter::Blur(radius) => {
