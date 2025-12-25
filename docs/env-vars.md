@@ -34,6 +34,8 @@ These are emitted by the paint pipeline:
 - `FASTR_FLEX_PROFILE=1` – flex profiling (with additional `FASTR_FLEX_PROFILE_*` knobs).
 - `FASTR_INTRINSIC_STATS=1` – intrinsic sizing cache stats.
 - `FASTR_LAYOUT_CACHE_STATS=1` – layout cache stats (intrinsic cache hits/misses and pass counts).
+- `FASTR_SVG_FILTER_CACHE_ITEMS=<N>` – SVG filter cache capacity (default 256).
+- `FASTR_SVG_FILTER_CACHE_BYTES=<N>` – approximate SVG filter cache size limit in bytes (default 4 MiB).
 
 ## Parallelism tuning
 
