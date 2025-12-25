@@ -7,6 +7,7 @@
 //! out of layout is treated as flow order; this module decides where to break and
 //! clones the appropriate fragment subtrees for each fragmentainer.
 
+use std::collections::HashMap;
 use std::env;
 use std::sync::OnceLock;
 
@@ -111,6 +112,16 @@ struct BreakCandidate {
   break_kind: BreakBetween,
   container_id: Option<usize>,
   details: Option<String>,
+  line_info: Option<LineBreakInfo>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LineBreakInfo {
+  container_id: usize,
+  line_index: usize,
+  line_count: usize,
+  widows: usize,
+  orphans: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +232,18 @@ pub(crate) fn fragmentation_axis(node: &FragmentNode) -> BlockAxis {
 pub(crate) struct BreakPlan {
   candidates: Vec<BreakCandidate>,
   forbidden: Vec<ForbiddenRange>,
+}
+
+/// Stateful helper that chooses fragmentation boundaries for a laid-out fragment tree.
+///
+/// Break opportunities are collected once from the tree and reused for successive fragmentainers
+/// even when their sizes differ (e.g., named/side-specific @page rules).
+#[derive(Debug, Clone)]
+pub struct BreakResolver {
+  opportunities: Vec<BreakCandidate>,
+  forbidden: Vec<ForbiddenRange>,
+  total_height: f32,
+  line_state: HashMap<usize, usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -387,55 +410,56 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     None
   };
 
-  let boundaries = {
-    let mut debug_sink: Option<&mut dyn DebugSink> =
-      debug_events.as_mut().map(|v| v as &mut dyn DebugSink);
+  let mut debug_sink: Option<&mut dyn DebugSink> =
+    debug_events.as_mut().map(|v| v as &mut dyn DebugSink);
 
-    collect_break_plan(
-      root,
-      0.0,
-      root_block_size,
-      &axis,
-      &mut plan,
-      options.kind,
-      &mut debug_sink,
-    );
-    // Always allow breaking at the end of the content range so the final fragment closes.
-    plan.candidates.push(BreakCandidate {
-      pos: total_block_size,
-      strength: BreakStrength::Forced,
-      kind: OpportunityKind::FinalContentEdge,
-      break_kind: BreakBetween::Always,
-      container_id: Some(fragment_debug_id(root)),
-      details: Some("end of content".to_string()),
-    });
-    push_debug_event(
-      &mut debug_sink,
-      DebugEvent::Opportunity(DebugOpportunity {
-        pos: total_block_size,
-        strength: BreakStrength::Forced,
-        kind: OpportunityKind::FinalContentEdge,
-        container_id: Some(fragment_debug_id(root)),
-        details: "final content edge".to_string(),
-      }),
-    );
+  collect_break_plan(
+    root,
+    0.0,
+    root_block_size,
+    &axis,
+    &mut plan,
+    options.kind,
+    &mut debug_sink,
+  );
+  // Always allow breaking at the end of the content range so the final fragment closes.
+  plan.candidates.push(BreakCandidate {
+    pos: total_block_size,
+    strength: BreakStrength::Forced,
+    kind: OpportunityKind::FinalContentEdge,
+    break_kind: BreakBetween::Always,
+    container_id: Some(fragment_debug_id(root)),
+    details: Some("end of content".to_string()),
+    line_info: None,
+  });
 
-    plan.candidates.sort_by(|a, b| {
-      a.pos
-        .partial_cmp(&b.pos)
-        .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    plan.candidates.dedup_by(|a, b| {
-      (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength && a.break_kind == b.break_kind
-    });
+  plan.candidates.sort_by(|a, b| {
+    a.pos
+      .partial_cmp(&b.pos)
+      .unwrap_or(std::cmp::Ordering::Equal)
+  });
+  plan.candidates.dedup_by(|a, b| {
+    (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength && a.break_kind == b.break_kind
+  });
 
-    compute_boundaries(
-      total_block_size,
-      options.fragmentainer_size,
-      &plan,
-      &mut debug_sink,
-    )
-  };
+  let mut resolver = BreakResolver::from_plan(plan.clone(), total_block_size);
+  let mut boundaries = vec![0.0];
+  let mut start = 0.0;
+  const EPS: f32 = 0.01;
+  while start + options.fragmentainer_size < total_block_size - EPS {
+    let end = resolver.next_boundary(start, options.fragmentainer_size);
+    if end <= start + EPS {
+      boundaries.push(total_block_size);
+      break;
+    }
+    boundaries.push(end);
+    start = end;
+  }
+  if total_block_size - *boundaries.last().unwrap_or(&0.0) > EPS {
+    boundaries.push(total_block_size);
+  }
+  boundaries.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+  boundaries.dedup_by(|a, b| (*a - *b).abs() < EPS);
 
   if let Some(events) = debug_events.as_ref() {
     print_fragmentation_trace(events);
@@ -680,6 +704,7 @@ pub(crate) fn build_break_plan(
     break_kind: BreakBetween::Always,
     container_id: Some(fragment_debug_id(root)),
     details: Some("end of content".to_string()),
+    line_info: None,
   });
   normalize_break_plan(&mut plan);
   plan
@@ -766,7 +791,116 @@ pub(crate) fn select_fragmentainer_boundary(
   total_height: f32,
   plan: &BreakPlan,
 ) -> f32 {
-  choose_boundary(start, fragmentainer, total_height, plan).0
+  let mut resolver = BreakResolver::from_plan(plan.clone(), total_height);
+  resolver.next_boundary(start, fragmentainer)
+}
+
+impl BreakResolver {
+  /// Creates a resolver while clamping total content height to a custom value.
+  pub(crate) fn from_plan(plan: BreakPlan, total_height: f32) -> Self {
+    Self {
+      opportunities: plan.candidates,
+      forbidden: plan.forbidden,
+      total_height: total_height.max(0.0),
+      line_state: HashMap::new(),
+    }
+  }
+
+  /// Selects the next break boundary after `start` that best fits within `fragmentainer`.
+  pub fn next_boundary(&mut self, start: f32, fragmentainer: f32) -> f32 {
+    const EPS: f32 = 0.01;
+
+    if start >= self.total_height - EPS {
+      return self.total_height;
+    }
+
+    let target = (start + fragmentainer).min(self.total_height);
+    let forced_boundary = self
+      .opportunities
+      .iter()
+      .find(|o| {
+        o.strength == BreakStrength::Forced
+          && o.pos > start + EPS
+          && o.pos <= target + EPS
+          && self.allows(o)
+      })
+      .map(|o| o.pos);
+
+    let preferred_target = if !is_forbidden(target, &self.forbidden) {
+      Some(target)
+    } else {
+      None
+    };
+
+    let boundary = if let Some(pos) = forced_boundary {
+      pos
+    } else {
+      let natural = self
+        .opportunities
+        .iter()
+        .rev()
+        .find(|o| o.pos > start + EPS && o.pos <= target + EPS && self.allows(o))
+        .map(|o| o.pos);
+
+      if let Some(pos) = natural {
+        pos
+      } else if let Some(pos) = preferred_target {
+        pos
+      } else {
+        self
+          .opportunities
+          .iter()
+          .find(|o| o.pos > target + EPS && self.allows(o))
+          .map(|o| o.pos)
+          .unwrap_or(target.min(self.total_height))
+      }
+    };
+
+    let clamped = boundary.min(self.total_height);
+    if (clamped - start).abs() < EPS {
+      self.apply_boundary(self.total_height);
+      return self.total_height;
+    }
+
+    self.apply_boundary(clamped);
+    clamped
+  }
+
+  fn allows(&self, opportunity: &BreakCandidate) -> bool {
+    if is_forbidden(opportunity.pos, &self.forbidden) {
+      return false;
+    }
+
+    if opportunity.strength == BreakStrength::Forced {
+      return true;
+    }
+
+    if let Some(line) = opportunity.line_info {
+      let consumed = *self.line_state.get(&line.container_id).unwrap_or(&0);
+      let lines_since_break = line.line_index.saturating_sub(consumed);
+      if lines_since_break < line.orphans {
+        return false;
+      }
+    }
+
+    true
+  }
+
+  fn apply_boundary(&mut self, boundary: f32) {
+    const EPS: f32 = 0.01;
+    for opportunity in self
+      .opportunities
+      .iter()
+      .filter(|o| o.pos <= boundary + EPS)
+    {
+      if let Some(line) = opportunity.line_info {
+        let entry = self.line_state.entry(line.container_id).or_insert(0);
+        if line.line_index > *entry {
+          *entry = line.line_index;
+        }
+      }
+    }
+  }
 }
 
 fn collect_break_plan(
@@ -801,6 +935,7 @@ fn collect_break_plan(
       break_kind: style.break_before,
       container_id,
       details: detail.clone(),
+      line_info: None,
     });
     if debug.is_some() {
       push_debug_event(
@@ -899,6 +1034,13 @@ fn collect_break_plan(
           break_kind: BreakBetween::Auto,
           container_id,
           details: detail.clone(),
+          line_info: Some(LineBreakInfo {
+            container_id: container_id.unwrap_or(fragment_debug_id(node)),
+            line_index: idx,
+            line_count,
+            widows,
+            orphans,
+          }),
         });
         if debug.is_some() {
           push_debug_event(
@@ -974,6 +1116,7 @@ fn collect_break_plan(
         break_kind: BreakBetween::Auto,
         container_id: Some(fragment_debug_id(child)),
         details: detail.clone(),
+        line_info: None,
       });
       if debug.is_some() {
         push_debug_event(
@@ -1011,6 +1154,7 @@ fn collect_break_plan(
       break_kind: style.break_after,
       container_id,
       details: detail.clone(),
+      line_info: None,
     });
     if debug.is_some() {
       push_debug_event(

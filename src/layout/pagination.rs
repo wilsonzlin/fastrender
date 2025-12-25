@@ -6,8 +6,7 @@ use crate::css::types::CollectedPageRule;
 use crate::geometry::{Rect, Size};
 use crate::layout::fragmentation::{
   build_break_plan, clip_node, collect_forced_boundaries, fragmentation_axis,
-  propagate_fragment_metadata, select_fragmentainer_boundary, BlockAxis, ForcedBreak,
-  FragmentationKind,
+  propagate_fragment_metadata, BlockAxis, BreakResolver, ForcedBreak, FragmentationKind,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
@@ -100,6 +99,7 @@ pub fn paginate_fragment_tree_with_options(
     .block_size(&root.bounding_box())
     .max(fallback_block_size);
   let break_plan = build_break_plan(root, 0.0, total_block, FragmentationKind::Page);
+  let mut break_resolver = BreakResolver::from_plan(break_plan, total_block);
 
   let mut forced = collect_forced_boundaries(root, 0.0, FragmentationKind::Page);
   forced.push(ForcedBreak {
@@ -174,22 +174,12 @@ pub fn paginate_fragment_tree_with_options(
       style.content_size.height
     }
     .max(1.0);
-    let mut end = select_fragmentainer_boundary(pos, page_block, total_block, &break_plan);
-    let mut next_side_hint = None;
-    if let Some(boundary) = forced
-      .iter()
-      .copied()
-      .find(|b| b.position > pos + 0.01 && b.position < end - 0.01)
-    {
-      end = boundary.position;
-      next_side_hint = break_side_hint(boundary.kind);
-    } else if let Some(boundary) = forced
+    let end = break_resolver.next_boundary(pos, page_block);
+    let next_side_hint = forced
       .iter()
       .copied()
       .find(|b| (b.position - end).abs() < 0.01)
-    {
-      next_side_hint = break_side_hint(boundary.kind);
-    }
+      .and_then(|b| break_side_hint(b.kind));
 
     if end <= pos + 0.01 {
       break;
