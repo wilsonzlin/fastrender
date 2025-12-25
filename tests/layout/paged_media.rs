@@ -1533,3 +1533,106 @@ fn paginated_trees_compute_scroll_metadata() {
     "expected viewport scroll metadata"
   );
 }
+
+#[test]
+fn var_in_string_set_is_used_in_running_header() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          :root { --title: "Var Title"; }
+          h1 { string-set: header var(--title); }
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-center { content: string(header); }
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Ignored</h1>
+        <div style="height: 250px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "expected at least two pages, got {}",
+    page_roots.len()
+  );
+
+  for (idx, page) in page_roots.iter().take(2).enumerate() {
+    let content = page.children.first().expect("page content");
+    let content_y = page.bounds.y() + content.bounds.y();
+
+    let mut texts = Vec::new();
+    collect_text_fragments(page, (0.0, 0.0), &mut texts);
+
+    let header = texts
+      .iter()
+      .find(|t| t.text.contains("Var Title") && t.y < content_y)
+      .unwrap_or_else(|| panic!("page {} running header", idx + 1));
+    assert_eq!(header.text, "Var Title");
+  }
+}
+
+#[test]
+fn var_in_string_argument_selects_last_running_string() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          h1 {
+            string-set: header content();
+            margin: 0;
+            font-size: 20px;
+            line-height: 20px;
+          }
+          :root { --pos: last; }
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-center { content: string(header, var(--pos)); }
+          }
+        </style>
+      </head>
+      <body>
+        <div style="height: 80px"></div>
+        <div style="height: 80px"></div>
+        <h1>First</h1>
+        <div style="height: 60px"></div>
+        <h1>Second</h1>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "expected at least two pages, got {}",
+    page_roots.len()
+  );
+
+  let page = page_roots[1];
+  let content = page.children.first().expect("page content");
+  let content_y = page.bounds.y() + content.bounds.y();
+
+  let mut texts = Vec::new();
+  collect_text_fragments(page, (0.0, 0.0), &mut texts);
+  let header = texts
+    .iter()
+    .find(|t| t.text.contains("Second") && t.y < content_y)
+    .expect("running header");
+
+  assert_eq!(header.text, "Second");
+}
