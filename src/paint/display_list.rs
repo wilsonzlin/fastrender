@@ -1189,6 +1189,8 @@ impl Transform3D {
       0.0, 0.0, 0.0, 1.0, // column 4
     ],
   };
+  /// Minimum absolute w value for projective projections to be considered valid.
+  pub const MIN_PROJECTIVE_W: f32 = 1e-3;
 
   /// Create identity transform
   pub const fn identity() -> Self {
@@ -1313,6 +1315,32 @@ impl Transform3D {
     (tx, ty, tz, tw)
   }
 
+  /// Project a point on the z=0 plane, returning normalized coordinates if w is valid.
+  pub fn project_point_2d(&self, x: f32, y: f32) -> Option<Point> {
+    let (tx, ty, _tz, tw) = self.transform_point(x, y, 0.0);
+    if !tw.is_finite()
+      || tw.abs() < Self::MIN_PROJECTIVE_W
+      || tw < 0.0
+      || !tx.is_finite()
+      || !ty.is_finite()
+    {
+      return None;
+    }
+    Some(Point::new(tx / tw, ty / tw))
+  }
+
+  /// Project a point in 3D, returning normalized coordinates if w is valid.
+  pub fn project_point(&self, x: f32, y: f32, z: f32) -> Option<[f32; 3]> {
+    let (tx, ty, tz, tw) = self.transform_point(x, y, z);
+    if !tw.is_finite() || tw.abs() < Self::MIN_PROJECTIVE_W || tw < 0.0 {
+      return None;
+    }
+    if !tx.is_finite() || !ty.is_finite() || !tz.is_finite() {
+      return None;
+    }
+    Some([tx / tw, ty / tw, tz / tw])
+  }
+
   /// Transform a direction vector using the linear part of the matrix (ignoring translation)
   pub fn transform_direction(&self, x: f32, y: f32, z: f32) -> [f32; 3] {
     let tx = self.m[0] * x + self.m[4] * y + self.m[8] * z;
@@ -1349,40 +1377,84 @@ impl Transform3D {
   }
 
   /// Approximate this 3D transform as a 2D affine transform by projecting basis vectors
+  pub fn approximate_2d_with_validity(&self) -> (Transform2D, bool) {
+    let p0 = self.project_point_2d(0.0, 0.0);
+    let p1 = self.project_point_2d(1.0, 0.0);
+    let p2 = self.project_point_2d(0.0, 1.0);
+
+    let valid = p0.is_some() && p1.is_some() && p2.is_some();
+
+    let p0 = p0.unwrap_or(Point::ZERO);
+    let p1 = p1.unwrap_or(Point::new(1.0, 0.0));
+    let p2 = p2.unwrap_or(Point::new(0.0, 1.0));
+
+    let dx1 = (p1.x - p0.x, p1.y - p0.y);
+    let dx2 = (p2.x - p0.x, p2.y - p0.y);
+
+    (
+      Transform2D {
+        a: dx1.0,
+        b: dx1.1,
+        c: dx2.0,
+        d: dx2.1,
+        e: p0.x,
+        f: p0.y,
+      },
+      valid,
+    )
+  }
+
+  /// Approximate this 3D transform as a 2D affine transform by projecting basis vectors
   pub fn approximate_2d(&self) -> Transform2D {
-    let project = |x: f32, y: f32, m: &Transform3D| -> Option<(f32, f32)> {
-      let (tx, ty, _tz, tw) = m.transform_point(x, y, 0.0);
-      if tw.abs() < 1e-6 {
-        None
-      } else {
-        Some((tx / tw, ty / tw))
-      }
-    };
-
-    let p0 = project(0.0, 0.0, self).unwrap_or((0.0, 0.0));
-    let p1 = project(1.0, 0.0, self).unwrap_or((1.0, 0.0));
-    let p2 = project(0.0, 1.0, self).unwrap_or((0.0, 1.0));
-
-    let dx1 = (p1.0 - p0.0, p1.1 - p0.1);
-    let dx2 = (p2.0 - p0.0, p2.1 - p0.1);
-
-    Transform2D {
-      a: dx1.0,
-      b: dx1.1,
-      c: dx2.0,
-      d: dx2.1,
-      e: p0.0,
-      f: p0.1,
-    }
+    self.approximate_2d_with_validity().0
   }
 
   /// Transform an axis-aligned rectangle using a 2D projection of this matrix.
   pub fn transform_rect(&self, rect: Rect) -> Rect {
+    if let Some(quad) = self.project_quad(rect) {
+      let mut min_x = f32::INFINITY;
+      let mut min_y = f32::INFINITY;
+      let mut max_x = f32::NEG_INFINITY;
+      let mut max_y = f32::NEG_INFINITY;
+
+      for p in quad {
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+      }
+
+      return Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y);
+    }
+
     self
       .to_2d()
       .unwrap_or_else(|| self.approximate_2d())
       .transform_rect(rect)
   }
+
+  /// Project a rectangle to a quad; returns None if any corner has an invalid w.
+  pub fn project_quad(&self, rect: Rect) -> Option<[Point; 4]> {
+    let corners = [
+      (rect.min_x(), rect.min_y()),
+      (rect.max_x(), rect.min_y()),
+      (rect.max_x(), rect.max_y()),
+      (rect.min_x(), rect.max_y()),
+    ];
+
+    let mut projected = [Point::ZERO; 4];
+    for (i, (x, y)) in corners.iter().enumerate() {
+      projected[i] = self.project_point_2d(*x, *y)?;
+    }
+
+    Some(projected)
+  }
+}
+
+/// Project a rectangle with a 3D transform into a quad on the z=0 plane.
+/// Returns None if any corner maps to an invalid w (zero, negative, or non-finite).
+pub fn quad_from_transform3d(rect: Rect, transform: &Transform3D) -> Option<[Point; 4]> {
+  transform.project_quad(rect)
 }
 
 /// 2D affine transform matrix

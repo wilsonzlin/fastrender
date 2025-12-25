@@ -699,6 +699,14 @@ impl DisplayListOptimizer {
         return TransformMapping::Affine(affine);
       }
     }
+
+    if transform.project_point_2d(0.0, 0.0).is_none()
+      || transform.project_point_2d(1.0, 0.0).is_none()
+      || transform.project_point_2d(0.0, 1.0).is_none()
+    {
+      return TransformMapping::Unsupported;
+    }
+
     if homography.is_invertible() {
       TransformMapping::Projective(homography)
     } else {

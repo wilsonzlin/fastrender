@@ -18,6 +18,7 @@ mod optimize_test;
 mod paged_media_margin_boxes;
 mod overflow_clip_test;
 mod picture_source_selection;
+mod projective_mapping;
 mod rasterize_test;
 mod stacking_test;
 mod svg_filter_color_interpolation;
