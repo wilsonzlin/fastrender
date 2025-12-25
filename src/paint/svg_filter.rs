@@ -350,21 +350,25 @@ fn parse_filter_definition(
         .unwrap_or(true)
   })?;
 
-  let units = match filter_node.attribute("filterUnits") {
+  parse_filter_node(&filter_node, image_cache)
+}
+
+fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option<Arc<SvgFilter>> {
+  let units = match node.attribute("filterUnits") {
     Some(v) if v.eq_ignore_ascii_case("userspaceonuse") => SvgFilterUnits::UserSpaceOnUse,
     _ => SvgFilterUnits::ObjectBoundingBox,
   };
   let default_region = SvgFilterRegion::default_for_units(units);
   let region = SvgFilterRegion {
-    x: SvgLength::parse(filter_node.attribute("x")).unwrap_or(default_region.x),
-    y: SvgLength::parse(filter_node.attribute("y")).unwrap_or(default_region.y),
-    width: SvgLength::parse(filter_node.attribute("width")).unwrap_or(default_region.width),
-    height: SvgLength::parse(filter_node.attribute("height")).unwrap_or(default_region.height),
+    x: SvgLength::parse(node.attribute("x")).unwrap_or(default_region.x),
+    y: SvgLength::parse(node.attribute("y")).unwrap_or(default_region.y),
+    width: SvgLength::parse(node.attribute("width")).unwrap_or(default_region.width),
+    height: SvgLength::parse(node.attribute("height")).unwrap_or(default_region.height),
     units,
   };
 
   let mut steps = Vec::new();
-  for child in filter_node.children().filter(|c| c.is_element()) {
+  for child in node.children().filter(|c| c.is_element()) {
     let result_name = child.attribute("result").map(|s| s.to_string());
     let tag = child.tag_name().name().to_ascii_lowercase();
     let primitive = match tag.as_str() {
@@ -404,6 +408,30 @@ impl SvgFilter {
   pub fn resolve_region(&self, bbox: Rect) -> Rect {
     self.region.resolve(bbox)
   }
+}
+
+pub(crate) fn collect_svg_filters(
+  svg: &str,
+  image_cache: &ImageCache,
+) -> HashMap<String, Arc<SvgFilter>> {
+  let mut registry = HashMap::new();
+  let Ok(doc) = Document::parse(svg) else {
+    return registry;
+  };
+
+  for filter in doc.descendants().filter(|n| n.has_tag_name("filter")) {
+    let Some(id) = filter.attribute("id") else {
+      continue;
+    };
+    if id.trim().is_empty() {
+      continue;
+    }
+    if let Some(parsed) = parse_filter_node(&filter, image_cache) {
+      registry.entry(id.to_string()).or_insert(parsed);
+    }
+  }
+
+  registry
 }
 
 fn parse_input(attr: Option<&str>) -> FilterInput {

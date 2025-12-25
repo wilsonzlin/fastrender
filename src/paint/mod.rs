@@ -104,5 +104,6 @@ pub mod painter;
 pub mod rasterize;
 pub mod stacking;
 pub mod svg_filter;
+pub mod svg_filter_registry;
 pub mod text_rasterize;
 pub mod text_shadow;
