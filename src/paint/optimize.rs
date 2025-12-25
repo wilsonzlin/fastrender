@@ -34,11 +34,7 @@ use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
-<<<<<<< HEAD
-use crate::paint::filter_outset::compute_filter_outset;
-=======
 use crate::paint::filter_outset::{filter_outset, filter_outset_with_bounds};
->>>>>>> 09d5f0f (Unify filter outset in optimizer and add blur culling tests)
 
 // ============================================================================
 // Optimization Configuration
@@ -390,16 +386,10 @@ impl DisplayListOptimizer {
               transform_state.unsupported_depth += 1;
             }
           }
-<<<<<<< HEAD
-          let (l, t, r, b) = compute_filter_outset(&sc.filters, sc.bounds, 1.0);
-          let (bl, bt, br, bb) = compute_filter_outset(&sc.backdrop_filters, sc.bounds, 1.0);
-          let max_outset = l.max(t).max(r).max(b).max(bl).max(bt).max(br).max(bb);
-=======
           let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
           let backdrop_outset =
             filter_outset_with_bounds(&sc.backdrop_filters, 1.0, Some(sc.bounds));
           let max_outset = filters_outset.max_side().max(backdrop_outset.max_side());
->>>>>>> 09d5f0f (Unify filter outset in optimizer and add blur culling tests)
           let scale = Self::transform_scale_factor(&transform_state.current);
           let world_outset = if transform_state.culling_disabled() {
             0.0
@@ -718,21 +708,12 @@ impl DisplayListOptimizer {
     transform: Option<Transform2D>,
   ) -> Option<Rect> {
     if let Some(bounds) = children {
-<<<<<<< HEAD
-      let (l, t, r, b) = compute_filter_outset(&item.filters, bounds, 1.0);
-      let (bl, bt, br, bb) = compute_filter_outset(&item.backdrop_filters, bounds, 1.0);
-      let expand_left = l.max(bl);
-      let expand_top = t.max(bt);
-      let expand_right = r.max(br);
-      let expand_bottom = b.max(bb);
-=======
-      let filters_outset = filter_outset(&item.filters, 1.0);
-      let backdrop_outset = filter_outset(&item.backdrop_filters, 1.0);
+      let filters_outset = filter_outset_with_bounds(&item.filters, 1.0, Some(bounds));
+      let backdrop_outset = filter_outset_with_bounds(&item.backdrop_filters, 1.0, Some(bounds));
       let expand_left = filters_outset.left.max(backdrop_outset.left);
       let expand_top = filters_outset.top.max(backdrop_outset.top);
       let expand_right = filters_outset.right.max(backdrop_outset.right);
       let expand_bottom = filters_outset.bottom.max(backdrop_outset.bottom);
->>>>>>> 09d5f0f (Unify filter outset in optimizer and add blur culling tests)
 
       let scale = transform
         .as_ref()
@@ -751,21 +732,12 @@ impl DisplayListOptimizer {
       return Some(expanded);
     }
 
-<<<<<<< HEAD
-    let (l, t, r, b) = compute_filter_outset(&item.filters, item.bounds, 1.0);
-    let (bl, bt, br, bb) = compute_filter_outset(&item.backdrop_filters, item.bounds, 1.0);
-    let expand_left = l.max(bl);
-    let expand_top = t.max(bt);
-    let expand_right = r.max(br);
-    let expand_bottom = b.max(bb);
-=======
-    let filters_outset = filter_outset(&item.filters, 1.0);
-    let backdrop_outset = filter_outset(&item.backdrop_filters, 1.0);
+    let filters_outset = filter_outset_with_bounds(&item.filters, 1.0, Some(item.bounds));
+    let backdrop_outset = filter_outset_with_bounds(&item.backdrop_filters, 1.0, Some(item.bounds));
     let expand_left = filters_outset.left.max(backdrop_outset.left);
     let expand_top = filters_outset.top.max(backdrop_outset.top);
     let expand_right = filters_outset.right.max(backdrop_outset.right);
     let expand_bottom = filters_outset.bottom.max(backdrop_outset.bottom);
->>>>>>> 09d5f0f (Unify filter outset in optimizer and add blur culling tests)
     let mut bounds = item.bounds;
     if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
       bounds = Rect::from_xywh(
@@ -923,11 +895,8 @@ pub fn optimize_with_stats(list: DisplayList, viewport: Rect) -> (DisplayList, O
 mod tests {
   use super::*;
   use crate::paint::display_list::BorderRadii;
-<<<<<<< HEAD
   use crate::paint::display_list::ClipItem;
   use crate::paint::display_list::ClipShape;
-=======
->>>>>>> 09d5f0f (Unify filter outset in optimizer and add blur culling tests)
   use crate::paint::display_list::OpacityItem;
   use crate::paint::display_list::StackingContextItem;
   use crate::paint::display_list::Transform3D;
@@ -935,10 +904,6 @@ mod tests {
   use crate::paint::display_list::TransformStyle;
   use crate::style::color::Rgba;
   use crate::style::types::BackfaceVisibility;
-<<<<<<< HEAD
-  use crate::style::types::TransformStyle;
-=======
->>>>>>> 09d5f0f (Unify filter outset in optimizer and add blur culling tests)
   use std::f32::consts::FRAC_PI_4;
 
   fn make_fill_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba) -> DisplayItem {
@@ -1093,7 +1058,6 @@ mod tests {
       .items()
       .iter()
       .any(|item| matches!(item, DisplayItem::FillRect(_))));
-  }
   }
 
   #[test]

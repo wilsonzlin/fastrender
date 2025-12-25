@@ -433,42 +433,6 @@ enum ResolvedFilter {
   SvgFilter(Arc<crate::paint::svg_filter::SvgFilter>),
 }
 
-impl FilterOutset for ResolvedFilter {
-  fn expand_outset(&self, _bbox: Rect, scale: f32, out: &mut (f32, f32, f32, f32)) {
-    match self {
-      ResolvedFilter::Blur(radius) => {
-        let delta = (radius * scale).abs() * 3.0;
-        out.0 += delta;
-        out.1 += delta;
-        out.2 += delta;
-        out.3 += delta;
-      }
-      ResolvedFilter::DropShadow {
-        offset_x,
-        offset_y,
-        blur_radius,
-        spread,
-        ..
-      } => {
-        let dx = offset_x * scale;
-        let dy = offset_y * scale;
-        let blur = blur_radius * scale;
-        let spread = spread * scale;
-        let delta = (blur.abs() * 3.0 + spread).max(0.0);
-        let shadow_left = out.0 + delta - dx;
-        let shadow_right = out.2 + delta + dx;
-        let shadow_top = out.1 + delta - dy;
-        let shadow_bottom = out.3 + delta + dy;
-        out.0 = out.0.max(shadow_left);
-        out.2 = out.2.max(shadow_right);
-        out.1 = out.1.max(shadow_top);
-        out.3 = out.3.max(shadow_bottom);
-      }
-      _ => {}
-    }
-  }
-}
-
 #[derive(Debug, Clone)]
 enum DisplayCommand {
   Background {
