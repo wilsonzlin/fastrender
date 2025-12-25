@@ -301,7 +301,9 @@ impl DisplayListBuilder {
       self.viewport = Some((viewport.width, viewport.height));
     }
     self.rebuild_svg_filter_registry_from_tree(tree);
-    self.build_fragment(&tree.root, Point::ZERO);
+    for root in std::iter::once(&tree.root).chain(tree.additional_fragments.iter()) {
+      self.build_fragment(root, Point::ZERO);
+    }
     self.list
   }
 

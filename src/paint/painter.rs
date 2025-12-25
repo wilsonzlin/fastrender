@@ -185,6 +185,12 @@ struct PaintStats {
   stacking: (usize, f64),
 }
 
+#[derive(Copy, Clone)]
+struct RootPaintOptions {
+  use_root_background: bool,
+  extend_background_to_viewport: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TextCacheKey {
   style_ptr: usize,
@@ -1108,7 +1114,7 @@ impl Painter {
     let mut stats = PaintStats::default();
 
     if dump_counts_enabled() {
-      let (total, text, replaced, lines, inline) = fragment_counts(&tree.root);
+      let (total, text, replaced, lines, inline) = fragment_tree_counts(tree);
       eprintln!(
         "fragment counts total={} text={} lines={} inline={} replaced={}",
         total, text, lines, inline, replaced
@@ -1127,16 +1133,14 @@ impl Painter {
     let registry_ref = (!svg_filter_registry.is_empty()).then_some(&svg_filter_registry);
     let mut items = Vec::new();
     let collect_start = Instant::now();
-    let treat_root_as_canvas = tree.has_explicit_viewport();
-    self.collect_stacking_context(
-      &tree.root,
-      offset,
-      None,
-      true,
-      treat_root_as_canvas,
-      registry_ref,
-      &mut items,
-    );
+    let root_paint = RootPaintOptions {
+      use_root_background: tree.has_explicit_viewport(),
+      extend_background_to_viewport: tree.has_explicit_viewport()
+        && tree.additional_fragments.is_empty(),
+    };
+    for root in std::iter::once(&tree.root).chain(tree.additional_fragments.iter()) {
+      self.collect_stacking_context(root, offset, None, true, root_paint, registry_ref, &mut items);
+    }
     if profiling {
       stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
     }
@@ -1351,12 +1355,17 @@ impl Painter {
     offset: Point,
     parent_style: Option<&ComputedStyle>,
     is_root_context: bool,
-    treat_root_as_canvas: bool,
+    root_paint: RootPaintOptions,
     svg_filter_registry: Option<&SvgFilterRegistry>,
     items: &mut Vec<DisplayCommand>,
   ) {
     let debug_fragments = dump_fragments_enabled();
-    let is_root_fragment = treat_root_as_canvas && is_root_context && parent_style.is_none();
+    let is_root_fragment = is_root_context && parent_style.is_none();
+    let root_background = if is_root_fragment && root_paint.use_root_background {
+      Some(root_paint.extend_background_to_viewport)
+    } else {
+      None
+    };
     if let Some(style) = fragment.style.as_deref() {
       if !matches!(
         style.visibility,
@@ -1406,7 +1415,7 @@ impl Painter {
       self.enqueue_background_and_borders(
         fragment,
         abs_bounds,
-        is_root_fragment,
+        root_background,
         &mut local_commands,
       );
       self.enqueue_content(fragment, abs_bounds, &mut local_commands);
@@ -1458,7 +1467,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
-          treat_root_as_canvas,
+          root_paint,
           svg_filter_registry,
           &mut local_commands,
         );
@@ -1470,7 +1479,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
-          treat_root_as_canvas,
+          root_paint,
           svg_filter_registry,
           &mut local_commands,
         );
@@ -1481,7 +1490,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
-          treat_root_as_canvas,
+          root_paint,
           svg_filter_registry,
           &mut local_commands,
         );
@@ -1492,7 +1501,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
-          treat_root_as_canvas,
+          root_paint,
           svg_filter_registry,
           &mut local_commands,
         );
@@ -1505,7 +1514,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
-          treat_root_as_canvas,
+          root_paint,
           svg_filter_registry,
           &mut local_commands,
         );
@@ -1518,7 +1527,7 @@ impl Painter {
           next_offset,
           style_ref,
           false,
-          treat_root_as_canvas,
+          root_paint,
           svg_filter_registry,
           &mut local_commands,
         );
@@ -1532,7 +1541,7 @@ impl Painter {
     self.enqueue_background_and_borders(
       fragment,
       abs_bounds,
-      is_root_fragment,
+      root_background,
       &mut local_commands,
     );
 
@@ -1586,7 +1595,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
-        treat_root_as_canvas,
+        root_paint,
         svg_filter_registry,
         &mut local_commands,
       );
@@ -1600,7 +1609,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
-        treat_root_as_canvas,
+        root_paint,
         svg_filter_registry,
         &mut local_commands,
       );
@@ -1611,7 +1620,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
-        treat_root_as_canvas,
+        root_paint,
         svg_filter_registry,
         &mut local_commands,
       );
@@ -1622,7 +1631,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
-        treat_root_as_canvas,
+        root_paint,
         svg_filter_registry,
         &mut local_commands,
       );
@@ -1635,7 +1644,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
-        treat_root_as_canvas,
+        root_paint,
         svg_filter_registry,
         &mut local_commands,
       );
@@ -1648,7 +1657,7 @@ impl Painter {
         child_offset,
         style_ref,
         false,
-        treat_root_as_canvas,
+        root_paint,
         svg_filter_registry,
         &mut local_commands,
       );
@@ -1844,10 +1853,10 @@ impl Painter {
     &self,
     fragment: &FragmentNode,
     abs_bounds: Rect,
-    is_root_fragment: bool,
+    root_background: Option<bool>,
     items: &mut Vec<DisplayCommand>,
   ) {
-    let style = if is_root_fragment {
+    let style = if root_background.is_some() {
       Self::root_background_style(fragment)
     } else {
       fragment.style.clone()
@@ -1856,7 +1865,7 @@ impl Painter {
 
     let has_background = Self::has_paintable_background(&style);
     if has_background {
-      let background_rect = if is_root_fragment {
+      let background_rect = if matches!(root_background, Some(true)) {
         Rect::from_xywh(0.0, 0.0, self.css_width, self.css_height)
       } else {
         abs_bounds
@@ -7819,6 +7828,16 @@ fn fragment_counts(node: &FragmentNode) -> (usize, usize, usize, usize, usize) {
   (total, text, replaced, lines, inline)
 }
 
+fn fragment_tree_counts(tree: &FragmentTree) -> (usize, usize, usize, usize, usize) {
+  std::iter::once(&tree.root)
+    .chain(tree.additional_fragments.iter())
+    .map(fragment_counts)
+    .fold(
+      (0, 0, 0, 0, 0),
+      |(t0, tx0, r0, l0, i0), (t, tx, r, l, i)| (t0 + t, tx0 + tx, r0 + r, l0 + l, i0 + i),
+    )
+}
+
 fn resolve_filters(
   filters: &[FilterFunction],
   style: &ComputedStyle,
@@ -10005,7 +10024,18 @@ mod tests {
 
     let painter = Painter::new(100, 10, Rgba::WHITE).expect("painter");
     let mut commands = Vec::new();
-    painter.collect_stacking_context(&root, Point::ZERO, None, true, false, None, &mut commands);
+    painter.collect_stacking_context(
+      &root,
+      Point::ZERO,
+      None,
+      true,
+      RootPaintOptions {
+        use_root_background: false,
+        extend_background_to_viewport: false,
+      },
+      None,
+      &mut commands,
+    );
 
     // Background commands occur in paint order; filter child backgrounds to check ordering.
     let xs: Vec<f32> = commands

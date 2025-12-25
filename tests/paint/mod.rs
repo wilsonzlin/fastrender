@@ -10,6 +10,7 @@ mod color_mix_polar_display_list_test;
 mod display_list_renderer_test;
 mod display_list_skip_ink_test;
 mod display_list_test;
+mod fragmented_root_paint;
 mod math_render;
 mod optimize_test;
 mod paged_media_margin_boxes;
