@@ -23,10 +23,20 @@ mod wpt_runner_tests {
   use std::collections::HashMap;
   use std::path::Path;
   use std::path::PathBuf;
+  use std::sync::Once;
   use std::time::Duration;
   use tempfile::TempDir;
 
+  static SET_BUNDLED_FONTS: Once = Once::new();
+
+  fn ensure_bundled_fonts() {
+    SET_BUNDLED_FONTS.call_once(|| {
+      std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
+    });
+  }
+
   fn create_test_renderer() -> fastrender::FastRender {
+    ensure_bundled_fonts();
     fastrender::FastRender::new().unwrap()
   }
 

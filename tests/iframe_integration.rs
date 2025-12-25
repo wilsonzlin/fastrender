@@ -3,11 +3,21 @@ mod r#ref;
 use fastrender::FastRender;
 use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
 use std::path::PathBuf;
+use std::sync::Once;
 use tempfile::tempdir;
 use url::Url;
 
+static SET_BUNDLED_FONTS: Once = Once::new();
+
+fn ensure_bundled_fonts() {
+  SET_BUNDLED_FONTS.call_once(|| {
+    std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
+  });
+}
+
 #[test]
 fn iframe_file_src_renders_nested_document() {
+  ensure_bundled_fonts();
   let temp = tempdir().unwrap();
   let inner_path = temp.path().join("inner.html");
   std::fs::write(

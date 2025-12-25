@@ -39,10 +39,20 @@ use fastrender::FastRender;
 use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig, ImageDiff};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Once;
 
 /// Test configuration for fixtures
 const FIXTURE_WIDTH: u32 = 600;
 const FIXTURE_HEIGHT: u32 = 800;
+
+static SET_BUNDLED_FONTS: Once = Once::new();
+
+fn ensure_bundled_fonts() {
+  SET_BUNDLED_FONTS.call_once(|| {
+    // Keep fixture goldens deterministic across machines.
+    std::env::set_var("FASTR_USE_BUNDLED_FONTS", "1");
+  });
+}
 
 /// Get the fixtures directory path
 fn fixtures_dir() -> PathBuf {
@@ -255,6 +265,7 @@ fn compare_rendered_to_golden(
 /// Returns true if test passes (either rendering succeeds and matches golden,
 /// or golden was updated).
 fn test_fixture(name: &str) -> Result<(), String> {
+  ensure_bundled_fonts();
   let name_owned = name.to_string();
   std::thread::Builder::new()
     .stack_size(64 * 1024 * 1024)
