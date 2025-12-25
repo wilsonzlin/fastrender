@@ -280,6 +280,18 @@ impl Canvas {
     &mut self.pixmap
   }
 
+  /// Returns a mutable reference to the pixmap that will receive composited output.
+  ///
+  /// When painting inside an offscreen layer, this refers to the parent layer's pixmap
+  /// that already contains the backdrop content.
+  pub(crate) fn backdrop_pixmap_mut(&mut self) -> &mut Pixmap {
+    self
+      .layer_stack
+      .last_mut()
+      .map(|layer| &mut layer.pixmap)
+      .unwrap_or(&mut self.pixmap)
+  }
+
   // ========================================================================
   // State Management
   // ========================================================================

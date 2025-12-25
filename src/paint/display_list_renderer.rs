@@ -589,6 +589,8 @@ fn apply_backdrop_filters(
   filters: &[ResolvedFilter],
   radii: BorderRadii,
   scale: f32,
+  clip_mask: Option<&Mask>,
+  clip_bounds: Option<Rect>,
 ) {
   if filters.is_empty() {
     return;
@@ -638,7 +640,7 @@ fn apply_backdrop_filters(
 
   apply_filters(&mut region, filters, scale);
 
-  if !radii.is_zero() {
+  let radii_mask = if !radii.is_zero() {
     let mut mask = match Pixmap::new(region_w, region_h) {
       Some(p) => p,
       None => return,
@@ -654,61 +656,28 @@ fn apply_backdrop_filters(
       &radii.clamped(bounds.width(), bounds.height()),
       Rgba::new(255, 255, 255, 1.0),
     );
-    let mask_pixels = mask.pixels();
-    let pixel_count = mask_pixels.len();
-    if pixel_count > 2048 {
-      region
-        .pixels_mut()
-        .par_iter_mut()
-        .zip(mask_pixels.par_iter())
-        .for_each(|(dst, m)| {
-          let alpha = m.alpha();
-          if alpha == 255 {
-            return;
-          }
-          if alpha == 0 {
-            *dst = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-            return;
-          }
-          let scale = alpha as f32 / 255.0;
-          let premultiply = |v: u8| ((v as f32 * scale).round().clamp(0.0, 255.0)) as u8;
-          *dst = tiny_skia::PremultipliedColorU8::from_rgba(
-            premultiply(dst.red()),
-            premultiply(dst.green()),
-            premultiply(dst.blue()),
-            premultiply(dst.alpha()),
-          )
-          .unwrap_or(*dst);
-        });
-    } else {
-      for (dst, m) in region.pixels_mut().iter_mut().zip(mask_pixels.iter()) {
-        let alpha = m.alpha();
-        if alpha == 255 {
-          continue;
-        }
-        if alpha == 0 {
-          *dst = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap();
-          continue;
-        }
-        let scale = alpha as f32 / 255.0;
-        let premultiply = |v: u8| ((v as f32 * scale).round().clamp(0.0, 255.0)) as u8;
-        *dst = tiny_skia::PremultipliedColorU8::from_rgba(
-          premultiply(dst.red()),
-          premultiply(dst.green()),
-          premultiply(dst.blue()),
-          premultiply(dst.alpha()),
-        )
-        .unwrap_or(*dst);
-      }
-    }
+    Some(mask)
+  } else {
+    None
+  };
+
+  let mut write_rect = *bounds;
+  if let Some(clip) = clip_bounds {
+    let Some(intersection) = write_rect.intersection(clip) else {
+      return;
+    };
+    write_rect = intersection;
+  }
+  if write_rect.width() <= 0.0 || write_rect.height() <= 0.0 {
+    return;
   }
 
-  let write_x = bounds.min_x().floor().max(clamped_x as f32) as u32;
-  let write_y = bounds.min_y().floor().max(clamped_y as f32) as u32;
-  let write_w = (bounds.width().ceil() as i32)
+  let write_x = write_rect.min_x().floor().max(clamped_x as f32).max(0.0) as u32;
+  let write_y = write_rect.min_y().floor().max(clamped_y as f32).max(0.0) as u32;
+  let write_w = (write_rect.width().ceil() as i32)
     .min(pix_w - write_x as i32)
     .max(0) as u32;
-  let write_h = (bounds.height().ceil() as i32)
+  let write_h = (write_rect.height().ceil() as i32)
     .min(pix_h - write_y as i32)
     .max(0) as u32;
   if write_w == 0 || write_h == 0 {
@@ -717,12 +686,59 @@ fn apply_backdrop_filters(
 
   let src_start_x = (write_x as i32 - clamped_x as i32) as u32;
   let src_start_y = (write_y as i32 - clamped_y as i32) as u32;
+  let mut dest_data = pixmap.data_mut();
+  let src_data = region.data();
+  let region_width = region.width() as usize;
+  let clip_mask_data =
+    clip_mask.map(|mask| (mask.data(), mask.width() as usize, mask.height() as usize));
+  let radii_pixels = radii_mask.as_ref().map(|mask| mask.pixels());
+
   for row in 0..write_h as usize {
     let dst_idx = (write_y as usize + row) * bytes_per_row + write_x as usize * 4;
-    let src_idx = ((src_start_y as usize + row) * region_w as usize + src_start_x as usize) * 4;
-    let src = &region.data()[src_idx..src_idx + write_w as usize * 4];
-    let dst = &mut pixmap.data_mut()[dst_idx..dst_idx + write_w as usize * 4];
-    dst.copy_from_slice(src);
+    let src_idx = ((src_start_y as usize + row) * region_width + src_start_x as usize) * 4;
+    let mask_y = write_y as usize + row;
+
+    for col in 0..write_w as usize {
+      let dest_offset = dst_idx + col * 4;
+      let src_offset = src_idx + col * 4;
+      let mut coverage = 255u16;
+
+      if let Some((mask_data, mask_w, mask_h)) = &clip_mask_data {
+        let mask_x = write_x as usize + col;
+        if mask_x >= *mask_w || mask_y >= *mask_h {
+          coverage = 0;
+        } else {
+          let mask_idx = mask_y * mask_w + mask_x;
+          coverage = coverage.saturating_mul(mask_data[mask_idx] as u16) / 255;
+        }
+      }
+
+      if let Some(mask_pixels) = radii_pixels {
+        let mask_idx = (src_start_y as usize + row) * region_width + (src_start_x as usize + col);
+        coverage = coverage.saturating_mul(mask_pixels[mask_idx].alpha() as u16) / 255;
+      }
+
+      if coverage >= 255 {
+        dest_data[dest_offset..dest_offset + 4]
+          .copy_from_slice(&src_data[src_offset..src_offset + 4]);
+        continue;
+      }
+
+      if coverage == 0 {
+        continue;
+      }
+
+      let cov = coverage as f32 / 255.0;
+      let inv = 1.0 - cov;
+      let src_px = &src_data[src_offset..src_offset + 4];
+      let dst_slice = &mut dest_data[dest_offset..dest_offset + 4];
+      for i in 0..4 {
+        let val = (src_px[i] as f32 * cov + dst_slice[i] as f32 * inv)
+          .round()
+          .clamp(0.0, 255.0) as u8;
+        dst_slice[i] = val;
+      }
+    }
   }
 }
 
@@ -1028,6 +1044,14 @@ struct StackingRecord {
   css_bounds: Rect,
   manual_blend: Option<BlendMode>,
   culled: bool,
+  pending_backdrop: Option<PendingBackdrop>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingBackdrop {
+  bounds: Rect,
+  filters: Vec<ResolvedFilter>,
+  radii: BorderRadii,
 }
 
 impl DisplayListRenderer {
@@ -2507,6 +2531,31 @@ impl DisplayListRenderer {
     Ok(self.canvas.into_pixmap())
   }
 
+  fn apply_pending_backdrop(&mut self, next_item: &DisplayItem) {
+    let Some(record) = self.stacking_layers.last_mut() else {
+      return;
+    };
+    if record.pending_backdrop.is_none() {
+      return;
+    }
+    if matches!(next_item, DisplayItem::PushClip(_)) {
+      return;
+    }
+
+    let pending = record.pending_backdrop.take().unwrap();
+    let clip_mask = self.canvas.clip_mask().cloned();
+    let clip_bounds = self.canvas.clip_bounds();
+    apply_backdrop_filters(
+      self.canvas.backdrop_pixmap_mut(),
+      &pending.bounds,
+      &pending.filters,
+      pending.radii,
+      self.scale,
+      clip_mask.as_ref(),
+      clip_bounds,
+    );
+  }
+
   fn render_item(&mut self, item: &DisplayItem) -> Result<()> {
     if self.culled_depth > 0 {
       match item {
@@ -2522,6 +2571,8 @@ impl DisplayListRenderer {
       }
       return Ok(());
     }
+
+    self.apply_pending_backdrop(item);
 
     match item {
       DisplayItem::FillRect(FillRectItem { rect, color }) => {
@@ -2587,12 +2638,13 @@ impl DisplayListRenderer {
 
         let scaled_filters = self.ds_filters(&item.filters);
         let scaled_backdrop = self.ds_filters(&item.backdrop_filters);
+        let has_backdrop = !scaled_backdrop.is_empty();
         let css_bounds = item.bounds;
         let bounds = self.ds_rect(css_bounds);
         let radii = self.ds_radii(item.radii);
         let mask = item.mask.clone();
 
-        let is_isolated = item.is_isolated || !scaled_backdrop.is_empty();
+        let is_isolated = item.is_isolated || has_backdrop;
         let manual_blend = if is_manual_blend(item.mix_blend_mode) && !is_isolated {
           Some(item.mix_blend_mode)
         } else {
@@ -2607,16 +2659,16 @@ impl DisplayListRenderer {
 
         self.transform_stack.push(combined_transform_3d);
 
-        if !scaled_backdrop.is_empty() {
+        let pending_backdrop = if has_backdrop {
           let backdrop_bounds = transform_rect(bounds, &combined_transform);
-          apply_backdrop_filters(
-            self.canvas.pixmap_mut(),
-            &backdrop_bounds,
-            &scaled_backdrop,
+          Some(PendingBackdrop {
+            bounds: backdrop_bounds,
+            filters: scaled_backdrop,
             radii,
-            self.scale,
-          );
-        }
+          })
+        } else {
+          None
+        };
 
         let needs_layer = is_isolated
           || !matches!(
@@ -2624,7 +2676,7 @@ impl DisplayListRenderer {
             crate::paint::display_list::BlendMode::Normal
           )
           || !scaled_filters.is_empty()
-          || !scaled_backdrop.is_empty()
+          || has_backdrop
           || mask.is_some();
         if needs_layer {
           if manual_blend.is_some() {
@@ -2649,6 +2701,7 @@ impl DisplayListRenderer {
           css_bounds,
           manual_blend,
           culled: false,
+          pending_backdrop,
         });
 
         if item.transform.is_some() {
@@ -2668,6 +2721,7 @@ impl DisplayListRenderer {
             css_bounds: Rect::ZERO,
             manual_blend: None,
             culled: false,
+            pending_backdrop: None,
           });
 
         let _ = self.transform_stack.pop();
