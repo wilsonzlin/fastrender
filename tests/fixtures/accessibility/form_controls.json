@@ -1,0 +1,82 @@
+{
+  "present": {
+    "check": {
+      "role": "checkbox",
+      "name": null,
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "checked": "true"
+      }
+    },
+    "slider": {
+      "role": "slider",
+      "name": "5",
+      "description": null,
+      "value": "Medium",
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "combo": {
+      "role": "combobox",
+      "name": "B",
+      "description": null,
+      "value": "B",
+      "level": null,
+      "html_tag": "select",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "opt-b": {
+      "role": "option",
+      "name": "B",
+      "description": null,
+      "value": "B",
+      "level": null,
+      "html_tag": "option",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "selected": true
+      }
+    },
+    "toggle": {
+      "role": "button",
+      "name": "Toggle",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "button",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false,
+        "pressed": "mixed"
+      }
+    }
+  }
+}

@@ -1,6 +1,7 @@
 use fastrender::accessibility::{AccessibilityNode, CheckState, PressedState};
-use fastrender::api::FastRender;
+use fastrender::api::{FastRender, RenderOptions};
 use serde_json::{json, Value};
+use std::fs;
 
 fn find_by_id<'a>(node: &'a AccessibilityNode, id: &str) -> Option<&'a AccessibilityNode> {
   if node.id.as_deref() == Some(id) {
@@ -34,6 +35,13 @@ fn render_accessibility_json(html: &str) -> Value {
     .accessibility_tree_json(&dom, 800, 600)
     .expect("accessibility tree json");
   serde_json::from_str(&json).expect("parse json")
+}
+
+fn render_accessibility_json_with_options(html: &str, options: RenderOptions) -> Value {
+  let mut renderer = FastRender::new().expect("renderer");
+  renderer
+    .accessibility_tree_html_json(html, options)
+    .expect("accessibility tree json")
 }
 
 fn find_json_node<'a>(node: &'a Value, id: &str) -> Option<&'a Value> {
@@ -552,4 +560,56 @@ fn accessibility_form_controls_snapshot_json() {
       }
     })
   );
+}
+
+#[test]
+fn accessibility_fixture_snapshots() {
+  let fixtures = [
+    "headings_links",
+    "labels",
+    "form_controls",
+    "inert_and_hidden",
+    "modal_top_layer",
+  ];
+
+  for name in fixtures {
+    let html = fs::read_to_string(format!("tests/fixtures/accessibility/{name}.html"))
+      .expect("read html fixture");
+    let expected: Value = serde_json::from_str(
+      &fs::read_to_string(format!("tests/fixtures/accessibility/{name}.json"))
+        .expect("read json fixture"),
+    )
+    .expect("parse expected json");
+
+    let tree =
+      render_accessibility_json_with_options(&html, RenderOptions::new().with_viewport(800, 600));
+
+    let present = expected
+      .get("present")
+      .and_then(|v| v.as_object())
+      .cloned()
+      .unwrap_or_default();
+    let absent: Vec<String> = expected
+      .get("absent")
+      .and_then(|v| v.as_array())
+      .map(|arr| {
+        arr
+          .iter()
+          .filter_map(|v| v.as_str().map(str::to_string))
+          .collect()
+      })
+      .unwrap_or_default();
+
+    let present_ids: Vec<String> = present.keys().cloned().collect();
+    let id_refs: Vec<&str> = present_ids.iter().map(|s| s.as_str()).collect();
+    let subset = snapshot_subset(&tree, &id_refs);
+
+    assert_eq!(subset, Value::Object(present), "fixture {name}");
+    for missing in absent {
+      assert!(
+        find_json_node(&tree, &missing).is_none(),
+        "expected node {missing} to be absent in fixture {name}"
+      );
+    }
+  }
 }

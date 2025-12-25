@@ -22,6 +22,8 @@ Use `FastRender::builder()` to set defaults (viewport size, background color, ba
 - `device_pixel_ratio: Option<f32>` – temporarily override the DPR used for media queries and image/srcset selection.
 - `media_type: MediaType` – defaults to `MediaType::Screen`.
 - `scroll_x`, `scroll_y` – apply CSS px scroll offsets before painting.
+- `css_limit: Option<usize>` – limit the number of linked stylesheets inlined by the fetch helpers.
+- `capture_accessibility: bool` – include an accessibility tree in render results (see below).
 - `allow_partial` – when rendering URLs, return a placeholder pixmap + diagnostics instead of an error if the document fails to fetch.
 
 ```rust
@@ -114,6 +116,16 @@ When enabled:
   the 0.1–10 range for stability.
 - The visual viewport (used for `device-width` media features) and effective
   device pixel ratio are scaled by the resolved zoom factor.
+
+## Accessibility trees
+
+FastRender can emit the computed accessibility tree so semantics can be validated alongside pixels:
+
+- `FastRender::accessibility_tree_html(html, options)` builds the accessibility tree directly from HTML without running layout/paint.
+- `FastRender::render_html_with_accessibility(html, options)` returns both the rendered `Pixmap` and the accessibility tree for convenience.
+- When `RenderOptions::capture_accessibility` is set, `RenderResult` populates `accessibility: Option<AccessibilityNode>` alongside diagnostics.
+
+`AccessibilityNode` is `Serialize`, so callers can convert it to `serde_json::Value` or a pretty-printed string. The `dump_a11y` CLI binary emits the JSON tree for a cached HTML document.
 
 ## DOM compatibility mode
 

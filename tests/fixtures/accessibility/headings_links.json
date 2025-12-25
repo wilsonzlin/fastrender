@@ -1,0 +1,64 @@
+{
+  "present": {
+    "title": {
+      "role": "heading",
+      "name": "Main Title",
+      "description": null,
+      "value": null,
+      "level": 1,
+      "html_tag": "h1",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "subtitle": {
+      "role": "heading",
+      "name": "Subtitle",
+      "description": null,
+      "value": null,
+      "level": 5,
+      "html_tag": "h2",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "link": {
+      "role": "link",
+      "name": "Primary link",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "visited": {
+      "role": "link",
+      "name": "Visited link",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "a",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": true
+      }
+    }
+  }
+}

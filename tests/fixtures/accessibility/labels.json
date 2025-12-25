@@ -1,0 +1,49 @@
+{
+  "present": {
+    "user": {
+      "role": "textbox",
+      "name": "Username",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "search": {
+      "role": "searchbox",
+      "name": "Search the site",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "input",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "named": {
+      "role": "generic",
+      "name": "Custom Label",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "div",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  }
+}

@@ -485,6 +485,8 @@ pub struct RenderOptions {
   pub scroll_y: f32,
   /// Maximum number of external stylesheets to inline. `None` means unlimited.
   pub css_limit: Option<usize>,
+  /// When true, include an accessibility tree alongside rendering results.
+  pub capture_accessibility: bool,
   /// When true, document fetch failures will return a placeholder pixmap with diagnostics instead of an error.
   pub allow_partial: bool,
 }
@@ -498,6 +500,7 @@ impl Default for RenderOptions {
       scroll_x: 0.0,
       scroll_y: 0.0,
       css_limit: None,
+      capture_accessibility: false,
       allow_partial: false,
     }
   }
@@ -537,6 +540,12 @@ impl RenderOptions {
   /// Limit the number of linked stylesheets to inline.
   pub fn with_stylesheet_limit(mut self, limit: Option<usize>) -> Self {
     self.css_limit = limit;
+    self
+  }
+
+  /// Request an accessibility tree alongside rendered output.
+  pub fn with_accessibility(mut self, enabled: bool) -> Self {
+    self.capture_accessibility = enabled;
     self
   }
 
@@ -614,6 +623,8 @@ pub enum ResourceKind {
 pub struct RenderResult {
   /// Rendered pixels.
   pub pixmap: Pixmap,
+  /// Optional accessibility tree captured during rendering.
+  pub accessibility: Option<AccessibilityNode>,
   /// Diagnostics captured while fetching resources.
   pub diagnostics: RenderDiagnostics,
 }
@@ -761,6 +772,17 @@ impl RenderResult {
   pub fn into_pixmap(self) -> Pixmap {
     self.pixmap
   }
+
+  /// Return the captured accessibility tree, if present.
+  pub fn accessibility(&self) -> Option<&AccessibilityNode> {
+    self.accessibility.as_ref()
+  }
+}
+
+#[derive(Debug)]
+struct RenderOutputs {
+  pixmap: Pixmap,
+  accessibility: Option<AccessibilityNode>,
 }
 
 /// Request for capturing intermediate render artifacts.
@@ -851,6 +873,8 @@ impl RenderArtifacts {
 pub struct RenderReport {
   /// Rendered pixels.
   pub pixmap: Pixmap,
+  /// Optional accessibility tree captured during rendering.
+  pub accessibility: Option<AccessibilityNode>,
   /// Diagnostics captured while fetching resources.
   pub diagnostics: RenderDiagnostics,
   /// Optional intermediate artifacts captured during the render.
@@ -862,6 +886,7 @@ impl RenderReport {
   pub fn into_result(self) -> RenderResult {
     RenderResult {
       pixmap: self.pixmap,
+      accessibility: self.accessibility,
       diagnostics: self.diagnostics,
     }
   }
@@ -1587,7 +1612,8 @@ impl FastRender {
 
   /// Renders HTML with explicit per-request options.
   pub fn render_html_with_options(&mut self, html: &str, options: RenderOptions) -> Result<Pixmap> {
-    self.render_html_with_options_internal(html, options, None)
+    let outputs = self.render_html_with_options_internal(html, options, None)?;
+    Ok(outputs.pixmap)
   }
 
   /// Renders HTML with options while capturing requested artifacts.
@@ -1597,7 +1623,38 @@ impl FastRender {
     options: RenderOptions,
     artifacts: &mut RenderArtifacts,
   ) -> Result<Pixmap> {
-    self.render_html_with_options_internal(html, options, Some(artifacts))
+    let outputs = self.render_html_with_options_internal(html, options, Some(artifacts))?;
+    Ok(outputs.pixmap)
+  }
+
+  /// Renders HTML and returns both the pixmap and accessibility tree.
+  pub fn render_html_with_accessibility(
+    &mut self,
+    html: &str,
+    mut options: RenderOptions,
+  ) -> Result<(Pixmap, AccessibilityNode)> {
+    options.capture_accessibility = true;
+    let outputs = self.render_html_with_options_internal(html, options, None)?;
+    let Some(tree) = outputs.accessibility else {
+      return Err(Error::Render(RenderError::InvalidParameters {
+        message: "Accessibility capture was requested but not produced".to_string(),
+      }));
+    };
+
+    Ok((outputs.pixmap, tree))
+  }
+
+  /// Convenience wrapper to render HTML with a viewport and capture accessibility output.
+  pub fn render_html_with_accessibility_viewport(
+    &mut self,
+    html: &str,
+    width: u32,
+    height: u32,
+  ) -> Result<(Pixmap, AccessibilityNode)> {
+    let options = RenderOptions::new()
+      .with_viewport(width, height)
+      .with_accessibility(true);
+    self.render_html_with_accessibility(html, options)
   }
 
   fn render_html_with_options_internal(
@@ -1605,7 +1662,7 @@ impl FastRender {
     html: &str,
     options: RenderOptions,
     artifacts: Option<&mut RenderArtifacts>,
-  ) -> Result<Pixmap> {
+  ) -> Result<RenderOutputs> {
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
@@ -1621,6 +1678,7 @@ impl FastRender {
       options.scroll_x,
       options.scroll_y,
       options.media_type,
+      options.capture_accessibility,
       artifacts,
     );
 
@@ -1644,8 +1702,9 @@ impl FastRender {
     scroll_x: f32,
     scroll_y: f32,
     media_type: MediaType,
+    capture_accessibility: bool,
     mut artifacts: Option<&mut RenderArtifacts>,
-  ) -> Result<Pixmap> {
+  ) -> Result<RenderOutputs> {
     // Validate dimensions
     if width == 0 || height == 0 {
       return Err(Error::Render(RenderError::InvalidParameters {
@@ -1684,7 +1743,7 @@ impl FastRender {
 
     let previous_dpr = self.device_pixel_ratio;
 
-    let result = (|| -> Result<Pixmap> {
+    let result = (|| -> Result<RenderOutputs> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
       let layout_artifacts = self.layout_document_for_media_with_artifacts(
@@ -1710,6 +1769,7 @@ impl FastRender {
         }
       }
       let layout_viewport = fragment_tree.viewport_size();
+      let styled_tree = styled_tree;
       if std::env::var("FASTR_LOG_FRAG_BOUNDS")
         .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
         .unwrap_or(false)
@@ -1924,7 +1984,16 @@ impl FastRender {
         }
       }
 
-      Ok(pixmap)
+      let accessibility = if capture_accessibility {
+        Some(crate::accessibility::build_accessibility_tree(&styled_tree))
+      } else {
+        None
+      };
+
+      Ok(RenderOutputs {
+        pixmap,
+        accessibility,
+      })
     })();
 
     self.device_pixel_ratio = previous_dpr;
@@ -2241,6 +2310,7 @@ impl FastRender {
           let pixmap = self.render_error_overlay(width, height)?;
           return Ok(RenderReport {
             pixmap,
+            accessibility: None,
             diagnostics,
             artifacts: RenderArtifacts::new(artifacts),
           });
@@ -2294,12 +2364,13 @@ impl FastRender {
       &mut diagnostics,
     );
     let mut captured = RenderArtifacts::new(artifacts);
-    let pixmap =
-      self.render_html_with_options_and_artifacts(&html_with_css, options, &mut captured)?;
+    let outputs =
+      self.render_html_with_options_internal(&html_with_css, options, Some(&mut captured))?;
     diagnostics.font = Some(self.font_context.font_stats_snapshot());
 
     Ok(RenderReport {
-      pixmap,
+      pixmap: outputs.pixmap,
+      accessibility: outputs.accessibility,
       diagnostics,
       artifacts: captured,
     })
@@ -2337,12 +2408,13 @@ impl FastRender {
       &mut diagnostics,
     );
     let mut captured = RenderArtifacts::new(artifacts);
-    let pixmap =
-      self.render_html_with_options_and_artifacts(&html_with_css, options, &mut captured)?;
+    let outputs =
+      self.render_html_with_options_internal(&html_with_css, options, Some(&mut captured))?;
     diagnostics.font = Some(self.font_context.font_stats_snapshot());
 
     Ok(RenderReport {
-      pixmap,
+      pixmap: outputs.pixmap,
+      accessibility: outputs.accessibility,
       diagnostics,
       artifacts: captured,
     })
@@ -2507,28 +2579,71 @@ impl FastRender {
     width: u32,
     height: u32,
   ) -> Result<AccessibilityNode> {
+    let options = RenderOptions::new().with_viewport(width, height);
+    self.accessibility_tree_with_options(dom, options)
+  }
+
+  /// Computes the accessibility tree for a parsed document using render options.
+  pub fn accessibility_tree_with_options(
+    &mut self,
+    dom: &DomNode,
+    options: RenderOptions,
+  ) -> Result<AccessibilityNode> {
+    let (width, height) = options
+      .viewport
+      .unwrap_or((self.default_width, self.default_height));
     if width == 0 || height == 0 {
       return Err(Error::Render(RenderError::InvalidParameters {
         message: "Viewport width and height must be positive".to_string(),
       }));
     }
 
+    let original_dpr = self.device_pixel_ratio;
+    if let Some(dpr) = options.device_pixel_ratio {
+      self.device_pixel_ratio = dpr;
+    }
+
+    let requested_viewport = Size::new(width as f32, height as f32);
+    let meta_viewport = if self.apply_meta_viewport {
+      crate::html::viewport::extract_viewport(dom)
+    } else {
+      None
+    };
+    let resolved_viewport = resolve_viewport(
+      requested_viewport,
+      self.device_pixel_ratio,
+      meta_viewport.as_ref(),
+    );
+
     let target_fragment = self.current_target_fragment();
-    let media_ctx = MediaContext::screen(width as f32, height as f32)
-      .with_device_pixel_ratio(self.device_pixel_ratio)
-      .with_env_overrides();
+    let mut dom_with_state = dom.clone();
+    let modal_open = modal_dialog_present(&dom_with_state);
+    apply_top_layer_state(&mut dom_with_state, modal_open, false);
+    let viewport_size = resolved_viewport.layout_viewport;
+    let device_size = resolved_viewport.visual_viewport;
+    let media_ctx = match options.media_type {
+      MediaType::Print => MediaContext::print(viewport_size.width, viewport_size.height),
+      MediaType::Screen => MediaContext::screen(viewport_size.width, viewport_size.height),
+      other => {
+        MediaContext::screen(viewport_size.width, viewport_size.height).with_media_type(other)
+      }
+    }
+    .with_device_size(device_size.width, device_size.height)
+    .with_device_pixel_ratio(resolved_viewport.device_pixel_ratio)
+    .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
-    let stylesheet = self.collect_document_stylesheet(dom, &media_ctx, &mut media_query_cache);
+    let stylesheet =
+      self.collect_document_stylesheet(&dom_with_state, &media_ctx, &mut media_query_cache);
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
     // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
-    std::thread::scope(|scope| {
+    let result = std::thread::scope(|scope| {
       let handle = std::thread::Builder::new()
         .name("fastr-accessibility".to_string())
         .stack_size(8 * 1024 * 1024)
         .spawn_scoped(scope, || {
           let mut local_media_query_cache = MediaQueryCache::default();
           let styled_tree = apply_styles_with_media_target_and_imports_cached(
-            dom,
+            &dom_with_state,
             &stylesheet,
             &media_ctx,
             target_fragment.as_deref(),
@@ -2553,7 +2668,28 @@ impl FastRender {
           message: "Accessibility worker thread panicked".to_string(),
         })
       })
-    })
+    });
+
+    if options.device_pixel_ratio.is_some() {
+      self.device_pixel_ratio = original_dpr;
+    }
+
+    result
+  }
+
+  /// Computes the accessibility tree for an HTML string using render options.
+  pub fn accessibility_tree_html(
+    &mut self,
+    html: &str,
+    options: RenderOptions,
+  ) -> Result<AccessibilityNode> {
+    let base_hint = self.base_url.clone().unwrap_or_default();
+    let base_url = infer_base_url(html, &base_hint).into_owned();
+    if !base_url.is_empty() {
+      self.set_base_url(base_url);
+    }
+    let dom = self.parse_html(html)?;
+    self.accessibility_tree_with_options(&dom, options)
   }
 
   /// Convenience helper to serialize the accessibility tree to JSON.
@@ -2565,6 +2701,20 @@ impl FastRender {
   ) -> Result<String> {
     let tree = self.accessibility_tree(dom, width, height)?;
     serde_json::to_string_pretty(&tree).map_err(|e| {
+      Error::Render(RenderError::InvalidParameters {
+        message: format!("Failed to serialize accessibility tree: {e}"),
+      })
+    })
+  }
+
+  /// Serialize the accessibility tree for an HTML string.
+  pub fn accessibility_tree_html_json(
+    &mut self,
+    html: &str,
+    options: RenderOptions,
+  ) -> Result<serde_json::Value> {
+    let tree = self.accessibility_tree_html(html, options)?;
+    serde_json::to_value(tree).map_err(|e| {
       Error::Render(RenderError::InvalidParameters {
         message: format!("Failed to serialize accessibility tree: {e}"),
       })
@@ -5628,7 +5778,18 @@ pub(crate) fn render_html_with_shared_resources(
     dom_compat_mode: DomCompatibilityMode::Standard,
   };
 
-  renderer.render_html_internal(html, width, height, 0.0, 0.0, MediaType::Screen, None)
+  renderer
+    .render_html_internal(
+      html,
+      width,
+      height,
+      0.0,
+      0.0,
+      MediaType::Screen,
+      false,
+      None,
+    )
+    .map(|out| out.pixmap)
 }
 
 #[cfg(test)]

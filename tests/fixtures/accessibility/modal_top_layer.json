@@ -1,0 +1,35 @@
+{
+  "present": {
+    "modal": {
+      "role": "generic",
+      "name": "Confirm",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "dialog",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    },
+    "modal-btn": {
+      "role": "button",
+      "name": "Confirm",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "button",
+      "states": {
+        "focusable": true,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  },
+  "absent": ["before", "after"]
+}

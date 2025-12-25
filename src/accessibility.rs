@@ -421,6 +421,7 @@ fn is_node_hidden(node: &StyledNode) -> bool {
   };
 
   attr_hidden
+    || node.styles.inert
     || matches!(node.styles.display, Display::None)
     || node.styles.visibility != Visibility::Visible
 }

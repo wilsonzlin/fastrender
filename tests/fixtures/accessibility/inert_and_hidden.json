@@ -1,0 +1,20 @@
+{
+  "present": {
+    "visible": {
+      "role": "generic",
+      "name": "Visible text",
+      "description": null,
+      "value": null,
+      "level": null,
+      "html_tag": "div",
+      "states": {
+        "focusable": false,
+        "disabled": false,
+        "required": false,
+        "invalid": false,
+        "visited": false
+      }
+    }
+  },
+  "absent": ["hidden", "inert", "inert-btn"]
+}
