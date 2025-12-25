@@ -3,6 +3,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use fastrender::css::types::BoxShadow;
 use fastrender::css::types::ColorStop;
+use fastrender::css::types::Transform as CssTransform;
 use fastrender::geometry::Rect;
 use fastrender::image_loader::ImageCache;
 use fastrender::paint::display_list::BlendMode;
@@ -26,6 +27,7 @@ use fastrender::paint::display_list::TextDecorationItem;
 use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
+use fastrender::paint::painter::scale_pixmap_for_dpr;
 use fastrender::style::color::Color;
 use fastrender::style::types::BackfaceVisibility;
 use fastrender::style::types::BackgroundImage;
@@ -334,6 +336,25 @@ fn assert_oklch_components(
 fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
   let px = pixmap.pixel(x, y).unwrap();
   (px.red(), px.green(), px.blue(), px.alpha())
+}
+
+fn downsample_half(pixmap: Pixmap) -> Pixmap {
+  scale_pixmap_for_dpr(pixmap, 0.5).expect("downsample pixmap")
+}
+
+fn mean_abs_diff(a: &Pixmap, b: &Pixmap) -> f32 {
+  assert_eq!(a.width(), b.width());
+  assert_eq!(a.height(), b.height());
+
+  let mut total: u64 = 0;
+  let mut count: u64 = 0;
+  for (pa, pb) in a.data().chunks_exact(4).zip(b.data().chunks_exact(4)) {
+    for i in 0..4 {
+      total += pa[i].abs_diff(pb[i]) as u64;
+      count += 1;
+    }
+  }
+  total as f32 / count as f32
 }
 
 fn project_point_2d(transform: &Transform3D, point: (f32, f32)) -> Option<(f32, f32)> {
@@ -845,6 +866,80 @@ fn clip_path_warped_with_perspective_transform() {
   assert!(
     width < bounds.width() as u32 && height < bounds.height() as u32,
     "clip-path should tighten the projected bounds, got {width}x{height}"
+  );
+}
+
+#[test]
+fn perspective_transform_matches_when_downsampled_from_hidpi() {
+  let mut child_style = ComputedStyle::default();
+  child_style.background_color = Rgba::RED;
+  child_style.perspective = Some(Length::px(320.0));
+  child_style.transform = vec![
+    CssTransform::RotateY(30.0),
+    CssTransform::Translate(Length::px(8.0), Length::px(0.0)),
+  ];
+  let child_style = Arc::new(child_style);
+
+  let mut root_style = ComputedStyle::default();
+  root_style.background_color = Rgba::WHITE;
+  let root_style = Arc::new(root_style);
+
+  let child = FragmentNode::new_block_styled(
+    Rect::from_xywh(20.0, 12.0, 36.0, 28.0),
+    vec![],
+    child_style,
+  );
+  let root = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 80.0, 60.0),
+    vec![child],
+    root_style,
+  );
+
+  let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+
+  let baseline_renderer =
+    DisplayListRenderer::new_scaled(80, 60, Rgba::WHITE, FontContext::new(), 1.0).unwrap();
+  let baseline = baseline_renderer.render(&list).expect("render 1x");
+
+  let hidpi_renderer =
+    DisplayListRenderer::new_scaled(80, 60, Rgba::WHITE, FontContext::new(), 2.0).unwrap();
+  let hidpi = hidpi_renderer.render(&list).expect("render 2x");
+  let hidpi_down = downsample_half(hidpi);
+
+  let red_predicate = |(r, g, b, a): (u8, u8, u8, u8)| a > 0 && r > g + 10 && r > b + 10;
+  let bbox_base = bounding_box_for_color(&baseline, red_predicate).expect("baseline bbox");
+  let bbox_down = bounding_box_for_color(&hidpi_down, red_predicate).expect("hidpi bbox");
+
+  assert!(
+    bbox_base.0.abs_diff(bbox_down.0) <= 1
+      && bbox_base.1.abs_diff(bbox_down.1) <= 1
+      && bbox_base.2.abs_diff(bbox_down.2) <= 1
+      && bbox_base.3.abs_diff(bbox_down.3) <= 1,
+    "expected similar projected bounds: {:?} vs {:?}",
+    bbox_base,
+    bbox_down
+  );
+
+  let center_x = (bbox_base.0 + bbox_base.2) / 2;
+  let center_y = (bbox_base.1 + bbox_base.3) / 2;
+  let center_base = pixel(&baseline, center_x, center_y);
+  let center_down = pixel(&hidpi_down, center_x, center_y);
+  let max_center_delta = center_base
+    .0
+    .abs_diff(center_down.0)
+    .max(center_base.1.abs_diff(center_down.1))
+    .max(center_base.2.abs_diff(center_down.2));
+  assert!(
+    max_center_delta <= 4,
+    "center color should remain consistent after downsampling (base {:?}, hidpi {:?})",
+    center_base,
+    center_down
+  );
+
+  let avg_diff = mean_abs_diff(&baseline, &hidpi_down);
+  assert!(
+    avg_diff <= 3.0,
+    "overall difference should stay small after downsampling, got {avg_diff}"
   );
 }
 

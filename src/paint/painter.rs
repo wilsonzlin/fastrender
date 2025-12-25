@@ -10043,6 +10043,25 @@ mod tests {
     }
   }
 
+  fn downsample_half(pixmap: Pixmap) -> Pixmap {
+    scale_pixmap_for_dpr(pixmap, 0.5).expect("downsample pixmap")
+  }
+
+  fn mean_abs_diff(a: &Pixmap, b: &Pixmap) -> f32 {
+    assert_eq!(a.width(), b.width());
+    assert_eq!(a.height(), b.height());
+
+    let mut total: u64 = 0;
+    let mut count: u64 = 0;
+    for (pa, pb) in a.data().chunks_exact(4).zip(b.data().chunks_exact(4)) {
+      for i in 0..4 {
+        total += pa[i].abs_diff(pb[i]) as u64;
+        count += 1;
+      }
+    }
+    total as f32 / count as f32
+  }
+
   fn two_color_data_url() -> String {
     let pixels = vec![
       255, 0, 0, 255, // red
@@ -10399,6 +10418,74 @@ mod tests {
             red_bbox,
             shadow_pixels
         );
+  }
+
+  #[test]
+  fn perspective_transform_is_consistent_across_device_scale() {
+    let mut child_style = ComputedStyle::default();
+    child_style.background_color = Rgba::RED;
+    child_style.perspective = Some(Length::px(320.0));
+    child_style.transform = vec![
+      crate::css::types::Transform::RotateY(30.0),
+      crate::css::types::Transform::Translate(Length::px(8.0), Length::px(0.0)),
+    ];
+    let child_style = Arc::new(child_style);
+
+    let mut root_style = ComputedStyle::default();
+    root_style.background_color = Rgba::WHITE;
+    let root_style = Arc::new(root_style);
+
+    let child = FragmentNode::new_block_styled(
+      Rect::from_xywh(20.0, 12.0, 36.0, 28.0),
+      vec![],
+      child_style,
+    );
+    let root = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 80.0, 60.0),
+      vec![child],
+      root_style,
+    );
+    let tree = FragmentTree::new(root);
+
+    let baseline = paint_tree_scaled(&tree, 80, 60, Rgba::WHITE, 1.0).expect("paint 1x");
+    let hidpi = paint_tree_scaled(&tree, 80, 60, Rgba::WHITE, 2.0).expect("paint 2x");
+    let hidpi_down = downsample_half(hidpi);
+
+    let red_predicate = |(r, g, b, a): (u8, u8, u8, u8)| a > 0 && r > g + 10 && r > b + 10;
+    let bbox_base = bounding_box_for_color(&baseline, red_predicate).expect("baseline bbox");
+    let bbox_down = bounding_box_for_color(&hidpi_down, red_predicate).expect("hidpi bbox");
+
+    assert!(
+      bbox_base.0.abs_diff(bbox_down.0) <= 1
+        && bbox_base.1.abs_diff(bbox_down.1) <= 1
+        && bbox_base.2.abs_diff(bbox_down.2) <= 1
+        && bbox_base.3.abs_diff(bbox_down.3) <= 1,
+      "expected similar projected bounds: {:?} vs {:?}",
+      bbox_base,
+      bbox_down
+    );
+
+    let center_x = (bbox_base.0 + bbox_base.2) / 2;
+    let center_y = (bbox_base.1 + bbox_base.3) / 2;
+    let center_base = color_at(&baseline, center_x, center_y);
+    let center_down = color_at(&hidpi_down, center_x, center_y);
+    let max_center_delta = center_base
+      .0
+      .abs_diff(center_down.0)
+      .max(center_base.1.abs_diff(center_down.1))
+      .max(center_base.2.abs_diff(center_down.2));
+    assert!(
+      max_center_delta <= 4,
+      "center color should remain consistent after downsampling (base {:?}, hidpi {:?})",
+      center_base,
+      center_down
+    );
+
+    let avg_diff = mean_abs_diff(&baseline, &hidpi_down);
+    assert!(
+      avg_diff <= 3.0,
+      "overall difference should stay small after downsampling, got {avg_diff}"
+    );
   }
 
   #[test]
