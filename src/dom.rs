@@ -2158,6 +2158,7 @@ impl<'a> Element for ElementRef<'a> {
       | PseudoElement::FirstLetter
       | PseudoElement::Marker
       | PseudoElement::Backdrop => true,
+      PseudoElement::Slotted(_) | PseudoElement::Part(_) => false,
     }
   }
 

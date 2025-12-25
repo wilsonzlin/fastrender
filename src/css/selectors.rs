@@ -13,6 +13,7 @@ use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use selectors::parser::{Combinator, RelativeSelector, RelativeSelectorMatchHint};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// Direction keyword for :dir()
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,7 +259,7 @@ impl ToCss for PseudoClass {
 // ============================================================================
 
 /// Pseudo-elements we support
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PseudoElement {
   Before,
   After,
@@ -266,10 +267,28 @@ pub enum PseudoElement {
   FirstLetter,
   Marker,
   Backdrop,
+  Slotted(Box<[Selector<FastRenderSelectorImpl>]>),
+  Part(Vec<CssString>),
 }
 
 impl selectors::parser::PseudoElement for PseudoElement {
   type Impl = FastRenderSelectorImpl;
+}
+
+impl std::hash::Hash for PseudoElement {
+  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+    std::mem::discriminant(self).hash(state);
+    match self {
+      PseudoElement::Slotted(selectors) => {
+        selectors.len().hash(state);
+        for selector in selectors.iter() {
+          selector.to_css_string().hash(state);
+        }
+      }
+      PseudoElement::Part(names) => names.hash(state),
+      _ => {}
+    }
+  }
 }
 
 impl ToCss for PseudoElement {
@@ -284,6 +303,26 @@ impl ToCss for PseudoElement {
       PseudoElement::FirstLetter => dest.write_str("::first-letter"),
       PseudoElement::Marker => dest.write_str("::marker"),
       PseudoElement::Backdrop => dest.write_str("::backdrop"),
+      PseudoElement::Slotted(selectors) => {
+        dest.write_str("::slotted(")?;
+        for (i, selector) in selectors.iter().enumerate() {
+          if i > 0 {
+            dest.write_str(", ")?;
+          }
+          selector.to_css(dest)?;
+        }
+        dest.write_str(")")
+      }
+      PseudoElement::Part(names) => {
+        dest.write_str("::part(")?;
+        for (i, name) in names.iter().enumerate() {
+          if i > 0 {
+            dest.write_char(' ')?;
+          }
+          name.to_css(dest)?;
+        }
+        dest.write_str(")")
+      }
     }
   }
 }
@@ -501,6 +540,23 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
     }
   }
 
+  fn parse_functional_pseudo_element<'t>(
+    &self,
+    name: cssparser::CowRcStr<'i>,
+    parser: &mut Parser<'i, 't>,
+  ) -> std::result::Result<PseudoElement, ParseError<'i, Self::Error>> {
+    let lowered = name.to_ascii_lowercase();
+    match lowered.as_str() {
+      "slotted" => parse_slotted_pseudo_element(parser, &name),
+      "part" => parse_part_pseudo_element(parser, &name),
+      _ => Err(
+        parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+          name,
+        )),
+      ),
+    }
+  }
+
   fn parse_is_and_where(&self) -> bool {
     // Enable parsing of :is() and :where() pseudo-classes
     true
@@ -547,8 +603,63 @@ fn build_relative_selectors(
     .into_boxed_slice()
 }
 
+fn parse_slotted_pseudo_element<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  name: &cssparser::CowRcStr<'i>,
+) -> std::result::Result<PseudoElement, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let list = SelectorList::parse(
+    &PseudoClassParser,
+    parser,
+    selectors::parser::ParseRelative::No,
+  )
+  .map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+      name.clone(),
+    ))
+  })?;
+
+  let selectors: Vec<_> = list.slice().iter().cloned().collect();
+  if selectors.is_empty() || selectors.iter().any(selector_has_combinators) {
+    return Err(
+      parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+        name.clone(),
+      )),
+    );
+  }
+
+  Ok(PseudoElement::Slotted(selectors.into_boxed_slice()))
+}
+
+fn parse_part_pseudo_element<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  name: &cssparser::CowRcStr<'i>,
+) -> std::result::Result<PseudoElement, ParseError<'i, SelectorParseErrorKind<'i>>> {
+  let mut names = Vec::new();
+  let first = parser.expect_ident().map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+      name.clone(),
+    ))
+  })?;
+  names.push(CssString::from(first.as_ref()));
+
+  while let Ok(next) = parser.try_parse(|p| p.expect_ident()) {
+    names.push(CssString::from(next.as_ref()));
+  }
+
+  parser.skip_whitespace();
+  if !parser.is_exhausted() {
+    return Err(
+      parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+        name.clone(),
+      )),
+    );
+  }
+
+  Ok(PseudoElement::Part(names))
+}
+
 fn selector_has_combinators(selector: &Selector<FastRenderSelectorImpl>) -> bool {
-  let mut iter = selector.iter();
+  let mut iter = selector.iter_skip_relative_selector_anchor();
   loop {
     while iter.next().is_some() {}
     match iter.next_sequence() {
@@ -621,7 +732,7 @@ mod tests {
   use cssparser::ParserInput;
   use cssparser::SourceLocation;
   use cssparser::ToCss;
-  use selectors::Parser as SelectorsParser;
+  use selectors::parser::ParseRelative;
 
   fn parse(expr: &str) -> (i32, i32) {
     let mut input = ParserInput::new(expr);
@@ -764,5 +875,41 @@ mod tests {
       ":placeholder-shown"
     );
     assert_eq!(PseudoClass::Autofill.to_css_string(), ":autofill");
+  }
+
+  #[test]
+  fn parses_shadow_pseudo_elements() {
+    let mut input = ParserInput::new("div::slotted(.a)");
+    let mut parser = Parser::new(&mut input);
+    assert!(SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No).is_ok());
+
+    let mut input = ParserInput::new("button::part(name)");
+    let mut parser = Parser::new(&mut input);
+    assert!(SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No).is_ok());
+  }
+
+  #[test]
+  fn rejects_non_compound_slotted_selector() {
+    let mut input = ParserInput::new("div::slotted(.a .b)");
+    let mut parser = Parser::new(&mut input);
+    assert!(SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No).is_err());
+  }
+
+  #[test]
+  fn to_css_serializes_pseudo_elements() {
+    let mut input = ParserInput::new(".foo");
+    let mut parser = Parser::new(&mut input);
+    let selector_list = SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No)
+      .expect("should parse selector");
+    let selector = selector_list
+      .slice()
+      .first()
+      .expect("expected selector")
+      .clone();
+    let slotted = PseudoElement::Slotted(vec![selector].into_boxed_slice());
+    assert_eq!(slotted.to_css_string(), "::slotted(.foo)");
+
+    let part = PseudoElement::Part(vec![CssString::from("name"), CssString::from("badge")]);
+    assert_eq!(part.to_css_string(), "::part(name badge)");
   }
 }
