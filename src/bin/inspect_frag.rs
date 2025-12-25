@@ -693,7 +693,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   println!("fragments: {}", fragment_tree.fragment_count());
 
   let mut fragments_abs: Vec<(Rect, &FragmentNode)> = Vec::new();
-  collect_fragments_abs(&fragment_tree.root, scroll_offset, &mut fragments_abs);
+  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
+    collect_fragments_abs(root, scroll_offset, &mut fragments_abs);
+  }
 
   let mut fragments_by_box: HashMap<usize, Vec<(Rect, &FragmentNode)>> = HashMap::new();
   let mut transformed: Vec<(Rect, &FragmentNode, Option<Transform3D>)> = Vec::new();
@@ -897,7 +899,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("dark bg #{idx}: {:?} @ {:?}", content, rect);
   }
   let mut all_text: Vec<(f32, f32, String)> = Vec::new();
-  collect_text_abs(&fragment_tree.root, scroll_offset, &mut all_text);
+  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
+    collect_text_abs(root, scroll_offset, &mut all_text);
+  }
   all_text.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
   println!("leftmost text fragments:");
   for (idx, (x, y, text)) in all_text.iter().take(10).enumerate() {
@@ -997,10 +1001,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
   println!("path to first 'US' text fragment (absolute bounds):");
   let mut path: Vec<String> = Vec::new();
-  find_us_fragment(&fragment_tree.root, scroll_offset, &mut path);
+  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
+    if find_us_fragment(root, scroll_offset, &mut path) {
+      break;
+    }
+  }
 
   let mut stacks = Vec::new();
-  collect_stacking_contexts(&fragment_tree.root, scroll_offset, None, true, &mut stacks);
+  for (idx, root) in std::iter::once(&fragment_tree.root)
+    .chain(fragment_tree.additional_fragments.iter())
+    .enumerate()
+  {
+    collect_stacking_contexts(root, scroll_offset, None, idx == 0, &mut stacks);
+  }
   stacks.sort_by(|a, b| {
     a.rect
       .y()
@@ -1140,9 +1153,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
 
-  // Absolute-coordinate background analysis.
+  // Absolute-coordinate background analysis across all fragment roots.
   let mut abs_backgrounds: Vec<(Rect, &FragmentNode)> = Vec::new();
-  collect_backgrounds_abs(&fragment_tree.root, scroll_offset, &mut abs_backgrounds);
+  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
+    collect_backgrounds_abs(root, scroll_offset, &mut abs_backgrounds);
+  }
   let mut abs_view_bgs: Vec<_> = abs_backgrounds
     .iter()
     .filter_map(|(rect, frag)| {
@@ -1220,12 +1235,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Trace nav/header positioning for HN: find first text containing "Hacker News" or ".pagetop" span.
   let mut nav_path = Vec::new();
-  if find_fragment_with_text(
-    &fragment_tree.root,
-    scroll_offset,
-    "Hacker News",
-    &mut nav_path,
-  ) {
+  let mut found_nav = false;
+  for root in std::iter::once(&fragment_tree.root).chain(fragment_tree.additional_fragments.iter()) {
+    if find_fragment_with_text(root, scroll_offset, "Hacker News", &mut nav_path) {
+      found_nav = true;
+      break;
+    }
+  }
+  if found_nav {
     println!("path to 'Hacker News' fragment:");
     for (idx, entry) in nav_path.iter().enumerate() {
       println!("  {idx}: {entry}");
@@ -1317,7 +1334,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       );
     }
   }
-  if let Some(path) = find_first_skinny(&fragment_tree.root, scroll_offset, &box_debug) {
+  let skinny_path = std::iter::once(&fragment_tree.root)
+    .chain(fragment_tree.additional_fragments.iter())
+    .find_map(|root| find_first_skinny(root, scroll_offset, &box_debug));
+  if let Some(path) = skinny_path {
     println!("path to first skinny fragment:");
     for (idx, entry) in path.iter().enumerate() {
       println!("  {idx}: {entry}");
@@ -1355,7 +1375,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map(|v| v.to_string())
     .unwrap_or_else(|| "New photos released from Epstein".into());
   if !needle.is_empty() {
-    if let Some(path) = find_fragment_path(&fragment_tree.root, scroll_offset, &needle) {
+    let path = std::iter::once(&fragment_tree.root)
+      .chain(fragment_tree.additional_fragments.iter())
+      .find_map(|root| find_fragment_path(root, scroll_offset, &needle));
+    if let Some(path) = path {
       println!("ancestor chain for text containing {:?}:", needle);
       for (depth, (label, rect)) in path.iter().enumerate() {
         println!(
@@ -1409,7 +1432,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .get("FASTR_DUMP_FRAGMENT")
     .and_then(|v| v.parse::<usize>().ok())
   {
-    if let Some(fragment) = find_fragment_node(&fragment_tree.root, scroll_offset, dump_id) {
+    if let Some(fragment) = std::iter::once(&fragment_tree.root)
+      .chain(fragment_tree.additional_fragments.iter())
+      .find_map(|root| find_fragment_node(root, scroll_offset, dump_id))
+    {
       println!(
         "fragment subtree for box_id {}: text_fragments={}",
         dump_id,
@@ -1421,8 +1447,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   }
   for target_id in trace_ids {
-    if let Some(path) =
-      find_fragment_by_box_id(&fragment_tree.root, scroll_offset, target_id, &box_debug)
+    if let Some(path) = std::iter::once(&fragment_tree.root)
+      .chain(fragment_tree.additional_fragments.iter())
+      .find_map(|root| find_fragment_by_box_id(root, scroll_offset, target_id, &box_debug))
     {
       println!("path to box_id {target_id}:");
       for (idx, entry) in path.iter().enumerate() {
@@ -1471,7 +1498,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       println!("box_id {target_id} not found in fragments");
     }
   }
-  if let Some(path) = find_max_x_fragment(&fragment_tree.root, scroll_offset) {
+  if let Some(path) = std::iter::once(&fragment_tree.root)
+    .chain(fragment_tree.additional_fragments.iter())
+    .find_map(|root| find_max_x_fragment(root, scroll_offset))
+  {
     println!("path to fragment with largest max_x:");
     for (idx, entry) in path.iter().enumerate() {
       println!("  {idx}: {entry}");
