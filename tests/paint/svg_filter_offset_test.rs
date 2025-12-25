@@ -1,4 +1,5 @@
 use fastrender::paint::svg_filter::{apply_svg_filter, FilterInput, FilterPrimitive, FilterStep, SvgFilter};
+use fastrender::Rgba;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 fn vertical_line_pixmap() -> Pixmap {
@@ -22,6 +23,25 @@ fn render_offset(dx: f32) -> Pixmap {
         input: FilterInput::SourceGraphic,
         dx,
         dy: 0.0,
+      },
+    }],
+  };
+  apply_svg_filter(&filter, &mut pixmap);
+  pixmap
+}
+
+fn render_drop_shadow(dx: f32) -> Pixmap {
+  let mut pixmap = vertical_line_pixmap();
+  let filter = SvgFilter {
+    steps: vec![FilterStep {
+      result: None,
+      primitive: FilterPrimitive::DropShadow {
+        input: FilterInput::SourceGraphic,
+        dx,
+        dy: 0.0,
+        std_dev: 0.0,
+        color: Rgba::new(0, 0, 0, 1.0),
+        opacity: 1.0,
       },
     }],
   };
@@ -60,5 +80,25 @@ fn fe_offset_preserves_subpixel_offsets() {
     offset_half.data(),
     offset_1.data(),
     "subpixel offset should differ from whole pixel offset"
+  );
+}
+
+#[test]
+fn drop_shadow_preserves_subpixel_offsets() {
+  let shadow_0 = render_drop_shadow(0.0);
+  let shadow_half = render_drop_shadow(0.5);
+  let shadow_1 = render_drop_shadow(1.0);
+
+  let mid_y = 1;
+  let right_of_line = 3;
+  let alpha_at = |pixmap: &Pixmap, x: u32| pixmap.pixel(x, mid_y).unwrap().alpha();
+
+  assert_eq!(alpha_at(&shadow_0, right_of_line), 0);
+  assert_eq!(alpha_at(&shadow_1, right_of_line), 255);
+
+  let mid_alpha = alpha_at(&shadow_half, right_of_line);
+  assert!(
+    mid_alpha > 0 && mid_alpha < 255,
+    "subpixel offset should yield partial coverage"
   );
 }
