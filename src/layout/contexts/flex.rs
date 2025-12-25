@@ -106,18 +106,10 @@ fn normalize_fragment_origin(fragment: &FragmentNode) -> FragmentNode {
   normalized
 }
 
-fn trace_flex_text_ids() -> &'static Vec<usize> {
-  static IDS: OnceLock<Vec<usize>> = OnceLock::new();
-  IDS.get_or_init(|| {
-    std::env::var("FASTR_TRACE_FLEX_TEXT")
-      .ok()
-      .map(|v| {
-        v.split(',')
-          .filter_map(|tok| tok.trim().parse::<usize>().ok())
-          .collect()
-      })
-      .unwrap_or_default()
-  })
+fn trace_flex_text_ids() -> Vec<usize> {
+  crate::debug::runtime::runtime_toggles()
+    .usize_list("FASTR_TRACE_FLEX_TEXT")
+    .unwrap_or_default()
 }
 
 fn fragment_first_baseline(fragment: &FragmentNode) -> Option<f32> {
@@ -292,9 +284,8 @@ impl FormattingContext for FlexFormattingContext {
     // Reuse full layout fragments when the same flex container is laid out repeatedly with
     // identical available sizes (common on carousel-heavy pages). This is scoped per layout
     // run via the factory cache reset.
-    let disable_cache = std::env::var("FASTR_DISABLE_FLEX_CACHE")
-      .map(|v| v != "0")
-      .unwrap_or(false);
+    let toggles = crate::debug::runtime::runtime_toggles();
+    let disable_cache = toggles.truthy("FASTR_DISABLE_FLEX_CACHE");
     let layout_cache_entry = if disable_cache {
       None
     } else {
@@ -397,12 +388,8 @@ impl FormattingContext for FlexFormattingContext {
     let mut pass_stores: HashMap<u64, usize> = HashMap::new();
     let mut pass_hits: HashMap<u64, usize> = HashMap::new();
     let compute_timer = flex_profile::timer();
-    static LOG_ROOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *LOG_ROOT.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_ROOT")
-        .map(|v| v != "0")
-        .unwrap_or(false)
-    }) {
+    let log_root = toggles.truthy("FASTR_LOG_FLEX_ROOT");
+    if log_root {
       eprintln!(
         "[flex-root] id={} selector={} avail=({:?},{:?}) known=({:?},{:?}) viewport=({:.1},{:.1})",
         box_node.id,
@@ -419,121 +406,48 @@ impl FormattingContext for FlexFormattingContext {
         self.viewport_size.height,
       );
     }
-    static LOG_SKINNY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    static LOG_SMALL_AVAIL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    static LOG_MEASURE_IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
-    static LOG_NODE_KEYS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
-    static LOG_NODE_KEYS_MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let log_constraint_raw = toggles
+      .get("FASTR_LOG_FLEX_CONSTRAINTS")
+      .map(|v| v.to_string());
+    let log_constraint_ids = toggles
+      .usize_list("FASTR_LOG_FLEX_CONSTRAINTS")
+      .unwrap_or_default();
+    let log_constraint_limit = toggles.usize_with_default("FASTR_LOG_FLEX_CONSTRAINTS_MAX", 10);
+    let log_first_n = toggles.usize_with_default("FASTR_LOG_FLEX_FIRST_N", 0);
+    let abort_after_first = toggles.truthy("FASTR_ABORT_FLEX_AFTER_FIRST_N");
+    if log_constraint_raw.is_some() {
+      eprintln!(
+        "[flex-constraints-env] raw={:?} ids={:?} max={}",
+        log_constraint_raw, log_constraint_ids, log_constraint_limit
+      );
+    }
+    if log_first_n > 0 {
+      eprintln!(
+        "[flex-first-env] n={} abort={}",
+        log_first_n, abort_after_first
+      );
+    }
+    let log_skinny = toggles.truthy("FASTR_LOG_SKINNY_FLEX");
+    let log_small_avail = toggles.truthy("FASTR_LOG_SMALL_FLEX");
+    let log_measure_ids = toggles
+      .usize_list("FASTR_LOG_FLEX_MEASURE_IDS")
+      .unwrap_or_default();
+    let log_node_keys = toggles
+      .usize_list("FASTR_LOG_FLEX_NODE_KEYS")
+      .unwrap_or_default();
+    let log_node_keys_max = toggles.usize_with_default("FASTR_LOG_FLEX_NODE_KEYS_MAX", 10);
+    let log_large_avail = toggles.f64("FASTR_LOG_LARGE_FLEX").map(|v| v as f32);
     static LOG_NODE_KEYS_COUNTS: std::sync::OnceLock<
       std::sync::Mutex<std::collections::HashMap<usize, usize>>,
     > = std::sync::OnceLock::new();
-    static LOG_LARGE_AVAIL: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
     static LOG_LARGE_AVAIL_COUNTS: std::sync::OnceLock<
       std::sync::Mutex<std::collections::HashMap<usize, usize>>,
     > = std::sync::OnceLock::new();
-    static LOG_CONSTRAINT_IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
     static LOG_CONSTRAINT_COUNTS: std::sync::OnceLock<
       std::sync::Mutex<std::collections::HashMap<usize, usize>>,
     > = std::sync::OnceLock::new();
-    static LOG_CONSTRAINT_LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    static LOG_CONSTRAINT_IDS_LOGGED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    static LOG_FIRST_N: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     static LOG_FIRST_N_COUNTER: std::sync::OnceLock<std::sync::Mutex<usize>> =
       std::sync::OnceLock::new();
-    static ABORT_AFTER_FIRST: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    static LOG_CONSTRAINT_RAW: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let log_constraint_raw = LOG_CONSTRAINT_RAW
-      .get_or_init(|| std::env::var("FASTR_LOG_FLEX_CONSTRAINTS").ok())
-      .clone();
-    let log_constraint_ids = LOG_CONSTRAINT_IDS.get_or_init(|| {
-      log_constraint_raw
-        .as_ref()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
-    let log_constraint_limit = *LOG_CONSTRAINT_LIMIT.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_CONSTRAINTS_MAX")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(10)
-    });
-    let log_first_n = *LOG_FIRST_N.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_FIRST_N")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
-    });
-    let abort_after_first = *ABORT_AFTER_FIRST.get_or_init(|| {
-      std::env::var("FASTR_ABORT_FLEX_AFTER_FIRST_N")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
-    if log_constraint_raw.is_some() {
-      LOG_CONSTRAINT_IDS_LOGGED.get_or_init(|| {
-        eprintln!(
-          "[flex-constraints-env] raw={:?} ids={:?} max={}",
-          log_constraint_raw, log_constraint_ids, log_constraint_limit
-        );
-        true
-      });
-    }
-    static LOG_FIRST_ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if log_first_n > 0 {
-      LOG_FIRST_ENV.get_or_init(|| {
-        eprintln!(
-          "[flex-first-env] n={} abort={}",
-          log_first_n, abort_after_first
-        );
-        true
-      });
-    }
-    let log_skinny = *LOG_SKINNY.get_or_init(|| {
-      std::env::var("FASTR_LOG_SKINNY_FLEX")
-        .map(|v| v != "0")
-        .unwrap_or(false)
-    });
-    let log_small_avail = *LOG_SMALL_AVAIL.get_or_init(|| {
-      std::env::var("FASTR_LOG_SMALL_FLEX")
-        .map(|v| v != "0")
-        .unwrap_or(false)
-    });
-    let log_measure_ids = LOG_MEASURE_IDS.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_MEASURE_IDS")
-        .ok()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
-    let log_node_keys = LOG_NODE_KEYS.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_NODE_KEYS")
-        .ok()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
-    let log_node_keys_max = *LOG_NODE_KEYS_MAX.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_NODE_KEYS_MAX")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(10)
-    });
-    let log_large_avail = *LOG_LARGE_AVAIL.get_or_init(|| {
-      std::env::var("FASTR_LOG_LARGE_FLEX")
-        .ok()
-        .and_then(|v| v.parse::<f32>().ok())
-        .filter(|v| *v > 0.0)
-    });
     record_taffy_invocation(TaffyAdapterKind::Flex);
     taffy_tree
             .compute_layout_with_measure(
@@ -813,26 +727,14 @@ impl FormattingContext for FlexFormattingContext {
                         flex_profile::record_measure_time(measure_timer);
                         return size;
                     }
-                    static TRACE_FLAG: OnceLock<bool> = OnceLock::new();
                     static TRACE_COUNT: OnceLock<Mutex<usize>> = OnceLock::new();
                     static LOG_MEASURE_COUNTS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
-                    let trace_enabled = *TRACE_FLAG.get_or_init(|| {
-                        std::env::var("FASTR_TRACE_FLEX")
-                            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-                            .unwrap_or(false)
-                    });
-                    static LOG_MEASURE_FIRST: OnceLock<usize> = OnceLock::new();
+                    let trace_enabled = toggles.truthy("FASTR_TRACE_FLEX");
                     static LOG_MEASURE_FIRST_COUNT: OnceLock<Mutex<usize>> = OnceLock::new();
-                    static LOG_MEASURE_FIRST_ABOVE: OnceLock<Option<u128>> = OnceLock::new();
-                    let log_measure_first = *LOG_MEASURE_FIRST
-                        .get_or_init(|| {
-                            std::env::var("FASTR_LOG_FLEX_MEASURE_FIRST_N")
-                                .ok()
-                                .and_then(|v| v.parse().ok())
-                                .unwrap_or(0)
-                        });
-                    let log_measure_first_above = *LOG_MEASURE_FIRST_ABOVE
-                        .get_or_init(|| std::env::var("FASTR_LOG_FLEX_MEASURE_FIRST_N_MS").ok().and_then(|v| v.parse().ok()));
+                    let log_measure_first =
+                        toggles.usize_with_default("FASTR_LOG_FLEX_MEASURE_FIRST_N", 0);
+                    let log_measure_first_above =
+                        toggles.u128("FASTR_LOG_FLEX_MEASURE_FIRST_N_MS");
 
                     let fallback_size = |known: Option<f32>, avail_dim: AvailableSpace| {
                         known.unwrap_or(match avail_dim {
@@ -1400,10 +1302,7 @@ impl FormattingContext for FlexFormattingContext {
             )
             .map_err(|e| LayoutError::MissingContext(format!("Taffy layout failed: {:?}", e)))?;
     flex_profile::record_compute_time(compute_timer);
-    if std::env::var("FASTR_DEBUG_FLEX_CHILD")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-    {
+    if toggles.truthy("FASTR_DEBUG_FLEX_CHILD") {
       if let Ok(style) = taffy_tree.style(root_node) {
         eprintln!(
           "[flex-taffy-root-style] size=({:?},{:?}) min=({:?},{:?}) max=({:?},{:?})",
@@ -1418,10 +1317,7 @@ impl FormattingContext for FlexFormattingContext {
       if let Ok(layout) = taffy_tree.layout(root_node) {
         eprintln!(
           "[flex-taffy-root-layout] size=({:.2},{:.2}) loc=({:.2},{:.2})",
-          layout.size.width,
-          layout.size.height,
-          layout.location.x,
-          layout.location.y,
+          layout.size.width, layout.size.height, layout.location.x, layout.location.y,
         );
       }
     }
@@ -1654,10 +1550,7 @@ impl FormattingContext for FlexFormattingContext {
           child_fragment.bounds.origin.y = pos;
         }
       }
-      if std::env::var("FASTR_DEBUG_FLEX_CHILD")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-      {
+      if toggles.truthy("FASTR_DEBUG_FLEX_CHILD") {
         eprintln!(
           "[flex-container] bounds=({:.2},{:.2},{:.2},{:.2})",
           fragment.bounds.x(),
@@ -1747,25 +1640,9 @@ impl FormattingContext for FlexFormattingContext {
       }
     }
 
-    static LOG_WIDE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    static LOG_SKINNY_FRAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    static LOG_TARGET_IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
-    let log_wide = *LOG_WIDE.get_or_init(|| std::env::var("FASTR_LOG_WIDE_FLEX").is_ok());
-    let log_skinny_frag = *LOG_SKINNY_FRAG.get_or_init(|| {
-      std::env::var("FASTR_LOG_SKINNY_FLEX")
-        .map(|v| v != "0")
-        .unwrap_or(false)
-    });
-    let log_target_ids = LOG_TARGET_IDS.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_IDS")
-        .ok()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
+    let log_wide = toggles.truthy("FASTR_LOG_WIDE_FLEX");
+    let log_skinny_frag = toggles.truthy("FASTR_LOG_SKINNY_FLEX");
+    let log_target_ids = toggles.usize_list("FASTR_LOG_FLEX_IDS").unwrap_or_default();
     if log_wide || log_skinny_frag || !log_target_ids.is_empty() {
       let avail_w = constraints.width();
       if fragment.bounds.width() > self.viewport_size.width + 0.5
@@ -2577,7 +2454,8 @@ impl FlexFormattingContext {
     // flex items on real pages. Flexbox specifies that scroll containers use a 0 automatic minimum.
     if !is_root {
       if let Some(container) = containing_flex {
-        let container_inline_is_horizontal = matches!(container.writing_mode, WritingMode::HorizontalTb);
+        let container_inline_is_horizontal =
+          matches!(container.writing_mode, WritingMode::HorizontalTb);
         let container_main_is_inline = matches!(
           container.flex_direction,
           FlexDirection::Row | FlexDirection::RowReverse
@@ -2589,7 +2467,8 @@ impl FlexFormattingContext {
         };
 
         if container_main_is_horizontal {
-          if min_width_dimension == Dimension::AUTO && matches!(style.overflow_x, CssOverflow::Visible)
+          if min_width_dimension == Dimension::AUTO
+            && matches!(style.overflow_x, CssOverflow::Visible)
           {
             if let Ok(min_content) =
               self.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
@@ -2890,10 +2769,7 @@ impl FlexFormattingContext {
         } else {
           self.viewport_size.height
         };
-        if std::env::var("FASTR_DEBUG_FLEX_CHILD")
-          .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-          .unwrap_or(false)
-        {
+        if toggles.truthy("FASTR_DEBUG_FLEX_CHILD") {
           eprintln!(
                         "[flex-child-layout] id={} selector={} layout=({:.2},{:.2}) loc=({:.2},{:.2}) grow={} shrink={} basis={:?}",
                         child_box.id,
@@ -3030,7 +2906,11 @@ impl FlexFormattingContext {
                 if resolved_height <= eps && !main_axis_is_row {
                   manual_col_positions = true;
                 }
-                if allow_overflow_fallback && main_axis_is_row && rect_w.is_finite() && rect_w > wrap_eps {
+                if allow_overflow_fallback
+                  && main_axis_is_row
+                  && rect_w.is_finite()
+                  && rect_w > wrap_eps
+                {
                   let runaway = child_loc_x.abs() > rect_w * 2.0;
                   if runaway {
                     manual_row_positions = true;
@@ -3101,16 +2981,9 @@ impl FlexFormattingContext {
                     last_layout_y = Some(child_loc_y);
                   }
                 }
-                let log_child_ids = LOG_CHILD_IDS.get_or_init(|| {
-                  std::env::var("FASTR_LOG_FLEX_CHILD_IDS")
-                    .ok()
-                    .map(|s| {
-                      s.split(',')
-                        .filter_map(|tok| tok.trim().parse::<usize>().ok())
-                        .collect()
-                    })
-                    .unwrap_or_default()
-                });
+                let log_child_ids = toggles
+                  .usize_list("FASTR_LOG_FLEX_CHILD_IDS")
+                  .unwrap_or_default();
                 let log_child = !log_child_ids.is_empty()
                   && (log_child_ids.contains(&child_box.id)
                     || log_child_ids.contains(&box_node.id));
@@ -3290,8 +3163,7 @@ impl FlexFormattingContext {
                 }),
                 CrateAvailableSpace::MaxContent,
               )
-            }
-            ;
+            };
             let mc_timer = flex_profile::node_timer();
             let mc_selector = mc_timer
               .as_ref()
@@ -3438,16 +3310,9 @@ impl FlexFormattingContext {
                 last_layout_y = Some(child_loc_y);
               }
             }
-            let log_child_ids = LOG_CHILD_IDS.get_or_init(|| {
-              std::env::var("FASTR_LOG_FLEX_CHILD_IDS")
-                .ok()
-                .map(|s| {
-                  s.split(',')
-                    .filter_map(|tok| tok.trim().parse::<usize>().ok())
-                    .collect()
-                })
-                .unwrap_or_default()
-            });
+            let log_child_ids = toggles
+              .usize_list("FASTR_LOG_FLEX_CHILD_IDS")
+              .unwrap_or_default();
             let log_child = !log_child_ids.is_empty()
               && (log_child_ids.contains(&child_box.id) || log_child_ids.contains(&box_node.id));
             if log_child {
@@ -3519,25 +3384,12 @@ impl FlexFormattingContext {
 
     // If Taffy reported non-increasing positions along the main axis, fall back to a simple
     // manual placement using the resolved fragment widths/heights to avoid overlapping items.
-    static LOG_OVERFLOW: OnceLock<bool> = OnceLock::new();
-    static LOG_OVERFLOW_IDS: OnceLock<Vec<usize>> = OnceLock::new();
     static OVERFLOW_COUNTS: OnceLock<Mutex<std::collections::HashMap<usize, usize>>> =
       OnceLock::new();
-    let log_overflow = *LOG_OVERFLOW.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_OVERFLOW")
-        .map(|v| v != "0")
-        .unwrap_or(false)
-    });
-    let log_overflow_ids = LOG_OVERFLOW_IDS.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_OVERFLOW_IDS")
-        .ok()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
+    let log_overflow = toggles.truthy("FASTR_LOG_FLEX_OVERFLOW");
+    let log_overflow_ids = toggles
+      .usize_list("FASTR_LOG_FLEX_OVERFLOW_IDS")
+      .unwrap_or_default();
     if main_axis_is_row {
       // Re-run manual row placement when Taffy positions items beyond the container width.
       // Even when overflow is expected (wide items), their starting position should remain
@@ -3551,17 +3403,9 @@ impl FlexFormattingContext {
         .iter()
         .map(|c| c.bounds.max_x())
         .fold(0.0, f32::max);
-      static LOG_SHRINK_IDS: OnceLock<Vec<usize>> = OnceLock::new();
-      let log_shrink_ids = LOG_SHRINK_IDS.get_or_init(|| {
-        std::env::var("FASTR_LOG_FLEX_SHRINK_IDS")
-          .ok()
-          .map(|s| {
-            s.split(',')
-              .filter_map(|tok| tok.trim().parse::<usize>().ok())
-              .collect()
-          })
-          .unwrap_or_default()
-      });
+      let log_shrink_ids = toggles
+        .usize_list("FASTR_LOG_FLEX_SHRINK_IDS")
+        .unwrap_or_default();
       let log_this_shrink = !log_shrink_ids.is_empty() && log_shrink_ids.contains(&box_node.id);
 
       if allow_overflow_fallback && max_child_x > container_w + 0.5 {
@@ -3978,12 +3822,7 @@ impl FlexFormattingContext {
       let drift_limit = rect.width().max(1.0) * 4.0;
       if min_x.is_finite() && min_x > drift_limit && max_x.is_finite() {
         let dx = min_x;
-        static LOG_DRIFT: OnceLock<bool> = OnceLock::new();
-        let log_drift = *LOG_DRIFT.get_or_init(|| {
-          std::env::var("FASTR_LOG_FLEX_DRIFT")
-            .map(|v| v != "0")
-            .unwrap_or(false)
-        });
+        let log_drift = toggles.truthy("FASTR_LOG_FLEX_DRIFT");
         if log_drift {
           let selector = box_node
             .debug_info
@@ -4792,9 +4631,14 @@ mod tests {
       ));
     }
 
-    let container =
-      BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, items);
-    let fragment = fc.layout(&container, &LayoutConstraints::definite(400.0, 200.0)).unwrap();
+    let container = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Flex,
+      items,
+    );
+    let fragment = fc
+      .layout(&container, &LayoutConstraints::definite(400.0, 200.0))
+      .unwrap();
 
     for (idx, child) in fragment.children.iter().enumerate() {
       assert!(
