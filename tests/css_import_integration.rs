@@ -57,7 +57,7 @@ fn png_bytes(color: Rgba) -> Vec<u8> {
   let img = RgbaImage::from_pixel(1, 1, image::Rgba([color.r, color.g, color.b, alpha]));
   let mut out = Vec::new();
   PngEncoder::new(&mut out)
-    .write_image(img.as_raw(), 1, 1, ColorType::Rgba8)
+    .write_image(img.as_raw(), 1, 1, ColorType::Rgba8.into())
     .expect("encode png");
   out
 }
@@ -105,10 +105,11 @@ fn nested_imports_resolve_against_base_and_stylesheet_urls() {
     .with(theme_url, theme_css.as_bytes(), "text/css")
     .with(entry_image, png_bytes(Rgba::rgb(10, 0, 0)), "image/png")
     .with(deep_image, png_bytes(Rgba::rgb(20, 0, 0)), "image/png");
-  let fetcher = Arc::new(fetcher);
+  let fetcher: Arc<RecordingFetcher> = Arc::new(fetcher);
+  let fetcher_for_renderer: Arc<dyn ResourceFetcher> = fetcher.clone();
 
   let mut renderer = FastRender::builder()
-    .fetcher(Arc::clone(&fetcher))
+    .fetcher(fetcher_for_renderer)
     .build()
     .unwrap();
 

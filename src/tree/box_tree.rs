@@ -1582,6 +1582,7 @@ mod tests {
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
       font_size: Some(16.0),
+      base_url: None,
     });
 
     assert_eq!(chosen, "300w");
