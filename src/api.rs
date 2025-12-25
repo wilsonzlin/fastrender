@@ -153,6 +153,8 @@ use url::Url;
 const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 use std::time::Instant;
 // Re-export Pixmap from tiny-skia for public use
+pub use crate::image_loader::ImageCacheConfig;
+pub use crate::text::font_db::FontCacheConfig;
 pub use crate::layout::pagination::PageStacking;
 pub use tiny_skia::Pixmap;
 
