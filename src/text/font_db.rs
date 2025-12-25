@@ -824,14 +824,14 @@ impl FontDatabase {
   /// works in minimal environments where no system fonts are present.
   pub fn with_config(config: &FontConfig) -> Self {
     let mut this = Self {
-      db: FontDbDatabase::new(),
+      db: Arc::new(FontDbDatabase::new()),
       cache: RwLock::new(HashMap::new()),
       math_fonts: RwLock::new(None),
       glyph_coverage: GlyphCoverageCache::new(GLYPH_COVERAGE_CACHE_SIZE),
     };
 
     if config.use_system_fonts {
-      this.db.load_system_fonts();
+      Arc::make_mut(&mut this.db).load_system_fonts();
     }
 
     for dir in &config.font_dirs {
@@ -912,16 +912,18 @@ impl FontDatabase {
   }
 
   fn set_generic_fallbacks(&mut self) {
-    if let Some(primary) = self
+    let primary = self
       .faces()
       .next()
-      .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
-    {
-      self.db.set_serif_family(primary.clone());
-      self.db.set_sans_serif_family(primary.clone());
-      self.db.set_monospace_family(primary.clone());
-      self.db.set_cursive_family(primary.clone());
-      self.db.set_fantasy_family(primary);
+      .and_then(|face| face.families.first().map(|(name, _)| name.clone()));
+
+    if let Some(primary) = primary {
+      let db = Arc::make_mut(&mut self.db);
+      db.set_serif_family(primary.clone());
+      db.set_sans_serif_family(primary.clone());
+      db.set_monospace_family(primary.clone());
+      db.set_cursive_family(primary.clone());
+      db.set_fantasy_family(primary);
     }
   }
 
