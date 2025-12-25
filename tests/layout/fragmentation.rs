@@ -175,8 +175,9 @@ fn column_fragmentation_places_fragments_in_grid() {
     options.fragmentainer_size + options.fragmentainer_gap,
   ];
 
-  for (fragment, (&expected_x, &expected_y)) in
-    fragments.iter().zip(expected_xs.iter().zip(expected_ys.iter()))
+  for (fragment, (&expected_x, &expected_y)) in fragments
+    .iter()
+    .zip(expected_xs.iter().zip(expected_ys.iter()))
   {
     assert!((fragment.bounds.width() - column_width).abs() < 0.01);
     assert!((fragment.bounds.x() - expected_x).abs() < 0.01);
