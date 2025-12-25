@@ -1845,7 +1845,7 @@ mod tests {
       preserve_alpha: false,
       subregion: None,
     };
-    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
     assert_eq!(pixmap.pixels(), out.pixels());
   }
 
@@ -1871,7 +1871,7 @@ mod tests {
       subregion: None,
     };
 
-    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
     let center = out.pixels()[4];
     assert_eq!(center.red(), 40);
     assert_eq!(center.green(), 40);
@@ -1913,8 +1913,8 @@ mod tests {
       subregion: None,
     };
 
-    let dup = apply_primitive(&base, &pixmap, &HashMap::new(), &pixmap).unwrap();
-    let none = apply_primitive(&none_mode, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    let dup = apply_primitive(&base, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
+    let none = apply_primitive(&none_mode, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
     let dup_corner = dup.pixels()[0];
     let none_corner = none.pixels()[0];
 
@@ -1948,7 +1948,7 @@ mod tests {
       preserve_alpha: false,
       subregion: Some((0.0, 0.0, 1.0, 1.0)),
     };
-    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
     let out_pixels = out.pixels();
     assert_eq!(out_pixels[0], pixels[0]); // inside subregion
     assert_eq!(out_pixels[1], PremultipliedColorU8::TRANSPARENT);

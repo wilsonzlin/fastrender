@@ -2146,7 +2146,7 @@ mod tests {
     };
     assert_eq!(parts.len(), 7);
     assert!(matches!(parts[0], PropertyValue::Url(ref u) if u == "a"));
-    assert!(matches!(parts[1], PropertyValue::Number(n) if (*n - 30.0).abs() < 1e-6));
+    assert!(matches!(parts[1], PropertyValue::Number(n) if (n - 30.0).abs() < 1e-6));
     assert!(matches!(parts[2], PropertyValue::Keyword(ref k) if k == "/"));
     assert!(
       matches!(parts[3], PropertyValue::Length(len) if (len.value - 10.0).abs() < 0.01 && len.unit == LengthUnit::Px)
