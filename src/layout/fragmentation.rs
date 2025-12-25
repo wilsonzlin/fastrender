@@ -241,6 +241,9 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
   }
 
   let fragment_count = boundaries.len() - 1;
+  let column_count = options.column_count.max(1);
+  let column_step = root.bounds.width() + options.column_gap;
+  let fragment_step = options.fragmentainer_size + options.fragmentainer_gap;
   let mut fragments = Vec::with_capacity(fragment_count);
 
   for (index, window) in boundaries.windows(2).enumerate() {
@@ -255,9 +258,13 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       propagate_fragment_metadata(&mut clipped, index, fragment_count);
 
       // Translate fragments to account for fragmentainer gaps so downstream consumers
-      // can reason about the absolute position of each fragmentainer stack.
-      let vertical_offset = index as f32 * (options.fragmentainer_size + options.fragmentainer_gap);
-      let translated = clipped.translate(Point::new(0.0, vertical_offset));
+      // can reason about the absolute position of each fragmentainer stack. When
+      // columns are requested, fragments are distributed left-to-right before
+      // stacking additional rows vertically.
+      let column = index % column_count;
+      let row = index / column_count;
+      let offset = Point::new(column as f32 * column_step, row as f32 * fragment_step);
+      let translated = clipped.translate(offset);
       fragments.push(translated);
     }
   }
