@@ -42,6 +42,7 @@ use fastrender::style::types::BorderImageSlice;
 use fastrender::style::types::BorderImageSliceValue;
 use fastrender::style::types::BorderImageSource;
 use fastrender::style::types::BorderStyle;
+use fastrender::style::types::BoxDecorationBreak;
 use fastrender::style::types::ClipPath;
 use fastrender::style::types::FillRule as StyleFillRule;
 use fastrender::style::types::ImageRendering;
@@ -57,6 +58,7 @@ use fastrender::style::types::TransformStyle;
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::fragment_tree::FragmentNode;
+use fastrender::tree::fragment_tree::FragmentSliceInfo;
 use fastrender::ComputedStyle;
 use fastrender::Rgba;
 use image::codecs::png::PngEncoder;
@@ -3056,5 +3058,150 @@ fn clip_path_clips_outer_box_shadow() {
     pixel(&pixmap, 20, 20),
     (0, 255, 0, 255),
     "clip-path should still allow the element to paint inside the clip"
+  );
+}
+
+#[test]
+fn box_decoration_break_slice_only_paints_outer_edges() {
+  let mut style = ComputedStyle::default();
+  style.background_color = Rgba::WHITE;
+  style.border_top_width = Length::px(4.0);
+  style.border_bottom_width = Length::px(4.0);
+  style.border_top_style = BorderStyle::Solid;
+  style.border_bottom_style = BorderStyle::Solid;
+  style.border_top_color = Rgba::BLACK;
+  style.border_bottom_color = Rgba::BLACK;
+  let style = Arc::new(style);
+
+  let total_height = 200.0;
+  let first_height = 120.0;
+  let mut first = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 40.0, first_height),
+    vec![],
+    style.clone(),
+  );
+  first.fragment_count = 2;
+  first.slice_info = FragmentSliceInfo {
+    is_first: true,
+    is_last: false,
+    slice_offset: 0.0,
+    original_block_size: total_height,
+  };
+
+  let mut second = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, first_height, 40.0, total_height - first_height),
+    vec![],
+    style.clone(),
+  );
+  second.fragment_index = 1;
+  second.fragment_count = 2;
+  second.slice_info = FragmentSliceInfo {
+    is_first: false,
+    is_last: true,
+    slice_offset: first_height,
+    original_block_size: total_height,
+  };
+
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, 40.0, total_height),
+    vec![first, second],
+  );
+
+  let list = DisplayListBuilder::new().build(&root);
+  let pixmap = DisplayListRenderer::new(40, total_height as u32, Rgba::WHITE, FontContext::new())
+    .unwrap()
+    .render(&list)
+    .unwrap();
+
+  assert_eq!(
+    pixel(&pixmap, 5, 1),
+    (0, 0, 0, 255),
+    "top border paints once"
+  );
+  assert_eq!(
+    pixel(&pixmap, 5, 118),
+    (255, 255, 255, 255),
+    "slice should skip bottom border on first fragment"
+  );
+  assert_eq!(
+    pixel(&pixmap, 5, 121),
+    (255, 255, 255, 255),
+    "slice should skip top border on continuation"
+  );
+  assert_eq!(
+    pixel(&pixmap, 5, 197),
+    (0, 0, 0, 255),
+    "bottom border should appear on last fragment"
+  );
+}
+
+#[test]
+fn box_decoration_break_clone_paints_each_fragment() {
+  let mut style = ComputedStyle::default();
+  style.background_color = Rgba::WHITE;
+  style.border_top_width = Length::px(4.0);
+  style.border_bottom_width = Length::px(4.0);
+  style.border_top_style = BorderStyle::Solid;
+  style.border_bottom_style = BorderStyle::Solid;
+  style.border_top_color = Rgba::BLACK;
+  style.border_bottom_color = Rgba::BLACK;
+  style.box_decoration_break = BoxDecorationBreak::Clone;
+  let style = Arc::new(style);
+
+  let total_height = 200.0;
+  let first_height = 120.0;
+  let mut first = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 40.0, first_height),
+    vec![],
+    style.clone(),
+  );
+  first.fragment_count = 2;
+  first.slice_info = FragmentSliceInfo {
+    is_first: true,
+    is_last: false,
+    slice_offset: 0.0,
+    original_block_size: total_height,
+  };
+
+  let mut second = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, first_height, 40.0, total_height - first_height),
+    vec![],
+    style.clone(),
+  );
+  second.fragment_index = 1;
+  second.fragment_count = 2;
+  second.slice_info = FragmentSliceInfo {
+    is_first: false,
+    is_last: true,
+    slice_offset: first_height,
+    original_block_size: total_height,
+  };
+
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, 40.0, total_height),
+    vec![first, second],
+  );
+
+  let list = DisplayListBuilder::new().build(&root);
+  let pixmap = DisplayListRenderer::new(40, total_height as u32, Rgba::WHITE, FontContext::new())
+    .unwrap()
+    .render(&list)
+    .unwrap();
+
+  assert_eq!(pixel(&pixmap, 5, 1), (0, 0, 0, 255), "top border paints");
+  assert_eq!(
+    pixel(&pixmap, 5, 118),
+    (0, 0, 0, 255),
+    "clone should paint bottom border on first fragment"
+  );
+  assert_eq!(
+    pixel(&pixmap, 5, 121),
+    (0, 0, 0, 255),
+    "clone should paint top border on continuation"
+  );
+  assert_eq!(
+    pixel(&pixmap, 5, 197),
+    (0, 0, 0, 255),
+    "bottom border paints on last fragment"
   );
 }
