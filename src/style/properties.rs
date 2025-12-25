@@ -3700,13 +3700,20 @@ pub fn apply_declaration_with_base(
     return;
   }
 
+  let property = match decl.property.as_str() {
+    "page-break-before" => "break-before",
+    "page-break-after" => "break-after",
+    "page-break-inside" => "break-inside",
+    other => other,
+  };
+
   // Resolve var() references in the value
-  let resolved_value =
-    match resolve_var_for_property(&decl.value, &styles.custom_properties, &decl.property) {
-      VarResolutionResult::Resolved(v) => *v,
-      // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
-      _ => return,
-    };
+  let resolved_value = match resolve_var_for_property(&decl.value, &styles.custom_properties, property)
+  {
+    VarResolutionResult::Resolved(v) => *v,
+    // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
+    _ => return,
+  };
   let order = styles.logical.next_order();
   if let Some(global) = global_keyword(&resolved_value) {
     let defaults = ComputedStyle::default();
@@ -3716,7 +3723,7 @@ pub fn apply_declaration_with_base(
       &defaults,
       revert_base,
       revert_layer_base,
-      decl.property.as_str(),
+      property,
       global,
       order,
     ) {
@@ -3732,7 +3739,7 @@ pub fn apply_declaration_with_base(
     }
   };
 
-  match decl.property.as_str() {
+  match property {
     "all" => {
       let Some(global) = global_keyword(&resolved_value) else {
         return;
@@ -6607,16 +6614,22 @@ pub fn apply_declaration_with_base(
       }
     }
     "break-before" | "break-after" => {
+      let from_page_break = matches!(
+        decl.property.as_str(),
+        "page-break-before" | "page-break-after"
+      );
       if let PropertyValue::Keyword(kw) = &resolved_value {
         let value = match kw.as_str() {
           "auto" => BreakBetween::Auto,
           "avoid" => BreakBetween::Avoid,
+          "always" if from_page_break => BreakBetween::Page,
           "always" => BreakBetween::Always,
           "column" => BreakBetween::Column,
           "page" => BreakBetween::Page,
+          "left" | "right" => BreakBetween::Page,
           _ => BreakBetween::Auto,
         };
-        if decl.property == "break-before" {
+        if property == "break-before" {
           styles.break_before = value;
         } else {
           styles.break_after = value;
