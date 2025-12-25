@@ -29,6 +29,7 @@ use crate::style::grid::parse_track_list;
 use crate::style::grid::ParsedTracks;
 use crate::style::inline_axis_is_horizontal;
 use crate::style::position::Position;
+use crate::style::string_set::parse_string_set_value;
 use crate::style::types::*;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
@@ -3353,6 +3354,7 @@ fn apply_property_from_source(
       styles.border_spacing_horizontal = source.border_spacing_horizontal;
       styles.border_spacing_vertical = source.border_spacing_vertical;
     }
+    "string-set" => styles.string_set = source.string_set.clone(),
     "content" => {
       styles.content_value = source.content_value.clone();
       styles.content = source.content.clone();
@@ -7984,6 +7986,12 @@ pub fn apply_declaration_with_base(
       }
     }
 
+    "string-set" => {
+      if let Some(assignments) = parse_string_set_value(&resolved_value) {
+        styles.string_set = assignments;
+      }
+    }
+
     // Content property (for ::before and ::after pseudo-elements)
     "content" => {
       if let Some(parsed) = content_value_from_property(&resolved_value) {
@@ -12393,6 +12401,7 @@ mod tests {
   use super::*;
   use crate::css::properties::parse_property_value;
   use crate::geometry::Size;
+  use crate::style::string_set::{StringSetAssignment, StringSetValue};
   use crate::style::types::AlignContent;
   use crate::style::types::AlignItems;
   use crate::style::types::AspectRatio;
@@ -17360,6 +17369,45 @@ mod tests {
     };
     apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
     assert!(style.quotes.is_empty());
+  }
+
+  #[test]
+  fn parses_string_set_property() {
+    let mut style = ComputedStyle::default();
+    let decl = Declaration {
+      property: "string-set".to_string(),
+      value: PropertyValue::Keyword("chapter content() section \"Intro\"".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+    assert_eq!(style.string_set.len(), 2);
+    assert_eq!(style.string_set[0].name, "chapter");
+    assert!(matches!(style.string_set[0].value, StringSetValue::Content));
+    assert_eq!(style.string_set[1].name, "section");
+    assert!(matches!(
+      style.string_set[1].value,
+      StringSetValue::Literal(ref s) if s == "Intro"
+    ));
+  }
+
+  #[test]
+  fn string_set_none_clears_assignments() {
+    let mut style = ComputedStyle::default();
+    style.string_set.push(StringSetAssignment {
+      name: "title".to_string(),
+      value: StringSetValue::Literal("Old".to_string()),
+    });
+
+    let decl = Declaration {
+      property: "string-set".to_string(),
+      value: PropertyValue::Keyword("none".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+    assert!(style.string_set.is_empty());
   }
 
   #[test]

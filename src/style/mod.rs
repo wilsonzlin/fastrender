@@ -18,6 +18,7 @@ pub mod page;
 pub mod position;
 pub mod properties;
 pub mod style_set;
+pub mod string_set;
 pub mod types;
 pub mod values;
 pub mod var_resolution;
@@ -36,6 +37,7 @@ use display::Display;
 use position::Position;
 use std::collections::HashMap;
 use std::sync::Arc;
+use string_set::StringSetAssignment;
 use types::AccentColor;
 use types::AlignContent;
 use types::AlignItems;
@@ -733,6 +735,9 @@ pub struct ComputedStyle {
   pub caption_side: CaptionSide,
   pub empty_cells: EmptyCells,
 
+  /// Named strings assigned by the `string-set` property.
+  pub string_set: Vec<StringSetAssignment>,
+
   // CSS Custom Properties (variables)
   pub custom_properties: HashMap<String, String>,
 
@@ -1034,6 +1039,8 @@ impl Default for ComputedStyle {
       table_layout: TableLayout::Auto,
       caption_side: CaptionSide::Top,
       empty_cells: EmptyCells::Show,
+
+      string_set: Vec::new(),
 
       custom_properties: HashMap::new(),
 

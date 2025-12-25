@@ -371,6 +371,7 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "visibility",
   "white-space",
   "width",
+  "string-set",
   "will-change",
   "word-break",
   "word-wrap",
