@@ -5,7 +5,7 @@
 //! fetched CSS into an HTML document. They are shared by the developer
 //! tooling binaries so cached pages can be rendered with their real styles.
 
-use crate::error::{RenderError, RenderStage, Result};
+use crate::error::{RenderError, RenderStage};
 use crate::render_control::RenderDeadline;
 use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;

@@ -513,6 +513,21 @@ pub struct RenderOptions {
   pub cancel_callback: Option<Arc<CancelCallback>>,
 }
 
+impl std::fmt::Debug for RenderOptions {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("RenderOptions")
+      .field("viewport", &self.viewport)
+      .field("device_pixel_ratio", &self.device_pixel_ratio)
+      .field("media_type", &self.media_type)
+      .field("scroll_x", &self.scroll_x)
+      .field("scroll_y", &self.scroll_y)
+      .field("css_limit", &self.css_limit)
+      .field("allow_partial", &self.allow_partial)
+      .field("timeout", &self.timeout)
+      .finish_non_exhaustive()
+  }
+}
+
 impl Default for RenderOptions {
   fn default() -> Self {
     Self {
