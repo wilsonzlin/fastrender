@@ -402,8 +402,13 @@ fn main() {
 
         let worker_name = name.clone();
         let render_opts = options.clone();
-        let render_config = config.clone();
+        let mut render_config = config.clone();
         let render_fetcher = fetcher.clone() as Arc<dyn fastrender::resource::ResourceFetcher>;
+        let has_page_rule = doc.html.to_ascii_lowercase().contains("@page");
+        if has_page_rule {
+          render_config.fit_canvas_to_content = true;
+          let _ = writeln!(log, "Detected @page rule; fitting canvas to content");
+        }
         let doc_for_render = doc.clone();
         let panic_to_string = |panic: Box<dyn std::any::Any + Send + 'static>| -> String {
           panic
