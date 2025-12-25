@@ -191,8 +191,8 @@ pub(crate) fn fragmentation_axis(node: &FragmentNode) -> BlockAxis {
   BlockAxis::new(wm)
 }
 
-#[derive(Default, Debug)]
-struct BreakPlan {
+#[derive(Default, Debug, Clone)]
+pub(crate) struct BreakPlan {
   candidates: Vec<BreakCandidate>,
   forbidden: Vec<ForbiddenRange>,
 }
@@ -596,6 +596,129 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
   }
 }
 
+fn normalize_break_plan(plan: &mut BreakPlan) {
+  plan.candidates.sort_by(|a, b| {
+    a.pos
+      .partial_cmp(&b.pos)
+      .unwrap_or(std::cmp::Ordering::Equal)
+  });
+  plan
+    .candidates
+    .dedup_by(|a, b| (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength);
+}
+
+pub(crate) fn build_break_plan(
+  root: &FragmentNode,
+  abs_start: f32,
+  total_block_size: f32,
+) -> BreakPlan {
+  let axis = fragmentation_axis(root);
+  let root_block_size = axis.block_size(&root.bounds);
+  let mut plan = BreakPlan::default();
+  let mut debug: Option<&mut dyn DebugSink> = None;
+  collect_break_plan(
+    root,
+    abs_start,
+    root_block_size,
+    &axis,
+    &mut plan,
+    &mut debug,
+  );
+  plan.candidates.push(BreakCandidate {
+    pos: total_block_size,
+    strength: BreakStrength::Forced,
+    kind: OpportunityKind::FinalContentEdge,
+    container_id: Some(fragment_debug_id(root)),
+    details: Some("end of content".to_string()),
+  });
+  normalize_break_plan(&mut plan);
+  plan
+}
+
+fn choose_boundary(
+  start: f32,
+  fragmentainer: f32,
+  total_height: f32,
+  plan: &BreakPlan,
+) -> (
+  f32,
+  BoundaryReason,
+  Option<f32>,
+  Option<f32>,
+  Option<f32>,
+  Option<f32>,
+) {
+  const EPSILON: f32 = 0.01;
+  let target = (start + fragmentainer).min(total_height);
+
+  let forced_boundary = plan.candidates.iter().find_map(|candidate| {
+    if candidate.strength == BreakStrength::Forced
+      && candidate.pos > start + EPSILON
+      && candidate.pos <= target + EPSILON
+      && !is_forbidden(candidate.pos, &plan.forbidden)
+    {
+      Some(candidate.pos)
+    } else {
+      None
+    }
+  });
+
+  let preferred_target = if !is_forbidden(target, &plan.forbidden) {
+    Some(target)
+  } else {
+    None
+  };
+
+  let natural = plan.candidates.iter().rev().find_map(|candidate| {
+    if candidate.pos > start + EPSILON
+      && candidate.pos <= target + EPSILON
+      && !is_forbidden(candidate.pos, &plan.forbidden)
+    {
+      Some(candidate.pos)
+    } else {
+      None
+    }
+  });
+
+  let overflow_candidate = plan.candidates.iter().find_map(|candidate| {
+    if candidate.pos > target + EPSILON && !is_forbidden(candidate.pos, &plan.forbidden) {
+      Some(candidate.pos)
+    } else {
+      None
+    }
+  });
+
+  let (boundary, reason) = if let Some(pos) = forced_boundary {
+    (pos, BoundaryReason::ForcedInRange)
+  } else if let Some(pos) = natural {
+    (pos, BoundaryReason::NaturalInRange)
+  } else if let Some(pos) = preferred_target {
+    (pos, BoundaryReason::PreferredTarget)
+  } else if let Some(pos) = overflow_candidate {
+    (pos, BoundaryReason::Overflowed)
+  } else {
+    (target, BoundaryReason::Fallback)
+  };
+
+  (
+    boundary.min(total_height),
+    reason,
+    forced_boundary,
+    natural,
+    preferred_target,
+    overflow_candidate,
+  )
+}
+
+pub(crate) fn select_fragmentainer_boundary(
+  start: f32,
+  fragmentainer: f32,
+  total_height: f32,
+  plan: &BreakPlan,
+) -> f32 {
+  choose_boundary(start, fragmentainer, total_height, plan).0
+}
+
 fn collect_break_plan(
   node: &FragmentNode,
   abs_start: f32,
@@ -864,17 +987,8 @@ fn collect_break_plan(
 
 pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> Vec<f32> {
   let axis = fragmentation_axis(node);
-  let mut plan = BreakPlan::default();
-  let parent_block_size = axis.block_size(&node.bounds);
-  let mut debug: Option<&mut dyn DebugSink> = None;
-  collect_break_plan(
-    node,
-    abs_start,
-    parent_block_size,
-    &axis,
-    &mut plan,
-    &mut debug,
-  );
+  let total_block_size = axis.block_size(&node.bounding_box());
+  let plan = build_break_plan(node, abs_start, total_block_size);
   plan
     .candidates
     .into_iter()
@@ -891,57 +1005,13 @@ fn compute_boundaries(
 ) -> Vec<f32> {
   const EPSILON: f32 = 0.01;
 
-  let mut forced: Vec<f32> = plan
-    .candidates
-    .iter()
-    .filter(|c| c.strength == BreakStrength::Forced)
-    .map(|c| c.pos)
-    .collect();
-  let mut allowed: Vec<f32> = plan.candidates.iter().map(|c| c.pos).collect();
-
-  forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-  forced.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
-  allowed.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-  allowed.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
-
   let mut boundaries = vec![0.0];
   let mut start = 0.0;
 
   while start + fragmentainer < total_height - EPSILON {
-    let target = start + fragmentainer;
-
-    // Forced breaks take precedence when they fall within the available range.
-    let forced_boundary = forced.iter().copied().find(|p| {
-      *p > start + EPSILON && *p <= target + EPSILON && !is_forbidden(*p, &plan.forbidden)
-    });
-
-    let preferred_target = if !is_forbidden(target, &plan.forbidden) {
-      Some(target)
-    } else {
-      None
-    };
-
-    let natural = allowed.iter().rev().copied().find(|p| {
-      *p > start + EPSILON && *p <= target + EPSILON && !is_forbidden(*p, &plan.forbidden)
-    });
-
-    let overflow_candidate = allowed
-      .iter()
-      .copied()
-      .find(|p| *p > target + EPSILON && !is_forbidden(*p, &plan.forbidden));
-
-    let (boundary, reason) = if let Some(pos) = forced_boundary {
-      (pos, BoundaryReason::ForcedInRange)
-    } else if let Some(pos) = natural {
-      (pos, BoundaryReason::NaturalInRange)
-    } else if let Some(pos) = preferred_target {
-      (pos, BoundaryReason::PreferredTarget)
-    } else if let Some(pos) = overflow_candidate {
-      (pos, BoundaryReason::Overflowed)
-    } else {
-      (target.min(total_height), BoundaryReason::Fallback)
-    };
-
+    let target = (start + fragmentainer).min(total_height);
+    let (boundary, reason, forced_boundary, natural, preferred_target, overflow_candidate) =
+      choose_boundary(start, fragmentainer, total_height, plan);
     let clamped = boundary.min(total_height);
     if (clamped - start).abs() < EPSILON {
       // Give up on tiny slices to avoid infinite loops.

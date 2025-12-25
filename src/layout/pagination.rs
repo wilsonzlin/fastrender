@@ -5,7 +5,8 @@ use std::sync::Arc;
 use crate::css::types::CollectedPageRule;
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::fragmentation::{
-  clip_node, collect_forced_boundaries, fragmentation_axis, propagate_fragment_metadata, BlockAxis,
+  build_break_plan, clip_node, propagate_fragment_metadata, select_fragmentainer_boundary,
+  fragmentation_axis, BlockAxis,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
@@ -89,7 +90,6 @@ pub fn paginate_fragment_tree_with_options(
       .unwrap_or(std::cmp::Ordering::Equal)
   });
 
-  let mut forced = collect_forced_boundaries(root, 0.0);
   let fallback_block_size = if axis.horizontal {
     fallback_page_size.width
   } else {
@@ -98,9 +98,7 @@ pub fn paginate_fragment_tree_with_options(
   let total_block = axis
     .block_size(&root.bounding_box())
     .max(fallback_block_size);
-  forced.push(total_block);
-  forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-  forced.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+  let break_plan = build_break_plan(root, 0.0, total_block);
 
   let fixed_fragments = collect_fixed_fragments(root, &axis, root_block_size);
 
@@ -131,14 +129,7 @@ pub fn paginate_fragment_tree_with_options(
       style.content_size.height
     }
     .max(1.0);
-    let mut end = (pos + page_block).min(total_block);
-    if let Some(boundary) = forced
-      .iter()
-      .copied()
-      .find(|b| *b > pos + 0.01 && *b < end - 0.01)
-    {
-      end = boundary;
-    }
+    let end = select_fragmentainer_boundary(pos, page_block, total_block, &break_plan);
 
     if end <= pos + 0.01 {
       break;
