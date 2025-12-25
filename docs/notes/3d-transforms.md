@@ -16,3 +16,18 @@ Key points:
   stack.
 - Elements with transforms or perspective establish containing blocks for
   positioned descendants (including `position: fixed`).
+
+## Preserve-3D fallback
+
+Projective warping is not always available. The preserve-3d compositor now
+classifies each stacking context transform and falls back deterministically:
+
+- Perspective transforms are approximated to 2D when warping is unavailable.
+- Depth sorting still runs for `transform-style: preserve-3d` when all child
+  depths are stable; otherwise it falls back to the authored paint order
+  (equivalent to `transform-style: flat`).
+- Degenerate projections (non-finite or `w≈0` when projecting plane corners)
+  force flat ordering but still honour backface-visibility where possible.
+
+Set `FASTR_PRESERVE3D_DEBUG=1` to log the chosen path per item while debugging
+real pages.

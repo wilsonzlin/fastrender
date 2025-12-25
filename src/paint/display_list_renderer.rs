@@ -2845,6 +2845,7 @@ impl DisplayListRenderer {
 
   /// Consumes the renderer and returns the painted pixmap.
   pub fn render(mut self, list: &DisplayList) -> Result<Pixmap> {
+    let list = crate::paint::preserve_3d::composite_preserve_3d(list);
     self.render_slice(list.items())?;
     Ok(self.canvas.into_pixmap())
   }

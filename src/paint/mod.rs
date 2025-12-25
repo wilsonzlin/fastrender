@@ -99,6 +99,7 @@ pub mod homography;
 pub mod motion_path;
 pub mod object_fit;
 pub mod optimize;
+pub mod preserve_3d;
 pub mod painter;
 pub mod preserve3d;
 pub mod projective_warp;
