@@ -34,7 +34,6 @@
 use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::display_list::BorderRadii;
-#[cfg(test)]
 use crate::paint::display_list::BorderRadius;
 use crate::style::color::Rgba;
 use tiny_skia::FillRule;
@@ -1363,10 +1362,10 @@ mod tests {
   #[test]
   fn test_border_radii_uniform() {
     let radii = BorderRadii::uniform(10.0);
-    assert_eq!(radii.top_left, 10.0);
-    assert_eq!(radii.top_right, 10.0);
-    assert_eq!(radii.bottom_right, 10.0);
-    assert_eq!(radii.bottom_left, 10.0);
+    assert_eq!(radii.top_left, BorderRadius::uniform(10.0));
+    assert_eq!(radii.top_right, BorderRadius::uniform(10.0));
+    assert_eq!(radii.bottom_right, BorderRadius::uniform(10.0));
+    assert_eq!(radii.bottom_left, BorderRadius::uniform(10.0));
     assert!(radii.has_radius());
   }
 

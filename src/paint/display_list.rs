@@ -493,7 +493,7 @@ impl BorderRadii {
     let left_sum = self.top_left.y + self.bottom_left.y;
     let right_sum = self.top_right.y + self.bottom_right.y;
 
-    let mut scale_x = 1.0;
+    let mut scale_x: f32 = 1.0;
     if top_sum > 0.0 {
       scale_x = scale_x.min(width / top_sum);
     }
@@ -501,7 +501,7 @@ impl BorderRadii {
       scale_x = scale_x.min(width / bottom_sum);
     }
 
-    let mut scale_y = 1.0;
+    let mut scale_y: f32 = 1.0;
     if left_sum > 0.0 {
       scale_y = scale_y.min(height / left_sum);
     }

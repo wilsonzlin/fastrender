@@ -12515,8 +12515,11 @@ mod tests {
           assert_eq!(*right, Length::percent(20.0));
           assert_eq!(*left, Length::percent(20.0));
           let radii = border_radius.as_ref().expect("radii present");
-          assert_eq!(radii.top_left, Length::px(5.0));
-          assert_eq!(radii.bottom_right, Length::px(5.0));
+          assert_eq!(radii.top_left, BorderCornerRadius::uniform(Length::px(5.0)));
+          assert_eq!(
+            radii.bottom_right,
+            BorderCornerRadius::uniform(Length::px(5.0))
+          );
         }
         other => panic!("unexpected basic shape: {other:?}"),
       },

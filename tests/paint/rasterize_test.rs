@@ -15,6 +15,7 @@ use fastrender::paint::rasterize::stroke_rounded_rect;
 use fastrender::paint::rasterize::BorderColors;
 use fastrender::paint::rasterize::BorderWidths;
 use fastrender::paint::rasterize::BoxShadow;
+use fastrender::paint::display_list::BorderRadius;
 use fastrender::BorderRadii;
 use fastrender::Rgba;
 use tiny_skia::Pixmap;
