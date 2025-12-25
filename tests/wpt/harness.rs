@@ -406,6 +406,13 @@ impl TestResult {
     self
   }
 
+  /// Attaches pixel-diff statistics without perceptual metrics.
+  pub fn with_diff(mut self, pixel_diff: u64, diff_percentage: f64) -> Self {
+    self.pixel_diff = Some(pixel_diff);
+    self.diff_percentage = Some(diff_percentage);
+    self
+  }
+
   /// Sets comparison metrics from an image diff result.
   pub fn with_comparison(mut self, diff: &ImageDiff) -> Self {
     self.pixel_diff = Some(diff.statistics.different_pixels);

@@ -47,7 +47,12 @@ fn test_ref_compare_identical_images() {
   assert!(diff.dimensions_match);
   assert_eq!(diff.statistics.different_pixels, 0);
   assert_eq!(diff.statistics.different_percent, 0.0);
-  assert_eq!(diff.statistics.max_channel_diff(), 0);
+  assert_eq!(
+    diff
+      .statistics
+      .max_channel_diff(CompareConfig::strict().compare_alpha),
+    0
+  );
   assert!(diff.statistics.psnr.is_infinite());
 }
 
@@ -154,9 +159,11 @@ fn test_ref_statistics_max_channel_diff() {
     max_alpha_diff: 75,
     mse: 0.0,
     psnr: 0.0,
+    perceptual_similarity: 0.0,
+    perceptual_distance: 0.0,
   };
 
-  assert_eq!(stats.max_channel_diff(), 100);
+  assert_eq!(stats.max_channel_diff(true), 100);
 }
 
 #[test]

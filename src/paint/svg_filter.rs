@@ -1538,7 +1538,7 @@ mod tests {
     assert_eq!(px.green(), 0);
     assert_eq!(px.blue(), 0);
 
-    let expected_alpha = (255.0 * (0.2126 * 1.0 + 0.7152 * 0.5 + 0.0722 * 0.0))
+    let expected_alpha = (255.0f32 * (0.2126 * 1.0 + 0.7152 * 0.5 + 0.0722 * 0.0))
       .round()
       .clamp(0.0, 255.0) as u8;
     assert_eq!(px.alpha(), expected_alpha);
@@ -1694,8 +1694,19 @@ mod tests {
       preserve_alpha: false,
       subregion: None,
     };
-    let mut none_mode = base.clone();
-    none_mode.edge_mode = EdgeMode::None;
+    let none_mode = FilterPrimitive::ConvolveMatrix {
+      input: FilterInput::SourceGraphic,
+      order_x: 3,
+      order_y: 3,
+      kernel: vec![1.0; 9],
+      divisor: Some(9.0),
+      bias: 0.0,
+      target_x: 1,
+      target_y: 1,
+      edge_mode: EdgeMode::None,
+      preserve_alpha: false,
+      subregion: None,
+    };
 
     let dup = apply_primitive(&base, &pixmap, &HashMap::new(), &pixmap).unwrap();
     let none = apply_primitive(&none_mode, &pixmap, &HashMap::new(), &pixmap).unwrap();

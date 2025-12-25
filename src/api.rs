@@ -92,9 +92,7 @@ use crate::layout::flex_profile::reset_flex_profile;
 use crate::layout::formatting_context::intrinsic_cache_clear;
 use crate::layout::formatting_context::intrinsic_cache_reset_counters;
 use crate::layout::formatting_context::intrinsic_cache_stats;
-use crate::layout::pagination::{
-  paginate_fragment_tree_with_options, PaginateOptions, PageStacking,
-};
+use crate::layout::pagination::{paginate_fragment_tree_with_options, PaginateOptions};
 use crate::layout::profile::layout_profile_enabled;
 use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
@@ -644,6 +642,7 @@ pub struct PreparedDocument {
   layout_viewport: Size,
   visual_viewport: Size,
   device_pixel_ratio: f32,
+  page_zoom: f32,
   background_color: Rgba,
   default_scroll: Point,
   font_context: FontContext,
@@ -672,6 +671,8 @@ impl PreparedDocument {
     }
 
     let viewport = viewport_override.map(|(w, h)| Size::new(w as f32, h as f32));
+    let paint_scale =
+      (self.device_pixel_ratio / self.page_zoom.max(f32::EPSILON)).max(f32::EPSILON);
     paint_fragment_tree_with_scroll(
       self.fragment_tree.clone(),
       scroll_x,
@@ -680,7 +681,7 @@ impl PreparedDocument {
       background_override.unwrap_or(self.background_color),
       &self.font_context,
       &self.image_cache,
-      self.device_pixel_ratio,
+      paint_scale,
     )
   }
 
@@ -845,6 +846,8 @@ struct ResolvedViewport {
   visual_viewport: Size,
   /// Effective device pixel ratio after page zoom. This multiplies the renderer's base DPR.
   device_pixel_ratio: f32,
+  /// Effective page zoom derived from meta viewport directives.
+  zoom: f32,
 }
 
 impl ResolvedViewport {
@@ -853,6 +856,7 @@ impl ResolvedViewport {
       layout_viewport: viewport,
       visual_viewport: viewport,
       device_pixel_ratio: sanitize_scale(Some(device_pixel_ratio)).unwrap_or(1.0),
+      zoom: 1.0,
     }
   }
 }
@@ -901,7 +905,7 @@ fn resolve_viewport(
 
   let mut scale = meta
     .initial_scale
-    .and_then(sanitize_scale)
+    .and_then(|value| sanitize_scale(Some(value)))
     .or_else(|| {
       meta.width.and_then(|_| {
         Some((requested_visual.width / resolved.layout_viewport.width).max(f32::EPSILON))
@@ -921,6 +925,7 @@ fn resolve_viewport(
     scale = scale.min(max);
   }
   scale = sanitize_scale(Some(scale)).unwrap_or(1.0);
+  resolved.zoom = scale;
 
   resolved.visual_viewport = Size::new(
     (requested_visual.width / scale).max(1.0),
@@ -1549,6 +1554,7 @@ impl FastRender {
         layout_width,
         layout_height,
         options.media_type,
+        LayoutDocumentOptions::default(),
       )
     })();
 
@@ -1720,6 +1726,7 @@ impl FastRender {
       layout_viewport,
       visual_viewport: resolved_viewport.visual_viewport,
       device_pixel_ratio: resolved_viewport.device_pixel_ratio,
+      page_zoom: resolved_viewport.zoom,
       background_color: self.background_color,
       default_scroll: Point::new(options.scroll_x, options.scroll_y),
       font_context: self.font_context.clone(),

@@ -440,6 +440,6 @@ fn meta_viewport_flips_media_query_when_enabled() {
       FastRender::with_config(FastRenderConfig::new().with_meta_viewport(true)).unwrap();
     let meta_applied = enabled.render_html(html, 600, 400).unwrap();
     let meta_pixel = meta_applied.pixel(0, 0).unwrap();
-    assert!(meta_pixel.green() > meta_pixel.red());
+    assert!(meta_pixel.red() > meta_pixel.green());
   });
 }

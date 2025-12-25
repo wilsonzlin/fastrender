@@ -3,10 +3,7 @@
 //! This module wraps the shared `fastrender::image_compare` APIs with helpers
 //! for converting to/from tiny-skia pixmaps used by the renderer.
 
-use fastrender::image_compare::{
-  compare_images as compare_rgba_images, decode_png, encode_png, CompareConfig, DiffStatistics,
-  ImageDiff,
-};
+use fastrender::image_compare::{compare_images as compare_rgba_images, decode_png, encode_png};
 use image::RgbaImage;
 use std::path::Path;
 use tiny_skia::Pixmap;

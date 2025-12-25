@@ -343,15 +343,20 @@ fn apply_page_stacking(pages: &mut [FragmentNode], axis: &BlockAxis, stacking: P
 
   let gap = gap.max(0.0);
   let mut offset = 0.0;
+  let mut last_extent = None;
 
-  for (idx, page) in pages.iter_mut().enumerate() {
-    if idx > 0 {
-      let previous_extent = axis.block_size(&pages[idx - 1].bounds);
-      offset += previous_extent + gap;
+  for page in pages.iter_mut() {
+    if let Some(extent) = last_extent {
+      offset += extent + gap;
     }
 
-    let delta = axis.translate_along_block(offset);
-    translate_fragment(page, delta.x, delta.y);
+    if axis.horizontal {
+      translate_fragment(page, offset, 0.0);
+    } else {
+      translate_fragment(page, 0.0, offset);
+    }
+
+    last_extent = Some(axis.block_size(&page.bounds));
   }
 }
 
