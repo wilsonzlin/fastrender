@@ -2645,7 +2645,7 @@ impl DisplayListRenderer {
         let mask = item.mask.clone();
 
         let is_isolated = item.is_isolated || has_backdrop;
-        let manual_blend = if is_manual_blend(item.mix_blend_mode) && !is_isolated {
+        let manual_blend = if is_manual_blend(item.mix_blend_mode) {
           Some(item.mix_blend_mode)
         } else {
           None
@@ -2681,13 +2681,17 @@ impl DisplayListRenderer {
         if needs_layer {
           if manual_blend.is_some() {
             self.canvas.push_layer(1.0)?;
+          } else if !matches!(
+            item.mix_blend_mode,
+            crate::paint::display_list::BlendMode::Normal
+          ) {
+            self
+              .canvas
+              .push_layer_with_blend(1.0, Some(map_blend_mode(item.mix_blend_mode)))?;
           } else {
-            let blend = if is_isolated {
-              tiny_skia::BlendMode::SourceOver
-            } else {
-              map_blend_mode(item.mix_blend_mode)
-            };
-            self.canvas.push_layer_with_blend(1.0, Some(blend))?;
+            self
+              .canvas
+              .push_layer_with_blend(1.0, Some(tiny_skia::BlendMode::SourceOver))?;
           }
         } else {
           self.canvas.save();
@@ -6327,6 +6331,99 @@ mod tests {
     assert!(
       px.1 < 5 && px.2 < 5,
       "green/blue should be near zero (got {:?})",
+      px
+    );
+    assert_eq!(px.3, 255, "alpha should remain opaque (got {:?})", px);
+  }
+
+  #[test]
+  fn isolated_stacking_context_respects_blend_mode() {
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    // Gray backdrop (50% luminance)
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+      color: Rgba::from_rgba8(128, 128, 128, 255),
+    }));
+
+    list.push(DisplayItem::PushStackingContext(
+      crate::paint::display_list::StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+        mix_blend_mode: crate::paint::display_list::BlendMode::Multiply,
+        is_isolated: true,
+        transform: None,
+        transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+        mask: None,
+      },
+    ));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+      color: Rgba::rgb(255, 0, 0),
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let px = pixel(&pixmap, 0, 0);
+    // Multiply should still apply even when the stacking context is isolated.
+    assert!(
+      (px.0 as i32 - 128).abs() <= 2,
+      "red channel should be ~128 (got {:?})",
+      px
+    );
+    assert!(
+      px.1 < 5 && px.2 < 5,
+      "green/blue should be near zero (got {:?})",
+      px
+    );
+    assert_eq!(px.3, 255, "alpha should remain opaque (got {:?})", px);
+  }
+
+  #[test]
+  fn isolated_manual_blend_mode_applies() {
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    // Start with a gray backdrop to make hue blending distinguishable from source-over.
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+      color: Rgba::from_rgba8(128, 128, 128, 255),
+    }));
+
+    list.push(DisplayItem::PushStackingContext(
+      crate::paint::display_list::StackingContextItem {
+        z_index: 0,
+        creates_stacking_context: true,
+        bounds: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+        mix_blend_mode: crate::paint::display_list::BlendMode::Hue,
+        is_isolated: true,
+        transform: None,
+        transform_style: TransformStyle::Flat,
+        backface_visibility: BackfaceVisibility::Visible,
+        filters: Vec::new(),
+        backdrop_filters: Vec::new(),
+        radii: BorderRadii::ZERO,
+        mask: None,
+      },
+    ));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+      color: Rgba::rgb(255, 0, 0),
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let px = pixel(&pixmap, 0, 0);
+    // Hue takes destination saturation/lightness; with a gray backdrop the result stays gray.
+    assert!(
+      (px.0 as i32 - 128).abs() <= 2
+        && (px.1 as i32 - 128).abs() <= 2
+        && (px.2 as i32 - 128).abs() <= 2,
+      "manual hue blend should preserve the gray backdrop (got {:?})",
       px
     );
     assert_eq!(px.3, 255, "alpha should remain opaque (got {:?})", px);
