@@ -24,7 +24,7 @@ use crate::layout::formatting_context::layout_cache_use_epoch;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation;
-use crate::layout::fragmentation::{FragmentationKind, FragmentationOptions};
+use crate::layout::fragmentation::FragmentationOptions;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
@@ -125,9 +125,7 @@ impl LayoutConfig {
   /// The initial containing block is set to the provided page size and fragmentation is
   /// configured to split content at that block-size with the supplied gap.
   pub fn for_pagination(page_size: Size, gap: f32) -> Self {
-    let fragmentation = FragmentationOptions::new(page_size.height)
-      .with_gap(gap)
-      .with_kind(FragmentationKind::Page);
+    let fragmentation = FragmentationOptions::new(page_size.height).with_gap(gap);
     Self::new(page_size).with_fragmentation(fragmentation)
   }
 

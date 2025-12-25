@@ -13,6 +13,31 @@ use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
 
+/// Controls how paginated pages are positioned in the fragment tree.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageStacking {
+  /// Translate each page along the block axis so they don't overlap.
+  ///
+  /// The provided gap is inserted between successive pages (clamped to >= 0).
+  Stacked { gap: f32 },
+  /// Leave all pages at the origin so they can be painted independently.
+  Untranslated,
+}
+
+/// Options for pagination.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaginateOptions {
+  pub stacking: PageStacking,
+}
+
+impl Default for PaginateOptions {
+  fn default() -> Self {
+    Self {
+      stacking: PageStacking::Stacked { gap: 0.0 },
+    }
+  }
+}
+
 /// Split a laid out fragment tree into pages using the provided @page rules.
 pub fn paginate_fragment_tree(
   root: &FragmentNode,
@@ -111,6 +136,37 @@ pub fn paginate_fragment_tree(
   let count = pages.len();
   for (idx, page) in pages.iter_mut().enumerate() {
     propagate_fragment_metadata(page, idx, count);
+  }
+
+  pages
+}
+
+/// Split a laid out fragment tree into pages using the provided @page rules with options.
+pub fn paginate_fragment_tree_with_options(
+  root: &FragmentNode,
+  rules: &[CollectedPageRule<'_>],
+  fallback_page_size: Size,
+  font_ctx: &FontContext,
+  root_font_size: f32,
+  initial_page_name: Option<String>,
+  options: PaginateOptions,
+) -> Vec<FragmentNode> {
+  let mut pages = paginate_fragment_tree(
+    root,
+    rules,
+    fallback_page_size,
+    font_ctx,
+    root_font_size,
+    initial_page_name,
+  );
+
+  if let PageStacking::Stacked { gap } = options.stacking {
+    let gap = gap.max(0.0);
+    let mut offset = 0.0;
+    for page in &mut pages {
+      translate_fragment(page, 0.0, offset);
+      offset += page.bounds.height() + gap;
+    }
   }
 
   pages

@@ -874,7 +874,7 @@ impl BlockFormattingContext {
 
     let bounds = Rect::from_xywh(computed_width.margin_left, box_y, box_width, box_height);
 
-    let fragment = FragmentNode::new_with_style(
+    let mut fragment = FragmentNode::new_with_style(
       bounds,
       crate::tree::fragment_tree::FragmentContent::Block {
         box_id: Some(child.id),
@@ -2053,7 +2053,7 @@ impl BlockFormattingContext {
       LayoutConstraints::new(AvailableSpace::Definite(column_width), available_height);
     let (flow_fragments, flow_height, flow_positioned) =
       self.layout_children(&parent_clone, &column_constraints, nearest_positioned_cb)?;
-    let mut flow_fragments: Vec<FragmentNode> = flow_fragments
+    let flow_fragments: Vec<FragmentNode> = flow_fragments
       .into_iter()
       .map(|mut frag| {
         Self::set_logical_from_bounds(&mut frag);

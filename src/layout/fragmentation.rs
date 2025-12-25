@@ -12,7 +12,9 @@ use std::sync::OnceLock;
 use crate::geometry::{Point, Rect};
 use crate::style::types::{BreakBetween, BreakInside};
 use crate::style::ComputedStyle;
-use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentationInfo, FragmentainerPath};
+use crate::tree::fragment_tree::{
+  FragmentContent, FragmentNode, FragmentainerPath, FragmentationInfo,
+};
 
 /// Options controlling how fragments are split across fragmentainers.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -244,6 +246,7 @@ pub(crate) fn clip_node(
       clipped_abs_start,
       fragment_index,
       fragment_count,
+      fragmentainer_size,
     ) {
       cloned.children.push(child_clipped);
     }
@@ -260,7 +263,7 @@ fn clip_multicol_node(
   parent_clipped_abs_start: f32,
   fragment_index: usize,
   fragment_count: usize,
-  _fragmentainer_size: f32,
+  fragmentainer_size: f32,
   info: &FragmentationInfo,
 ) -> Option<FragmentNode> {
   let logical_bounds = node.logical_bounds();
@@ -321,11 +324,9 @@ fn clip_multicol_node(
       }
       let within_column = offset_within_slice - column_height * column_index as f32;
       let x_offset = column_index as f32 * (info.column_width + info.column_gap);
-      translate_fragment_in_place(
-        &mut child_clipped,
-        x_offset - child_clipped.bounds.x(),
-        within_column - child_clipped.bounds.y(),
-      );
+      let dx = x_offset - child_clipped.bounds.x();
+      let dy = within_column - child_clipped.bounds.y();
+      translate_fragment_in_place(&mut child_clipped, dx, dy);
       cloned.children.push(child_clipped);
     }
   }
@@ -344,6 +345,7 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     fragment_index: node.fragment_index,
     fragment_count: node.fragment_count,
     fragmentainer_index: node.fragmentainer_index,
+    fragmentainer: node.fragmentainer,
     scroll_overflow: node.scroll_overflow,
     fragmentation: node.fragmentation.clone(),
   }

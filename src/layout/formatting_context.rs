@@ -334,17 +334,16 @@ pub(crate) fn layout_style_fingerprint(style: &Arc<ComputedStyle>) -> u64 {
 }
 
 fn fragmentation_fingerprint(options: Option<FragmentationOptions>) -> u64 {
-  if let Some(opts) = options {
-    let mut h = DefaultHasher::new();
-    opts.fragmentainer_size.to_bits().hash(&mut h);
-    opts.fragmentainer_gap.to_bits().hash(&mut h);
-    opts.column_count.hash(&mut h);
-    opts.column_gap.to_bits().hash(&mut h);
-    opts.kind.hash(&mut h);
-    h.finish()
-  } else {
-    0
-  }
+  options
+    .map(|opts| {
+      let mut h = DefaultHasher::new();
+      opts.fragmentainer_size.to_bits().hash(&mut h);
+      opts.fragmentainer_gap.to_bits().hash(&mut h);
+      opts.column_count.hash(&mut h);
+      opts.column_gap.to_bits().hash(&mut h);
+      h.finish()
+    })
+    .unwrap_or(0)
 }
 
 fn is_layout_cacheable(box_node: &BoxNode, fc_type: FormattingContextType) -> bool {
