@@ -313,6 +313,34 @@ fn margin_box_content_is_positioned_in_margins() {
 }
 
 #[test]
+fn margin_box_quotes_property_applies() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          body { quotes: "<" ">"; }
+          @page {
+            size: 200px 120px;
+            margin: 10px;
+            @top-center { content: open-quote "x" close-quote; }
+          }
+        </style>
+      </head>
+      <body>
+        <div style="height: 20px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page = pages(&tree)[0];
+
+  assert!(find_text(page, "<x>").is_some());
+}
+
+#[test]
 fn margin_box_url_content_creates_replaced_fragment() {
   let html = r#"
     <html>
