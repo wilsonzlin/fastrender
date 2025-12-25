@@ -35,6 +35,7 @@ use crate::paint::display_list::ResolvedFilter;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
+use crate::paint::filter_outset::filter_outset;
 
 // ============================================================================
 // Optimization Configuration
@@ -333,9 +334,9 @@ impl DisplayListOptimizer {
               transform_state.unsupported_depth += 1;
             }
           }
-          let (l, t, r, b) = Self::filter_outset(&sc.filters);
-          let (bl, bt, br, bb) = Self::filter_outset(&sc.backdrop_filters);
-          let max_outset = l.max(t).max(r).max(b).max(bl).max(bt).max(br).max(bb);
+          let filters_outset = filter_outset(&sc.filters, 1.0);
+          let backdrop_outset = filter_outset(&sc.backdrop_filters, 1.0);
+          let max_outset = filters_outset.max_side().max(backdrop_outset.max_side());
           let scale = Self::transform_scale_factor(&transform_state.current);
           let world_outset = if transform_state.culling_disabled() {
             0.0
@@ -654,12 +655,12 @@ impl DisplayListOptimizer {
     transform: Option<Transform2D>,
   ) -> Option<Rect> {
     if let Some(bounds) = children {
-      let (l, t, r, b) = Self::filter_outset(&item.filters);
-      let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
-      let expand_left = l.max(bl);
-      let expand_top = t.max(bt);
-      let expand_right = r.max(br);
-      let expand_bottom = b.max(bb);
+      let filters_outset = filter_outset(&item.filters, 1.0);
+      let backdrop_outset = filter_outset(&item.backdrop_filters, 1.0);
+      let expand_left = filters_outset.left.max(backdrop_outset.left);
+      let expand_top = filters_outset.top.max(backdrop_outset.top);
+      let expand_right = filters_outset.right.max(backdrop_outset.right);
+      let expand_bottom = filters_outset.bottom.max(backdrop_outset.bottom);
 
       let scale = transform
         .as_ref()
@@ -678,12 +679,12 @@ impl DisplayListOptimizer {
       return Some(expanded);
     }
 
-    let (l, t, r, b) = Self::filter_outset(&item.filters);
-    let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
-    let expand_left = l.max(bl);
-    let expand_top = t.max(bt);
-    let expand_right = r.max(br);
-    let expand_bottom = b.max(bb);
+    let filters_outset = filter_outset(&item.filters, 1.0);
+    let backdrop_outset = filter_outset(&item.backdrop_filters, 1.0);
+    let expand_left = filters_outset.left.max(backdrop_outset.left);
+    let expand_top = filters_outset.top.max(backdrop_outset.top);
+    let expand_right = filters_outset.right.max(backdrop_outset.right);
+    let expand_bottom = filters_outset.bottom.max(backdrop_outset.bottom);
     let mut bounds = item.bounds;
     if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
       bounds = Rect::from_xywh(
@@ -698,41 +699,6 @@ impl DisplayListOptimizer {
       Some(transform) => Some(transform.transform_rect(bounds)),
       None => Some(bounds),
     }
-  }
-
-  fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
-    let mut left: f32 = 0.0;
-    let mut top: f32 = 0.0;
-    let mut right: f32 = 0.0;
-    let mut bottom: f32 = 0.0;
-
-    for filter in filters {
-      match filter {
-        ResolvedFilter::Blur(radius) => {
-          let delta = radius.abs() * 3.0;
-          left = left.max(delta);
-          right = right.max(delta);
-          top = top.max(delta);
-          bottom = bottom.max(delta);
-        }
-        ResolvedFilter::DropShadow {
-          offset_x,
-          offset_y,
-          blur_radius,
-          spread,
-          ..
-        } => {
-          let delta = blur_radius.abs() * 3.0 + spread.max(0.0);
-          left = left.max(delta - offset_x.min(0.0));
-          right = right.max(delta + offset_x.max(0.0));
-          top = top.max(delta - offset_y.min(0.0));
-          bottom = bottom.max(delta + offset_y.max(0.0));
-        }
-        _ => {}
-      }
-    }
-
-    (left, top, right, bottom)
   }
 
   /// Try to merge two fill rects
@@ -875,10 +841,14 @@ pub fn optimize_with_stats(list: DisplayList, viewport: Rect) -> (DisplayList, O
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::paint::display_list::BorderRadii;
   use crate::paint::display_list::OpacityItem;
+  use crate::paint::display_list::StackingContextItem;
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list::TransformItem;
+  use crate::paint::display_list::TransformStyle;
   use crate::style::color::Rgba;
+  use crate::style::types::BackfaceVisibility;
   use std::f32::consts::FRAC_PI_4;
 
   fn make_fill_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba) -> DisplayItem {
@@ -886,6 +856,19 @@ mod tests {
       rect: Rect::from_xywh(x, y, w, h),
       color,
     })
+  }
+
+  #[test]
+  fn filter_outset_accumulates_blur_chain() {
+    let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::Blur(2.0)];
+    let (l, t, r, b) = filter_outset(&filters, 1.0).as_tuple();
+    assert!(
+      (l - 12.0).abs() < 0.01
+        && (t - 12.0).abs() < 0.01
+        && (r - 12.0).abs() < 0.01
+        && (b - 12.0).abs() < 0.01,
+      "expected double blur radius to inflate by ~12px, got {l},{t},{r},{b}"
+    );
   }
 
   #[test]
@@ -914,6 +897,41 @@ mod tests {
 
     assert_eq!(stats.culled_count, 1);
     assert_eq!(optimized.len(), 2);
+  }
+
+  #[test]
+  fn blur_chain_outset_prevents_culling() {
+    let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::Blur(2.0)];
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(108.0, 10.0, 2.0, 2.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: filters.clone(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(make_fill_rect(108.0, 10.0, 2.0, 2.0, Rgba::RED));
+    list.push(DisplayItem::PopStackingContext);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, stats) = optimize_with_stats(list, viewport);
+
+    assert_eq!(
+      stats.culled_count, 0,
+      "blurred content should not be culled"
+    );
+    assert_eq!(optimized.len(), 3);
+    assert!(optimized
+      .items()
+      .iter()
+      .any(|item| matches!(item, DisplayItem::FillRect(_))));
   }
 
   #[test]
