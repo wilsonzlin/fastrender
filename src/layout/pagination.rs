@@ -294,7 +294,7 @@ pub fn paginate_fragment_tree(
 
     let mut fixed_fragments = Vec::new();
     collect_fixed_fragments(&layout.root, Point::ZERO, &mut fixed_fragments);
-    let mut page_root = FragmentNode::new_block(
+    let mut page_root = FragmentNode::new_block_styled(
       Rect::from_xywh(
         0.0,
         0.0,
@@ -302,6 +302,7 @@ pub fn paginate_fragment_tree(
         page_style.total_size.height,
       ),
       Vec::new(),
+      page_style.page_style.clone(),
     );
     let mut page_running_elements: HashMap<String, Vec<FragmentNode>> = HashMap::new();
 

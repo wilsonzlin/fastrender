@@ -1,7 +1,7 @@
-use fastrender::api::{FastRender, LayoutDocumentOptions, PageStacking};
-use fastrender::Rgba;
+use fastrender::api::{FastRender, LayoutDocumentOptions, PageStacking, RenderOptions};
 use fastrender::style::media::MediaType;
 use fastrender::tree::box_tree::ReplacedType;
+use fastrender::Rgba;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 
 fn pages<'a>(tree: &'a FragmentTree) -> Vec<&'a FragmentNode> {
@@ -212,6 +212,12 @@ fn assert_bounds_close(bounds: &fastrender::geometry::Rect, expected: (f32, f32,
     bounds.height(),
     height
   );
+}
+
+fn pixel(pixmap: &resvg::tiny_skia::Pixmap, x: u32, y: u32) -> [u8; 4] {
+  let idx = (y as usize * pixmap.width() as usize + x as usize) * 4;
+  let data = pixmap.data();
+  [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]
 }
 
 #[test]
@@ -1875,4 +1881,74 @@ fn var_in_string_argument_selects_last_running_string() {
     .expect("running header");
 
   assert_eq!(header.text, "Second");
+}
+
+#[test]
+fn page_background_paints_page_box() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 0;
+            background: rgb(10, 20, 30);
+          }
+          html, body { margin: 0; background: transparent; }
+          body { padding: 40px; }
+        </style>
+      </head>
+      <body>
+        <div style="width: 20px; height: 20px; margin: 20px; background: white;"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let pixmap = renderer
+    .render_html_with_options(
+      html,
+      RenderOptions::new()
+        .with_viewport(200, 200)
+        .with_media_type(MediaType::Print),
+    )
+    .expect("render page background");
+
+  assert_eq!(pixel(&pixmap, 100, 100), [10, 20, 30, 255]);
+}
+
+#[test]
+fn page_border_is_painted() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 0;
+            background: rgb(180, 190, 200);
+            border: 12px solid rgb(20, 40, 60);
+          }
+          html, body { margin: 0; background: transparent; }
+          body { padding: 30px; }
+        </style>
+      </head>
+      <body>
+        <div style="width: 10px; height: 10px; margin: 20px; background: white;"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let pixmap = renderer
+    .render_html_with_options(
+      html,
+      RenderOptions::new()
+        .with_viewport(200, 200)
+        .with_media_type(MediaType::Print),
+    )
+    .expect("render page border");
+
+  assert_eq!(pixel(&pixmap, 5, 5), [20, 40, 60, 255]);
+  assert_eq!(pixel(&pixmap, 100, 100), [180, 190, 200, 255]);
 }

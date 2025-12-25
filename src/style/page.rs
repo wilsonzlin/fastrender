@@ -68,6 +68,7 @@ pub struct ResolvedPageStyle {
   pub bleed: f32,
   pub trim: f32,
   pub margin_boxes: HashMap<PageMarginArea, ComputedStyle>,
+  pub page_style: ComputedStyle,
 }
 
 /// Resolve page styles for a specific page index/name/side.
@@ -89,6 +90,7 @@ pub fn resolve_page_style(
     .unwrap_or(root_font_size);
   let mut props = PageProperties::default();
   let mut margin_styles: HashMap<PageMarginArea, ComputedStyle> = HashMap::new();
+  let mut page_style = default_page_style(root_font_size);
 
   let mut matching: Vec<(&CollectedPageRule<'_>, u8)> = Vec::new();
   for rule in rules {
@@ -115,7 +117,16 @@ pub fn resolve_page_style(
 
   for (rule, _) in &matching {
     for decl in &rule.rule.declarations {
-      apply_page_declaration(&mut props, decl);
+      if apply_page_declaration(&mut props, decl) {
+        continue;
+      }
+      apply_page_box_declaration(
+        &mut page_style,
+        decl,
+        &defaults,
+        root_font_size,
+        fallback_size,
+      );
     }
 
     for margin_rule in &rule.rule.margin_rules {
@@ -147,6 +158,12 @@ pub fn resolve_page_style(
       style.display = Display::Block;
     }
   }
+  resolve_pending_logical_properties(&mut page_style);
+  if matches!(page_style.display, Display::Inline) {
+    page_style.display = Display::Block;
+  }
+  page_style.root_font_size = root_font_size;
+  page_style.font_size = root_font_size;
 
   let (page_width, page_height) = resolve_page_size(&props, fallback_size, root_font_size);
   let bleed = props
@@ -225,6 +242,7 @@ pub fn resolve_page_style(
     bleed,
     trim,
     margin_boxes: margin_styles,
+    page_style,
   }
 }
 
@@ -284,12 +302,16 @@ fn selector_specificity(selector: &crate::css::types::PageSelector) -> u8 {
   spec
 }
 
-fn apply_page_declaration(props: &mut PageProperties, decl: &crate::css::types::Declaration) {
+fn apply_page_declaration(
+  props: &mut PageProperties,
+  decl: &crate::css::types::Declaration,
+) -> bool {
   match decl.property.as_str() {
     "size" => {
       if let Some(size) = parse_page_size_value(&decl.value) {
         props.size = Some(size);
       }
+      true
     }
     "margin" => {
       if let Some(values) = parse_margin_shorthand(&decl.value) {
@@ -298,38 +320,45 @@ fn apply_page_declaration(props: &mut PageProperties, decl: &crate::css::types::
         props.margin_bottom = Some(values[2]);
         props.margin_left = Some(values[3]);
       }
+      true
     }
     "margin-top" => {
       if let Some(len) = length_from_value(&decl.value) {
         props.margin_top = Some(len);
       }
+      true
     }
     "margin-right" => {
       if let Some(len) = length_from_value(&decl.value) {
         props.margin_right = Some(len);
       }
+      true
     }
     "margin-bottom" => {
       if let Some(len) = length_from_value(&decl.value) {
         props.margin_bottom = Some(len);
       }
+      true
     }
     "margin-left" => {
       if let Some(len) = length_from_value(&decl.value) {
         props.margin_left = Some(len);
       }
+      true
     }
     "bleed" => {
       if let Some(len) = length_from_value(&decl.value) {
         props.bleed = Some(len);
       }
+      true
     }
     "trim" => {
       if let Some(len) = length_from_value(&decl.value) {
         props.trim = Some(len);
       }
+      true
     }
-    _ => {}
+    _ => false,
   }
 }
 
@@ -538,6 +567,83 @@ fn default_margin_text_align(area: PageMarginArea) -> TextAlign {
     | PageMarginArea::RightMiddle
     | PageMarginArea::RightBottom => TextAlign::Right,
   }
+}
+
+fn default_page_style(root_font_size: f32) -> ComputedStyle {
+  let mut style = ComputedStyle::default();
+  style.display = Display::Block;
+  style.root_font_size = root_font_size;
+  style.font_size = root_font_size;
+  style
+}
+
+fn apply_page_box_declaration(
+  style: &mut ComputedStyle,
+  decl: &crate::css::types::Declaration,
+  defaults: &ComputedStyle,
+  root_font_size: f32,
+  viewport: Size,
+) -> bool {
+  if !page_box_property_allowed(decl.property.as_str()) {
+    return false;
+  }
+
+  apply_declaration_with_base(
+    style,
+    decl,
+    defaults,
+    defaults,
+    None,
+    root_font_size,
+    root_font_size,
+    viewport,
+  );
+  true
+}
+
+fn page_box_property_allowed(property: &str) -> bool {
+  matches!(
+    property,
+    "background"
+      | "background-color"
+      | "background-image"
+      | "background-size"
+      | "background-repeat"
+      | "background-position"
+      | "background-position-x"
+      | "background-position-y"
+      | "background-attachment"
+      | "background-origin"
+      | "background-clip"
+      | "background-blend-mode"
+      | "border"
+      | "border-color"
+      | "border-style"
+      | "border-width"
+      | "border-top"
+      | "border-right"
+      | "border-bottom"
+      | "border-left"
+      | "border-top-color"
+      | "border-right-color"
+      | "border-bottom-color"
+      | "border-left-color"
+      | "border-top-style"
+      | "border-right-style"
+      | "border-bottom-style"
+      | "border-left-style"
+      | "border-top-width"
+      | "border-right-width"
+      | "border-bottom-width"
+      | "border-left-width"
+      | "border-radius"
+      | "border-top-left-radius"
+      | "border-top-right-radius"
+      | "border-bottom-left-radius"
+      | "border-bottom-right-radius"
+      | "box-shadow"
+      | "color"
+  )
 }
 
 impl PageNamedSize {
