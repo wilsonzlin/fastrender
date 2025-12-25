@@ -16797,8 +16797,8 @@ mod tests {
   #[test]
   fn cursor_parses_multiple_image_candidates_with_keyword_fallback() {
     let mut style = ComputedStyle::default();
-    let value = parse_property_value("cursor", "url(a.cur) 1 2, url(b.cur), pointer")
-      .expect("cursor list");
+    let value =
+      parse_property_value("cursor", "url(a.cur) 1 2, url(b.cur), pointer").expect("cursor list");
     apply_declaration(
       &mut style,
       &Declaration {

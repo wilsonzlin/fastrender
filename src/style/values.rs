@@ -481,7 +481,10 @@ mod tests {
     let vmax = Length::new(10.0, LengthUnit::Vmax);
     assert_eq!(vmax.resolve_with_viewport(800.0, 600.0), Some(80.0)); // 10% of 800
 
-    assert_eq!(Length::percent(50.0).resolve_with_viewport(800.0, 600.0), None);
+    assert_eq!(
+      Length::percent(50.0).resolve_with_viewport(800.0, 600.0),
+      None
+    );
     assert_eq!(Length::em(2.0).resolve_with_viewport(800.0, 600.0), None);
   }
 
