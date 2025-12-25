@@ -1459,4 +1459,38 @@ mod tests {
     assert!(none_corner.red() < dup_corner.red());
     assert!(none_corner.alpha() < dup_corner.alpha());
   }
+
+  #[test]
+  fn convolve_respects_subregion() {
+    let mut pixmap = Pixmap::new(2, 2).unwrap();
+    let pixels = [
+      premul(255, 0, 0, 255),
+      premul(0, 255, 0, 255),
+      premul(0, 0, 255, 255),
+      premul(255, 255, 0, 255),
+    ];
+    for (dst, src) in pixmap.pixels_mut().iter_mut().zip(pixels.iter()) {
+      *dst = *src;
+    }
+
+    let prim = FilterPrimitive::ConvolveMatrix {
+      input: FilterInput::SourceGraphic,
+      order_x: 3,
+      order_y: 3,
+      kernel: vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+      divisor: None,
+      bias: 0.0,
+      target_x: 1,
+      target_y: 1,
+      edge_mode: EdgeMode::Duplicate,
+      preserve_alpha: false,
+      subregion: Some((0.0, 0.0, 1.0, 1.0)),
+    };
+    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    let out_pixels = out.pixels();
+    assert_eq!(out_pixels[0], pixels[0]); // inside subregion
+    assert_eq!(out_pixels[1], PremultipliedColorU8::TRANSPARENT);
+    assert_eq!(out_pixels[2], PremultipliedColorU8::TRANSPARENT);
+    assert_eq!(out_pixels[3], PremultipliedColorU8::TRANSPARENT);
+  }
 }
