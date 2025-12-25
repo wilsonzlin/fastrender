@@ -270,7 +270,7 @@ impl<'a> SvgFilterResolver<'a> {
 
       for root in &self.fragment_roots {
         for fragment in root.iter_fragments() {
-          if let FragmentContent::Replaced { replaced_type } = &fragment.content {
+          if let FragmentContent::Replaced { replaced_type, .. } = &fragment.content {
             if let ReplacedType::Svg { content } = replaced_type {
               if let Some(filter) = parse_filter_definition(&content.svg, Some(id), cache) {
                 return Some(filter);

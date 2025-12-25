@@ -128,7 +128,7 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Builder that converts a fragment tree to a display list
@@ -139,6 +139,8 @@ pub struct DisplayListBuilder {
   /// The display list being built
   list: DisplayList,
   image_cache: Option<ImageCache>,
+  /// Serialized SVG filter definitions collected from the document DOM.
+  svg_filter_defs: Option<Arc<HashMap<String, String>>>,
   viewport: Option<(f32, f32)>,
   font_ctx: FontContext,
   shaper: ShapingPipeline,
@@ -199,6 +201,7 @@ impl DisplayListBuilder {
     Self {
       list: DisplayList::new(),
       image_cache: Some(ImageCache::new()),
+      svg_filter_defs: None,
       viewport: None,
       font_ctx: FontContext::new(),
       shaper: ShapingPipeline::new(),
@@ -214,6 +217,7 @@ impl DisplayListBuilder {
     Self {
       list: DisplayList::new(),
       image_cache: Some(image_cache),
+      svg_filter_defs: None,
       viewport: None,
       font_ctx: FontContext::new(),
       shaper: ShapingPipeline::new(),
@@ -238,6 +242,17 @@ impl DisplayListBuilder {
     if let Some(cache) = self.image_cache.as_mut() {
       cache.set_base_url(base_url);
     }
+  }
+
+  /// Sets serialized SVG filter definitions to use when resolving `url(#...)` filters.
+  pub fn with_svg_filter_defs(mut self, defs: Option<Arc<HashMap<String, String>>>) -> Self {
+    self.svg_filter_defs = defs;
+    self
+  }
+
+  /// Updates the SVG filter registry used for `url(#...)` filters.
+  pub fn set_svg_filter_defs(&mut self, defs: Option<Arc<HashMap<String, String>>>) {
+    self.svg_filter_defs = defs;
   }
 
   /// Sets the font context for shaping text into the display list.
@@ -290,6 +305,28 @@ impl DisplayListBuilder {
     self.list
   }
 
+  /// Builds a stacking-context-aware display list from a FragmentTree.
+  pub fn build_tree_with_stacking(mut self, tree: &FragmentTree) -> DisplayList {
+    if self.viewport.is_none() {
+      let viewport = tree.viewport_size();
+      self.viewport = Some((viewport.width, viewport.height));
+    }
+    let mut svg_roots: Vec<&FragmentNode> = Vec::with_capacity(1 + tree.additional_fragments.len());
+    svg_roots.push(&tree.root);
+    for root in &tree.additional_fragments {
+      svg_roots.push(root);
+    }
+    let image_cache = self.image_cache.clone();
+    let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(&tree.root);
+    let defs = tree
+      .svg_filter_defs
+      .clone()
+      .or_else(|| self.svg_filter_defs.clone());
+    let mut svg_filters = SvgFilterResolver::new(defs, svg_roots, image_cache.as_ref());
+    self.build_stacking_context(&stacking, Point::ZERO, true, &mut svg_filters);
+    self.list
+  }
+
   /// Builds a display list from a stacking context tree (respecting z-order).
   pub fn build_from_stacking(mut self, stacking: &StackingContext) -> DisplayList {
     if self.viewport.is_none() {
@@ -297,7 +334,12 @@ impl DisplayListBuilder {
     }
     let mut svg_roots = Vec::new();
     Self::collect_stacking_fragments(stacking, &mut svg_roots);
-    let mut svg_filters = SvgFilterResolver::new(None, svg_roots, self.image_cache.as_ref());
+    let image_cache = self.image_cache.clone();
+    let mut svg_filters = SvgFilterResolver::new(
+      self.svg_filter_defs.clone(),
+      svg_roots,
+      image_cache.as_ref(),
+    );
     self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
     self.list
   }
@@ -308,7 +350,12 @@ impl DisplayListBuilder {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
     let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
-    let mut svg_filters = SvgFilterResolver::new(None, vec![root], self.image_cache.as_ref());
+    let image_cache = self.image_cache.clone();
+    let mut svg_filters = SvgFilterResolver::new(
+      self.svg_filter_defs.clone(),
+      vec![root],
+      image_cache.as_ref(),
+    );
     self.build_stacking_context(&stacking, Point::ZERO, true, &mut svg_filters);
     self.list
   }
@@ -2053,6 +2100,7 @@ impl DisplayListBuilder {
     DisplayListBuilder {
       list: DisplayList::new(),
       image_cache: self.image_cache.clone(),
+      svg_filter_defs: self.svg_filter_defs.clone(),
       viewport: self.viewport,
       font_ctx: self.font_ctx.clone(),
       shaper: self.shaper.clone(),
