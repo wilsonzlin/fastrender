@@ -104,6 +104,7 @@ fn break_inside_avoid_is_best_effort() {
     (fragments[1].children[0].bounds.height() - 30.0).abs() < 0.1,
     "avoid block should remain intact when moved"
   );
+}
 
 #[test]
 fn line_fragments_remain_atomic_when_boundary_slices_through() {
