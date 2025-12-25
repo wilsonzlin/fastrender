@@ -107,3 +107,10 @@ pub mod svg_filter;
 pub mod svg_filter_registry;
 pub mod text_rasterize;
 pub mod text_shadow;
+
+/// Stable debug snapshot for display lists.
+pub fn snapshot_display_list(
+  list: &crate::paint::display_list::DisplayList,
+) -> crate::debug::snapshot::DisplayListSnapshot {
+  crate::debug::snapshot::snapshot_display_list(list)
+}

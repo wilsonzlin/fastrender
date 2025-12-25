@@ -23,4 +23,5 @@
 //! ```
 pub mod inspect;
 pub(crate) mod trace;
+pub mod snapshot;
 pub mod tree_printer;
