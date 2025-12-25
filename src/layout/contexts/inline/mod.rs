@@ -39,10 +39,10 @@
 pub mod baseline;
 pub mod line_builder;
 
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
-use crate::error::{RenderError, RenderStage};
 use crate::layout::absolute_positioning::resolve_positioned_style;
 use crate::layout::absolute_positioning::AbsoluteLayout;
 use crate::layout::absolute_positioning::AbsoluteLayoutInput;

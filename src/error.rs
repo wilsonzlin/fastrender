@@ -10,10 +10,10 @@
 //! All errors use the `thiserror` crate for minimal boilerplate and
 //! proper error trait implementations.
 
+use serde::{Deserialize, Serialize};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Result type alias for FastRender operations
@@ -517,7 +517,10 @@ pub enum RenderError {
 
   /// Rendering exceeded the configured timeout or was cancelled.
   #[error("Rendering timed out during {stage} after {elapsed:?}")]
-  Timeout { stage: RenderStage, elapsed: Duration },
+  Timeout {
+    stage: RenderStage,
+    elapsed: Duration,
+  },
 }
 
 #[cfg(test)]

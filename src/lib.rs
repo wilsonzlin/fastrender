@@ -178,11 +178,11 @@ pub mod accessibility;
 pub mod layout;
 pub mod math;
 pub mod paint;
+pub mod render_control;
 pub mod scroll;
 pub mod style;
 pub mod text;
 pub mod tree;
-pub mod render_control;
 
 // ============================================================================
 // Supporting Modules
@@ -221,8 +221,8 @@ pub use api::RenderReport;
 pub use api::RenderResult;
 pub use api::ResourceFetchError;
 pub use api::ResourceKind;
-pub use render_control::CancelCallback;
 pub use compat::CompatProfile;
+pub use render_control::CancelCallback;
 // CSS
 pub use css::parser::parse_stylesheet_with_errors;
 pub use css::types::CssParseError;

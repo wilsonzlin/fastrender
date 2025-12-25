@@ -26,10 +26,10 @@
 pub mod margin_collapse;
 pub mod width;
 
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
-use crate::error::{RenderError, RenderStage};
 use crate::layout::constraints::AvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::width::MarginValue;
@@ -49,13 +49,13 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
-use crate::render_control::check_active;
 use crate::layout::utils::border_size_from_box_sizing;
 use crate::layout::utils::compute_replaced_size;
 use crate::layout::utils::content_size_from_box_sizing;
 use crate::layout::utils::resolve_length_with_percentage;
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
+use crate::render_control::check_active;
 use crate::style::block_axis_is_horizontal;
 use crate::style::block_axis_positive;
 use crate::style::display::Display;

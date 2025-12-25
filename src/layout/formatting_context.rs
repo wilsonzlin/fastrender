@@ -682,6 +682,9 @@ pub enum LayoutError {
   ///
   /// Required resources (fonts, images, etc.) are not available.
   MissingContext(String),
+
+  /// Layout aborted due to timeout or cancellation.
+  Timeout { elapsed: Duration },
 }
 
 impl std::fmt::Display for LayoutError {
@@ -690,6 +693,7 @@ impl std::fmt::Display for LayoutError {
       Self::UnsupportedBoxType(msg) => write!(f, "Unsupported box type: {}", msg),
       Self::CircularDependency => write!(f, "Circular dependency in layout"),
       Self::MissingContext(msg) => write!(f, "Missing context: {}", msg),
+      Self::Timeout { elapsed } => write!(f, "Layout timed out after {elapsed:?}"),
     }
   }
 }
@@ -861,3 +865,4 @@ mod tests {
     intrinsic_cache_use_epoch(1, true);
   }
 }
+use std::time::Duration;

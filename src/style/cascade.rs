@@ -1278,17 +1278,17 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
         Some(&mut reuse_counter)
       } else {
         None
-    };
-    let color_scheme_pref = media_ctx
-      .prefers_color_scheme
-      .unwrap_or(ColorScheme::NoPreference);
+      };
+      let color_scheme_pref = media_ctx
+        .prefers_color_scheme
+        .unwrap_or(ColorScheme::NoPreference);
       apply_styles_internal(
         dom,
         &rule_index,
         &mut selector_caches,
         &mut scratch,
         &base_styles,
-      &base_ua_styles,
+        &base_ua_styles,
         16.0,
         16.0,
         Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
@@ -1299,9 +1299,9 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
         container_scope,
         reuse_map,
         reuse_counter_opt,
-      deadline,
-    )
-  })
+        deadline,
+      )
+    })
   })?;
 
   if let (true, Some(start)) = (profile_enabled, profile_start) {
@@ -1956,7 +1956,7 @@ fn apply_styles_internal_with_ancestors<'a>(
         if let Some(counter) = reuse_counter {
           *counter += reused_size;
         }
-        return reused;
+        return Ok(reused);
       }
     }
   }

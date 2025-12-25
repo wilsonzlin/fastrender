@@ -5,7 +5,7 @@
 //! fetched CSS into an HTML document. They are shared by the developer
 //! tooling binaries so cached pages can be rendered with their real styles.
 
-use crate::error::{RenderError, RenderStage};
+use crate::error::{RenderError, RenderStage, Result};
 use crate::render_control::RenderDeadline;
 use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
@@ -377,7 +377,7 @@ pub fn inline_imports<S: BuildHasher, F>(
   fetch: &mut F,
   seen: &mut HashSet<String, S>,
   deadline: Option<&RenderDeadline>,
-) -> Result<String, RenderError>
+) -> std::result::Result<String, RenderError>
 where
   F: FnMut(&str) -> Result<String>,
 {
@@ -401,7 +401,7 @@ pub fn inline_imports_with_diagnostics<S: BuildHasher, F, D>(
   seen: &mut HashSet<String, S>,
   diagnostics: &mut D,
   deadline: Option<&RenderDeadline>,
-) -> Result<String, RenderError>
+) -> std::result::Result<String, RenderError>
 where
   F: FnMut(&str) -> Result<String>,
   D: FnMut(&str, &str),
@@ -1309,8 +1309,14 @@ mod tests {
         Ok(String::new())
       }
     };
-    let out =
-      inline_imports(css, "https://example.com/main.css", &mut fetched, &mut seen, None).unwrap();
+    let out = inline_imports(
+      css,
+      "https://example.com/main.css",
+      &mut fetched,
+      &mut seen,
+      None,
+    )
+    .unwrap();
     if !out.contains("p { margin: 0; }") {
       eprintln!("inline_imports output: {out}");
     }

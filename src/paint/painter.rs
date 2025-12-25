@@ -54,8 +54,8 @@ use crate::paint::svg_filter_registry::SvgFilterRegistry;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
-use crate::resource::ResourceFetcher;
 use crate::render_control::check_active;
+use crate::resource::ResourceFetcher;
 #[cfg(test)]
 use crate::style::color::Color;
 use crate::style::color::Rgba;
@@ -1143,7 +1143,15 @@ impl Painter {
         && tree.additional_fragments.is_empty(),
     };
     for root in std::iter::once(&tree.root).chain(tree.additional_fragments.iter()) {
-      self.collect_stacking_context(root, offset, None, true, root_paint, registry_ref, &mut items);
+      self.collect_stacking_context(
+        root,
+        offset,
+        None,
+        true,
+        root_paint,
+        registry_ref,
+        &mut items,
+      );
     }
     check_active(RenderStage::Paint).map_err(Error::Render)?;
     if profiling {
@@ -1549,12 +1557,7 @@ impl Painter {
     }
 
     // Stacking context: paint own background/border first
-    self.enqueue_background_and_borders(
-      fragment,
-      abs_bounds,
-      root_background,
-      &mut local_commands,
-    );
+    self.enqueue_background_and_borders(fragment, abs_bounds, root_background, &mut local_commands);
 
     // Partition children into stacking-context buckets and normal flow (preserving DOM order)
     let mut negative_contexts = Vec::new();

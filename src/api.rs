@@ -71,8 +71,8 @@ use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
 use crate::error::NavigationError;
-use crate::error::RenderStage;
 use crate::error::RenderError;
+use crate::error::RenderStage;
 use crate::error::ResourceError;
 use crate::error::Result;
 use crate::geometry::Point;
@@ -95,6 +95,7 @@ use crate::layout::flex_profile::reset_flex_profile;
 use crate::layout::formatting_context::intrinsic_cache_clear;
 use crate::layout::formatting_context::intrinsic_cache_reset_counters;
 use crate::layout::formatting_context::intrinsic_cache_stats;
+use crate::layout::formatting_context::LayoutError as FormattingLayoutError;
 use crate::layout::pagination::{paginate_fragment_tree_with_options, PaginateOptions};
 use crate::layout::profile::layout_profile_enabled;
 use crate::layout::profile::log_layout_profile;
@@ -511,21 +512,6 @@ pub struct RenderOptions {
   pub timeout: Option<Duration>,
   /// Optional cooperative cancellation callback.
   pub cancel_callback: Option<Arc<CancelCallback>>,
-}
-
-impl std::fmt::Debug for RenderOptions {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("RenderOptions")
-      .field("viewport", &self.viewport)
-      .field("device_pixel_ratio", &self.device_pixel_ratio)
-      .field("media_type", &self.media_type)
-      .field("scroll_x", &self.scroll_x)
-      .field("scroll_y", &self.scroll_y)
-      .field("css_limit", &self.css_limit)
-      .field("allow_partial", &self.allow_partial)
-      .field("timeout", &self.timeout)
-      .finish_non_exhaustive()
-  }
 }
 
 impl Default for RenderOptions {
@@ -2042,18 +2028,13 @@ impl FastRender {
     artifacts: Option<&mut RenderArtifacts>,
   ) -> Result<RenderOutputs> {
     let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
-    self.render_html_with_options_internal_with_deadline(
-      html,
-      options,
-      artifacts,
-      Some(&deadline),
-    )
+    self.render_html_with_options_internal_with_deadline(html, options, artifacts, Some(&deadline))
   }
 
   fn render_html_with_options_internal_with_deadline(
     &mut self,
     html: &str,
-    mut options: RenderOptions,
+    options: RenderOptions,
     artifacts: Option<&mut RenderArtifacts>,
     deadline: Option<&RenderDeadline>,
   ) -> Result<RenderOutputs> {
@@ -3174,7 +3155,6 @@ impl FastRender {
     let mut media_query_cache = MediaQueryCache::default();
     let stylesheet =
       self.collect_document_stylesheet(&dom_with_state, &media_ctx, &mut media_query_cache);
-    check_deadline(deadline, RenderStage::Css)?;
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
     // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
     let result = std::thread::scope(|scope| {
@@ -3346,12 +3326,7 @@ impl FastRender {
     deadline: Option<&RenderDeadline>,
   ) -> Result<FragmentTree> {
     let artifacts = self.layout_document_for_media_with_artifacts(
-      dom,
-      width,
-      height,
-      media_type,
-      options,
-      deadline,
+      dom, width, height, media_type, options, deadline,
     )?;
     Ok(artifacts.fragment_tree)
   }
@@ -3647,12 +3622,10 @@ impl FastRender {
       .layout_engine
       .layout_tree_with_deadline(&box_tree, deadline)
       .map_err(|e| match e {
-        crate::error::LayoutError::Timeout { elapsed } => {
-          Error::Render(RenderError::Timeout {
-            stage: RenderStage::Layout,
-            elapsed,
-          })
-        }
+        FormattingLayoutError::Timeout { elapsed } => Error::Render(RenderError::Timeout {
+          stage: RenderStage::Layout,
+          elapsed,
+        }),
         other => Error::Render(RenderError::InvalidParameters {
           message: format!("Layout failed: {:?}", other),
         }),
@@ -4203,7 +4176,7 @@ impl FastRender {
     css_limit: Option<usize>,
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
-  ) -> Result<String, RenderError> {
+  ) -> std::result::Result<String, RenderError> {
     Self::inline_stylesheets_for_html(
       self.fetcher.as_ref(),
       html,
@@ -4224,7 +4197,7 @@ impl FastRender {
     css_limit: Option<usize>,
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
-  ) -> Result<String, RenderError> {
+  ) -> std::result::Result<String, RenderError> {
     self.inline_stylesheets(html, base_url, media_type, css_limit, diagnostics, deadline)
   }
 
@@ -4237,7 +4210,7 @@ impl FastRender {
     css_limit: Option<usize>,
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
-  ) -> Result<String, RenderError> {
+  ) -> std::result::Result<String, RenderError> {
     let mut css_links = extract_css_links(html, base_url, media_type);
     if let Some(limit) = css_limit {
       if css_links.len() > limit {
