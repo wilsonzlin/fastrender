@@ -1964,7 +1964,10 @@ impl<'a> Element for ElementRef<'a> {
       PseudoClass::TargetWithin => self.subtree_contains_target(),
       PseudoClass::Scope => match _context.relative_selector_anchor() {
         Some(anchor) => anchor == self.opaque(),
-        None => self.all_ancestors.is_empty(),
+        None => !self
+          .all_ancestors
+          .iter()
+          .any(|ancestor| ancestor.is_element()),
       },
       PseudoClass::Empty => self.is_empty(),
       PseudoClass::Disabled => self.supports_disabled() && self.is_disabled(),
@@ -2425,6 +2428,20 @@ mod tests {
 
     assert!(matches(&upper, &[], &PseudoClass::Root));
     assert!(!matches(&svg_root, &[], &PseudoClass::Root));
+  }
+
+  #[test]
+  fn scope_matches_document_root_without_anchor() {
+    let document = DomNode {
+      node_type: DomNodeType::Document,
+      children: vec![element("html", vec![element("body", vec![])])],
+    };
+
+    let html = &document.children[0];
+    let body = &document.children[0].children[0];
+
+    assert!(matches(html, &[&document], &PseudoClass::Scope));
+    assert!(!matches(body, &[&document, html], &PseudoClass::Scope));
   }
 
   #[test]
