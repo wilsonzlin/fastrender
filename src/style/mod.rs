@@ -55,6 +55,7 @@ use types::BorderCollapse;
 use types::BorderCornerRadius;
 use types::BorderImage;
 use types::BorderStyle;
+use types::BoxDecorationBreak;
 use types::BoxSizing;
 use types::BreakBetween;
 use types::BreakInside;
@@ -472,6 +473,7 @@ pub struct ComputedStyle {
   pub outline_width: Length,
   pub outline_offset: Length,
   pub box_sizing: BoxSizing,
+  pub box_decoration_break: BoxDecorationBreak,
   pub container_type: ContainerType,
   /// Space-separated list of container names (empty when none).
   pub container_name: Vec<String>,
@@ -803,6 +805,7 @@ impl Default for ComputedStyle {
       outline_width: Length::px(3.0),
       outline_offset: Length::px(0.0),
       box_sizing: BoxSizing::ContentBox,
+      box_decoration_break: BoxDecorationBreak::Slice,
       container_type: ContainerType::Normal,
       container_name: Vec::new(),
       shrink_to_fit_inline_size: false,

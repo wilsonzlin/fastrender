@@ -57,6 +57,16 @@ pub enum BoxSizing {
   BorderBox,
 }
 
+/// How backgrounds/borders behave when a box is fragmented.
+///
+/// CSS: `box-decoration-break`
+/// Reference: CSS Fragmentation Module Level 3
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoxDecorationBreak {
+  Slice,
+  Clone,
+}
+
 /// Container type for container queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerType {

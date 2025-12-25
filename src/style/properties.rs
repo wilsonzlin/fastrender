@@ -1897,6 +1897,7 @@ fn apply_property_from_source(
     "appearance" => styles.appearance = source.appearance.clone(),
     "resize" => styles.resize = source.resize,
     "box-sizing" => styles.box_sizing = source.box_sizing,
+    "box-decoration-break" => styles.box_decoration_break = source.box_decoration_break,
     "top" => set_inset_side(styles, crate::style::PhysicalSide::Top, source.top, order),
     "right" => set_inset_side(
       styles,
@@ -4053,6 +4054,19 @@ pub fn apply_declaration_with_base(
         match kw.as_str() {
           _ if kw.eq_ignore_ascii_case("content-box") => styles.box_sizing = BoxSizing::ContentBox,
           _ if kw.eq_ignore_ascii_case("border-box") => styles.box_sizing = BoxSizing::BorderBox,
+          _ => {}
+        }
+      }
+    }
+    "box-decoration-break" => {
+      if let PropertyValue::Keyword(kw) = &resolved_value {
+        match kw.as_str() {
+          _ if kw.eq_ignore_ascii_case("slice") => {
+            styles.box_decoration_break = BoxDecorationBreak::Slice
+          }
+          _ if kw.eq_ignore_ascii_case("clone") => {
+            styles.box_decoration_break = BoxDecorationBreak::Clone
+          }
           _ => {}
         }
       }
@@ -15455,6 +15469,28 @@ mod tests {
     );
 
     assert!(matches!(style.box_sizing, BoxSizing::BorderBox));
+  }
+
+  #[test]
+  fn parses_box_decoration_break_keyword() {
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "box-decoration-break".to_string(),
+        value: PropertyValue::Keyword("clone".to_string()),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert!(matches!(
+      style.box_decoration_break,
+      BoxDecorationBreak::Clone
+    ));
   }
 
   #[test]

@@ -13,7 +13,7 @@ use crate::geometry::{Point, Rect};
 use crate::style::display::Display;
 use crate::style::types::{BreakBetween, BreakInside};
 use crate::style::ComputedStyle;
-use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentainerPath};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentSliceInfo, FragmentainerPath};
 
 /// The fragmentation context determines how break hints are interpreted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +328,21 @@ pub(crate) fn clip_node(
   cloned.fragment_index = fragment_index;
   cloned.fragment_count = fragment_count.max(1);
   cloned.fragmentainer_index = fragment_index;
+  let original_block_size = node
+    .slice_info
+    .original_block_size
+    .max((node_abs_end - node_abs_start).max(0.0))
+    .max(node.bounds.height());
+  let base_offset = node.slice_info.slice_offset.max(0.0);
+  let slice_offset = base_offset + (clipped_abs_start - node_abs_start).max(0.0);
+  let slice_end_offset = base_offset + (clipped_abs_end - node_abs_start).max(0.0);
+  let epsilon = 0.01;
+  cloned.slice_info = FragmentSliceInfo {
+    is_first: slice_offset <= epsilon,
+    is_last: slice_end_offset >= original_block_size - epsilon,
+    slice_offset: slice_offset.min(original_block_size),
+    original_block_size,
+  };
 
   if matches!(node.content, FragmentContent::Line { .. }) {
     // Line boxes are indivisible. If a break lands inside a line, move the whole
@@ -392,6 +407,7 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     fragment_count: node.fragment_count,
     fragmentainer_index: node.fragmentainer_index,
     fragmentainer: node.fragmentainer,
+    slice_info: node.slice_info,
     scroll_overflow: node.scroll_overflow,
     fragmentation: node.fragmentation.clone(),
   }

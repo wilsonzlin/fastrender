@@ -308,12 +308,41 @@ pub struct FragmentNode {
   /// Structured fragmentainer metadata (page/column set/column).
   pub fragmentainer: FragmentainerPath,
 
+  /// Metadata about how this fragment relates to other fragments of the same box.
+  ///
+  /// Used for `box-decoration-break: slice`.
+  pub slice_info: FragmentSliceInfo,
+
   /// Scrollable overflow area for this fragment (including descendants),
   /// expressed in the fragment's local coordinate space.
   pub scroll_overflow: Rect,
 
   /// Fragmentation metadata for nested fragmentainers (e.g., multi-column containers).
   pub fragmentation: Option<FragmentationInfo>,
+}
+
+/// Fragmentation metadata for a fragment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FragmentSliceInfo {
+  /// Whether this fragment starts at the box's block-start edge.
+  pub is_first: bool,
+  /// Whether this fragment ends at the box's block-end edge.
+  pub is_last: bool,
+  /// Distance from the original box's block-start edge to this fragment slice's start.
+  pub slice_offset: f32,
+  /// Block-size of the unfragmented box.
+  pub original_block_size: f32,
+}
+
+impl FragmentSliceInfo {
+  pub fn single(block_size: f32) -> Self {
+    Self {
+      is_first: true,
+      is_last: true,
+      slice_offset: 0.0,
+      original_block_size: block_size,
+    }
+  }
 }
 
 impl FragmentNode {
@@ -346,6 +375,7 @@ impl FragmentNode {
       fragment_count: 1,
       fragmentainer_index: fragmentainer.flattened_index(),
       fragmentainer,
+      slice_info: FragmentSliceInfo::single(bounds.height()),
       scroll_overflow,
       fragmentation: None,
     }
@@ -372,6 +402,7 @@ impl FragmentNode {
       fragment_count: 1,
       fragmentainer_index: fragmentainer.flattened_index(),
       fragmentainer,
+      slice_info: FragmentSliceInfo::single(bounds.height()),
       scroll_overflow,
       fragmentation: None,
     }
@@ -665,6 +696,7 @@ impl FragmentNode {
       fragment_count: self.fragment_count,
       fragmentainer_index: self.fragmentainer_index,
       fragmentainer: self.fragmentainer,
+      slice_info: self.slice_info,
       scroll_overflow: self.scroll_overflow,
       fragmentation: self.fragmentation.clone(),
     }

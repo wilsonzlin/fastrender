@@ -103,6 +103,7 @@ use crate::style::types::BackgroundSize;
 use crate::style::types::BackgroundSizeComponent;
 use crate::style::types::BackgroundSizeKeyword;
 use crate::style::types::BorderImageSource;
+use crate::style::types::BoxDecorationBreak;
 use crate::style::types::ImageOrientation;
 use crate::style::types::ImageRendering;
 use crate::style::types::Isolation;
@@ -533,10 +534,18 @@ impl DisplayListBuilder {
     };
 
     if let Some(style) = style_opt {
-      self.emit_box_shadows_from_style(absolute_rect, style, false);
-      self.emit_background_from_style(absolute_rect, style);
-      self.emit_box_shadows_from_style(absolute_rect, style, true);
-      self.emit_border_from_style(absolute_rect, style);
+      let (decoration_rect, decoration_clip) =
+        Self::decoration_rect_and_clip(fragment, absolute_rect, style);
+      if let Some(clip) = decoration_clip.as_ref() {
+        self.list.push(DisplayItem::PushClip(clip.clone()));
+      }
+      self.emit_box_shadows_from_style(decoration_rect, style, false);
+      self.emit_background_from_style(decoration_rect, style);
+      self.emit_box_shadows_from_style(decoration_rect, style, true);
+      self.emit_border_from_style(decoration_rect, style);
+      if decoration_clip.is_some() {
+        self.list.push(DisplayItem::PopClip);
+      }
     }
 
     // CSS Paint Order:
@@ -610,8 +619,16 @@ impl DisplayListBuilder {
     );
 
     if let Some(style) = fragment.style.as_deref() {
-      self.emit_background_from_style(absolute_rect, style);
-      self.emit_border_from_style(absolute_rect, style);
+      let (decoration_rect, decoration_clip) =
+        Self::decoration_rect_and_clip(fragment, absolute_rect, style);
+      if let Some(clip) = decoration_clip.as_ref() {
+        self.list.push(DisplayItem::PushClip(clip.clone()));
+      }
+      self.emit_background_from_style(decoration_rect, style);
+      self.emit_border_from_style(decoration_rect, style);
+      if decoration_clip.is_some() {
+        self.list.push(DisplayItem::PopClip);
+      }
     }
 
     let box_id = Self::get_box_id(fragment);
@@ -1043,6 +1060,40 @@ impl DisplayListBuilder {
       MixBlendMode::ColorOklch => BlendMode::ColorOklch,
       MixBlendMode::LuminosityOklch => BlendMode::LuminosityOklch,
     }
+  }
+
+  fn decoration_rect_and_clip(
+    fragment: &FragmentNode,
+    absolute_rect: Rect,
+    style: &ComputedStyle,
+  ) -> (Rect, Option<ClipItem>) {
+    if !matches!(style.box_decoration_break, BoxDecorationBreak::Slice) {
+      return (absolute_rect, None);
+    }
+
+    let info = fragment.slice_info;
+    if info.is_first && info.is_last {
+      return (absolute_rect, None);
+    }
+
+    let original_block = info
+      .original_block_size
+      .max(absolute_rect.height())
+      .max(0.0);
+    let slice_offset = info.slice_offset.clamp(0.0, original_block);
+    let rect = Rect::from_xywh(
+      absolute_rect.x(),
+      absolute_rect.y() - slice_offset,
+      absolute_rect.width(),
+      original_block,
+    );
+    let clip = ClipItem {
+      shape: ClipShape::Rect {
+        rect: absolute_rect,
+        radii: None,
+      },
+    };
+    (rect, Some(clip))
   }
 
   fn background_rects(
