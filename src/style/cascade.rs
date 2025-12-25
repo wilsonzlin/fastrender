@@ -764,6 +764,16 @@ impl<'a> RuleIndex<'a> {
             }
           }
         }
+        let lower_tag = tag.to_ascii_lowercase();
+        if lower_tag != tag {
+          if let Some(list) = self.by_tag.get(&lower_tag) {
+            for idx in list {
+              if seen.insert(*idx) {
+                out.push(*idx);
+              }
+            }
+          }
+        }
         if let Some(list) = self.by_tag.get("*") {
           for idx in list {
             if seen.insert(*idx) {
@@ -842,6 +852,23 @@ impl<'a> RuleIndex<'a> {
     if !bucket.by_tag.is_empty() {
       if let Some(tag) = node.tag_name() {
         if let Some(list) = bucket.by_tag.get(tag) {
+          for idx in list {
+            if seen.insert(*idx) {
+              out.push(*idx);
+            }
+          }
+        }
+        let lower_tag = tag.to_ascii_lowercase();
+        if lower_tag != tag {
+          if let Some(list) = bucket.by_tag.get(&lower_tag) {
+            for idx in list {
+              if seen.insert(*idx) {
+                out.push(*idx);
+              }
+            }
+          }
+        }
+        if let Some(list) = bucket.by_tag.get("*") {
           for idx in list {
             if seen.insert(*idx) {
               out.push(*idx);
