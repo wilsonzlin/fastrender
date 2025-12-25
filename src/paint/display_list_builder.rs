@@ -362,34 +362,27 @@ impl DisplayListBuilder {
       fragment.bounds.size,
     );
 
-    if let Some(style) = fragment.style.as_deref() {
+    let backface_culled = if let Some(style) = fragment.style.as_deref() {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
         && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
       {
         if let Some(transform) = Self::build_transform(style, absolute_rect, self.viewport) {
-          if Self::backface_is_hidden(&transform) {
-            if push_opacity {
-              self.pop_opacity();
-            }
-            return;
-          }
+          Self::backface_is_hidden(&transform)
+        } else {
+          false
         }
+      } else {
+        false
       }
-    }
+    } else {
+      false
+    };
 
-    if let Some(style) = fragment.style.as_deref() {
-      if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
-        && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
-      {
-        if let Some(transform) = Self::build_transform(style, absolute_rect, self.viewport) {
-          if Self::backface_is_hidden(&transform) {
-            if push_opacity {
-              self.pop_opacity();
-            }
-            return;
-          }
-        }
+    if backface_culled {
+      if push_opacity {
+        self.pop_opacity();
       }
+      return;
     }
 
     if let Some(style) = fragment.style.as_deref() {
