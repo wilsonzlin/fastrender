@@ -126,6 +126,15 @@ impl Homography {
     }
   }
 
+  /// Alias for `invert`.
+  ///
+  /// Some callers refer to the inverse as `inverse()`; keep this wrapper to
+  /// avoid duplicating implementations.
+  #[inline]
+  pub fn inverse(&self) -> Option<Self> {
+    self.invert()
+  }
+
   /// Maps a point through the homography.
   ///
   /// Returns `None` if the homogeneous w component is zero or non-finite.
@@ -143,6 +152,13 @@ impl Homography {
     } else {
       None
     }
+  }
+
+  /// Maps a point through the homography, returning a tuple for convenience.
+  #[inline]
+  pub fn transform_point(&self, x: f32, y: f32) -> Option<(f32, f32)> {
+    let mapped = self.map_point(Point::new(x, y))?;
+    Some((mapped.x, mapped.y))
   }
 
   /// Maps an axis-aligned rectangle and returns the axis-aligned bounding box.

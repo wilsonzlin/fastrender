@@ -1,346 +1,173 @@
+use crate::paint::homography::Homography;
 use rayon::prelude::*;
-use tiny_skia::{Mask, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
+use tiny_skia::Mask;
+use tiny_skia::Pixmap;
+use tiny_skia::PremultipliedColorU8;
 
-const PARALLEL_THRESHOLD: usize = 2048;
-
-/// 3x3 projective transform matrix.
-///
-/// Stored in row-major order:
-/// ```text
-/// [m0 m1 m2]
-/// [m3 m4 m5]
-/// [m6 m7 m8]
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Homography {
-  pub m: [f32; 9],
+pub struct WarpedPixmap {
+  pub pixmap: Pixmap,
+  pub offset: (i32, i32),
 }
 
-impl Homography {
-  pub const IDENTITY: Self = Self {
-    m: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-  };
+const PARALLEL_THRESHOLD: u32 = 2048;
 
-  pub fn identity() -> Self {
-    Self::IDENTITY
-  }
-
-  pub fn new(m: [f32; 9]) -> Self {
-    Self { m }
-  }
-
-  /// Transform a point. Returns None for degenerate results (NaN/Inf or w=0).
-  pub fn transform_point(&self, x: f32, y: f32) -> Option<(f32, f32)> {
-    let hx = self.m[0] * x + self.m[1] * y + self.m[2];
-    let hy = self.m[3] * x + self.m[4] * y + self.m[5];
-    let hw = self.m[6] * x + self.m[7] * y + self.m[8];
-    if !hx.is_finite() || !hy.is_finite() || !hw.is_finite() || hw.abs() < f32::EPSILON {
-      return None;
-    }
-    Some((hx / hw, hy / hw))
-  }
-
-  /// Matrix multiplication (self * other).
-  pub fn multiply(&self, other: &Homography) -> Homography {
-    let mut out = [0.0_f32; 9];
-    for row in 0..3 {
-      for col in 0..3 {
-        out[row * 3 + col] = self.m[row * 3 + 0] * other.m[col + 0]
-          + self.m[row * 3 + 1] * other.m[col + 3]
-          + self.m[row * 3 + 2] * other.m[col + 6];
-      }
-    }
-    Homography { m: out }
-  }
-
-  /// Invert the homography. Returns None if not invertible.
-  pub fn invert(&self) -> Option<Homography> {
-    let m = &self.m;
-    let det = m[0] * (m[4] * m[8] - m[5] * m[7])
-      - m[1] * (m[3] * m[8] - m[5] * m[6])
-      + m[2] * (m[3] * m[7] - m[4] * m[6]);
-    if det.abs() < f32::EPSILON {
-      return None;
-    }
-    let inv_det = 1.0 / det;
-    let inv = [
-      (m[4] * m[8] - m[5] * m[7]) * inv_det,
-      (m[2] * m[7] - m[1] * m[8]) * inv_det,
-      (m[1] * m[5] - m[2] * m[4]) * inv_det,
-      (m[5] * m[6] - m[3] * m[8]) * inv_det,
-      (m[0] * m[8] - m[2] * m[6]) * inv_det,
-      (m[2] * m[3] - m[0] * m[5]) * inv_det,
-      (m[3] * m[7] - m[4] * m[6]) * inv_det,
-      (m[1] * m[6] - m[0] * m[7]) * inv_det,
-      (m[0] * m[4] - m[1] * m[3]) * inv_det,
-    ];
-    Some(Homography { m: inv })
-  }
-
-  /// Build a homography that maps the unit square (0,0)-(1,1) to the given quadrilateral.
-  pub fn from_unit_square_to_quad(dst: [(f32, f32); 4]) -> Option<Self> {
-    let (x0, y0) = dst[0];
-    let (x1, y1) = dst[1];
-    let (x2, y2) = dst[2];
-    let (x3, y3) = dst[3];
-
-    let dx1 = x1 - x2;
-    let dy1 = y1 - y2;
-    let dx2 = x3 - x2;
-    let dy2 = y3 - y2;
-    let dx3 = x0 - x1 + x2 - x3;
-    let dy3 = y0 - y1 + y2 - y3;
-
-    if dx3.abs() < f32::EPSILON && dy3.abs() < f32::EPSILON {
-      return Some(Homography {
-        m: [
-          x1 - x0,
-          x3 - x0,
-          x0,
-          y1 - y0,
-          y3 - y0,
-          y0,
-          0.0,
-          0.0,
-          1.0,
-        ],
-      });
-    }
-
-    let det = dx1 * dy2 - dx2 * dy1;
-    if det.abs() < f32::EPSILON {
-      return None;
-    }
-    let g = (dx3 * dy2 - dx2 * dy3) / det;
-    let h = (dx1 * dy3 - dx3 * dy1) / det;
-
-    Some(Homography {
-      m: [
-        x1 - x0 + g * x1,
-        x3 - x0 + h * x3,
-        x0,
-        y1 - y0 + g * y1,
-        y3 - y0 + h * y3,
-        y0,
-        g,
-        h,
-        1.0,
-      ],
-    })
-  }
-
-  /// Build a homography mapping a rectangle (0..src_width, 0..src_height) to a quadrilateral.
-  pub fn from_rect_to_quad(src_width: f32, src_height: f32, dst: [(f32, f32); 4]) -> Option<Self> {
-    if src_width <= 0.0 || src_height <= 0.0 {
-      return None;
-    }
-    let scale = Homography {
-      m: [
-        1.0 / src_width,
-        0.0,
-        0.0,
-        0.0,
-        1.0 / src_height,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-      ],
-    };
-    let to_quad = Homography::from_unit_square_to_quad(dst)?;
-    Some(to_quad.multiply(&scale))
-  }
-}
-
-/// Warp pixels from `src` into `dst` using a projective transform.
-///
-/// The homography maps source coordinates into destination coordinates; the inverse is used for
-/// sampling. Bilinear filtering and premultiplied-alpha blending are applied.
 pub fn warp_pixmap(
-  dst: &mut Pixmap,
   src: &Pixmap,
-  h_src_to_dst: &Homography,
-  opacity: f32,
-  blend_mode: tiny_skia::BlendMode,
-  clip_mask: Option<&Mask>,
-) {
-  if src.width() == 0 || src.height() == 0 || dst.width() == 0 || dst.height() == 0 {
-    return;
+  homography: &Homography,
+  dst_quad: &[(f32, f32); 4],
+  target_size: (u32, u32),
+  clip: Option<&Mask>,
+) -> Option<WarpedPixmap> {
+  let inv = homography.inverse()?;
+  let (target_w, target_h) = target_size;
+  if target_w == 0 || target_h == 0 {
+    return None;
   }
-  let Some(h_dst_to_src) = h_src_to_dst.invert() else {
-    return;
-  };
 
-  let corners = [
-    (0.0_f32, 0.0_f32),
-    (src.width() as f32, 0.0_f32),
-    (src.width() as f32, src.height() as f32),
-    (0.0_f32, src.height() as f32),
-  ];
   let mut min_x = f32::INFINITY;
-  let mut min_y = f32::INFINITY;
   let mut max_x = f32::NEG_INFINITY;
+  let mut min_y = f32::INFINITY;
   let mut max_y = f32::NEG_INFINITY;
-  let mut has_point = false;
-  for (x, y) in corners {
-    if let Some((tx, ty)) = h_src_to_dst.transform_point(x, y) {
-      if tx.is_finite() && ty.is_finite() {
-        has_point = true;
-        min_x = min_x.min(tx);
-        min_y = min_y.min(ty);
-        max_x = max_x.max(tx);
-        max_y = max_y.max(ty);
+  for (x, y) in dst_quad {
+    min_x = min_x.min(*x);
+    max_x = max_x.max(*x);
+    min_y = min_y.min(*y);
+    max_y = max_y.max(*y);
+  }
+  if !min_x.is_finite() || !max_x.is_finite() || !min_y.is_finite() || !max_y.is_finite() {
+    return None;
+  }
+
+  let mask_w = clip.map(|m| m.width()).unwrap_or(target_w);
+  let mask_h = clip.map(|m| m.height()).unwrap_or(target_h);
+  let bound_w = target_w.min(mask_w);
+  let bound_h = target_h.min(mask_h);
+
+  let mut min_x_i = min_x.floor() as i32;
+  let mut max_x_i = max_x.ceil() as i32;
+  let mut min_y_i = min_y.floor() as i32;
+  let mut max_y_i = max_y.ceil() as i32;
+  min_x_i = min_x_i.clamp(0, bound_w as i32);
+  max_x_i = max_x_i.clamp(0, bound_w as i32);
+  min_y_i = min_y_i.clamp(0, bound_h as i32);
+  max_y_i = max_y_i.clamp(0, bound_h as i32);
+
+  let width = max_x_i.saturating_sub(min_x_i) as u32;
+  let height = max_y_i.saturating_sub(min_y_i) as u32;
+  if width == 0 || height == 0 {
+    return None;
+  }
+
+  let src_w = src.width() as i32;
+  let src_h = src.height() as i32;
+  if src_w == 0 || src_h == 0 {
+    return None;
+  }
+
+  let mut output = Pixmap::new(width, height)?;
+  let clip_data = clip.map(|m| (m.data(), m.width() as usize));
+  let area = width.saturating_mul(height);
+
+  let process_row = |row_idx: usize, row: &mut [PremultipliedColorU8]| {
+    let global_y = min_y_i + row_idx as i32;
+    for (col_idx, dst_px) in row.iter_mut().enumerate() {
+      let global_x = min_x_i + col_idx as i32;
+      let clip_alpha = clip_data
+        .as_ref()
+        .and_then(|(data, stride)| data.get(global_y as usize * *stride + global_x as usize))
+        .copied()
+        .unwrap_or(255);
+      if clip_alpha == 0 {
+        continue;
       }
+      let dx = global_x as f32 + 0.5;
+      let dy = global_y as f32 + 0.5;
+      let Some((sx, sy)) = inv.transform_point(dx, dy) else {
+        continue;
+      };
+      if sx < 0.0 || sy < 0.0 || sx >= src_w as f32 || sy >= src_h as f32 {
+        continue;
+      }
+      let mut sample = sample_bilinear(src, sx, sy);
+      if clip_alpha < 255 {
+        let scale = clip_alpha as f32 / 255.0;
+        let premultiply = |v: u8| ((v as f32 * scale).round().clamp(0.0, 255.0)) as u8;
+        sample = PremultipliedColorU8::from_rgba(
+          premultiply(sample.red()),
+          premultiply(sample.green()),
+          premultiply(sample.blue()),
+          premultiply(sample.alpha()),
+        )
+        .unwrap_or(sample);
+      }
+      *dst_px = sample;
     }
-  }
-  if !has_point {
-    return;
-  }
-
-  let dst_w = dst.width() as f32;
-  let dst_h = dst.height() as f32;
-  let x0 = min_x.floor().max(0.0).min(dst_w) as i32;
-  let y0 = min_y.floor().max(0.0).min(dst_h) as i32;
-  let x1 = max_x.ceil().max(0.0).min(dst_w) as i32;
-  let y1 = max_y.ceil().max(0.0).min(dst_h) as i32;
-  if x0 >= x1 || y0 >= y1 {
-    return;
-  }
-
-  let region_w = (x1 - x0) as u32;
-  let region_h = (y1 - y0) as u32;
-  let Some(mut warped) = Pixmap::new(region_w, region_h) else {
-    return;
   };
 
-  let src_width = src.width() as usize;
-  let src_height = src.height() as usize;
-  let src_pixels = src.pixels();
-  let opacity = opacity.clamp(0.0, 1.0);
-  let pixel_count = region_w as usize * region_h as usize;
-  if pixel_count > PARALLEL_THRESHOLD {
-    warped
+  if area > PARALLEL_THRESHOLD {
+    output
       .pixels_mut()
-      .par_chunks_mut(region_w as usize)
+      .par_chunks_mut(width as usize)
       .enumerate()
-      .for_each(|(row_idx, row)| {
-        let y = y0 + row_idx as i32;
-        let cy = y as f32 + 0.5;
-        for (col_idx, px) in row.iter_mut().enumerate() {
-          let x = x0 + col_idx as i32;
-          let cx = x as f32 + 0.5;
-          let Some((sx, sy)) = h_dst_to_src.transform_point(cx as f32, cy) else {
-            continue;
-          };
-          let sample = sample_bilinear(src_pixels, src_width, src_height, sx, sy);
-          if sample[3] <= 0.0 {
-            continue;
-          }
-          *px = pack_color([
-            sample[0] * opacity,
-            sample[1] * opacity,
-            sample[2] * opacity,
-            sample[3] * opacity,
-          ]);
-        }
-      });
+      .for_each(|(row_idx, row)| process_row(row_idx, row));
   } else {
-    for row_idx in 0..region_h as i32 {
-      let y = y0 + row_idx;
-      let cy = y as f32 + 0.5;
-      let row_start = row_idx as usize * region_w as usize;
-      let row_slice = &mut warped.pixels_mut()[row_start..row_start + region_w as usize];
-      for col_idx in 0..region_w as i32 {
-        let x = x0 + col_idx;
-        let cx = x as f32 + 0.5;
-        if let Some((sx, sy)) = h_dst_to_src.transform_point(cx as f32, cy) {
-          let sample = sample_bilinear(src_pixels, src_width, src_height, sx, sy);
-          if sample[3] <= 0.0 {
-            continue;
-          }
-          row_slice[col_idx as usize] = pack_color([
-            sample[0] * opacity,
-            sample[1] * opacity,
-            sample[2] * opacity,
-            sample[3] * opacity,
-          ]);
-        }
-      }
+    for (row_idx, row) in output.pixels_mut().chunks_mut(width as usize).enumerate() {
+      process_row(row_idx, row);
     }
   }
 
-  let paint = PixmapPaint {
-    opacity: 1.0,
-    blend_mode,
-    ..Default::default()
-  };
-  let _ = dst.draw_pixmap(
-    x0,
-    y0,
-    warped.as_ref(),
-    &paint,
-    Transform::identity(),
-    clip_mask,
-  );
+  Some(WarpedPixmap {
+    pixmap: output,
+    offset: (min_x_i, min_y_i),
+  })
 }
 
-fn sample_bilinear(
-  pixels: &[PremultipliedColorU8],
-  width: usize,
-  height: usize,
-  x: f32,
-  y: f32,
-) -> [f32; 4] {
-  if !x.is_finite() || !y.is_finite() || width == 0 || height == 0 {
-    return [0.0; 4];
-  }
+fn sample_bilinear(src: &Pixmap, x: f32, y: f32) -> PremultipliedColorU8 {
+  let sx0 = x.floor() as i32;
+  let sy0 = y.floor() as i32;
+  let sx1 = (sx0 + 1).min(src.width() as i32 - 1);
+  let sy1 = (sy0 + 1).min(src.height() as i32 - 1);
 
-  let sx = x - 0.5;
-  let sy = y - 0.5;
-  let x0 = sx.floor() as i32;
-  let y0 = sy.floor() as i32;
-  let tx = sx - x0 as f32;
-  let ty = sy - y0 as f32;
-  let x1 = x0 + 1;
-  let y1 = y0 + 1;
+  let fx = x - sx0 as f32;
+  let fy = y - sy0 as f32;
 
-  let weights = [
-    ((1.0 - tx) * (1.0 - ty), x0, y0),
-    (tx * (1.0 - ty), x1, y0),
-    ((1.0 - tx) * ty, x0, y1),
-    (tx * ty, x1, y1),
-  ];
+  let c00 = src
+    .pixel(sx0 as u32, sy0 as u32)
+    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  let c10 = src
+    .pixel(sx1 as u32, sy0 as u32)
+    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  let c01 = src
+    .pixel(sx0 as u32, sy1 as u32)
+    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  let c11 = src
+    .pixel(sx1 as u32, sy1 as u32)
+    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
 
-  let mut out = [0.0_f32; 4];
-  for &(w, px, py) in &weights {
-    if w <= 0.0 || px < 0 || py < 0 || px >= width as i32 || py >= height as i32 {
-      continue;
-    }
-    let idx = py as usize * width + px as usize;
-    let c = pixels[idx];
-    out[0] += c.red() as f32 / 255.0 * w;
-    out[1] += c.green() as f32 / 255.0 * w;
-    out[2] += c.blue() as f32 / 255.0 * w;
-    out[3] += c.alpha() as f32 / 255.0 * w;
-  }
-  out
-}
+  let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+  let top_r = lerp(c00.red() as f32, c10.red() as f32, fx);
+  let top_g = lerp(c00.green() as f32, c10.green() as f32, fx);
+  let top_b = lerp(c00.blue() as f32, c10.blue() as f32, fx);
+  let top_a = lerp(c00.alpha() as f32, c10.alpha() as f32, fx);
 
-fn pack_color(channels: [f32; 4]) -> PremultipliedColorU8 {
-  let clamp = |v: f32, max: u8| -> u8 {
-    let scaled = (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-    scaled.min(max)
-  };
-  let a = clamp(channels[3], u8::MAX);
-  let r = clamp(channels[0], a);
-  let g = clamp(channels[1], a);
-  let b = clamp(channels[2], a);
+  let bot_r = lerp(c01.red() as f32, c11.red() as f32, fx);
+  let bot_g = lerp(c01.green() as f32, c11.green() as f32, fx);
+  let bot_b = lerp(c01.blue() as f32, c11.blue() as f32, fx);
+  let bot_a = lerp(c01.alpha() as f32, c11.alpha() as f32, fx);
+
+  let r = lerp(top_r, bot_r, fy).round().clamp(0.0, 255.0) as u8;
+  let g = lerp(top_g, bot_g, fy).round().clamp(0.0, 255.0) as u8;
+  let b = lerp(top_b, bot_b, fy).round().clamp(0.0, 255.0) as u8;
+  let a = lerp(top_a, bot_a, fy).round().clamp(0.0, 255.0) as u8;
+
   PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT)
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::geometry::Point;
+  use tiny_skia::MaskType;
 
   fn color(r: u8, g: u8, b: u8, a: u8) -> PremultipliedColorU8 {
     PremultipliedColorU8::from_rgba(r, g, b, a).unwrap()
@@ -359,25 +186,29 @@ mod tests {
     src_pixels[2] = color(0, 0, 255, 255);
     src_pixels[3] = color(255, 255, 255, 255);
 
-    let mut dst = Pixmap::new(2, 2).unwrap();
-    warp_pixmap(
-      &mut dst,
+    let dst_quad = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
+    let warped = warp_pixmap(
       &src,
-      &Homography::IDENTITY,
-      1.0,
-      tiny_skia::BlendMode::SourceOver,
+      &Homography::identity(),
+      &dst_quad,
+      (2, 2),
       None,
-    );
+    )
+    .expect("warp");
+
+    assert_eq!(warped.offset, (0, 0));
+    assert_eq!(warped.pixmap.width(), 2);
+    assert_eq!(warped.pixmap.height(), 2);
 
     for y in 0..2 {
       for x in 0..2 {
-        assert_eq!(pixel(&dst, x, y), pixel(&src, x, y));
+        assert_eq!(pixel(&warped.pixmap, x, y), pixel(&src, x, y));
       }
     }
   }
 
   #[test]
-  fn warp_to_trapezoid_places_corners() {
+  fn warp_to_trapezoid_matches_inverse_sampling() {
     let mut src = Pixmap::new(2, 2).unwrap();
     let src_pixels = src.pixels_mut();
     src_pixels[0] = color(255, 0, 0, 255);
@@ -385,42 +216,44 @@ mod tests {
     src_pixels[2] = color(0, 0, 255, 255);
     src_pixels[3] = color(255, 255, 255, 255);
 
-    let mut dst = Pixmap::new(6, 6).unwrap();
-    let homography = Homography::from_rect_to_quad(
-      2.0,
-      2.0,
-      [(1.0, 1.0), (4.0, 1.0), (5.0, 4.5), (0.5, 4.5)],
-    )
-    .unwrap();
-    warp_pixmap(
-      &mut dst,
-      &src,
-      &homography,
-      1.0,
-      tiny_skia::BlendMode::SourceOver,
-      None,
-    );
+    let dst_quad = [(1.0, 1.0), (4.0, 1.0), (5.0, 4.5), (0.5, 4.5)];
+    let src_quad = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)];
+    let src_points: [Point; 4] = src_quad.map(|(x, y)| Point::new(x, y));
+    let dst_points: [Point; 4] = dst_quad.map(|(x, y)| Point::new(x, y));
 
-    let inv = homography.invert().unwrap();
-    let sample_at = |x: u32, y: u32| {
-      inv
-        .transform_point(x as f32 + 0.5, y as f32 + 0.5)
-        .map(|(sx, sy)| {
-          pack_color(sample_bilinear(
-            src.pixels(),
-            src.width() as usize,
-            src.height() as usize,
-            sx,
-            sy,
-          ))
-        })
-        .unwrap_or(PremultipliedColorU8::TRANSPARENT)
+    let homography = Homography::from_quad_to_quad(src_points, dst_points).expect("homography");
+
+    let warped = warp_pixmap(&src, &homography, &dst_quad, (6, 6), None).expect("warp");
+    let inv = homography.invert().expect("invert");
+
+    let expected_at = |x: i32, y: i32| {
+      let dx = x as f32 + 0.5;
+      let dy = y as f32 + 0.5;
+      let Some((sx, sy)) = inv.transform_point(dx, dy) else {
+        return PremultipliedColorU8::TRANSPARENT;
+      };
+      if sx < 0.0 || sy < 0.0 || sx >= src.width() as f32 || sy >= src.height() as f32 {
+        return PremultipliedColorU8::TRANSPARENT;
+      }
+      sample_bilinear(&src, sx, sy)
     };
 
-    assert_eq!(pixel(&dst, 1, 1), sample_at(1, 1));
-    assert_eq!(pixel(&dst, 4, 1), sample_at(4, 1));
-    assert_eq!(pixel(&dst, 0, 4), sample_at(0, 4));
-    assert_eq!(pixel(&dst, 4, 4), sample_at(4, 4));
+    let samples = [(1, 1), (4, 1), (0, 4), (4, 4)];
+    for (x, y) in samples {
+      let local_x = x - warped.offset.0;
+      let local_y = y - warped.offset.1;
+      if local_x < 0
+        || local_y < 0
+        || local_x >= warped.pixmap.width() as i32
+        || local_y >= warped.pixmap.height() as i32
+      {
+        continue;
+      }
+      assert_eq!(
+        pixel(&warped.pixmap, local_x as u32, local_y as u32),
+        expected_at(x, y)
+      );
+    }
   }
 
   #[test]
@@ -428,33 +261,29 @@ mod tests {
     let mut src = Pixmap::new(3, 3).unwrap();
     src.pixels_mut().fill(color(200, 0, 0, 255));
 
-    let mut dst = Pixmap::new(3, 3).unwrap();
-    dst
-      .pixels_mut()
-      .fill(color(0, 200, 0, 255));
-
+    let dst_quad = [(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)];
     let mut mask_pixmap = Pixmap::new(3, 3).unwrap();
     mask_pixmap.pixels_mut().fill(color(0, 0, 0, 0));
-    mask_pixmap.pixels_mut()[4] = color(255, 255, 255, 255);
-    let mask = Mask::from_pixmap(mask_pixmap.as_ref(), tiny_skia::MaskType::Alpha);
+    mask_pixmap.pixels_mut()[4] = color(0, 0, 0, 255);
+    let mask = Mask::from_pixmap(mask_pixmap.as_ref(), MaskType::Alpha);
 
-    warp_pixmap(
-      &mut dst,
+    let warped = warp_pixmap(
       &src,
-      &Homography::IDENTITY,
-      1.0,
-      tiny_skia::BlendMode::SourceOver,
+      &Homography::identity(),
+      &dst_quad,
+      (3, 3),
       Some(&mask),
-    );
+    )
+    .expect("warp");
 
     for y in 0..3 {
       for x in 0..3 {
-        let px = pixel(&dst, x, y);
+        let px = pixel(&warped.pixmap, x, y);
         if x == 1 && y == 1 {
           assert!(px.red() > 0);
+          assert_eq!(px.alpha(), 255);
         } else {
-          assert_eq!(px.red(), 0);
-          assert_eq!(px.green(), 200);
+          assert_eq!(px, PremultipliedColorU8::TRANSPARENT);
         }
       }
     }

@@ -2455,6 +2455,151 @@ fn color_mix_handles_transparent_components() {
 }
 
 #[test]
+fn perspective_rotate_y_renders_projective_shape() {
+  let rect = Rect::from_xywh(20.0, 20.0, 20.0, 20.0);
+  let center = (
+    rect.x() + rect.width() * 0.5,
+    rect.y() + rect.height() * 0.5,
+  );
+  let angle = std::f32::consts::FRAC_PI_3;
+  let transform = Transform3D::translate(center.0, center.1, 0.0)
+    .multiply(&Transform3D::perspective(200.0))
+    .multiply(&Transform3D::rotate_y(angle))
+    .multiply(&Transform3D::translate(-center.0, -center.1, 0.0));
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: rect,
+    mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+    is_isolated: true,
+    transform: Some(transform),
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect,
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let renderer = DisplayListRenderer::new(80, 80, Rgba::WHITE, FontContext::new()).unwrap();
+  let pixmap = renderer.render(&list).expect("render");
+  let bbox = bounding_box_for_color(&pixmap, |(_, _, _, a)| a > 0).expect("red pixels");
+  let actual_width = (bbox.2 as i32 - bbox.0 as i32 + 1) as f32;
+  let actual_height = (bbox.3 as i32 - bbox.1 as i32 + 1) as f32;
+
+  let corners = [
+    (rect.min_x(), rect.min_y()),
+    (rect.max_x(), rect.min_y()),
+    (rect.max_x(), rect.max_y()),
+    (rect.min_x(), rect.max_y()),
+  ];
+  let projective_bounds = {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (x, y) in corners {
+      let (tx, ty, _tz, tw) = transform.transform_point(x, y, 0.0);
+      let w = if tw.abs() < 1e-6 { 1.0 } else { tw };
+      let px = tx / w;
+      let py = ty / w;
+      min_x = min_x.min(px);
+      min_y = min_y.min(py);
+      max_x = max_x.max(px);
+      max_y = max_y.max(py);
+    }
+    (min_x, min_y, max_x, max_y)
+  };
+  let affine_bounds = {
+    let affine = transform.approximate_2d();
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for (x, y) in corners {
+      let ax = affine.a * x + affine.c * y + affine.e;
+      let ay = affine.b * x + affine.d * y + affine.f;
+      min_x = min_x.min(ax);
+      min_y = min_y.min(ay);
+      max_x = max_x.max(ax);
+      max_y = max_y.max(ay);
+    }
+    (min_x, min_y, max_x, max_y)
+  };
+  let span = |min_v: f32, max_v: f32| (max_v.ceil() - min_v.floor()).max(0.0);
+  let proj_width = span(projective_bounds.0, projective_bounds.2);
+  let proj_height = span(projective_bounds.1, projective_bounds.3);
+  let affine_width = span(affine_bounds.0, affine_bounds.2);
+  let affine_height = span(affine_bounds.1, affine_bounds.3);
+
+  assert!(
+    (proj_width - affine_width).abs() > 0.5 || (proj_height - affine_height).abs() > 0.5,
+    "projective and affine bounds should differ"
+  );
+  let proj_error = (actual_width - proj_width).abs() + (actual_height - proj_height).abs();
+  let affine_error = (actual_width - affine_width).abs() + (actual_height - affine_height).abs();
+  assert!(
+    proj_error < affine_error,
+    "projective warp should better match perspective mapping (proj_error {}, affine_error {})",
+    proj_error,
+    affine_error
+  );
+}
+
+#[test]
+fn rotate_y_without_perspective_stays_affine() {
+  let rect = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
+  let center = (
+    rect.x() + rect.width() * 0.5,
+    rect.y() + rect.height() * 0.5,
+  );
+  let transform = Transform3D::translate(center.0, center.1, 0.0)
+    .multiply(&Transform3D::rotate_y(std::f32::consts::FRAC_PI_4))
+    .multiply(&Transform3D::translate(-center.0, -center.1, 0.0));
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: rect,
+    mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+    is_isolated: true,
+    transform: Some(transform),
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect,
+    color: Rgba::BLUE,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let renderer = DisplayListRenderer::new(60, 60, Rgba::WHITE, FontContext::new()).unwrap();
+  let pixmap = renderer.render(&list).expect("render");
+  let bbox = bounding_box_for_color(&pixmap, |(_, _, _, a)| a > 0).expect("blue pixels");
+  let actual_width = (bbox.2 as i32 - bbox.0 as i32 + 1) as f32;
+
+  let expected_width = rect.width() * std::f32::consts::FRAC_PI_4.cos();
+  assert!(
+    (actual_width - expected_width).abs() <= 1.0,
+    "expected affine projection width around {}, got {}",
+    expected_width,
+    actual_width
+  );
+}
+
+#[test]
 fn outline_ignores_clip_path() {
   let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
   let mut list = DisplayList::new();

@@ -53,6 +53,8 @@ use crate::paint::display_list::TransformItem;
 use crate::paint::display_list::MaskReferenceRects;
 use crate::paint::filter_outset::filter_outset;
 use crate::paint::filter_outset::filter_outset_with_bounds;
+use crate::paint::homography::Homography;
+use crate::paint::projective_warp::warp_pixmap;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
@@ -1103,6 +1105,8 @@ struct StackingRecord {
   css_bounds: Rect,
   manual_blend: Option<BlendMode>,
   layer_bounds: Option<Rect>,
+  projective_transform: Option<Transform3D>,
+  parent_transform: Transform,
   culled: bool,
   pending_backdrop: Option<PendingBackdrop>,
 }
@@ -2768,12 +2772,17 @@ impl DisplayListRenderer {
         self.render_list_marker(&scaled)?;
       }
       DisplayItem::PushStackingContext(item) => {
-        let parent_transform = *self
+        let parent_transform_3d = *self
           .transform_stack
           .last()
           .unwrap_or(&Transform3D::identity());
         let local_transform = item.transform.unwrap_or(Transform3D::identity());
-        let combined_transform_3d = parent_transform.multiply(&local_transform);
+        let combined_transform_3d = parent_transform_3d.multiply(&local_transform);
+
+        let projective_transform = item.transform.and_then(|t| {
+          let h = Homography::from_transform3d_z0(&t);
+          (!h.is_affine()).then_some(t)
+        });
 
         if matches!(item.backface_visibility, BackfaceVisibility::Hidden)
           && Self::backface_is_hidden(&combined_transform_3d)
@@ -2797,7 +2806,8 @@ impl DisplayListRenderer {
           None
         };
 
-        let mut combined_transform = self.canvas.transform();
+        let parent_transform = self.canvas.transform();
+        let mut combined_transform = parent_transform;
         if item.transform.is_some() {
           let t = self.to_skia_transform(&local_transform);
           combined_transform = combined_transform.post_concat(t);
@@ -2824,8 +2834,9 @@ impl DisplayListRenderer {
           )
           || !scaled_filters.is_empty()
           || has_backdrop
-          || mask.is_some();
-        let layer_bounds = needs_layer
+          || mask.is_some()
+          || projective_transform.is_some();
+        let layer_bounds = (needs_layer && projective_transform.is_none())
           .then(|| {
             self.stacking_layer_bounds(
               bounds,
@@ -2857,6 +2868,9 @@ impl DisplayListRenderer {
               self.canvas.push_layer_with_blend(1.0, Some(blend))?;
             }
           }
+          if projective_transform.is_some() {
+            self.canvas.clear_clip();
+          }
         } else {
           self.canvas.save();
         }
@@ -2869,11 +2883,13 @@ impl DisplayListRenderer {
           css_bounds,
           manual_blend,
           layer_bounds,
+          projective_transform,
+          parent_transform,
           culled: false,
           pending_backdrop,
         });
 
-        if item.transform.is_some() {
+        if item.transform.is_some() && projective_transform.is_none() {
           self.canvas.set_transform(combined_transform);
         }
       }
@@ -2890,6 +2906,8 @@ impl DisplayListRenderer {
             css_bounds: Rect::ZERO,
             manual_blend: None,
             layer_bounds: None,
+            projective_transform: None,
+            parent_transform: Transform::identity(),
             culled: false,
             pending_backdrop: None,
           });
@@ -2969,7 +2987,101 @@ impl DisplayListRenderer {
             }
           }
 
-          if let Some(mode) = record.manual_blend {
+          if let Some(projective_transform) = record.projective_transform {
+            let corners = [
+              (record.css_bounds.min_x(), record.css_bounds.min_y()),
+              (record.css_bounds.max_x(), record.css_bounds.min_y()),
+              (record.css_bounds.max_x(), record.css_bounds.max_y()),
+              (record.css_bounds.min_x(), record.css_bounds.max_y()),
+            ];
+            let mut src_quad = [Point::ZERO; 4];
+            let mut dst_quad_points = [Point::ZERO; 4];
+            let mut dst_quad = [(0.0f32, 0.0f32); 4];
+            let mut valid = true;
+
+            for (i, (x, y)) in corners.iter().enumerate() {
+              let sx = *x * self.scale;
+              let sy = *y * self.scale;
+              let src_x = sx * record.parent_transform.sx
+                + sy * record.parent_transform.kx
+                + record.parent_transform.tx;
+              let src_y = sx * record.parent_transform.ky
+                + sy * record.parent_transform.sy
+                + record.parent_transform.ty;
+              src_quad[i] = Point::new(src_x - origin.0 as f32, src_y - origin.1 as f32);
+
+              let (tx, ty, _tz, tw) = projective_transform.transform_point(*x, *y, 0.0);
+              if tw.abs() < 1e-6 {
+                valid = false;
+                break;
+              }
+              let px = (tx / tw) * self.scale;
+              let py = (ty / tw) * self.scale;
+              let dst_x = px * record.parent_transform.sx
+                + py * record.parent_transform.kx
+                + record.parent_transform.tx;
+              let dst_y = px * record.parent_transform.ky
+                + py * record.parent_transform.sy
+                + record.parent_transform.ty;
+              dst_quad[i] = (dst_x, dst_y);
+              dst_quad_points[i] = Point::new(dst_x, dst_y);
+            }
+
+            let warped = valid
+              .then(|| Homography::from_quad_to_quad(src_quad, dst_quad_points))
+              .flatten()
+              .and_then(|homography| {
+                warp_pixmap(
+                  &layer,
+                  &homography,
+                  &dst_quad,
+                  (self.canvas.width(), self.canvas.height()),
+                  self.canvas.clip_mask(),
+                )
+              });
+
+            if let Some(warped) = warped {
+              if let Some(mode) = record.manual_blend {
+                self.composite_manual_layer(
+                  &warped.pixmap,
+                  opacity,
+                  mode,
+                  warped.offset,
+                  None,
+                )?;
+              } else {
+                let mut paint = PixmapPaint::default();
+                paint.opacity = opacity;
+                paint.blend_mode = composite_blend.unwrap_or(self.canvas.blend_mode());
+                self.canvas.pixmap_mut().draw_pixmap(
+                  warped.offset.0,
+                  warped.offset.1,
+                  warped.pixmap.as_ref(),
+                  &paint,
+                  Transform::identity(),
+                  None,
+                );
+              }
+            } else if let Some(mode) = record.manual_blend {
+              if let Some(mask) = self.canvas.clip_mask().cloned() {
+                let Some(cropped) = crop_mask(
+                  &mask,
+                  origin.0 as u32,
+                  origin.1 as u32,
+                  layer.width(),
+                  layer.height(),
+                ) else {
+                  return Ok(());
+                };
+                layer.apply_mask(&cropped);
+              }
+              self.composite_manual_layer(&layer, opacity, mode, origin, effect_bounds.as_ref())?;
+            } else {
+              self
+                .canvas
+                .composite_layer(&layer, opacity, composite_blend, origin);
+            }
+          } else if let Some(mode) = record.manual_blend {
             if let Some(mask) = self.canvas.clip_mask().cloned() {
               let Some(cropped) = crop_mask(
                 &mask,
