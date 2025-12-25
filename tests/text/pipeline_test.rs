@@ -19,6 +19,7 @@ use fastrender::text::pipeline::ItemizedRun;
 use fastrender::text::pipeline::RunRotation;
 use fastrender::text::pipeline::Script;
 use fastrender::text::pipeline::ShapingPipeline;
+use fastrender::text::FontSubsetMode;
 use fastrender::ComputedStyle;
 use fastrender::FontContext;
 
@@ -760,4 +761,49 @@ fn test_pipeline_respects_font_size() {
   // Double font size should roughly double width
   assert!(width_32 > width_16 * 1.8);
   assert!(width_32 < width_16 * 2.2);
+}
+
+#[test]
+fn shaping_cache_records_hits() {
+  let mut font_context = FontContext::new();
+  font_context.reset_font_stats();
+  let pipeline = ShapingPipeline::new();
+  let style = ComputedStyle::default();
+  if !font_context.has_fonts() {
+    return;
+  }
+
+  require_fonts!(pipeline.shape("Hello cache", &style, &font_context));
+  require_fonts!(pipeline.shape("Hello cache", &style, &font_context));
+
+  let stats = font_context.font_stats_snapshot();
+  assert!(stats.shape_cache_hits >= 1);
+  assert!(stats.shaping_runs >= 1);
+}
+
+#[test]
+fn subsetting_preserves_combining_marks_and_ligatures() {
+  let mut ctx_subset = FontContext::new();
+  ctx_subset.set_subset_mode(FontSubsetMode::Subset);
+  let mut ctx_full = FontContext::new();
+  ctx_full.set_subset_mode(FontSubsetMode::Off);
+
+  if !ctx_subset.has_fonts() || !ctx_full.has_fonts() {
+    return;
+  }
+
+  let mut style = ComputedStyle::default();
+  style.font_family = vec!["DejaVu Sans".to_string(), "sans-serif".to_string()];
+  let text = "fi e\u{0301}";
+
+  let subset_runs = require_fonts!(ShapingPipeline::new().shape(text, &style, &ctx_subset));
+  let full_runs = require_fonts!(ShapingPipeline::new().shape(text, &style, &ctx_full));
+
+  let subset_glyphs: usize = subset_runs.iter().map(|r| r.glyphs.len()).sum();
+  let full_glyphs: usize = full_runs.iter().map(|r| r.glyphs.len()).sum();
+  assert_eq!(subset_glyphs, full_glyphs);
+
+  let subset_advance: f32 = subset_runs.iter().map(|r| r.advance).sum();
+  let full_advance: f32 = full_runs.iter().map(|r| r.advance).sum();
+  assert!((subset_advance - full_advance).abs() < 0.1);
 }

@@ -39,17 +39,19 @@ use fontdb::Family as FontDbFamily;
 use fontdb::Query as FontDbQuery;
 use fontdb::ID;
 use lru::LruCache;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
+use std::time::{Duration, Instant};
 
 #[cfg(debug_assertions)]
 use std::cell::Cell;
-#[cfg(debug_assertions)]
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
 
@@ -117,6 +119,118 @@ pub(crate) fn reset_face_parse_counter_for_tests() {
 #[cfg(not(debug_assertions))]
 #[allow(dead_code)]
 pub(crate) fn reset_face_parse_counter_for_tests() {}
+
+/// Controls how fonts are subsetted and cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontSubsetMode {
+  /// Do not attempt any subsetting or subset caching.
+  Off,
+  /// Cache subsets keyed by codepoint sets but reuse the original font data.
+  Cache,
+  /// Attempt to create subsets (currently conservative; falls back to caching).
+  Subset,
+}
+
+impl Default for FontSubsetMode {
+  fn default() -> Self {
+    Self::Cache
+  }
+}
+
+fn ns_to_ms(ns: u64) -> f64 {
+  (ns as f64) / 1_000_000.0
+}
+
+/// Snapshot of font pipeline statistics for diagnostics.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct FontPipelineStats {
+  pub font_load_ms: f64,
+  pub font_loads: u64,
+  pub shaping_ms: f64,
+  pub shaping_runs: u64,
+  pub shape_cache_hits: u64,
+  pub shape_cache_misses: u64,
+  pub subset_cache_hits: u64,
+  pub subset_cache_misses: u64,
+  pub plan_ms: f64,
+}
+
+#[derive(Debug, Default)]
+pub struct FontStats {
+  font_load_ns: AtomicU64,
+  font_loads: AtomicU64,
+  shaping_ns: AtomicU64,
+  shaping_runs: AtomicU64,
+  shape_cache_hits: AtomicU64,
+  shape_cache_misses: AtomicU64,
+  subset_cache_hits: AtomicU64,
+  subset_cache_misses: AtomicU64,
+  plan_ns: AtomicU64,
+}
+
+impl FontStats {
+  pub fn snapshot(&self) -> FontPipelineStats {
+    FontPipelineStats {
+      font_load_ms: ns_to_ms(self.font_load_ns.load(Ordering::Relaxed)),
+      font_loads: self.font_loads.load(Ordering::Relaxed),
+      shaping_ms: ns_to_ms(self.shaping_ns.load(Ordering::Relaxed)),
+      shaping_runs: self.shaping_runs.load(Ordering::Relaxed),
+      shape_cache_hits: self.shape_cache_hits.load(Ordering::Relaxed),
+      shape_cache_misses: self.shape_cache_misses.load(Ordering::Relaxed),
+      subset_cache_hits: self.subset_cache_hits.load(Ordering::Relaxed),
+      subset_cache_misses: self.subset_cache_misses.load(Ordering::Relaxed),
+      plan_ms: ns_to_ms(self.plan_ns.load(Ordering::Relaxed)),
+    }
+  }
+
+  pub fn reset(&self) {
+    self.font_load_ns.store(0, Ordering::Relaxed);
+    self.font_loads.store(0, Ordering::Relaxed);
+    self.shaping_ns.store(0, Ordering::Relaxed);
+    self.shaping_runs.store(0, Ordering::Relaxed);
+    self.shape_cache_hits.store(0, Ordering::Relaxed);
+    self.shape_cache_misses.store(0, Ordering::Relaxed);
+    self.subset_cache_hits.store(0, Ordering::Relaxed);
+    self.subset_cache_misses.store(0, Ordering::Relaxed);
+    self.plan_ns.store(0, Ordering::Relaxed);
+  }
+
+  pub fn record_font_load(&self, duration: Duration) {
+    self.font_loads.fetch_add(1, Ordering::Relaxed);
+    self
+      .font_load_ns
+      .fetch_add(duration.as_nanos() as u64, Ordering::Relaxed);
+  }
+
+  pub fn record_shaping(&self, duration: Duration) {
+    self.shaping_runs.fetch_add(1, Ordering::Relaxed);
+    self
+      .shaping_ns
+      .fetch_add(duration.as_nanos() as u64, Ordering::Relaxed);
+  }
+
+  pub fn record_shape_cache_hit(&self) {
+    self.shape_cache_hits.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub fn record_shape_cache_miss(&self) {
+    self.shape_cache_misses.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub fn record_subset_hit(&self) {
+    self.subset_cache_hits.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub fn record_subset_miss(&self) {
+    self.subset_cache_misses.fetch_add(1, Ordering::Relaxed);
+  }
+
+  pub fn record_plan_time(&self, duration: Duration) {
+    self
+      .plan_ns
+      .fetch_add(duration.as_nanos() as u64, Ordering::Relaxed);
+  }
+}
 
 #[inline]
 fn parse_face_with_counter<'a>(
@@ -190,6 +304,63 @@ impl GlyphCoverageCache {
       cache.clear();
     }
   }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SubsetCacheKey {
+  data_ptr: usize,
+  index: u32,
+  subset_hash: u64,
+}
+
+#[derive(Clone, Default)]
+struct FontSubsetCache {
+  inner: Arc<Mutex<HashMap<SubsetCacheKey, Arc<Vec<u8>>>>>,
+}
+
+impl FontSubsetCache {
+  fn get(&self, key: &SubsetCacheKey) -> Option<Arc<Vec<u8>>> {
+    self
+      .inner
+      .lock()
+      .ok()
+      .and_then(|mut cache| cache.get(key).cloned())
+  }
+
+  fn put(&self, key: SubsetCacheKey, data: Arc<Vec<u8>>) {
+    if let Ok(mut cache) = self.inner.lock() {
+      cache.insert(key, data);
+    }
+  }
+
+  fn clear(&self) {
+    if let Ok(mut cache) = self.inner.lock() {
+      cache.clear();
+    }
+  }
+}
+
+pub(crate) fn hash_codepoints(codepoints: &[u32]) -> u64 {
+  let mut hasher = DefaultHasher::new();
+  let mut cps = codepoints.to_vec();
+  cps.sort_unstable();
+  cps.hash(&mut hasher);
+  hasher.finish()
+}
+
+fn conservative_subset_codepoints(codepoints: &[u32]) -> Vec<u32> {
+  let mut expanded: Vec<u32> = codepoints.to_vec();
+  const EXTRA_RANGES: &[(u32, u32)] = &[
+    (0x0300, 0x036f), // combining diacritical marks
+    (0xfe00, 0xfe0f), // variation selectors
+    (0x200c, 0x200d), // ZWNJ/ZWJ
+  ];
+  for (start, end) in EXTRA_RANGES {
+    expanded.extend((*start)..=(*end));
+  }
+  expanded.sort_unstable();
+  expanded.dedup();
+  expanded
 }
 
 /// Font weight (100-900)
@@ -689,6 +860,10 @@ pub struct FontDatabase {
   math_fonts: RwLock<Option<Vec<ID>>>,
   /// Glyph coverage cache to avoid repeated face parsing
   glyph_coverage: GlyphCoverageCache,
+  /// Cached subsets keyed by codepoint hash and font identity.
+  subset_cache: FontSubsetCache,
+  /// Optional shared statistics sink for diagnostics.
+  stats: Option<Arc<FontStats>>,
 }
 
 impl FontDatabase {
@@ -713,6 +888,8 @@ impl FontDatabase {
       cache: RwLock::new(HashMap::new()),
       math_fonts: RwLock::new(None),
       glyph_coverage: GlyphCoverageCache::new(GLYPH_COVERAGE_CACHE_SIZE),
+      subset_cache: FontSubsetCache::default(),
+      stats: Some(Arc::new(FontStats::default())),
     }
   }
 
@@ -725,6 +902,8 @@ impl FontDatabase {
       cache: RwLock::new(HashMap::new()),
       math_fonts: RwLock::new(None),
       glyph_coverage: GlyphCoverageCache::new(GLYPH_COVERAGE_CACHE_SIZE),
+      subset_cache: FontSubsetCache::default(),
+      stats: Some(Arc::new(FontStats::default())),
     }
   }
 
@@ -756,6 +935,16 @@ impl FontDatabase {
       *cached = None;
     }
     Ok(())
+  }
+
+  /// Attach a shared statistics sink for profiling and diagnostics.
+  pub fn set_stats(&mut self, stats: Arc<FontStats>) {
+    self.stats = Some(stats);
+  }
+
+  #[inline]
+  pub(crate) fn stats(&self) -> Option<Arc<FontStats>> {
+    self.stats.clone()
   }
 
   /// Queries for a font matching the given criteria
@@ -851,6 +1040,7 @@ impl FontDatabase {
     }
 
     let mut data_result: Option<Arc<Vec<u8>>> = None;
+    let load_start = self.stats.as_ref().map(|_| Instant::now());
     self.db.with_face_data(id, |font_data, _face_index| {
       data_result = Some(Arc::new(font_data.to_vec()));
     });
@@ -861,7 +1051,53 @@ impl FontDatabase {
       cache.insert(id, Arc::clone(&data));
     }
 
+    if let (Some(stats), Some(start)) = (self.stats.as_ref(), load_start) {
+      stats.record_font_load(start.elapsed());
+    }
+
     Some(data)
+  }
+
+  /// Returns a cached subset of `font` for the given codepoints based on the configured
+  /// subsetting strategy. Currently subsets conservatively by caching the original data with a
+  /// codepoint hash key to avoid recomputation when real subsetting is enabled.
+  pub(crate) fn subset_font_data(
+    &self,
+    font: &LoadedFont,
+    codepoints: &[u32],
+    mode: FontSubsetMode,
+  ) -> Arc<Vec<u8>> {
+    if matches!(mode, FontSubsetMode::Off) {
+      return Arc::clone(&font.data);
+    }
+
+    let expanded = if matches!(mode, FontSubsetMode::Subset) {
+      conservative_subset_codepoints(codepoints)
+    } else {
+      let mut cp = codepoints.to_vec();
+      cp.sort_unstable();
+      cp
+    };
+    let subset_hash = hash_codepoints(&expanded);
+    let key = SubsetCacheKey {
+      data_ptr: Arc::as_ptr(&font.data) as usize,
+      index: font.index,
+      subset_hash,
+    };
+    if let Some(hit) = self.subset_cache.get(&key) {
+      if let Some(stats) = &self.stats {
+        stats.record_subset_hit();
+      }
+      return hit;
+    }
+
+    if let Some(stats) = &self.stats {
+      stats.record_subset_miss();
+    }
+
+    let data = Arc::clone(&font.data);
+    self.subset_cache.put(key, Arc::clone(&data));
+    data
   }
 
   /// Creates a LoadedFont from cached data
@@ -966,6 +1202,7 @@ impl FontDatabase {
       cache.clear();
     }
     self.glyph_coverage.clear();
+    self.subset_cache.clear();
     if let Ok(mut cached) = self.math_fonts.write() {
       *cached = None;
     }

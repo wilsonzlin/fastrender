@@ -32,12 +32,17 @@ use crate::css::types::FontSourceFormat;
 use crate::error::Error;
 use crate::error::Result;
 use crate::resource::ResourceFetcher;
+use crate::text::font_db::hash_codepoints;
 use crate::text::font_db::FontDatabase;
+use crate::text::font_db::FontPipelineStats;
+use crate::text::font_db::FontStats;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
+use crate::text::font_db::FontSubsetMode;
 use crate::text::font_db::FontWeight;
 use crate::text::font_db::LoadedFont;
 use crate::text::font_db::ScaledMetrics;
+use crate::text::pipeline::Script;
 use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -47,6 +52,7 @@ use rustybuzz::Direction;
 use rustybuzz::Face;
 use rustybuzz::Feature;
 use rustybuzz::UnicodeBuffer;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
 use std::sync::atomic::AtomicU64;
@@ -125,6 +131,23 @@ fn display_allows_use(display: FontDisplay, elapsed: Duration) -> bool {
   elapsed <= swap_deadline
 }
 
+fn detect_subset_mode() -> FontSubsetMode {
+  let subsetting_enabled = std::env::var("FASTR_FONT_SUBSETTING")
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false);
+  if subsetting_enabled {
+    return FontSubsetMode::Subset;
+  }
+  let cache_disabled = std::env::var("FASTR_FONT_SUBSET_CACHE")
+    .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false);
+  if cache_disabled {
+    FontSubsetMode::Off
+  } else {
+    FontSubsetMode::Cache
+  }
+}
+
 struct PendingTask {
   shared: Arc<(Mutex<usize>, Condvar)>,
 }
@@ -188,6 +211,22 @@ pub struct FontContext {
   pending_async: Arc<(Mutex<usize>, Condvar)>,
   web_used_codepoints: Arc<RwLock<Vec<u32>>>,
   generation: Arc<AtomicU64>,
+  stats: Arc<FontStats>,
+  subset_mode: FontSubsetMode,
+  page_plan: Arc<RwLock<Option<FontUsagePlan>>>,
+}
+
+/// Plan describing the scripts and fallback families needed to render a page.
+#[derive(Debug, Clone, Default)]
+pub struct FontUsagePlan {
+  /// Unique codepoints encountered in visible text.
+  pub codepoints: Vec<u32>,
+  /// Codepoints grouped by detected script.
+  pub scripts: HashMap<crate::text::pipeline::Script, Vec<u32>>,
+  /// Candidate fallback families per script.
+  pub script_fallbacks: HashMap<crate::text::pipeline::Script, Vec<String>>,
+  /// Hash of the codepoint set, useful for cache keys.
+  pub subset_hash: u64,
 }
 
 impl FontContext {
@@ -263,7 +302,16 @@ impl FontContext {
   }
 
   /// Creates a font context backed by a custom database and fetcher.
-  pub fn with_database_and_fetcher(db: Arc<FontDatabase>, fetcher: Arc<dyn FontFetcher>) -> Self {
+  pub fn with_database_and_fetcher(
+    mut db: Arc<FontDatabase>,
+    fetcher: Arc<dyn FontFetcher>,
+  ) -> Self {
+    let stats = db.stats().unwrap_or_else(|| Arc::new(FontStats::default()));
+    if db.stats().is_none() {
+      if let Some(inner) = Arc::get_mut(&mut db) {
+        inner.set_stats(stats.clone());
+      }
+    }
     Self {
       db,
       web_fonts: Arc::new(RwLock::new(Vec::new())),
@@ -273,6 +321,9 @@ impl FontContext {
       pending_async: Arc::new((Mutex::new(0), Condvar::new())),
       web_used_codepoints: Arc::new(RwLock::new(Vec::new())),
       generation: Arc::new(AtomicU64::new(0)),
+      stats,
+      subset_mode: detect_subset_mode(),
+      page_plan: Arc::new(RwLock::new(None)),
     }
   }
 
@@ -304,10 +355,37 @@ impl FontContext {
     self.db.font_count()
   }
 
+  /// Overrides the current subsetting mode. Primarily intended for tests.
+  pub fn set_subset_mode(&mut self, mode: FontSubsetMode) {
+    self.subset_mode = mode;
+  }
+
   /// Returns whether any fonts are available
   #[inline]
   pub fn has_fonts(&self) -> bool {
     !self.db.is_empty()
+  }
+
+  /// Clears any cached stats, useful for per-render diagnostics.
+  pub fn reset_font_stats(&self) {
+    self.stats.reset();
+  }
+
+  /// Snapshot current font-related profiling metrics.
+  pub fn font_stats_snapshot(&self) -> FontPipelineStats {
+    self.stats.snapshot()
+  }
+
+  /// Clears any previously computed font usage plan.
+  pub fn clear_font_plan(&self) {
+    if let Ok(mut guard) = self.page_plan.write() {
+      *guard = None;
+    }
+  }
+
+  /// Returns the most recently computed usage plan, if any.
+  pub fn font_plan(&self) -> Option<FontUsagePlan> {
+    self.page_plan.read().ok().and_then(|p| (*p).clone())
   }
 
   /// Returns whether there are no usable fonts (system + web).
@@ -559,6 +637,7 @@ impl FontContext {
     if let Ok(mut used) = self.web_used_codepoints.write() {
       used.clear();
     }
+    self.clear_font_plan();
     self.bump_generation();
   }
 
@@ -679,6 +758,78 @@ impl FontContext {
         return false;
       }
     }
+  }
+
+  /// Precomputes fallback families and subset cache entries for the given codepoints.
+  pub fn prime_font_plan(&self, codepoints: &[u32]) -> FontUsagePlan {
+    let start = Instant::now();
+    let mut plan = FontUsagePlan::default();
+    let mut seen = HashSet::new();
+    for cp in codepoints {
+      if seen.insert(*cp) {
+        plan.codepoints.push(*cp);
+      }
+    }
+    plan.codepoints.sort_unstable();
+    plan.subset_hash = hash_codepoints(&plan.codepoints);
+
+    let mut scripts: HashMap<Script, Vec<u32>> = HashMap::new();
+    for cp in &plan.codepoints {
+      if let Some(ch) = char::from_u32(*cp) {
+        scripts.entry(Script::detect(ch)).or_default().push(*cp);
+      }
+    }
+    plan.scripts = scripts.clone();
+
+    let mut fallbacks: HashMap<Script, Vec<String>> = HashMap::new();
+    for (script, cps) in scripts {
+      if cps.is_empty() {
+        continue;
+      }
+      let representative = cps.iter().find_map(|cp| char::from_u32(*cp)).unwrap_or(' ');
+      let mut chosen = Vec::new();
+      for face in self.db.faces() {
+        if self.db.has_glyph(face.id, representative) {
+          if let Some(name) = face.families.first().map(|(n, _)| n.clone()) {
+            chosen.push(name);
+          }
+        }
+        if chosen.len() >= 3 {
+          break;
+        }
+      }
+      if !chosen.is_empty() {
+        fallbacks.insert(script, chosen);
+      }
+    }
+    plan.script_fallbacks = fallbacks.clone();
+
+    if !plan.codepoints.is_empty() && !matches!(self.subset_mode, FontSubsetMode::Off) {
+      for families in fallbacks.values() {
+        for family in families {
+          if let Some(id) = self.db.resolve_family_list_full(
+            &[family.clone()],
+            FontWeight::NORMAL,
+            FontStyle::Normal,
+            FontStretch::Normal,
+          ) {
+            if let Some(font) = self.db.load_font(id) {
+              let _ = self
+                .db
+                .subset_font_data(&font, &plan.codepoints, self.subset_mode);
+            }
+          }
+        }
+      }
+    }
+
+    if let Ok(mut guard) = self.page_plan.write() {
+      *guard = Some(plan.clone());
+    }
+    if let Some(stats) = self.db.stats() {
+      stats.record_plan_time(start.elapsed());
+    }
+    plan
   }
 
   #[inline]
@@ -830,6 +981,50 @@ impl FontContext {
   #[inline]
   fn bump_generation(&self) {
     let _ = self.generation.fetch_add(1, Ordering::Relaxed);
+  }
+
+  #[inline]
+  pub(crate) fn subset_mode(&self) -> FontSubsetMode {
+    self.subset_mode
+  }
+
+  pub(crate) fn subset_font_for_text(&self, font: &Arc<LoadedFont>, text: &str) -> Arc<LoadedFont> {
+    if matches!(self.subset_mode, FontSubsetMode::Off) {
+      return Arc::clone(font);
+    }
+    let codepoints: Vec<u32> = text.chars().map(|c| c as u32).collect();
+    if codepoints.is_empty() {
+      return Arc::clone(font);
+    }
+    let data = self
+      .db
+      .subset_font_data(font, &codepoints, self.subset_mode);
+    if Arc::ptr_eq(&data, &font.data) {
+      return Arc::clone(font);
+    }
+    Arc::new(LoadedFont {
+      data,
+      index: font.index,
+      family: font.family.clone(),
+      weight: font.weight,
+      style: font.style,
+      stretch: font.stretch,
+    })
+  }
+
+  #[inline]
+  pub(crate) fn record_shape_cache_hit(&self) {
+    self.stats.record_shape_cache_hit();
+  }
+
+  #[inline]
+  pub(crate) fn record_shape_cache_miss(&self) {
+    self.stats.record_shape_cache_miss();
+  }
+
+  #[inline]
+  pub(crate) fn record_shaping_time(&self, duration: Duration) {
+    self.stats.record_shaping(duration);
   }
 
   pub(crate) fn match_web_font_for_char(
