@@ -40,12 +40,97 @@ pub fn paginate_fragment_tree(
   forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
   forced.dedup_by(|a, b| (*a - *b).abs() < 0.01);
 
-  let mut pages = Vec::new();
+  let page_plans = build_page_plans(
+    &spans,
+    &forced,
+    total_height,
+    rules,
+    fallback_page_size,
+    root_font_size,
+    initial_page_name.as_deref(),
+  );
+
+  if page_plans.is_empty() {
+    return vec![root.clone()];
+  }
+
+  let page_count = page_plans.len();
+  let mut pages = Vec::with_capacity(page_count);
+
+  for plan in &page_plans {
+    let mut page_root = FragmentNode::new_block(
+      Rect::from_xywh(
+        0.0,
+        0.0,
+        plan.style.total_size.width,
+        plan.style.total_size.height,
+      ),
+      Vec::new(),
+    );
+
+    if let Some(mut content) = clip_node(
+      root,
+      plan.start,
+      plan.end,
+      0.0,
+      plan.start,
+      plan.page_index,
+      page_count,
+    ) {
+      content.bounds = Rect::from_xywh(
+        content.bounds.x(),
+        content.bounds.y(),
+        plan.style.content_size.width,
+        content.bounds.height(),
+      );
+      translate_fragment(
+        &mut content,
+        plan.style.content_origin.x,
+        plan.style.content_origin.y,
+      );
+      page_root.children.push(content);
+    }
+
+    page_root.children.extend(build_margin_box_fragments(
+      &plan.style,
+      font_ctx,
+      plan.page_index,
+      page_count,
+    ));
+
+    pages.push(page_root);
+  }
+
+  for (idx, page) in pages.iter_mut().enumerate() {
+    propagate_fragment_metadata(page, idx, page_count);
+  }
+
+  pages
+}
+
+#[derive(Debug, Clone)]
+struct PagePlan {
+  start: f32,
+  end: f32,
+  style: ResolvedPageStyle,
+  page_index: usize,
+}
+
+fn build_page_plans(
+  spans: &[PageNameSpan],
+  forced: &[f32],
+  total_height: f32,
+  rules: &[CollectedPageRule<'_>],
+  fallback_page_size: Size,
+  root_font_size: f32,
+  initial_page_name: Option<&str>,
+) -> Vec<PagePlan> {
+  let mut plans = Vec::new();
   let mut pos = 0.0;
   let mut page_index = 0;
 
   while pos < total_height - 0.01 {
-    let page_name = page_name_for_position(&spans, pos, initial_page_name.as_deref());
+    let page_name = page_name_for_position(spans, pos, initial_page_name);
     let side = if (page_index + 1) % 2 == 0 {
       PageSide::Left
     } else {
@@ -75,42 +160,18 @@ pub fn paginate_fragment_tree(
       break;
     }
 
-    let clipped = clip_node(root, pos, end, 0.0, pos, page_index, 0);
-    let mut page_root = FragmentNode::new_block(
-      Rect::from_xywh(0.0, 0.0, style.total_size.width, style.total_size.height),
-      Vec::new(),
-    );
+    plans.push(PagePlan {
+      start: pos,
+      end,
+      style,
+      page_index,
+    });
 
-    if let Some(mut content) = clipped {
-      content.bounds = Rect::from_xywh(
-        content.bounds.x(),
-        content.bounds.y(),
-        style.content_size.width,
-        content.bounds.height(),
-      );
-      translate_fragment(&mut content, style.content_origin.x, style.content_origin.y);
-      page_root.children.push(content);
-    }
-
-    page_root
-      .children
-      .extend(build_margin_box_fragments(&style, font_ctx));
-
-    pages.push(page_root);
     pos = end;
     page_index += 1;
   }
 
-  if pages.is_empty() {
-    return vec![root.clone()];
-  }
-
-  let count = pages.len();
-  for (idx, page) in pages.iter_mut().enumerate() {
-    propagate_fragment_metadata(page, idx, count);
-  }
-
-  pages
+  plans
 }
 
 #[derive(Debug, Clone)]
@@ -174,16 +235,21 @@ fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
 fn build_margin_box_fragments(
   style: &ResolvedPageStyle,
   _font_ctx: &FontContext,
+  page_index: usize,
+  page_count: usize,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
   let generator = ContentGenerator::new();
-  let mut context = ContentContext::new();
 
   for (area, box_style) in &style.margin_boxes {
     if let Some(bounds) = margin_box_bounds(*area, style) {
       if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
         continue;
       }
+
+      let mut context = ContentContext::new();
+      context.set_counter("page", (page_index + 1) as i32);
+      context.set_counter("pages", page_count as i32);
 
       let text = generator.generate(&box_style.content_value, &mut context);
       let mut children = Vec::new();
