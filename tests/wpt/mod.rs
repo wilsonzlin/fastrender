@@ -13,9 +13,11 @@ pub mod runner;
 pub use harness::compare_images;
 pub use harness::generate_diff_image;
 pub use harness::AssertionResult;
-pub use harness::CompareConfig;
+pub use harness::DiscoveryMode;
 pub use harness::HarnessConfig;
-pub use harness::ImageDiff;
+pub use harness::ImageComparisonResult;
+pub use harness::PixelMismatch;
+pub use harness::ReftestExpectation;
 pub use harness::SuiteResult;
 pub use harness::TestMetadata;
 pub use harness::TestResult;
@@ -118,13 +120,17 @@ mod integration_tests {
       .with_tolerance(10)
       .with_max_diff(0.5)
       .fail_fast()
-      .with_filter("css");
+      .with_filter("css")
+      .with_discovery_mode(DiscoveryMode::MetadataOnly)
+      .with_font_dir("fonts/ci");
 
     assert_eq!(config.test_dir, PathBuf::from("custom/path"));
     assert_eq!(config.pixel_tolerance, 10);
     assert_eq!(config.max_diff_percentage, 0.5);
     assert!(config.fail_fast);
     assert_eq!(config.filter, Some("css".to_string()));
+    assert_eq!(config.discovery_mode, DiscoveryMode::MetadataOnly);
+    assert_eq!(config.font_dirs, vec![PathBuf::from("fonts/ci")]);
   }
 
   /// Test runner builder pattern

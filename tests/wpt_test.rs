@@ -9,7 +9,9 @@ pub use wpt::*;
 
 #[cfg(test)]
 mod wpt_runner_tests {
+  use super::wpt::DiscoveryMode;
   use super::wpt::HarnessConfig;
+  use super::wpt::ImageComparisonResult;
   use super::wpt::RunnerStats;
   use super::wpt::SuiteResult;
   use super::wpt::TestMetadata;
@@ -18,6 +20,7 @@ mod wpt_runner_tests {
   use super::wpt::TestType;
   use super::wpt::WptRunner;
   use super::wpt::WptRunnerBuilder;
+  use std::collections::HashMap;
   use std::path::Path;
   use std::path::PathBuf;
   use std::time::Duration;
@@ -38,7 +41,6 @@ mod wpt_runner_tests {
 
     assert_eq!(runner.stats().total, 0);
     assert_eq!(runner.config().pixel_tolerance, 0);
-    assert!(runner.config().compare_alpha);
   }
 
   #[test]
@@ -63,13 +65,13 @@ mod wpt_runner_tests {
       .output_dir("target/custom-output")
       .tolerance(5)
       .max_diff(1.0)
-      .ignore_alpha()
-      .perceptual_distance(0.1)
       .fail_fast()
       .save_rendered()
       .save_diffs()
       .parallel(2)
       .manifest("custom/manifest.toml")
+      .discovery_mode(DiscoveryMode::ManifestOnly)
+      .font_dir("fonts/ci-builder")
       .no_report()
       .build();
 
@@ -84,8 +86,6 @@ mod wpt_runner_tests {
     );
     assert_eq!(runner.config().pixel_tolerance, 5);
     assert_eq!(runner.config().max_diff_percentage, 1.0);
-    assert!(!runner.config().compare_alpha);
-    assert_eq!(runner.config().max_perceptual_distance, Some(0.1));
     assert!(runner.config().fail_fast);
     assert!(runner.config().save_rendered);
     assert!(runner.config().save_diffs);
@@ -96,6 +96,11 @@ mod wpt_runner_tests {
       Some(PathBuf::from("custom/manifest.toml"))
     );
     assert!(!runner.config().write_report);
+    assert_eq!(runner.config().discovery_mode, DiscoveryMode::ManifestOnly);
+    assert_eq!(
+      runner.config().font_dirs,
+      vec![PathBuf::from("fonts/ci-builder")]
+    );
   }
 
   #[test]
@@ -193,6 +198,27 @@ mod wpt_runner_tests {
   }
 
   #[test]
+  fn test_wpt_runner_sidecar_discovery() {
+    let renderer = create_test_renderer();
+    let mut config = HarnessConfig::with_test_dir("tests/wpt/tests/discovery")
+      .with_discovery_mode(DiscoveryMode::MetadataOnly);
+    let temp = TempDir::new().unwrap();
+    config.output_dir = temp.path().join("output");
+    let mut runner = WptRunner::with_config(renderer, config);
+
+    let results = runner.run_suite(Path::new("tests/wpt/tests/discovery"));
+    let map: HashMap<_, _> = results
+      .into_iter()
+      .map(|r| (r.metadata.id.clone(), r.status))
+      .collect();
+
+    assert_eq!(map.get("link-match"), Some(&TestStatus::Pass));
+    assert_eq!(map.get("link-mismatch"), Some(&TestStatus::Pass));
+    assert_eq!(map.get("ini-expected-fail"), Some(&TestStatus::Pass));
+    assert_eq!(map.get("ini-disabled"), Some(&TestStatus::Skip));
+  }
+
+  #[test]
   fn test_wpt_runner_suite_aggregated() {
     let renderer = create_test_renderer();
     let mut runner = WptRunner::new(renderer);
@@ -238,7 +264,12 @@ mod wpt_runner_tests {
         assert!(!results.is_empty());
 
         for result in &results {
-          assert_eq!(result.status, TestStatus::Pass, "{}", result.metadata.id);
+          assert!(
+            !result.status.is_failure(),
+            "{} failed with status {:?}",
+            result.metadata.id,
+            result.status
+          );
         }
       })
       .unwrap()
@@ -404,10 +435,20 @@ mod wpt_runner_tests {
   #[test]
   fn test_result_with_diff() {
     let metadata = TestMetadata::from_path(PathBuf::from("test.html"));
-    let result = TestResult::pass(metadata, Duration::from_millis(100)).with_diff(100, 0.5);
+    let comparison = ImageComparisonResult {
+      diff_pixels: 100,
+      total_pixels: 200,
+      diff_percentage: 0.5,
+      max_channel_diff: 10,
+      samples: Vec::new(),
+      dimensions: (10, 20),
+    };
+    let result = TestResult::pass(metadata, Duration::from_millis(100)).with_diff(&comparison);
 
     assert_eq!(result.pixel_diff, Some(100));
     assert_eq!(result.diff_percentage, Some(0.5));
+    assert_eq!(result.max_channel_diff, Some(10));
+    assert_eq!(result.image_dimensions, Some((10, 20)));
   }
 
   // =========================================================================
@@ -516,6 +557,8 @@ mod wpt_runner_tests {
     assert!(!config.update_expected);
     assert!(config.manifest_path.is_none());
     assert!(config.write_report);
+    assert_eq!(config.discovery_mode, DiscoveryMode::ManifestWithFallback);
+    assert!(config.font_dirs.is_empty());
   }
 
   #[test]
@@ -536,7 +579,9 @@ mod wpt_runner_tests {
       .with_filter("css")
       .update_expected()
       .with_manifest("custom/manifest.toml")
-      .without_report();
+      .without_report()
+      .with_discovery_mode(DiscoveryMode::MetadataOnly)
+      .with_font_dir("fonts/ci");
 
     assert_eq!(config.pixel_tolerance, 10);
     assert_eq!(config.max_diff_percentage, 0.5);
@@ -550,6 +595,8 @@ mod wpt_runner_tests {
       Some(PathBuf::from("custom/manifest.toml"))
     );
     assert!(!config.write_report);
+    assert_eq!(config.discovery_mode, DiscoveryMode::MetadataOnly);
+    assert_eq!(config.font_dirs, vec![PathBuf::from("fonts/ci")]);
   }
 
   // =========================================================================

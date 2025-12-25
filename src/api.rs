@@ -3577,6 +3577,18 @@ impl FastRender {
     self.image_cache.set_base_url(base);
   }
 
+  /// Replaces the font context used for layout and painting.
+  ///
+  /// This is primarily used by test harnesses to install a deterministic set
+  /// of fonts in CI environments.
+  pub fn set_font_context(&mut self, font_context: FontContext) {
+    self.font_context = font_context.clone();
+    let mut config = self.layout_engine.config().clone();
+    config.initial_containing_block.width = self.default_width as f32;
+    config.initial_containing_block.height = self.default_height as f32;
+    self.layout_engine = LayoutEngine::with_font_context(config, font_context);
+  }
+
   /// Overrides the device pixel ratio for subsequent renders.
   ///
   /// This is primarily used by test harnesses that need to vary DPR per test case.

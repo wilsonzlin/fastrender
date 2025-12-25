@@ -34,8 +34,6 @@
 //!                 └── margin-applies-to-002.png  # Expected image
 //! ```
 
-use fastrender::image_compare;
-pub use fastrender::image_compare::{CompareConfig, ImageDiff};
 use image::RgbaImage;
 use std::collections::HashMap;
 use std::fmt;
@@ -139,6 +137,15 @@ pub enum TestType {
   Crashtest,
 }
 
+/// Expectation for a reftest comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReftestExpectation {
+  /// The test render should match the reference.
+  Match,
+  /// The test render should differ from the reference.
+  Mismatch,
+}
+
 impl TestType {
   /// Parses test type from file metadata or naming convention
   pub fn from_path(path: &Path) -> Self {
@@ -169,6 +176,8 @@ pub struct TestMetadata {
   pub test_type: TestType,
   /// Optional reference file for reftests
   pub reference_path: Option<PathBuf>,
+  /// Whether a reftest should match or intentionally mismatch its reference.
+  pub reftest_expectation: ReftestExpectation,
   /// Expected result (for tests marked as expected fail)
   pub expected_status: Option<TestStatus>,
   /// Test timeout in milliseconds
@@ -211,6 +220,7 @@ impl TestMetadata {
       path,
       test_type,
       reference_path,
+      reftest_expectation: ReftestExpectation::Match,
       expected_status: None,
       timeout_ms: 30000, // 30 second default timeout
       disabled: false,
@@ -298,12 +308,12 @@ pub struct TestResult {
   pub pixel_diff: Option<u64>,
   /// Difference percentage (0.0 to 100.0)
   pub diff_percentage: Option<f64>,
-  /// Perceptual distance (0.0 identical)
-  pub perceptual_distance: Option<f64>,
-  /// Perceptual similarity score (1.0 identical)
-  pub perceptual_similarity: Option<f64>,
-  /// Diff image encoded as PNG (if generated)
-  pub diff_image: Option<Vec<u8>>,
+  /// Maximum per-channel difference encountered
+  pub max_channel_diff: Option<u8>,
+  /// Sample of differing pixels
+  pub diff_samples: Vec<PixelMismatch>,
+  /// Dimensions of the compared images
+  pub image_dimensions: Option<(u32, u32)>,
 }
 
 impl TestResult {
@@ -319,9 +329,9 @@ impl TestResult {
       expected_image: None,
       pixel_diff: None,
       diff_percentage: None,
-      perceptual_distance: None,
-      perceptual_similarity: None,
-      diff_image: None,
+      max_channel_diff: None,
+      diff_samples: Vec::new(),
+      image_dimensions: None,
     }
   }
 
@@ -338,9 +348,9 @@ impl TestResult {
       expected_image: None,
       pixel_diff: None,
       diff_percentage: None,
-      perceptual_distance: None,
-      perceptual_similarity: None,
-      diff_image: None,
+      max_channel_diff: None,
+      diff_samples: Vec::new(),
+      image_dimensions: None,
     }
   }
 
@@ -357,9 +367,9 @@ impl TestResult {
       expected_image: None,
       pixel_diff: None,
       diff_percentage: None,
-      perceptual_distance: None,
-      perceptual_similarity: None,
-      diff_image: None,
+      max_channel_diff: None,
+      diff_samples: Vec::new(),
+      image_dimensions: None,
     }
   }
 
@@ -375,9 +385,9 @@ impl TestResult {
       expected_image: None,
       pixel_diff: None,
       diff_percentage: None,
-      perceptual_distance: None,
-      perceptual_similarity: None,
-      diff_image: None,
+      max_channel_diff: None,
+      diff_samples: Vec::new(),
+      image_dimensions: None,
     }
   }
 
@@ -393,9 +403,9 @@ impl TestResult {
       expected_image: None,
       pixel_diff: None,
       diff_percentage: None,
-      perceptual_distance: None,
-      perceptual_similarity: None,
-      diff_image: None,
+      max_channel_diff: None,
+      diff_samples: Vec::new(),
+      image_dimensions: None,
     }
   }
 
@@ -406,22 +416,13 @@ impl TestResult {
     self
   }
 
-  /// Attaches pixel-diff statistics without perceptual metrics.
-  pub fn with_diff(mut self, pixel_diff: u64, diff_percentage: f64) -> Self {
-    self.pixel_diff = Some(pixel_diff);
-    self.diff_percentage = Some(diff_percentage);
-    self
-  }
-
-  /// Sets comparison metrics from an image diff result.
-  pub fn with_comparison(mut self, diff: &ImageDiff) -> Self {
-    self.pixel_diff = Some(diff.statistics.different_pixels);
-    self.diff_percentage = Some(diff.statistics.different_percent);
-    self.perceptual_distance = Some(diff.statistics.perceptual_distance);
-    self.perceptual_similarity = Some(diff.statistics.perceptual_similarity);
-    if let Ok(Some(png)) = diff.diff_png() {
-      self.diff_image = Some(png);
-    }
+  /// Sets the pixel difference information
+  pub fn with_diff(mut self, comparison: &ImageComparisonResult) -> Self {
+    self.pixel_diff = Some(comparison.diff_pixels);
+    self.diff_percentage = Some(comparison.diff_percentage);
+    self.max_channel_diff = Some(comparison.max_channel_diff);
+    self.diff_samples = comparison.samples.clone();
+    self.image_dimensions = Some(comparison.dimensions);
     self
   }
 }
@@ -554,10 +555,6 @@ pub struct HarnessConfig {
   pub pixel_tolerance: u8,
   /// Maximum allowed percentage difference
   pub max_diff_percentage: f64,
-  /// Whether to compare alpha channel
-  pub compare_alpha: bool,
-  /// Optional perceptual distance threshold (0.0 identical)
-  pub max_perceptual_distance: Option<f64>,
   /// Default timeout in milliseconds
   pub default_timeout_ms: u64,
   /// Whether to fail fast on first failure
@@ -574,6 +571,27 @@ pub struct HarnessConfig {
   pub manifest_path: Option<PathBuf>,
   /// Whether to emit a human-readable report
   pub write_report: bool,
+  /// Test discovery strategy
+  pub discovery_mode: DiscoveryMode,
+  /// Optional font directories used to seed the renderer for deterministic output
+  pub font_dirs: Vec<PathBuf>,
+}
+
+/// Modes for discovering tests under the WPT tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryMode {
+  /// Prefer a manifest when present but fall back to filesystem discovery.
+  ManifestWithFallback,
+  /// Only honor manifests; skip automatic discovery.
+  ManifestOnly,
+  /// Ignore manifests and rely solely on filesystem discovery.
+  MetadataOnly,
+}
+
+impl Default for DiscoveryMode {
+  fn default() -> Self {
+    DiscoveryMode::ManifestWithFallback
+  }
 }
 
 impl Default for HarnessConfig {
@@ -586,8 +604,6 @@ impl Default for HarnessConfig {
       save_diffs: true,
       pixel_tolerance: 0,
       max_diff_percentage: 0.0,
-      compare_alpha: true,
-      max_perceptual_distance: None,
       default_timeout_ms: 30000,
       fail_fast: false,
       parallel: false,
@@ -596,6 +612,8 @@ impl Default for HarnessConfig {
       filter: None,
       manifest_path: None,
       write_report: true,
+      discovery_mode: DiscoveryMode::default(),
+      font_dirs: Vec::new(),
     }
   }
 }
@@ -625,29 +643,6 @@ impl HarnessConfig {
   pub fn with_max_diff(mut self, max_diff: f64) -> Self {
     self.max_diff_percentage = max_diff;
     self
-  }
-
-  /// Disables alpha comparison.
-  pub fn without_alpha(mut self) -> Self {
-    self.compare_alpha = false;
-    self
-  }
-
-  /// Sets a perceptual distance threshold (0.0 identical).
-  pub fn with_perceptual_distance(mut self, distance: f64) -> Self {
-    self.max_perceptual_distance = Some(distance);
-    self
-  }
-
-  /// Builds an image comparison config from the harness settings.
-  pub fn comparison_config(&self) -> CompareConfig {
-    let mut config = CompareConfig::strict()
-      .with_channel_tolerance(self.pixel_tolerance)
-      .with_max_different_percent(self.max_diff_percentage)
-      .with_compare_alpha(self.compare_alpha)
-      .with_max_perceptual_distance(self.max_perceptual_distance);
-    config.generate_diff_image = self.save_diffs || self.write_report;
-    config
   }
 
   /// Enables fail-fast mode
@@ -686,6 +681,18 @@ impl HarnessConfig {
     self.write_report = false;
     self
   }
+
+  /// Sets the discovery mode (manifest vs. metadata)
+  pub fn with_discovery_mode(mut self, mode: DiscoveryMode) -> Self {
+    self.discovery_mode = mode;
+    self
+  }
+
+  /// Adds a font directory to seed the renderer with deterministic fonts.
+  pub fn with_font_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+    self.font_dirs.push(dir.into());
+    self
+  }
 }
 
 /// Compares two images and returns the difference metrics.
@@ -693,12 +700,138 @@ impl HarnessConfig {
 /// # Returns
 ///
 /// Tuple of (different_pixels, total_pixels, diff_percentage)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PixelMismatch {
+  /// X coordinate of the differing pixel
+  pub x: u32,
+  /// Y coordinate of the differing pixel
+  pub y: u32,
+  /// Absolute per-channel differences (RGBA)
+  pub delta: [u8; 4],
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageComparisonResult {
+  /// Number of pixels that differ beyond tolerance
+  pub diff_pixels: u64,
+  /// Total pixels compared
+  pub total_pixels: u64,
+  /// Percentage of differing pixels
+  pub diff_percentage: f64,
+  /// Maximum absolute difference observed across all channels
+  pub max_channel_diff: u8,
+  /// Sample of first few differing pixels with coordinates and deltas
+  pub samples: Vec<PixelMismatch>,
+  /// Dimensions of the compared images
+  pub dimensions: (u32, u32),
+}
+
+impl ImageComparisonResult {
+  pub fn is_match(&self, threshold: f64) -> bool {
+    self.diff_percentage <= threshold
+  }
+}
+
 pub fn compare_images(
   rendered: &[u8],
   expected: &[u8],
-  config: &CompareConfig,
-) -> Result<ImageDiff, String> {
-  image_compare::compare_png(rendered, expected, config).map_err(|e| e.to_string())
+  tolerance: u8,
+  max_diff_percentage: Option<f64>,
+) -> Result<ImageComparisonResult, String> {
+  // Decode PNG images
+  let rendered_img =
+    decode_png(rendered).map_err(|e| format!("Failed to decode rendered image: {}", e))?;
+  let expected_img =
+    decode_png(expected).map_err(|e| format!("Failed to decode expected image: {}", e))?;
+
+  // Check dimensions match
+  let (rendered_width, rendered_height) = rendered_img.dimensions();
+  let (expected_width, expected_height) = expected_img.dimensions();
+  if rendered_width != expected_width || rendered_height != expected_height {
+    return Err(format!(
+      "Image dimensions differ: rendered {}x{}, expected {}x{}",
+      rendered_width, rendered_height, expected_width, expected_height
+    ));
+  }
+
+  let total_pixels = (rendered_width as u64) * (rendered_height as u64);
+  let mut diff_pixels = 0u64;
+  let mut max_channel_diff = 0u8;
+  let mut samples = Vec::new();
+  const SAMPLE_LIMIT: usize = 5;
+
+  // Precompute allowed differing pixels for early exit if threshold provided and > 0.
+  let stop_after = match max_diff_percentage {
+    Some(max_pct) if max_pct > 0.0 => {
+      let allowed = ((max_pct / 100.0) * total_pixels as f64).ceil() as u64;
+      Some(allowed)
+    }
+    _ => None,
+  };
+
+  let tolerance = tolerance as i16;
+  let rendered_data = rendered_img.as_raw();
+  let expected_data = expected_img.as_raw();
+
+  for (idx, (rendered_px, expected_px)) in rendered_data
+    .chunks_exact(4)
+    .zip(expected_data.chunks_exact(4))
+    .enumerate()
+  {
+    let mut channel_diffs = [0u8; 4];
+    let differs =
+      rendered_px
+        .iter()
+        .zip(expected_px.iter())
+        .enumerate()
+        .any(|(channel, (&r, &e))| {
+          let delta = (r as i16 - e as i16).abs();
+          channel_diffs[channel] = delta as u8;
+          delta > tolerance
+        });
+
+    if differs {
+      diff_pixels += 1;
+      if let Some(local_max) = channel_diffs.iter().max() {
+        max_channel_diff = max_channel_diff.max(*local_max);
+      }
+      if samples.len() < SAMPLE_LIMIT {
+        let x = (idx as u32) % rendered_width;
+        let y = (idx as u32) / rendered_width;
+        samples.push(PixelMismatch {
+          x,
+          y,
+          delta: channel_diffs,
+        });
+      }
+
+      if let Some(limit) = stop_after {
+        if diff_pixels > limit {
+          break;
+        }
+      }
+    }
+  }
+
+  let diff_percentage = if total_pixels == 0 {
+    0.0
+  } else {
+    (diff_pixels as f64 / total_pixels as f64) * 100.0
+  };
+
+  Ok(ImageComparisonResult {
+    diff_pixels,
+    total_pixels,
+    diff_percentage,
+    max_channel_diff,
+    samples,
+    dimensions: (rendered_width, rendered_height),
+  })
+}
+
+/// Decodes a PNG image from bytes into an RGBA buffer
+fn decode_png(data: &[u8]) -> Result<RgbaImage, image::ImageError> {
+  image::load_from_memory_with_format(data, image::ImageFormat::Png).map(|img| img.to_rgba8())
 }
 
 /// Generates a visual diff image between two images
@@ -715,15 +848,11 @@ pub fn compare_images(
 pub fn generate_diff_image(
   rendered: &[u8],
   expected: &[u8],
-  config: &CompareConfig,
+  tolerance: u8,
 ) -> Result<Vec<u8>, String> {
-  let mut config = config.clone();
-  config.generate_diff_image = true;
-  let diff = compare_images(rendered, expected, &config)?;
-  diff
-    .diff_png()
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| "Diff image not available".to_string())
+  fastrender::image_output::diff_png(rendered, expected, tolerance)
+    .map(|(_, diff)| diff)
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -932,12 +1061,12 @@ mod tests {
     let config = HarnessConfig::default();
     assert_eq!(config.pixel_tolerance, 0);
     assert_eq!(config.max_diff_percentage, 0.0);
-    assert!(config.compare_alpha);
-    assert!(config.max_perceptual_distance.is_none());
     assert!(!config.fail_fast);
     assert!(!config.parallel);
     assert!(config.manifest_path.is_none());
     assert!(config.write_report);
+    assert_eq!(config.discovery_mode, DiscoveryMode::ManifestWithFallback);
+    assert!(config.font_dirs.is_empty());
   }
 
   #[test]
@@ -945,25 +1074,25 @@ mod tests {
     let config = HarnessConfig::with_test_dir("custom/tests")
       .with_tolerance(5)
       .with_max_diff(0.5)
-      .without_alpha()
-      .with_perceptual_distance(0.2)
       .fail_fast()
       .parallel(8)
       .with_filter("css")
       .with_manifest("manifest.json")
-      .without_report();
+      .without_report()
+      .with_discovery_mode(DiscoveryMode::MetadataOnly)
+      .with_font_dir("fonts/ci");
 
     assert_eq!(config.test_dir, PathBuf::from("custom/tests"));
     assert_eq!(config.pixel_tolerance, 5);
     assert_eq!(config.max_diff_percentage, 0.5);
-    assert!(!config.compare_alpha);
-    assert_eq!(config.max_perceptual_distance, Some(0.2));
     assert!(config.fail_fast);
     assert!(config.parallel);
     assert_eq!(config.workers, 8);
     assert_eq!(config.filter, Some("css".to_string()));
     assert_eq!(config.manifest_path, Some(PathBuf::from("manifest.json")));
     assert!(!config.write_report);
+    assert_eq!(config.discovery_mode, DiscoveryMode::MetadataOnly);
+    assert_eq!(config.font_dirs, vec![PathBuf::from("fonts/ci")]);
   }
 
   #[test]
@@ -993,11 +1122,14 @@ mod tests {
   #[test]
   fn test_compare_images_identical() {
     let png = solid_png(2, 2, [10, 20, 30, 255]);
-    let diff = compare_images(&png, &png, &CompareConfig::strict()).unwrap();
+    let comparison = compare_images(&png, &png, 0, None).unwrap();
 
-    assert_eq!(diff.statistics.different_pixels, 0);
-    assert_eq!(diff.statistics.total_pixels, 4);
-    assert_eq!(diff.statistics.different_percent, 0.0);
+    assert_eq!(comparison.diff_pixels, 0);
+    assert_eq!(comparison.total_pixels, 4);
+    assert_eq!(comparison.diff_percentage, 0.0);
+    assert_eq!(comparison.max_channel_diff, 0);
+    assert_eq!(comparison.dimensions, (2, 2));
+    assert!(comparison.samples.is_empty());
   }
 
   #[test]
@@ -1008,11 +1140,16 @@ mod tests {
     let expected_png = solid_png(2, 2, [0, 0, 0, 255]);
     let rendered_png = encode_png(&rendered_img);
 
-    let diff = compare_images(&rendered_png, &expected_png, &CompareConfig::strict()).unwrap();
+    let comparison = compare_images(&rendered_png, &expected_png, 0, None).unwrap();
 
-    assert_eq!(diff.statistics.different_pixels, 1);
-    assert_eq!(diff.statistics.total_pixels, 4);
-    assert!((diff.statistics.different_percent - 25.0).abs() < f64::EPSILON);
+    assert_eq!(comparison.diff_pixels, 1);
+    assert_eq!(comparison.total_pixels, 4);
+    assert_eq!(comparison.max_channel_diff, 255);
+    assert!((comparison.diff_percentage - 25.0).abs() < f64::EPSILON);
+    assert_eq!(comparison.samples.len(), 1);
+    let sample = &comparison.samples[0];
+    assert_eq!((sample.x, sample.y), (1, 1));
+    assert!(sample.delta.iter().any(|d| *d > 0));
   }
 
   #[test]
@@ -1023,11 +1160,11 @@ mod tests {
     rendered_img.put_pixel(0, 0, Rgba([12, 10, 10, 255]));
     let rendered_png = encode_png(&rendered_img);
 
-    let config = CompareConfig::strict().with_channel_tolerance(5);
-    let diff = compare_images(&rendered_png, &expected_png, &config).unwrap();
+    let comparison = compare_images(&rendered_png, &expected_png, 5, None).unwrap();
 
-    assert_eq!(diff.statistics.different_pixels, 0);
-    assert_eq!(diff.statistics.different_percent, 0.0);
+    assert_eq!(comparison.diff_pixels, 0);
+    assert_eq!(comparison.diff_percentage, 0.0);
+    assert_eq!(comparison.max_channel_diff, 0);
   }
 
   #[test]
@@ -1035,8 +1172,8 @@ mod tests {
     let small = solid_png(1, 1, [0, 0, 0, 255]);
     let large = solid_png(2, 1, [0, 0, 0, 255]);
 
-    let diff = compare_images(&small, &large, &CompareConfig::strict()).unwrap();
-    assert!(!diff.dimensions_match);
+    let err = compare_images(&small, &large, 0, None).unwrap_err();
+    assert!(err.contains("dimensions differ"));
   }
 
   #[test]
@@ -1044,8 +1181,8 @@ mod tests {
     let rendered = solid_png(1, 1, [255, 255, 255, 255]);
     let expected = solid_png(1, 1, [0, 0, 0, 255]);
 
-    let diff_png = generate_diff_image(&rendered, &expected, &CompareConfig::strict()).unwrap();
-    let diff_image = image_compare::decode_png(&diff_png).unwrap();
+    let diff_png = generate_diff_image(&rendered, &expected, 0).unwrap();
+    let diff_image = decode_png(&diff_png).unwrap();
 
     assert_eq!(diff_image.dimensions(), (1, 1));
     assert_eq!(*diff_image.get_pixel(0, 0), Rgba([255, 0, 0, 255]));
@@ -1062,12 +1199,14 @@ mod tests {
     }
     let rendered = encode_png(&rendered_img);
 
-    let full_diff = compare_images(&rendered, &expected, &CompareConfig::strict()).unwrap();
-    assert_eq!(full_diff.statistics.different_pixels, 5);
+    let full = compare_images(&rendered, &expected, 0, None).unwrap();
+    assert_eq!(full.diff_pixels, 5);
 
-    let limited_config = CompareConfig::strict().with_max_different_percent(10.0);
-    let limited = compare_images(&rendered, &expected, &limited_config).unwrap();
-    assert!(!limited.is_match());
-    assert!(limited.statistics.different_percent > 10.0);
+    // With a 10% max diff threshold (ceil(0.1 * 9) = 1 allowed), we should early exit
+    // once we exceed the allowance. The reported diff count may be lower than the true
+    // count but must still exceed the threshold percentage.
+    let limited = compare_images(&rendered, &expected, 0, Some(10.0)).unwrap();
+    assert!(limited.diff_pixels <= full.diff_pixels);
+    assert!(limited.diff_percentage > 10.0);
   }
 }

@@ -44,18 +44,31 @@
 
 use super::harness::compare_images;
 use super::harness::generate_diff_image;
+use super::harness::DiscoveryMode;
 use super::harness::HarnessConfig;
+use super::harness::ImageComparisonResult;
+use super::harness::ReftestExpectation;
 use super::harness::SuiteResult;
 use super::harness::TestMetadata;
 use super::harness::TestResult;
 use super::harness::TestStatus;
 use super::harness::TestType;
+use fastrender::text::font_db::FontDatabase;
+use fastrender::text::font_loader::FontContext;
+use html5ever::parse_document;
+use html5ever::tendril::TendrilSink;
+use image::codecs::png::PngEncoder;
+use image::{ColorType, ImageEncoder, Rgba, RgbaImage};
+use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use rayon::prelude::*;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -134,8 +147,34 @@ struct ManifestViewport {
   height: u32,
 }
 
+#[derive(Debug, Default)]
+struct IniMetadata {
+  expected: Option<TestStatus>,
+  timeout_ms: Option<u64>,
+  disabled: Option<String>,
+  viewport: Option<(u32, u32)>,
+  dpr: Option<f32>,
+  test_type: Option<TestType>,
+  reference: Option<PathBuf>,
+  reftest_expectation: Option<ReftestExpectation>,
+}
+
+impl IniMetadata {
+  fn is_empty(&self) -> bool {
+    self.expected.is_none()
+      && self.timeout_ms.is_none()
+      && self.disabled.is_none()
+      && self.viewport.is_none()
+      && self.dpr.is_none()
+      && self.test_type.is_none()
+      && self.reference.is_none()
+      && self.reftest_expectation.is_none()
+  }
+}
+
 #[derive(Debug, Clone)]
 struct ArtifactPaths {
+  base: PathBuf,
   actual: PathBuf,
   diff: PathBuf,
   expected: PathBuf,
@@ -285,6 +324,7 @@ impl WptRunner {
   /// );
   /// ```
   pub fn run_suite(&mut self, suite_dir: &Path) -> Vec<TestResult> {
+    self.apply_font_overrides();
     let test_cases = self.discover_tests(suite_dir);
     let mut results = if self.config.parallel && !self.config.fail_fast {
       self.run_tests_parallel(test_cases)
@@ -329,9 +369,7 @@ impl WptRunner {
 
   fn record_result(&mut self, result: &TestResult) {
     self.stats.record(result);
-    if self.config.save_rendered || (self.config.save_diffs && result.status == TestStatus::Fail) {
-      self.save_artifact(result);
-    }
+    self.save_artifact(result);
   }
 
   fn run_tests_sequential(&mut self, tests: Vec<TestMetadata>) -> Vec<TestResult> {
@@ -377,6 +415,7 @@ impl WptRunner {
             }
           };
 
+          Self::apply_font_overrides_to_renderer(&config, &mut renderer);
           Self::execute_test(&config, &mut renderer, metadata)
         })
         .collect()
@@ -384,10 +423,33 @@ impl WptRunner {
   }
 
   fn discover_tests(&self, suite_dir: &Path) -> Vec<TestMetadata> {
-    if let Some(manifest) = self.manifest_path_for_suite(suite_dir) {
-      if let Ok(entries) = self.load_manifest(&manifest, suite_dir) {
-        return entries;
+    let manifest = if matches!(
+      self.config.discovery_mode,
+      DiscoveryMode::ManifestOnly | DiscoveryMode::ManifestWithFallback
+    ) {
+      self
+        .manifest_path_for_suite(suite_dir)
+        .and_then(|path| self.load_manifest(&path, suite_dir).ok())
+    } else {
+      None
+    };
+
+    if let Some(mut entries) = manifest {
+      if self.config.discovery_mode == DiscoveryMode::ManifestWithFallback {
+        let discovered = self.collect_tests(suite_dir);
+        let existing: HashSet<PathBuf> = entries.iter().map(|m| m.path.clone()).collect();
+        for test in discovered {
+          if !existing.contains(&test.path) {
+            entries.push(test);
+          }
+        }
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
       }
+      return entries;
+    }
+
+    if self.config.discovery_mode == DiscoveryMode::ManifestOnly {
+      return Vec::new();
     }
 
     self.collect_tests(suite_dir)
@@ -414,6 +476,35 @@ impl WptRunner {
     ];
 
     candidates.into_iter().flatten().find(|path| path.exists())
+  }
+
+  fn apply_font_overrides(&mut self) {
+    Self::apply_font_overrides_to_renderer(&self.config, &mut self.renderer);
+  }
+
+  fn apply_font_overrides_to_renderer(
+    config: &HarnessConfig,
+    renderer: &mut fastrender::FastRender,
+  ) {
+    if config.font_dirs.is_empty() {
+      return;
+    }
+
+    let mut db = FontDatabase::empty();
+    for dir in &config.font_dirs {
+      db.load_fonts_dir(dir);
+    }
+
+    if db.font_count() == 0 {
+      eprintln!(
+        "No fonts loaded from configured directories: {:?}",
+        config.font_dirs
+      );
+      return;
+    }
+
+    let font_context = FontContext::with_database(Arc::new(db));
+    renderer.set_font_context(font_context);
   }
 
   fn load_manifest(
@@ -492,6 +583,8 @@ impl WptRunner {
       metadata = metadata.disable(reason);
     }
 
+    self.apply_sidecar_metadata(&mut metadata);
+
     metadata
   }
 
@@ -512,6 +605,7 @@ impl WptRunner {
             metadata.timeout_ms = self.config.default_timeout_ms;
           }
           metadata.id = Self::test_id_for_path(&metadata.path, &self.config.test_dir);
+          self.apply_sidecar_metadata(&mut metadata);
           tests.push(metadata);
         } else if path.is_dir() {
           // Recursively collect from subdirectories
@@ -523,6 +617,236 @@ impl WptRunner {
     // Sort for deterministic ordering
     tests.sort_by(|a, b| a.path.cmp(&b.path));
     tests
+  }
+
+  fn apply_sidecar_metadata(&self, metadata: &mut TestMetadata) {
+    if let Some(ini_path) = Self::ini_metadata_path(&metadata.path) {
+      if let Ok(Some(ini)) = self.parse_ini_metadata(&ini_path, metadata) {
+        self.apply_ini_overrides(metadata, ini);
+      }
+    }
+
+    if let Some((reference, expectation)) = Self::discover_reference_from_html(&metadata.path) {
+      metadata.reference_path = Some(reference);
+      metadata.reftest_expectation = expectation;
+      metadata.test_type = TestType::Reftest;
+    }
+
+    if metadata.timeout_ms == 0 {
+      metadata.timeout_ms = self.config.default_timeout_ms;
+    }
+  }
+
+  fn ini_metadata_path(test_path: &Path) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    candidates.push(test_path.with_extension("ini"));
+    if let Some(ext) = test_path.extension().and_then(|e| e.to_str()) {
+      candidates.push(test_path.with_extension(format!("{ext}.ini")));
+    }
+    candidates.into_iter().find(|p| p.exists())
+  }
+
+  fn ini_section_names(&self, metadata: &TestMetadata) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(filename) = metadata.path.file_name().and_then(|n| n.to_str()) {
+      names.push(filename.to_string());
+    }
+    names.push(format!("{}.html", metadata.id));
+    if let Ok(relative) = metadata.path.strip_prefix(&self.config.test_dir) {
+      names.push(relative.to_string_lossy().replace('\\', "/"));
+    }
+    names
+  }
+
+  fn parse_ini_metadata(
+    &self,
+    ini_path: &Path,
+    metadata: &TestMetadata,
+  ) -> Result<Option<IniMetadata>, String> {
+    let content = fs::read_to_string(ini_path)
+      .map_err(|e| format!("Failed to read ini {:?}: {}", ini_path, e))?;
+
+    let mut ini = IniMetadata::default();
+    let mut in_section = false;
+    let mut saw_section = false;
+    let sections = self.ini_section_names(metadata);
+
+    for raw_line in content.lines() {
+      let line = raw_line.trim();
+      if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+        continue;
+      }
+
+      if line.starts_with('[') && line.ends_with(']') {
+        saw_section = true;
+        let section = line.trim_start_matches('[').trim_end_matches(']').trim();
+        in_section = sections
+          .iter()
+          .any(|name| name.eq_ignore_ascii_case(section));
+        continue;
+      }
+
+      if saw_section && !in_section {
+        continue;
+      }
+
+      let Some((raw_key, raw_value)) = line
+        .split_once(':')
+        .or_else(|| line.split_once('='))
+        .map(|(k, v)| (k.trim(), v.trim()))
+      else {
+        continue;
+      };
+
+      let key = raw_key.to_ascii_lowercase();
+      match key.as_str() {
+        "expected" => ini.expected = Some(Self::parse_expected_status(raw_value)),
+        "disabled" | "skip" => {
+          let reason = if raw_value.is_empty() {
+            "Disabled via metadata"
+          } else {
+            raw_value
+          };
+          ini.disabled = Some(reason.to_string());
+        }
+        "timeout" => {
+          ini.timeout_ms = Some(if raw_value.eq_ignore_ascii_case("long") {
+            60000
+          } else {
+            raw_value.parse().unwrap_or(self.config.default_timeout_ms)
+          });
+        }
+        "viewport" => {
+          if let Some((w, h)) = Self::parse_viewport(raw_value) {
+            ini.viewport = Some((w, h));
+          }
+        }
+        "dpr" | "device-pixel-ratio" => {
+          if let Ok(dpr) = raw_value.parse::<f32>() {
+            ini.dpr = Some(dpr);
+          }
+        }
+        "type" | "test_type" => {
+          ini.test_type = Some(Self::parse_test_type_from_manifest(
+            raw_value,
+            &metadata.path,
+          ));
+        }
+        "reference" | "ref" => {
+          let base = metadata.path.parent().unwrap_or_else(|| Path::new("."));
+          ini.reference = Some(base.join(raw_value));
+        }
+        "reftest" => {
+          if raw_value.eq_ignore_ascii_case("mismatch") {
+            ini.reftest_expectation = Some(ReftestExpectation::Mismatch);
+          } else if raw_value.eq_ignore_ascii_case("match") {
+            ini.reftest_expectation = Some(ReftestExpectation::Match);
+          }
+        }
+        _ => {}
+      }
+    }
+
+    if ini.is_empty() {
+      Ok(None)
+    } else {
+      Ok(Some(ini))
+    }
+  }
+
+  fn apply_ini_overrides(&self, metadata: &mut TestMetadata, ini: IniMetadata) {
+    if let Some(expected) = ini.expected {
+      metadata.expected_status = Some(expected);
+    }
+    if let Some(timeout) = ini.timeout_ms {
+      metadata.timeout_ms = timeout;
+    }
+    if let Some(reason) = ini.disabled {
+      metadata.disabled = true;
+      metadata.disabled_reason = Some(reason);
+    }
+    if let Some((w, h)) = ini.viewport {
+      metadata.viewport_width = w;
+      metadata.viewport_height = h;
+    }
+    if let Some(dpr) = ini.dpr {
+      metadata.device_pixel_ratio = dpr;
+    }
+    if let Some(kind) = ini.test_type {
+      metadata.test_type = kind;
+    }
+    if let Some(reference) = ini.reference {
+      metadata.reference_path = Some(reference);
+      metadata.test_type = TestType::Reftest;
+    }
+    if let Some(expectation) = ini.reftest_expectation {
+      metadata.reftest_expectation = expectation;
+    }
+  }
+
+  fn parse_viewport(raw: &str) -> Option<(u32, u32)> {
+    let parts: Vec<&str> = raw.split(['x', 'X']).collect();
+    if parts.len() != 2 {
+      return None;
+    }
+    let width = parts.get(0)?.trim().parse().ok()?;
+    let height = parts.get(1)?.trim().parse().ok()?;
+    Some((width, height))
+  }
+
+  fn discover_reference_from_html(test_path: &Path) -> Option<(PathBuf, ReftestExpectation)> {
+    let Ok(content) = fs::read_to_string(test_path) else {
+      return None;
+    };
+
+    let mut bytes = content.as_bytes();
+    let dom = parse_document(RcDom::default(), Default::default())
+      .from_utf8()
+      .read_from(&mut bytes)
+      .ok()?;
+
+    let link = Self::find_reftest_link(dom.document)?;
+    let base = test_path.parent().unwrap_or_else(|| Path::new("."));
+    Some((base.join(link.0), link.1))
+  }
+
+  fn find_reftest_link(handle: Handle) -> Option<(String, ReftestExpectation)> {
+    if let NodeData::Element {
+      ref name,
+      ref attrs,
+      ..
+    } = handle.data
+    {
+      if name.local.eq_ignore_ascii_case("link") {
+        let mut rel_value = None;
+        let mut href_value = None;
+        for attr in attrs.borrow().iter() {
+          if attr.name.local.eq_ignore_ascii_case("rel") {
+            rel_value = Some(attr.value.to_string());
+          } else if attr.name.local.eq_ignore_ascii_case("href") {
+            href_value = Some(attr.value.to_string());
+          }
+        }
+
+        if let (Some(rel), Some(href)) = (rel_value, href_value) {
+          for token in rel.split_whitespace() {
+            if token.eq_ignore_ascii_case("match") {
+              return Some((href, ReftestExpectation::Match));
+            }
+            if token.eq_ignore_ascii_case("mismatch") {
+              return Some((href, ReftestExpectation::Mismatch));
+            }
+          }
+        }
+      }
+    }
+
+    for child in handle.children.borrow().iter() {
+      if let Some(found) = Self::find_reftest_link(child.clone()) {
+        return Some(found);
+      }
+    }
+    None
   }
 
   /// Checks if a file is a test file
@@ -593,9 +917,12 @@ impl WptRunner {
       }
     }
 
-    if metadata.device_pixel_ratio > 0.0 {
-      renderer.set_device_pixel_ratio(metadata.device_pixel_ratio);
-    }
+    let dpr = if metadata.device_pixel_ratio > 0.0 {
+      metadata.device_pixel_ratio
+    } else {
+      1.0
+    };
+    renderer.set_device_pixel_ratio(dpr);
 
     let mut result = match metadata.test_type {
       TestType::Reftest => Self::run_reftest(renderer, &metadata, config, start),
@@ -750,7 +1077,17 @@ impl WptRunner {
           format!("Failed to save expected image: {}", e),
         );
       }
-      return TestResult::pass(metadata.clone(), start.elapsed());
+      let mut result = TestResult::pass(metadata.clone(), start.elapsed())
+        .with_images(rendered_image.clone(), rendered_image.clone());
+      if let Ok(comparison) = compare_images(
+        &rendered_image,
+        &rendered_image,
+        config.pixel_tolerance,
+        Some(0.0),
+      ) {
+        result = result.with_diff(&comparison);
+      }
+      return result;
     }
 
     let expected_image = match expected_image {
@@ -786,16 +1123,23 @@ impl WptRunner {
 
     // Try to render - success means no crash
     match Self::render_html(renderer, &test_html, metadata) {
-      Ok(_) => TestResult::pass(metadata.clone(), start.elapsed()),
-      Err(e) => {
-        // Rendering failed, but didn't crash - could be expected
-        // For crash tests, we only care that it doesn't panic
-        TestResult::error(
-          metadata.clone(),
-          start.elapsed(),
-          format!("Render error (not a crash): {}", e),
-        )
+      Ok(rendered) => {
+        let mut result = TestResult::pass(metadata.clone(), start.elapsed())
+          .with_images(rendered.clone(), rendered);
+        if let (Some(ref actual), Some(ref expected)) =
+          (&result.rendered_image, &result.expected_image)
+        {
+          if let Ok(comparison) = compare_images(actual, expected, 0, Some(0.0)) {
+            result = result.with_diff(&comparison);
+          }
+        }
+        result
       }
+      Err(e) => TestResult::error(
+        metadata.clone(),
+        start.elapsed(),
+        format!("Render error (not a crash): {}", e),
+      ),
     }
   }
 
@@ -819,45 +1163,96 @@ impl WptRunner {
     expected: Vec<u8>,
   ) -> TestResult {
     let duration = start.elapsed();
-    let compare_config = config.comparison_config();
 
-    match compare_images(&rendered, &expected, &compare_config) {
-      Ok(diff) => {
-        if diff.is_match() {
-          TestResult::pass(metadata.clone(), duration)
-            .with_images(rendered, expected)
-            .with_comparison(&diff)
-        } else if config.update_expected {
-          let expected_path = Self::get_expected_image_path(config, metadata);
-          if let Err(err) = Self::save_expected_image(&expected_path, &rendered) {
-            return TestResult::error(
-              metadata.clone(),
-              duration,
-              format!("Failed to update expected image: {err}"),
-            );
-          }
-
-          let mut result = TestResult::pass(metadata.clone(), duration)
-            .with_images(rendered, expected)
-            .with_comparison(&diff);
-          result.message = Some("Updated expected image".to_string());
-          result
-        } else {
-          TestResult::fail(
-            metadata.clone(),
-            duration,
-            format!("Image mismatch: {}", diff.summary()),
-          )
-          .with_images(rendered, expected)
-          .with_comparison(&diff)
-        }
+    let comparison = match compare_images(
+      &rendered,
+      &expected,
+      config.pixel_tolerance,
+      Some(config.max_diff_percentage),
+    ) {
+      Ok(result) => result,
+      Err(e) => {
+        return TestResult::error(
+          metadata.clone(),
+          duration,
+          format!("Comparison error: {}", e),
+        )
       }
-      Err(e) => TestResult::error(
-        metadata.clone(),
-        duration,
-        format!("Comparison error: {}", e),
-      ),
+    };
+
+    let should_match = metadata.reftest_expectation != ReftestExpectation::Mismatch;
+    let matches_expectation = if should_match {
+      comparison.is_match(config.max_diff_percentage)
+    } else {
+      comparison.diff_pixels > 0
+    };
+
+    if matches_expectation {
+      let mut result = TestResult::pass(metadata.clone(), duration)
+        .with_images(rendered, expected)
+        .with_diff(&comparison);
+      if !should_match {
+        result.message = Some("Mismatch reference differed as expected".to_string());
+      }
+      return result;
     }
+
+    if config.update_expected && should_match {
+      let expected_path = Self::get_expected_image_path(config, metadata);
+      if let Err(err) = Self::save_expected_image(&expected_path, &rendered) {
+        return TestResult::error(
+          metadata.clone(),
+          duration,
+          format!("Failed to update expected image: {err}"),
+        );
+      }
+
+      let mut result = TestResult::pass(metadata.clone(), duration)
+        .with_images(rendered, expected)
+        .with_diff(&comparison);
+      result.message = Some("Updated expected image".to_string());
+      return result;
+    }
+
+    let message =
+      Self::format_comparison_failure(&comparison, metadata.reftest_expectation, config);
+    TestResult::fail(metadata.clone(), duration, message)
+      .with_images(rendered, expected)
+      .with_diff(&comparison)
+  }
+
+  fn format_comparison_failure(
+    comparison: &ImageComparisonResult,
+    expectation: ReftestExpectation,
+    config: &HarnessConfig,
+  ) -> String {
+    let mut message = if expectation == ReftestExpectation::Mismatch {
+      "Mismatch expected but renders were identical".to_string()
+    } else {
+      format!(
+        "Image mismatch: {:.3}% difference ({} pixels, max channel diff {})",
+        comparison.diff_percentage, comparison.diff_pixels, comparison.max_channel_diff
+      )
+    };
+
+    if expectation == ReftestExpectation::Match && config.max_diff_percentage > 0.0 {
+      let _ = write!(
+        &mut message,
+        " (allowed ≤{:.3}% and tolerance {})",
+        config.max_diff_percentage, config.pixel_tolerance
+      );
+    }
+
+    if !comparison.samples.is_empty() {
+      let samples: Vec<String> = comparison
+        .samples
+        .iter()
+        .map(|s| format!("({}, {}): Δ{:?}", s.x, s.y, s.delta))
+        .collect();
+      let _ = write!(&mut message, "; first differences {}", samples.join(", "));
+    }
+
+    message
   }
 
   /// Gets the path for the expected image
@@ -881,26 +1276,14 @@ impl WptRunner {
     fs::write(path, image).map_err(|e| format!("Failed to write image: {}", e))
   }
 
-  fn relative_test_path(config: &HarnessConfig, metadata: &TestMetadata) -> PathBuf {
-    metadata
-      .path
-      .strip_prefix(&config.test_dir)
-      .map(|p| p.to_path_buf())
-      .unwrap_or_else(|_| metadata.path.clone())
-  }
-
   fn artifact_paths(config: &HarnessConfig, metadata: &TestMetadata) -> ArtifactPaths {
-    let relative = Self::relative_test_path(config, metadata);
-
-    let mut actual = config.output_dir.join(&relative);
-    actual.set_extension("actual.png");
-
-    let mut diff = config.output_dir.join(relative);
-    diff.set_extension("diff.png");
-
-    let expected = Self::get_expected_image_path(config, metadata);
+    let base = config.output_dir.join(&metadata.id);
+    let actual = base.join("actual.png");
+    let expected = base.join("expected.png");
+    let diff = base.join("diff.png");
 
     ArtifactPaths {
+      base,
       actual,
       diff,
       expected,
@@ -974,65 +1357,111 @@ impl WptRunner {
       return None;
     }
 
+    let counts = |status: TestStatus| results.iter().filter(|r| r.status == status).count();
     let total = results.len();
-    let passed = results
-      .iter()
-      .filter(|r| r.status == TestStatus::Pass)
-      .count();
-    let failed: Vec<&TestResult> = results.iter().filter(|r| r.status.is_failure()).collect();
+    let passed = counts(TestStatus::Pass);
+    let failed = results.iter().filter(|r| r.status.is_failure()).count();
+    let skipped = counts(TestStatus::Skip);
+    let suite_name = self
+      .config
+      .test_dir
+      .file_name()
+      .and_then(|s| s.to_str())
+      .unwrap_or("wpt");
 
-    let mut report = String::new();
-    let _ = writeln!(report, "# WPT run summary");
-    let _ = writeln!(report, "- Total: {}", total);
-    let _ = writeln!(report, "- Passed: {}", passed);
-    let _ = writeln!(report, "- Failed/Error: {}", failed.len());
-    let _ = writeln!(report, "");
-
-    let _ = writeln!(report, "## Failures");
-    if failed.is_empty() {
-      let _ = writeln!(report, "All tests passed.");
-    } else {
+    let mut rows = String::new();
+    for result in results {
+      let paths = Self::artifact_paths(&self.config, &result.metadata);
+      let expected_link = self.link_from_output(&paths.expected);
+      let actual_link = self.link_from_output(&paths.actual);
+      let diff_link = self.link_from_output(&paths.diff);
+      let diff_pct = result.diff_percentage.unwrap_or(0.0);
+      let max_diff = result.max_channel_diff.unwrap_or(0);
+      let message = result
+        .message
+        .clone()
+        .unwrap_or_default()
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
       let _ = writeln!(
-        report,
-        "| Test | Status | Expected | Actual | Diff | Message |"
+        rows,
+        "<tr data-status=\"{}\" data-diff=\"{:.4}\" data-suite=\"{}\">\
+           <td>{}</td>\
+           <td>{}</td>\
+           <td>{:.3}</td>\
+           <td>{}</td>\
+           <td><a href=\"{}\">expected</a> | <a href=\"{}\">actual</a> | <a href=\"{}\">diff</a></td>\
+           <td>{}</td>\
+         </tr>",
+        result.status,
+        diff_pct,
+        suite_name,
+        Self::escape_html(&result.metadata.id),
+        result.status,
+        diff_pct,
+        max_diff,
+        expected_link,
+        actual_link,
+        diff_link,
+        message,
       );
-      let _ = writeln!(report, "| --- | --- | --- | --- | --- | --- |");
-      for result in failed {
-        let paths = Self::artifact_paths(&self.config, &result.metadata);
-        let expected_link = self.link_from_output(&paths.expected);
-        let actual_link = self.link_from_output(&paths.actual);
-        let diff_link = self.link_from_output(&paths.diff);
-        let message = result
-          .message
-          .as_ref()
-          .map(|m| m.replace('|', "\\|"))
-          .unwrap_or_default();
-
-        let _ = writeln!(
-          report,
-          "| {} | {} | [{}]({}) | [{}]({}) | [{}]({}) | {} |",
-          result.metadata.id,
-          result.status,
-          paths
-            .expected
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy(),
-          expected_link,
-          paths
-            .actual
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy(),
-          actual_link,
-          paths.diff.file_name().unwrap_or_default().to_string_lossy(),
-          diff_link,
-          message,
-        );
-      }
     }
 
-    let report_path = self.config.output_dir.join("report.md");
+    let report = format!(
+      r#"<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WPT report</title>
+  <style>
+    body {{ font-family: sans-serif; margin: 16px; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th, td {{ border: 1px solid #ccc; padding: 6px; font-size: 14px; }}
+    thead {{ background: #f6f6f6; position: sticky; top: 0; }}
+    .controls label {{ margin-right: 12px; }}
+  </style>
+</head>
+<body>
+  <h1>WPT run summary</h1>
+  <p>Suite: {suite_name}. Total: {total}. Passed: {passed}. Failed/Error: {failed}. Skipped: {skipped}.</p>
+  <div class="controls">
+    <label><input type="checkbox" name="status" value="PASS" checked>Pass</label>
+    <label><input type="checkbox" name="status" value="FAIL" checked>Fail</label>
+    <label><input type="checkbox" name="status" value="ERROR" checked>Error</label>
+    <label><input type="checkbox" name="status" value="TIMEOUT" checked>Timeout</label>
+    <label><input type="checkbox" name="status" value="SKIP" checked>Skip</label>
+    <label style="margin-left:16px;">Min diff % <input type="number" id="min-diff" value="0" step="0.01" style="width:90px;"></label>
+  </div>
+  <table>
+    <thead>
+      <tr><th>Test</th><th>Status</th><th>Diff %</th><th>Max Δ</th><th>Links</th><th>Message</th></tr>
+    </thead>
+    <tbody id="results">
+      {rows}
+    </tbody>
+  </table>
+  <script>
+    const applyFilters = () => {{
+      const statuses = Array.from(document.querySelectorAll('input[name="status"]:checked')).map(el => el.value);
+      const minDiff = parseFloat(document.getElementById('min-diff').value || '0');
+      document.querySelectorAll('#results tr').forEach(row => {{
+        const status = row.dataset.status;
+        const diff = parseFloat(row.dataset.diff || '0');
+        const show = statuses.includes(status) && diff >= minDiff;
+        row.style.display = show ? '' : 'none';
+      }});
+    }};
+    document.querySelectorAll('input[name="status"]').forEach(el => el.addEventListener('change', applyFilters));
+    document.getElementById('min-diff').addEventListener('input', applyFilters);
+    applyFilters();
+  </script>
+</body>
+</html>
+"#
+    );
+
+    let report_path = self.config.output_dir.join("report.html");
     if let Some(parent) = report_path.parent() {
       if fs::create_dir_all(parent).is_err() {
         return None;
@@ -1065,45 +1494,62 @@ impl WptRunner {
   fn save_artifact(&self, result: &TestResult) {
     let paths = Self::artifact_paths(&self.config, &result.metadata);
 
-    if let Some(parent) = paths.actual.parent() {
-      if let Err(e) = fs::create_dir_all(parent) {
-        eprintln!("Failed to create output directory: {}", e);
-        return;
-      }
+    if let Err(e) = fs::create_dir_all(&paths.base) {
+      eprintln!("Failed to create output directory: {}", e);
+      return;
     }
 
-    // Save rendered/actual image
-    if self.config.save_rendered {
-      if let Some(ref rendered) = result.rendered_image {
-        if let Err(e) = fs::write(&paths.actual, rendered) {
-          eprintln!("Failed to save rendered image: {}", e);
-        }
-      }
+    let actual = result
+      .rendered_image
+      .clone()
+      .unwrap_or_else(Self::placeholder_png);
+    if let Err(e) = fs::write(&paths.actual, &actual) {
+      eprintln!("Failed to save rendered image: {}", e);
     }
 
-    // Save diff image if failed
-    if result.status == TestStatus::Fail && self.config.save_diffs {
-      if let Some(ref diff_png) = result.diff_image {
-        if let Some(parent) = paths.diff.parent() {
-          let _ = fs::create_dir_all(parent);
-        }
-        if let Err(e) = fs::write(&paths.diff, diff_png) {
-          eprintln!("Failed to save diff image: {}", e);
-        }
-      } else if let (Some(ref rendered), Some(ref expected)) =
-        (&result.rendered_image, &result.expected_image)
-      {
-        let config = self.config.comparison_config();
-        if let Ok(diff) = generate_diff_image(rendered, expected, &config) {
-          if let Some(parent) = paths.diff.parent() {
-            let _ = fs::create_dir_all(parent);
-          }
-          if let Err(e) = fs::write(&paths.diff, diff) {
-            eprintln!("Failed to save diff image: {}", e);
-          }
-        }
-      }
+    let expected = result
+      .expected_image
+      .clone()
+      .or_else(|| self.load_expected_bytes(&result.metadata))
+      .unwrap_or_else(Self::placeholder_png);
+    if let Err(e) = fs::write(&paths.expected, &expected) {
+      eprintln!("Failed to save expected image: {}", e);
     }
+
+    let diff = generate_diff_image(&actual, &expected, self.config.pixel_tolerance)
+      .unwrap_or_else(|_| Self::placeholder_png());
+    if let Err(e) = fs::write(&paths.diff, diff) {
+      eprintln!("Failed to save diff image: {}", e);
+    }
+  }
+
+  fn load_expected_bytes(&self, metadata: &TestMetadata) -> Option<Vec<u8>> {
+    let path = Self::get_expected_image_path(&self.config, metadata);
+    fs::read(path).ok()
+  }
+
+  fn placeholder_png() -> Vec<u8> {
+    static EMPTY: OnceLock<Vec<u8>> = OnceLock::new();
+    EMPTY
+      .get_or_init(|| {
+        let image = RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 0]));
+        let mut buffer = Vec::new();
+        let _ = PngEncoder::new(&mut buffer).write_image(
+          image.as_raw(),
+          image.width(),
+          image.height(),
+          ColorType::Rgba8.into(),
+        );
+        buffer
+      })
+      .clone()
+  }
+
+  fn escape_html(input: &str) -> String {
+    input
+      .replace('&', "&amp;")
+      .replace('<', "&lt;")
+      .replace('>', "&gt;")
   }
 }
 
@@ -1158,18 +1604,6 @@ impl WptRunnerBuilder {
     self
   }
 
-  /// Ignores alpha channel during comparisons.
-  pub fn ignore_alpha(mut self) -> Self {
-    self.config.compare_alpha = false;
-    self
-  }
-
-  /// Sets a perceptual distance threshold (0.0 identical).
-  pub fn perceptual_distance(mut self, distance: f64) -> Self {
-    self.config.max_perceptual_distance = Some(distance);
-    self
-  }
-
   /// Enables fail-fast mode
   pub fn fail_fast(mut self) -> Self {
     self.config.fail_fast = true;
@@ -1210,6 +1644,18 @@ impl WptRunnerBuilder {
   /// Sets a custom manifest path
   pub fn manifest(mut self, manifest: impl Into<PathBuf>) -> Self {
     self.config.manifest_path = Some(manifest.into());
+    self
+  }
+
+  /// Sets the discovery mode (manifest vs sidecar metadata)
+  pub fn discovery_mode(mut self, mode: DiscoveryMode) -> Self {
+    self.config.discovery_mode = mode;
+    self
+  }
+
+  /// Seeds the renderer with fonts from a directory for deterministic output.
+  pub fn font_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+    self.config.font_dirs.push(dir.into());
     self
   }
 
@@ -1278,8 +1724,6 @@ mod tests {
       .test_dir("custom/tests")
       .tolerance(10)
       .max_diff(2.0)
-      .ignore_alpha()
-      .perceptual_distance(0.3)
       .fail_fast()
       .parallel(3)
       .manifest("custom/manifest.toml")
@@ -1289,8 +1733,6 @@ mod tests {
     assert_eq!(runner.config().test_dir, PathBuf::from("custom/tests"));
     assert_eq!(runner.config().pixel_tolerance, 10);
     assert_eq!(runner.config().max_diff_percentage, 2.0);
-    assert!(!runner.config().compare_alpha);
-    assert_eq!(runner.config().max_perceptual_distance, Some(0.3));
     assert!(runner.config().fail_fast);
     assert!(runner.config().parallel);
     assert_eq!(runner.config().workers, 3);
