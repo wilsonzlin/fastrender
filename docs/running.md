@@ -40,6 +40,14 @@ Cache layout:
 
 `fetch_and_render` supports `file://…` inputs for local repros. Run with `--help` for the full flag list.
 
+## Responsive captures and `<meta name="viewport">`
+
+`<meta name="viewport">` is ignored by default so renders stay deterministic. When
+building custom harnesses, enable it via `FastRenderConfig::with_meta_viewport(true)`
+to respect author-provided `width`/`height` and zoom directives. The resolved zoom
+is clamped to the 0.1–10 range and scales the effective device pixel ratio along
+with the visual viewport used for `device-*` media features.
+
 ## Inspect layout/paint artifacts
 
 The `inspect_frag` binary is the main “what happened?” tool:

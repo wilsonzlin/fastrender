@@ -289,6 +289,22 @@ mod tests {
   }
 
   #[test]
+  fn parses_scale_ranges() {
+    let parsed =
+      parse_meta_viewport_content("initial-scale=2; minimum-scale=1; maximum-scale=5").unwrap();
+    assert_eq!(parsed.initial_scale, Some(2.0));
+    assert_eq!(parsed.minimum_scale, Some(1.0));
+    assert_eq!(parsed.maximum_scale, Some(5.0));
+  }
+
+  #[test]
+  fn rejects_zero_and_negative_numbers() {
+    assert!(parse_meta_viewport_content("initial-scale=0").is_none());
+    assert!(parse_meta_viewport_content("width=0").is_none());
+    assert!(parse_meta_viewport_content("maximum-scale=-1").is_none());
+  }
+
+  #[test]
   fn ignores_mismatched_device_lengths() {
     let parsed =
       parse_meta_viewport_content("width=device-height, height=400, initial-scale=1").unwrap();

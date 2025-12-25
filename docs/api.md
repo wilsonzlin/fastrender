@@ -91,6 +91,30 @@ result.pixmap.save_png("example.png")?;
 
 `RenderResult::into_pixmap()` discards diagnostics when they are not needed.
 
+## Meta viewport handling
+
+FastRender ignores `<meta name="viewport">` directives by default to keep layouts
+stable across renders. Enable support explicitly when you want responsive pages
+to honor author-provided viewport hints:
+
+```rust
+use fastrender::api::{FastRender, FastRenderConfig};
+
+let mut renderer =
+  FastRender::with_config(FastRenderConfig::new().with_meta_viewport(true))?;
+```
+
+When enabled:
+
+- `width=device-width`/numeric `width`/`height` set the layout viewport used by
+  CSS `vw`/`vh` and media queries.
+- `initial-scale` sets the zoom factor; if omitted, a default scale is derived
+  from the requested width/height when provided.
+- `minimum-scale`/`maximum-scale` clamp the zoom; all zoom factors are limited to
+  the 0.1–10 range for stability.
+- The visual viewport (used for `device-width` media features) and effective
+  device pixel ratio are scaled by the resolved zoom factor.
+
 ## DOM compatibility mode
 
 `DomCompatibilityMode` controls whether FastRender applies small, JS-era DOM mutations while parsing. The default (`Standard`) leaves the parsed DOM untouched; `Compatibility` applies class flips used by some sites that gate content on “JS enabled” markers (see `docs/notes/dom-compatibility.md`).

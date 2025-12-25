@@ -415,6 +415,11 @@ impl FastRenderBuilder {
   }
 
   /// Applies `<meta name="viewport">` directives when computing the layout viewport.
+  ///
+  /// When enabled, `width`/`height` set the layout viewport used for viewport units
+  /// and media queries. `initial-scale` (and optional min/max scale) controls zoom,
+  /// clamped to the 0.1–10 range, and scales the effective device pixel ratio as
+  /// well as the visual viewport used for device media features.
   pub fn apply_meta_viewport(mut self, enabled: bool) -> Self {
     self.config.apply_meta_viewport = enabled;
     self
@@ -794,6 +799,11 @@ impl FastRenderConfig {
   }
 
   /// Applies `<meta name="viewport">` directives when computing the layout viewport.
+  ///
+  /// `width`/`height` set the layout viewport. Zoom is driven by `initial-scale`
+  /// (or derived from the requested width/height) and clamped by `minimum-scale`/
+  /// `maximum-scale` to the 0.1–10 range, scaling the effective device pixel ratio
+  /// and the visual viewport used for device media features.
   pub fn with_meta_viewport(mut self, enabled: bool) -> Self {
     self.apply_meta_viewport = enabled;
     self
@@ -825,10 +835,15 @@ impl FastRenderConfig {
   }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct ResolvedViewport {
+  /// The CSS layout viewport (initial containing block). Viewport units (`vw`/`vh`)
+  /// and media queries use this size.
   layout_viewport: Size,
+  /// The visual viewport after applying the resolved zoom scale. Device media features
+  /// (`device-width`/`device-height`) use this value.
   visual_viewport: Size,
+  /// Effective device pixel ratio after page zoom. This multiplies the renderer's base DPR.
   device_pixel_ratio: f32,
 }
 
@@ -837,10 +852,14 @@ impl ResolvedViewport {
     Self {
       layout_viewport: viewport,
       visual_viewport: viewport,
-      device_pixel_ratio: sanitize_positive(Some(device_pixel_ratio)).unwrap_or(1.0),
+      device_pixel_ratio: sanitize_scale(Some(device_pixel_ratio)).unwrap_or(1.0),
     }
   }
 }
+
+/// Default zoom clamping range aligned with common browser behavior.
+const MIN_EFFECTIVE_SCALE: f32 = 0.1;
+const MAX_EFFECTIVE_SCALE: f32 = 10.0;
 
 /// Resolves the effective viewport based on meta viewport directives.
 fn resolve_viewport(
@@ -848,43 +867,69 @@ fn resolve_viewport(
   base_dpr: f32,
   meta: Option<&crate::html::viewport::MetaViewport>,
 ) -> ResolvedViewport {
-  let resolved = ResolvedViewport::new(requested, base_dpr);
+  let mut resolved = ResolvedViewport::new(
+    Size::new(requested.width.max(1.0), requested.height.max(1.0)),
+    base_dpr,
+  );
   let Some(meta) = meta else {
     return resolved;
   };
 
-  let mut visual = resolved.visual_viewport;
+  // Apply explicit width/height requests first; these drive the layout viewport directly.
+  let requested_visual = resolved.visual_viewport;
   if let Some(width) = meta.width {
-    if let Some(value) = viewport_length_value(width, requested.width) {
-      visual.width = value;
+    if let Some(value) = viewport_length_value(width, requested_visual.width) {
+      resolved.layout_viewport.width = value.max(1.0);
     }
   }
   if let Some(height) = meta.height {
-    if let Some(value) = viewport_length_value(height, requested.height) {
-      visual.height = value;
+    if let Some(value) = viewport_length_value(height, requested_visual.height) {
+      resolved.layout_viewport.height = value.max(1.0);
     }
   }
 
-  let mut scale = meta.initial_scale.unwrap_or(1.0);
-  if let Some(min_scale) = sanitize_positive(meta.minimum_scale) {
-    scale = scale.max(min_scale);
+  // Determine the zoom scale. Authors can pin it explicitly with initial-scale; otherwise
+  // we derive a default that makes the visual viewport match the requested width/height
+  // when a corresponding dimension is provided.
+  let mut min_scale = sanitize_scale(meta.minimum_scale);
+  let mut max_scale = sanitize_scale(meta.maximum_scale);
+  if let (Some(min), Some(max)) = (min_scale, max_scale) {
+    if min > max {
+      std::mem::swap(&mut min_scale, &mut max_scale);
+    }
   }
-  if let Some(max_scale) = sanitize_positive(meta.maximum_scale) {
-    scale = scale.min(max_scale);
-  }
-  scale = sanitize_positive(Some(scale)).unwrap_or(1.0);
 
-  let layout_viewport = Size::new(
-    (visual.width / scale).max(1.0),
-    (visual.height / scale).max(1.0),
+  let mut scale = meta
+    .initial_scale
+    .and_then(sanitize_scale)
+    .or_else(|| {
+      meta.width.and_then(|_| {
+        Some((requested_visual.width / resolved.layout_viewport.width).max(f32::EPSILON))
+      })
+    })
+    .or_else(|| {
+      meta.height.and_then(|_| {
+        Some((requested_visual.height / resolved.layout_viewport.height).max(f32::EPSILON))
+      })
+    })
+    .unwrap_or(1.0);
+
+  if let Some(min) = min_scale {
+    scale = scale.max(min);
+  }
+  if let Some(max) = max_scale {
+    scale = scale.min(max);
+  }
+  scale = sanitize_scale(Some(scale)).unwrap_or(1.0);
+
+  resolved.visual_viewport = Size::new(
+    (requested_visual.width / scale).max(1.0),
+    (requested_visual.height / scale).max(1.0),
   );
-  let device_pixel_ratio = (resolved.device_pixel_ratio * scale).max(f32::EPSILON);
-
-  ResolvedViewport {
-    layout_viewport,
-    visual_viewport: visual,
-    device_pixel_ratio,
-  }
+  resolved.device_pixel_ratio = (resolved.device_pixel_ratio * scale)
+    .clamp(MIN_EFFECTIVE_SCALE, MAX_EFFECTIVE_SCALE)
+    .max(f32::EPSILON);
+  resolved
 }
 
 fn viewport_length_value(len: ViewportLength, fallback: f32) -> Option<f32> {
@@ -895,8 +940,148 @@ fn viewport_length_value(len: ViewportLength, fallback: f32) -> Option<f32> {
   }
 }
 
-fn sanitize_positive(value: Option<f32>) -> Option<f32> {
-  value.filter(|v| v.is_finite() && *v > 0.0)
+fn sanitize_scale(value: Option<f32>) -> Option<f32> {
+  value
+    .filter(|v| v.is_finite() && *v > 0.0)
+    .map(|v| v.clamp(MIN_EFFECTIVE_SCALE, MAX_EFFECTIVE_SCALE))
+}
+
+#[cfg(test)]
+mod viewport_resolution_tests {
+  use super::*;
+  use crate::html::viewport::parse_meta_viewport_content;
+
+  fn assert_close(actual: f32, expected: f32, label: &str) {
+    let delta = (actual - expected).abs();
+    assert!(
+      delta < 0.01,
+      "{label}: expected {expected} got {actual} (delta {delta})"
+    );
+  }
+
+  #[test]
+  fn resolves_meta_viewport_permutations() {
+    let requested = Size::new(800.0, 600.0);
+    let base_dpr = 2.0;
+    let cases: [(&str, Option<&str>, (f32, f32), (f32, f32), f32); 16] = [
+      ("no meta", None, (800.0, 600.0), (800.0, 600.0), 2.0),
+      (
+        "device width baseline",
+        Some("width=device-width"),
+        (800.0, 600.0),
+        (800.0, 600.0),
+        2.0,
+      ),
+      (
+        "narrow width default scale",
+        Some("width=320"),
+        (320.0, 600.0),
+        (320.0, 240.0),
+        5.0,
+      ),
+      (
+        "width with explicit scale",
+        Some("width=320, initial-scale=1.5"),
+        (320.0, 600.0),
+        (533.33, 400.0),
+        3.0,
+      ),
+      (
+        "width with max scale clamp",
+        Some("width=320, maximum-scale=1"),
+        (320.0, 600.0),
+        (800.0, 600.0),
+        2.0,
+      ),
+      (
+        "width with min scale clamp",
+        Some("width=320, minimum-scale=3"),
+        (320.0, 600.0),
+        (266.67, 200.0),
+        6.0,
+      ),
+      (
+        "initial scale clamped low",
+        Some("width=320, initial-scale=0.05"),
+        (320.0, 600.0),
+        (8000.0, 6000.0),
+        0.2,
+      ),
+      (
+        "height only derives scale",
+        Some("height=400"),
+        (800.0, 400.0),
+        (533.33, 400.0),
+        3.0,
+      ),
+      (
+        "width and height derive scale from width",
+        Some("width=300, height=400"),
+        (300.0, 400.0),
+        (300.0, 225.0),
+        5.33,
+      ),
+      (
+        "initial scale only",
+        Some("initial-scale=2"),
+        (800.0, 600.0),
+        (400.0, 300.0),
+        4.0,
+      ),
+      (
+        "initial scale clamped to minimum",
+        Some("initial-scale=0.05"),
+        (800.0, 600.0),
+        (8000.0, 6000.0),
+        0.2,
+      ),
+      (
+        "min greater than max swaps",
+        Some("minimum-scale=2, maximum-scale=1, initial-scale=5"),
+        (800.0, 600.0),
+        (400.0, 300.0),
+        4.0,
+      ),
+      (
+        "wide layout with zoom",
+        Some("width=1200, initial-scale=2"),
+        (1200.0, 600.0),
+        (400.0, 300.0),
+        4.0,
+      ),
+      (
+        "wide layout with clamped zoom",
+        Some("width=1200, initial-scale=2, maximum-scale=1.2"),
+        (1200.0, 600.0),
+        (666.67, 500.0),
+        2.4,
+      ),
+      (
+        "narrow layout with tight min/max",
+        Some("width=200, height=150, minimum-scale=0.2, maximum-scale=0.25"),
+        (200.0, 150.0),
+        (3200.0, 2400.0),
+        0.5,
+      ),
+      (
+        "device width with scale capped by maximum",
+        Some("width=device-width, initial-scale=3, maximum-scale=2"),
+        (800.0, 600.0),
+        (400.0, 300.0),
+        4.0,
+      ),
+    ];
+
+    for (label, content, expected_layout, expected_visual, expected_dpr) in cases {
+      let meta = content.and_then(parse_meta_viewport_content);
+      let resolved = resolve_viewport(requested, base_dpr, meta.as_ref());
+      assert_close(resolved.layout_viewport.width, expected_layout.0, label);
+      assert_close(resolved.layout_viewport.height, expected_layout.1, label);
+      assert_close(resolved.visual_viewport.width, expected_visual.0, label);
+      assert_close(resolved.visual_viewport.height, expected_visual.1, label);
+      assert_close(resolved.device_pixel_ratio, expected_dpr, label);
+    }
+  }
 }
 
 fn apply_sticky_offsets_with_context(

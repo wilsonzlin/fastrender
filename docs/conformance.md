@@ -8,7 +8,7 @@ FastRender is spec-first: correctness is defined by the HTML/CSS specifications 
 - **Parsing**: HTML5 parsing via html5ever's spec-mode tree builder with scripting disabled (`ParseOpts` in `src/dom.rs`).
 - **Encoding sniffing**: HTML Living Standard BOM/`Content-Type`/`<meta charset>` sniffing (`src/html/encoding.rs`).
 - **Shadow DOM snapshots**: Static `<template shadowroot>` attachment with slot distribution during parse (`attach_shadow_roots` and `distribute_slots` in `src/dom.rs`).
-- **Base URL & viewport**: `<base href>` resolution and `<meta viewport>` handling in the HTML helpers.
+- **Base URL & viewport**: `<base href>` resolution and `<meta viewport>` handling (`width`/`height`/`initial`/`min`/`max` scale with zoom clamped to 0.1–10).
 
 ### CSS
 - **Cascade & inheritance**: CSS Cascade 4, including origin ordering (UA stylesheet + author), `!important`, custom properties, cascade layers (`@layer`), `@import`, and scoped styles (`@scope`).
@@ -31,6 +31,7 @@ Status legend: ✅ Supported, ⚠️ Partial/targeted, 🚫 Not supported.
 | Parse | Encoding sniffing | ✅ | BOM → `Content-Type` → `<meta charset>` scan with Windows-1252 fallback. |
 | Parse | Shadow DOM snapshots | ⚠️ | `<template shadowroot>` is attached eagerly and slots distributed; no runtime attach/detach or JS-driven shadow roots. |
 | Parse | Target fragments | ✅ | `with_target_fragment` drives :target/:target-within matching. |
+| Parse | Meta viewport directives | ✅ | `<meta name="viewport">` width/device-width/height plus initial/min/max scale parsed; zoom clamped to 0.1–10 feeds layout vs visual viewports and DPR when enabled via config. |
 | Style | Stylesheet parsing | ✅ | `@import`, @media/@supports/@container/@scope/@layer/@page/@font-face/@counter-style/@keyframes; error recovery keeps valid rules. |
 | Style | Selectors level 4 | ✅ | :is/:where/:has, relative selectors, structural nth-* pseudos, :lang/:dir, :any-link/:target-within, form-state pseudos, ::before/::after/::marker/::backdrop. Hover/focus/visited require `data-fastr-*` hints. |
 | Style | Cascade & inheritance | ✅ | UA stylesheet + author cascade, custom properties with fallback, cascade layers, scoped styles, counter styles, color-scheme propagation. |
@@ -80,4 +81,3 @@ When adding or tightening conformance:
 2. **Add tests**: Cover the change with unit tests (module-level), fixture/render tests (`tests/fixtures` or `tests/layout`/`tests/paint`), and WPT cases when applicable (`tests/wpt`). New docs should also be gated by presence tests when they are repo policy.
 3. **Link rationale**: If design choices reference research or internal notes, add links in the section above (or create a new short note under `docs/notes/`).
 4. **Keep status accurate**: Mark entries as ⚠️ when behavior is partial but spec-correct for the implemented subset; use 🚫 for intentional gaps.
-
