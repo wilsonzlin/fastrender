@@ -917,7 +917,8 @@ mod tests {
 
   #[test]
   fn turbulence_base_frequency_parses_pair() {
-    let doc = Document::parse("<filter><feTurbulence baseFrequency=\"0.1 0.2\"/></filter>").unwrap();
+    let doc =
+      Document::parse("<filter><feTurbulence baseFrequency=\"0.1 0.2\"/></filter>").unwrap();
     let node = doc
       .descendants()
       .find(|n| n.has_tag_name("feTurbulence"))

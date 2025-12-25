@@ -313,11 +313,7 @@ fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
   pixmap.data_mut().copy_from_slice(&a);
 }
 
-pub(crate) fn apply_gaussian_blur_anisotropic(
-  pixmap: &mut Pixmap,
-  sigma_x: f32,
-  sigma_y: f32,
-) {
+pub(crate) fn apply_gaussian_blur_anisotropic(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
   let sigma_x = sigma_x.abs();
   let sigma_y = sigma_y.abs();
   if sigma_x == 0.0 && sigma_y == 0.0 {
@@ -460,14 +456,12 @@ mod tests {
           center_non_zero += 1;
         }
       } else {
-        assert_eq!(
-          px.alpha(),
-          0,
-          "blur spread horizontally to column {}",
-          x
-        );
+        assert_eq!(px.alpha(), 0, "blur spread horizontally to column {}", x);
       }
     }
-    assert!(center_non_zero > 1, "expected vertical spread in center column");
+    assert!(
+      center_non_zero > 1,
+      "expected vertical spread in center column"
+    );
   }
 }
