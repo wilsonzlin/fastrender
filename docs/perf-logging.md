@@ -7,6 +7,10 @@ When using `render_pages`/`fetch_and_render`, per-page logs are written to `fetc
 - `FASTR_CASCADE_PROFILE=1`
   - Enables cascade profiling. Logs node count, candidate/match counts, and timing breakdown for selector matching, declaration application, and pseudo computation at the end of `apply_styles`.
 
+- `FASTR_TRACE_OUT=/tmp/trace.json`
+  - Writes a Chrome trace of the render pipeline (fetch/decode/parse/style/layout/paint). Open it in `chrome://tracing` or Perfetto to inspect spans.
+  - `fetch_and_render` also supports `--trace-out trace.json`, and library consumers can set `RenderOptions::with_trace_output`.
+
 - Container query second-pass logging (used in `render_pages`/`fetch_and_render`):
   - `FASTR_LOG_CONTAINER_PASS=1` prints the number of query containers (size vs inline-size) and a few samples of their dimensions/names when the second cascade/layout runs.
   - `FASTR_LOG_CONTAINER_REUSE=1` reports how many styled nodes are reused during the container-query recascade.
