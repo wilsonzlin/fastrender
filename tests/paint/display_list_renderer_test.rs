@@ -1351,6 +1351,75 @@ fn backdrop_filters_modify_backdrop_region() {
 }
 
 #[test]
+fn backdrop_filter_respects_clip_path_mask() {
+  let renderer = DisplayListRenderer::new(8, 8, Rgba::RED, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  let triangle = fastrender::paint::clip_path::ResolvedClipPath::Polygon {
+    points: vec![
+      fastrender::geometry::Point::new(1.0, 1.0),
+      fastrender::geometry::Point::new(5.0, 1.0),
+      fastrender::geometry::Point::new(1.0, 5.0),
+    ],
+    fill_rule: FillRule::Winding,
+  };
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+    mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+    is_isolated: false,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
+    radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Path { path: triangle },
+  }));
+  list.push(DisplayItem::PopClip);
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).expect("render");
+  assert_eq!(pixel(&pixmap, 2, 2), (0, 255, 255, 255));
+  assert_eq!(pixel(&pixmap, 4, 4), (255, 0, 0, 255));
+}
+
+#[test]
+fn backdrop_filter_respects_rounded_clip_rect() {
+  let renderer = DisplayListRenderer::new(8, 8, Rgba::RED, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
+    mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+    is_isolated: false,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: vec![ResolvedFilter::Invert(1.0)],
+    radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Rect {
+      rect: Rect::from_xywh(1.0, 1.0, 6.0, 6.0),
+      radii: Some(BorderRadii::uniform(2.0)),
+    },
+  }));
+  list.push(DisplayItem::PopClip);
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).expect("render");
+  assert_eq!(pixel(&pixmap, 3, 3), (0, 255, 255, 255));
+  assert_eq!(pixel(&pixmap, 1, 1), (255, 0, 0, 255));
+}
+
+#[test]
 fn background_blend_mode_combines_multiple_layers() {
   let mut style = fastrender::ComputedStyle::default();
   style.background_color = Rgba::WHITE;
