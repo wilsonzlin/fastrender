@@ -24,6 +24,7 @@ mod media_invalid_type;
 mod media_test;
 mod nth_child_of_test;
 mod order_property_test;
+mod required_optional_pseudo_test;
 mod root_font_size_percent_test;
 mod rule_index_normalization_test;
 mod scope_pseudo_root_test;
