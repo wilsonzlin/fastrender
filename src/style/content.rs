@@ -169,6 +169,16 @@ pub enum ContentItem {
   /// The string is rendered as-is.
   String(String),
 
+  /// A reference to a named string set.
+  ///
+  /// CSS: `content: string(name, start|first|last);`
+  StringReference {
+    /// The string set name.
+    name: String,
+    /// Which value to resolve for the current page.
+    kind: StringReferenceKind,
+  },
+
   /// An attribute reference
   ///
   /// CSS: `content: attr(data-label);`
@@ -270,6 +280,46 @@ impl fmt::Display for RunningStringPosition {
   }
 }
 
+/// Which value of a named string set to resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringReferenceKind {
+  /// Value carried from previous pages.
+  Start,
+  /// First assignment within the current page.
+  First,
+  /// Last assignment within the current page (default for `string()`).
+  Last,
+}
+
+/// Values captured for a named string on a page.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunningStringValues {
+  /// Value carried into this page.
+  pub start: Option<String>,
+  /// First assignment within this page.
+  pub first: Option<String>,
+  /// Last assignment within this page.
+  pub last: Option<String>,
+}
+
+/// Computed value for a string-set assignment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StringSetValue {
+  /// Use the element's generated text content (`content()`).
+  Content,
+  /// Use a literal string.
+  Literal(String),
+}
+
+/// A single string-set assignment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StringSetAssignment {
+  /// String name being assigned.
+  pub name: String,
+  /// Value to set for that string.
+  pub value: StringSetValue,
+}
+
 impl ContentItem {
   /// Creates a string content item
   pub fn string(s: impl Into<String>) -> Self {
@@ -355,6 +405,11 @@ impl fmt::Display for ContentItem {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
       ContentItem::String(s) => write!(f, "\"{}\"", s.replace('"', "\\\"")),
+      ContentItem::StringReference { name, kind } => match kind {
+        StringReferenceKind::Start => write!(f, "string({}, start)", name),
+        StringReferenceKind::First => write!(f, "string({}, first)", name),
+        StringReferenceKind::Last => write!(f, "string({})", name),
+      },
       ContentItem::Attr { name, fallback, .. } => {
         if let Some(fb) = fallback {
           write!(f, "attr({}, \"{}\")", name, fb)
@@ -798,6 +853,11 @@ pub struct ContentContext {
   /// Key: counter name, Value: current count
   counters: HashMap<String, Vec<i32>>,
 
+  /// Named string values available for the current page.
+  ///
+  /// Key: string name, Value: per-page running values.
+  running_strings: HashMap<String, RunningStringValues>,
+
   /// Element attributes
   ///
   /// Key: attribute name, Value: attribute value
@@ -823,6 +883,7 @@ impl ContentContext {
   pub fn new() -> Self {
     Self {
       counters: HashMap::new(),
+      running_strings: HashMap::new(),
       attributes: HashMap::new(),
       named_strings: HashMap::new(),
       quote_depth: 0,
@@ -864,6 +925,21 @@ impl ContentContext {
   /// Sets the full counter stack (outermost → innermost) for a given name.
   pub fn set_counter_stack(&mut self, name: &str, values: Vec<i32>) {
     self.counters.insert(name.to_string(), values);
+  }
+
+  /// Sets the per-page running string values available to content generation.
+  pub fn set_running_strings(&mut self, values: HashMap<String, RunningStringValues>) {
+    self.running_strings = values;
+  }
+
+  /// Resolves a named string value for the current page.
+  pub fn get_running_string(&self, name: &str, kind: StringReferenceKind) -> Option<&str> {
+    let values = self.running_strings.get(name)?;
+    match kind {
+      StringReferenceKind::Start => values.start.as_deref(),
+      StringReferenceKind::First => values.first.as_deref().or_else(|| values.start.as_deref()),
+      StringReferenceKind::Last => values.last.as_deref().or_else(|| values.start.as_deref()),
+    }
   }
 
   /// Pushes a new counter scope (for nested counters)
@@ -1138,6 +1214,11 @@ impl ContentGenerator {
   fn generate_item(&self, item: &ContentItem, context: &mut ContentContext) -> String {
     match item {
       ContentItem::String(s) => s.clone(),
+
+      ContentItem::StringReference { name, kind } => context
+        .get_running_string(name, *kind)
+        .map(str::to_string)
+        .unwrap_or_default(),
 
       ContentItem::Attr { name, fallback, .. } => context
         .get_attribute(name)
@@ -1450,26 +1531,18 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
     }
 
     "string" => {
-      let parts: Vec<&str> = args.split(',').map(|part| part.trim()).collect();
-      if parts.is_empty() || parts[0].is_empty() || parts.len() > 2 {
-        return None;
-      }
-
-      let name = parts[0].to_string();
-      let position = if parts.len() == 1 {
-        RunningStringPosition::First
-      } else if parts[1].is_empty() {
-        return None;
-      } else {
-        match parts[1].to_lowercase().as_str() {
-          "first" => RunningStringPosition::First,
-          "start" => RunningStringPosition::Start,
-          "last" => RunningStringPosition::Last,
-          _ => return None,
-        }
+      let mut parts = args.split(',').map(|p| p.trim()).filter(|p| !p.is_empty());
+      let name = parts
+        .next()?
+        .trim_matches(|c| c == '"' || c == '\'')
+        .to_string();
+      let kind = match parts.next().map(|k| k.to_ascii_lowercase()) {
+        Some(k) if k == "start" => StringReferenceKind::Start,
+        Some(k) if k == "first" => StringReferenceKind::First,
+        Some(_) => StringReferenceKind::Last,
+        None => StringReferenceKind::Last,
       };
-
-      Some(ContentItem::NamedString { name, position })
+      Some(ContentItem::StringReference { name, kind })
     }
 
     "url" => {

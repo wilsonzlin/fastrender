@@ -1,5 +1,6 @@
 //! Pagination helpers that honor CSS @page rules and margin boxes.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,7 +14,10 @@ use crate::layout::fragmentation::{
   clip_node, collect_atomic_ranges, collect_forced_boundaries, normalize_atomic_ranges,
   normalize_fragment_margins, propagate_fragment_metadata, AtomicRange,
 };
-use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
+use crate::layout::running_strings::{collect_string_set_events, StringSetEvent};
+use crate::style::content::{
+  ContentContext, ContentItem, ContentValue, CounterStyle, RunningStringValues, StringReferenceKind,
+};
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
 use crate::style::position::Position;
@@ -173,7 +177,13 @@ pub fn paginate_fragment_tree(
   let base_spans = base_layout.page_name_spans.clone();
   let base_root = base_layout.root.clone();
 
-  let mut pages: Vec<(FragmentNode, ResolvedPageStyle)> = Vec::new();
+  let mut string_set_events = collect_string_set_events(&base_root);
+  string_set_events.sort_by(|a, b| a.abs_y.partial_cmp(&b.abs_y).unwrap_or(Ordering::Equal));
+  let mut string_event_idx = 0usize;
+  let mut string_set_carry: HashMap<String, String> = HashMap::new();
+
+  let mut pages: Vec<(FragmentNode, ResolvedPageStyle, HashMap<String, RunningStringValues>)> =
+    Vec::new();
   let mut consumed_base = 0.0f32;
   let mut page_index = 0usize;
 
@@ -249,23 +259,23 @@ pub fn paginate_fragment_tree(
       .iter()
       .copied()
       .find(|b| *b > start + EPSILON && *b < end - EPSILON)
-	    {
-	      end = boundary;
-	    }
+    {
+      end = boundary;
+    }
 
-	    end = adjust_for_atomic_ranges(start, end, &layout.atomic_ranges).min(total_height);
+    end = adjust_for_atomic_ranges(start, end, &layout.atomic_ranges).min(total_height);
 
-	    if end <= start + EPSILON {
-	      end = adjust_for_atomic_ranges(
-	        start,
-	        (start + page_block).min(total_height),
-	        &layout.atomic_ranges,
-	      )
-	      .min(total_height);
-	      if end <= start + EPSILON {
-	        break;
-	      }
-	    }
+    if end <= start + EPSILON {
+      end = adjust_for_atomic_ranges(
+        start,
+        (start + page_block).min(total_height),
+        &layout.atomic_ranges,
+      )
+      .min(total_height);
+      if end <= start + EPSILON {
+        break;
+      }
+    }
 
     let clipped = clip_node(&layout.root, start, end, 0.0, start, page_index, 0);
     let mut fixed_fragments = Vec::new();
@@ -306,9 +316,18 @@ pub fn paginate_fragment_tree(
       page_root.children.push(fixed);
     }
 
-    pages.push((page_root, page_style));
     let base_advance = ((end - start).max(0.0) / total_height) * base_total_height;
-    consumed_base = (consumed_base + base_advance).min(base_total_height);
+    let end_in_base = (consumed_base + base_advance).min(base_total_height);
+    let page_strings = running_strings_for_page(
+      &string_set_events,
+      &mut string_event_idx,
+      &mut string_set_carry,
+      start_in_base,
+      end_in_base,
+    );
+
+    pages.push((page_root, page_style, page_strings));
+    consumed_base = end_in_base;
     page_index += 1;
 
     if consumed_base >= base_total_height - EPSILON {
@@ -320,15 +339,9 @@ pub fn paginate_fragment_tree(
     return Ok(vec![base_root]);
   }
 
-  let mut offset_y = 0.0;
-  for (page, _) in &mut pages {
-    translate_fragment(page, 0.0, offset_y);
-    offset_y += page.bounds.height();
-  }
-
   let count = pages.len();
   let mut page_roots = Vec::with_capacity(count);
-  for (idx, (mut page, style)) in pages.into_iter().enumerate() {
+  for (idx, (mut page, style, running_strings)) in pages.into_iter().enumerate() {
     page
       .children
       .extend(build_margin_box_fragments(
@@ -336,6 +349,7 @@ pub fn paginate_fragment_tree(
         font_ctx,
         idx,
         count,
+        &running_strings,
       ));
     propagate_fragment_metadata(&mut page, idx, count);
     page_roots.push(page);
@@ -483,6 +497,50 @@ fn apply_page_stacking(
   }
 }
 
+fn running_strings_for_page(
+  events: &[StringSetEvent],
+  idx: &mut usize,
+  carry: &mut HashMap<String, String>,
+  start: f32,
+  end: f32,
+) -> HashMap<String, RunningStringValues> {
+  let mut snapshot = HashMap::new();
+  for (name, value) in carry.iter() {
+    snapshot.insert(
+      name.clone(),
+      RunningStringValues {
+        start: Some(value.clone()),
+        first: None,
+        last: None,
+      },
+    );
+  }
+
+  while *idx < events.len() && events[*idx].abs_y < end {
+    if events[*idx].abs_y < start {
+      *idx += 1;
+      continue;
+    }
+
+    let event = &events[*idx];
+    let entry = snapshot
+      .entry(event.name.clone())
+      .or_insert_with(|| RunningStringValues {
+        start: carry.get(&event.name).cloned(),
+        first: None,
+        last: None,
+      });
+    if entry.first.is_none() {
+      entry.first = Some(event.value.clone());
+    }
+    entry.last = Some(event.value.clone());
+    carry.insert(event.name.clone(), event.value.clone());
+    *idx += 1;
+  }
+
+  snapshot
+}
+
 fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
   node.bounds = Rect::from_xywh(
     node.bounds.x() + dx,
@@ -538,6 +596,7 @@ fn build_margin_box_fragments(
   font_ctx: &FontContext,
   page_index: usize,
   page_count: usize,
+  running_strings: &HashMap<String, RunningStringValues>,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
 
@@ -558,7 +617,8 @@ fn build_margin_box_fragments(
       }
 
       let style_arc = Arc::new(box_style.clone());
-      let children = build_margin_box_children(box_style, page_index, page_count, &style_arc);
+      let children =
+        build_margin_box_children(box_style, page_index, page_count, running_strings, &style_arc);
       let root = BoxNode::new_block(style_arc.clone(), FormattingContextType::Block, children);
       let box_tree = BoxTree::new(root);
 
@@ -578,11 +638,13 @@ fn build_margin_box_children(
   box_style: &ComputedStyle,
   page_index: usize,
   page_count: usize,
+  running_strings: &HashMap<String, RunningStringValues>,
   style: &Arc<ComputedStyle>,
 ) -> Vec<BoxNode> {
   let mut children: Vec<BoxNode> = Vec::new();
   let mut context = ContentContext::new();
   context.set_quotes(box_style.quotes.clone());
+  context.set_running_strings(running_strings.clone());
   context.set_counter(
     "page",
     page_index
@@ -635,8 +697,16 @@ fn build_margin_box_children(
               text_buf.push_str(&formatted.join(separator));
             }
           }
+          ContentItem::StringReference { name, kind } => {
+            text_buf.push_str(context.get_running_string(name, *kind).unwrap_or(""));
+          }
           ContentItem::NamedString { name, position } => {
-            text_buf.push_str(&context.resolve_named_string(name, *position));
+            let kind = match position {
+              crate::style::content::RunningStringPosition::Start => StringReferenceKind::Start,
+              crate::style::content::RunningStringPosition::First => StringReferenceKind::First,
+              crate::style::content::RunningStringPosition::Last => StringReferenceKind::Last,
+            };
+            text_buf.push_str(context.get_running_string(name, kind).unwrap_or(""));
           }
           ContentItem::OpenQuote => {
             text_buf.push_str(context.open_quote());

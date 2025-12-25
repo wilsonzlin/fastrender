@@ -81,6 +81,7 @@ pub mod inline;
 
 // Pagination helpers for @page and multi-page outputs
 pub mod pagination;
+pub mod running_strings;
 
 // W3.T13 - Absolute positioning algorithm
 pub mod absolute_positioning;

@@ -15,7 +15,7 @@ use crate::style::block_axis_is_horizontal;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::content::parse_content;
-use crate::style::content::ContentValue;
+use crate::style::content::{ContentValue, StringSetAssignment, StringSetValue};
 use crate::style::counters::CounterSet;
 use crate::style::display::Display;
 use crate::style::float::Clear;
@@ -805,6 +805,71 @@ fn content_value_from_property(value: &PropertyValue) -> Option<ContentValue> {
   };
 
   parse_content(&css_text)
+}
+
+fn string_from_property_value(value: &PropertyValue) -> Option<String> {
+  match value {
+    PropertyValue::String(s) => Some(format!("\"{}\"", s)),
+    PropertyValue::Url(url) => Some(format!("url({})", url)),
+    PropertyValue::Keyword(kw) => Some(kw.clone()),
+    PropertyValue::Multiple(list) => {
+      let mut parts = Vec::new();
+      for item in list {
+        match item {
+          PropertyValue::String(s) => parts.push(format!("\"{}\"", s)),
+          PropertyValue::Url(url) => parts.push(format!("url({})", url)),
+          PropertyValue::Keyword(kw) => parts.push(kw.clone()),
+          PropertyValue::Number(n) => parts.push(n.to_string()),
+          PropertyValue::Percentage(p) => parts.push(format!("{}%", p)),
+          _ => return None,
+        }
+      }
+      Some(parts.join(" "))
+    }
+    _ => None,
+  }
+}
+
+fn parse_string_set_value(token: &str) -> Option<StringSetValue> {
+  let trimmed = token.trim();
+  if trimmed.eq_ignore_ascii_case("content()") {
+    return Some(StringSetValue::Content);
+  }
+
+  if (trimmed.starts_with('"') && trimmed.ends_with('"'))
+    || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
+  {
+    return Some(StringSetValue::Literal(
+      trimmed[1..trimmed.len() - 1].to_string(),
+    ));
+  }
+
+  None
+}
+
+fn parse_string_set(raw: &str) -> Option<Vec<StringSetAssignment>> {
+  let tokens = tokenize_property_value(raw, false);
+  if tokens.len() < 2 {
+    return None;
+  }
+
+  let mut assignments = Vec::new();
+  let mut idx = 0;
+  while idx + 1 < tokens.len() {
+    if let Some(value) = parse_string_set_value(&tokens[idx + 1]) {
+      assignments.push(StringSetAssignment {
+        name: tokens[idx].clone(),
+        value,
+      });
+    }
+    idx += 2;
+  }
+
+  if assignments.is_empty() {
+    None
+  } else {
+    Some(assignments)
+  }
 }
 
 fn parse_background_image_list(value: &PropertyValue) -> Option<Vec<Option<BackgroundImage>>> {
@@ -3359,6 +3424,7 @@ fn apply_property_from_source(
       styles.content_value = source.content_value.clone();
       styles.content = source.content.clone();
     }
+    "string-set" => styles.string_set = source.string_set.clone(),
     "quotes" => styles.quotes = source.quotes.clone(),
     "image-orientation" => styles.image_orientation = source.image_orientation,
     "image-rendering" => styles.image_rendering = source.image_rendering,
@@ -8015,6 +8081,15 @@ pub fn apply_declaration_with_base(
           PropertyValue::Url(u) => format!("url({})", u),
           _ => String::new(),
         };
+      }
+    }
+    "string-set" => {
+      let source = string_from_property_value(&resolved_value).unwrap_or_else(|| {
+        // Fall back to the raw value to preserve author string tokens.
+        decl.raw_value.clone()
+      });
+      if let Some(values) = parse_string_set(&source) {
+        styles.string_set = values;
       }
     }
     "quotes" => match &resolved_value {

@@ -747,6 +747,9 @@ pub struct ComputedStyle {
 
   /// Quotes used by open-quote/close-quote
   pub quotes: Vec<(String, String)>,
+
+  /// String-set assignments (CSS `string-set`).
+  pub string_set: Vec<crate::style::content::StringSetAssignment>,
 }
 
 impl Default for ComputedStyle {
@@ -1047,6 +1050,7 @@ impl Default for ComputedStyle {
       content: String::new(),
       content_value: crate::style::content::ContentValue::Normal,
       quotes: crate::style::content::default_quotes(),
+      string_set: Vec::new(),
     }
   }
 }
