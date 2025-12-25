@@ -8,6 +8,8 @@
 //! - Embedded var() in other CSS functions
 //! - Edge cases and error handling
 
+use fastrender::css::types::Declaration;
+use fastrender::style::properties::apply_declaration;
 use fastrender::style::values::LengthUnit;
 use fastrender::style::var_resolution::contains_var;
 use fastrender::style::var_resolution::extract_var_references;
@@ -16,6 +18,7 @@ use fastrender::style::var_resolution::resolve_var;
 use fastrender::style::var_resolution::resolve_var_for_property;
 use fastrender::style::var_resolution::resolve_var_with_depth;
 use fastrender::style::var_resolution::VarResolutionResult;
+use fastrender::style::ComputedStyle;
 use fastrender::Length;
 use fastrender::PropertyValue;
 use std::collections::HashMap;
@@ -26,6 +29,15 @@ fn make_props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     .iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .collect()
+}
+
+fn decl(property: &str, value: PropertyValue, raw_value: &str) -> Declaration {
+  Declaration {
+    property: property.to_string(),
+    value,
+    raw_value: raw_value.to_string(),
+    important: false,
+  }
 }
 
 // ============================================================================
@@ -147,7 +159,7 @@ fn test_resolve_var_fallback_with_commas_and_functions() {
   let resolved = resolve_var_for_property(&value, &props, "color");
 
   match resolved {
-    VarResolutionResult::Resolved(v) => match *v {
+    VarResolutionResult::Resolved { value, .. } => match *value {
       PropertyValue::Color(_) => {}
       other => panic!("Expected color value, got {:?}", other),
     },
@@ -162,7 +174,7 @@ fn test_resolve_var_fallback_with_commas_inside_url() {
   let resolved = resolve_var_for_property(&value, &props, "background-image");
 
   match resolved {
-    VarResolutionResult::Resolved(v) => match *v {
+    VarResolutionResult::Resolved { value, .. } => match *value {
       PropertyValue::Multiple(values) => {
         assert_eq!(values.len(), 1);
         assert!(matches!(values[0], PropertyValue::Url(ref url) if url == "a,b"));
@@ -588,4 +600,92 @@ fn test_resolve_var_preserves_type_for_lengths() {
       _ => panic!("Expected Length for {}, got {:?}", name, resolved),
     }
   }
+}
+
+#[test]
+fn scroll_timeline_uses_resolved_var_value() {
+  let parent = ComputedStyle::default();
+  let mut style = ComputedStyle::default();
+
+  apply_declaration(
+    &mut style,
+    &decl(
+      "--tl",
+      PropertyValue::Custom("scroll(root block)".to_string()),
+      "scroll(root block)",
+    ),
+    &parent,
+    16.0,
+    16.0,
+  );
+  apply_declaration(
+    &mut style,
+    &decl(
+      "scroll-timeline",
+      PropertyValue::Keyword("var(--tl)".to_string()),
+      "var(--tl)",
+    ),
+    &parent,
+    16.0,
+    16.0,
+  );
+
+  let mut expected = ComputedStyle::default();
+  apply_declaration(
+    &mut expected,
+    &decl(
+      "scroll-timeline",
+      PropertyValue::Keyword("scroll(root block)".to_string()),
+      "scroll(root block)",
+    ),
+    &parent,
+    16.0,
+    16.0,
+  );
+
+  assert_eq!(style.scroll_timelines, expected.scroll_timelines);
+}
+
+#[test]
+fn animation_name_list_resolves_from_var() {
+  let parent = ComputedStyle::default();
+  let mut style = ComputedStyle::default();
+
+  apply_declaration(
+    &mut style,
+    &decl(
+      "--names",
+      PropertyValue::Custom("fade, slide".to_string()),
+      "fade, slide",
+    ),
+    &parent,
+    16.0,
+    16.0,
+  );
+  apply_declaration(
+    &mut style,
+    &decl(
+      "animation-name",
+      PropertyValue::Keyword("var(--names)".to_string()),
+      "var(--names)",
+    ),
+    &parent,
+    16.0,
+    16.0,
+  );
+
+  let mut expected = ComputedStyle::default();
+  apply_declaration(
+    &mut expected,
+    &decl(
+      "animation-name",
+      PropertyValue::Keyword("fade, slide".to_string()),
+      "fade, slide",
+    ),
+    &parent,
+    16.0,
+    16.0,
+  );
+
+  assert_eq!(style.animation_names, expected.animation_names);
 }
