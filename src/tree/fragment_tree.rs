@@ -600,7 +600,10 @@ impl FragmentNode {
     let mut bbox = self.logical_bounds();
     for child in &self.children {
       let child_bbox = child.logical_bounding_box();
-      bbox = bbox.union(child_bbox);
+      bbox = bbox.union(child_bbox.translate(Point::new(
+        self.logical_bounds().x(),
+        self.logical_bounds().y(),
+      )));
     }
     bbox
   }
