@@ -2045,9 +2045,19 @@ impl ImageCache {
       },
     ))?;
 
-    let scale_x = target_width / source_width;
-    let scale_y = target_height / source_height;
-    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+    let render_width_f = render_width as f32;
+    let render_height_f = render_height as f32;
+
+    let scale_x = render_width_f / source_width;
+    let scale_y = render_height_f / source_height;
+    let transform = if aspect_ratio_none {
+      tiny_skia::Transform::from_scale(scale_x, scale_y)
+    } else {
+      let scale = scale_x.min(scale_y);
+      let translate_x = (render_width_f - source_width * scale) * 0.5;
+      let translate_y = (render_height_f - source_height * scale) * 0.5;
+      tiny_skia::Transform::from_row(scale, 0.0, 0.0, scale, translate_x, translate_y)
+    };
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     // Convert pixmap to image
@@ -2287,6 +2297,66 @@ mod tests {
     assert_eq!(image.height(), 5);
     assert_eq!(ratio, Some(2.0));
     assert!(!aspect_none);
+  }
+
+  #[test]
+  fn render_svg_to_image_width_only_viewbox_preserves_aspect_ratio() {
+    let cache = ImageCache::new();
+    let svg = r#"
+      <svg xmlns='http://www.w3.org/2000/svg' width='200' viewBox='0 0 100 100'>
+        <rect x='0' y='0' width='100' height='100' fill='red'/>
+      </svg>
+    "#;
+    let (image, _, _) = cache.render_svg_to_image(svg).expect("render svg");
+
+    assert_eq!((image.width(), image.height()), (200, 200));
+    let rgba = image.to_rgba8();
+    let padding_pixel = rgba.get_pixel(100, 10).0;
+    assert_eq!(
+      padding_pixel[3], 0,
+      "preserveAspectRatio='xMidYMid meet' should leave top padding transparent"
+    );
+    assert_eq!(rgba.get_pixel(100, 100).0, [255, 0, 0, 255]);
+  }
+
+  #[test]
+  fn render_svg_to_image_respects_preserve_aspect_ratio_none_when_scaling() {
+    let cache = ImageCache::new();
+    let svg = r#"
+      <svg xmlns='http://www.w3.org/2000/svg' width='200' viewBox='0 0 100 100' preserveAspectRatio='none'>
+        <rect x='0' y='0' width='100' height='100' fill='red'/>
+      </svg>
+    "#;
+    let (image, _, aspect_none) = cache.render_svg_to_image(svg).expect("render svg");
+
+    assert!(aspect_none);
+    assert_eq!((image.width(), image.height()), (200, 150));
+    let rgba = image.to_rgba8();
+    assert_eq!(
+      rgba.get_pixel(100, 10).0,
+      [255, 0, 0, 255],
+      "preserveAspectRatio='none' should stretch to the top edge"
+    );
+  }
+
+  #[test]
+  fn render_svg_to_image_height_only_viewbox_preserves_aspect_ratio() {
+    let cache = ImageCache::new();
+    let svg = r#"
+      <svg xmlns='http://www.w3.org/2000/svg' height='200' viewBox='0 0 100 100'>
+        <rect x='0' y='0' width='100' height='100' fill='red'/>
+      </svg>
+    "#;
+    let (image, _, _) = cache.render_svg_to_image(svg).expect("render svg");
+
+    assert_eq!((image.width(), image.height()), (200, 200));
+    let rgba = image.to_rgba8();
+    let padding_pixel = rgba.get_pixel(10, 100).0;
+    assert_eq!(
+      padding_pixel[3], 0,
+      "preserveAspectRatio='xMidYMid meet' should leave left padding transparent"
+    );
+    assert_eq!(rgba.get_pixel(100, 100).0, [255, 0, 0, 255]);
   }
 
   #[test]
