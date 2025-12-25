@@ -105,8 +105,39 @@ fn break_inside_avoid_is_best_effort() {
     "avoid block should remain intact when moved"
   );
 
-  // Case B: avoid is best-effort for content taller than a fragmentainer.
-  let tall_avoid = FragmentNode::new_block_styled(
+#[test]
+fn line_fragments_remain_atomic_when_boundary_slices_through() {
+  let atomic_line = line(10.0);
+  let original_height = atomic_line.bounds.height();
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 25.0), vec![atomic_line]);
+
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(15.0));
+
+  assert_eq!(fragments.len(), 2);
+  let first_fragment_lines: Vec<&FragmentNode> = fragments[0]
+    .children
+    .iter()
+    .filter(|child| matches!(child.content, FragmentContent::Line { .. }))
+    .collect();
+  assert_eq!(first_fragment_lines.len(), 1);
+  assert!(
+    (first_fragment_lines[0].bounds.height() - original_height).abs() < 0.01,
+    "line fragments should keep their full height even when clipped mid-line"
+  );
+  assert!(
+    fragments[1]
+      .children
+      .iter()
+      .all(|child| !matches!(child.content, FragmentContent::Line { .. })),
+    "line should only appear in the fragment that contains its start"
+  );
+}
+
+#[test]
+fn break_inside_avoid_keeps_block_together() {
+  let mut avoid_style = ComputedStyle::default();
+  avoid_style.break_inside = BreakInside::Avoid;
+  let tall_block = FragmentNode::new_block_styled(
     Rect::from_xywh(0.0, 0.0, 80.0, 140.0),
     vec![],
     Arc::new(avoid_style),

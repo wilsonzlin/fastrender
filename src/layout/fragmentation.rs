@@ -182,60 +182,37 @@ pub(crate) fn clip_node(
     return None;
   }
 
-  let default_style = default_style();
-  let style = node
-    .style
-    .as_ref()
-    .map(|s| s.as_ref())
-    .unwrap_or(default_style);
-
-  if let Some(info) = node
-    .fragmentation
-    .as_ref()
-    .filter(|meta| meta.column_count > 1)
-  {
-    return clip_multicol_node(
-      node,
-      fragment_start,
-      fragment_end,
-      parent_abs_start,
-      parent_clipped_abs_start,
-      fragment_index,
-      fragment_count,
-      fragmentainer_size,
-      info,
-    );
-  }
-  let has_line_children = node
-    .children
-    .iter()
-    .any(|child| matches!(child.content, FragmentContent::Line { .. }));
-  let avoid_inside = matches!(style.break_inside, BreakInside::Avoid)
-    || ((style.widows > 1 || style.orphans > 1) && has_line_children);
-
-  // Honor break-inside/line constraints by keeping the fragment intact within a single fragmentainer.
-  if avoid_inside && (node_abs_start < fragment_start || node_abs_end > fragment_end) {
-    if (fragment_start..fragment_end).contains(&node_abs_start) {
-      let mut cloned = clone_without_children(node);
-      cloned.fragment_index = fragment_index;
-      cloned.fragment_count = fragment_count.max(1);
-      cloned.fragmentainer_index = fragment_index;
-      cloned.children = node.children.clone();
-      return Some(cloned);
-    }
-    return None;
-  }
-
   let clipped_abs_start = node_abs_start.max(fragment_start);
   let clipped_abs_end = node_abs_end.min(fragment_end);
   let new_height = (clipped_abs_end - clipped_abs_start).max(0.0);
   let new_y = clipped_abs_start - parent_clipped_abs_start;
 
   let mut cloned = clone_without_children(node);
-  cloned.bounds = Rect::from_xywh(node.bounds.x(), new_y, node.bounds.width(), new_height);
   cloned.fragment_index = fragment_index;
   cloned.fragment_count = fragment_count.max(1);
   cloned.fragmentainer_index = fragment_index;
+
+  if matches!(node.content, FragmentContent::Line { .. }) {
+    // Keep line boxes whole. If a fragment boundary slices through a line,
+    // include it in the fragment that contains its start to avoid producing
+    // partial-height line fragments.
+    let fully_contained = node_abs_start >= fragment_start && node_abs_end <= fragment_end;
+    if !fully_contained && node_abs_start < fragment_start {
+      return None;
+    }
+
+    let line_y = node_abs_start - parent_clipped_abs_start;
+    cloned.bounds = Rect::from_xywh(
+      node.bounds.x(),
+      line_y,
+      node.bounds.width(),
+      node.bounds.height(),
+    );
+    cloned.children = node.children.clone();
+    return Some(cloned);
+  }
+
+  cloned.bounds = Rect::from_xywh(node.bounds.x(), new_y, node.bounds.width(), new_height);
 
   for child in &node.children {
     if let Some(child_clipped) = clip_node(
