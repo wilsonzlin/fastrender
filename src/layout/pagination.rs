@@ -105,8 +105,6 @@ pub fn paginate_fragment_tree(
     return vec![root.clone()];
   }
 
-  // Stack page roots vertically so downstream consumers (painting, hit-testing,
-  // content-size queries) can see the full paginated extent.
   let mut offset_y = 0.0;
   for page in &mut pages {
     translate_fragment(page, 0.0, offset_y);
