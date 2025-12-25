@@ -553,7 +553,7 @@ impl DisplayListBuilder {
     let (filters, backdrop_filters, radii) = root_style
       .map(|style| {
         (
-          Self::resolve_filters(
+          self.resolve_filters(
             &style.filter,
             style,
             self.viewport,
@@ -561,7 +561,7 @@ impl DisplayListBuilder {
             self.image_cache.as_ref(),
             self.svg_filter_registry.as_ref(),
           ),
-          Self::resolve_filters(
+          self.resolve_filters(
             &style.backdrop_filter,
             style,
             self.viewport,

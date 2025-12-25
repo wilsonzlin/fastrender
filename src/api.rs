@@ -96,6 +96,7 @@ use crate::layout::pagination::{paginate_fragment_tree_with_options, PaginateOpt
 use crate::layout::profile::layout_profile_enabled;
 use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
+use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::painter::paint_tree_with_resources_scaled;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
 use crate::resource::CachingFetcherConfig;
@@ -133,6 +134,7 @@ use crate::tree::box_tree::SrcsetDescriptor;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -545,7 +547,7 @@ impl RenderOptions {
 }
 
 /// Diagnostics collected during rendering.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RenderDiagnostics {
   /// Network fetch errors encountered while loading subresources.
   pub fetch_errors: Vec<ResourceFetchError>,
@@ -568,7 +570,7 @@ impl RenderDiagnostics {
 }
 
 /// Error captured while fetching a resource needed for rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceFetchError {
   /// Type of resource that failed.
   pub kind: ResourceKind,
@@ -754,6 +756,127 @@ impl RenderResult {
   pub fn into_pixmap(self) -> Pixmap {
     self.pixmap
   }
+}
+
+/// Request for capturing intermediate render artifacts.
+///
+/// All flags are opt-in to avoid unnecessary cloning and allocations during
+/// normal renders.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RenderArtifactRequest {
+  /// Capture the parsed DOM tree.
+  pub dom: bool,
+  /// Capture the styled tree after cascade.
+  pub styled_tree: bool,
+  /// Capture the generated box tree.
+  pub box_tree: bool,
+  /// Capture the laid-out fragment tree.
+  pub fragment_tree: bool,
+  /// Capture the built display list prior to rasterization.
+  pub display_list: bool,
+}
+
+impl RenderArtifactRequest {
+  /// No artifacts should be captured.
+  pub fn none() -> Self {
+    Self::default()
+  }
+
+  /// Capture artifacts suitable for summarization.
+  pub fn summary() -> Self {
+    Self {
+      dom: true,
+      styled_tree: true,
+      box_tree: true,
+      fragment_tree: true,
+      display_list: true,
+    }
+  }
+
+  /// Capture all available artifacts for full dumps.
+  pub fn full() -> Self {
+    Self {
+      dom: true,
+      styled_tree: true,
+      box_tree: true,
+      fragment_tree: true,
+      display_list: true,
+    }
+  }
+
+  /// Returns true when no artifacts are requested.
+  pub fn is_empty(&self) -> bool {
+    !self.dom && !self.styled_tree && !self.box_tree && !self.fragment_tree && !self.display_list
+  }
+}
+
+/// Intermediate render artifacts captured during a render.
+#[derive(Debug, Default, Clone)]
+pub struct RenderArtifacts {
+  request: RenderArtifactRequest,
+  /// Parsed DOM tree.
+  pub dom: Option<DomNode>,
+  /// Styled tree after cascade.
+  pub styled_tree: Option<StyledNode>,
+  /// Generated box tree.
+  pub box_tree: Option<BoxTree>,
+  /// Positioned fragment tree.
+  pub fragment_tree: Option<FragmentTree>,
+  /// Built display list prior to rasterization.
+  pub display_list: Option<crate::paint::display_list::DisplayList>,
+}
+
+impl RenderArtifacts {
+  /// Create an empty artifacts container honoring the provided request.
+  pub fn new(request: RenderArtifactRequest) -> Self {
+    Self {
+      request,
+      ..Self::default()
+    }
+  }
+
+  /// Returns the requested capture configuration.
+  pub fn request(&self) -> RenderArtifactRequest {
+    self.request
+  }
+}
+
+/// Render output that includes intermediate artifacts alongside diagnostics.
+#[derive(Debug, Clone)]
+pub struct RenderReport {
+  /// Rendered pixels.
+  pub pixmap: Pixmap,
+  /// Diagnostics captured while fetching resources.
+  pub diagnostics: RenderDiagnostics,
+  /// Optional intermediate artifacts captured during the render.
+  pub artifacts: RenderArtifacts,
+}
+
+impl RenderReport {
+  /// Convert into a `RenderResult`, discarding captured artifacts.
+  pub fn into_result(self) -> RenderResult {
+    RenderResult {
+      pixmap: self.pixmap,
+      diagnostics: self.diagnostics,
+    }
+  }
+}
+
+impl From<RenderReport> for RenderResult {
+  fn from(report: RenderReport) -> Self {
+    report.into_result()
+  }
+}
+
+/// Intermediate artifacts produced during layout.
+#[derive(Debug, Clone)]
+pub struct LayoutArtifacts {
+  /// Styled DOM tree after cascade.
+  pub styled_tree: StyledNode,
+  /// Generated box tree.
+  pub box_tree: BoxTree,
+  /// Positioned fragment tree.
+  pub fragment_tree: FragmentTree,
 }
 
 impl FastRenderConfig {
@@ -1470,20 +1593,48 @@ impl FastRender {
 
   /// Renders HTML with explicit per-request options.
   pub fn render_html_with_options(&mut self, html: &str, options: RenderOptions) -> Result<Pixmap> {
-    let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
-    let overall_start = timings_enabled.then(Instant::now);
-    let prepared = self.prepare_html(html, options)?;
-    let paint_start = timings_enabled.then(Instant::now);
-    let pixmap = prepared.paint_default()?;
+    self.render_html_with_options_internal(html, options, None)
+  }
 
-    if let Some(start) = paint_start {
-      eprintln!("timing:paint {:?}", start.elapsed());
-    }
-    if let Some(start) = overall_start {
-      eprintln!("timing:render_html_total {:?}", start.elapsed());
+  /// Renders HTML with options while capturing requested artifacts.
+  pub fn render_html_with_options_and_artifacts(
+    &mut self,
+    html: &str,
+    options: RenderOptions,
+    artifacts: &mut RenderArtifacts,
+  ) -> Result<Pixmap> {
+    self.render_html_with_options_internal(html, options, Some(artifacts))
+  }
+
+  fn render_html_with_options_internal(
+    &mut self,
+    html: &str,
+    options: RenderOptions,
+    artifacts: Option<&mut RenderArtifacts>,
+  ) -> Result<Pixmap> {
+    let (width, height) = options
+      .viewport
+      .unwrap_or((self.default_width, self.default_height));
+    let original_dpr = self.device_pixel_ratio;
+    if let Some(dpr) = options.device_pixel_ratio {
+      self.device_pixel_ratio = dpr;
     }
 
-    Ok(pixmap)
+    let result = self.render_html_internal(
+      html,
+      width,
+      height,
+      options.scroll_x,
+      options.scroll_y,
+      options.media_type,
+      artifacts,
+    );
+
+    if options.device_pixel_ratio.is_some() {
+      self.device_pixel_ratio = original_dpr;
+    }
+
+    result
   }
 
   /// Prepares HTML for repeated painting without re-running parse/style/layout.
@@ -1499,12 +1650,293 @@ impl FastRender {
     scroll_x: f32,
     scroll_y: f32,
     media_type: MediaType,
+    mut artifacts: Option<&mut RenderArtifacts>,
   ) -> Result<Pixmap> {
-    let options = RenderOptions::default()
-      .with_viewport(width, height)
-      .with_scroll(scroll_x, scroll_y)
-      .with_media_type(media_type);
-    self.render_html_with_options(html, options)
+    // Validate dimensions
+    if width == 0 || height == 0 {
+      return Err(Error::Render(RenderError::InvalidParameters {
+        message: format!("Invalid dimensions: width={}, height={}", width, height),
+      }));
+    }
+
+    let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
+    let mut stage_start = timings_enabled.then(Instant::now);
+    let overall_start = stage_start.clone();
+
+    // Parse HTML to DOM
+    let dom = self.parse_html(html)?;
+    if let Some(store) = artifacts.as_deref_mut() {
+      if store.request().dom {
+        store.dom = Some(dom.clone());
+      }
+    }
+
+    if let Some(start) = stage_start.as_mut() {
+      let now = Instant::now();
+      eprintln!("timing:parse {:?}", now - *start);
+      *start = now;
+    }
+
+    let requested_viewport = Size::new(width as f32, height as f32);
+    let base_dpr = self.device_pixel_ratio;
+    let meta_viewport = if self.apply_meta_viewport {
+      crate::html::viewport::extract_viewport(&dom)
+    } else {
+      None
+    };
+    let resolved_viewport = resolve_viewport(requested_viewport, base_dpr, meta_viewport.as_ref());
+    let layout_width = resolved_viewport.layout_viewport.width.max(1.0).round() as u32;
+    let layout_height = resolved_viewport.layout_viewport.height.max(1.0).round() as u32;
+
+    let previous_dpr = self.device_pixel_ratio;
+
+    let result = (|| -> Result<Pixmap> {
+      self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
+      self.pending_device_size = Some(resolved_viewport.visual_viewport);
+      let layout_artifacts = self.layout_document_for_media_with_artifacts(
+        &dom,
+        layout_width,
+        layout_height,
+        media_type,
+        LayoutDocumentOptions::default(),
+      )?;
+      self.pending_device_size = None;
+      let LayoutArtifacts {
+        styled_tree,
+        box_tree,
+        mut fragment_tree,
+        ..
+      } = layout_artifacts;
+      if let Some(store) = artifacts.as_deref_mut() {
+        if store.request().styled_tree {
+          store.styled_tree = Some(styled_tree.clone());
+        }
+        if store.request().box_tree {
+          store.box_tree = Some(box_tree.clone());
+        }
+      }
+      let layout_viewport = fragment_tree.viewport_size();
+      if std::env::var("FASTR_LOG_FRAG_BOUNDS")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+      {
+        let bbox = fragment_tree.content_size();
+        eprintln!(
+                "[frag-bounds] viewport=({}x{}) bbox=({:.1},{:.1})→({:.1},{:.1}) size=({:.1}x{:.1}) fragments={}",
+                layout_viewport.width,
+                layout_viewport.height,
+                bbox.min_x(),
+                bbox.min_y(),
+                bbox.max_x(),
+                bbox.max_y(),
+                bbox.width(),
+                bbox.height(),
+                fragment_tree.fragment_count()
+            );
+      }
+
+      if let Ok(v) = std::env::var("FASTR_DUMP_TEXT_FRAGMENTS") {
+        if v != "0" && !v.eq_ignore_ascii_case("false") {
+          let limit: usize = v.parse().unwrap_or(20);
+          let mut total = 0usize;
+          let mut stack = vec![(&fragment_tree.root, crate::geometry::Point::ZERO)];
+          while let Some((frag, offset)) = stack.pop() {
+            let abs = crate::geometry::Rect::from_xywh(
+              frag.bounds.x() + offset.x,
+              frag.bounds.y() + offset.y,
+              frag.bounds.width(),
+              frag.bounds.height(),
+            );
+            if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &frag.content {
+              if total < limit {
+                eprintln!(
+                  "text frag {} @ ({:.1},{:.1},{:.1},{:.1}) {:?}",
+                  total,
+                  abs.x(),
+                  abs.y(),
+                  abs.width(),
+                  abs.height(),
+                  text.chars().take(80).collect::<String>()
+                );
+              }
+              total += 1;
+            }
+            for child in frag.children.iter().rev() {
+              stack.push((child, crate::geometry::Point::new(abs.x(), abs.y())));
+            }
+          }
+          eprintln!("total text fragments: {}", total);
+        }
+      }
+
+      if let Ok(query) = std::env::var("FASTR_TRACE_TEXT") {
+        fn describe_node(node: &crate::tree::fragment_tree::FragmentNode) -> String {
+          let display = node
+            .style
+            .as_ref()
+            .map(|s| format!("{:?}", s.display))
+            .unwrap_or_else(|| "None".to_string());
+          match &node.content {
+            crate::tree::fragment_tree::FragmentContent::Block { box_id } => {
+              format!("Block(box_id={:?}, display={})", box_id, display)
+            }
+            crate::tree::fragment_tree::FragmentContent::Inline {
+              box_id,
+              fragment_index,
+            } => {
+              format!(
+                "Inline(box_id={:?}, fragment_index={}, display={})",
+                box_id, fragment_index, display
+              )
+            }
+            crate::tree::fragment_tree::FragmentContent::Line { baseline } => {
+              format!("Line(baseline={:.3}, display={})", baseline, display)
+            }
+            crate::tree::fragment_tree::FragmentContent::Text {
+              text,
+              box_id,
+              baseline_offset,
+              ..
+            } => {
+              let preview: String = text.chars().take(80).collect();
+              format!(
+                "Text(box_id={:?}, baseline={:.3}, display={}, text=\"{}\")",
+                box_id, baseline_offset, display, preview
+              )
+            }
+            crate::tree::fragment_tree::FragmentContent::Replaced { box_id, .. } => {
+              format!("Replaced(box_id={:?}, display={})", box_id, display)
+            }
+          }
+        }
+
+        fn trace_text<'a>(
+          node: &'a crate::tree::fragment_tree::FragmentNode,
+          offset: crate::geometry::Point,
+          query: &str,
+          trail: &mut Vec<String>,
+        ) -> bool {
+          let raw = node.bounds;
+          let abs = crate::geometry::Rect::from_xywh(
+            node.bounds.x() + offset.x,
+            node.bounds.y() + offset.y,
+            node.bounds.width(),
+            node.bounds.height(),
+          );
+          let label = format!(
+            "{} raw=({:.1},{:.1},{:.1},{:.1}) abs=({:.1},{:.1},{:.1},{:.1})",
+            describe_node(node),
+            raw.x(),
+            raw.y(),
+            raw.width(),
+            raw.height(),
+            abs.x(),
+            abs.y(),
+            abs.width(),
+            abs.height()
+          );
+          trail.push(label);
+          if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &node.content {
+            if text.contains(query) {
+              eprintln!("trace for {:?}:", query);
+              for (depth, entry) in trail.iter().enumerate() {
+                eprintln!("  {}{}", "  ".repeat(depth), entry);
+              }
+              trail.pop();
+              return true;
+            }
+          }
+          let child_offset = crate::geometry::Point::new(abs.x(), abs.y());
+          for child in &node.children {
+            if trace_text(child, child_offset, query, trail) {
+              trail.pop();
+              return true;
+            }
+          }
+          trail.pop();
+          false
+        }
+        let mut trail = Vec::new();
+        trace_text(
+          &fragment_tree.root,
+          crate::geometry::Point::ZERO,
+          &query,
+          &mut trail,
+        );
+      }
+
+      if let Some(start) = stage_start.as_mut() {
+        let now = Instant::now();
+        eprintln!("timing:layout_document {:?}", now - *start);
+        *start = now;
+      }
+
+      let expand_full_page = std::env::var("FASTR_FULL_PAGE")
+        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false);
+      let viewport_size = layout_viewport;
+      let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
+      let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
+      let scroll = scroll_result.state.viewport;
+
+      animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+
+      self.apply_sticky_offsets(
+        &mut fragment_tree.root,
+        Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
+        scroll,
+        viewport_size,
+      );
+
+      let viewport_width_px = viewport_size.width.max(1.0).ceil() as u32;
+      let viewport_height_px = viewport_size.height.max(1.0).ceil() as u32;
+
+      let (target_width, target_height) = if expand_full_page {
+        let content_bounds = fragment_tree.content_size();
+        let w = viewport_width_px.max(content_bounds.max_x().ceil().max(1.0) as u32);
+        let h = viewport_height_px.max(content_bounds.max_y().ceil().max(1.0) as u32);
+        (w, h)
+      } else {
+        (viewport_width_px, viewport_height_px)
+      };
+
+      if let Some(store) = artifacts.as_deref_mut() {
+        if store.request().fragment_tree {
+          store.fragment_tree = Some(fragment_tree.clone());
+        }
+        if store.request().display_list {
+          let viewport = fragment_tree.viewport_size();
+          let mut builder = DisplayListBuilder::with_image_cache(self.image_cache.clone())
+            .with_font_context(self.font_context.clone())
+            .with_device_pixel_ratio(self.device_pixel_ratio)
+            .with_viewport_size(viewport.width, viewport.height);
+          if let Some(base_url) = &self.base_url {
+            builder.set_base_url(base_url.clone());
+          }
+          let display_list = builder.build_tree(&fragment_tree);
+          store.display_list = Some(display_list);
+        }
+      }
+
+      // Paint to pixmap
+      let offset = Point::new(-scroll.x, -scroll.y);
+      let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
+
+      if let Some(start) = stage_start {
+        let now = Instant::now();
+        eprintln!("timing:paint {:?}", now - start);
+        if let Some(overall) = overall_start {
+          eprintln!("timing:render_html_total {:?}", now - overall);
+        }
+      }
+
+      Ok(pixmap)
+    })();
+
+    self.device_pixel_ratio = previous_dpr;
+    self.pending_device_size = None;
+
+    result
   }
 
   fn prepare_html_internal(
@@ -1735,6 +2167,8 @@ impl FastRender {
   }
 
   /// Renders HTML with a custom background color
+
+  /// Renders HTML with a custom background color
   ///
   /// # Arguments
   ///
@@ -1777,7 +2211,9 @@ impl FastRender {
 
   /// Fetches and renders a document from a URL using default options.
   pub fn render_url(&mut self, url: &str) -> Result<RenderResult> {
-    self.render_url_with_options(url, RenderOptions::default())
+    self
+      .render_url_with_options_report(url, RenderOptions::default(), RenderArtifactRequest::none())
+      .map(RenderReport::into_result)
   }
 
   /// Fetches and renders a document from a URL with explicit options.
@@ -1786,6 +2222,18 @@ impl FastRender {
     url: &str,
     options: RenderOptions,
   ) -> Result<RenderResult> {
+    self
+      .render_url_with_options_report(url, options, RenderArtifactRequest::none())
+      .map(RenderReport::into_result)
+  }
+
+  /// Fetches and renders a document from a URL with explicit options while capturing artifacts.
+  pub fn render_url_with_options_report(
+    &mut self,
+    url: &str,
+    options: RenderOptions,
+    artifacts: RenderArtifactRequest,
+  ) -> Result<RenderReport> {
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
@@ -1797,9 +2245,10 @@ impl FastRender {
         diagnostics.document_error = Some(e.to_string());
         if options.allow_partial {
           let pixmap = self.render_error_overlay(width, height)?;
-          return Ok(RenderResult {
+          return Ok(RenderReport {
             pixmap,
             diagnostics,
+            artifacts: RenderArtifacts::new(artifacts),
           });
         }
         return Err(Error::Navigation(NavigationError::FetchFailed {
@@ -1808,7 +2257,7 @@ impl FastRender {
         }));
       }
     };
-    self.render_fetched_html_with_options(&resource, Some(url), options)
+    self.render_fetched_html_with_options_report(&resource, Some(url), options, artifacts)
   }
 
   /// Render already-fetched HTML while inlining linked stylesheets using the configured fetcher.
@@ -1818,6 +2267,25 @@ impl FastRender {
     base_hint: Option<&str>,
     options: RenderOptions,
   ) -> Result<RenderResult> {
+    self
+      .render_fetched_html_with_options_report(
+        resource,
+        base_hint,
+        options,
+        RenderArtifactRequest::none(),
+      )
+      .map(RenderReport::into_result)
+  }
+
+  /// Render already-fetched HTML while inlining linked stylesheets using the configured fetcher.
+  /// Captures intermediate artifacts.
+  pub fn render_fetched_html_with_options_report(
+    &mut self,
+    resource: &crate::resource::FetchedResource,
+    base_hint: Option<&str>,
+    options: RenderOptions,
+    artifacts: RenderArtifactRequest,
+  ) -> Result<RenderReport> {
     let mut diagnostics = RenderDiagnostics::default();
     let hint = resource.final_url.as_deref().or(base_hint).unwrap_or("");
     let html = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
@@ -1831,11 +2299,14 @@ impl FastRender {
       options.css_limit,
       &mut diagnostics,
     );
-    let pixmap = self.render_html_with_options(&html_with_css, options)?;
+    let mut captured = RenderArtifacts::new(artifacts);
+    let pixmap =
+      self.render_html_with_options_and_artifacts(&html_with_css, options, &mut captured)?;
 
-    Ok(RenderResult {
+    Ok(RenderReport {
       pixmap,
       diagnostics,
+      artifacts: captured,
     })
   }
 
@@ -1846,6 +2317,19 @@ impl FastRender {
     base_hint: &str,
     options: RenderOptions,
   ) -> Result<RenderResult> {
+    self
+      .render_html_with_stylesheets_report(html, base_hint, options, RenderArtifactRequest::none())
+      .map(RenderReport::into_result)
+  }
+
+  /// Renders an HTML string after inlining linked stylesheets, capturing artifacts.
+  pub fn render_html_with_stylesheets_report(
+    &mut self,
+    html: &str,
+    base_hint: &str,
+    options: RenderOptions,
+    artifacts: RenderArtifactRequest,
+  ) -> Result<RenderReport> {
     let mut diagnostics = RenderDiagnostics::default();
     let base_url = infer_base_url(html, base_hint).into_owned();
     self.set_base_url(base_url.clone());
@@ -1857,11 +2341,14 @@ impl FastRender {
       options.css_limit,
       &mut diagnostics,
     );
-    let pixmap = self.render_html_with_options(&html_with_css, options)?;
+    let mut captured = RenderArtifacts::new(artifacts);
+    let pixmap =
+      self.render_html_with_options_and_artifacts(&html_with_css, options, &mut captured)?;
 
-    Ok(RenderResult {
+    Ok(RenderReport {
       pixmap,
       diagnostics,
+      artifacts: captured,
     })
   }
 
@@ -5142,7 +5629,7 @@ pub(crate) fn render_html_with_shared_resources(
     dom_compat_mode: DomCompatibilityMode::Standard,
   };
 
-  renderer.render_html_internal(html, width, height, 0.0, 0.0, MediaType::Screen)
+  renderer.render_html_internal(html, width, height, 0.0, 0.0, MediaType::Screen, None)
 }
 
 #[cfg(test)]
