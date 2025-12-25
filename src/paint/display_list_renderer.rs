@@ -46,9 +46,7 @@ use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::TransformItem;
-use crate::paint::filter_outset::{
-  compute_filter_outset, filter_outset, filter_outset_with_bounds,
-};
+use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
@@ -4904,6 +4902,7 @@ mod tests {
   use crate::paint::display_list::TextShadowItem;
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list_builder::DisplayListBuilder;
+  use crate::paint::filter_outset::compute_filter_outset;
   use crate::style::color::{Color, Rgba};
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundRepeat;

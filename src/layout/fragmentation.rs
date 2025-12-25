@@ -425,11 +425,9 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
         .partial_cmp(&b.pos)
         .unwrap_or(std::cmp::Ordering::Equal)
     });
-    plan
-      .candidates
-      .dedup_by(|a, b| {
-        (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength && a.break_kind == b.break_kind
-      });
+    plan.candidates.dedup_by(|a, b| {
+      (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength && a.break_kind == b.break_kind
+    });
 
     compute_boundaries(
       total_block_size,
@@ -651,11 +649,9 @@ fn normalize_break_plan(plan: &mut BreakPlan) {
       .partial_cmp(&b.pos)
       .unwrap_or(std::cmp::Ordering::Equal)
   });
-  plan
-    .candidates
-    .dedup_by(|a, b| {
-      (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength && a.break_kind == b.break_kind
-    });
+  plan.candidates.dedup_by(|a, b| {
+    (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength && a.break_kind == b.break_kind
+  });
 }
 
 pub(crate) fn build_break_plan(
@@ -993,7 +989,15 @@ fn collect_break_plan(
       }
     }
 
-    collect_break_plan(child, child_abs_start, node_block_size, axis, plan, kind, debug);
+    collect_break_plan(
+      child,
+      child_abs_start,
+      node_block_size,
+      axis,
+      plan,
+      kind,
+      debug,
+    );
   }
 
   if forces_break(kind, style.break_after) {

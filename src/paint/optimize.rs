@@ -34,7 +34,7 @@ use crate::paint::display_list::FillRectItem;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
-use crate::paint::filter_outset::{filter_outset, filter_outset_with_bounds};
+use crate::paint::filter_outset::filter_outset_with_bounds;
 
 // ============================================================================
 // Optimization Configuration
@@ -902,6 +902,7 @@ mod tests {
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list::TransformItem;
   use crate::paint::display_list::TransformStyle;
+  use crate::paint::filter_outset::filter_outset;
   use crate::style::color::Rgba;
   use crate::style::types::BackfaceVisibility;
   use std::f32::consts::FRAC_PI_4;

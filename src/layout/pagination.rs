@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::css::types::CollectedPageRule;
-use crate::geometry::{Point, Rect, Size};
+use crate::geometry::{Rect, Size};
 use crate::layout::fragmentation::{
   build_break_plan, clip_node, collect_forced_boundaries, fragmentation_axis,
   propagate_fragment_metadata, select_fragmentainer_boundary, BlockAxis, ForcedBreak,
@@ -44,7 +44,6 @@ impl Default for PaginateOptions {
 
 #[derive(Clone)]
 struct FixedFragment {
-  origin: Point,
   fragment: FragmentNode,
 }
 
@@ -125,7 +124,6 @@ pub fn paginate_fragment_tree_with_options(
     while let Some(required_side) = pending_side {
       let current_side = page_side_for_index(page_index);
       if current_side == required_side {
-        pending_side = None;
         break;
       }
 
@@ -145,7 +143,11 @@ pub fn paginate_fragment_tree_with_options(
       );
       for fixed in &fixed_fragments {
         let mut repeated = fixed.fragment.clone();
-        translate_fragment(&mut repeated, style.content_origin.x, style.content_origin.y);
+        translate_fragment(
+          &mut repeated,
+          style.content_origin.x,
+          style.content_origin.y,
+        );
         blank_page.children.push(repeated);
       }
       blank_page
@@ -340,10 +342,7 @@ fn collect_fixed_fragments_inner(
     cloned.fragmentainer_index = 0;
     cloned.fragment_count = 1;
     cloned.fragment_index = 0;
-    out.push(FixedFragment {
-      origin: Point::new(node_abs_x, node_abs_y),
-      fragment: cloned,
-    });
+    out.push(FixedFragment { fragment: cloned });
     return;
   }
 
