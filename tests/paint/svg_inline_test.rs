@@ -7,13 +7,13 @@ use fastrender::tree::box_tree::{BoxNode, BoxType, ReplacedType, SvgContent};
 use fastrender::FastRender;
 use resvg::tiny_skia::Pixmap;
 
-fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> [u8; 4] {
+pub(super) fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> [u8; 4] {
   let idx = (y as usize * pixmap.width() as usize + x as usize) * 4;
   let data = pixmap.data();
   [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]
 }
 
-fn serialized_inline_svg(html: &str, width: f32, height: f32) -> Option<SvgContent> {
+pub(super) fn serialized_inline_svg(html: &str, width: f32, height: f32) -> Option<SvgContent> {
   let dom = dom::parse_html(html).ok()?;
   let stylesheet = extract_css(&dom).ok()?;
   let media = MediaContext::screen(width, height);
