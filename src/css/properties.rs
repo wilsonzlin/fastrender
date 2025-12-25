@@ -252,12 +252,18 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "mix-blend-mode",
   "object-fit",
   "object-position",
+  "offset-anchor",
+  "offset-distance",
+  "offset-path",
+  "offset-rotate",
   "opacity",
+  "orphans",
   "outline",
   "outline-color",
   "outline-offset",
   "outline-style",
   "outline-width",
+  "overflow-wrap",
   "overscroll-behavior",
   "overscroll-behavior-x",
   "overscroll-behavior-y",
@@ -300,6 +306,9 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "place-self",
   "position",
   "quotes",
+  "ruby-align",
+  "ruby-merge",
+  "ruby-position",
   "resize",
   "scroll-behavior",
   "right",
@@ -339,8 +348,6 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "transform-style",
   "transform-origin",
   "backface-visibility",
-  "bleed",
-  "marks",
   "page",
   "page-break-after",
   "page-break-before",
@@ -351,11 +358,11 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "visibility",
   "white-space",
   "width",
-  "size",
-  "trim",
   "will-change",
   "word-break",
+  "word-wrap",
   "word-spacing",
+  "widows",
   "writing-mode",
   "z-index",
 ];
@@ -1791,6 +1798,8 @@ fn parse_stop_angle(token: &str) -> Option<f32> {
 mod tests {
   use super::*;
   use crate::style::color::Color;
+  use crate::style::properties::supported_properties;
+  use std::collections::BTreeSet;
 
   #[test]
   fn parses_space_separated_values_into_multiple() {
@@ -1947,6 +1956,22 @@ mod tests {
       props.len(),
       KNOWN_PROPERTIES.len(),
       "KNOWN_PROPERTIES contains duplicates"
+    );
+  }
+
+  #[test]
+  fn known_properties_match_applied_properties() {
+    let supported: BTreeSet<_> = supported_properties().iter().copied().collect();
+    let known: BTreeSet<_> = KNOWN_PROPERTIES.iter().copied().collect();
+
+    let missing: Vec<_> = supported.difference(&known).copied().collect();
+    let extra: Vec<_> = known.difference(&supported).copied().collect();
+
+    assert!(
+      missing.is_empty() && extra.is_empty(),
+      "KNOWN_PROPERTIES out of sync with apply_declaration_with_base.\nmissing: {:?}\nextra: {:?}",
+      missing,
+      extra
     );
   }
 

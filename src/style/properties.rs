@@ -41,6 +41,7 @@ use cssparser::ParserInput;
 use cssparser::Token;
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use svgtypes::PathParser;
 
 thread_local! {
@@ -69,6 +70,80 @@ pub fn with_image_set_dpr<T>(dpr: f32, f: impl FnOnce() -> T) -> T {
 
 fn current_image_set_dpr() -> f32 {
   IMAGE_SET_DPR.with(|cell| cell.get())
+}
+
+/// Returns the list of property names handled by [`apply_declaration_with_base`].
+///
+/// This is derived from the top-level match arms in this file so it stays in sync with
+/// implementation coverage.
+pub fn supported_properties() -> &'static [&'static str] {
+  static SUPPORTED: OnceLock<Vec<&'static str>> = OnceLock::new();
+  SUPPORTED.get_or_init(|| {
+    let mut in_match = false;
+    let mut brace_depth = 0usize;
+    let mut properties = Vec::new();
+    let mut current = Vec::new();
+
+    for line in include_str!("properties.rs").lines() {
+      let trimmed = line.trim_start();
+      if !in_match {
+        if trimmed.starts_with("match property ") {
+          in_match = true;
+          brace_depth = 0;
+          current.clear();
+        } else {
+          continue;
+        }
+      }
+
+      if brace_depth == 1 {
+        if let Some((arm, _)) = line.split_once("=>") {
+          for part in arm.split('|') {
+            let trimmed = part.trim();
+            if let Some(prop) = trimmed.strip_prefix('"').and_then(|p| p.strip_suffix('"')) {
+              current.push(prop.to_string());
+            }
+          }
+        }
+      }
+
+      for ch in line.chars() {
+        match ch {
+          '{' => brace_depth += 1,
+          '}' => {
+            if brace_depth > 0 {
+              brace_depth -= 1;
+            }
+            if in_match && brace_depth == 0 {
+              in_match = false;
+              if current.len() > properties.len() {
+                properties = current.clone();
+              }
+              current.clear();
+              break;
+            }
+          }
+          _ => {}
+        }
+      }
+
+      if !in_match {
+        continue;
+      }
+    }
+
+    properties.extend(
+      ["page-break-before", "page-break-after", "page-break-inside"]
+        .into_iter()
+        .map(|s| s.to_string()),
+    );
+    properties.sort();
+    properties.dedup();
+    properties
+      .into_iter()
+      .map(|p| -> &'static str { Box::leak(p.into_boxed_str()) })
+      .collect()
+  })
 }
 
 /// Populate line names for named grid areas (`<name>-start`/`<name>-end`).
