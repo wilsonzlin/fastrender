@@ -93,6 +93,31 @@ result.pixmap.save_png("example.png")?;
 
 `RenderResult::into_pixmap()` discards diagnostics when they are not needed.
 
+## Parallel rendering
+
+`FastRender` instances are `Send` but not `Sync`, so callers should avoid sharing a single instance across threads.
+Use `FastRenderPool` to render multiple pages concurrently while sharing immutable resources like fonts and the UA stylesheet:
+
+```rust
+use fastrender::api::{FastRenderPool, FastRenderPoolConfig};
+
+let pool = FastRenderPool::with_config(
+    FastRenderPoolConfig::new().with_pool_size(4)
+)?;
+
+let handles: Vec<_> = (0..4).map(|_| {
+    let pool = pool.clone();
+    std::thread::spawn(move || {
+        pool.render_html("<h1>Hi!</h1>", 800, 600).unwrap()
+    })
+}).collect();
+
+for handle in handles {
+    let pixmap = handle.join().unwrap();
+    // Save, compare, etc.
+}
+```
+
 ## Meta viewport handling
 
 FastRender ignores `<meta name="viewport">` directives by default to keep layouts

@@ -51,8 +51,9 @@
 //! # Thread Safety
 //!
 //! `FastRender` is `Send` but not `Sync`. Each instance maintains internal
-//! caches that are not thread-safe. For multi-threaded use, create one
-//! instance per thread.
+//! caches that are not thread-safe. For multi-threaded rendering, create one
+//! instance per thread or use [`FastRenderPool`] to share immutable resources
+//! while keeping per-worker caches isolated.
 
 use crate::accessibility::AccessibilityNode;
 use crate::animation;
@@ -78,6 +79,7 @@ use crate::geometry::Size;
 use crate::html::encoding::decode_html_bytes;
 use crate::html::viewport::ViewportLength;
 use crate::image_loader::ImageCache;
+use crate::image_loader::ImageCacheConfig;
 use crate::image_output::encode_image;
 use crate::image_output::OutputFormat;
 use crate::layout::absolute_positioning::resolve_positioned_style;
@@ -100,7 +102,7 @@ use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::painter::paint_tree_with_resources_scaled;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
 use crate::resource::CachingFetcherConfig;
-use crate::resource::{HttpFetcher, ResourceFetcher};
+use crate::resource::{CachingFetcher, HttpFetcher, ResourceFetcher};
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
 use crate::style::cascade::apply_styles_with_media_target_and_imports_cached;
 use crate::style::cascade::ContainerQueryContext;
@@ -114,6 +116,8 @@ use crate::style::page::PageSide;
 use crate::style::types::ContainerType;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
+use crate::text::font_db::FontCacheConfig;
+use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontPipelineStats;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
@@ -135,18 +139,15 @@ use crate::tree::box_tree::SrcsetDescriptor;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
+use fontdb::Database as FontDbDatabase;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::hash::Hash;
-use std::hash::Hasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem;
-use std::sync::Arc;
-use std::sync::OnceLock;
-#[cfg(test)]
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use url::Url;
 
 const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
@@ -1037,6 +1038,204 @@ impl FastRenderConfig {
   }
 }
 
+/// Configuration for [`FastRenderPool`].
+#[derive(Debug, Clone)]
+pub struct FastRenderPoolConfig {
+  /// Base renderer configuration applied to each worker.
+  pub renderer: FastRenderConfig,
+  /// Maximum number of worker renderers kept in the pool.
+  pub pool_size: usize,
+  /// Cache sizing for font lookups.
+  pub font_cache: FontCacheConfig,
+  /// Cache sizing for image decoding.
+  pub image_cache: ImageCacheConfig,
+  /// Optional shared resource fetcher used for documents and subresources.
+  pub fetcher: Option<Arc<dyn ResourceFetcher>>,
+}
+
+impl Default for FastRenderPoolConfig {
+  fn default() -> Self {
+    Self {
+      renderer: FastRenderConfig::default(),
+      pool_size: num_cpus::get().max(1),
+      font_cache: FontCacheConfig::default(),
+      image_cache: ImageCacheConfig::default(),
+      fetcher: None,
+    }
+  }
+}
+
+impl FastRenderPoolConfig {
+  /// Create a new pool configuration using defaults.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Override the renderer configuration applied to each worker.
+  pub fn with_renderer_config(mut self, renderer: FastRenderConfig) -> Self {
+    self.renderer = renderer;
+    self
+  }
+
+  /// Override the maximum number of pooled renderers.
+  pub fn with_pool_size(mut self, pool_size: usize) -> Self {
+    self.pool_size = pool_size.max(1);
+    self
+  }
+
+  /// Override the font cache configuration applied to each worker.
+  pub fn with_font_cache(mut self, font_cache: FontCacheConfig) -> Self {
+    self.font_cache = font_cache;
+    self
+  }
+
+  /// Override the image cache configuration applied to each worker.
+  pub fn with_image_cache(mut self, image_cache: ImageCacheConfig) -> Self {
+    self.image_cache = image_cache;
+    self
+  }
+
+  /// Provide a custom resource fetcher shared by all pooled renderers.
+  pub fn with_fetcher(mut self, fetcher: Arc<dyn ResourceFetcher>) -> Self {
+    self.fetcher = Some(fetcher);
+    self
+  }
+}
+
+#[derive(Clone)]
+pub struct FastRenderPool {
+  inner: Arc<PoolInner>,
+}
+
+struct PoolInner {
+  shared: Arc<SharedPoolResources>,
+  state: Mutex<PoolState>,
+  available: Condvar,
+}
+
+struct PoolState {
+  idle: Vec<FastRender>,
+  total: usize,
+}
+
+struct SharedPoolResources {
+  config: FastRenderConfig,
+  font_cache: FontCacheConfig,
+  image_cache: ImageCacheConfig,
+  fetcher: Arc<dyn ResourceFetcher>,
+  font_db: Arc<FontDbDatabase>,
+  pool_size: usize,
+}
+
+impl SharedPoolResources {
+  fn build_renderer(&self) -> Result<FastRender> {
+    let font_context = FontContext::with_shared_resource_fetcher(
+      Arc::clone(&self.font_db),
+      Arc::clone(&self.fetcher),
+      self.font_cache,
+    );
+    FastRender::from_parts(
+      self.config.clone(),
+      Arc::clone(&self.fetcher),
+      font_context,
+      self.image_cache,
+    )
+  }
+}
+
+impl FastRenderPool {
+  /// Create a new pool using the default configuration.
+  pub fn new() -> Result<Self> {
+    Self::with_config(FastRenderPoolConfig::default())
+  }
+
+  /// Create a new pool using the provided configuration.
+  pub fn with_config(config: FastRenderPoolConfig) -> Result<Self> {
+    let pool_size = config.pool_size.max(1);
+    let fetcher = resolve_fetcher(&config.renderer, config.fetcher);
+    let inner = PoolInner {
+      shared: Arc::new(SharedPoolResources {
+        config: config.renderer,
+        font_cache: config.font_cache,
+        image_cache: config.image_cache,
+        fetcher,
+        font_db: FontDatabase::shared_system_db(),
+        pool_size,
+      }),
+      state: Mutex::new(PoolState {
+        idle: Vec::with_capacity(pool_size),
+        total: 0,
+      }),
+      available: Condvar::new(),
+    };
+
+    Ok(Self {
+      inner: Arc::new(inner),
+    })
+  }
+
+  fn acquire_renderer(&self) -> Result<FastRender> {
+    let mut guard = self.inner.state.lock().unwrap();
+    loop {
+      if let Some(renderer) = guard.idle.pop() {
+        return Ok(renderer);
+      }
+      if guard.total < self.inner.shared.pool_size {
+        guard.total += 1;
+        let shared = Arc::clone(&self.inner.shared);
+        drop(guard);
+        let built = shared.build_renderer();
+        match built {
+          Ok(renderer) => return Ok(renderer),
+          Err(err) => {
+            let mut guard = self.inner.state.lock().unwrap();
+            guard.total = guard.total.saturating_sub(1);
+            self.inner.available.notify_one();
+            return Err(err);
+          }
+        }
+      }
+      guard = self.inner.available.wait(guard).unwrap();
+    }
+  }
+
+  fn release_renderer(&self, renderer: FastRender) {
+    let mut guard = self.inner.state.lock().unwrap();
+    guard.idle.push(renderer);
+    self.inner.available.notify_one();
+  }
+
+  fn with_renderer<F, T>(&self, op: F) -> Result<T>
+  where
+    F: FnOnce(&mut FastRender) -> Result<T>,
+  {
+    let mut renderer = self.acquire_renderer()?;
+    let result = op(&mut renderer);
+    self.release_renderer(renderer);
+    result
+  }
+
+  /// Render HTML to a pixmap using a pooled renderer.
+  pub fn render_html(&self, html: &str, width: u32, height: u32) -> Result<Pixmap> {
+    self.with_renderer(|renderer| renderer.render_html(html, width, height))
+  }
+
+  /// Render HTML with per-request options using a pooled renderer.
+  pub fn render_html_with_options(&self, html: &str, options: RenderOptions) -> Result<Pixmap> {
+    self.with_renderer(move |renderer| renderer.render_html_with_options(html, options))
+  }
+
+  /// Fetch and render a document from a URL using a pooled renderer.
+  pub fn render_url(&self, url: &str) -> Result<RenderResult> {
+    self.with_renderer(|renderer| renderer.render_url(url))
+  }
+
+  /// Fetch and render a document from a URL using explicit options.
+  pub fn render_url_with_options(&self, url: &str, options: RenderOptions) -> Result<RenderResult> {
+    self.with_renderer(move |renderer| renderer.render_url_with_options(url, options))
+  }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ResolvedViewport {
   /// The CSS layout viewport (initial containing block). Viewport units (`vw`/`vh`)
@@ -1467,6 +1666,33 @@ impl LayoutDocumentOptions {
     self
   }
 }
+
+fn resolve_fetcher(
+  config: &FastRenderConfig,
+  fetcher: Option<Arc<dyn ResourceFetcher>>,
+) -> Arc<dyn ResourceFetcher> {
+  if let Some(fetcher) = fetcher {
+    return fetcher;
+  }
+
+  if let Some(cache) = config.resource_cache {
+    Arc::new(CachingFetcher::with_config(HttpFetcher::new(), cache))
+  } else {
+    Arc::new(HttpFetcher::new())
+  }
+}
+
+fn build_image_cache(
+  base_url: &Option<String>,
+  fetcher: Arc<dyn ResourceFetcher>,
+  config: ImageCacheConfig,
+) -> ImageCache {
+  match base_url {
+    Some(url) => ImageCache::with_base_url_and_fetcher_and_config(url.clone(), fetcher, config),
+    None => ImageCache::with_fetcher_and_config(fetcher, config),
+  }
+}
+
 impl FastRender {
   fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
     let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
@@ -1494,6 +1720,37 @@ impl FastRender {
 
   fn box_generation_options(&self) -> BoxGenerationOptions {
     BoxGenerationOptions::default().with_compat_profile(self.compat_profile)
+  }
+
+  fn from_parts(
+    config: FastRenderConfig,
+    fetcher: Arc<dyn ResourceFetcher>,
+    font_context: FontContext,
+    image_cache_config: ImageCacheConfig,
+  ) -> Result<Self> {
+    let layout_config = LayoutConfig::for_viewport(Size::new(
+      config.default_width as f32,
+      config.default_height as f32,
+    ))
+    .with_identifier("api");
+    let layout_engine = LayoutEngine::with_font_context(layout_config, font_context.clone());
+    let image_cache = build_image_cache(&config.base_url, Arc::clone(&fetcher), image_cache_config);
+
+    Ok(Self {
+      font_context,
+      layout_engine,
+      image_cache,
+      fetcher,
+      background_color: config.background_color,
+      default_width: config.default_width,
+      default_height: config.default_height,
+      device_pixel_ratio: config.device_pixel_ratio,
+      apply_meta_viewport: config.apply_meta_viewport,
+      pending_device_size: None,
+      base_url: config.base_url.clone(),
+      dom_compat_mode: config.dom_compat_mode,
+      compat_profile: config.compat_profile,
+    })
   }
 
   /// Creates a new FastRender instance with default configuration
@@ -1571,34 +1828,9 @@ impl FastRender {
     config: FastRenderConfig,
     fetcher: Option<Arc<dyn ResourceFetcher>>,
   ) -> Result<Self> {
-    let fetcher = fetcher.unwrap_or_else(|| Arc::new(HttpFetcher::new()));
-    let font_context = FontContext::new();
-    let layout_config = LayoutConfig::for_viewport(Size::new(
-      config.default_width as f32,
-      config.default_height as f32,
-    ))
-    .with_identifier("api");
-    let layout_engine = LayoutEngine::with_font_context(layout_config, font_context.clone());
-    let image_cache = match &config.base_url {
-      Some(url) => ImageCache::with_base_url_and_fetcher(url.clone(), Arc::clone(&fetcher)),
-      None => ImageCache::with_fetcher(Arc::clone(&fetcher)),
-    };
-
-    Ok(Self {
-      font_context,
-      layout_engine,
-      image_cache,
-      fetcher,
-      background_color: config.background_color,
-      default_width: config.default_width,
-      default_height: config.default_height,
-      device_pixel_ratio: config.device_pixel_ratio,
-      apply_meta_viewport: config.apply_meta_viewport,
-      pending_device_size: None,
-      base_url: config.base_url.clone(),
-      dom_compat_mode: config.dom_compat_mode,
-      compat_profile: config.compat_profile,
-    })
+    let fetcher = resolve_fetcher(&config, fetcher);
+    let font_context = FontContext::with_resource_fetcher(Arc::clone(&fetcher));
+    Self::from_parts(config, fetcher, font_context, ImageCacheConfig::default())
   }
 
   /// Renders HTML/CSS to a pixmap

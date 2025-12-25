@@ -54,6 +54,16 @@ fn test_fastrender_with_custom_config() {
 }
 
 #[test]
+fn test_thread_safe_pool_creation() {
+  let pool = fastrender::api::FastRenderPool::new().expect("pool");
+  let pixmap = pool
+    .render_html("<div>pool</div>", 64, 64)
+    .expect("render html");
+  assert_eq!(pixmap.width(), 64);
+  assert_eq!(pixmap.height(), 64);
+}
+
+#[test]
 fn test_builder_chain_for_compatibility() {
   let renderer = FastRender::builder()
     .compat_mode(CompatProfile::Standards)
