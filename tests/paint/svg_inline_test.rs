@@ -202,3 +202,26 @@ fn foreign_object_with_dimensions_emits_marker() {
     "valid dimensions should avoid unresolved placeholder comments"
   );
 }
+
+#[test]
+fn foreign_object_accepts_absolute_units_for_dimensions() {
+  let html = r#"
+  <svg width="2in" height="2in" viewBox="0 0 192 192">
+    <foreignObject x="1in" y="0" width="1in" height="1in">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="width:96px;height:96px;background: rgb(0, 255, 0);"></div>
+    </foreignObject>
+  </svg>
+  "#;
+
+  let serialized = serialized_inline_svg(html, 200.0, 200.0).expect("serialize svg");
+  assert!(
+    serialized.svg.contains("FASTRENDER_FOREIGN_OBJECT_0"),
+    "absolute units should resolve to a valid foreignObject"
+  );
+  assert!(
+    !serialized
+      .svg
+      .contains("FASTRENDER_FOREIGN_OBJECT_UNRESOLVED"),
+    "converted dimensions should avoid unresolved placeholder"
+  );
+}

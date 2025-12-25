@@ -29,6 +29,7 @@ use crate::style::types::TextTransform;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
+use crate::svg::parse_svg_length_px;
 use crate::tree::anonymous::AnonymousBoxCreator;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
@@ -485,25 +486,7 @@ fn collect_picture_source_map(styled: &StyledNode) -> HashMap<usize, Vec<Picture
 }
 
 fn parse_svg_number(value: &str) -> Option<f32> {
-  let trimmed = value.trim();
-  if trimmed.is_empty() || trimmed.ends_with('%') {
-    return None;
-  }
-
-  let mut end = 0;
-  for (idx, ch) in trimmed.char_indices() {
-    if matches!(ch, '0'..='9' | '+' | '-' | '.' | 'e' | 'E') {
-      end = idx + ch.len_utf8();
-    } else {
-      break;
-    }
-  }
-
-  if end == 0 {
-    return None;
-  }
-
-  trimmed[..end].parse::<f32>().ok()
+  parse_svg_length_px(value)
 }
 
 #[allow(dead_code)]
