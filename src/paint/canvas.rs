@@ -220,6 +220,16 @@ impl Canvas {
     Self::new(width, height, Rgba::TRANSPARENT)
   }
 
+  /// Wraps an existing pixmap in a Canvas without clearing it.
+  pub fn from_pixmap(pixmap: Pixmap) -> Self {
+    Self {
+      pixmap,
+      state_stack: Vec::new(),
+      layer_stack: Vec::new(),
+      current_state: CanvasState::new(),
+    }
+  }
+
   /// Returns the canvas width in pixels
   #[inline]
   pub fn width(&self) -> u32 {

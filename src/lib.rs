@@ -240,7 +240,8 @@ pub use css::types::PropertyValue;
 pub use css::types::Transform;
 // Debug tools
 pub use debug::tree_printer::{
-  ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, PrintConfig, TreeDiff,
+  ColorMode, DiffMode, DotExporter, EnhancedTreePrinter, JsonExportConfig, PrintConfig, TreeDiff,
+  TreeJsonExporter,
 };
 // Error handling
 pub use error::{Error, Result};

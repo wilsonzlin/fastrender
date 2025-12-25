@@ -1,11 +1,18 @@
 //! Enhanced tree printing and visualization utilities
 
-use crate::geometry::Rect;
+use crate::dom::{DomNode, DomNodeType};
+use crate::geometry::{Point, Rect};
+use crate::paint::display_list::{DisplayItem, DisplayList};
+use crate::style::cascade::StyledNode;
+use crate::style::color::Rgba;
+use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::MarkerContent;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 /// Color mode for terminal output
@@ -531,6 +538,489 @@ fn truncate(s: &str, max_len: usize) -> String {
   } else {
     format!("{}...", &s[..max_len])
   }
+}
+
+/// Configuration for JSON exports.
+#[derive(Debug, Clone, Default)]
+pub struct JsonExportConfig {
+  /// Optional scroll offset applied to fragment bounds.
+  pub scroll_offset: Option<Point>,
+}
+
+/// Serializes trees into deterministic JSON structures.
+///
+/// The exporter focuses on lightweight, stable summaries suitable for
+/// debugging and test fixtures rather than full-fidelity serialization.
+pub struct TreeJsonExporter {
+  config: JsonExportConfig,
+}
+
+impl TreeJsonExporter {
+  /// Creates an exporter with default configuration.
+  pub fn new() -> Self {
+    Self {
+      config: JsonExportConfig::default(),
+    }
+  }
+
+  /// Creates an exporter with explicit configuration.
+  pub fn with_config(config: JsonExportConfig) -> Self {
+    Self { config }
+  }
+
+  /// Serializes a DOM subtree.
+  pub fn export_dom(&self, node: &DomNode) -> Value {
+    self.export_dom_node(node)
+  }
+
+  /// Serializes a styled tree.
+  pub fn export_styled_tree(&self, node: &StyledNode) -> Value {
+    let mut entries = vec![
+      ("node_id", Value::from(node.node_id as u64)),
+      ("node", self.export_dom_brief(&node.node)),
+      ("styles", style_summary(&node.styles)),
+    ];
+
+    if let Some(before) = &node.before_styles {
+      entries.push(("before", style_summary(before)));
+    }
+    if let Some(after) = &node.after_styles {
+      entries.push(("after", style_summary(after)));
+    }
+    if let Some(marker) = &node.marker_styles {
+      entries.push(("marker", style_summary(marker)));
+    }
+
+    let children: Vec<Value> = node
+      .children
+      .iter()
+      .map(|child| self.export_styled_tree(child))
+      .collect();
+    entries.push(("children", Value::Array(children)));
+
+    map_from_pairs(entries)
+  }
+
+  /// Serializes a box tree.
+  pub fn export_box_tree(&self, node: &BoxNode) -> Value {
+    let mut entries = vec![
+      ("id", Value::from(node.id as u64)),
+      ("type", Value::String(format!("{:?}", node.box_type))),
+      ("style", style_summary(&node.style)),
+    ];
+
+    if let Some(info) = &node.debug_info {
+      entries.push(("debug", Value::String(info.to_selector())));
+    }
+    if let Some(styled_node_id) = node.styled_node_id {
+      entries.push(("styled_node_id", Value::from(styled_node_id as u64)));
+    }
+
+    let children: Vec<Value> = node
+      .children
+      .iter()
+      .map(|child| self.export_box_tree(child))
+      .collect();
+    entries.push(("children", Value::Array(children)));
+
+    map_from_pairs(entries)
+  }
+
+  /// Serializes a fragment tree. Bounds are emitted both in local and absolute coordinates.
+  pub fn export_fragment_tree(&self, fragment: &FragmentNode) -> Value {
+    self.export_fragment_with_offset(fragment, Point::ZERO)
+  }
+
+  fn export_fragment_with_offset(&self, fragment: &FragmentNode, parent_offset: Point) -> Value {
+    let scroll = self.config.scroll_offset.unwrap_or(Point::new(0.0, 0.0));
+    let abs_rect = Rect::from_xywh(
+      fragment.bounds.x() + parent_offset.x + scroll.x,
+      fragment.bounds.y() + parent_offset.y + scroll.y,
+      fragment.bounds.width(),
+      fragment.bounds.height(),
+    );
+
+    let mut entries = vec![
+      ("kind", Value::String(fragment_kind(fragment))),
+      ("local_bounds", rect_value(fragment.bounds, None)),
+      ("absolute_bounds", rect_value(abs_rect, None)),
+      (
+        "fragment_index",
+        Value::from(fragment.fragment_index as u64),
+      ),
+      (
+        "fragment_count",
+        Value::from(fragment.fragment_count as u64),
+      ),
+      (
+        "fragmentainer_index",
+        Value::from(fragment.fragmentainer_index as u64),
+      ),
+      (
+        "scroll_overflow",
+        rect_value(
+          fragment.scroll_overflow,
+          Some(Point::new(
+            parent_offset.x + scroll.x,
+            parent_offset.y + scroll.y,
+          )),
+        ),
+      ),
+    ];
+
+    match &fragment.content {
+      FragmentContent::Block { box_id }
+      | FragmentContent::Inline { box_id, .. }
+      | FragmentContent::Replaced { box_id, .. }
+      | FragmentContent::Text { box_id, .. } => {
+        if let Some(id) = box_id {
+          entries.push(("box_id", Value::from(*id as u64)));
+        }
+      }
+      FragmentContent::Line { .. } => {}
+    }
+
+    if let FragmentContent::Text { text, .. } = &fragment.content {
+      entries.push(("text", Value::String(truncate(text, 120))));
+    }
+
+    if let Some(style) = fragment.style.as_deref() {
+      entries.push(("style", style_summary(style)));
+    }
+
+    let next_offset = Point::new(
+      parent_offset.x + fragment.bounds.x(),
+      parent_offset.y + fragment.bounds.y(),
+    );
+    let children: Vec<Value> = fragment
+      .children
+      .iter()
+      .map(|child| self.export_fragment_with_offset(child, next_offset))
+      .collect();
+    entries.push(("children", Value::Array(children)));
+
+    map_from_pairs(entries)
+  }
+
+  /// Serializes a display list into a compact JSON representation.
+  pub fn export_display_list(&self, list: &DisplayList) -> Value {
+    let items: Vec<Value> = list.items().iter().map(display_item_value).collect();
+    let mut entries = vec![("items", Value::Array(items))];
+
+    if let Some(bounds) = list
+      .items()
+      .iter()
+      .fold(None, |acc, item| match (acc, item.bounds()) {
+        (None, Some(rect)) => Some(rect),
+        (Some(prev), Some(rect)) => Some(prev.union(rect)),
+        (acc, None) => acc,
+      })
+    {
+      entries.push(("bounds", rect_value(bounds, None)));
+    }
+
+    map_from_pairs(entries)
+  }
+
+  fn export_dom_brief(&self, node: &DomNode) -> Value {
+    match &node.node_type {
+      DomNodeType::Element {
+        tag_name,
+        namespace,
+        attributes,
+      } => map_from_pairs(vec![
+        ("type", Value::String("element".into())),
+        ("tag", Value::String(tag_name.clone())),
+        ("namespace", Value::String(namespace.clone())),
+        ("attributes", attributes_value(attributes)),
+      ]),
+      DomNodeType::Slot {
+        namespace,
+        attributes,
+      } => map_from_pairs(vec![
+        ("type", Value::String("slot".into())),
+        ("namespace", Value::String(namespace.clone())),
+        ("attributes", attributes_value(attributes)),
+      ]),
+      DomNodeType::Text { content } => map_from_pairs(vec![
+        ("type", Value::String("text".into())),
+        ("text", Value::String(truncate(content, 120))),
+      ]),
+      DomNodeType::Document => map_from_pairs(vec![("type", Value::String("document".into()))]),
+      DomNodeType::ShadowRoot { .. } => {
+        map_from_pairs(vec![("type", Value::String("shadow_root".into()))])
+      }
+    }
+  }
+
+  fn export_dom_node(&self, node: &DomNode) -> Value {
+    let mut entries = match &node.node_type {
+      DomNodeType::Element {
+        tag_name,
+        namespace,
+        attributes,
+      } => vec![
+        ("type", Value::String("element".into())),
+        ("tag", Value::String(tag_name.clone())),
+        ("namespace", Value::String(namespace.clone())),
+        ("attributes", attributes_value(attributes)),
+      ],
+      DomNodeType::Slot {
+        namespace,
+        attributes,
+      } => vec![
+        ("type", Value::String("slot".into())),
+        ("namespace", Value::String(namespace.clone())),
+        ("attributes", attributes_value(attributes)),
+      ],
+      DomNodeType::ShadowRoot { mode } => vec![
+        ("type", Value::String("shadow_root".into())),
+        ("mode", Value::String(format!("{:?}", mode))),
+      ],
+      DomNodeType::Text { content } => vec![
+        ("type", Value::String("text".into())),
+        ("text", Value::String(truncate(content, 200))),
+      ],
+      DomNodeType::Document => vec![("type", Value::String("document".into()))],
+    };
+
+    let children: Vec<Value> = node
+      .children
+      .iter()
+      .map(|child| self.export_dom_node(child))
+      .collect();
+    entries.push(("children", Value::Array(children)));
+
+    map_from_pairs(entries)
+  }
+}
+
+fn display_item_value(item: &DisplayItem) -> Value {
+  match item {
+    DisplayItem::FillRect(it) => map_from_pairs(vec![
+      ("type", Value::String("FillRect".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::StrokeRect(it) => map_from_pairs(vec![
+      ("type", Value::String("StrokeRect".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("width", Value::from(it.width)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::Outline(it) => map_from_pairs(vec![
+      ("type", Value::String("Outline".into())),
+      ("rect", rect_value(it.outer_rect(), None)),
+      ("width", Value::from(it.width)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::FillRoundedRect(it) => map_from_pairs(vec![
+      ("type", Value::String("FillRoundedRect".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::StrokeRoundedRect(it) => map_from_pairs(vec![
+      ("type", Value::String("StrokeRoundedRect".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("width", Value::from(it.width)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::Text(it) => map_from_pairs(vec![
+      ("type", Value::String("Text".into())),
+      ("origin", point_value(it.origin)),
+      ("glyphs", Value::from(it.glyphs.len() as u64)),
+      ("font_size", Value::from(it.font_size)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::Image(it) => map_from_pairs(vec![
+      ("type", Value::String("Image".into())),
+      ("dest_rect", rect_value(it.dest_rect, None)),
+      (
+        "filter_quality",
+        Value::String(format!("{:?}", it.filter_quality)),
+      ),
+    ]),
+    DisplayItem::BoxShadow(it) => map_from_pairs(vec![
+      ("type", Value::String("BoxShadow".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::ListMarker(it) => map_from_pairs(vec![
+      ("type", Value::String("ListMarker".into())),
+      ("origin", point_value(it.origin)),
+      ("glyphs", Value::from(it.glyphs.len() as u64)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::LinearGradient(it) => map_from_pairs(vec![
+      ("type", Value::String("LinearGradient".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("stops", Value::from(it.stops.len() as u64)),
+    ]),
+    DisplayItem::RadialGradient(it) => map_from_pairs(vec![
+      ("type", Value::String("RadialGradient".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("stops", Value::from(it.stops.len() as u64)),
+    ]),
+    DisplayItem::ConicGradient(it) => map_from_pairs(vec![
+      ("type", Value::String("ConicGradient".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("stops", Value::from(it.stops.len() as u64)),
+    ]),
+    DisplayItem::Border(it) => map_from_pairs(vec![
+      ("type", Value::String("Border".into())),
+      ("rect", rect_value(it.rect, None)),
+      ("color", color_value(it.color)),
+    ]),
+    DisplayItem::TextDecoration(it) => map_from_pairs(vec![
+      ("type", Value::String("TextDecoration".into())),
+      ("rect", rect_value(it.bounds, None)),
+    ]),
+    DisplayItem::PushClip(it) => map_from_pairs(vec![
+      ("type", Value::String("PushClip".into())),
+      (
+        "shape",
+        match &it.shape {
+          crate::paint::display_list::ClipShape::Rect { rect, .. } => rect_value(*rect, None),
+          crate::paint::display_list::ClipShape::Path { .. } => Value::String("path".into()),
+        },
+      ),
+    ]),
+    DisplayItem::PopClip => map_from_pairs(vec![("type", Value::String("PopClip".into()))]),
+    DisplayItem::PushOpacity(it) => map_from_pairs(vec![
+      ("type", Value::String("PushOpacity".into())),
+      ("opacity", Value::from(it.opacity)),
+      ("bounds", rect_value(it.bounds, None)),
+    ]),
+    DisplayItem::PopOpacity => map_from_pairs(vec![("type", Value::String("PopOpacity".into()))]),
+    DisplayItem::PushTransform(it) => map_from_pairs(vec![
+      ("type", Value::String("PushTransform".into())),
+      ("is_3d", Value::from(it.is_3d)),
+    ]),
+    DisplayItem::PopTransform => {
+      map_from_pairs(vec![("type", Value::String("PopTransform".into()))])
+    }
+    DisplayItem::PushBlendMode(it) => map_from_pairs(vec![
+      ("type", Value::String("PushBlendMode".into())),
+      ("mode", Value::String(format!("{:?}", it.blend_mode))),
+    ]),
+    DisplayItem::PopBlendMode => {
+      map_from_pairs(vec![("type", Value::String("PopBlendMode".into()))])
+    }
+    DisplayItem::PushStackingContext(it) => map_from_pairs(vec![
+      ("type", Value::String("PushStackingContext".into())),
+      ("bounds", rect_value(it.bounds, None)),
+      ("opacity", Value::from(it.opacity)),
+      (
+        "z_index",
+        match it.z_index {
+          Some(v) => Value::from(v),
+          None => Value::Null,
+        },
+      ),
+    ]),
+    DisplayItem::PopStackingContext => {
+      map_from_pairs(vec![("type", Value::String("PopStackingContext".into()))])
+    }
+  }
+}
+
+fn fragment_kind(fragment: &FragmentNode) -> String {
+  match &fragment.content {
+    FragmentContent::Block { .. } => "block".into(),
+    FragmentContent::Inline { .. } => "inline".into(),
+    FragmentContent::Text { .. } => "text".into(),
+    FragmentContent::Line { .. } => "line".into(),
+    FragmentContent::Replaced { .. } => "replaced".into(),
+  }
+}
+
+fn style_summary(style: &ComputedStyle) -> Value {
+  let mut entries = vec![
+    ("display", Value::String(format!("{:?}", style.display))),
+    ("position", Value::String(format!("{:?}", style.position))),
+    (
+      "visibility",
+      Value::String(format!("{:?}", style.visibility)),
+    ),
+    ("opacity", Value::from(style.opacity)),
+    (
+      "z_index",
+      style.z_index.map(Value::from).unwrap_or(Value::Null),
+    ),
+    ("color", color_value(style.color)),
+    ("background_color", color_value(style.background_color)),
+    (
+      "overflow",
+      Value::String(format!("{:?}/{:?}", style.overflow_x, style.overflow_y)),
+    ),
+    ("transform_ops", Value::from(style.transform.len() as u64)),
+    ("font_size", Value::from(style.font_size)),
+    ("line_height", Value::from(style.computed_line_height())),
+  ];
+
+  if let Some(bg) = style.background_layers.first() {
+    entries.push((
+      "background_image",
+      Value::String(match &bg.image {
+        Some(crate::style::types::BackgroundImage::Url(url)) => format!("url({})", url),
+        Some(crate::style::types::BackgroundImage::None) => "none".into(),
+        Some(_) => "gradient".into(),
+        None => "none".into(),
+      }),
+    ));
+  }
+
+  map_from_pairs(entries)
+}
+
+fn attributes_value(attrs: &[(String, String)]) -> Value {
+  let mut map = BTreeMap::new();
+  for (name, value) in attrs {
+    map.insert(name.clone(), Value::String(value.clone()));
+  }
+  let mut obj = Map::new();
+  for (k, v) in map {
+    obj.insert(k, v);
+  }
+  Value::Object(obj)
+}
+
+fn color_value(color: Rgba) -> Value {
+  map_from_pairs(vec![
+    ("r", Value::from(color.r)),
+    ("g", Value::from(color.g)),
+    ("b", Value::from(color.b)),
+    ("a", Value::from(color.a)),
+  ])
+}
+
+fn rect_value(rect: Rect, offset: Option<Point>) -> Value {
+  let (x, y) = if let Some(off) = offset {
+    (rect.x() + off.x, rect.y() + off.y)
+  } else {
+    (rect.x(), rect.y())
+  };
+  map_from_pairs(vec![
+    ("x", Value::from(x)),
+    ("y", Value::from(y)),
+    ("width", Value::from(rect.width())),
+    ("height", Value::from(rect.height())),
+  ])
+}
+
+fn point_value(point: Point) -> Value {
+  map_from_pairs(vec![
+    ("x", Value::from(point.x)),
+    ("y", Value::from(point.y)),
+  ])
+}
+
+fn map_from_pairs(entries: Vec<(&str, Value)>) -> Value {
+  let mut map = Map::new();
+  for (key, value) in entries {
+    map.insert(key.to_string(), value);
+  }
+  Value::Object(map)
 }
 
 #[cfg(test)]
