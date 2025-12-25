@@ -109,7 +109,7 @@ struct ConstraintKey {
 // constraints in the order: orphans → continuation widows → future widows.
 
 const BREAK_EPSILON: f32 = 0.01;
-const LINE_FALLBACK_EPSILON: f32 = 0.5;
+const LINE_FALLBACK_EPSILON: f32 = 1.0;
 
 /// Splits a fragment tree into multiple fragmentainer roots based on the given options.
 ///
