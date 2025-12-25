@@ -384,6 +384,7 @@ impl TreePrinter {
       FragmentContent::Text { text, .. } => &format!("Text({})", truncate(text, 20)),
       FragmentContent::Line { .. } => "Line",
       FragmentContent::Replaced { .. } => "Replaced",
+      FragmentContent::RunningAnchor { .. } => "RunningAnchor",
     };
 
     output.push_str(prefix);

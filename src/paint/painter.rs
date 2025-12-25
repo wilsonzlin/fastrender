@@ -7737,6 +7737,7 @@ fn describe_content(content: &FragmentContent) -> &'static str {
     }
     FragmentContent::Line { .. } => "line",
     FragmentContent::Replaced { .. } => "replaced",
+    FragmentContent::RunningAnchor { .. } => "running-anchor",
   }
 }
 
@@ -7751,7 +7752,7 @@ fn fragment_counts(node: &FragmentNode) -> (usize, usize, usize, usize, usize) {
     FragmentContent::Replaced { .. } => replaced += 1,
     FragmentContent::Line { .. } => lines += 1,
     FragmentContent::Inline { .. } => inline += 1,
-    FragmentContent::Block { .. } => {}
+    FragmentContent::Block { .. } | FragmentContent::RunningAnchor { .. } => {}
   }
   for child in &node.children {
     let (t, tx, r, l, i) = fragment_counts(child);

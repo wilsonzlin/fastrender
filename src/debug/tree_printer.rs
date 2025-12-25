@@ -356,6 +356,7 @@ impl EnhancedTreePrinter {
       }
       FragmentContent::Line { .. } => "Line",
       FragmentContent::Replaced { .. } => "Replaced",
+      FragmentContent::RunningAnchor { .. } => "RunningAnchor",
     };
 
     format!(

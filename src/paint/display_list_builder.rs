@@ -2545,6 +2545,7 @@ impl DisplayListBuilder {
       FragmentContent::Text { box_id, .. } => *box_id,
       FragmentContent::Replaced { box_id, .. } => *box_id,
       FragmentContent::Line { .. } => None,
+      FragmentContent::RunningAnchor { .. } => None,
     }
   }
 

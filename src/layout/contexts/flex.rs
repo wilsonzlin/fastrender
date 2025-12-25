@@ -3441,6 +3441,7 @@ impl FlexFormattingContext {
             | FragmentContent::Text { box_id, .. }
             | FragmentContent::Replaced { box_id, .. } => *box_id,
             FragmentContent::Line { .. } => None,
+            FragmentContent::RunningAnchor { .. } => None,
           } {
             frag_box_ids.push((idx, box_id));
           }

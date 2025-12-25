@@ -119,6 +119,14 @@ pub enum FragmentContent {
     /// Index or ID of source BoxNode
     box_id: Option<usize>,
   },
+
+  /// Running element anchor snapshot used for paged margin boxes.
+  RunningAnchor {
+    /// Identifier for the running element.
+    name: String,
+    /// Snapshot of the running element fragment subtree.
+    snapshot: Box<FragmentNode>,
+  },
 }
 
 // ReplacedType is imported from box_tree to avoid duplication
@@ -674,11 +682,19 @@ impl FragmentNode {
   /// assert_eq!(translated.bounds.y(), 30.0);
   /// ```
   pub fn translate(&self, offset: Point) -> Self {
+    let content = match &self.content {
+      FragmentContent::RunningAnchor { name, snapshot } => FragmentContent::RunningAnchor {
+        name: name.clone(),
+        snapshot: Box::new(snapshot.translate(offset)),
+      },
+      other => other.clone(),
+    };
+
     Self {
       bounds: self.bounds.translate(offset),
       block_metadata: self.block_metadata.clone(),
       logical_override: self.logical_override.map(|r| r.translate(offset)),
-      content: self.content.clone(),
+      content,
       baseline: self.baseline,
       children: self.children.clone(),
       style: self.style.clone(),
@@ -698,11 +714,18 @@ impl FragmentNode {
   /// subtree. Use sparingly; most callers should prefer [`translate`], which
   /// keeps child coordinates relative to their parent.
   pub fn translate_subtree_absolute(&self, offset: Point) -> Self {
+    let content = match &self.content {
+      FragmentContent::RunningAnchor { name, snapshot } => FragmentContent::RunningAnchor {
+        name: name.clone(),
+        snapshot: Box::new(snapshot.translate_subtree_absolute(offset)),
+      },
+      other => other.clone(),
+    };
     Self {
       bounds: self.bounds.translate(offset),
       block_metadata: self.block_metadata.clone(),
       logical_override: self.logical_override.map(|r| r.translate(offset)),
-      content: self.content.clone(),
+      content,
       baseline: self.baseline,
       children: self
         .children

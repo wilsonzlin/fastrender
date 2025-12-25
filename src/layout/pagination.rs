@@ -16,7 +16,7 @@ use crate::layout::fragmentation::{
 };
 use crate::layout::running_strings::{collect_string_set_events, StringSetEvent};
 use crate::style::content::{
-  ContentContext, ContentItem, ContentValue, CounterStyle, RunningStringValues,
+  ContentContext, ContentItem, ContentValue, CounterStyle, RunningElementSelect, RunningStringValues,
 };
 use crate::style::display::{Display, FormattingContextType};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
@@ -25,7 +25,7 @@ use crate::style::types::WritingMode;
 use crate::style::{block_axis_is_horizontal, ComputedStyle};
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::{BoxNode, BoxTree, ReplacedType};
-use crate::tree::fragment_tree::FragmentNode;
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 
 /// Controls how paginated pages are positioned in the fragment tree.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -247,8 +247,12 @@ pub fn paginate_fragment_tree(
   let mut string_event_idx = 0usize;
   let mut string_set_carry: HashMap<String, String> = HashMap::new();
 
-  let mut pages: Vec<(FragmentNode, ResolvedPageStyle, HashMap<String, RunningStringValues>)> =
-    Vec::new();
+  let mut pages: Vec<(
+    FragmentNode,
+    ResolvedPageStyle,
+    HashMap<String, RunningStringValues>,
+    HashMap<String, Vec<FragmentNode>>,
+  )> = Vec::new();
   let mut consumed_base = 0.0f32;
   let mut page_index = 0usize;
 
@@ -297,6 +301,7 @@ pub fn paginate_fragment_tree(
       ),
       Vec::new(),
     );
+    let mut page_running_elements: HashMap<String, Vec<FragmentNode>> = HashMap::new();
 
     let mut end_in_base = start_in_base;
 
@@ -369,6 +374,7 @@ pub fn paginate_fragment_tree(
           page_style.content_origin.x,
           page_style.content_origin.y,
         );
+        page_running_elements = collect_running_elements_for_page(&content);
         page_root.children.push(content);
       }
 
@@ -393,7 +399,7 @@ pub fn paginate_fragment_tree(
       end_in_base,
     );
 
-    pages.push((page_root, page_style, page_strings));
+    pages.push((page_root, page_style, page_strings, page_running_elements));
     if !is_blank_page {
       consumed_base = end_in_base;
     }
@@ -410,7 +416,9 @@ pub fn paginate_fragment_tree(
 
   let count = pages.len();
   let mut page_roots = Vec::with_capacity(count);
-  for (idx, (mut page, style, running_strings)) in pages.into_iter().enumerate() {
+  let mut running_element_state: HashMap<String, FragmentNode> = HashMap::new();
+  for (idx, (mut page, style, running_strings, running_elements)) in pages.into_iter().enumerate()
+  {
     page
       .children
       .extend(build_margin_box_fragments(
@@ -419,7 +427,14 @@ pub fn paginate_fragment_tree(
         idx,
         count,
         &running_strings,
+        &running_elements,
+        &running_element_state,
       ));
+    for (name, anchors) in &running_elements {
+      if let Some(last) = anchors.last() {
+        running_element_state.insert(name.clone(), last.clone());
+      }
+    }
     propagate_fragment_metadata(&mut page, idx, count);
     page_roots.push(page);
   }
@@ -627,6 +642,98 @@ fn running_strings_for_page(
   snapshot
 }
 
+fn collect_running_elements_for_page(root: &FragmentNode) -> HashMap<String, Vec<FragmentNode>> {
+  let mut occurrences: HashMap<String, Vec<(f32, FragmentNode)>> = HashMap::new();
+  collect_running_element_occurrences(root, Point::ZERO, &mut occurrences);
+
+  let mut out: HashMap<String, Vec<FragmentNode>> = HashMap::new();
+  for (name, mut entries) in occurrences {
+    entries.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    let mut snapshots = Vec::with_capacity(entries.len());
+    for (_, mut snapshot) in entries {
+      strip_running_anchor_fragments(&mut snapshot);
+      clear_running_position(&mut snapshot);
+      let offset = Point::new(-snapshot.bounds.x(), -snapshot.bounds.y());
+      snapshots.push(snapshot.translate(offset));
+    }
+    out.insert(name, snapshots);
+  }
+
+  out
+}
+
+fn collect_running_element_occurrences(
+  node: &FragmentNode,
+  origin: Point,
+  out: &mut HashMap<String, Vec<(f32, FragmentNode)>>,
+) {
+  let abs_origin = Point::new(origin.x + node.bounds.x(), origin.y + node.bounds.y());
+
+  if let FragmentContent::RunningAnchor { name, snapshot } = &node.content {
+    out
+      .entry(name.clone())
+      .or_default()
+      .push((abs_origin.y, (**snapshot).clone()));
+  } else if node.content.is_block() || node.content.is_inline() || node.content.is_replaced() {
+    if let Some(name) = node
+      .style
+      .as_deref()
+      .and_then(|style| style.running_position.as_ref())
+    {
+      out
+        .entry(name.clone())
+        .or_default()
+        .push((abs_origin.y, node.clone()));
+    }
+  }
+
+  for child in &node.children {
+    collect_running_element_occurrences(child, abs_origin, out);
+  }
+}
+
+fn strip_running_anchor_fragments(node: &mut FragmentNode) {
+  let mut kept: Vec<FragmentNode> = Vec::with_capacity(node.children.len());
+  for mut child in node.children.drain(..) {
+    if matches!(child.content, FragmentContent::RunningAnchor { .. }) {
+      continue;
+    }
+    strip_running_anchor_fragments(&mut child);
+    kept.push(child);
+  }
+  node.children = kept;
+}
+
+fn clear_running_position(node: &mut FragmentNode) {
+  if let Some(style) = node.style.as_deref() {
+    if style.running_position.is_some() {
+      let mut owned = style.clone();
+      owned.running_position = None;
+      node.style = Some(Arc::new(owned));
+    }
+  }
+  for child in &mut node.children {
+    clear_running_position(child);
+  }
+}
+
+fn select_running_element(
+  ident: &str,
+  select: RunningElementSelect,
+  page_anchors: &HashMap<String, Vec<FragmentNode>>,
+  running_state: &HashMap<String, FragmentNode>,
+) -> Option<FragmentNode> {
+  if let Some(list) = page_anchors.get(ident) {
+    if !list.is_empty() {
+      return match select {
+        RunningElementSelect::Last => list.last().cloned(),
+        RunningElementSelect::First | RunningElementSelect::Start => list.first().cloned(),
+      };
+    }
+  }
+  running_state.get(ident).cloned()
+}
+
 fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
   node.bounds = Rect::from_xywh(
     node.bounds.x() + dx,
@@ -683,6 +790,8 @@ fn build_margin_box_fragments(
   page_index: usize,
   page_count: usize,
   running_strings: &HashMap<String, RunningStringValues>,
+  running_elements: &HashMap<String, Vec<FragmentNode>>,
+  running_state: &HashMap<String, FragmentNode>,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
 
@@ -703,6 +812,22 @@ fn build_margin_box_fragments(
       }
 
       let style_arc = Arc::new(box_style.clone());
+      if let ContentValue::Items(items) = &box_style.content_value {
+        if items.len() == 1 {
+          if let ContentItem::Element { ident, select } = &items[0] {
+            if let Some(snapshot) =
+              select_running_element(ident, *select, running_elements, running_state)
+            {
+              fragments.push(FragmentNode::new_block_styled(
+                bounds,
+                vec![snapshot],
+                style_arc,
+              ));
+              continue;
+            }
+          }
+        }
+      }
       let children =
         build_margin_box_children(box_style, page_index, page_count, running_strings, &style_arc);
       let root = BoxNode::new_block(style_arc.clone(), FormattingContextType::Block, children);
@@ -822,6 +947,9 @@ fn build_margin_box_children(
               None,
               None,
             ));
+          }
+          ContentItem::Element { .. } => {
+            flush_text(&mut text_buf, &mut children, style);
           }
         }
       }

@@ -619,7 +619,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       FragmentContent::Block { .. } => block_count += 1,
       FragmentContent::Line { .. } => line_count += 1,
       FragmentContent::Replaced { .. } => replaced_count += 1,
-      FragmentContent::Inline { .. } => {}
+      FragmentContent::Inline { .. } | FragmentContent::RunningAnchor { .. } => {}
     }
 
     if let Some(box_id) = fragment_box_id(frag) {
@@ -1212,6 +1212,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 FragmentContent::Line { .. } => "line".to_string(),
                 FragmentContent::Text { text, .. } => format!("text {:?}", text.chars().take(30).collect::<String>()),
                 FragmentContent::Replaced { .. } => "replaced".to_string(),
+                FragmentContent::RunningAnchor { .. } => "running-anchor".to_string(),
             };
             if let Some(style) = frag.style.as_deref() {
                 info.push_str(&format!(
@@ -1602,6 +1603,7 @@ fn print_fragment_tree(node: &FragmentNode, indent: usize, max_lines: usize) {
       FragmentContent::Line { .. } => "line".into(),
       FragmentContent::Text { text, .. } => format!("text {:?}", text),
       FragmentContent::Replaced { box_id, .. } => format!("replaced box_id={:?}", box_id),
+      FragmentContent::RunningAnchor { .. } => "running-anchor".into(),
     }
   }
 
@@ -1716,6 +1718,7 @@ fn find_fragment_path(
     FragmentContent::Line { .. } => "line".to_string(),
     FragmentContent::Block { .. } => "block".to_string(),
     FragmentContent::Replaced { .. } => "replaced".to_string(),
+    FragmentContent::RunningAnchor { .. } => "running-anchor".to_string(),
   };
   if let Some(style) = node.style.as_deref() {
     label.push_str(&format!(
@@ -1832,6 +1835,7 @@ fn find_max_x_fragment(
       FragmentContent::Line { .. } => "line",
       FragmentContent::Text { .. } => "text",
       FragmentContent::Replaced { .. } => "replaced",
+      FragmentContent::RunningAnchor { .. } => "running-anchor",
     };
     let mut entry = format!(
       "{} @ ({:.1},{:.1},{:.1},{:.1})",
@@ -2298,6 +2302,7 @@ fn fragment_box_id(fragment: &FragmentNode) -> Option<usize> {
     | FragmentContent::Text { box_id, .. }
     | FragmentContent::Replaced { box_id, .. } => *box_id,
     FragmentContent::Line { .. } => None,
+    FragmentContent::RunningAnchor { .. } => None,
   }
 }
 

@@ -807,29 +807,6 @@ fn content_value_from_property(value: &PropertyValue) -> Option<ContentValue> {
   parse_content(&css_text)
 }
 
-fn string_from_property_value(value: &PropertyValue) -> Option<String> {
-  match value {
-    PropertyValue::String(s) => Some(format!("\"{}\"", s)),
-    PropertyValue::Url(url) => Some(format!("url({})", url)),
-    PropertyValue::Keyword(kw) => Some(kw.clone()),
-    PropertyValue::Multiple(list) => {
-      let mut parts = Vec::new();
-      for item in list {
-        match item {
-          PropertyValue::String(s) => parts.push(format!("\"{}\"", s)),
-          PropertyValue::Url(url) => parts.push(format!("url({})", url)),
-          PropertyValue::Keyword(kw) => parts.push(kw.clone()),
-          PropertyValue::Number(n) => parts.push(n.to_string()),
-          PropertyValue::Percentage(p) => parts.push(format!("{}%", p)),
-          _ => return None,
-        }
-      }
-      Some(parts.join(" "))
-    }
-    _ => None,
-  }
-}
-
 fn parse_background_image_list(value: &PropertyValue) -> Option<Vec<Option<BackgroundImage>>> {
   match value {
     PropertyValue::Multiple(tokens)
@@ -4104,12 +4081,12 @@ pub fn apply_declaration_with_base(
     // Position
     "position" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
-        if let Ok(position) = Position::parse(kw) {
-          styles.position = position;
-          styles.running_position = None;
-        } else if let Some(running) = parse_running_position(kw) {
+        if let Some(running) = parse_running_position(kw) {
           styles.running_position = Some(running);
           styles.position = Position::Static;
+        } else if let Ok(position) = Position::parse(kw) {
+          styles.position = position;
+          styles.running_position = None;
         }
       }
     }
