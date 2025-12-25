@@ -1785,15 +1785,15 @@ fn pick<'a, T: Clone>(list: &'a [T], idx: usize, default: T) -> T {
 
 fn collect_timelines(
   node: &FragmentNode,
-  offset: Point,
+  origin: Point,
   viewport: Rect,
   content: Rect,
   scroll: Point,
   map: &mut HashMap<String, TimelineState>,
 ) {
   let abs = Rect::from_xywh(
-    node.bounds.x() + offset.x,
-    node.bounds.y() + offset.y,
+    origin.x,
+    origin.y,
     node.bounds.width(),
     node.bounds.height(),
   );
@@ -1846,7 +1846,7 @@ fn collect_timelines(
     }
   }
 
-  let child_offset = Point::new(abs.x(), abs.y());
+  let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
   for child in &node.children {
     collect_timelines(child, child_offset, viewport, content, scroll, map);
   }
@@ -1854,15 +1854,15 @@ fn collect_timelines(
 
 fn apply_animations_to_node(
   node: &mut FragmentNode,
-  offset: Point,
+  origin: Point,
   viewport: Rect,
   scroll: Point,
   keyframes: &HashMap<String, KeyframesRule>,
   timelines: &HashMap<String, TimelineState>,
 ) {
   let abs = Rect::from_xywh(
-    node.bounds.x() + offset.x,
-    node.bounds.y() + offset.y,
+    origin.x,
+    origin.y,
     node.bounds.width(),
     node.bounds.height(),
   );
@@ -1932,7 +1932,7 @@ fn apply_animations_to_node(
     }
   }
 
-  let child_offset = Point::new(abs.x(), abs.y());
+  let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
   for child in &mut node.children {
     apply_animations_to_node(child, child_offset, viewport, scroll, keyframes, timelines);
   }
@@ -1956,35 +1956,31 @@ pub fn apply_scroll_driven_animations(tree: &mut FragmentTree, scroll: Point) {
   );
   let content = tree.content_size();
   let mut timelines: HashMap<String, TimelineState> = HashMap::new();
+  let root_offset = Point::new(tree.root.bounds.x(), tree.root.bounds.y());
   collect_timelines(
     &tree.root,
-    Point::ZERO,
+    root_offset,
     viewport,
     content,
     scroll,
     &mut timelines,
   );
   for frag in &tree.additional_fragments {
-    collect_timelines(frag, Point::ZERO, viewport, content, scroll, &mut timelines);
+    let offset = Point::new(frag.bounds.x(), frag.bounds.y());
+    collect_timelines(frag, offset, viewport, content, scroll, &mut timelines);
   }
 
   apply_animations_to_node(
     &mut tree.root,
-    Point::ZERO,
+    root_offset,
     viewport,
     scroll,
     &tree.keyframes,
     &timelines,
   );
   for frag in &mut tree.additional_fragments {
-    apply_animations_to_node(
-      frag,
-      Point::ZERO,
-      viewport,
-      scroll,
-      &tree.keyframes,
-      &timelines,
-    );
+    let offset = Point::new(frag.bounds.x(), frag.bounds.y());
+    apply_animations_to_node(frag, offset, viewport, scroll, &tree.keyframes, &timelines);
   }
 }
 
