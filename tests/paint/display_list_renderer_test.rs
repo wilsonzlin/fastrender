@@ -1639,6 +1639,44 @@ fn drop_shadow_filter_renders_shadow() {
 }
 
 #[test]
+fn drop_shadow_filter_offsets_with_bounded_layer() {
+  let renderer = DisplayListRenderer::new(6, 4, Rgba::WHITE, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+  let bounds = Rect::from_xywh(2.0, 1.0, 2.0, 2.0);
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![ResolvedFilter::DropShadow {
+      offset_x: 1.0,
+      offset_y: 0.0,
+      blur_radius: 0.0,
+      spread: 0.0,
+      color: Rgba::BLACK,
+    }],
+    backdrop_filters: Vec::new(),
+    radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+  assert_eq!(pixel(&pixmap, 2, 1), (255, 0, 0, 255));
+  assert_eq!(pixel(&pixmap, 3, 1), (255, 0, 0, 255));
+  assert_eq!(pixel(&pixmap, 4, 1), (0, 0, 0, 255));
+  assert_eq!(pixel(&pixmap, 1, 1), (255, 255, 255, 255));
+}
+
+#[test]
 fn blur_filters_arent_clipped_by_border_radii() {
   use fastrender::paint::display_list::BorderRadii;
 
@@ -2189,6 +2227,50 @@ fn clip_path_masks_after_filters() {
   assert_eq!(pixel(&pixmap, 6, 6), (255, 0, 0, 255));
   assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
   assert_eq!(pixel(&pixmap, 11, 11), (255, 255, 255, 255));
+}
+
+#[test]
+fn clip_path_masks_bounded_layer_with_offset() {
+  let mut list = DisplayList::new();
+  let triangle = fastrender::paint::clip_path::ResolvedClipPath::Polygon {
+    points: vec![
+      fastrender::geometry::Point::new(2.0, 1.0),
+      fastrender::geometry::Point::new(6.0, 1.0),
+      fastrender::geometry::Point::new(2.0, 5.0),
+    ],
+    fill_rule: tiny_skia::FillRule::Winding,
+  };
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Path { path: triangle },
+  }));
+  let bounds = Rect::from_xywh(2.0, 1.0, 4.0, 4.0);
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    mix_blend_mode: fastrender::paint::display_list::BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![ResolvedFilter::Invert(1.0)],
+    backdrop_filters: Vec::new(),
+    radii: fastrender::paint::display_list::BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+  list.push(DisplayItem::PopClip);
+
+  let renderer = DisplayListRenderer::new(8, 6, Rgba::WHITE, FontContext::new()).unwrap();
+  let pixmap = renderer.render(&list).expect("rendered");
+
+  assert_eq!(pixel(&pixmap, 3, 1), (0, 255, 255, 255));
+  assert_eq!(pixel(&pixmap, 5, 3), (255, 255, 255, 255));
+  assert_eq!(pixel(&pixmap, 1, 1), (255, 255, 255, 255));
 }
 
 #[test]

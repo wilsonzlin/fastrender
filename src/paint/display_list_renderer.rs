@@ -12,6 +12,7 @@ use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
+use crate::paint::canvas::crop_mask;
 use crate::paint::canvas::Canvas;
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BorderImageItem;
@@ -50,7 +51,6 @@ use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::TransformItem;
 #[cfg(test)]
 use crate::paint::display_list::MaskReferenceRects;
-#[cfg(test)]
 use crate::paint::filter_outset::filter_outset;
 use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::rasterize::fill_rounded_rect;
@@ -547,6 +547,85 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bb
   }
 }
 
+fn apply_filters_scoped(
+  pixmap: &mut Pixmap,
+  filters: &[ResolvedFilter],
+  scale: f32,
+  bbox: Rect,
+  bounds: Option<&Rect>,
+) {
+  if filters.is_empty() {
+    return;
+  }
+
+  let Some(bounds) = bounds else {
+    apply_filters(pixmap, filters, scale, bbox);
+    return;
+  };
+
+  let x = bounds.min_x().floor() as i32;
+  let y = bounds.min_y().floor() as i32;
+  let width = bounds.width().ceil() as u32;
+  let height = bounds.height().ceil() as u32;
+  if width == 0 || height == 0 {
+    return;
+  }
+
+  let pix_w = pixmap.width() as i32;
+  let pix_h = pixmap.height() as i32;
+  if x >= pix_w || y >= pix_h {
+    return;
+  }
+
+  let clamped_x = x.max(0) as u32;
+  let clamped_y = y.max(0) as u32;
+  let max_w = pix_w.saturating_sub(clamped_x as i32).max(0) as u32;
+  let max_h = pix_h.saturating_sub(clamped_y as i32).max(0) as u32;
+  let region_w = width.min(max_w);
+  let region_h = height.min(max_h);
+  if region_w == 0 || region_h == 0 {
+    return;
+  }
+
+  if region_w == pixmap.width() && region_h == pixmap.height() && clamped_x == 0 && clamped_y == 0 {
+    apply_filters(pixmap, filters, scale, bbox);
+    return;
+  }
+
+  let Some(mut region) = Pixmap::new(region_w, region_h) else {
+    apply_filters(pixmap, filters, scale, bbox);
+    return;
+  };
+
+  let bytes_per_row = pixmap.width() as usize * 4;
+  let region_row_bytes = region_w as usize * 4;
+  let start = (clamped_y as usize * bytes_per_row) + clamped_x as usize * 4;
+  let data = pixmap.data();
+  let dest = region.data_mut();
+
+  for row in 0..region_h as usize {
+    let src_idx = start + row * bytes_per_row;
+    let dst_idx = row * region_row_bytes;
+    dest[dst_idx..dst_idx + region_row_bytes]
+      .copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
+  }
+
+  let local_bbox = Rect::from_xywh(
+    bbox.x() - clamped_x as f32,
+    bbox.y() - clamped_y as f32,
+    bbox.width(),
+    bbox.height(),
+  );
+  apply_filters(&mut region, filters, scale, local_bbox);
+
+  for row in 0..region_h as usize {
+    let dst_idx = (clamped_y as usize + row) * bytes_per_row + clamped_x as usize * 4;
+    let src_idx = row * region_row_bytes;
+    let src = &region.data()[src_idx..src_idx + region_row_bytes];
+    let dst = &mut pixmap.data_mut()[dst_idx..dst_idx + region_row_bytes];
+    dst.copy_from_slice(src);
+  }
+}
 fn apply_backdrop_filters(
   pixmap: &mut Pixmap,
   bounds: &Rect,
@@ -761,6 +840,14 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) {
       }
     }
   }
+}
+
+fn rect_int_bounds(rect: &Rect) -> (i32, i32, i32, i32) {
+  let x0 = rect.min_x().floor() as i32;
+  let y0 = rect.min_y().floor() as i32;
+  let x1 = rect.max_x().ceil() as i32;
+  let y1 = rect.max_y().ceil() as i32;
+  (x0, y0, x1, y1)
 }
 
 fn apply_drop_shadow(
@@ -1015,6 +1102,7 @@ struct StackingRecord {
   mask: Option<ResolvedMask>,
   css_bounds: Rect,
   manual_blend: Option<BlendMode>,
+  layer_bounds: Option<Rect>,
   culled: bool,
   pending_backdrop: Option<PendingBackdrop>,
 }
@@ -1099,6 +1187,61 @@ impl DisplayListRenderer {
       bottom_right: radii.bottom_right * self.scale,
       bottom_left: radii.bottom_left * self.scale,
     }
+  }
+
+  fn stacking_layer_bounds(
+    &self,
+    bounds: Rect,
+    transform: Transform,
+    filters: &[ResolvedFilter],
+    backdrop_filters: &[ResolvedFilter],
+  ) -> Option<Rect> {
+    let mut layer_bounds = transform_rect(bounds, &transform);
+    let (f_l, f_t, f_r, f_b) = filter_outset(filters, self.scale).as_tuple();
+    let (b_l, b_t, b_r, b_b) = filter_outset(backdrop_filters, self.scale).as_tuple();
+    let expand_left = f_l.max(b_l);
+    let expand_top = f_t.max(b_t);
+    let expand_right = f_r.max(b_r);
+    let expand_bottom = f_b.max(b_b);
+    layer_bounds = Rect::from_xywh(
+      layer_bounds.x() - expand_left,
+      layer_bounds.y() - expand_top,
+      layer_bounds.width() + expand_left + expand_right,
+      layer_bounds.height() + expand_top + expand_bottom,
+    );
+
+    if let Some(clip) = self.canvas.clip_bounds() {
+      layer_bounds = match layer_bounds.intersection(clip) {
+        Some(r) => r,
+        None => return None,
+      };
+    }
+
+    layer_bounds = match layer_bounds.intersection(self.canvas.bounds()) {
+      Some(r) => r,
+      None => return None,
+    };
+
+    if layer_bounds.width() <= 0.0
+      || layer_bounds.height() <= 0.0
+      || !layer_bounds.x().is_finite()
+      || !layer_bounds.y().is_finite()
+    {
+      return None;
+    }
+
+    Some(layer_bounds)
+  }
+
+  fn layer_space_bounds(&self, bounds: Rect, origin: (i32, i32), layer: &Pixmap) -> Option<Rect> {
+    let translated = Rect::from_xywh(
+      bounds.x() - origin.0 as f32,
+      bounds.y() - origin.1 as f32,
+      bounds.width(),
+      bounds.height(),
+    );
+    let layer_rect = Rect::from_xywh(0.0, 0.0, layer.width() as f32, layer.height() as f32);
+    translated.intersection(layer_rect)
   }
 
   fn ds_filters(&self, filters: &[ResolvedFilter]) -> Vec<ResolvedFilter> {
@@ -2424,11 +2567,37 @@ impl DisplayListRenderer {
     layer: &Pixmap,
     opacity: f32,
     mode: BlendMode,
+    origin: (i32, i32),
+    region: Option<&Rect>,
   ) -> Result<()> {
     let target = self.canvas.pixmap_mut();
-    let width = target.width().min(layer.width()) as usize;
-    let height = target.height().min(layer.height()) as usize;
-    if width == 0 || height == 0 {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if opacity == 0.0 {
+      return Ok(());
+    }
+
+    let (mut x0, mut y0, mut x1, mut y1) = (
+      origin.0,
+      origin.1,
+      origin.0 + layer.width() as i32,
+      origin.1 + layer.height() as i32,
+    );
+    if let Some(region) = region {
+      let (rx0, ry0, rx1, ry1) = rect_int_bounds(region);
+      x0 = x0.max(rx0);
+      y0 = y0.max(ry0);
+      x1 = x1.min(rx1);
+      y1 = y1.min(ry1);
+    }
+    x0 = x0.max(0);
+    y0 = y0.max(0);
+    x1 = x1
+      .min(target.width() as i32)
+      .min(origin.0 + layer.width() as i32);
+    y1 = y1
+      .min(target.height() as i32)
+      .min(origin.1 + layer.height() as i32);
+    if x0 >= x1 || y0 >= y1 {
       return Ok(());
     }
 
@@ -2436,65 +2605,65 @@ impl DisplayListRenderer {
     let src_stride = layer.width() as usize;
     let dst_stride = target.width() as usize;
     let dst_pixels = target.pixels_mut();
-    let opacity = opacity.clamp(0.0, 1.0);
 
-    dst_pixels
-      .par_chunks_mut(dst_stride)
-      .zip(src_pixels.par_chunks(src_stride))
-      .take(height)
-      .for_each(|(dst_row, src_row)| {
-        let src_slice = &src_row[..width];
-        let dst_slice = &mut dst_row[..width];
-        for (src_px, dst_px) in src_slice.iter().zip(dst_slice.iter_mut()) {
-          let raw_sa = src_px.alpha() as f32 / 255.0;
-          if raw_sa == 0.0 || opacity == 0.0 {
-            continue;
-          }
-          let sa = (raw_sa * opacity).clamp(0.0, 1.0);
-          let da = dst_px.alpha() as f32 / 255.0;
-
-          let src_rgb = if raw_sa > 0.0 {
-            (
-              (src_px.red() as f32 / 255.0) / raw_sa,
-              (src_px.green() as f32 / 255.0) / raw_sa,
-              (src_px.blue() as f32 / 255.0) / raw_sa,
-            )
-          } else {
-            (0.0, 0.0, 0.0)
-          };
-
-          let dst_rgb = if da > 0.0 {
-            (
-              (dst_px.red() as f32 / 255.0) / da,
-              (dst_px.green() as f32 / 255.0) / da,
-              (dst_px.blue() as f32 / 255.0) / da,
-            )
-          } else {
-            (0.0, 0.0, 0.0)
-          };
-
-          let blended_rgb = apply_manual_blend(mode, src_rgb, dst_rgb);
-
-          let out_a = sa + da * (1.0 - sa);
-          let out_rgb = if out_a > 0.0 {
-            (
-              (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
-              (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
-              (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
-            )
-          } else {
-            (0.0, 0.0, 0.0)
-          };
-
-          let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-          let scale = out_a;
-          let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-          let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-          let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
-          *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
-            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    for y in y0..y1 {
+      let src_row = (y - origin.1) as usize;
+      let dst_row = y as usize;
+      let src_start = src_row * src_stride + (x0 - origin.0) as usize;
+      let dst_start = dst_row * dst_stride + x0 as usize;
+      let width = (x1 - x0) as usize;
+      let src_slice = &src_pixels[src_start..src_start + width];
+      let dst_slice = &mut dst_pixels[dst_start..dst_start + width];
+      for (src_px, dst_px) in src_slice.iter().zip(dst_slice.iter_mut()) {
+        let raw_sa = src_px.alpha() as f32 / 255.0;
+        if raw_sa == 0.0 || opacity == 0.0 {
+          continue;
         }
-      });
+        let sa = (raw_sa * opacity).clamp(0.0, 1.0);
+        let da = dst_px.alpha() as f32 / 255.0;
+
+        let src_rgb = if raw_sa > 0.0 {
+          (
+            (src_px.red() as f32 / 255.0) / raw_sa,
+            (src_px.green() as f32 / 255.0) / raw_sa,
+            (src_px.blue() as f32 / 255.0) / raw_sa,
+          )
+        } else {
+          (0.0, 0.0, 0.0)
+        };
+
+        let dst_rgb = if da > 0.0 {
+          (
+            (dst_px.red() as f32 / 255.0) / da,
+            (dst_px.green() as f32 / 255.0) / da,
+            (dst_px.blue() as f32 / 255.0) / da,
+          )
+        } else {
+          (0.0, 0.0, 0.0)
+        };
+
+        let blended_rgb = apply_manual_blend(mode, src_rgb, dst_rgb);
+
+        let out_a = sa + da * (1.0 - sa);
+        let out_rgb = if out_a > 0.0 {
+          (
+            (blended_rgb.0 * sa + dst_rgb.0 * da * (1.0 - sa)) / out_a,
+            (blended_rgb.1 * sa + dst_rgb.1 * da * (1.0 - sa)) / out_a,
+            (blended_rgb.2 * sa + dst_rgb.2 * da * (1.0 - sa)) / out_a,
+          )
+        } else {
+          (0.0, 0.0, 0.0)
+        };
+
+        let out_a_u8 = (out_a * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+        let scale = out_a;
+        let r = ((out_rgb.0 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+        let g = ((out_rgb.1 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+        let b = ((out_rgb.2 * scale) * 255.0 + 0.5).clamp(0.0, out_a_u8 as f32) as u8;
+        *dst_px = PremultipliedColorU8::from_rgba(r, g, b, out_a_u8)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
 
     Ok(())
   }
@@ -2656,20 +2825,37 @@ impl DisplayListRenderer {
           || !scaled_filters.is_empty()
           || has_backdrop
           || mask.is_some();
+        let layer_bounds = needs_layer
+          .then(|| {
+            self.stacking_layer_bounds(
+              bounds,
+              combined_transform,
+              &scaled_filters,
+              &scaled_backdrop,
+            )
+          })
+          .flatten();
         if needs_layer {
+          let bounded_rect = if has_backdrop { None } else { layer_bounds };
           if manual_blend.is_some() {
-            self.canvas.push_layer(1.0)?;
-          } else if !matches!(
-            item.mix_blend_mode,
-            crate::paint::display_list::BlendMode::Normal
-          ) {
-            self
-              .canvas
-              .push_layer_with_blend(1.0, Some(map_blend_mode(item.mix_blend_mode)))?;
+            if let Some(layer_rect) = bounded_rect {
+              self.canvas.push_layer_bounded(1.0, None, layer_rect)?;
+            } else {
+              self.canvas.push_layer(1.0)?;
+            }
           } else {
-            self
-              .canvas
-              .push_layer_with_blend(1.0, Some(tiny_skia::BlendMode::SourceOver))?;
+            let blend = if is_isolated {
+              tiny_skia::BlendMode::SourceOver
+            } else {
+              map_blend_mode(item.mix_blend_mode)
+            };
+            if let Some(layer_rect) = bounded_rect {
+              self
+                .canvas
+                .push_layer_bounded(1.0, Some(blend), layer_rect)?;
+            } else {
+              self.canvas.push_layer_with_blend(1.0, Some(blend))?;
+            }
           }
         } else {
           self.canvas.save();
@@ -2682,6 +2868,7 @@ impl DisplayListRenderer {
           mask,
           css_bounds,
           manual_blend,
+          layer_bounds,
           culled: false,
           pending_backdrop,
         });
@@ -2702,6 +2889,7 @@ impl DisplayListRenderer {
             mask: None,
             css_bounds: Rect::ZERO,
             manual_blend: None,
+            layer_bounds: None,
             culled: false,
             pending_backdrop: None,
           });
@@ -2714,65 +2902,91 @@ impl DisplayListRenderer {
           return Ok(());
         }
         if record.needs_layer {
-          if let Some(mode) = record.manual_blend {
-            let (mut layer, opacity, _) = self.canvas.pop_layer_raw()?;
-            if let Some(mask) = record.mask.as_ref() {
-              if let Some(mask) = self.render_mask(mask) {
+          let (mut layer, origin, opacity, composite_blend) = self.canvas.pop_layer_raw()?;
+
+          let (out_l, out_t, out_r, out_b) =
+            filter_outset_with_bounds(&record.filters, self.scale, Some(record.css_bounds))
+              .as_tuple();
+
+          let mut effect_bounds = record.layer_bounds;
+          if effect_bounds.is_none() {
+            let expanded_bounds = Rect::from_xywh(
+              record.mask_bounds.x() - out_l,
+              record.mask_bounds.y() - out_t,
+              record.mask_bounds.width() + out_l + out_r,
+              record.mask_bounds.height() + out_t + out_b,
+            );
+            if expanded_bounds.width() > 0.0 && expanded_bounds.height() > 0.0 {
+              effect_bounds = Some(expanded_bounds);
+            }
+          }
+
+          let layer_region = effect_bounds.and_then(|rect| self.layer_space_bounds(rect, origin, &layer));
+
+          if let Some(mask_style) = record.mask.as_ref() {
+            if let Some(mask) = self.render_mask(mask_style) {
+              if let Some(cropped) = crop_mask(
+                &mask,
+                origin.0 as u32,
+                origin.1 as u32,
+                layer.width(),
+                layer.height(),
+              ) {
+                layer.apply_mask(&cropped);
+              } else if mask.width() == layer.width() && mask.height() == layer.height() {
                 layer.apply_mask(&mask);
+              } else {
+                return Ok(());
               }
             }
-            if !record.filters.is_empty() {
-              apply_filters(&mut layer, &record.filters, self.scale, record.mask_bounds);
+          }
+
+          if !record.filters.is_empty() {
+            let bbox = Rect::from_xywh(
+              record.mask_bounds.x() - origin.0 as f32,
+              record.mask_bounds.y() - origin.1 as f32,
+              record.mask_bounds.width(),
+              record.mask_bounds.height(),
+            );
+            apply_filters_scoped(
+              &mut layer,
+              &record.filters,
+              self.scale,
+              bbox,
+              layer_region.as_ref(),
+            );
+          }
+
+          if !record.radii.is_zero() || !record.filters.is_empty() {
+            let clip_rect = Rect::from_xywh(
+              record.mask_bounds.x() - out_l,
+              record.mask_bounds.y() - out_t,
+              record.mask_bounds.width() + out_l + out_r,
+              record.mask_bounds.height() + out_t + out_b,
+            );
+            if let Some(local_clip) = self.layer_space_bounds(clip_rect, origin, &layer) {
+              apply_clip_mask_rect(&mut layer, local_clip, record.radii);
             }
-            if !record.radii.is_zero() || !record.filters.is_empty() {
-              let (out_l, out_t, out_r, out_b) =
-                filter_outset_with_bounds(&record.filters, self.scale, Some(record.mask_bounds))
-                  .as_tuple();
-              let clip_rect = Rect::from_xywh(
-                record.mask_bounds.x() - out_l,
-                record.mask_bounds.y() - out_t,
-                record.mask_bounds.width() + out_l + out_r,
-                record.mask_bounds.height() + out_t + out_b,
-              );
-              apply_clip_mask_rect(&mut layer, clip_rect, record.radii);
-            }
+          }
+
+          if let Some(mode) = record.manual_blend {
             if let Some(mask) = self.canvas.clip_mask().cloned() {
-              layer.apply_mask(&mask);
+              let Some(cropped) = crop_mask(
+                &mask,
+                origin.0 as u32,
+                origin.1 as u32,
+                layer.width(),
+                layer.height(),
+              ) else {
+                return Ok(());
+              };
+              layer.apply_mask(&cropped);
             }
-            self.composite_manual_layer(&layer, opacity, mode)?;
+            self.composite_manual_layer(&layer, opacity, mode, origin, effect_bounds.as_ref())?;
           } else {
-            if let Some(mask) = record.mask.as_ref() {
-              if let Some(mask) = self.render_mask(mask) {
-                self.canvas.pixmap_mut().apply_mask(&mask);
-              }
-            }
-            if !record.filters.is_empty() {
-              apply_filters(
-                self.canvas.pixmap_mut(),
-                &record.filters,
-                self.scale,
-                record.mask_bounds,
-              );
-            }
-            if !record.radii.is_zero() || !record.filters.is_empty() {
-              let (out_l, out_t, out_r, out_b) =
-                filter_outset_with_bounds(&record.filters, self.scale, Some(record.mask_bounds))
-                  .as_tuple();
-              let clip_rect = Rect::from_xywh(
-                record.mask_bounds.x() - out_l,
-                record.mask_bounds.y() - out_t,
-                record.mask_bounds.width() + out_l + out_r,
-                record.mask_bounds.height() + out_t + out_b,
-              );
-              self.canvas.save();
-              self
-                .canvas
-                .set_clip_with_radii(clip_rect, Some(record.radii));
-              self.canvas.pop_layer()?;
-              self.canvas.restore();
-            } else {
-              self.canvas.pop_layer()?;
-            }
+            self
+              .canvas
+              .composite_layer(&layer, opacity, composite_blend, origin);
           }
         } else {
           self.canvas.restore();
@@ -2813,8 +3027,9 @@ impl DisplayListRenderer {
       DisplayItem::PopBlendMode => {
         let blend_mode = self.blend_stack.pop().flatten();
         if let Some(mode) = blend_mode {
-          let (layer, opacity, _) = self.canvas.pop_layer_raw()?;
-          self.composite_manual_layer(&layer, opacity, mode)?;
+          let (layer, origin, opacity, _) = self.canvas.pop_layer_raw()?;
+          let region = self.canvas.clip_bounds();
+          self.composite_manual_layer(&layer, opacity, mode, origin, region.as_ref())?;
         } else {
           self.canvas.pop_layer()?;
         }
@@ -4781,6 +4996,7 @@ mod tests {
   use super::*;
   use crate::geometry::Point;
   use crate::geometry::Rect;
+  use crate::paint::clip_path::ResolvedClipPath;
   use crate::paint::display_list::BlendMode;
   use crate::paint::display_list::BorderImageItem;
   use crate::paint::display_list::BorderImageSourceItem;
@@ -4788,6 +5004,8 @@ mod tests {
   use crate::paint::display_list::BorderRadii;
   use crate::paint::display_list::BorderSide;
   use crate::paint::display_list::BoxShadowItem;
+  use crate::paint::display_list::ClipItem;
+  use crate::paint::display_list::ClipShape;
   use crate::paint::display_list::DecorationPaint;
   use crate::paint::display_list::DecorationStroke;
   use crate::paint::display_list::DisplayItem;
@@ -4811,6 +5029,7 @@ mod tests {
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list_builder::DisplayListBuilder;
   use crate::style::color::{Color, Rgba};
+  use crate::style::types::BackfaceVisibility;
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundRepeat;
   use crate::style::types::BackgroundSize;
@@ -5749,6 +5968,56 @@ mod tests {
   }
 
   #[test]
+  fn stacking_context_filter_stays_bounded() {
+    let filters = vec![ResolvedFilter::Blur(1.0)];
+    let renderer = DisplayListRenderer::new(20, 20, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    let bounds = Rect::from_xywh(2.0, 2.0, 4.0, 4.0);
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds,
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: true,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: filters.clone(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: bounds,
+      color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let bbox = bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b)
+      .expect("blurred content");
+    let (out_l, out_t, out_r, out_b) = filter_outset(&filters, 1.0).as_tuple();
+    let expected = Rect::from_xywh(
+      bounds.x() - out_l,
+      bounds.y() - out_t,
+      bounds.width() + out_l + out_r,
+      bounds.height() + out_t + out_b,
+    );
+    assert!(
+      bbox.0 >= expected.min_x().floor() as u32 && bbox.1 >= expected.min_y().floor() as u32,
+      "expected bbox {:?} to start within {:?}",
+      bbox,
+      expected
+    );
+    assert!(
+      bbox.2 <= expected.max_x().ceil() as u32 && bbox.3 <= expected.max_y().ceil() as u32,
+      "expected bbox {:?} to end within {:?}",
+      bbox,
+      expected
+    );
+  }
+
+  #[test]
   fn backdrop_filter_applies_to_background() {
     let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
     let mut list = DisplayList::new();
@@ -6241,6 +6510,47 @@ mod tests {
     let pixmap = renderer.render(&list).unwrap();
     assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
     assert_eq!(pixel(&pixmap, 3, 3), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn clip_path_with_bounded_layer_clips_content() {
+    let renderer = DisplayListRenderer::new(12, 12, Rgba::WHITE, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    let triangle = ResolvedClipPath::Polygon {
+      points: vec![
+        Point::new(0.0, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(0.0, 10.0),
+      ],
+      fill_rule: tiny_skia::FillRule::Winding,
+    };
+    list.push(DisplayItem::PushClip(ClipItem {
+      shape: ClipShape::Path { path: triangle },
+    }));
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: vec![ResolvedFilter::Brightness(1.0)],
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      color: Rgba::rgb(0, 0, 255),
+    }));
+    list.push(DisplayItem::PopStackingContext);
+    list.push(DisplayItem::PopClip);
+
+    let pixmap = renderer.render(&list).unwrap();
+    assert_eq!(pixel(&pixmap, 2, 2), (0, 0, 255, 255));
+    assert_eq!(pixel(&pixmap, 9, 1), (255, 255, 255, 255));
   }
 
   #[test]

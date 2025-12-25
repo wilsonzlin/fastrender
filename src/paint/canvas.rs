@@ -131,6 +131,7 @@ struct LayerRecord {
   current_state: CanvasState,
   opacity: f32,
   composite_blend: Option<SkiaBlendMode>,
+  origin: (i32, i32),
 }
 
 // ============================================================================
@@ -366,16 +367,55 @@ impl Canvas {
     self.push_layer_with_blend(opacity, None)
   }
 
+  /// Pushes a new offscreen layer with explicit bounds.
+  ///
+  /// The layer pixmap will be clipped to the provided bounds (after clamping to the canvas)
+  /// and drawing inside the layer will be translated so global coordinates continue to work.
+  pub fn push_layer_bounded(
+    &mut self,
+    opacity: f32,
+    blend: Option<SkiaBlendMode>,
+    bounds: Rect,
+  ) -> Result<()> {
+    let (origin_x, origin_y, width, height) = match self.layer_bounds(bounds) {
+      Some(b) => b,
+      None => (0, 0, self.pixmap.width(), self.pixmap.height()),
+    };
+    self.push_layer_internal(opacity, blend, origin_x, origin_y, width, height)
+  }
+
   /// Pushes a new offscreen layer with an explicit composite blend mode.
   pub fn push_layer_with_blend(
     &mut self,
     opacity: f32,
     blend: Option<SkiaBlendMode>,
   ) -> Result<()> {
-    let new_pixmap = Pixmap::new(self.pixmap.width(), self.pixmap.height()).ok_or_else(|| {
-      RenderError::InvalidParameters {
-        message: "Failed to create layer pixmap".into(),
-      }
+    self.push_layer_internal(
+      opacity,
+      blend,
+      0,
+      0,
+      self.pixmap.width(),
+      self.pixmap.height(),
+    )
+  }
+
+  fn push_layer_internal(
+    &mut self,
+    opacity: f32,
+    blend: Option<SkiaBlendMode>,
+    origin_x: i32,
+    origin_y: i32,
+    width: u32,
+    height: u32,
+  ) -> Result<()> {
+    let parent_width = self.pixmap.width();
+    let parent_height = self.pixmap.height();
+    let width = width.max(1);
+    let height = height.max(1);
+
+    let new_pixmap = Pixmap::new(width, height).ok_or_else(|| RenderError::InvalidParameters {
+      message: "Failed to create layer pixmap".into(),
     })?;
 
     let record = LayerRecord {
@@ -384,19 +424,80 @@ impl Canvas {
       current_state: self.current_state.clone(),
       opacity: opacity.clamp(0.0, 1.0),
       composite_blend: blend,
+      origin: (origin_x, origin_y),
     };
     self.layer_stack.push(record);
     // Painting inside the layer should start from a neutral state.
     self.current_state.opacity = 1.0;
     self.current_state.blend_mode = SkiaBlendMode::SourceOver;
+
+    if origin_x != 0 || origin_y != 0 || width != parent_width || height != parent_height {
+      let layer_rect = Rect::from_xywh(
+        origin_x as f32,
+        origin_y as f32,
+        width as f32,
+        height as f32,
+      );
+      self.current_state.transform = self
+        .current_state
+        .transform
+        .pre_translate(-(origin_x as f32), -(origin_y as f32));
+      if let Some(clip_rect) = self.current_state.clip_rect.take() {
+        let intersected = clip_rect.intersection(layer_rect).unwrap_or(Rect::ZERO);
+        self.current_state.clip_rect = if intersected.width() <= 0.0 || intersected.height() <= 0.0
+        {
+          Some(Rect::ZERO)
+        } else {
+          Some(Rect::from_xywh(
+            intersected.x() - origin_x as f32,
+            intersected.y() - origin_y as f32,
+            intersected.width(),
+            intersected.height(),
+          ))
+        };
+      }
+      if let Some(mask) = self.current_state.clip_mask.take() {
+        self.current_state.clip_mask =
+          crop_mask(&mask, origin_x as u32, origin_y as u32, width, height);
+      }
+    }
+
     Ok(())
+  }
+
+  fn layer_bounds(&self, bounds: Rect) -> Option<(i32, i32, u32, u32)> {
+    if !bounds.x().is_finite()
+      || !bounds.y().is_finite()
+      || !bounds.width().is_finite()
+      || !bounds.height().is_finite()
+    {
+      return None;
+    }
+
+    let x0 = bounds.min_x().floor() as i32;
+    let y0 = bounds.min_y().floor() as i32;
+    let x1 = bounds.max_x().ceil() as i32;
+    let y1 = bounds.max_y().ceil() as i32;
+
+    let canvas_w = self.pixmap.width() as i32;
+    let canvas_h = self.pixmap.height() as i32;
+    let clamped_x0 = x0.clamp(0, canvas_w);
+    let clamped_y0 = y0.clamp(0, canvas_h);
+    let clamped_x1 = x1.clamp(0, canvas_w);
+    let clamped_y1 = y1.clamp(0, canvas_h);
+    let width = clamped_x1.saturating_sub(clamped_x0) as u32;
+    let height = clamped_y1.saturating_sub(clamped_y0) as u32;
+    if width == 0 || height == 0 {
+      return None;
+    }
+    Some((clamped_x0, clamped_y0, width, height))
   }
 
   /// Pops the most recent offscreen layer without compositing it.
   ///
   /// Returns the layer pixmap, the effective opacity (including parent opacity),
   /// and any explicit composite blend mode that was requested.
-  pub fn pop_layer_raw(&mut self) -> Result<(Pixmap, f32, Option<SkiaBlendMode>)> {
+  pub fn pop_layer_raw(&mut self) -> Result<(Pixmap, (i32, i32), f32, Option<SkiaBlendMode>)> {
     let Some(record) = self.layer_stack.pop() else {
       return Err(
         RenderError::InvalidParameters {
@@ -410,13 +511,24 @@ impl Canvas {
     self.state_stack = record.state_stack;
     self.current_state = record.current_state;
     let opacity = (record.opacity * self.current_state.opacity).clamp(0.0, 1.0);
-    Ok((layer_pixmap, opacity, record.composite_blend))
+    Ok((layer_pixmap, record.origin, opacity, record.composite_blend))
   }
 
   /// Pops the most recent offscreen layer and composites it into the parent.
   pub fn pop_layer(&mut self) -> Result<()> {
-    let (layer_pixmap, opacity, composite_blend) = self.pop_layer_raw()?;
+    let (layer_pixmap, origin, opacity, composite_blend) = self.pop_layer_raw()?;
 
+    self.composite_layer(&layer_pixmap, opacity, composite_blend, origin);
+    Ok(())
+  }
+
+  pub(crate) fn composite_layer(
+    &mut self,
+    layer: &Pixmap,
+    opacity: f32,
+    composite_blend: Option<SkiaBlendMode>,
+    origin: (i32, i32),
+  ) {
     let mut paint = PixmapPaint::default();
     paint.opacity = opacity;
     paint.blend_mode = composite_blend.unwrap_or(self.current_state.blend_mode);
@@ -424,14 +536,13 @@ impl Canvas {
     let transform = self.current_state.transform;
 
     self.pixmap.draw_pixmap(
-      0,
-      0,
-      layer_pixmap.as_ref(),
+      origin.0,
+      origin.1,
+      layer.as_ref(),
       &paint,
       transform,
       clip.as_ref(),
     );
-    Ok(())
   }
 
   /// Returns the current blend mode.
@@ -1192,6 +1303,50 @@ fn combine_masks(into: &mut Mask, existing: &Mask) {
   }
 }
 
+pub(crate) fn crop_mask(
+  mask: &Mask,
+  origin_x: u32,
+  origin_y: u32,
+  width: u32,
+  height: u32,
+) -> Option<Mask> {
+  if width == 0 || height == 0 {
+    return None;
+  }
+
+  let mask_width = mask.width();
+  let mask_height = mask.height();
+  if origin_x >= mask_width || origin_y >= mask_height {
+    return None;
+  }
+
+  let crop_w = width.min(mask_width.saturating_sub(origin_x));
+  let crop_h = height.min(mask_height.saturating_sub(origin_y));
+  if crop_w == 0 || crop_h == 0 {
+    return None;
+  }
+
+  let mut pixmap = Pixmap::new(crop_w, crop_h)?;
+  let dst = pixmap.data_mut();
+  let src = mask.data();
+  let src_stride = mask_width as usize;
+  let dst_stride = crop_w as usize * 4;
+  for row in 0..crop_h as usize {
+    let src_idx = (origin_y as usize + row) * src_stride + origin_x as usize;
+    let dst_idx = row * dst_stride;
+    for col in 0..crop_w as usize {
+      let alpha = src[src_idx + col];
+      let base = dst_idx + col * 4;
+      dst[base] = 0;
+      dst[base + 1] = 0;
+      dst[base + 2] = 0;
+      dst[base + 3] = alpha;
+    }
+  }
+
+  Some(Mask::from_pixmap(pixmap.as_ref(), MaskType::Alpha))
+}
+
 // ============================================================================
 // Blend Mode Conversion
 // ============================================================================
@@ -1522,6 +1677,30 @@ mod tests {
   }
 
   #[test]
+  fn bounded_layer_matches_full_layer_output() {
+    let mut full = Canvas::new(8, 8, Rgba::WHITE).unwrap();
+    full.push_layer(1.0).unwrap();
+    let rect = Rect::from_xywh(2.0, 3.0, 3.0, 2.0);
+    full.draw_rect(rect, Rgba::RED);
+    full.pop_layer().unwrap();
+    let full_pixmap = full.into_pixmap();
+
+    let mut bounded = Canvas::new(8, 8, Rgba::WHITE).unwrap();
+    bounded
+      .push_layer_bounded(1.0, None, rect)
+      .expect("bounded layer");
+    bounded.draw_rect(rect, Rgba::RED);
+    bounded.pop_layer().unwrap();
+    let bounded_pixmap = bounded.into_pixmap();
+
+    assert_eq!(
+      full_pixmap.data(),
+      bounded_pixmap.data(),
+      "bounded layer should match full layer rendering"
+    );
+  }
+
+  #[test]
   fn rotated_clip_bounds_prevents_culling() {
     let mut canvas = Canvas::new(10, 10, Rgba::WHITE).unwrap();
     let rotate_90_about_center = Transform::from_row(0.0, 1.0, -1.0, 0.0, 10.0, 0.0);
@@ -1589,5 +1768,28 @@ mod tests {
 
     assert_eq!(pixel(&pixmap, 9, 2), (0, 0, 255, 255));
     assert_eq!(pixel(&pixmap, 1, 1), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn bounded_layer_matches_full_layer() {
+    let mut full = Canvas::new(12, 12, Rgba::WHITE).unwrap();
+    full.push_layer(1.0).unwrap();
+    full.translate(1.0, 1.0);
+    full.set_clip(Rect::from_xywh(2.0, 2.0, 6.0, 6.0));
+    full.draw_rect(Rect::from_xywh(2.0, 2.0, 3.0, 3.0), Rgba::rgb(255, 0, 0));
+    full.pop_layer().unwrap();
+    let full_pixmap = full.into_pixmap();
+
+    let mut bounded = Canvas::new(12, 12, Rgba::WHITE).unwrap();
+    bounded
+      .push_layer_bounded(1.0, None, Rect::from_xywh(1.0, 1.0, 8.0, 8.0))
+      .unwrap();
+    bounded.translate(1.0, 1.0);
+    bounded.set_clip(Rect::from_xywh(2.0, 2.0, 6.0, 6.0));
+    bounded.draw_rect(Rect::from_xywh(2.0, 2.0, 3.0, 3.0), Rgba::rgb(255, 0, 0));
+    bounded.pop_layer().unwrap();
+    let bounded_pixmap = bounded.into_pixmap();
+
+    assert_eq!(bounded_pixmap.data(), full_pixmap.data());
   }
 }
