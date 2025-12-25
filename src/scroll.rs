@@ -527,16 +527,14 @@ impl PendingContainer {
       min_y,
       (max_x - min_x).max(0.0),
       (max_y - min_y).max(0.0),
-    );
+    )
+    .translate(self.origin);
 
-    if !self.uses_viewport_scroll {
-      scroll_bounds = scroll_bounds.translate(self.origin);
-      for target in &mut targets_x {
-        target.position += self.origin.x;
-      }
-      for target in &mut targets_y {
-        target.position += self.origin.y;
-      }
+    for target in &mut targets_x {
+      target.position += self.origin.x;
+    }
+    for target in &mut targets_y {
+      target.position += self.origin.y;
     }
 
     ScrollSnapContainer {
@@ -605,6 +603,41 @@ fn collect_scroll_metadata(
   }
 }
 
+fn merge_containers(containers: Vec<ScrollSnapContainer>) -> Vec<ScrollSnapContainer> {
+  let mut merged = Vec::new();
+  let mut by_id: HashMap<usize, usize> = HashMap::new();
+
+  for container in containers {
+    if let Some(box_id) = container.box_id {
+      if let Some(idx) = by_id.get(&box_id).copied() {
+        let existing = &mut merged[idx];
+        debug_assert_eq!(
+          existing.uses_viewport_scroll,
+          container.uses_viewport_scroll
+        );
+        debug_assert_eq!(existing.viewport, container.viewport);
+        debug_assert_eq!(existing.strictness, container.strictness);
+        debug_assert_eq!(existing.behavior, container.behavior);
+        debug_assert_eq!(existing.snap_x, container.snap_x);
+        debug_assert_eq!(existing.snap_y, container.snap_y);
+        debug_assert_eq!(existing.padding_x, container.padding_x);
+        debug_assert_eq!(existing.padding_y, container.padding_y);
+
+        existing.scroll_bounds = existing.scroll_bounds.union(container.scroll_bounds);
+        existing.targets_x.extend(container.targets_x);
+        existing.targets_y.extend(container.targets_y);
+      } else {
+        by_id.insert(box_id, merged.len());
+        merged.push(container);
+      }
+    } else {
+      merged.push(container);
+    }
+  }
+
+  merged
+}
+
 /// Computes scrollable overflow areas and snap target lists for a fragment tree.
 pub(crate) fn build_scroll_metadata(tree: &mut FragmentTree) -> ScrollMetadata {
   annotate_overflow(&mut tree.root);
@@ -633,6 +666,7 @@ pub(crate) fn build_scroll_metadata(tree: &mut FragmentTree) -> ScrollMetadata {
     );
   }
 
+  metadata.containers = merge_containers(metadata.containers);
   metadata
 }
 
