@@ -4902,11 +4902,18 @@ pub fn apply_declaration_with_base(
 
     // Border radius
     "border-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
-        set_corner_radius(styles, PhysicalCorner::TopLeft, Some(len), order);
-        set_corner_radius(styles, PhysicalCorner::TopRight, Some(len), order);
-        set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(len), order);
-        set_corner_radius(styles, PhysicalCorner::BottomRight, Some(len), order);
+      if let Some([top_left, top_right, bottom_right, bottom_left]) =
+        parse_border_radius_shorthand(&resolved_value)
+      {
+        set_corner_radius(styles, PhysicalCorner::TopLeft, Some(top_left), order);
+        set_corner_radius(styles, PhysicalCorner::TopRight, Some(top_right), order);
+        set_corner_radius(
+          styles,
+          PhysicalCorner::BottomRight,
+          Some(bottom_right),
+          order,
+        );
+        set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(bottom_left), order);
       }
     }
     "border-top-left-radius" => {
@@ -11876,6 +11883,39 @@ pub fn apply_box_values(
   }
 }
 
+fn parse_border_radius_shorthand(value: &PropertyValue) -> Option<[Length; 4]> {
+  let lengths: Vec<Length> = match value {
+    PropertyValue::Length(len) => vec![*len],
+    PropertyValue::Number(n) if *n == 0.0 => vec![Length::px(0.0)],
+    PropertyValue::Keyword(kw) => vec![parse_length(kw)?],
+    PropertyValue::Multiple(values) => {
+      if values
+        .iter()
+        .any(|v| matches!(v, PropertyValue::Keyword(kw) if kw == "/"))
+      {
+        return None;
+      }
+      let mut lengths = Vec::new();
+      for v in values {
+        let Some(len) = extract_length(v) else {
+          return None;
+        };
+        lengths.push(len);
+      }
+      lengths
+    }
+    _ => return None,
+  };
+
+  match lengths.len() {
+    1 => Some([lengths[0]; 4]),
+    2 => Some([lengths[0], lengths[1], lengths[0], lengths[1]]),
+    3 => Some([lengths[0], lengths[1], lengths[2], lengths[1]]),
+    4 => Some([lengths[0], lengths[1], lengths[2], lengths[3]]),
+    _ => None,
+  }
+}
+
 pub fn parse_border_style(kw: &str) -> BorderStyle {
   match kw {
     "none" => BorderStyle::None,
@@ -15343,6 +15383,98 @@ mod tests {
 
     assert_eq!(style.padding_left, Length::px(0.0));
     assert_eq!(style.border_left_width, Length::px(0.0));
+  }
+
+  #[test]
+  fn border_radius_shorthand_one_value_sets_all_corners() {
+    let mut style = ComputedStyle::default();
+    let value = parse_property_value("border-radius", "10px").expect("parsed value");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "border-radius".to_string(),
+        value,
+        raw_value: "10px".to_string(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(style.border_top_left_radius, Length::px(10.0));
+    assert_eq!(style.border_top_right_radius, Length::px(10.0));
+    assert_eq!(style.border_bottom_right_radius, Length::px(10.0));
+    assert_eq!(style.border_bottom_left_radius, Length::px(10.0));
+  }
+
+  #[test]
+  fn border_radius_shorthand_two_values_sets_opposite_corners() {
+    let mut style = ComputedStyle::default();
+    let value = parse_property_value("border-radius", "10px 20px").expect("parsed value");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "border-radius".to_string(),
+        value,
+        raw_value: "10px 20px".to_string(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(style.border_top_left_radius, Length::px(10.0));
+    assert_eq!(style.border_top_right_radius, Length::px(20.0));
+    assert_eq!(style.border_bottom_right_radius, Length::px(10.0));
+    assert_eq!(style.border_bottom_left_radius, Length::px(20.0));
+  }
+
+  #[test]
+  fn border_radius_shorthand_three_values_expand_correctly() {
+    let mut style = ComputedStyle::default();
+    let value = parse_property_value("border-radius", "10px 20px 30px").expect("parsed value");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "border-radius".to_string(),
+        value,
+        raw_value: "10px 20px 30px".to_string(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(style.border_top_left_radius, Length::px(10.0));
+    assert_eq!(style.border_top_right_radius, Length::px(20.0));
+    assert_eq!(style.border_bottom_right_radius, Length::px(30.0));
+    assert_eq!(style.border_bottom_left_radius, Length::px(20.0));
+  }
+
+  #[test]
+  fn border_radius_shorthand_four_values_expand_correctly() {
+    let mut style = ComputedStyle::default();
+    let value = parse_property_value("border-radius", "1px 2px 3px 4px").expect("parsed value");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "border-radius".to_string(),
+        value,
+        raw_value: "1px 2px 3px 4px".to_string(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(style.border_top_left_radius, Length::px(1.0));
+    assert_eq!(style.border_top_right_radius, Length::px(2.0));
+    assert_eq!(style.border_bottom_right_radius, Length::px(3.0));
+    assert_eq!(style.border_bottom_left_radius, Length::px(4.0));
   }
 
   #[test]
