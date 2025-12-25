@@ -23,6 +23,23 @@ fn find_text<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNod
   None
 }
 
+fn find_text_with_parent<'a>(
+  node: &'a FragmentNode,
+  needle: &str,
+) -> Option<(&'a FragmentNode, &'a FragmentNode)> {
+  for child in &node.children {
+    if let FragmentContent::Text { text, .. } = &child.content {
+      if text.contains(needle) {
+        return Some((node, child));
+      }
+    }
+    if let Some(found) = find_text_with_parent(child, needle) {
+      return Some(found);
+    }
+  }
+  None
+}
+
 fn find_replaced_image<'a>(node: &'a FragmentNode) -> Option<&'a FragmentNode> {
   if let FragmentContent::Replaced { replaced_type, .. } = &node.content {
     if matches!(replaced_type, ReplacedType::Image { .. }) {
@@ -908,4 +925,77 @@ fn margin_box_with_empty_string_content_is_generated() {
   let fragment = found.expect("margin box with empty content should generate a fragment");
   assert!(fragment.bounds.width() > 0.0);
   assert!(fragment.bounds.height() > 0.0);
+}
+
+#[test]
+fn margin_box_default_text_align_center_for_top_center() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 120px;
+            margin: 10px;
+            @top-center { content: "A"; }
+          }
+        </style>
+      </head>
+      <body></body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 300, 300).unwrap();
+  let page = pages(&tree)[0];
+
+  let (margin_box, text) =
+    find_text_with_parent(page, "A").expect("top-center margin box text fragment");
+  let offset = text.bounds.x() - margin_box.bounds.x();
+
+  assert!(
+    offset > margin_box.bounds.width() * 0.2,
+    "text should not hug the left edge: offset={}, box width={}",
+    offset,
+    margin_box.bounds.width()
+  );
+}
+
+#[test]
+fn margin_box_default_text_align_right_for_top_right() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 120px;
+            margin: 10px;
+            @top-right { content: "A"; }
+          }
+        </style>
+      </head>
+      <body></body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 300, 300).unwrap();
+  let page = pages(&tree)[0];
+
+  let (margin_box, text) =
+    find_text_with_parent(page, "A").expect("top-right margin box text fragment");
+  let left_offset = text.bounds.x() - margin_box.bounds.x();
+  let right_offset = margin_box.bounds.max_x() - text.bounds.max_x();
+
+  assert!(
+    left_offset > right_offset,
+    "text should be closer to the right edge (left_offset={}, right_offset={})",
+    left_offset,
+    right_offset
+  );
+  assert!(
+    right_offset < margin_box.bounds.width() * 0.2,
+    "text should sit near the right edge"
+  );
 }
