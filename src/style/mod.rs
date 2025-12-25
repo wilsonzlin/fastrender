@@ -406,6 +406,8 @@ pub struct ComputedStyle {
   // Display and positioning
   pub display: Display,
   pub position: Position,
+  /// Running element name when authored via `position: running(<ident>)`.
+  pub running_position: Option<String>,
   pub appearance: Appearance,
   pub scroll_behavior: ScrollBehavior,
   pub overscroll_behavior_x: OverscrollBehavior,
@@ -755,6 +757,7 @@ impl Default for ComputedStyle {
     Self {
       display: Display::Inline,
       position: Position::Static,
+      running_position: None,
       appearance: Appearance::Auto,
       scroll_behavior: ScrollBehavior::Auto,
       overscroll_behavior_x: OverscrollBehavior::Auto,

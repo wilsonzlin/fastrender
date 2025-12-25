@@ -1917,7 +1917,10 @@ fn apply_property_from_source(
     }
     "overflow-x" => styles.overflow_x = source.overflow_x,
     "overflow-y" => styles.overflow_y = source.overflow_y,
-    "position" => styles.position = source.position,
+    "position" => {
+      styles.position = source.position;
+      styles.running_position = source.running_position.clone();
+    }
     "appearance" => styles.appearance = source.appearance.clone(),
     "resize" => styles.resize = source.resize,
     "box-sizing" => styles.box_sizing = source.box_sizing,
@@ -3846,6 +3849,38 @@ fn split_font_variant_tokens(input: &str) -> Vec<String> {
   tokens
 }
 
+fn parse_running_position(value: &str) -> Option<String> {
+  let trimmed = value.trim();
+  let Some(open_paren) = trimmed.find('(') else {
+    return None;
+  };
+  if !trimmed[..open_paren].trim().eq_ignore_ascii_case("running") {
+    return None;
+  }
+
+  let Some(close_paren) = trimmed.rfind(')') else {
+    return None;
+  };
+  if close_paren <= open_paren {
+    return None;
+  }
+  if !trimmed[close_paren + 1..].trim().is_empty() {
+    return None;
+  }
+
+  let ident = trimmed[open_paren + 1..close_paren].trim();
+  let mut chars = ident.chars();
+  let first = chars.next()?;
+  if !(first.is_ascii_alphabetic() || first == '_') {
+    return None;
+  }
+  if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    return None;
+  }
+
+  Some(ident.to_string())
+}
+
 pub fn apply_declaration(
   styles: &mut ComputedStyle,
   decl: &Declaration,
@@ -4071,6 +4106,10 @@ pub fn apply_declaration_with_base(
       if let PropertyValue::Keyword(kw) = &resolved_value {
         if let Ok(position) = Position::parse(kw) {
           styles.position = position;
+          styles.running_position = None;
+        } else if let Some(running) = parse_running_position(kw) {
+          styles.running_position = Some(running);
+          styles.position = Position::Static;
         }
       }
     }
