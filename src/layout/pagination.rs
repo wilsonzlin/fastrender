@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::css::types::CollectedPageRule;
 use crate::geometry::{Rect, Size};
 use crate::layout::fragmentation::{
-  clip_node, collect_forced_boundaries, propagate_fragment_metadata,
+  clip_node, collect_forced_boundaries, fragmentation_axis, propagate_fragment_metadata, BlockAxis,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
@@ -26,8 +26,10 @@ pub fn paginate_fragment_tree(
     return vec![root.clone()];
   }
 
+  let axis = fragmentation_axis(root);
   let mut spans = Vec::new();
-  collect_page_name_spans(root, 0.0, &mut spans);
+  let root_block_size = axis.block_size(&root.bounds);
+  collect_page_name_spans(root, 0.0, root_block_size, &axis, &mut spans);
   spans.sort_by(|a, b| {
     a.start
       .partial_cmp(&b.start)
@@ -35,8 +37,15 @@ pub fn paginate_fragment_tree(
   });
 
   let mut forced = collect_forced_boundaries(root, 0.0);
-  let total_height = root.bounding_box().height().max(fallback_page_size.height);
-  forced.push(total_height);
+  let fallback_block_size = if axis.horizontal {
+    fallback_page_size.width
+  } else {
+    fallback_page_size.height
+  };
+  let total_block = axis
+    .block_size(&root.bounding_box())
+    .max(fallback_block_size);
+  forced.push(total_block);
   forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
   forced.dedup_by(|a, b| (*a - *b).abs() < 0.01);
 
@@ -44,7 +53,7 @@ pub fn paginate_fragment_tree(
   let mut pos = 0.0;
   let mut page_index = 0;
 
-  while pos < total_height - 0.01 {
+  while pos < total_block - 0.01 {
     let page_name = page_name_for_position(&spans, pos, initial_page_name.as_deref());
     let side = if (page_index + 1) % 2 == 0 {
       PageSide::Left
@@ -61,8 +70,13 @@ pub fn paginate_fragment_tree(
       root_font_size,
     );
 
-    let page_block = style.content_size.height.max(1.0);
-    let mut end = (pos + page_block).min(total_height);
+    let page_block = if axis.horizontal {
+      style.content_size.width
+    } else {
+      style.content_size.height
+    }
+    .max(1.0);
+    let mut end = (pos + page_block).min(total_block);
     if let Some(boundary) = forced
       .iter()
       .copied()
@@ -75,7 +89,18 @@ pub fn paginate_fragment_tree(
       break;
     }
 
-    let clipped = clip_node(root, pos, end, 0.0, pos, page_index, 0);
+    let clipped = clip_node(
+      root,
+      pos,
+      end,
+      0.0,
+      pos,
+      root_block_size,
+      end - pos,
+      &axis,
+      page_index,
+      0,
+    );
     let mut page_root = FragmentNode::new_block(
       Rect::from_xywh(0.0, 0.0, style.total_size.width, style.total_size.height),
       Vec::new(),
@@ -120,9 +145,16 @@ struct PageNameSpan {
   name: String,
 }
 
-fn collect_page_name_spans(node: &FragmentNode, abs_start: f32, spans: &mut Vec<PageNameSpan>) {
-  let start = abs_start + node.bounds.y();
-  let end = start + node.bounds.height();
+fn collect_page_name_spans(
+  node: &FragmentNode,
+  abs_start: f32,
+  parent_block_size: f32,
+  axis: &BlockAxis,
+  spans: &mut Vec<PageNameSpan>,
+) {
+  let node_block_size = axis.block_size(&node.bounds);
+  let start = abs_start + axis.block_offset_in_parent(&node.bounds, parent_block_size);
+  let end = start + node_block_size;
 
   if let Some(style) = node.style.as_ref() {
     if let Some(name) = &style.page {
@@ -135,7 +167,7 @@ fn collect_page_name_spans(node: &FragmentNode, abs_start: f32, spans: &mut Vec<
   }
 
   for child in &node.children {
-    collect_page_name_spans(child, start, spans);
+    collect_page_name_spans(child, start, node_block_size, axis, spans);
   }
 }
 
