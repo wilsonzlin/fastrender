@@ -74,7 +74,7 @@ struct ForbiddenRange {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct BlockAxis {
-  horizontal: bool,
+  pub(crate) horizontal: bool,
   positive: bool,
 }
 
@@ -86,7 +86,7 @@ impl BlockAxis {
     }
   }
 
-  fn block_size(&self, rect: &Rect) -> f32 {
+  pub(crate) fn block_size(&self, rect: &Rect) -> f32 {
     if self.horizontal {
       rect.width()
     } else {
@@ -94,7 +94,7 @@ impl BlockAxis {
     }
   }
 
-  fn block_offset_in_parent(&self, rect: &Rect, parent_block_size: f32) -> f32 {
+  pub(crate) fn block_offset_in_parent(&self, rect: &Rect, parent_block_size: f32) -> f32 {
     let start = if self.horizontal { rect.x() } else { rect.y() };
     let size = self.block_size(rect);
     if self.positive {
@@ -252,8 +252,10 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       let inline_offset = col as f32 * (column_width + column_gap);
       let block_delta = axis.translate_along_block(block_offset);
       let inline_delta = axis.translate_along_inline(inline_offset);
-      let translated =
-        clipped.translate(Point::new(block_delta.x + inline_delta.x, block_delta.y + inline_delta.y));
+      let translated = clipped.translate(Point::new(
+        block_delta.x + inline_delta.x,
+        block_delta.y + inline_delta.y,
+      ));
 
       fragments.push(translated);
     }
