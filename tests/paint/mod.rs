@@ -2,6 +2,7 @@
 
 mod util;
 
+mod backface_culling_test;
 mod avif_test;
 mod canvas_test;
 mod color_mix_display_list_test;
