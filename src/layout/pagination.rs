@@ -13,7 +13,7 @@ use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
 use crate::style::position::Position;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
-use crate::tree::fragment_tree::FragmentNode;
+use crate::tree::fragment_tree::{FragmentNode, FragmentainerPath};
 
 /// Controls how paginated pages are positioned in the fragment tree.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -135,6 +135,7 @@ pub fn paginate_fragment_tree_with_options(
       break;
     }
 
+    let fragmentainer = FragmentainerPath::new(page_index);
     let clipped = clip_node(
       root,
       pos,
@@ -146,6 +147,7 @@ pub fn paginate_fragment_tree_with_options(
       &axis,
       page_index,
       0,
+      fragmentainer,
     );
     let mut page_root = FragmentNode::new_block(
       Rect::from_xywh(0.0, 0.0, style.total_size.width, style.total_size.height),
@@ -191,7 +193,7 @@ pub fn paginate_fragment_tree_with_options(
 
   let count = pages.len();
   for (idx, page) in pages.iter_mut().enumerate() {
-    propagate_fragment_metadata(page, idx, count);
+    propagate_fragment_metadata(page, idx, count, FragmentainerPath::new(idx));
   }
 
   pages

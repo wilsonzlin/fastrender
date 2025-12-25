@@ -14,8 +14,12 @@ use crate::geometry::{Point, Rect};
 use crate::style::types::WritingMode;
 use crate::style::types::{BreakBetween, BreakInside};
 use crate::style::ComputedStyle;
+<<<<<<< HEAD
 use crate::style::{block_axis_is_horizontal, block_axis_positive};
-use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentainerPath};
+=======
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentainerPath};
+>>>>>>> 50fdf49 (Add structured fragmentainer metadata)
 
 /// Options controlling how fragments are split across fragmentainers.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -426,18 +430,11 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       continue;
     }
 
-    if let Some(mut clipped) = clip_node(
-      root,
-      start,
-      end,
-      0.0,
-      start,
-      root_block_size,
-      end - start,
-      &axis,
-      index,
-      fragment_count,
-    ) {
+<<<<<<< HEAD
+    let path = FragmentainerPath::new(index);
+    if let Some(mut clipped) =
+      clip_node(root, start, end, 0.0, start, root_block_size, end - start, &axis, index, fragment_count, path)
+    {
       if column_count > 1 {
         if axis.horizontal {
           clipped.bounds.size.height = column_width;
@@ -445,7 +442,13 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
           clipped.bounds.size.width = column_width;
         }
       }
-      propagate_fragment_metadata(&mut clipped, index, fragment_count);
+      propagate_fragment_metadata(&mut clipped, index, fragment_count, path);
+=======
+    let path = FragmentainerPath::new(index);
+    if let Some(mut clipped) = clip_node(root, start, end, 0.0, start, index, fragment_count, path)
+    {
+      propagate_fragment_metadata(&mut clipped, index, fragment_count, path);
+>>>>>>> 50fdf49 (Add structured fragmentainer metadata)
 
       // Translate fragments to account for fragmentainer gaps so downstream consumers
       // can reason about the absolute position of each fragmentainer stack. When multiple
@@ -472,12 +475,20 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
   fragments
 }
 
-pub(crate) fn propagate_fragment_metadata(node: &mut FragmentNode, index: usize, count: usize) {
+pub(crate) fn propagate_fragment_metadata(
+  node: &mut FragmentNode,
+  index: usize,
+  count: usize,
+  path: FragmentainerPath,
+) {
+  let merged_path = path.inherit_from(&node.fragmentainer);
+
   node.fragment_index = index;
   node.fragment_count = count.max(1);
-  node.fragmentainer_index = index;
+  node.fragmentainer = merged_path;
+  node.fragmentainer_index = merged_path.flattened_index();
   for child in &mut node.children {
-    propagate_fragment_metadata(child, index, count);
+    propagate_fragment_metadata(child, index, count, path);
   }
 }
 
@@ -492,6 +503,7 @@ pub(crate) fn clip_node(
   axis: &BlockAxis,
   fragment_index: usize,
   fragment_count: usize,
+  fragmentainer: FragmentainerPath,
 ) -> Option<FragmentNode> {
   let node_block_start = axis.block_offset_in_parent(&node.bounds, parent_block_size);
   let node_block_size = axis.block_size(&node.bounds);
@@ -516,6 +528,7 @@ pub(crate) fn clip_node(
   if is_line && (node_abs_start < fragment_start || node_abs_end > fragment_end) {
     if node_abs_start >= fragment_start && node_abs_start < fragment_end {
       let mut cloned = clone_without_children(node);
+      let merged_path = fragmentainer.inherit_from(&node.fragmentainer);
       cloned.bounds = Rect::from_xywh(
         node.bounds.x(),
         node_abs_start - parent_clipped_abs_start,
@@ -524,7 +537,8 @@ pub(crate) fn clip_node(
       );
       cloned.fragment_index = fragment_index;
       cloned.fragment_count = fragment_count.max(1);
-      cloned.fragmentainer_index = fragment_index;
+      cloned.fragmentainer = merged_path;
+      cloned.fragmentainer_index = merged_path.flattened_index();
       cloned.children = node.children.clone();
       return Some(cloned);
     }
@@ -537,9 +551,11 @@ pub(crate) fn clip_node(
   {
     if (fragment_start..fragment_end).contains(&node_abs_start) {
       let mut cloned = clone_without_children(node);
+      let merged_path = fragmentainer.inherit_from(&node.fragmentainer);
       cloned.fragment_index = fragment_index;
       cloned.fragment_count = fragment_count.max(1);
-      cloned.fragmentainer_index = fragment_index;
+      cloned.fragmentainer = merged_path;
+      cloned.fragmentainer_index = merged_path.flattened_index();
       cloned.children = node.children.clone();
       return Some(cloned);
     }
@@ -552,6 +568,7 @@ pub(crate) fn clip_node(
   let new_block_start = clipped_abs_start - parent_clipped_abs_start;
 
   let mut cloned = clone_without_children(node);
+  let merged_path = fragmentainer.inherit_from(&node.fragmentainer);
   cloned.bounds = axis.set_block_position_and_size(
     &node.bounds,
     new_block_start,
@@ -560,7 +577,8 @@ pub(crate) fn clip_node(
   );
   cloned.fragment_index = fragment_index;
   cloned.fragment_count = fragment_count.max(1);
-  cloned.fragmentainer_index = fragment_index;
+  cloned.fragmentainer = merged_path;
+  cloned.fragmentainer_index = merged_path.flattened_index();
 
   for child in &node.children {
     if let Some(child_clipped) = clip_node(
@@ -574,6 +592,7 @@ pub(crate) fn clip_node(
       axis,
       fragment_index,
       fragment_count,
+      fragmentainer,
     ) {
       cloned.children.push(child_clipped);
     }
@@ -592,6 +611,7 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     fragment_index: node.fragment_index,
     fragment_count: node.fragment_count,
     fragmentainer_index: node.fragmentainer_index,
+    fragmentainer: node.fragmentainer,
     scroll_overflow: node.scroll_overflow,
   }
 }

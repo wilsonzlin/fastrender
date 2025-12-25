@@ -158,6 +158,72 @@ impl FragmentContent {
   }
 }
 
+/// Identifies the fragmentainer (page/column) a fragment belongs to.
+///
+/// Pagination yields distinct pages (`page_index`), while multi-column layout can further
+/// partition content into column sets (`column_set_index`) and individual columns
+/// (`column_index`). Fields are optional so a non-paginated, non-column layout can still use
+/// the default `page_index = 0` with `None` for the column components.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FragmentainerPath {
+  /// Zero-based page index within the paginated flow.
+  pub page_index: usize,
+  /// Which column set this fragment is part of (e.g., the nth multi-column segment).
+  pub column_set_index: Option<usize>,
+  /// Which column within the active column set this fragment occupies.
+  pub column_index: Option<usize>,
+}
+
+impl FragmentainerPath {
+  /// Creates a new path for the given page with no column information.
+  pub fn new(page_index: usize) -> Self {
+    Self {
+      page_index,
+      column_set_index: None,
+      column_index: None,
+    }
+  }
+
+  /// Updates the page index while preserving column information.
+  pub fn with_page_index(mut self, page_index: usize) -> Self {
+    self.page_index = page_index;
+    self
+  }
+
+  /// Sets the column set and column indices.
+  pub fn with_columns(mut self, column_set_index: usize, column_index: usize) -> Self {
+    self.column_set_index = Some(column_set_index);
+    self.column_index = Some(column_index);
+    self
+  }
+
+  /// Combines this path with an existing one, filling in any missing column metadata.
+  ///
+  /// The supplied path always wins for page/column fields that are present; existing column
+  /// metadata is used as a fallback when the new path leaves them unset.
+  pub fn inherit_from(self, existing: &FragmentainerPath) -> Self {
+    Self {
+      page_index: self.page_index,
+      column_set_index: self.column_set_index.or(existing.column_set_index),
+      column_index: self.column_index.or(existing.column_index),
+    }
+  }
+
+  /// Returns a flattened index representing the innermost fragmentainer.
+  pub fn flattened_index(&self) -> usize {
+    self
+      .column_index
+      .or(self.column_set_index)
+      .unwrap_or(self.page_index)
+  }
+}
+
+impl Default for FragmentainerPath {
+  fn default() -> Self {
+    Self::new(0)
+  }
+}
+
 /// A single fragment in the fragment tree
 ///
 /// Represents a laid-out box with a definite position and size.
@@ -214,7 +280,13 @@ pub struct FragmentNode {
   pub fragment_count: usize,
 
   /// Which fragmentainer (page/column) this fragment occupies.
+  ///
+  /// This remains as a flattened index of the innermost fragmentainer (column takes precedence
+  /// over page) for backwards compatibility.
   pub fragmentainer_index: usize,
+
+  /// Structured fragmentainer metadata (page/column set/column).
+  pub fragmentainer: FragmentainerPath,
 
   /// Scrollable overflow area for this fragment (including descendants),
   /// expressed in the fragment's local coordinate space.
@@ -238,6 +310,7 @@ impl FragmentNode {
   /// ```
   pub fn new(bounds: Rect, content: FragmentContent, children: Vec<FragmentNode>) -> Self {
     let scroll_overflow = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
+    let fragmentainer = FragmentainerPath::default();
     Self {
       bounds,
       content,
@@ -246,7 +319,8 @@ impl FragmentNode {
       style: None,
       fragment_index: 0,
       fragment_count: 1,
-      fragmentainer_index: 0,
+      fragmentainer_index: fragmentainer.flattened_index(),
+      fragmentainer,
       scroll_overflow,
     }
   }
@@ -259,6 +333,7 @@ impl FragmentNode {
     style: Arc<ComputedStyle>,
   ) -> Self {
     let scroll_overflow = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
+    let fragmentainer = FragmentainerPath::default();
     Self {
       bounds,
       content,
@@ -267,7 +342,8 @@ impl FragmentNode {
       style: Some(style),
       fragment_index: 0,
       fragment_count: 1,
-      fragmentainer_index: 0,
+      fragmentainer_index: fragmentainer.flattened_index(),
+      fragmentainer,
       scroll_overflow,
     }
   }
@@ -534,6 +610,7 @@ impl FragmentNode {
       fragment_index: self.fragment_index,
       fragment_count: self.fragment_count,
       fragmentainer_index: self.fragmentainer_index,
+      fragmentainer: self.fragmentainer,
       scroll_overflow: self.scroll_overflow,
     }
   }

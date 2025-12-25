@@ -343,6 +343,7 @@ pub use tree::debug::DebugInfo;
 pub use tree::fragment_tree::FragmentContent;
 pub use tree::fragment_tree::FragmentNode;
 pub use tree::fragment_tree::FragmentTree;
+pub use tree::fragment_tree::FragmentainerPath;
 pub use tree::pseudo_elements::count_pseudo_boxes;
 pub use tree::pseudo_elements::find_pseudo_boxes;
 pub use tree::pseudo_elements::get_pseudo_type;
