@@ -549,7 +549,8 @@ impl FragmentNode {
   /// Computes the bounding box of this fragment and all its children
   ///
   /// Returns the minimal rectangle that contains this fragment and all
-  /// descendants. Useful for paint invalidation and scrolling.
+  /// descendants in the fragment's local coordinate space (origin at the
+  /// fragment's top-left). Useful for paint invalidation and scrolling.
   ///
   /// # Examples
   ///
@@ -576,12 +577,14 @@ impl FragmentNode {
   /// assert_eq!(bbox.max_x(), 200.0);
   /// ```
   pub fn bounding_box(&self) -> Rect {
-    // Start with this fragment's bounds
-    let mut bbox = self.bounds;
+    // Start with this fragment's own bounds in local coordinates.
+    let mut bbox = Rect::from_xywh(0.0, 0.0, self.bounds.width(), self.bounds.height());
 
-    // Union with all children's bounding boxes
+    // Union with all children's bounding boxes translated into this fragment's space.
     for child in &self.children {
-      let child_bbox = child.bounding_box();
+      let child_bbox = child
+        .bounding_box()
+        .translate(Point::new(child.bounds.x(), child.bounds.y()));
       bbox = bbox.union(child_bbox);
     }
 
@@ -652,6 +655,7 @@ impl FragmentNode {
   /// Returns true if this fragment contains the given point
   ///
   /// Checks only this fragment's bounds, not children.
+  /// The point is interpreted in the fragment's local coordinate space.
   ///
   /// # Examples
   ///
@@ -664,11 +668,12 @@ impl FragmentNode {
   ///     vec![],
   /// );
   ///
+  /// // Points are relative to the fragment's own origin (0,0)
   /// assert!(fragment.contains_point(Point::new(50.0, 50.0)));
-  /// assert!(!fragment.contains_point(Point::new(5.0, 5.0)));
+  /// assert!(!fragment.contains_point(Point::new(-5.0, -5.0)));
   /// ```
   pub fn contains_point(&self, point: Point) -> bool {
-    self.bounds.contains_point(point)
+    Rect::from_xywh(0.0, 0.0, self.bounds.width(), self.bounds.height()).contains_point(point)
   }
 
   /// Finds all fragments at the given point
@@ -695,12 +700,16 @@ impl FragmentNode {
   /// // Should find both child and parent
   /// assert_eq!(hits.len(), 2);
   /// ```
+  ///
+  /// The input point is interpreted in this fragment's local coordinate space
+  /// (origin at the fragment's top-left).
   pub fn fragments_at_point(&self, point: Point) -> Vec<&FragmentNode> {
     let mut result = Vec::new();
 
     // Check children first (reverse paint order = depth-first, reversed)
     for child in self.children.iter().rev() {
-      result.extend(child.fragments_at_point(point));
+      let child_point = Point::new(point.x - child.bounds.x(), point.y - child.bounds.y());
+      result.extend(child.fragments_at_point(child_point));
     }
 
     // Check this fragment
@@ -883,18 +892,30 @@ impl FragmentTree {
 
   /// Computes the total bounding box of all content
   pub fn content_size(&self) -> Rect {
-    let mut bbox = self.root.bounding_box();
+    let mut bbox = self
+      .root
+      .bounding_box()
+      .translate(Point::new(self.root.bounds.x(), self.root.bounds.y()));
     for root in &self.additional_fragments {
-      bbox = bbox.union(root.bounding_box());
+      let translated = root
+        .bounding_box()
+        .translate(Point::new(root.bounds.x(), root.bounds.y()));
+      bbox = bbox.union(translated);
     }
     bbox
   }
 
   /// Finds all fragments at the given point
   pub fn hit_test(&self, point: Point) -> Vec<&FragmentNode> {
-    let mut hits = self.root.fragments_at_point(point);
+    let mut hits = self.root.fragments_at_point(Point::new(
+      point.x - self.root.bounds.x(),
+      point.y - self.root.bounds.y(),
+    ));
     for root in &self.additional_fragments {
-      hits.extend(root.fragments_at_point(point));
+      hits.extend(root.fragments_at_point(Point::new(
+        point.x - root.bounds.x(),
+        point.y - root.bounds.y(),
+      )));
     }
     hits
   }
@@ -985,7 +1006,7 @@ mod tests {
     let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 100.0, 50.0), vec![]);
 
     let bbox = fragment.bounding_box();
-    assert_eq!(bbox, fragment.bounds);
+    assert_eq!(bbox, Rect::from_xywh(0.0, 0.0, 100.0, 50.0));
   }
 
   #[test]
@@ -1014,8 +1035,19 @@ mod tests {
     let bbox = parent.bounding_box();
     // Should include grandchild at (150, 150) with size (50, 50)
     assert_eq!(bbox.min_x(), 0.0);
-    assert_eq!(bbox.max_x(), 200.0);
-    assert_eq!(bbox.max_y(), 200.0);
+    assert_eq!(bbox.max_x(), 250.0);
+    assert_eq!(bbox.max_y(), 250.0);
+  }
+
+  #[test]
+  fn test_bounding_box_accumulates_offsets() {
+    let grandchild = FragmentNode::new_block(Rect::from_xywh(0.0, 30.0, 10.0, 5.0), vec![]);
+    let child = FragmentNode::new_block(Rect::from_xywh(0.0, 50.0, 20.0, 20.0), vec![grandchild]);
+    let parent = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 40.0, 40.0), vec![child]);
+
+    let bbox = parent.bounding_box();
+    assert_eq!(bbox.min_y(), 0.0);
+    assert_eq!(bbox.max_y(), 85.0);
   }
 
   // Translation tests
@@ -1047,9 +1079,9 @@ mod tests {
     let fragment = FragmentNode::new_block(Rect::from_xywh(10.0, 10.0, 100.0, 100.0), vec![]);
 
     assert!(fragment.contains_point(Point::new(50.0, 50.0)));
-    assert!(fragment.contains_point(Point::new(10.0, 10.0))); // Boundary
-    assert!(fragment.contains_point(Point::new(110.0, 110.0))); // Boundary
-    assert!(!fragment.contains_point(Point::new(5.0, 5.0)));
+    assert!(fragment.contains_point(Point::new(0.0, 0.0))); // Boundary
+    assert!(fragment.contains_point(Point::new(100.0, 100.0))); // Boundary
+    assert!(!fragment.contains_point(Point::new(-5.0, -5.0)));
     assert!(!fragment.contains_point(Point::new(120.0, 120.0)));
   }
 
@@ -1088,6 +1120,23 @@ mod tests {
     let hits = parent.fragments_at_point(Point::new(40.0, 40.0));
     assert_eq!(hits.len(), 3); // Both children and parent
                                // child2 should come first (reverse paint order)
+  }
+
+  #[test]
+  fn test_hit_test_nested_offsets() {
+    let grandchild =
+      FragmentNode::new_block(Rect::from_xywh(5.0, 30.0, 10.0, 10.0), vec![]);
+    let child = FragmentNode::new_block(Rect::from_xywh(10.0, 50.0, 40.0, 40.0), vec![grandchild]);
+    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 200.0, 200.0), vec![child]);
+    let tree = FragmentTree::new(root);
+
+    // Point should hit grandchild (5+10+?, etc.)
+    let hits = tree.hit_test(Point::new(20.0, 90.0));
+    assert_eq!(hits.len(), 3);
+    assert!(std::ptr::eq(
+      hits[0],
+      &tree.root.children[0].children[0]
+    ));
   }
 
   // Tree traversal tests
@@ -1133,6 +1182,7 @@ mod tests {
     let hits = tree.hit_test(Point::new(120.0, 120.0));
     assert_eq!(hits.len(), 2); // child and root
   }
+
 
   #[test]
   fn test_fragment_tree_count() {
