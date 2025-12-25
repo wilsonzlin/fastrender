@@ -29,7 +29,7 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Accepts `--shard <index>/<total>` to render a slice of the cached pages in a stable order.
 - Optional outputs:
   - `--diagnostics-json` writes `fetches/renders/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
-  - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors).
+  - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors); `full` also writes a combined `fetches/renders/<page>.snapshot.json` pipeline snapshot.
 
 ## `fetch_and_render`
 
@@ -43,6 +43,7 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Entry: `src/bin/inspect_frag.rs`
 - Run: `cargo run --release --bin inspect_frag -- --help`
 - `--dump-json <dir>` writes deterministic snapshots of each pipeline stage (`dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, `display_list.json`). Pair with `--filter-selector` / `--filter-id` to focus on a subtree.
+- `--dump-snapshot` prints a combined pipeline snapshot JSON to stdout (and exits).
 - `--render-overlay <png>` renders the page with optional overlays for fragment bounds, box ids, stacking contexts, and scroll containers.
 
 ## `diff_renders`

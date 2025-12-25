@@ -29,7 +29,10 @@ use fastrender::style::cascade::StyledNode;
 use fastrender::tree::box_tree::{BoxNode, BoxType};
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use fastrender::OutputFormat;
-use fastrender::{BoxTree, DisplayList, FragmentTree, RenderArtifactRequest, RenderArtifacts};
+use fastrender::{
+  snapshot_pipeline, BoxTree, DisplayList, FragmentTree, PipelineSnapshot, RenderArtifactRequest,
+  RenderArtifacts,
+};
 use serde::Serialize;
 use serde_json;
 use std::collections::HashSet;
@@ -619,6 +622,7 @@ fn main() {
                   write_stage_json(summary_path, summary, &mut log);
                 }
                 write_full_artifacts(Path::new(RENDER_DIR), &name, artifacts, &mut log);
+                write_pipeline_snapshot(Path::new(RENDER_DIR), &name, artifacts, &mut log);
               }
             }
           } else {
@@ -948,6 +952,35 @@ fn write_full_artifacts(base: &Path, name: &str, artifacts: &RenderArtifacts, lo
   } else {
     let _ = writeln!(log, "Missing display list for {}", name);
   }
+}
+
+fn write_pipeline_snapshot(base: &Path, name: &str, artifacts: &RenderArtifacts, log: &mut String) {
+  let Some(dom) = artifacts.dom.as_ref() else {
+    let _ = writeln!(log, "Missing DOM artifact for {}", name);
+    return;
+  };
+  let Some(styled) = artifacts.styled_tree.as_ref() else {
+    let _ = writeln!(log, "Missing styled tree for {}", name);
+    return;
+  };
+  let Some(box_tree) = artifacts.box_tree.as_ref() else {
+    let _ = writeln!(log, "Missing box tree for {}", name);
+    return;
+  };
+  let Some(fragment_tree) = artifacts.fragment_tree.as_ref() else {
+    let _ = writeln!(log, "Missing fragment tree for {}", name);
+    return;
+  };
+  let Some(display_list) = artifacts.display_list.as_ref() else {
+    let _ = writeln!(log, "Missing display list for {}", name);
+    return;
+  };
+
+  let snapshot: PipelineSnapshot =
+    snapshot_pipeline(dom, styled, box_tree, fragment_tree, display_list);
+  let path = base.join(format!("{}.snapshot.json", name));
+  let _ = writeln!(log, "Snapshot: {}", path.display());
+  write_stage_json(path, &snapshot, log);
 }
 
 fn serialize_dom(node: &DomNode) -> SerializableDomNode {

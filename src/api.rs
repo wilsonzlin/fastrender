@@ -67,6 +67,7 @@ use crate::css::parser::{
   extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
+use crate::debug;
 use crate::debug::inspect::{InspectQuery, InspectionSnapshot};
 use crate::debug::trace::TraceHandle;
 use crate::dom::DomNode;
@@ -918,6 +919,19 @@ impl PreparedDocument {
   pub fn default_scroll(&self) -> Point {
     self.default_scroll
   }
+}
+
+/// Intermediate pipeline outputs produced during layout.
+#[derive(Debug, Clone)]
+pub struct LayoutIntermediates {
+  /// DOM after applying top-layer state.
+  pub dom: DomNode,
+  /// Styled tree produced by cascade.
+  pub styled_tree: StyledNode,
+  /// Box tree generated from the styled tree.
+  pub box_tree: BoxTree,
+  /// Positioned fragment tree ready for painting.
+  pub fragment_tree: FragmentTree,
 }
 
 impl RenderResult {
@@ -3526,6 +3540,103 @@ impl FastRender {
     trace.finalize(result)
   }
 
+  /// Generate a debug snapshot of the full rendering pipeline for an HTML string.
+  pub fn snapshot_pipeline(
+    &mut self,
+    html: &str,
+    base_hint: &str,
+    options: RenderOptions,
+  ) -> Result<debug::snapshot::PipelineSnapshot> {
+    let (width, height) = options
+      .viewport
+      .unwrap_or((self.default_width, self.default_height));
+
+    let mut diagnostics = RenderDiagnostics::default();
+    let base_url = infer_base_url(html, base_hint).into_owned();
+    self.set_base_url(base_url.clone());
+
+    let html_with_css = self
+      .inline_stylesheets(
+        html,
+        &base_url,
+        options.media_type,
+        options.css_limit,
+        &mut diagnostics,
+        None,
+        None,
+      )
+      .map_err(Error::Render)?;
+
+    let requested_viewport = Size::new(width as f32, height as f32);
+    let dom = self.parse_html(&html_with_css)?;
+    let meta_viewport = if self.apply_meta_viewport {
+      crate::html::viewport::extract_viewport(&dom)
+    } else {
+      None
+    };
+
+    let original_dpr = self.device_pixel_ratio;
+    if let Some(dpr) = options.device_pixel_ratio {
+      self.device_pixel_ratio = dpr;
+    }
+
+    let resolved_viewport = resolve_viewport(
+      requested_viewport,
+      self.device_pixel_ratio,
+      meta_viewport.as_ref(),
+    );
+    let layout_width = resolved_viewport.layout_viewport.width.max(1.0).round() as u32;
+    let layout_height = resolved_viewport.layout_viewport.height.max(1.0).round() as u32;
+
+    let snapshot = (|| -> Result<debug::snapshot::PipelineSnapshot> {
+      self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
+      self.pending_device_size = Some(resolved_viewport.visual_viewport);
+
+      let mut intermediates = self.layout_document_for_media_intermediates(
+        &dom,
+        layout_width,
+        layout_height,
+        options.media_type,
+      )?;
+
+      let viewport_size = intermediates.fragment_tree.viewport_size();
+      let scroll_state =
+        crate::scroll::ScrollState::with_viewport(Point::new(options.scroll_x, options.scroll_y));
+      let scroll_result =
+        crate::scroll::apply_scroll_snap(&mut intermediates.fragment_tree, &scroll_state);
+      let scroll = scroll_result.state.viewport;
+
+      animation::apply_scroll_driven_animations(&mut intermediates.fragment_tree, scroll);
+
+      self.apply_sticky_offsets(
+        &mut intermediates.fragment_tree.root,
+        Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
+        scroll,
+        viewport_size,
+      );
+
+      let mut display_list =
+        DisplayListBuilder::new().build_with_stacking_tree(&intermediates.fragment_tree.root);
+      for extra in &intermediates.fragment_tree.additional_fragments {
+        let extra_list = DisplayListBuilder::new().build_with_stacking_tree(extra);
+        display_list.append(extra_list);
+      }
+
+      Ok(debug::snapshot::snapshot_pipeline(
+        &intermediates.dom,
+        &intermediates.styled_tree,
+        &intermediates.box_tree,
+        &intermediates.fragment_tree,
+        &display_list,
+      ))
+    })();
+
+    self.device_pixel_ratio = original_dpr;
+    self.pending_device_size = None;
+
+    snapshot
+  }
+
   /// Parses HTML into a DOM tree
   ///
   /// Use this when you need direct access to the parsed DOM structure.
@@ -3912,6 +4023,39 @@ impl FastRender {
   }
 
   #[allow(clippy::cognitive_complexity)]
+  pub fn layout_document_for_media_intermediates(
+    &mut self,
+    dom: &DomNode,
+    width: u32,
+    height: u32,
+    media_type: MediaType,
+  ) -> Result<LayoutIntermediates> {
+    let trace = TraceHandle::disabled();
+    let artifacts = self.layout_document_for_media_with_artifacts(
+      dom,
+      width,
+      height,
+      media_type,
+      LayoutDocumentOptions::default(),
+      None,
+      &trace,
+    )?;
+    let LayoutArtifacts {
+      dom,
+      styled_tree,
+      box_tree,
+      fragment_tree,
+      ..
+    } = artifacts;
+    Ok(LayoutIntermediates {
+      dom,
+      styled_tree,
+      box_tree,
+      fragment_tree,
+    })
+  }
+
+  #[allow(clippy::cognitive_complexity)]
   pub fn layout_document_for_media_with_options(
     &mut self,
     dom: &DomNode,
@@ -3923,7 +4067,13 @@ impl FastRender {
   ) -> Result<FragmentTree> {
     let trace = TraceHandle::disabled();
     let artifacts = self.layout_document_for_media_with_artifacts(
-      dom, width, height, media_type, options, deadline, &trace,
+      dom,
+      width,
+      height,
+      media_type,
+      options,
+      deadline,
+      &trace,
     )?;
     Ok(artifacts.fragment_tree)
   }

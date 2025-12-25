@@ -52,6 +52,7 @@ use fastrender::tree::fragment_tree::FragmentContent;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::tree::fragment_tree::FragmentTree;
 use fastrender::OutputFormat;
+use fastrender::snapshot_pipeline;
 use selectors::matching::matches_selector;
 use selectors::matching::MatchingContext;
 use selectors::matching::MatchingForInvalidation;
@@ -142,6 +143,21 @@ struct Args {
   /// Abort after this many seconds
   #[arg(long)]
   timeout: Option<u64>,
+
+  /// Dump a combined pipeline snapshot as JSON to stdout and exit.
+  #[arg(
+    long,
+    conflicts_with_all = [
+      "dump_json",
+      "render_overlay",
+      "filter_selector",
+      "filter_id",
+      "query",
+      "query_id",
+      "query_node"
+    ]
+  )]
+  dump_snapshot: bool,
 
   /// Dump inspection JSON for a CSS selector (bypasses other output).
   #[arg(long)]
@@ -299,6 +315,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let media_ctx = media_prefs.media_context_with_overrides((viewport_w, viewport_h), args.dpr);
   let stylesheet = extract_css(&dom)?;
   let styled = apply_styles_with_media_and_target(&dom, &stylesheet, &media_ctx, None);
+
+  if args.dump_snapshot {
+    let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
+    let engine = LayoutEngine::with_font_context(
+      LayoutConfig::for_viewport(Size::new(viewport_w as f32, viewport_h as f32)),
+      renderer.font_context().clone(),
+    );
+    let fragment_tree = engine.layout_tree(&box_tree)?;
+    let mut display_list = DisplayListBuilder::new().build_with_stacking_tree(&fragment_tree.root);
+    for extra in &fragment_tree.additional_fragments {
+      let extra_list = DisplayListBuilder::new().build_with_stacking_tree(extra);
+      display_list.append(extra_list);
+    }
+    let snapshot = snapshot_pipeline(&dom, &styled, &box_tree, &fragment_tree, &display_list);
+    serde_json::to_writer_pretty(std::io::stdout(), &snapshot)?;
+    return Ok(());
+  }
 
   let mut styled_text = 0;
   let mut styled_text_visible = 0;
