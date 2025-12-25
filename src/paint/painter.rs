@@ -429,6 +429,7 @@ enum ResolvedFilter {
     spread: f32,
     color: Rgba,
   },
+  SvgFilter(Arc<crate::paint::svg_filter::SvgFilter>),
 }
 
 #[derive(Debug, Clone)]
@@ -1607,11 +1608,19 @@ impl Painter {
       .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
       .unwrap_or(false);
     let filters = style_ref
-      .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx))
+      .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx, &self.image_cache))
       .unwrap_or_default();
     let has_filters = !filters.is_empty();
     let backdrop_filters = style_ref
-      .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx))
+      .map(|s| {
+        resolve_filters(
+          &s.backdrop_filter,
+          s,
+          viewport,
+          &self.font_ctx,
+          &self.image_cache,
+        )
+      })
       .unwrap_or_default();
     let has_backdrop = !backdrop_filters.is_empty();
     let clip: Option<StackingClip> = style_ref.and_then(|style| {
@@ -1698,16 +1707,18 @@ impl Painter {
       });
 
       match (overflow_clip, clip_property) {
-        (Some(overflow), Some(prop_rect)) => overflow
-          .rect
-          .intersection(prop_rect)
-          .map(|rect| StackingClip {
-            rect,
-            radii: BorderRadii::ZERO,
-            clip_x: true,
-            clip_y: true,
-            clip_root: true,
-          }),
+        (Some(overflow), Some(prop_rect)) => {
+          overflow
+            .rect
+            .intersection(prop_rect)
+            .map(|rect| StackingClip {
+              rect,
+              radii: BorderRadii::ZERO,
+              clip_x: true,
+              clip_y: true,
+              clip_root: true,
+            })
+        }
         (Some(overflow), None) => Some(overflow),
         (None, Some(prop_rect)) => Some(StackingClip {
           rect: prop_rect,
@@ -2049,7 +2060,12 @@ impl Painter {
           if total_ms >= threshold_ms {
             let (run_count, glyph_count) = shaped_runs
               .as_deref()
-              .map(|runs| (runs.len(), runs.iter().map(|r| r.glyphs.len()).sum::<usize>()))
+              .map(|runs| {
+                (
+                  runs.len(),
+                  runs.iter().map(|r| r.glyphs.len()).sum::<usize>(),
+                )
+              })
               .unwrap_or((0, 0));
             let preview: String = text.chars().take(80).collect();
             eprintln!(
@@ -2172,8 +2188,10 @@ impl Painter {
 
         // Constrain the stacking layer to the visible viewport (expanded by filter outsets).
         // If a context is entirely outside the viewport, skip it.
-        let (filter_l, filter_t, filter_r, filter_b) = filter_outset(&filters, self.scale);
-        let (back_l, back_t, back_r, back_b) = filter_outset(&backdrop_filters, self.scale);
+        let (filter_l, filter_t, filter_r, filter_b) =
+          filter_outset(&filters, 1.0, Some(&context_rect));
+        let (back_l, back_t, back_r, back_b) =
+          filter_outset(&backdrop_filters, 1.0, Some(&context_rect));
         let expand_l = filter_l.max(back_l);
         let expand_t = filter_t.max(back_t);
         let expand_r = filter_r.max(back_r);
@@ -2448,7 +2466,14 @@ impl Painter {
         }
         if !filters.is_empty() {
           let filter_start = profile_enabled.then(Instant::now);
-          apply_filters(&mut layer_pixmap, &filters, self.scale);
+          apply_filters(
+            &mut layer_pixmap,
+            &filters,
+            self.scale,
+            // Filters run in device space on the layer pixmap, so use the device-scaled stacking
+            // context bounds to resolve any coordinate-dependent operations (e.g. SVG filter units).
+            Some(device_root_rect),
+          );
           if let Some(start) = filter_start {
             filter_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
@@ -2456,7 +2481,7 @@ impl Painter {
 
         let device_radii = self.device_radii(radii);
         if !radii.is_zero() || !filters.is_empty() {
-          let (out_l, out_t, out_r, out_b) = filter_outset(&filters, self.scale);
+          let (out_l, out_t, out_r, out_b) = filter_outset(&filters, 1.0, Some(&root_rect));
           let device_out_l = self.device_length(out_l);
           let device_out_t = self.device_length(out_t);
           let device_out_r = self.device_length(out_r);
@@ -5273,12 +5298,7 @@ impl Painter {
         let resolved = self.image_cache.resolve_url(src);
         eprintln!(
           "[image-paint] #{idx} src={} resolved={} rect=({:.1},{:.1},{:.1},{:.1})",
-          src,
-          resolved,
-          x,
-          y,
-          width,
-          height
+          src, resolved, x, y, width, height
         );
       }
     }
@@ -5507,13 +5527,14 @@ impl Painter {
 
       let render_w = dest_w_device.ceil().max(1.0) as u32;
       let render_h = dest_h_device.ceil().max(1.0) as u32;
-      let pixmap = match self
-        .image_cache
-        .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
-      {
-        Ok(pixmap) => pixmap,
-        Err(_) => return false,
-      };
+      let pixmap =
+        match self
+          .image_cache
+          .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
+        {
+          Ok(pixmap) => pixmap,
+          Err(_) => return false,
+        };
 
       let scale_x = dest_w_device / render_w as f32;
       let scale_y = dest_h_device / render_h as f32;
@@ -7538,8 +7559,8 @@ fn stacking_context_bounds(
   if let Some(outline_bounds) = outline_bounds {
     base = base.union(outline_bounds);
   }
-  let (l, t, r, b) = filter_outset(filters, 1.0);
-  let (bl, bt, br, bb) = filter_outset(backdrop_filters, 1.0);
+  let (l, t, r, b) = filter_outset(filters, 1.0, Some(&rect));
+  let (bl, bt, br, bb) = filter_outset(backdrop_filters, 1.0, Some(&rect));
   let total_l = l.max(bl);
   let total_t = t.max(bt);
   let total_r = r.max(br);
@@ -7742,6 +7763,7 @@ fn resolve_filters(
   style: &ComputedStyle,
   viewport: (f32, f32),
   font_ctx: &FontContext,
+  image_cache: &ImageCache,
 ) -> Vec<ResolvedFilter> {
   filters
     .iter()
@@ -7778,7 +7800,9 @@ fn resolve_filters(
           color,
         })
       }
-      FilterFunction::Url(_) => None,
+      FilterFunction::Url(url) => {
+        crate::paint::svg_filter::load_svg_filter(url, image_cache).map(ResolvedFilter::SvgFilter)
+      }
     })
     .collect()
 }
@@ -7798,16 +7822,20 @@ fn resolve_filter_length(
   }
 }
 
-fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32) {
+fn filter_outset(
+  filters: &[ResolvedFilter],
+  scale: f32,
+  bbox: Option<&Rect>,
+) -> (f32, f32, f32, f32) {
   let mut left: f32 = 0.0;
   let mut top: f32 = 0.0;
   let mut right: f32 = 0.0;
   let mut bottom: f32 = 0.0;
 
   for filter in filters {
-    match *filter {
+    match filter {
       ResolvedFilter::Blur(radius) => {
-        let delta = (radius * scale).abs() * 3.0;
+        let delta = (*radius * scale).abs() * 3.0;
         left += delta;
         right += delta;
         top += delta;
@@ -7834,6 +7862,16 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
         top = top.max(shadow_top);
         bottom = bottom.max(shadow_bottom);
       }
+      ResolvedFilter::SvgFilter(filter) => {
+        if let Some(bbox) = bbox {
+          let (svg_left, svg_top, svg_right, svg_bottom) =
+            crate::paint::svg_filter::filter_region_outsets(filter.as_ref(), bbox);
+          left = left.max(svg_left * scale);
+          top = top.max(svg_top * scale);
+          right = right.max(svg_right * scale);
+          bottom = bottom.max(svg_bottom * scale);
+        }
+      }
       _ => {}
     }
   }
@@ -7841,26 +7879,26 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
   (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
 }
 
-fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
+fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bbox: Option<Rect>) {
   for filter in filters {
-    match *filter {
+    match filter {
       ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
       ResolvedFilter::Brightness(amount) => {
-        apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
       }
       ResolvedFilter::Contrast(amount) => {
-        apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (apply_contrast(c, *amount), a))
       }
       ResolvedFilter::Grayscale(amount) => {
-        apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (grayscale(c, *amount), a))
       }
-      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, amount), a)),
+      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, *amount), a)),
       ResolvedFilter::Saturate(amount) => {
-        apply_color_filter(pixmap, |c, a| (saturate(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))
       }
-      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, deg), a)),
-      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, amount), a)),
-      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * amount)),
+      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a)),
+      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a)),
+      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount)),
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
@@ -7873,8 +7911,14 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
         offset_y * scale,
         blur_radius * scale,
         spread * scale,
-        color,
+        *color,
       ),
+      ResolvedFilter::SvgFilter(filter) => {
+        let bounds = bbox.copied().unwrap_or_else(|| {
+          Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32)
+        });
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, bounds);
+      }
     }
   }
 }
@@ -7889,7 +7933,17 @@ fn apply_backdrop_filters(
   if filters.is_empty() {
     return;
   }
-  let (out_l, out_t, out_r, out_b) = filter_outset(filters, 1.0);
+  let css_bounds = if scale.is_finite() && scale > 0.0 {
+    Rect::from_xywh(
+      bounds.x() / scale,
+      bounds.y() / scale,
+      bounds.width() / scale,
+      bounds.height() / scale,
+    )
+  } else {
+    *bounds
+  };
+  let (out_l, out_t, out_r, out_b) = filter_outset(filters, 1.0, Some(&css_bounds));
   let out_l = out_l * scale;
   let out_t = out_t * scale;
   let out_r = out_r * scale;
@@ -7938,14 +7992,15 @@ fn apply_backdrop_filters(
     dst_slice.copy_from_slice(src_slice);
   }
 
-  apply_filters(&mut region, filters, scale);
+  let local_rect = Rect::from_xywh(
+    bounds.x() - clamped_x as f32,
+    bounds.y() - clamped_y as f32,
+    bounds.width(),
+    bounds.height(),
+  );
+
+  apply_filters(&mut region, filters, scale, Some(local_rect));
   if !radii.is_zero() {
-    let local_rect = Rect::from_xywh(
-      bounds.x() - clamped_x as f32,
-      bounds.y() - clamped_y as f32,
-      bounds.width(),
-      bounds.height(),
-    );
     apply_clip_mask_rect(&mut region, local_rect, radii);
   }
 
@@ -10282,7 +10337,13 @@ mod tests {
   fn filter_lengths_resolve_viewport_units() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::new(10.0, LengthUnit::Vw))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &ImageCache::new(),
+    );
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!((radius - 20.0).abs() < 0.001),
       other => panic!("expected blur filter, got {:?}", other),
@@ -10293,7 +10354,13 @@ mod tests {
   fn filter_lengths_ignore_percentages() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::percent(50.0))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &ImageCache::new(),
+    );
     assert!(filters.is_empty(), "percentage blur should be discarded");
   }
 
@@ -10302,7 +10369,13 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_size = 20.0;
     style.filter = vec![FilterFunction::Blur(Length::new(1.0, LengthUnit::Ex))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &ImageCache::new(),
+    );
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!(
         (radius - 10.0).abs() < 2.0,
@@ -10316,7 +10389,13 @@ mod tests {
   fn negative_blur_lengths_resolve_to_no_filter() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::px(-2.0))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &ImageCache::new(),
+    );
     assert!(filters.is_empty(), "negative blur should drop the filter");
   }
 
@@ -10329,7 +10408,7 @@ mod tests {
       spread: -2.0,
       color: Rgba::BLACK,
     }];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0, None);
     let with_zero_spread = vec![ResolvedFilter::DropShadow {
       offset_x: 0.0,
       offset_y: 0.0,
@@ -10337,7 +10416,7 @@ mod tests {
       spread: 0.0,
       color: Rgba::BLACK,
     }];
-    let (l0, t0, r0, b0) = filter_outset(&with_zero_spread, 1.0);
+    let (l0, t0, r0, b0) = filter_outset(&with_zero_spread, 1.0, None);
     assert!(
       (l - 10.0).abs() < 0.01
         && (t - 10.0).abs() < 0.01
@@ -10354,7 +10433,7 @@ mod tests {
   #[test]
   fn filter_outset_accumulates_blurs() {
     let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::Blur(3.0)];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0, None);
     assert!(
       (l - 15.0).abs() < 0.01
         && (t - 15.0).abs() < 0.01
@@ -10376,7 +10455,7 @@ mod tests {
         color: Rgba::BLACK,
       },
     ];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0, None);
     // Blur contributes 6px first; drop shadow adds another 3px blur and shifts left/up by offsets.
     assert!(
       (l - 13.0).abs() < 0.01
@@ -10390,7 +10469,7 @@ mod tests {
   #[test]
   fn blur_filter_outset_scales_with_device_pixel_ratio() {
     let filters = vec![ResolvedFilter::Blur(4.0)];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0, None);
     // Blur outset is radius * 3 per side.
     assert!(
       (l - 12.0).abs() < 0.01
@@ -10400,7 +10479,7 @@ mod tests {
     );
 
     let filters = vec![ResolvedFilter::Blur(2.0)];
-    let (l, t, r, b) = filter_outset(&filters, 2.0);
+    let (l, t, r, b) = filter_outset(&filters, 2.0, None);
     // Device pixel ratio doubles the blur radius before computing outsets.
     assert!(
       (l - 12.0).abs() < 0.01
@@ -10443,7 +10522,13 @@ mod tests {
       FilterFunction::Invert(1.3),
       FilterFunction::Opacity(1.7),
     ];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &ImageCache::new(),
+    );
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
       ResolvedFilter::Grayscale(v) | ResolvedFilter::Sepia(v) | ResolvedFilter::Invert(v) =>
@@ -10461,7 +10546,13 @@ mod tests {
       FilterFunction::Contrast(1.7),
       FilterFunction::Saturate(3.2),
     ];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &ImageCache::new(),
+    );
     assert_eq!(filters.len(), 3);
     assert!(filters
       .iter()

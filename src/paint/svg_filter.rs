@@ -1,3 +1,4 @@
+use crate::geometry::Rect;
 use crate::image_loader::ImageCache;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::style::color;
@@ -16,8 +17,87 @@ fn filter_cache() -> &'static Mutex<HashMap<String, Arc<SvgFilter>>> {
   FILTER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[derive(Clone, Copy, Debug)]
+enum CoordinateUnits {
+  ObjectBoundingBox,
+  UserSpaceOnUse,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LengthOrPercentage {
+  value: f32,
+  is_percent: bool,
+}
+
+impl LengthOrPercentage {
+  fn resolve(self, axis: f32, units: CoordinateUnits) -> f32 {
+    match units {
+      CoordinateUnits::ObjectBoundingBox => {
+        if axis.is_finite() && axis != 0.0 {
+          self.value * axis
+        } else {
+          0.0
+        }
+      }
+      CoordinateUnits::UserSpaceOnUse => {
+        if self.is_percent {
+          if axis.is_finite() {
+            self.value * axis
+          } else {
+            0.0
+          }
+        } else {
+          self.value
+        }
+      }
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FilterRegion {
+  x: LengthOrPercentage,
+  y: LengthOrPercentage,
+  width: LengthOrPercentage,
+  height: LengthOrPercentage,
+  units: CoordinateUnits,
+}
+
+impl FilterRegion {
+  fn default() -> Self {
+    Self {
+      x: LengthOrPercentage {
+        value: -0.1,
+        is_percent: true,
+      },
+      y: LengthOrPercentage {
+        value: -0.1,
+        is_percent: true,
+      },
+      width: LengthOrPercentage {
+        value: 1.2,
+        is_percent: true,
+      },
+      height: LengthOrPercentage {
+        value: 1.2,
+        is_percent: true,
+      },
+      units: CoordinateUnits::ObjectBoundingBox,
+    }
+  }
+
+  fn resolve(&self, bbox: &Rect) -> Rect {
+    let width = self.width.resolve(bbox.width(), self.units).max(0.0);
+    let height = self.height.resolve(bbox.height(), self.units).max(0.0);
+    let x = bbox.x() + self.x.resolve(bbox.width(), self.units);
+    let y = bbox.y() + self.y.resolve(bbox.height(), self.units);
+    Rect::from_xywh(x, y, width, height)
+  }
+}
+
 #[derive(Clone, Debug)]
 pub struct SvgFilter {
+  pub region: FilterRegion,
   pub steps: Vec<FilterStep>,
 }
 
@@ -173,6 +253,24 @@ fn parse_filter_definition(
         .unwrap_or(true)
   })?;
 
+  let defaults = FilterRegion::default();
+  let units = match filter_node
+    .attribute("filterUnits")
+    .map(|u| u.to_ascii_lowercase())
+    .as_deref()
+  {
+    Some("userspaceonuse") => CoordinateUnits::UserSpaceOnUse,
+    Some("objectboundingbox") => CoordinateUnits::ObjectBoundingBox,
+    _ => defaults.units,
+  };
+  let region = FilterRegion {
+    x: parse_length_or_percentage(filter_node.attribute("x"), defaults.x),
+    y: parse_length_or_percentage(filter_node.attribute("y"), defaults.y),
+    width: parse_length_or_percentage(filter_node.attribute("width"), defaults.width),
+    height: parse_length_or_percentage(filter_node.attribute("height"), defaults.height),
+    units,
+  };
+
   let mut steps = Vec::new();
   for child in filter_node.children().filter(|c| c.is_element()) {
     let result_name = child.attribute("result").map(|s| s.to_string());
@@ -207,7 +305,7 @@ fn parse_filter_definition(
     return None;
   }
 
-  Some(Arc::new(SvgFilter { steps }))
+  Some(Arc::new(SvgFilter { region, steps }))
 }
 
 fn parse_input(attr: Option<&str>) -> FilterInput {
@@ -224,6 +322,31 @@ fn parse_number(value: Option<&str>) -> f32 {
     .and_then(|v| v.split_whitespace().next())
     .and_then(|v| v.parse::<f32>().ok())
     .unwrap_or(0.0)
+}
+
+fn parse_length_or_percentage(
+  value: Option<&str>,
+  default: LengthOrPercentage,
+) -> LengthOrPercentage {
+  let raw = value.map(|s| s.trim()).unwrap_or_default();
+  if raw.is_empty() {
+    return default;
+  }
+  if raw.ends_with('%') {
+    if let Ok(v) = raw[..raw.len() - 1].trim().parse::<f32>() {
+      return LengthOrPercentage {
+        value: v / 100.0,
+        is_percent: true,
+      };
+    }
+  }
+  if let Ok(v) = raw.parse::<f32>() {
+    return LengthOrPercentage {
+      value: v,
+      is_percent: false,
+    };
+  }
+  default
 }
 
 fn parse_color(value: Option<&str>) -> Option<Rgba> {
@@ -451,7 +574,30 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   Some(FilterPrimitive::ConvolveMatrix { input })
 }
 
-pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap) {
+pub fn resolve_filter_region(def: &SvgFilter, bbox: &Rect) -> Rect {
+  def.region.resolve(bbox)
+}
+
+pub fn filter_region_outsets(def: &SvgFilter, bbox: &Rect) -> (f32, f32, f32, f32) {
+  if !bbox.width().is_finite()
+    || !bbox.height().is_finite()
+    || bbox.width() <= 0.0
+    || bbox.height() <= 0.0
+  {
+    return (0.0, 0.0, 0.0, 0.0);
+  }
+  let region = resolve_filter_region(def, bbox);
+  let left = bbox.min_x() - region.min_x();
+  let top = bbox.min_y() - region.min_y();
+  let right = region.max_x() - bbox.max_x();
+  let bottom = region.max_y() - bbox.max_y();
+  (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
+}
+
+pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, bbox: Rect) {
+  // The bounding box is used to resolve the filter region and align with the caller's coordinate
+  // space. Region outsets are handled by the caller before invoking this function.
+  let _region = resolve_filter_region(def, &bbox);
   let source = pixmap.clone();
   let mut results: HashMap<String, Pixmap> = HashMap::new();
   let mut current = source.clone();

@@ -499,7 +499,7 @@ fn set_paint_color(paint: &mut tiny_skia::Paint, color: &Rgba, opacity: f32) {
   paint.set_color_rgba8(color.r, color.g, color.b, alpha);
 }
 
-fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
+fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bbox: Option<Rect>) {
   for filter in filters {
     match filter {
       ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
@@ -534,7 +534,10 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
         *color,
       ),
       ResolvedFilter::SvgFilter(ref filter) => {
-        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap);
+        let bounds = bbox.unwrap_or_else(|| {
+          Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32)
+        });
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, bounds);
       }
     }
   }
@@ -636,19 +639,24 @@ fn apply_backdrop_filters(
       .copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
   }
 
-  apply_filters(&mut region, filters, scale);
+  let local_rect = Rect::from_xywh(
+    bounds.x() - clamped_x as f32,
+    bounds.y() - clamped_y as f32,
+    bounds.width(),
+    bounds.height(),
+  );
+
+  apply_filters(&mut region, filters, scale, Some(local_rect));
 
   if !radii.is_zero() {
     let mut mask = match Pixmap::new(region_w, region_h) {
       Some(p) => p,
       None => return,
     };
-    let local_x = bounds.x() - clamped_x as f32;
-    let local_y = bounds.y() - clamped_y as f32;
     let _ = fill_rounded_rect(
       &mut mask,
-      local_x,
-      local_y,
+      local_rect.x(),
+      local_rect.y(),
       bounds.width(),
       bounds.height(),
       &radii.clamped(bounds.width(), bounds.height()),
@@ -2686,7 +2694,12 @@ impl DisplayListRenderer {
               }
             }
             if !record.filters.is_empty() {
-              apply_filters(&mut layer, &record.filters, self.scale);
+              apply_filters(
+                &mut layer,
+                &record.filters,
+                self.scale,
+                Some(record.mask_bounds),
+              );
             }
             if !record.radii.is_zero() || !record.filters.is_empty() {
               let (out_l, out_t, out_r, out_b) = filter_outset(&record.filters, self.scale);
@@ -2709,7 +2722,12 @@ impl DisplayListRenderer {
               }
             }
             if !record.filters.is_empty() {
-              apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
+              apply_filters(
+                self.canvas.pixmap_mut(),
+                &record.filters,
+                self.scale,
+                Some(record.mask_bounds),
+              );
             }
             if !record.radii.is_zero() || !record.filters.is_empty() {
               let (out_l, out_t, out_r, out_b) = filter_outset(&record.filters, self.scale);
