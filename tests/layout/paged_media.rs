@@ -24,6 +24,20 @@ fn find_text<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNod
   None
 }
 
+fn find_text_eq<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNode> {
+  if let FragmentContent::Text { text, .. } = &node.content {
+    if text == needle {
+      return Some(node);
+    }
+  }
+  for child in &node.children {
+    if let Some(found) = find_text_eq(child, needle) {
+      return Some(found);
+    }
+  }
+  None
+}
+
 #[derive(Debug, Clone)]
 struct PositionedText {
   text: String,
@@ -450,6 +464,46 @@ fn header_repeats_across_pages() {
     let header_pos = find_text_position_matching(page, "Title", (0.0, 0.0), &|pos| pos.1 < content_y)
       .expect("page header in margin box");
     assert!(header_pos.1 < content_y);
+  }
+}
+
+#[test]
+fn string_set_from_split_inline_updates_once() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 150px;
+            margin: 10px;
+            @top-center { content: string(header); }
+          }
+          body { margin: 0; }
+          p { width: 120px; font-size: 16px; }
+          .hdr { string-set: header content(); }
+        </style>
+      </head>
+      <body>
+        <p><span class="hdr">Very long header text that wraps across lines</span></p>
+        <div style="height: 300px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 300, 400).unwrap();
+  let page_roots = pages(&tree);
+  let page = page_roots.first().expect("page");
+  let expected = "Very long header text that wraps across lines";
+  let header = find_text_eq(page, expected).expect("header margin box");
+  let content = page.children.first().expect("page content");
+
+  assert!(header.bounds.y() < content.bounds.y());
+  if let FragmentContent::Text { text, .. } = &header.content {
+    assert_eq!(text, expected);
+  } else {
+    panic!("header should be text");
   }
 }
 

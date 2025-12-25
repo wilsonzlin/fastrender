@@ -1,7 +1,7 @@
-use crate::tree::box_tree::{BoxNode, BoxTree};
+use crate::tree::box_tree::{BoxNode, BoxTree, BoxType, MarkerContent};
 use crate::style::content::{StringSetAssignment, StringSetValue};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// A single string-set assignment event, positioned on the block axis.
@@ -23,8 +23,19 @@ pub fn collect_string_set_events(root: &FragmentNode, box_tree: &BoxTree) -> Vec
   let mut styles_by_id = HashMap::new();
   collect_box_styles(&box_tree.root, &mut styles_by_id);
 
+  let mut box_text = HashMap::new();
+  collect_box_text(&box_tree.root, &mut box_text);
+
   let mut events = Vec::new();
-  collect_string_set_events_inner(root, 0.0, &mut events, &styles_by_id);
+  let mut seen_boxes = HashSet::new();
+  collect_string_set_events_inner(
+    root,
+    0.0,
+    &mut events,
+    &styles_by_id,
+    &box_text,
+    &mut seen_boxes,
+  );
   events
 }
 
@@ -35,18 +46,59 @@ fn collect_box_styles(node: &BoxNode, out: &mut HashMap<usize, Arc<crate::style:
   }
 }
 
+fn collect_box_text(node: &BoxNode, out: &mut HashMap<usize, String>) -> String {
+  let mut text = String::new();
+  match &node.box_type {
+    BoxType::Text(t) => text.push_str(&t.text),
+    BoxType::Marker(marker) => {
+      if let MarkerContent::Text(t) = &marker.content {
+        text.push_str(t);
+      }
+    }
+    _ => {}
+  }
+
+  for child in &node.children {
+    text.push_str(&collect_box_text(child, out));
+  }
+
+  out.insert(node.id, text.clone());
+  text
+}
+
 fn collect_string_set_events_inner(
   node: &FragmentNode,
   abs_start: f32,
   out: &mut Vec<StringSetEvent>,
   styles_by_id: &HashMap<usize, Arc<crate::style::ComputedStyle>>,
+  box_text: &HashMap<usize, String>,
+  seen_boxes: &mut HashSet<usize>,
 ) {
   let start = abs_start + node.bounds.y();
 
+  let inline_continuation = matches!(
+    &node.content,
+    FragmentContent::Inline {
+      fragment_index, ..
+    } if *fragment_index > 0
+  );
+
+  let eligible_box_id = match &node.content {
+    FragmentContent::Inline {
+      box_id,
+      fragment_index,
+    } => (*fragment_index == 0).then_some(()).and_then(|_| *box_id),
+    FragmentContent::Block { box_id } => *box_id,
+    FragmentContent::Replaced { box_id, .. } => *box_id,
+    _ => None,
+  };
+
   let mut assignments: Option<&[StringSetAssignment]> = None;
+  let mut assignments_box_id: Option<usize> = None;
   if let Some(style) = node.style.as_deref() {
     if !style.string_set.is_empty() {
       assignments = Some(style.string_set.as_slice());
+      assignments_box_id = eligible_box_id.or_else(|| fragment_box_id(node));
     }
   }
 
@@ -55,24 +107,36 @@ fn collect_string_set_events_inner(
       if let Some(style) = styles_by_id.get(&box_id) {
         if !style.string_set.is_empty() {
           assignments = Some(style.string_set.as_slice());
+          assignments_box_id = Some(box_id);
         }
       }
     }
   }
 
   if let Some(assignments) = assignments {
-    for StringSetAssignment { name, value } in assignments {
-      let resolved = resolve_string_set_value(node, value);
-      out.push(StringSetEvent {
-        abs_y: start,
-        name: name.clone(),
-        value: resolved,
-      });
+    let should_emit = if inline_continuation {
+      false
+    } else if let Some(box_id) = eligible_box_id.or(assignments_box_id) {
+      seen_boxes.insert(box_id)
+    } else {
+      true
+    };
+
+    if should_emit {
+      for StringSetAssignment { name, value } in assignments {
+        let resolved =
+          resolve_string_set_value(node, value, assignments_box_id, box_text);
+        out.push(StringSetEvent {
+          abs_y: start,
+          name: name.clone(),
+          value: resolved,
+        });
+      }
     }
   }
 
   for child in &node.children {
-    collect_string_set_events_inner(child, start, out, styles_by_id);
+    collect_string_set_events_inner(child, start, out, styles_by_id, box_text, seen_boxes);
   }
 }
 
@@ -86,12 +150,22 @@ fn fragment_box_id(node: &FragmentNode) -> Option<usize> {
   }
 }
 
-fn resolve_string_set_value(node: &FragmentNode, value: &StringSetValue) -> String {
+fn resolve_string_set_value(
+  node: &FragmentNode,
+  value: &StringSetValue,
+  box_id: Option<usize>,
+  box_text: &HashMap<usize, String>,
+) -> String {
   match value {
     StringSetValue::Content => {
-      let mut text = String::new();
-      collect_text(node, &mut text);
-      text
+      if let Some(box_id) = box_id {
+        if let Some(text) = box_text.get(&box_id) {
+          return text.clone();
+        }
+      }
+      let mut fallback = String::new();
+      collect_text(node, &mut fallback);
+      fallback
     }
     StringSetValue::Literal(s) => s.clone(),
   }

@@ -4457,9 +4457,13 @@ impl InlineFormattingContext {
             box_item.width(),
           );
           record_containing_block(bounds, &mut positioned_containing_blocks);
-          FragmentNode::new_inline_styled(
+          let box_id = (box_item.box_id != 0).then_some(box_item.box_id);
+          FragmentNode::new_with_style(
             bounds,
-            box_item.box_index,
+            FragmentContent::Inline {
+              box_id,
+              fragment_index: box_item.box_index,
+            },
             children,
             box_item.style.clone(),
           )
@@ -4619,9 +4623,13 @@ impl InlineFormattingContext {
           .collect();
 
         let bounds = Rect::from_xywh(x, y, box_item.width(), box_item.metrics.height);
-        FragmentNode::new_inline_styled(
+        let box_id = (box_item.box_id != 0).then_some(box_item.box_id);
+        FragmentNode::new_with_style(
           bounds,
-          box_item.box_index,
+          FragmentContent::Inline {
+            box_id,
+            fragment_index: box_item.box_index,
+          },
           children,
           box_item.style.clone(),
         )
@@ -4738,9 +4746,12 @@ impl InlineFormattingContext {
           ruby_item.intrinsic_width(),
           ruby_item.metrics.height,
         );
-        let mut fragment = FragmentNode::new_inline_styled(
+        let mut fragment = FragmentNode::new_with_style(
           bounds,
-          ruby_item.box_id.unwrap_or(0),
+          FragmentContent::Inline {
+            box_id: ruby_item.box_id,
+            fragment_index: ruby_item.fragment_index,
+          },
           children,
           ruby_item.style.clone(),
         );
