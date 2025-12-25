@@ -5,8 +5,8 @@ use std::sync::Arc;
 use crate::css::types::CollectedPageRule;
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::fragmentation::{
-  build_break_plan, clip_node, propagate_fragment_metadata, select_fragmentainer_boundary,
-  fragmentation_axis, BlockAxis,
+  build_break_plan, clip_node, fragmentation_axis, propagate_fragment_metadata,
+  select_fragmentainer_boundary, BlockAxis,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};

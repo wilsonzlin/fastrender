@@ -17494,10 +17494,7 @@ mod tests {
     assert!(y1.offset.is_zero() && (y1.alignment - 0.5).abs() < 0.01);
     assert_eq!(
       second.size,
-      BackgroundSize::Explicit(
-        BackgroundSizeComponent::Auto,
-        BackgroundSizeComponent::Auto
-      )
+      BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
     );
     assert_eq!(second.repeat, BackgroundRepeat::repeat());
   }
