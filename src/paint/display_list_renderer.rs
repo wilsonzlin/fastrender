@@ -36,10 +36,13 @@ use crate::paint::display_list::ImageFilterQuality;
 use crate::paint::display_list::ImageItem;
 use crate::paint::display_list::LinearGradientItem;
 use crate::paint::display_list::ListMarkerItem;
+use crate::paint::display_list::MaskReferenceRects;
 use crate::paint::display_list::OpacityItem;
 use crate::paint::display_list::OutlineItem;
 use crate::paint::display_list::RadialGradientItem;
 use crate::paint::display_list::ResolvedFilter;
+use crate::paint::display_list::ResolvedMask;
+use crate::paint::display_list::ResolvedMaskImage;
 use crate::paint::display_list::StrokeRectItem;
 use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
@@ -76,6 +79,7 @@ use crate::style::types::TextEmphasisStyle;
 #[cfg(test)]
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
+#[cfg(test)]
 use crate::style::ComputedStyle;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
@@ -1024,7 +1028,7 @@ struct StackingRecord {
   filters: Vec<ResolvedFilter>,
   radii: BorderRadii,
   mask_bounds: Rect,
-  mask: Option<Arc<ComputedStyle>>,
+  mask: Option<ResolvedMask>,
   css_bounds: Rect,
   manual_blend: Option<BlendMode>,
   culled: bool,
@@ -2196,18 +2200,16 @@ impl DisplayListRenderer {
     }
   }
 
-  fn render_mask(&self, style: &ComputedStyle, css_bounds: Rect) -> Option<Mask> {
+  fn render_mask(&self, mask: &ResolvedMask) -> Option<Mask> {
     let viewport = (
       self.canvas.width() as f32 / self.scale,
       self.canvas.height() as f32 / self.scale,
     );
-    let rects = background_rects(css_bounds, style, Some(viewport));
+    let rects = mask.rects;
     let mut combined: Option<Mask> = None;
     let canvas_clip = Rect::from_xywh(0.0, 0.0, viewport.0, viewport.1);
 
-    for layer in style.mask_layers.iter().rev() {
-      let Some(image) = &layer.image else { continue };
-
+    for layer in mask.layers.iter().rev() {
       let origin_rect_css = match layer.origin {
         MaskOrigin::BorderBox => rects.border,
         MaskOrigin::PaddingBox => rects.padding,
@@ -2227,15 +2229,19 @@ impl DisplayListRenderer {
         continue;
       }
 
+      let (img_w, img_h) = match &layer.image {
+        ResolvedMaskImage::Raster(image) => (image.css_width, image.css_height),
+        ResolvedMaskImage::Generated(_) => (0.0, 0.0),
+      };
       let (mut tile_w, mut tile_h) = compute_background_size_from_value(
         &layer.size,
-        style.font_size,
-        style.root_font_size,
+        mask.font_size,
+        mask.root_font_size,
         viewport,
         origin_rect_css.width(),
         origin_rect_css.height(),
-        0.0,
-        0.0,
+        img_w,
+        img_h,
       );
       if tile_w <= 0.0 || tile_h <= 0.0 {
         continue;
@@ -2257,7 +2263,11 @@ impl DisplayListRenderer {
           BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto)
         )
       {
-        let aspect = 1.0;
+        let aspect = if img_w > 0.0 && img_h > 0.0 {
+          img_w / img_h
+        } else {
+          1.0
+        };
         if rounded_x {
           tile_h = tile_w / aspect;
         } else {
@@ -2271,8 +2281,8 @@ impl DisplayListRenderer {
         origin_rect_css.height(),
         tile_w,
         tile_h,
-        style.font_size,
-        style.root_font_size,
+        mask.font_size,
+        mask.root_font_size,
         viewport,
       );
 
@@ -2295,24 +2305,21 @@ impl DisplayListRenderer {
         clip_rect_css.max_y(),
       );
 
-      let pixmap_w = tile_w.ceil().max(1.0) as u32;
-      let pixmap_h = tile_h.ceil().max(1.0) as u32;
-      let tile = match image {
-        BackgroundImage::LinearGradient { .. }
-        | BackgroundImage::RepeatingLinearGradient { .. }
-        | BackgroundImage::RadialGradient { .. }
-        | BackgroundImage::RepeatingRadialGradient { .. }
-        | BackgroundImage::ConicGradient { .. }
-        | BackgroundImage::RepeatingConicGradient { .. } => render_generated_border_image(
-          image,
-          style.color,
-          pixmap_w,
-          pixmap_h,
-          style.font_size,
-          style.root_font_size,
-          Some(viewport),
-        ),
-        BackgroundImage::Url(_) | BackgroundImage::None => None,
+      let tile = match &layer.image {
+        ResolvedMaskImage::Generated(image) => {
+          let pixmap_w = tile_w.ceil().max(1.0) as u32;
+          let pixmap_h = tile_h.ceil().max(1.0) as u32;
+          render_generated_border_image(
+            image,
+            mask.color,
+            pixmap_w,
+            pixmap_h,
+            mask.font_size,
+            mask.root_font_size,
+            Some(viewport),
+          )
+        }
+        ResolvedMaskImage::Raster(image) => image_data_to_pixmap(image),
       };
       let Some(tile) = tile else { continue };
       let Some(mask_tile) = mask_tile_from_image(&tile, layer.mode) else {
@@ -2680,8 +2687,8 @@ impl DisplayListRenderer {
         if record.needs_layer {
           if let Some(mode) = record.manual_blend {
             let (mut layer, opacity, _) = self.canvas.pop_layer_raw()?;
-            if let Some(mask_style) = record.mask.as_ref() {
-              if let Some(mask) = self.render_mask(mask_style, record.css_bounds) {
+            if let Some(mask) = record.mask.as_ref() {
+              if let Some(mask) = self.render_mask(mask) {
                 layer.apply_mask(&mask);
               }
             }
@@ -2703,8 +2710,8 @@ impl DisplayListRenderer {
             }
             self.composite_manual_layer(&layer, opacity, mode)?;
           } else {
-            if let Some(mask_style) = record.mask.as_ref() {
-              if let Some(mask) = self.render_mask(mask_style, record.css_bounds) {
+            if let Some(mask) = record.mask.as_ref() {
+              if let Some(mask) = self.render_mask(mask) {
                 self.canvas.pixmap_mut().apply_mask(&mask);
               }
             }
@@ -3630,21 +3637,9 @@ impl DisplayListRenderer {
   }
 
   fn image_to_pixmap(&self, item: &ImageItem) -> Option<Pixmap> {
-    let mut data = Vec::with_capacity((item.image.width * item.image.height * 4) as usize);
-    let pixels = item.image.pixels.as_ref();
-    for chunk in pixels.chunks_exact(4) {
-      let r = chunk[0] as f32;
-      let g = chunk[1] as f32;
-      let b = chunk[2] as f32;
-      let a = chunk[3] as f32 / 255.0;
-      data.push((r * a).round() as u8);
-      data.push((g * a).round() as u8);
-      data.push((b * a).round() as u8);
-      data.push(chunk[3]);
-    }
-
-    let size = tiny_skia::IntSize::from_wh(item.image.width, item.image.height)?;
-    let full = Pixmap::from_vec(data, size)?;
+    let Some(full) = image_data_to_pixmap(&item.image) else {
+      return None;
+    };
 
     if let Some(src) = item.src_rect {
       let src_x = src.x().max(0.0).floor() as u32;
@@ -3673,6 +3668,23 @@ impl DisplayListRenderer {
       Some(full)
     }
   }
+}
+
+fn image_data_to_pixmap(image: &ImageData) -> Option<Pixmap> {
+  let mut data = Vec::with_capacity((image.width * image.height * 4) as usize);
+  for chunk in image.pixels.chunks_exact(4) {
+    let r = chunk[0] as f32;
+    let g = chunk[1] as f32;
+    let b = chunk[2] as f32;
+    let a = chunk[3] as f32 / 255.0;
+    data.push((r * a).round() as u8);
+    data.push((g * a).round() as u8);
+    data.push((b * a).round() as u8);
+    data.push(chunk[3]);
+  }
+
+  let size = tiny_skia::IntSize::from_wh(image.width, image.height)?;
+  Pixmap::from_vec(data, size)
 }
 
 fn sample_conic_stops(
@@ -4422,13 +4434,6 @@ fn render_generated_border_image(
   }
 }
 
-#[derive(Clone, Copy)]
-struct BackgroundRects {
-  border: Rect,
-  padding: Rect,
-  content: Rect,
-}
-
 fn resolve_length_for_paint(
   len: &Length,
   font_size: f32,
@@ -4451,94 +4456,6 @@ fn resolve_length_for_paint(
         len.value * font_size
       }
     })
-}
-
-fn background_rects(
-  rect: Rect,
-  style: &ComputedStyle,
-  viewport: Option<(f32, f32)>,
-) -> BackgroundRects {
-  let base = rect.width().max(0.0);
-  let font_size = style.font_size;
-  let vp = viewport.unwrap_or((base, base));
-
-  let border_left = resolve_length_for_paint(
-    &style.border_left_width,
-    font_size,
-    style.root_font_size,
-    base,
-    vp,
-  );
-  let border_right = resolve_length_for_paint(
-    &style.border_right_width,
-    font_size,
-    style.root_font_size,
-    base,
-    vp,
-  );
-  let border_top = resolve_length_for_paint(
-    &style.border_top_width,
-    font_size,
-    style.root_font_size,
-    base,
-    vp,
-  );
-  let border_bottom = resolve_length_for_paint(
-    &style.border_bottom_width,
-    font_size,
-    style.root_font_size,
-    base,
-    vp,
-  );
-
-  let padding_left = resolve_length_for_paint(
-    &style.padding_left,
-    font_size,
-    style.root_font_size,
-    base,
-    vp,
-  );
-  let padding_right = resolve_length_for_paint(
-    &style.padding_right,
-    font_size,
-    style.root_font_size,
-    base,
-    vp,
-  );
-  let padding_top = resolve_length_for_paint(
-    &style.padding_top,
-    font_size,
-    style.root_font_size,
-    base,
-    vp,
-  );
-  let padding_bottom = resolve_length_for_paint(
-    &style.padding_bottom,
-    font_size,
-    style.root_font_size,
-    base,
-    vp,
-  );
-
-  let border = Rect::from_xywh(rect.x(), rect.y(), rect.width(), rect.height());
-  let padding = Rect::from_xywh(
-    rect.x() + border_left,
-    rect.y() + border_top,
-    rect.width() - border_left - border_right,
-    rect.height() - border_top - border_bottom,
-  );
-  let content = Rect::from_xywh(
-    padding.x() + padding_left,
-    padding.y() + padding_top,
-    padding.width() - padding_left - padding_right,
-    padding.height() - padding_top - padding_bottom,
-  );
-
-  BackgroundRects {
-    border,
-    padding,
-    content,
-  }
 }
 
 fn compute_background_size_from_value(
@@ -4922,6 +4839,21 @@ mod tests {
       None
     } else {
       Some((min_x, min_y, max_x, max_y))
+    }
+  }
+
+  fn mask_rects(bounds: Rect, padding: (f32, f32, f32, f32)) -> MaskReferenceRects {
+    let (left, top, right, bottom) = padding;
+    let content = Rect::from_xywh(
+      bounds.x() + left,
+      bounds.y() + top,
+      (bounds.width() - left - right).max(0.0),
+      (bounds.height() - top - bottom).max(0.0),
+    );
+    MaskReferenceRects {
+      border: bounds,
+      padding: bounds,
+      content,
     }
   }
 
@@ -6282,12 +6214,7 @@ mod tests {
   fn mask_clip_respects_content_box() {
     let renderer = DisplayListRenderer::new(6, 6, Rgba::WHITE, FontContext::new()).unwrap();
 
-    let mut mask_style = ComputedStyle::default();
-    mask_style.padding_top = Length::px(1.0);
-    mask_style.padding_right = Length::px(1.0);
-    mask_style.padding_bottom = Length::px(1.0);
-    mask_style.padding_left = Length::px(1.0);
-
+    let bounds = Rect::from_xywh(0.0, 0.0, 6.0, 6.0);
     let mut layer = MaskLayer::default();
     layer.image = Some(BackgroundImage::LinearGradient {
       angle: 0.0,
@@ -6304,13 +6231,29 @@ mod tests {
     });
     layer.repeat = BackgroundRepeat::no_repeat();
     layer.clip = MaskClip::ContentBox;
-    mask_style.set_mask_layers(vec![layer]);
+    let resolved_layer = ResolvedMaskLayer {
+      image: ResolvedMaskImage::Generated(Box::new(layer.image.clone().unwrap())),
+      repeat: layer.repeat,
+      position: layer.position.clone(),
+      size: layer.size.clone(),
+      origin: layer.origin,
+      clip: layer.clip,
+      mode: layer.mode,
+      composite: layer.composite,
+    };
+    let mask = ResolvedMask {
+      layers: vec![resolved_layer],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects: mask_rects(bounds, (1.0, 1.0, 1.0, 1.0)),
+    };
 
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushStackingContext(StackingContextItem {
       z_index: 0,
       creates_stacking_context: true,
-      bounds: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
+      bounds,
       mix_blend_mode: BlendMode::Normal,
       is_isolated: true,
       transform: None,
@@ -6319,7 +6262,7 @@ mod tests {
       filters: Vec::new(),
       backdrop_filters: Vec::new(),
       radii: BorderRadii::ZERO,
-      mask: Some(Arc::new(mask_style)),
+      mask: Some(mask),
     }));
     list.push(DisplayItem::FillRect(FillRectItem {
       rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
@@ -6336,7 +6279,6 @@ mod tests {
   fn mask_composite_intersects_layers() {
     let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
 
-    let mut mask_style = ComputedStyle::default();
     let vertical = BackgroundImage::LinearGradient {
       angle: 90.0,
       stops: vec![
@@ -6381,7 +6323,7 @@ mod tests {
     };
 
     let mut first_layer = MaskLayer::default();
-    first_layer.image = Some(vertical);
+    first_layer.image = Some(vertical.clone());
     first_layer.repeat = BackgroundRepeat::no_repeat();
     first_layer.size = BackgroundSize::Explicit(
       BackgroundSizeComponent::Length(Length::percent(100.0)),
@@ -6390,14 +6332,42 @@ mod tests {
     first_layer.composite = MaskComposite::Intersect;
 
     let mut second_layer = MaskLayer::default();
-    second_layer.image = Some(horizontal);
+    second_layer.image = Some(horizontal.clone());
     second_layer.repeat = BackgroundRepeat::no_repeat();
     second_layer.size = BackgroundSize::Explicit(
       BackgroundSizeComponent::Length(Length::percent(100.0)),
       BackgroundSizeComponent::Length(Length::percent(100.0)),
     );
 
-    mask_style.set_mask_layers(vec![first_layer, second_layer]);
+    let resolved_layers = vec![
+      ResolvedMaskLayer {
+        image: ResolvedMaskImage::Generated(Box::new(vertical)),
+        repeat: first_layer.repeat,
+        position: first_layer.position.clone(),
+        size: first_layer.size.clone(),
+        origin: first_layer.origin,
+        clip: first_layer.clip,
+        mode: first_layer.mode,
+        composite: first_layer.composite,
+      },
+      ResolvedMaskLayer {
+        image: ResolvedMaskImage::Generated(Box::new(horizontal)),
+        repeat: second_layer.repeat,
+        position: second_layer.position.clone(),
+        size: second_layer.size.clone(),
+        origin: second_layer.origin,
+        clip: second_layer.clip,
+        mode: second_layer.mode,
+        composite: second_layer.composite,
+      },
+    ];
+    let mask = ResolvedMask {
+      layers: resolved_layers,
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects: mask_rects(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), (0.0, 0.0, 0.0, 0.0)),
+    };
 
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushStackingContext(StackingContextItem {
@@ -6412,7 +6382,7 @@ mod tests {
       filters: Vec::new(),
       backdrop_filters: Vec::new(),
       radii: BorderRadii::ZERO,
-      mask: Some(Arc::new(mask_style)),
+      mask: Some(mask),
     }));
     list.push(DisplayItem::FillRect(FillRectItem {
       rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
@@ -6430,7 +6400,6 @@ mod tests {
   fn mask_gradient_without_terminal_stop_masks() {
     let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
 
-    let mut mask_style = ComputedStyle::default();
     let horizontal = BackgroundImage::LinearGradient {
       angle: 90.0,
       stops: vec![
@@ -6450,13 +6419,28 @@ mod tests {
     };
 
     let mut layer = MaskLayer::default();
-    layer.image = Some(horizontal);
+    layer.image = Some(horizontal.clone());
     layer.repeat = BackgroundRepeat::no_repeat();
     layer.size = BackgroundSize::Explicit(
       BackgroundSizeComponent::Length(Length::percent(100.0)),
       BackgroundSizeComponent::Length(Length::percent(100.0)),
     );
-    mask_style.set_mask_layers(vec![layer]);
+    let mask = ResolvedMask {
+      layers: vec![ResolvedMaskLayer {
+        image: ResolvedMaskImage::Generated(Box::new(horizontal)),
+        repeat: layer.repeat,
+        position: layer.position.clone(),
+        size: layer.size.clone(),
+        origin: layer.origin,
+        clip: layer.clip,
+        mode: layer.mode,
+        composite: layer.composite,
+      }],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects: mask_rects(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), (0.0, 0.0, 0.0, 0.0)),
+    };
 
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushStackingContext(StackingContextItem {
@@ -6471,7 +6455,7 @@ mod tests {
       filters: Vec::new(),
       backdrop_filters: Vec::new(),
       radii: BorderRadii::ZERO,
-      mask: Some(Arc::new(mask_style)),
+      mask: Some(mask),
     }));
     list.push(DisplayItem::FillRect(FillRectItem {
       rect: Rect::from_xywh(0.0, 0.0, 4.0, 4.0),

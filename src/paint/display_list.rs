@@ -43,11 +43,18 @@ use crate::paint::clip_path::ResolvedClipPath;
 use crate::style::color::Rgba;
 use crate::style::types::BackfaceVisibility;
 use crate::style::types::BackgroundImage;
+use crate::style::types::BackgroundPosition;
+use crate::style::types::BackgroundRepeat;
+use crate::style::types::BackgroundSize;
 use crate::style::types::BorderImageOutset;
 use crate::style::types::BorderImageRepeat;
 use crate::style::types::BorderImageSlice;
 use crate::style::types::BorderImageWidth;
 use crate::style::types::BorderStyle as CssBorderStyle;
+use crate::style::types::MaskClip;
+use crate::style::types::MaskComposite;
+use crate::style::types::MaskMode;
+use crate::style::types::MaskOrigin;
 use crate::style::types::ResolvedTextDecoration;
 use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
@@ -939,6 +946,75 @@ pub enum BorderImageSourceItem {
 }
 
 // ============================================================================
+// Mask Items
+// ============================================================================
+
+/// Resolved mask applied to a stacking context.
+#[derive(Debug, Clone)]
+pub struct ResolvedMask {
+  /// Individual mask layers (ordered from closest to the element outward).
+  pub layers: Vec<ResolvedMaskLayer>,
+
+  /// Current color for resolving `currentColor` stops.
+  pub color: Rgba,
+
+  /// Font size at the element for resolving font-relative lengths.
+  pub font_size: f32,
+
+  /// Root font size for rem units.
+  pub root_font_size: f32,
+
+  /// Precomputed reference rectangles for mask-origin/clip.
+  pub rects: MaskReferenceRects,
+}
+
+/// Precomputed mask layer with decoded image.
+#[derive(Debug, Clone)]
+pub struct ResolvedMaskLayer {
+  /// Decoded or generated image for this layer.
+  pub image: ResolvedMaskImage,
+
+  /// Repeat behavior along the x/y axes.
+  pub repeat: BackgroundRepeat,
+
+  /// Position of the mask image.
+  pub position: BackgroundPosition,
+
+  /// Size of the mask image.
+  pub size: BackgroundSize,
+
+  /// Which box the image is positioned relative to.
+  pub origin: MaskOrigin,
+
+  /// Which box clips the painted mask.
+  pub clip: MaskClip,
+
+  /// Interpretation of the mask values.
+  pub mode: MaskMode,
+
+  /// How to composite this layer with the accumulated mask.
+  pub composite: MaskComposite,
+}
+
+/// Decoded mask image payload.
+#[derive(Debug, Clone)]
+pub enum ResolvedMaskImage {
+  /// Raster image decoded from `url(...)`.
+  Raster(ImageData),
+
+  /// Generated image such as a gradient.
+  Generated(Box<BackgroundImage>),
+}
+
+/// Reference rectangles for applying mask origin/clip.
+#[derive(Debug, Clone, Copy)]
+pub struct MaskReferenceRects {
+  pub border: Rect,
+  pub padding: Rect,
+  pub content: Rect,
+}
+
+// ============================================================================
 // Effect Items (Push/Pop)
 // ============================================================================
 
@@ -1494,7 +1570,7 @@ pub struct StackingContextItem {
   pub radii: BorderRadii,
 
   /// Optional mask applied to this stacking context
-  pub mask: Option<std::sync::Arc<crate::style::ComputedStyle>>,
+  pub mask: Option<ResolvedMask>,
 }
 
 /// Resolved filter functions (after length resolution).

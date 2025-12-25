@@ -12,8 +12,13 @@ use fastrender::paint::display_list::DecorationStroke;
 use fastrender::paint::display_list::DisplayItem;
 use fastrender::paint::display_list::DisplayList;
 use fastrender::paint::display_list::FillRectItem;
+use fastrender::paint::display_list::ImageData;
+use fastrender::paint::display_list::MaskReferenceRects;
 use fastrender::paint::display_list::OutlineItem;
 use fastrender::paint::display_list::ResolvedFilter;
+use fastrender::paint::display_list::ResolvedMask;
+use fastrender::paint::display_list::ResolvedMaskImage;
+use fastrender::paint::display_list::ResolvedMaskLayer;
 use fastrender::paint::display_list::StackingContextItem;
 use fastrender::paint::display_list::TextDecorationItem;
 use fastrender::paint::display_list::Transform3D;
@@ -38,6 +43,10 @@ use fastrender::style::types::BorderStyle;
 use fastrender::style::types::ClipPath;
 use fastrender::style::types::FillRule;
 use fastrender::style::types::ImageRendering;
+use fastrender::style::types::MaskClip;
+use fastrender::style::types::MaskComposite;
+use fastrender::style::types::MaskMode;
+use fastrender::style::types::MaskOrigin;
 use fastrender::style::types::MixBlendMode;
 use fastrender::style::types::ShapeRadius;
 use fastrender::style::types::TextDecorationStyle;
@@ -548,6 +557,120 @@ fn two_color_data_url() -> String {
     .write_image(&pixels, 2, 1, ExtendedColorType::Rgba8)
     .expect("encode png");
   format!("data:image/png;base64,{}", STANDARD.encode(&buf))
+}
+
+fn simple_mask(image: ResolvedMaskImage, mode: MaskMode, bounds: Rect) -> ResolvedMask {
+  let default_position = BackgroundPosition::Position {
+    x: BackgroundPositionComponent {
+      alignment: 0.0,
+      offset: Length::percent(0.0),
+    },
+    y: BackgroundPositionComponent {
+      alignment: 0.0,
+      offset: Length::percent(0.0),
+    },
+  };
+  ResolvedMask {
+    layers: vec![ResolvedMaskLayer {
+      image,
+      repeat: BackgroundRepeat::no_repeat(),
+      position: default_position,
+      size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
+      origin: MaskOrigin::BorderBox,
+      clip: MaskClip::BorderBox,
+      mode,
+      composite: MaskComposite::Add,
+    }],
+    color: Rgba::BLACK,
+    font_size: 16.0,
+    root_font_size: 16.0,
+    rects: MaskReferenceRects {
+      border: bounds,
+      padding: bounds,
+      content: bounds,
+    },
+  }
+}
+
+#[test]
+fn mask_url_image_applies_alpha() {
+  let renderer = DisplayListRenderer::new(2, 1, Rgba::BLUE, FontContext::new()).unwrap();
+  let bounds = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
+
+  let mask = simple_mask(
+    ResolvedMaskImage::Raster(ImageData::new_pixels(
+      2,
+      1,
+      vec![0, 0, 0, 0, 255, 0, 0, 255],
+    )),
+    MaskMode::Alpha,
+    bounds,
+  );
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: Some(mask),
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+  assert_eq!(pixel(&pixmap, 0, 0), (0, 0, 255, 255));
+  assert_eq!(pixel(&pixmap, 1, 0), (255, 0, 0, 255));
+}
+
+#[test]
+fn mask_luminance_mode_uses_channel_values() {
+  let renderer = DisplayListRenderer::new(2, 1, Rgba::GREEN, FontContext::new()).unwrap();
+  let bounds = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
+  let mask = simple_mask(
+    ResolvedMaskImage::Raster(ImageData::new_pixels(
+      2,
+      1,
+      vec![0, 0, 0, 255, 255, 255, 255, 255],
+    )),
+    MaskMode::Luminance,
+    bounds,
+  );
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: Some(mask),
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+  assert_eq!(pixel(&pixmap, 0, 0), (0, 255, 0, 255));
+  assert_eq!(pixel(&pixmap, 1, 0), (255, 0, 0, 255));
 }
 
 #[test]
