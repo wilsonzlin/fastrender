@@ -43,9 +43,13 @@ New columns/transform/form fixtures ship with checked-in goldens; keep these up 
 
 There is a self-contained WPT-style runner under `tests/wpt/` for local “render and compare” tests. It does not talk to upstream WPT and never fetches from the network.
 
-- Tests are declared in `tests/wpt/manifest.toml` with per-test viewport, DPR, expected outcome, and type (`visual`, `reftest`, `crashtest`). New HTML fixtures belong under `tests/wpt/tests/` and must be added to the manifest.
-- Expected images live under `tests/wpt/expected/` following the same relative path structure. Missing images are auto-generated on first run; set `UPDATE_WPT_EXPECTED=1 cargo test wpt_local_suite_passes -- --exact` to refresh everything.
-- Artifacts land in `target/wpt-output/<relative>.actual.png` and `<relative>.diff.png` with a `report.md` summary linking expected/actual/diff for failures.
+- Discovery reads sidecar metadata next to tests:
+  - `.html.ini` files set expectations (`expected: FAIL`), `disabled` reasons, timeouts, viewport, and DPR.
+  - `<link rel="match" | rel="mismatch">` inside HTML declares reftest references without touching the manifest.
+  - The legacy `tests/wpt/manifest.toml` is still honored; set `HarnessConfig::with_discovery_mode(DiscoveryMode::MetadataOnly)` to ignore it when adding new offline WPT dumps.
+- Visual baselines live under `tests/wpt/expected/` following the same relative path structure. Missing images are auto-generated on first run; set `UPDATE_WPT_EXPECTED=1 cargo test wpt_local_suite_passes -- --exact` to refresh everything. Reftests compare against the reference HTML and do not require a PNG.
+- Artifacts always land in `target/wpt-output/<id>/{actual,expected,diff}.png` with a filterable `report.html`.
+- Viewport/DPR are fixed per-test from metadata. CI can pin fonts for deterministic renders via `HarnessConfig::with_font_dir`/`WptRunnerBuilder::font_dir` (for example, point at `tests/fonts/`).
 - The runner supports parallel execution and per-test timeouts (see `HarnessConfig`).
 - Comparisons use the shared image comparison module (same as fixtures/ref tests) with configurable tolerance, alpha handling, pixel difference thresholds, and perceptual distance thresholds to reduce platform noise.
 
