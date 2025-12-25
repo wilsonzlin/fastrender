@@ -86,6 +86,11 @@ impl Homography {
     }
   }
 
+  /// Convenience alias for `from_quad_to_quad`.
+  pub fn from_quads(src: [Point; 4], dst: [Point; 4]) -> Option<Self> {
+    Self::from_quad_to_quad(src, dst)
+  }
+
   /// Projects a 3D transform onto the z=0 plane as a 2D homography.
   ///
   /// Matches `Transform3D::transform_point(x, y, 0)` semantics, preserving
@@ -289,6 +294,35 @@ fn solve_8x8(mut a: [[f32; 8]; 8], mut b: [f32; 8]) -> Option<[f32; 8]> {
   } else {
     None
   }
+}
+
+pub fn quad_bounds(points: &[Point; 4]) -> Rect {
+  let mut min_x = f32::INFINITY;
+  let mut min_y = f32::INFINITY;
+  let mut max_x = f32::NEG_INFINITY;
+  let mut max_y = f32::NEG_INFINITY;
+
+  for p in points {
+    min_x = min_x.min(p.x);
+    min_y = min_y.min(p.y);
+    max_x = max_x.max(p.x);
+    max_y = max_y.max(p.y);
+  }
+
+  if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+    return Rect::ZERO;
+  }
+
+  Rect::from_xywh(min_x, min_y, max_x - min_x, max_y - min_y)
+}
+
+pub fn rect_corners(rect: Rect) -> [Point; 4] {
+  [
+    Point::new(rect.min_x(), rect.min_y()),
+    Point::new(rect.max_x(), rect.min_y()),
+    Point::new(rect.max_x(), rect.max_y()),
+    Point::new(rect.min_x(), rect.max_y()),
+  ]
 }
 
 #[cfg(test)]

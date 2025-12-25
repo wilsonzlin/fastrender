@@ -47,12 +47,16 @@ use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::BorderRadii;
+use crate::paint::display_list::Transform2D;
+use crate::paint::display_list::Transform3D;
 use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::display_list_renderer::DisplayListRenderer;
 use crate::paint::filter_outset::{compute_filter_outset, FilterOutsetExt};
+use crate::paint::homography::{quad_bounds, rect_corners, Homography};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::optimize::DisplayListOptimizer;
+use crate::paint::projective_warp::warp_pixmap;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::paint::svg_filter::SvgFilterResolver;
@@ -329,16 +333,6 @@ fn cmd_profile_threshold_ms() -> Option<f64> {
   runtime::runtime_toggles().f64("FASTR_CMD_PROFILE_MS")
 }
 
-fn is_identity_transform(transform: &Transform) -> bool {
-  const EPS: f32 = 1e-6;
-  (transform.sx - 1.0).abs() < EPS
-    && transform.ky.abs() < EPS
-    && transform.kx.abs() < EPS
-    && (transform.sy - 1.0).abs() < EPS
-    && transform.tx.abs() < EPS
-    && transform.ty.abs() < EPS
-}
-
 fn nested_counts(cmds: &[DisplayCommand]) -> (usize, usize) {
   cmds.iter().fold((0, 0), |(total, text), cmd| match cmd {
     DisplayCommand::StackingContext { commands, .. } => {
@@ -504,6 +498,7 @@ enum DisplayCommand {
     rect: Rect,
     opacity: f32,
     transform: Option<Transform>,
+    transform_3d: Option<Transform3D>,
     blend_mode: MixBlendMode,
     isolated: bool,
     mask: Option<Arc<ComputedStyle>>,
@@ -1707,7 +1702,11 @@ impl Painter {
     let viewport = (self.css_width, self.css_height);
     // Wrap the stacking context if it applies an effect (opacity/transform); otherwise flatten
     let opacity = style_ref.map(|s| s.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
-    let transform = build_transform(style_ref, abs_bounds, Some(viewport));
+    let transform_3d = build_transform_3d(style_ref, abs_bounds, Some(viewport));
+    let transform = transform_3d
+      .as_ref()
+      .and_then(|t| t.to_2d())
+      .map(transform2d_to_skia);
     let blend_mode = style_ref
       .map(|s| s.mix_blend_mode)
       .unwrap_or(MixBlendMode::Normal);
@@ -1856,6 +1855,7 @@ impl Painter {
         rect: abs_bounds,
         opacity,
         transform,
+        transform_3d,
         blend_mode,
         isolated,
         mask,
@@ -2196,7 +2196,8 @@ impl Painter {
       DisplayCommand::StackingContext {
         rect: context_rect,
         opacity,
-        transform,
+        transform: _,
+        transform_3d,
         blend_mode,
         isolated,
         mask,
@@ -2210,7 +2211,7 @@ impl Painter {
         let profile_threshold_ms = stack_profile_threshold_ms();
         let profile_enabled = profile_threshold_ms.is_some();
         let total_start = profile_enabled.then(Instant::now);
-        let transform_identity = transform.as_ref().map_or(false, is_identity_transform);
+        let transform_identity = transform_3d.as_ref().map_or(true, Transform3D::is_identity);
         let mut bounds_ms = 0.0;
         let mut translate_ms = 0.0;
         let mut base_paint_ms = 0.0;
@@ -2275,7 +2276,7 @@ impl Painter {
           &filters,
           &backdrop_filters,
           context_rect,
-          transform.as_ref(),
+          transform_3d.as_ref(),
           clip.as_ref(),
           clip_path.as_ref(),
         ) else {
@@ -2590,20 +2591,31 @@ impl Painter {
           }
         }
 
-        let device_offset_x = self.device_length(offset.x);
-        let device_offset_y = self.device_length(offset.y);
-        let mut final_transform = self
-          .device_transform(transform)
-          .unwrap_or_else(Transform::identity);
-        final_transform =
-          final_transform.pre_concat(Transform::from_translate(device_offset_x, device_offset_y));
+        let combined_transform = transform_3d
+          .unwrap_or_else(Transform3D::identity)
+          .multiply(&Transform3D::translate(offset.x, offset.y, 0.0));
+        let affine_2d = combined_transform.to_2d();
+        let src_quad = rect_corners(device_root_rect);
+        let mut dest_quad_device = src_quad;
+        let mut projected = true;
+        for (idx, corner) in rect_corners(root_rect).iter().enumerate() {
+          let (tx, ty, _tz, tw) = combined_transform.transform_point(corner.x, corner.y, 0.0);
+          if !tx.is_finite() || !ty.is_finite() || tw.abs() < 1e-6 || !tw.is_finite() {
+            projected = false;
+            break;
+          }
+          dest_quad_device[idx] = Point::new(tx / tw * self.scale, ty / tw * self.scale);
+        }
+        if !projected {
+          dest_quad_device = src_quad;
+        }
+        let dest_bounds_device = quad_bounds(&dest_quad_device);
 
         if !backdrop_filters.is_empty() {
-          let backdrop_bounds = transform_rect(device_root_rect, &final_transform);
           let backdrop_start = profile_enabled.then(Instant::now);
           apply_backdrop_filters(
             &mut self.pixmap,
-            &backdrop_bounds,
+            &dest_bounds_device,
             &backdrop_filters,
             device_radii,
             self.scale,
@@ -2619,19 +2631,31 @@ impl Painter {
         } else {
           map_blend_mode(blend_mode)
         };
-        if is_hsl_blend(blend_mode) && !isolated {
-          if let Some(mut transformed) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
-            let mut paint = PixmapPaint::default();
-            paint.opacity = 1.0;
-            paint.blend_mode = SkiaBlendMode::SourceOver;
-            transformed.draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
-            composite_hsl_layer(
-              &mut self.pixmap,
-              &transformed,
-              opacity.min(1.0),
-              blend_mode,
-              Some(device_bounds),
-            );
+        if let Some(affine) = affine_2d {
+          let mut final_transform = self
+            .device_transform(Some(transform2d_to_skia(affine)))
+            .unwrap_or_else(Transform::identity);
+          if is_hsl_blend(blend_mode) && !isolated {
+            if let Some(mut transformed) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
+              let mut paint = PixmapPaint::default();
+              paint.opacity = 1.0;
+              paint.blend_mode = SkiaBlendMode::SourceOver;
+              transformed.draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
+              composite_hsl_layer(
+                &mut self.pixmap,
+                &transformed,
+                opacity.min(1.0),
+                blend_mode,
+                Some(dest_bounds_device),
+              );
+            } else {
+              let mut paint = PixmapPaint::default();
+              paint.opacity = opacity.min(1.0);
+              paint.blend_mode = fallback_blend;
+              self
+                .pixmap
+                .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
+            }
           } else {
             let mut paint = PixmapPaint::default();
             paint.opacity = opacity.min(1.0);
@@ -2640,13 +2664,64 @@ impl Painter {
               .pixmap
               .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
           }
-        } else {
-          let mut paint = PixmapPaint::default();
-          paint.opacity = opacity.min(1.0);
-          paint.blend_mode = fallback_blend;
-          self
-            .pixmap
-            .draw_pixmap(0, 0, layer_pixmap.as_ref(), &paint, final_transform, None);
+        } else if let Some(homography) = Homography::from_quads(src_quad, dest_quad_device) {
+          let dst_quad: [(f32, f32); 4] = dest_quad_device.map(|p| (p.x, p.y));
+          let target_size = (self.pixmap.width(), self.pixmap.height());
+          if is_hsl_blend(blend_mode) && !isolated {
+            if let Some(warped) = warp_pixmap(
+              &layer_pixmap,
+              &homography,
+              &dst_quad,
+              target_size,
+              None,
+            ) {
+              if let Some(mut transformed) = Pixmap::new(self.pixmap.width(), self.pixmap.height()) {
+                let mut paint = PixmapPaint::default();
+                paint.opacity = 1.0;
+                paint.blend_mode = SkiaBlendMode::SourceOver;
+                transformed.draw_pixmap(
+                  warped.offset.0,
+                  warped.offset.1,
+                  warped.pixmap.as_ref(),
+                  &paint,
+                  Transform::identity(),
+                  None,
+                );
+                composite_hsl_layer(
+                  &mut self.pixmap,
+                  &transformed,
+                  opacity.min(1.0),
+                  blend_mode,
+                  Some(dest_bounds_device),
+                );
+              } else {
+                let mut paint = PixmapPaint::default();
+                paint.opacity = opacity.min(1.0);
+                paint.blend_mode = fallback_blend;
+                self.pixmap.draw_pixmap(
+                  warped.offset.0,
+                  warped.offset.1,
+                  warped.pixmap.as_ref(),
+                  &paint,
+                  Transform::identity(),
+                  None,
+                );
+              }
+            }
+          } else if let Some(warped) = warp_pixmap(
+            &layer_pixmap,
+            &homography,
+            &dst_quad,
+            target_size,
+            None,
+          ) {
+              let mut paint = PixmapPaint::default();
+              paint.opacity = opacity.min(1.0);
+              paint.blend_mode = fallback_blend;
+              self
+                .pixmap
+                .draw_pixmap(warped.offset.0, warped.offset.1, warped.pixmap.as_ref(), &paint, Transform::identity(), None);
+          }
         }
         if let Some(start) = composite_start {
           composite_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -7264,190 +7339,23 @@ fn color_to_skia(color: Rgba) -> tiny_skia::Color {
   tiny_skia::Color::from_rgba8(color.r, color.g, color.b, alpha)
 }
 
-fn transform_reference_box(style: &ComputedStyle, bounds: Rect) -> Rect {
-  let rects = background_rects(
-    bounds.x(),
-    bounds.y(),
-    bounds.width(),
-    bounds.height(),
-    style,
-    None,
-  );
-  match style.transform_box {
-    TransformBox::ContentBox => rects.content,
-    TransformBox::BorderBox
-    | TransformBox::FillBox
-    | TransformBox::StrokeBox
-    | TransformBox::ViewBox => rects.border,
-  }
-}
-
-fn build_transform(
+fn build_transform_3d(
   style: Option<&ComputedStyle>,
   bounds: Rect,
   viewport: Option<(f32, f32)>,
-) -> Option<Transform> {
-  let style = style?;
-
-  let mut transform_from_list: Option<Transform> = None;
-
-  if !style.transform.is_empty() {
-    let reference = transform_reference_box(style, bounds);
-    let percentage_width = reference.width();
-    let percentage_height = reference.height();
-
-    let mut ts = Transform::identity();
-    const EPS: f32 = 1e-6;
-    for component in &style.transform {
-      let next = match component {
-        crate::css::types::Transform::Translate(x, y) => {
-          let tx =
-            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
-          let ty =
-            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
-          Transform::from_translate(tx, ty)
-        }
-        crate::css::types::Transform::TranslateX(x) => {
-          let tx =
-            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
-          Transform::from_translate(tx, 0.0)
-        }
-        crate::css::types::Transform::TranslateY(y) => {
-          let ty =
-            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
-          Transform::from_translate(0.0, ty)
-        }
-        crate::css::types::Transform::TranslateZ(_) => Transform::identity(),
-        crate::css::types::Transform::Translate3d(x, y, _) => {
-          let tx =
-            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
-          let ty =
-            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
-          Transform::from_translate(tx, ty)
-        }
-        crate::css::types::Transform::Scale(sx, sy) => Transform::from_scale(*sx, *sy),
-        crate::css::types::Transform::ScaleX(sx) => Transform::from_scale(*sx, 1.0),
-        crate::css::types::Transform::ScaleY(sy) => Transform::from_scale(1.0, *sy),
-        crate::css::types::Transform::ScaleZ(_) => Transform::identity(),
-        crate::css::types::Transform::Scale3d(sx, sy, _) => Transform::from_scale(*sx, *sy),
-        crate::css::types::Transform::Rotate(deg) => Transform::from_rotate(*deg),
-        crate::css::types::Transform::RotateZ(deg) => Transform::from_rotate(*deg),
-        crate::css::types::Transform::RotateX(_) => Transform::identity(),
-        crate::css::types::Transform::RotateY(_) => Transform::identity(),
-        crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
-          if (*x).abs() < EPS && (*y).abs() < EPS && (*z).abs() > EPS {
-            let sign = if *z >= 0.0 { 1.0 } else { -1.0 };
-            Transform::from_rotate(*deg * sign)
-          } else {
-            Transform::identity()
-          }
-        }
-        crate::css::types::Transform::SkewX(deg) => {
-          Transform::from_skew(deg.to_radians().tan(), 0.0)
-        }
-        crate::css::types::Transform::SkewY(deg) => {
-          Transform::from_skew(0.0, deg.to_radians().tan())
-        }
-        crate::css::types::Transform::Skew(ax, ay) => {
-          Transform::from_skew(ax.to_radians().tan(), ay.to_radians().tan())
-        }
-        crate::css::types::Transform::Perspective(_) => Transform::identity(),
-        crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
-          Transform::from_row(*a, *b, *c, *d, *e, *f)
-        }
-        crate::css::types::Transform::Matrix3d(values) => {
-          let m11 = values[0];
-          let m12 = values[1];
-          let m13 = values[2];
-          let m14 = values[3];
-          let m21 = values[4];
-          let m22 = values[5];
-          let m23 = values[6];
-          let m24 = values[7];
-          let m31 = values[8];
-          let m32 = values[9];
-          let m33 = values[10];
-          let m34 = values[11];
-          let m41 = values[12];
-          let m42 = values[13];
-          let m43 = values[14];
-          let m44 = values[15];
-
-          let compatible_2d = m13.abs() < EPS
-            && m14.abs() < EPS
-            && m23.abs() < EPS
-            && m24.abs() < EPS
-            && m31.abs() < EPS
-            && m32.abs() < EPS
-            && (m33 - 1.0).abs() < EPS
-            && m34.abs() < EPS
-            && m43.abs() < EPS
-            && (m44 - 1.0).abs() < EPS;
-
-          if compatible_2d {
-            Transform::from_row(m11, m12, m21, m22, m41, m42)
-          } else {
-            Transform::identity()
-          }
-        }
-      };
-      ts = ts.pre_concat(next);
-    }
-
-    let origin_x = resolve_transform_length(
-      &style.transform_origin.x,
-      style.font_size,
-      style.root_font_size,
-      percentage_width,
-    );
-    let origin_y = resolve_transform_length(
-      &style.transform_origin.y,
-      style.font_size,
-      style.root_font_size,
-      percentage_height,
-    );
-    let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
-
-    // Apply transform around the resolved origin.
-    ts = Transform::from_translate(origin.x, origin.y)
-      .pre_concat(ts)
-      .pre_concat(Transform::from_translate(-origin.x, -origin.y));
-
-    transform_from_list = Some(ts);
-  }
-
-  let motion = crate::paint::motion_path::compute_motion_transform(style, bounds, viewport)
-    .map(|t| Transform::from_row(t.a, t.b, t.c, t.d, t.e, t.f));
-
-  match (motion, transform_from_list) {
-    (None, None) => None,
-    (Some(motion), None) => Some(motion),
-    (None, Some(list)) => Some(list),
-    (Some(motion), Some(list)) => Some(list.pre_concat(motion)),
-  }
+) -> Option<Transform3D> {
+  style.and_then(|style| DisplayListBuilder::debug_resolve_transform(style, bounds, viewport))
 }
 
-fn resolve_transform_length(
-  len: &Length,
-  font_size: f32,
-  root_font_size: f32,
-  percentage_base: f32,
-) -> f32 {
-  let needs_viewport = len.unit.is_viewport_relative()
-    || len
-      .calc
-      .as_ref()
-      .map(|c| c.has_viewport_relative())
-      .unwrap_or(false);
-  let (vw, vh) = if needs_viewport {
-    (f32::NAN, f32::NAN)
-  } else {
-    (0.0, 0.0)
-  };
-
-  len
-    .resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
-    .unwrap_or(len.value)
+fn transform2d_to_skia(transform: Transform2D) -> Transform {
+  Transform::from_row(
+    transform.a,
+    transform.b,
+    transform.c,
+    transform.d,
+    transform.e,
+    transform.f,
+  )
 }
 
 fn transform_rect(rect: Rect, ts: &Transform) -> Rect {
@@ -7659,10 +7567,23 @@ fn stacking_context_bounds(
   filters: &[ResolvedFilter],
   backdrop_filters: &[ResolvedFilter],
   rect: Rect,
-  transform: Option<&Transform>,
+  transform: Option<&Transform3D>,
   clip: Option<&StackingClip>,
   clip_path: Option<&ResolvedClipPath>,
 ) -> Option<Rect> {
+  let project_rect_bounds = |rect: Rect, transform: &Transform3D| -> Option<Rect> {
+    let corners = rect_corners(rect);
+    let mut projected = [Point::ZERO; 4];
+    for (idx, corner) in corners.iter().enumerate() {
+      let (tx, ty, _tz, tw) = transform.transform_point(corner.x, corner.y, 0.0);
+      if tw.abs() < 1e-6 || !tx.is_finite() || !ty.is_finite() || !tw.is_finite() {
+        return None;
+      }
+      projected[idx] = Point::new(tx / tw, ty / tw);
+    }
+    Some(quad_bounds(&projected))
+  };
+
   let mut base = rect;
   let outline_bounds = compute_outline_bounds(commands);
   if let Some(desc) = compute_descendant_bounds(commands, rect) {
@@ -7695,8 +7616,9 @@ fn stacking_context_bounds(
     );
   }
   if let Some(ts) = transform {
-    let transformed = transform_rect(base, ts);
-    base = base.union(transformed);
+    if let Some(transformed) = project_rect_bounds(base, ts) {
+      base = base.union(transformed);
+    }
   }
   Some(base)
 }
@@ -7715,14 +7637,14 @@ fn command_bounds(cmd: &DisplayCommand) -> Option<Rect> {
       clip,
       clip_path,
       rect,
-      transform,
+      transform_3d,
       ..
     } => stacking_context_bounds(
       commands,
       filters,
       backdrop_filters,
       *rect,
-      transform.as_ref(),
+      transform_3d.as_ref(),
       clip.as_ref(),
       clip_path.as_ref(),
     ),
@@ -7809,6 +7731,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         rect,
         opacity,
         transform,
+        transform_3d,
         blend_mode,
         isolated,
         mask,
@@ -7822,6 +7745,7 @@ fn translate_commands(commands: Vec<DisplayCommand>, dx: f32, dy: f32) -> Vec<Di
         rect: rect.translate(offset),
         opacity,
         transform,
+        transform_3d,
         blend_mode,
         isolated,
         mask,
@@ -12748,6 +12672,7 @@ mod tests {
       rect: Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
       opacity: 1.0,
       transform: None,
+      transform_3d: None,
       blend_mode: MixBlendMode::Normal,
       isolated: true,
       mask: None,
@@ -12783,6 +12708,7 @@ mod tests {
       rect: Rect::from_xywh(0.0, 0.0, 6.0, 6.0),
       opacity: 1.0,
       transform: Some(Transform::from_translate(12.0, 8.0)),
+      transform_3d: Some(Transform3D::from_2d(&Transform2D::translate(12.0, 8.0))),
       blend_mode: MixBlendMode::Normal,
       isolated: false,
       mask: None,
@@ -13032,6 +12958,58 @@ mod tests {
 
     let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
     assert_eq!(color_at(&pixmap, 5, 5), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn perspective_transform_warps_layer() {
+    let mut style = ComputedStyle::default();
+    style.background_color = Rgba::RED;
+    style.perspective = Some(Length::px(400.0));
+    style
+      .transform
+      .push(crate::css::types::Transform::RotateY(45.0));
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+      vec![],
+      Arc::new(style),
+    );
+    let tree = FragmentTree::new(fragment);
+
+    let pixmap = paint_tree_scaled(&tree, 64, 40, Rgba::WHITE, 1.0).expect("paint");
+
+    let mut min_x = pixmap.width();
+    let mut min_y = pixmap.height();
+    let mut max_x = 0;
+    let mut max_y = 0;
+    let mut count = 0;
+    for y in 0..pixmap.height() {
+      for x in 0..pixmap.width() {
+        let (r, g, b, a) = color_at(&pixmap, x, y);
+        if a > 0 && (r != 255 || g != 255 || b != 255) {
+          count += 1;
+          min_x = min_x.min(x);
+          min_y = min_y.min(y);
+          max_x = max_x.max(x);
+          max_y = max_y.max(y);
+        }
+      }
+    }
+
+    assert!(count > 0, "expected warped content to paint");
+
+    let bounds = Rect::from_xywh(
+      min_x as f32,
+      min_y as f32,
+      (max_x - min_x + 1) as f32,
+      (max_y - min_y + 1) as f32,
+    );
+    let expected = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
+    assert!(
+      bounds.width() < expected.width() - 0.5,
+      "perspective should shrink projected width; expected < {}, got {}",
+      expected.width(),
+      bounds.width()
+    );
   }
 
   #[test]
@@ -13339,10 +13317,11 @@ mod tests {
       ));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-    let transform = build_transform(Some(&style), bounds, None).expect("transform should build");
+    let transform = build_transform_3d(Some(&style), bounds, None).expect("transform should build");
+    let transform = transform.to_2d().expect("should be affine");
 
-    assert!((transform.tx - 85.0).abs() < 1e-3);
-    assert!(transform.ty.abs() < 1e-3);
+    assert!((transform.e - 85.0).abs() < 1e-3);
+    assert!(transform.f.abs() < 1e-3);
   }
 
   #[test]
@@ -13360,10 +13339,11 @@ mod tests {
       .push(crate::css::types::Transform::Scale(2.0, 1.0));
 
     let bounds = Rect::from_xywh(0.0, 0.0, 200.0, 100.0);
-    let transform = build_transform(Some(&style), bounds, None).expect("transform should build");
+    let transform = build_transform_3d(Some(&style), bounds, None).expect("transform should build");
+    let transform = transform.to_2d().expect("should be affine");
 
-    assert!((transform.tx + 15.0).abs() < 1e-3);
-    assert!(transform.ty.abs() < 1e-3);
+    assert!((transform.e + 15.0).abs() < 1e-3);
+    assert!(transform.f.abs() < 1e-3);
   }
 
   #[test]
