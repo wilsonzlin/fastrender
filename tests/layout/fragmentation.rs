@@ -203,6 +203,56 @@ fn column_fragmentation_places_fragments_in_grid() {
 }
 
 #[test]
+fn column_fragmentation_places_columns_side_by_side() {
+  let fragmentainer_size = 60.0;
+  let fragmentainer_gap = 5.0;
+  let column_gap = 10.0;
+  let epsilon = 0.01;
+
+  let tall_child = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 260.0), vec![]);
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, 100.0, 260.0),
+    vec![tall_child],
+  );
+
+  let options = FragmentationOptions::new(fragmentainer_size)
+    .with_gap(fragmentainer_gap)
+    .with_columns(2, column_gap);
+  let fragments = fragment_tree(&root, &options);
+
+  assert!(
+    fragments.len() >= 4,
+    "tall content should generate multiple fragmentainers"
+  );
+
+  let first = &fragments[0];
+  let second = &fragments[1];
+  assert!(
+    (first.bounds.y() - second.bounds.y()).abs() < epsilon,
+    "first column set should share vertical origin"
+  );
+  assert_ne!(
+    first.bounds.x(),
+    second.bounds.x(),
+    "columns should be positioned side by side"
+  );
+  assert!(
+    (second.bounds.x() - (root.bounds.width() + column_gap)).abs() < epsilon,
+    "column gap should affect horizontal placement"
+  );
+
+  let third = &fragments[2];
+  assert!(
+    third.bounds.y() >= fragmentainer_size + fragmentainer_gap - epsilon,
+    "new column set should be translated down by fragmentainer height and gap"
+  );
+  assert!(
+    (third.bounds.x() - first.bounds.x()).abs() < epsilon,
+    "column sets should reset to the first column horizontally"
+  );
+}
+
+#[test]
 fn layout_engine_pagination_splits_pages() {
   let mut style = ComputedStyle::default();
   style.height = Some(Length::px(150.0));
