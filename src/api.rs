@@ -5106,6 +5106,7 @@ impl FastRender {
         })
       })?;
       fragment_tree = FragmentTree::from_fragments(pages, viewport);
+      fragment_tree.ensure_scroll_metadata();
     }
 
     if let Some(defs) = svg_filter_defs.clone() {
