@@ -568,8 +568,11 @@ fn selector_keys(
         } => {
           push_attribute_key(&mut base_keys, &local_name_lower.0);
         }
-        Component::AttributeInNoNamespace { local_name, .. } => {
-          push_attribute_key(&mut base_keys, &local_name.0);
+        Component::AttributeInNoNamespace {
+          local_name_lower, ..
+        } => {
+          // Prefer the parser-provided lowercase name when available.
+          push_attribute_key(&mut base_keys, &local_name_lower.0);
         }
         Component::AttributeOther(other) => {
           if other.namespace.is_none() {
