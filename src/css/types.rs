@@ -2,6 +2,7 @@
 //!
 //! Core types for representing CSS stylesheets, rules, and values.
 
+use super::properties::{parse_property_value_in_context, DeclarationContext};
 use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
 use crate::style::color::Color;
@@ -952,7 +953,7 @@ fn supports_value_is_valid(property: &str, value: &str) -> bool {
   }
 
   // Unknown properties are not supported.
-  let parsed = super::properties::parse_property_value(property, value);
+  let parsed = parse_property_value_in_context(DeclarationContext::Style, property, value);
   let Some(parsed) = parsed else { return false };
   let prop = property.to_ascii_lowercase();
   let value_lower = value.trim().to_ascii_lowercase();
@@ -1168,6 +1169,18 @@ mod tests {
     assert!(
       cond.matches(),
       "sideways-left should be considered supported"
+    );
+  }
+
+  #[test]
+  fn supports_rejects_page_only_properties() {
+    let cond = SupportsCondition::Declaration {
+      property: "size".into(),
+      value: "A4".into(),
+    };
+    assert!(
+      !cond.matches(),
+      "page-only properties should be unsupported in style @supports"
     );
   }
 }

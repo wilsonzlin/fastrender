@@ -6,7 +6,8 @@
 //! it attempts to skip to the next valid rule and continue parsing.
 //! Errors are collected and returned alongside the parsed stylesheet.
 
-use super::properties::parse_property_value;
+use super::properties::parse_property_value_in_context;
+use super::properties::DeclarationContext;
 use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
 use super::types::ContainerRule;
@@ -1067,7 +1068,7 @@ fn parse_page_block<'i, 't>(
             parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent("expected {".into()))
           })?;
           let nested = parser.parse_nested_block(|nested| {
-            parse_declaration_list(nested).map_err(|_| {
+            parse_declaration_list(nested, DeclarationContext::Style).map_err(|_| {
               nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
                 "declaration".into(),
               ))
@@ -1083,7 +1084,7 @@ fn parse_page_block<'i, 't>(
       }
       Ok(_) | Err(_) => {
         parser.reset(&state);
-        if let Some(decl) = parse_declaration(parser) {
+        if let Some(decl) = parse_declaration(parser, DeclarationContext::Page) {
           declarations.push(decl);
         }
       }
@@ -1711,7 +1712,7 @@ fn parse_single_keyframe<'i, 't>(
           return Ok(None);
         }
         let declarations = parser.parse_nested_block(|nested| {
-          parse_declaration_list(nested).map_err(|_| {
+          parse_declaration_list(nested, DeclarationContext::Style).map_err(|_| {
             nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
               "declaration".into(),
             ))
@@ -2272,7 +2273,7 @@ fn parse_style_block<'i, 't>(
       continue;
     }
 
-    if let Some(decl) = parse_declaration(parser) {
+    if let Some(decl) = parse_declaration(parser, DeclarationContext::Style) {
       declarations.push(decl);
     }
   }
@@ -2411,7 +2412,10 @@ fn parse_nest_rule<'i, 't>(
   })))
 }
 
-fn parse_declaration<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<Declaration> {
+fn parse_declaration<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  context: DeclarationContext,
+) -> Option<Declaration> {
   let property = match parser.expect_ident() {
     Ok(ident) => ident.to_string(),
     Err(_) => {
@@ -2464,7 +2468,7 @@ fn parse_declaration<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<Declaration>
     full_slice_raw.trim_end_matches(';').trim_end()
   };
 
-  parse_property_value(&property, value).map(|parsed_value| Declaration {
+  parse_property_value_in_context(context, &property, value).map(|parsed_value| Declaration {
     property,
     value: parsed_value,
     raw_value: value.to_string(),
@@ -2472,9 +2476,10 @@ fn parse_declaration<'i, 't>(parser: &mut Parser<'i, 't>) -> Option<Declaration>
   })
 }
 
-/// Parse a list of declarations
+/// Parse a list of declarations in the given context.
 fn parse_declaration_list<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  context: DeclarationContext,
 ) -> std::result::Result<Vec<Declaration>, ParseError<'i, ()>> {
   let mut declarations = Vec::new();
 
@@ -2483,7 +2488,7 @@ fn parse_declaration_list<'i, 't>(
     if parser.is_exhausted() {
       break;
     }
-    if let Some(decl) = parse_declaration(parser) {
+    if let Some(decl) = parse_declaration(parser, context) {
       declarations.push(decl);
     }
   }
@@ -2505,7 +2510,7 @@ fn skip_to_semicolon<'i, 't>(parser: &mut Parser<'i, 't>) {
 pub fn parse_declarations(declarations_str: &str) -> Vec<Declaration> {
   let mut input = ParserInput::new(declarations_str);
   let mut parser = Parser::new(&mut input);
-  parse_declaration_list(&mut parser).unwrap_or_default()
+  parse_declaration_list(&mut parser, DeclarationContext::Style).unwrap_or_default()
 }
 
 /// Inline `<style>` block extracted from the DOM.
@@ -2824,6 +2829,35 @@ mod tests {
       other => panic!("expected custom value, got {:?}", other),
     }
     assert_eq!(decls[0].raw_value, "  10px  var(--bar)");
+  }
+
+  #[test]
+  fn page_properties_parse_within_page_rule() {
+    let css = "@page { size: A4; bleed: 10px; }";
+    let stylesheet = parse_stylesheet(css).unwrap();
+    assert_eq!(stylesheet.rules.len(), 1);
+    match &stylesheet.rules[0] {
+      CssRule::Page(page) => {
+        assert_eq!(page.declarations.len(), 2);
+        assert_eq!(page.declarations[0].property, "size");
+        assert_eq!(page.declarations[1].property, "bleed");
+      }
+      other => panic!("expected page rule, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn page_properties_are_rejected_in_style_rules() {
+    let css = "div { size: A4; color: red; }";
+    let stylesheet = parse_stylesheet(css).unwrap();
+    assert_eq!(stylesheet.rules.len(), 1);
+    match &stylesheet.rules[0] {
+      CssRule::Style(rule) => {
+        assert_eq!(rule.declarations.len(), 1);
+        assert_eq!(rule.declarations[0].property, "color");
+      }
+      other => panic!("expected style rule, got {:?}", other),
+    }
   }
 
   #[test]

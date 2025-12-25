@@ -19,11 +19,17 @@ use cssparser::Parser;
 use cssparser::ParserInput;
 use cssparser::Token;
 
-/// Set of property names that the engine understands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeclarationContext {
+  Style,
+  Page,
+}
+
+/// Set of property names that the engine understands in standard style declarations.
 ///
 /// Unknown properties are dropped during parsing (per CSS 2.1 §4.2) and treated as unsupported
 /// for feature queries.
-const KNOWN_PROPERTIES: &[&str] = &[
+const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "accent-color",
   "align-content",
   "align-items",
@@ -370,8 +376,25 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "z-index",
 ];
 
-fn is_known_property(property: &str) -> bool {
-  KNOWN_PROPERTIES.contains(&property)
+/// Properties accepted in @page declaration blocks.
+const KNOWN_PAGE_PROPERTIES: &[&str] = &[
+  "bleed",
+  "marks",
+  "margin",
+  "margin-bottom",
+  "margin-left",
+  "margin-right",
+  "margin-top",
+  "size",
+  "trim",
+];
+
+fn is_known_style_property(property: &str) -> bool {
+  KNOWN_STYLE_PROPERTIES.contains(&property)
+}
+
+fn is_known_page_property(property: &str) -> bool {
+  KNOWN_PAGE_PROPERTIES.contains(&property)
 }
 
 fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
@@ -800,8 +823,17 @@ fn parse_single_font_family(parser: &mut Parser) -> Option<String> {
   Some(name)
 }
 
-/// Parse a CSS property value
+/// Parse a CSS property value in a style declaration context.
 pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
+  parse_property_value_in_context(DeclarationContext::Style, property, value_str)
+}
+
+/// Parse a CSS property value with knowledge of the declaration context.
+pub fn parse_property_value_in_context(
+  context: DeclarationContext,
+  property: &str,
+  value_str: &str,
+) -> Option<PropertyValue> {
   // Custom properties store their tokens verbatim (post !important stripping handled by caller).
   if property.starts_with("--") {
     return Some(PropertyValue::Custom(value_str.to_string()));
@@ -813,10 +845,21 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
   }
 
   // Unknown properties are ignored per the CSS error-handling rules.
-  if !is_known_property(property) {
+  if !property_allowed_in_context(context, property) {
     return None;
   }
 
+  parse_known_property_value(property, value_str)
+}
+
+fn property_allowed_in_context(context: DeclarationContext, property: &str) -> bool {
+  match context {
+    DeclarationContext::Style => is_known_style_property(property),
+    DeclarationContext::Page => is_known_page_property(property),
+  }
+}
+
+fn parse_known_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
   let value_str = value_str.trim();
   if value_str.is_empty() {
     return None;
@@ -1960,14 +2003,22 @@ mod tests {
 
   #[test]
   fn known_properties_are_unique() {
-    let mut props = KNOWN_PROPERTIES.to_vec();
-    props.sort_unstable();
-    props.dedup();
-    assert_eq!(
-      props.len(),
-      KNOWN_PROPERTIES.len(),
-      "KNOWN_PROPERTIES contains duplicates"
-    );
+    for (name, props) in [
+      ("KNOWN_STYLE_PROPERTIES", KNOWN_STYLE_PROPERTIES.as_slice()),
+      ("KNOWN_PAGE_PROPERTIES", KNOWN_PAGE_PROPERTIES.as_slice()),
+    ] {
+      let mut list = props.to_vec();
+      let original_len = list.len();
+      list.sort_unstable();
+      list.dedup();
+      assert_eq!(list.len(), original_len, "{} contains duplicates", name);
+    }
+  }
+
+  #[test]
+  fn page_properties_require_page_context() {
+    assert!(parse_property_value("size", "A4").is_none());
+    assert!(parse_property_value_in_context(DeclarationContext::Page, "size", "A4").is_some());
   }
 
   #[test]
