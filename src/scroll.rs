@@ -606,31 +606,41 @@ fn collect_scroll_metadata(
 fn merge_containers(containers: Vec<ScrollSnapContainer>) -> Vec<ScrollSnapContainer> {
   let mut merged = Vec::new();
   let mut by_id: HashMap<usize, usize> = HashMap::new();
+  let mut viewport_idx: Option<usize> = None;
 
   for container in containers {
-    if let Some(box_id) = container.box_id {
-      if let Some(idx) = by_id.get(&box_id).copied() {
-        let existing = &mut merged[idx];
-        debug_assert_eq!(
-          existing.uses_viewport_scroll,
-          container.uses_viewport_scroll
-        );
-        debug_assert_eq!(existing.viewport, container.viewport);
-        debug_assert_eq!(existing.strictness, container.strictness);
-        debug_assert_eq!(existing.behavior, container.behavior);
-        debug_assert_eq!(existing.snap_x, container.snap_x);
-        debug_assert_eq!(existing.snap_y, container.snap_y);
-        debug_assert_eq!(existing.padding_x, container.padding_x);
-        debug_assert_eq!(existing.padding_y, container.padding_y);
-
-        existing.scroll_bounds = existing.scroll_bounds.union(container.scroll_bounds);
-        existing.targets_x.extend(container.targets_x);
-        existing.targets_y.extend(container.targets_y);
-      } else {
-        by_id.insert(box_id, merged.len());
-        merged.push(container);
-      }
+    let merge_target = if container.uses_viewport_scroll {
+      viewport_idx
+    } else if let Some(box_id) = container.box_id {
+      by_id.get(&box_id).copied()
     } else {
+      None
+    };
+
+    if let Some(idx) = merge_target {
+      let existing = &mut merged[idx];
+      debug_assert_eq!(
+        existing.uses_viewport_scroll,
+        container.uses_viewport_scroll
+      );
+      debug_assert_eq!(existing.viewport, container.viewport);
+      debug_assert_eq!(existing.strictness, container.strictness);
+      debug_assert_eq!(existing.behavior, container.behavior);
+      debug_assert_eq!(existing.snap_x, container.snap_x);
+      debug_assert_eq!(existing.snap_y, container.snap_y);
+      debug_assert_eq!(existing.padding_x, container.padding_x);
+      debug_assert_eq!(existing.padding_y, container.padding_y);
+
+      existing.scroll_bounds = existing.scroll_bounds.union(container.scroll_bounds);
+      existing.targets_x.extend(container.targets_x);
+      existing.targets_y.extend(container.targets_y);
+    } else {
+      let idx = merged.len();
+      if container.uses_viewport_scroll {
+        viewport_idx = Some(idx);
+      } else if let Some(box_id) = container.box_id {
+        by_id.insert(box_id, idx);
+      }
       merged.push(container);
     }
   }
