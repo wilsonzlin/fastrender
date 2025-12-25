@@ -1128,18 +1128,32 @@ impl DisplayListRenderer {
     v * self.scale
   }
 
-  fn to_skia_transform(&self, transform: &Transform3D) -> Transform {
-    let affine = transform
-      .to_2d()
-      .unwrap_or_else(|| transform.approximate_2d());
+  fn to_skia_transform_checked(&self, transform: &Transform3D) -> (Transform, bool) {
+    if let Some(affine) = transform.to_2d() {
+      return (
+        Transform::from_row(
+          affine.a,
+          affine.b,
+          affine.c,
+          affine.d,
+          self.ds_len(affine.e),
+          self.ds_len(affine.f),
+        ),
+        true,
+      );
+    }
 
-    Transform::from_row(
-      affine.a,
-      affine.b,
-      affine.c,
-      affine.d,
-      self.ds_len(affine.e),
-      self.ds_len(affine.f),
+    let (approx, valid) = transform.approximate_2d_with_validity();
+    (
+      Transform::from_row(
+        approx.a,
+        approx.b,
+        approx.c,
+        approx.d,
+        self.ds_len(approx.e),
+        self.ds_len(approx.f),
+      ),
+      valid,
     )
   }
 
@@ -2806,8 +2820,10 @@ impl DisplayListRenderer {
         let parent_transform = self.canvas.transform();
         let mut combined_transform = parent_transform;
         if item.transform.is_some() {
-          let t = self.to_skia_transform(&local_transform);
-          combined_transform = combined_transform.post_concat(t);
+          let (t, valid) = self.to_skia_transform_checked(&local_transform);
+          if valid {
+            combined_transform = combined_transform.post_concat(t);
+          }
         }
 
         self.transform_stack.push(combined_transform_3d);
@@ -3962,9 +3978,11 @@ impl DisplayListRenderer {
 
   fn push_transform(&mut self, transform: &TransformItem) {
     self.canvas.save();
-    let matrix = self.to_skia_transform(&transform.transform);
-    let combined = self.canvas.transform().post_concat(matrix);
-    self.canvas.set_transform(combined);
+    let (matrix, valid) = self.to_skia_transform_checked(&transform.transform);
+    if valid {
+      let combined = self.canvas.transform().post_concat(matrix);
+      self.canvas.set_transform(combined);
+    }
   }
 
   fn resolve_font(&self, font_id: Option<&FontId>) -> Option<LoadedFont> {
