@@ -26,6 +26,7 @@ pub fn paginate_fragment_tree(
     return vec![root.clone()];
   }
 
+  let base_style = root.style.as_deref();
   let mut spans = Vec::new();
   collect_page_name_spans(root, 0.0, &mut spans);
   spans.sort_by(|a, b| {
@@ -59,6 +60,7 @@ pub fn paginate_fragment_tree(
       side,
       fallback_page_size,
       root_font_size,
+      base_style,
     );
 
     let page_block = style.content_size.height.max(1.0);

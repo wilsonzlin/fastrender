@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::css::types::PropertyValue;
 use crate::css::types::{CollectedPageRule, PageMarginArea, PagePseudoClass, PageSelector};
 use crate::geometry::{Point, Size};
+use crate::style::cascade::inherit_styles;
 use crate::style::display::Display;
 use crate::style::properties::{apply_declaration_with_base, resolve_pending_logical_properties};
 use crate::style::values::{Length, LengthUnit};
@@ -76,8 +77,14 @@ pub fn resolve_page_style(
   side: PageSide,
   fallback_size: Size,
   root_font_size: f32,
+  base_style: Option<&ComputedStyle>,
 ) -> ResolvedPageStyle {
   let defaults = ComputedStyle::default();
+  let inherited_base = base_style.unwrap_or(&defaults);
+  let parent_font_size = base_style.map_or(root_font_size, |s| s.font_size);
+  let root_font_size = base_style
+    .map(|s| s.root_font_size)
+    .unwrap_or(root_font_size);
   let mut props = PageProperties::default();
   let mut margin_styles: HashMap<PageMarginArea, ComputedStyle> = HashMap::new();
 
@@ -112,15 +119,15 @@ pub fn resolve_page_style(
     for margin_rule in &rule.rule.margin_rules {
       let style = margin_styles
         .entry(margin_rule.area)
-        .or_insert_with(|| default_margin_style(root_font_size));
+        .or_insert_with(|| default_margin_style(base_style, root_font_size));
       for decl in &margin_rule.declarations {
         apply_declaration_with_base(
           style,
           decl,
-          &defaults,
+          inherited_base,
           &defaults,
           None,
-          root_font_size,
+          parent_font_size,
           root_font_size,
           fallback_size,
         );
@@ -490,10 +497,15 @@ fn resolve_length_on_axis(
   )
 }
 
-fn default_margin_style(root_font_size: f32) -> ComputedStyle {
+fn default_margin_style(base_style: Option<&ComputedStyle>, root_font_size: f32) -> ComputedStyle {
   let mut style = ComputedStyle::default();
+  if let Some(base) = base_style {
+    inherit_styles(&mut style, base);
+    style.root_font_size = base.root_font_size;
+  } else {
+    style.root_font_size = root_font_size;
+  }
   style.display = Display::Block;
-  style.root_font_size = root_font_size;
   style
 }
 

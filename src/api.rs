@@ -1727,6 +1727,7 @@ impl FastRender {
         PageSide::Right,
         fallback_page_size,
         styled_tree.styles.root_font_size,
+        Some(&styled_tree.styles),
       );
       layout_viewport = style.content_size;
       first_page_style = Some(style);
