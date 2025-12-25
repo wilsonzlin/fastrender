@@ -66,7 +66,7 @@ use crate::css::loader::{
   inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base,
 };
 use crate::css::parser::{
-  extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
+  extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, CssTreeScope, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::debug;
@@ -3967,8 +3967,12 @@ impl FastRender {
       self.resource_context.clone(),
     );
 
-    for source in sources {
-      match source {
+    for scoped in sources {
+      if !matches!(scoped.scope, CssTreeScope::Document) {
+        continue;
+      }
+
+      match scoped.source {
         StylesheetSource::Inline(inline) => {
           if inline.disabled || !Self::stylesheet_type_is_css(inline.type_attr.as_deref()) {
             continue;

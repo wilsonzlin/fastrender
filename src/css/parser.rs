@@ -36,7 +36,7 @@ use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
-use crate::dom::DomNode;
+use crate::dom::{DomNode, DomNodeType};
 use crate::error::Result;
 use crate::style::counter_styles::{CounterStyleRule, CounterSystem, SpeakAs};
 use crate::style::media::MediaQuery;
@@ -2643,6 +2643,18 @@ pub fn parse_declarations(declarations_str: &str) -> Vec<Declaration> {
   parse_declaration_list(&mut parser, DeclarationContext::Style).unwrap_or_default()
 }
 
+/// Distinguishes which tree scope a stylesheet source applies to.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CssTreeScope {
+  /// Styles that live in the document (light DOM) tree.
+  Document,
+  /// Styles inside a particular shadow root, identified by the host's stable path within the DOM.
+  ShadowRoot {
+    /// Path of sibling indices (excluding text and document nodes) from the document root to the host element.
+    host_path: Vec<usize>,
+  },
+}
+
 /// Inline `<style>` block extracted from the DOM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineStyle {
@@ -2680,6 +2692,13 @@ pub enum StylesheetSource {
   External(StylesheetLink),
 }
 
+/// A stylesheet source paired with the DOM tree scope it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedStylesheetSource {
+  pub scope: CssTreeScope,
+  pub source: StylesheetSource,
+}
+
 /// Tokenize a `rel` attribute into lowercase relationship values.
 pub fn tokenize_rel_list(rel: &str) -> Vec<String> {
   rel
@@ -2698,12 +2717,19 @@ pub fn rel_list_contains_stylesheet(tokens: &[String]) -> bool {
 
 /// Extract inline `<style>` blocks and external `<link rel="stylesheet">` entries from a DOM.
 ///
-/// The returned list preserves document order so callers can maintain the correct cascade
-/// ordering when loading and parsing the resulting stylesheets.
-pub fn extract_css_sources(dom: &DomNode) -> Vec<StylesheetSource> {
-  let mut sources = Vec::new();
+/// Each stylesheet is tagged with the DOM tree scope it belongs to (document vs. a particular
+/// shadow root). Document order is preserved within each scope by walking the tree preorder.
+pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
+  fn contributes_to_scope_path(node: &DomNode) -> bool {
+    !matches!(node.node_type, DomNodeType::Text { .. } | DomNodeType::Document)
+  }
 
-  dom.walk_tree(&mut |node| {
+  fn walk(
+    node: &DomNode,
+    scope: &CssTreeScope,
+    path: &mut Vec<usize>,
+    sources: &mut Vec<ScopedStylesheetSource>,
+  ) {
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("style") {
         let mut css = String::new();
@@ -2713,29 +2739,60 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<StylesheetSource> {
           }
         }
 
-        sources.push(StylesheetSource::Inline(InlineStyle {
-          css,
-          media: node.get_attribute("media"),
-          type_attr: node.get_attribute("type"),
-          disabled: node.get_attribute_ref("disabled").is_some(),
-        }));
-      } else if tag.eq_ignore_ascii_case("link") {
+        sources.push(ScopedStylesheetSource {
+          scope: scope.clone(),
+          source: StylesheetSource::Inline(InlineStyle {
+            css,
+            media: node.get_attribute("media"),
+            type_attr: node.get_attribute("type"),
+            disabled: node.get_attribute_ref("disabled").is_some(),
+          }),
+        });
+      } else if tag.eq_ignore_ascii_case("link") && matches!(scope, CssTreeScope::Document) {
         let rel_attr = node.get_attribute("rel");
         let href_attr = node.get_attribute("href");
         if let (Some(rel), Some(href)) = (rel_attr, href_attr) {
           let rel = tokenize_rel_list(&rel);
-          sources.push(StylesheetSource::External(StylesheetLink {
-            href,
-            rel,
-            media: node.get_attribute("media"),
-            type_attr: node.get_attribute("type"),
-            disabled: node.get_attribute_ref("disabled").is_some(),
-          }));
+          sources.push(ScopedStylesheetSource {
+            scope: CssTreeScope::Document,
+            source: StylesheetSource::External(StylesheetLink {
+              href,
+              rel,
+              media: node.get_attribute("media"),
+              type_attr: node.get_attribute("type"),
+              disabled: node.get_attribute_ref("disabled").is_some(),
+            }),
+          });
         }
       }
     }
-  });
 
+    let mut child_index = 0;
+    for child in &node.children {
+      let mut child_scope = scope.clone();
+      if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
+        child_scope = CssTreeScope::ShadowRoot {
+          host_path: path.clone(),
+        };
+      }
+
+      let contributes = contributes_to_scope_path(child);
+      if contributes {
+        path.push(child_index);
+        child_index += 1;
+      }
+
+      walk(child, &child_scope, path, sources);
+
+      if contributes {
+        path.pop();
+      }
+    }
+  }
+
+  let mut sources = Vec::new();
+  let mut path = Vec::new();
+  walk(dom, &CssTreeScope::Document, &mut path, &mut sources);
   sources
 }
 
@@ -3335,13 +3392,16 @@ mod tests {
     let dom = crate::dom::parse_html(html).unwrap();
     let sources = extract_css_sources(&dom);
     assert_eq!(sources.len(), 3);
+    assert!(sources
+      .iter()
+      .all(|s| matches!(s.scope, CssTreeScope::Document)));
 
-    match &sources[0] {
+    match &sources[0].source {
       StylesheetSource::Inline(inline) => assert!(inline.css.contains("red")),
       other => panic!("expected inline style, got {:?}", other),
     }
 
-    match &sources[1] {
+    match &sources[1].source {
       StylesheetSource::External(link) => {
         assert_eq!(link.href, "a.css");
         assert!(rel_list_contains_stylesheet(&link.rel));
@@ -3350,7 +3410,7 @@ mod tests {
       other => panic!("expected external stylesheet link, got {:?}", other),
     }
 
-    match &sources[2] {
+    match &sources[2].source {
       StylesheetSource::Inline(inline) => {
         assert_eq!(inline.media.as_deref(), Some("print"));
         assert!(inline.css.contains("blue"));
