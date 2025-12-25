@@ -2163,7 +2163,7 @@ fn apply_sticky_offsets_with_context(
 
   let delta = Point::new(new_abs_x - abs_rect.x(), new_abs_y - abs_rect.y());
   if delta.x.abs() > f32::EPSILON || delta.y.abs() > f32::EPSILON {
-    *fragment = fragment.translate(delta);
+    *fragment = fragment.translate_subtree_absolute(delta);
   }
 }
 

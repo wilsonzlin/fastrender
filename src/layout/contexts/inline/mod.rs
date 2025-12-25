@@ -7411,7 +7411,7 @@ impl InlineFormattingContext {
           );
           let fragment = fc.layout(&block_node, &child_constraints)?;
           let translate_y = line_offset + margin_top - fragment.bounds.y();
-          let translated = fragment.translate(Point::new(0.0, translate_y));
+          let translated = fragment.translate_subtree_absolute(Point::new(0.0, translate_y));
           block_run_max_width = block_run_max_width
             .max(translated.bounds.x() + translated.bounds.width() + margin_right);
           line_offset += margin_top + translated.bounds.height() + margin_bottom;
@@ -7613,7 +7613,7 @@ impl InlineFormattingContext {
     // Create containing fragment
     if block_shift.abs() > f32::EPSILON {
       for child in &mut merged_children {
-        *child = child.translate(Point::new(block_shift, 0.0));
+        *child = child.translate_subtree_absolute(Point::new(block_shift, 0.0));
       }
     }
 
