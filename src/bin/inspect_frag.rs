@@ -12,6 +12,7 @@ use fastrender::css::loader::infer_base_url;
 use fastrender::css::loader::inject_css_into_html;
 use fastrender::css::loader::inline_imports;
 use fastrender::css::parser::extract_css;
+use fastrender::debug::runtime::{set_runtime_toggles, RuntimeToggles};
 use fastrender::dom::DomNodeType;
 use fastrender::dom::{self};
 use fastrender::geometry::Point;
@@ -39,8 +40,8 @@ use fastrender::tree::fragment_tree::FragmentContent;
 use fastrender::tree::fragment_tree::FragmentNode;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::env;
 use std::fs;
+use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
@@ -101,6 +102,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }));
 
   let args = Args::parse();
+  let runtime_toggles = Arc::new(RuntimeToggles::from_env());
+  let _toggle_guard = set_runtime_toggles(runtime_toggles.clone());
   let media_prefs = MediaPreferences::from(&args.media_prefs);
 
   let (viewport_w, viewport_h) = args.viewport;
@@ -147,20 +150,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
   }
 
-  let mut renderer = FastRender::builder().device_pixel_ratio(args.dpr).build()?;
+  let mut renderer = FastRender::builder()
+    .device_pixel_ratio(args.dpr)
+    .runtime_toggles((*runtime_toggles).clone())
+    .build()?;
   renderer.set_base_url(resource_base.clone());
 
-  if let Ok(val) = env::var("FASTR_TRACE_BOXES") {
+  if let Some(val) = runtime_toggles.get("FASTR_TRACE_BOXES") {
     eprintln!("FASTR_TRACE_BOXES env in inspect_frag: {val}");
   }
-  let inspect_mask = env::var("FASTR_INSPECT_MASK")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(false);
+  let inspect_mask = runtime_toggles.truthy("FASTR_INSPECT_MASK");
 
   // Optionally fetch and inline external CSS links to mirror the render_pages pipeline.
-  let fetch_css = env::var("FASTR_FETCH_LINK_CSS")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(true);
+  let fetch_css = runtime_toggles.truthy_with_default("FASTR_FETCH_LINK_CSS", true);
   if fetch_css {
     let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen);
     let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
@@ -341,7 +343,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     styled_text, styled_text_visible
   );
 
-  if let Ok(needle) = env::var("FASTR_FIND_TEXT") {
+  if let Some(needle) = runtime_toggles.get("FASTR_FIND_TEXT") {
     fn walk(node: &StyledNode, needle: &str, stack: &mut Vec<String>, found: &mut bool) {
       stack.push(format!(
         "{}({:?})",
@@ -369,7 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut stack = Vec::new();
     let mut found = false;
-    walk(&styled, &needle, &mut stack, &mut found);
+    walk(&styled, needle, &mut stack, &mut found);
     if !found {
       eprintln!("styled text node containing {:?} not found", needle);
     }
@@ -403,7 +405,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   }
 
-  let find_box_text = env::var("FASTR_FIND_BOX_TEXT").ok();
+  let find_box_text = runtime_toggles
+    .get("FASTR_FIND_BOX_TEXT")
+    .map(|s| s.to_string());
   let box_tree = generate_box_tree_with_anonymous_fixup(&styled);
   let mut text_boxes = 0;
   let mut path: Vec<String> = Vec::new();
@@ -672,9 +676,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   }
   // Optional viewport-overlap stats to understand what appears in the initial viewport.
-  let log_viewport = env::var("FASTR_LOG_VIEWPORT_OVERLAP")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(false);
+  let log_viewport = runtime_toggles.truthy("FASTR_LOG_VIEWPORT_OVERLAP");
   if log_viewport {
     let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport_w as f32, viewport_h as f32);
     let mut in_view = 0usize;
@@ -1192,8 +1194,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // Trace a problematic headline (or a caller-provided needle) to understand how its ancestors
   // are sized/positioned.
-  let needle =
-    env::var("FASTR_NEEDLE").unwrap_or_else(|_| "New photos released from Epstein".into());
+  let needle = runtime_toggles
+    .get("FASTR_NEEDLE")
+    .map(|v| v.to_string())
+    .unwrap_or_else(|| "New photos released from Epstein".into());
   if !needle.is_empty() {
     if let Some(path) = find_fragment_path(&fragment_tree.root, scroll_offset, &needle) {
       println!("ancestor chain for text containing {:?}:", needle);
@@ -1215,19 +1219,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   if let Some((first_li, _)) = li_nodes.first() {
     trace_ids.push(*first_li);
   }
-  if let Ok(env_ids) = env::var("FASTR_TRACE_BOXES") {
-    for id in env_ids
-      .split(',')
-      .filter_map(|tok| tok.trim().parse::<usize>().ok())
-    {
-      trace_ids.push(id);
-    }
+  if let Some(env_ids) = runtime_toggles.usize_list("FASTR_TRACE_BOXES") {
+    trace_ids.extend(env_ids);
   }
-  if let Ok(info_ids) = env::var("FASTR_TRACE_BOX_INFO") {
-    for id in info_ids
-      .split(',')
-      .filter_map(|tok| tok.trim().parse::<usize>().ok())
-    {
+  if let Some(info_ids) = runtime_toggles.usize_list("FASTR_TRACE_BOX_INFO") {
+    for id in info_ids {
       if let Some(node) = find_box_by_id(&box_tree.root, id) {
         println!(
                     "box {} info: display={:?} position={:?} visibility={:?} opacity={} size=({:?},{:?}) min=({:?},{:?}) max=({:?},{:?}) overflow=({:?},{:?}) flex=({:.2},{:.2},{:?}) order={} selector={:?}",
@@ -1253,8 +1249,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       }
     }
   }
-  if let Some(dump_id) = env::var("FASTR_DUMP_FRAGMENT")
-    .ok()
+  if let Some(dump_id) = runtime_toggles
+    .get("FASTR_DUMP_FRAGMENT")
     .and_then(|v| v.parse::<usize>().ok())
   {
     if let Some(fragment) = find_fragment_node(&fragment_tree.root, scroll_offset, dump_id) {

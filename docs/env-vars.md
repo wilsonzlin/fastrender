@@ -6,6 +6,8 @@ FastRender has many internal debug/profiling toggles controlled via environment 
 - `fetch_and_render`
 - `inspect_frag`
 
+The rendering pipeline parses the environment once into a typed [`RuntimeToggles`](../src/debug/runtime.rs) structure. Library callers can override these values without mutating the process environment by constructing a `RuntimeToggles` instance and supplying it via `FastRender::builder().runtime_toggles(...)` or `RenderOptions::with_runtime_toggles(...)`.
+
 ## Commonly useful
 
 - `FASTR_RENDER_TIMINGS=1` – print per-stage timings during rendering (parse/cascade/box/layout/paint).

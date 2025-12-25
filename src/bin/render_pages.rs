@@ -13,6 +13,7 @@ use common::render_pipeline::{
   build_render_configs, build_renderer_with_fetcher, follow_client_redirects, log_diagnostics,
   read_cached_document, render_document, RenderConfigBundle,
 };
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::image_output::encode_image;
 use fastrender::resource::normalize_page_name;
 use fastrender::resource::normalize_user_agent_for_log;
@@ -195,10 +196,7 @@ enum Status {
 }
 
 fn main() {
-  if std::env::var("FASTR_LAYOUT_PROFILE")
-    .map(|v| v != "0")
-    .unwrap_or(false)
-  {
+  if RuntimeToggles::from_env().truthy("FASTR_LAYOUT_PROFILE") {
     eprintln!("FASTR_LAYOUT_PROFILE enabled: layout timings will be logged");
   }
 
