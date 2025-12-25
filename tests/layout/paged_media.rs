@@ -327,6 +327,96 @@ fn margin_box_content_is_positioned_in_margins() {
 }
 
 #[test]
+fn header_repeats_across_pages() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          h1 { string-set: header content(); }
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-center { content: string(header); }
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Title</h1>
+        <div style="height: 600px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2);
+
+  for page in page_roots {
+    let content_y = page
+      .children
+      .first()
+      .map(|n| n.bounds.y())
+      .unwrap_or(f32::MAX);
+
+    let header_pos = find_text_position_matching(page, "Title", (0.0, 0.0), &|pos| pos.1 < content_y)
+      .expect("page header in margin box");
+    assert!(header_pos.1 < content_y);
+  }
+}
+
+#[test]
+fn start_vs_first() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          h1 { string-set: chapter content(); }
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-left { content: string(chapter, start); }
+            @top-right { content: string(chapter); }
+          }
+        </style>
+      </head>
+      <body>
+        <h1>Chapter 1</h1>
+        <div style="height: 250px"></div>
+        <h1>Chapter 2</h1>
+        <div style="height: 50px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2);
+  let page = page_roots[1];
+  let content_y = page
+    .children
+    .first()
+    .map(|n| n.bounds.y())
+    .unwrap_or(f32::MAX);
+
+  let left_pos =
+    find_text_position_matching(page, "Chapter 1", (0.0, 0.0), &|pos| pos.1 < content_y)
+      .expect("start value in top-left margin box");
+  let right_pos =
+    find_text_position_matching(page, "Chapter 2", (0.0, 0.0), &|pos| pos.1 < content_y)
+      .expect("last value in top-right margin box");
+
+  assert!(left_pos.1 < content_y);
+  assert!(right_pos.1 < content_y);
+  assert!(left_pos.0 < right_pos.0);
+}
+
+#[test]
 fn margin_box_quotes_property_applies() {
   let html = r#"
     <html>
@@ -687,6 +777,29 @@ fn find_text_position(node: &FragmentNode, needle: &str, origin: (f32, f32)) -> 
   }
   for child in &node.children {
     if let Some(pos) = find_text_position(child, needle, current) {
+      return Some(pos);
+    }
+  }
+  None
+}
+
+fn find_text_position_matching<F>(
+  node: &FragmentNode,
+  needle: &str,
+  origin: (f32, f32),
+  predicate: &F,
+) -> Option<(f32, f32)>
+where
+  F: Fn((f32, f32)) -> bool,
+{
+  let current = (origin.0 + node.bounds.x(), origin.1 + node.bounds.y());
+  if let FragmentContent::Text { text, .. } = &node.content {
+    if text.contains(needle) && predicate(current) {
+      return Some(current);
+    }
+  }
+  for child in &node.children {
+    if let Some(pos) = find_text_position_matching(child, needle, current, predicate) {
       return Some(pos);
     }
   }
