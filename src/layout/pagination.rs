@@ -14,6 +14,12 @@ use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
 
+#[derive(Clone)]
+struct FixedFragment {
+  origin: Point,
+  fragment: FragmentNode,
+}
+
 /// Split a laid out fragment tree into pages using the provided @page rules.
 pub fn paginate_fragment_tree(
   root: &FragmentNode,
@@ -50,7 +56,8 @@ pub fn paginate_fragment_tree(
   forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
   forced.dedup_by(|a, b| (*a - *b).abs() < 0.01);
 
-  let fixed_fragments = collect_fixed_fragments(root);
+  let axis = fragmentation_axis(root);
+  let fixed_fragments = collect_fixed_fragments(root, &axis, root_block_size);
 
   let mut pages = Vec::new();
   let mut pos = 0.0;
@@ -122,22 +129,13 @@ pub fn paginate_fragment_tree(
     }
 
     for fixed in &fixed_fragments {
-      if let Some(mut clipped_fixed) = clip_node(
-        fixed,
-        0.0,
-        page_block,
-        0.0,
-        0.0,
-        page_index,
-        0,
-      ) {
-        translate_fragment(
-          &mut clipped_fixed,
-          style.content_origin.x,
-          style.content_origin.y,
-        );
-        page_root.children.push(clipped_fixed);
-      }
+      let mut repeated = fixed.fragment.clone();
+      translate_fragment(
+        &mut repeated,
+        style.content_origin.x,
+        style.content_origin.y,
+      );
+      page_root.children.push(repeated);
     }
 
     page_root
@@ -194,6 +192,68 @@ fn collect_page_name_spans(
   }
 }
 
+fn collect_fixed_fragments(
+  root: &FragmentNode,
+  axis: &BlockAxis,
+  root_block_size: f32,
+) -> Vec<FixedFragment> {
+  let mut fixed = Vec::new();
+  collect_fixed_fragments_inner(root, axis, root_block_size, 0.0, 0.0, &mut fixed);
+  fixed
+}
+
+fn collect_fixed_fragments_inner(
+  node: &FragmentNode,
+  axis: &BlockAxis,
+  parent_block_size: f32,
+  abs_x: f32,
+  abs_y: f32,
+  out: &mut Vec<FixedFragment>,
+) {
+  let (node_abs_x, node_abs_y) = {
+    let offset_block = axis.block_offset_in_parent(&node.bounds, parent_block_size);
+    let inline_offset = if axis.horizontal {
+      node.bounds.y()
+    } else {
+      node.bounds.x()
+    };
+    if axis.horizontal {
+      (abs_x + offset_block, abs_y + inline_offset)
+    } else {
+      (abs_x + inline_offset, abs_y + offset_block)
+    }
+  };
+
+  if node
+    .style
+    .as_ref()
+    .is_some_and(|style| style.position == Position::Fixed)
+  {
+    let mut cloned = node.clone();
+    cloned.bounds = Rect::from_xywh(
+      node_abs_x,
+      node_abs_y,
+      node.bounds.width(),
+      node.bounds.height(),
+    );
+    cloned.scroll_overflow =
+      Rect::from_xywh(0.0, 0.0, cloned.bounds.width(), cloned.bounds.height());
+    cloned.fragmentainer_index = 0;
+    cloned.fragment_count = 1;
+    cloned.fragment_index = 0;
+    out.push(FixedFragment {
+      origin: Point::new(node_abs_x, node_abs_y),
+      fragment: cloned,
+    });
+    return;
+  }
+
+  let node_block_size = axis.block_size(&node.bounds);
+  for child in &node.children {
+    collect_fixed_fragments_inner(child, axis, node_block_size, node_abs_x, node_abs_y, out);
+  }
+}
+
 fn page_name_for_position(
   spans: &[PageNameSpan],
   pos: f32,
@@ -212,43 +272,6 @@ fn page_name_for_position(
   }
 
   fallback.map(|s| s.to_string())
-}
-
-fn collect_fixed_fragments(root: &FragmentNode) -> Vec<FragmentNode> {
-  let mut fragments = Vec::new();
-  collect_fixed_fragments_inner(root, Point::ZERO, &mut fragments);
-  fragments
-}
-
-fn collect_fixed_fragments_inner(
-  node: &FragmentNode,
-  parent_abs_origin: Point,
-  out: &mut Vec<FragmentNode>,
-) {
-  let current_origin = Point::new(
-    parent_abs_origin.x + node.bounds.x(),
-    parent_abs_origin.y + node.bounds.y(),
-  );
-
-  if is_fixed_fragment(node) {
-    out.push(clone_fixed_fragment(node, current_origin));
-    return;
-  }
-
-  for child in &node.children {
-    collect_fixed_fragments_inner(child, current_origin, out);
-  }
-}
-
-fn clone_fixed_fragment(node: &FragmentNode, abs_origin: Point) -> FragmentNode {
-  let mut cloned = node.clone();
-  cloned.bounds = Rect::from_xywh(
-    abs_origin.x,
-    abs_origin.y,
-    node.bounds.width(),
-    node.bounds.height(),
-  );
-  cloned
 }
 
 fn is_fixed_fragment(node: &FragmentNode) -> bool {
