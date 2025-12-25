@@ -1685,7 +1685,7 @@ fn filter_fragment_tree_for_boxes(
   tree: &FragmentTree,
   allowed: &HashSet<usize>,
 ) -> Option<FragmentTree> {
-  filter_fragment_node_for_boxes(&tree.root, allowed, Point::new(0.0, 0.0)).map(|root| {
+  filter_fragment_node_for_boxes(&tree.root, allowed).map(|root| {
     let mut clone = tree.clone();
     clone.root = root;
     clone.additional_fragments.clear();
@@ -1696,18 +1696,11 @@ fn filter_fragment_tree_for_boxes(
 fn filter_fragment_node_for_boxes(
   node: &FragmentNode,
   allowed: &HashSet<usize>,
-  offset: Point,
 ) -> Option<FragmentNode> {
   let filtered_children: Vec<_> = node
     .children
     .iter()
-    .filter_map(|child| {
-      filter_fragment_node_for_boxes(
-        child,
-        allowed,
-        Point::new(offset.x + node.bounds.x(), offset.y + node.bounds.y()),
-      )
-    })
+    .filter_map(|child| filter_fragment_node_for_boxes(child, allowed))
     .collect();
   let keep = fragment_box_id(node)
     .map(|id| allowed.contains(&id))
