@@ -838,6 +838,7 @@ impl Painter {
             crate::style::media::MediaContext::screen(viewport.width, viewport.height)
               .with_device_pixel_ratio(self.scale)
               .with_env_overrides();
+          let cache_base = self.image_cache.base_url();
           Some(
             replaced_box
               .replaced_type
@@ -847,6 +848,7 @@ impl Painter {
                 viewport: Some(viewport),
                 media_context: Some(&media_ctx),
                 font_size: Some(style.font_size),
+                base_url: cache_base.as_deref(),
               }),
           )
         } else {
@@ -4748,6 +4750,7 @@ impl Painter {
         let media_ctx = crate::style::media::MediaContext::screen(self.css_width, self.css_height)
           .with_device_pixel_ratio(self.scale)
           .with_env_overrides();
+        let cache_base = self.image_cache.base_url();
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
             scale: self.scale,
@@ -4755,6 +4758,7 @@ impl Painter {
             viewport: Some(Size::new(self.css_width, self.css_height)),
             media_context: Some(&media_ctx),
             font_size: style.map(|s| s.font_size),
+            base_url: cache_base.as_deref(),
           });
         for candidate in sources {
           if self.paint_image_from_src(
@@ -4912,6 +4916,7 @@ impl Painter {
         let media_ctx = crate::style::media::MediaContext::screen(self.css_width, self.css_height)
           .with_device_pixel_ratio(self.scale)
           .with_env_overrides();
+        let cache_base = self.image_cache.base_url();
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
             scale: self.scale,
@@ -4919,6 +4924,7 @@ impl Painter {
             viewport: Some(Size::new(self.css_width, self.css_height)),
             media_context: Some(&media_ctx),
             font_size: style.map(|s| s.font_size),
+            base_url: cache_base.as_deref(),
           });
         for candidate in sources {
           if self.paint_image_from_src(

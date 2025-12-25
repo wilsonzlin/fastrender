@@ -5,6 +5,7 @@
 use super::properties::{parse_property_value_in_context, DeclarationContext};
 use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
+use crate::css::loader::resolve_href_with_base;
 use crate::style::color::Color;
 use crate::style::color::Rgba;
 use crate::style::counter_styles::CounterStyleRule;
@@ -1484,7 +1485,7 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
   seen: &mut std::collections::HashSet<String>,
   out: &mut Vec<CssRule>,
 ) {
-  use url::Url;
+  const MAX_RESOLVED_IMPORTS: usize = 128;
 
   // Keep a mutable binding so nested calls can borrow the cache mutably via as_deref_mut().
   let mut cache = cache;
@@ -1573,15 +1574,14 @@ fn resolve_rules<L: CssImportLoader + ?Sized>(
           continue;
         }
 
-        let mut resolved_href = import.href.clone();
-        if let Some(base) = base_url {
-          if let Ok(base_url) = Url::parse(base).or_else(|_| {
-            Url::from_file_path(base).map_err(|()| url::ParseError::RelativeUrlWithoutBase)
-          }) {
-            if let Ok(resolved) = base_url.join(&import.href) {
-              resolved_href = resolved.to_string();
-            }
-          }
+        let resolved_href = if let Some(resolved) = resolve_href_with_base(base_url, &import.href) {
+          resolved
+        } else {
+          continue;
+        };
+
+        if seen.len() >= MAX_RESOLVED_IMPORTS {
+          continue;
         }
 
         if seen.contains(&resolved_href) {

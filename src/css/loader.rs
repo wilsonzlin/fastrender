@@ -363,6 +363,8 @@ fn parse_import_target(rule: &str) -> Option<(String, String)> {
   Some((target, rest))
 }
 
+const MAX_INLINE_IMPORTS: usize = 64;
+
 /// Inline `@import` rules by fetching their targets recursively.
 ///
 /// All fetched stylesheets have their `url(...)` references rewritten against the
@@ -376,6 +378,23 @@ pub fn inline_imports<S: BuildHasher, F>(
 ) -> String
 where
   F: FnMut(&str) -> Result<String>,
+{
+  inline_imports_with_diagnostics(css, base_url, fetch, seen, &mut |_url, _reason| {})
+}
+
+/// Inline `@import` rules with diagnostics about cycles and cutoffs.
+///
+/// This variant mirrors [`inline_imports`] but surfaces skipped imports to the caller.
+pub fn inline_imports_with_diagnostics<S: BuildHasher, F, D>(
+  css: &str,
+  base_url: &str,
+  fetch: &mut F,
+  seen: &mut HashSet<String, S>,
+  diagnostics: &mut D,
+) -> String
+where
+  F: FnMut(&str) -> Result<String>,
+  D: FnMut(&str, &str),
 {
   #[derive(PartialEq)]
   enum State {
@@ -458,17 +477,30 @@ where
             let rule = css[i..j].trim();
             if let Some((target, media)) = parse_import_target(rule) {
               if let Some(resolved) = resolve_href(base_url, &target) {
+                if seen.len() >= MAX_INLINE_IMPORTS {
+                  diagnostics(&resolved, "import limit reached");
+                  out.push_str(&css[last_emit..]);
+                  return out;
+                }
                 out.push_str(&css[last_emit..i]);
                 if seen.insert(resolved.clone()) {
                   if let Ok(fetched) = fetch(&resolved) {
                     let rewritten = absolutize_css_urls(&fetched, &resolved);
-                    let inlined = inline_imports(&rewritten, &resolved, fetch, seen);
+                    let inlined = inline_imports_with_diagnostics(
+                      &rewritten,
+                      &resolved,
+                      fetch,
+                      seen,
+                      diagnostics,
+                    );
                     if media.is_empty() || media.eq_ignore_ascii_case("all") {
                       out.push_str(&inlined);
                     } else {
                       let _ = write!(out, "@media {} {{\n{}\n}}\n", media, inlined);
                     }
                   }
+                } else {
+                  diagnostics(&resolved, "skipping cyclic @import");
                 }
                 last_emit = j;
                 i = j;

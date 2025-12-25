@@ -21,6 +21,7 @@
 //! Reference: CSS Display Module Level 3
 //! <https://www.w3.org/TR/css-display-3/>
 
+use crate::css::loader::resolve_href_with_base;
 use crate::geometry::Size;
 use crate::math::MathLayout;
 use crate::style::color::Rgba;
@@ -338,6 +339,7 @@ pub struct ImageSelectionContext<'a> {
   pub viewport: Option<crate::geometry::Size>,
   pub media_context: Option<&'a crate::style::media::MediaContext>,
   pub font_size: Option<f32>,
+  pub base_url: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -473,10 +475,30 @@ impl ReplacedType {
         let primary = self.image_source_for_context(ctx);
         let mut seen = std::collections::HashSet::new();
         let mut ordered = Vec::new();
-        let push_unique =
+        let mut push_unique =
           |url: &str, out: &mut Vec<String>, seen: &mut std::collections::HashSet<String>| {
-            if seen.insert(url.to_string()) {
-              out.push(url.to_string());
+            let trimmed = url.trim();
+            if trimmed.is_empty() {
+              return;
+            }
+            if trimmed.starts_with('#') {
+              return;
+            }
+            let resolved = resolve_href_with_base(ctx.base_url, trimmed).or_else(|| {
+              let lower = trimmed.to_ascii_lowercase();
+              if lower.starts_with("javascript:")
+                || lower.starts_with("vbscript:")
+                || lower.starts_with("mailto:")
+              {
+                None
+              } else {
+                Some(trimmed.to_string())
+              }
+            });
+            if let Some(resolved) = resolved {
+              if seen.insert(resolved.clone()) {
+                out.push(resolved);
+              }
             }
           };
 
@@ -1607,6 +1629,7 @@ mod tests {
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
       font_size: Some(16.0),
+      base_url: None,
     });
 
     assert_eq!(
@@ -1649,6 +1672,7 @@ mod tests {
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
       font_size: Some(16.0),
+      base_url: None,
     });
 
     assert_eq!(chosen, "100w");
@@ -1683,6 +1707,7 @@ mod tests {
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
       font_size: Some(16.0),
+      base_url: None,
     });
 
     assert_eq!(
@@ -1720,6 +1745,7 @@ mod tests {
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
       font_size: Some(16.0),
+      base_url: None,
     });
 
     assert_eq!(
@@ -1754,6 +1780,7 @@ mod tests {
       viewport: Some(Size::new(800.0, 600.0)),
       media_context: Some(&media_ctx),
       font_size: Some(16.0),
+      base_url: None,
     });
 
     assert_eq!(sources[0], "2x", "selected srcset candidate should lead");
@@ -1818,6 +1845,7 @@ mod tests {
       viewport: Some(small_viewport),
       media_context: Some(&small_media),
       font_size: Some(16.0),
+      base_url: None,
     });
     assert_eq!(chosen_small, "avif-2x");
 
@@ -1830,6 +1858,7 @@ mod tests {
       viewport: Some(large_viewport),
       media_context: Some(&large_media),
       font_size: Some(16.0),
+      base_url: None,
     });
     assert_eq!(chosen_large, "webp-2x");
   }
@@ -1872,6 +1901,7 @@ mod tests {
       viewport: Some(viewport),
       media_context: Some(&media_ctx),
       font_size: Some(16.0),
+      base_url: None,
     });
 
     assert_eq!(chosen, "800w");
@@ -1904,6 +1934,7 @@ mod tests {
       viewport: Some(Size::new(800.0, 600.0)),
       media_context: None,
       font_size: Some(16.0),
+      base_url: None,
     });
 
     assert_eq!(

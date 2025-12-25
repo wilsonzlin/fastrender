@@ -2290,6 +2290,7 @@ impl DisplayListBuilder {
             .with_env_overrides()
         });
         let style_for_image = fragment.style.as_deref();
+        let cache_base = self.image_cache.as_ref().and_then(|cache| cache.base_url());
         let sources =
           replaced_type.image_sources_with_fallback(crate::tree::box_tree::ImageSelectionContext {
             scale: self.device_pixel_ratio,
@@ -2297,6 +2298,7 @@ impl DisplayListBuilder {
             viewport: self.viewport.map(|(w, h)| crate::geometry::Size::new(w, h)),
             media_context: media_ctx.as_ref(),
             font_size: fragment.style.as_deref().map(|s| s.font_size),
+            base_url: cache_base.as_deref(),
           });
 
         if let Some(image) = sources

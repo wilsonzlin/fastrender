@@ -60,7 +60,7 @@ use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
-  inject_css_into_html, inline_imports, resolve_href_with_base,
+  inject_css_into_html, inline_imports, inline_imports_with_diagnostics, resolve_href_with_base,
 };
 use crate::css::parser::{
   extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
@@ -144,7 +144,6 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::io;
 use std::mem;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -3670,7 +3669,16 @@ impl FastRender {
               }
             };
 
-            inline_imports(&rewritten, &css_url, &mut import_fetch, &mut seen_imports)
+            let mut import_diag =
+              |url: &str, reason: &str| diagnostics.record(ResourceKind::Stylesheet, url, reason);
+
+            inline_imports_with_diagnostics(
+              &rewritten,
+              &css_url,
+              &mut import_fetch,
+              &mut seen_imports,
+              &mut import_diag,
+            )
           };
           combined_css.push_str(&inlined);
           combined_css.push('\n');
@@ -3924,6 +3932,7 @@ impl FastRender {
               viewport: Some(viewport),
               media_context: Some(&media_ctx),
               font_size: Some(style.font_size),
+              base_url: self.base_url.as_deref(),
             });
           if let Some(start) = select_start {
             let ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -4280,30 +4289,7 @@ impl CssImportFetcher {
   }
 
   fn resolve_url(&self, href: &str) -> Option<String> {
-    if href.starts_with("data:") {
-      return Some(href.to_string());
-    }
-
-    if let Ok(abs) = Url::parse(href) {
-      return Some(abs.to_string());
-    }
-
-    let base = self.base_url.as_ref()?;
-    let mut base_candidate = base.clone();
-    if base_candidate.starts_with("file://") {
-      let path = &base_candidate["file://".len()..];
-      if Path::new(path).is_dir() && !base_candidate.ends_with('/') {
-        base_candidate.push('/');
-      }
-    }
-
-    Url::parse(&base_candidate)
-      .or_else(|_| {
-        Url::from_file_path(&base_candidate).map_err(|()| url::ParseError::RelativeUrlWithoutBase)
-      })
-      .ok()
-      .and_then(|base_url| base_url.join(href).ok())
-      .map(|u| u.to_string())
+    resolve_href_with_base(self.base_url.as_deref(), href)
   }
 }
 
