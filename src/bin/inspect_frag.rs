@@ -3,7 +3,7 @@ mod common;
 use clap::Parser;
 use common::args::{parse_viewport, MediaPreferenceArgs};
 use common::media_prefs::MediaPreferences;
-use cssparser::Parser;
+use cssparser::Parser as CssParser;
 use cssparser::ParserInput;
 use fastrender::api::FastRender;
 use fastrender::css::encoding::decode_css_bytes;
@@ -52,6 +52,7 @@ use fastrender::tree::fragment_tree::FragmentContent;
 use fastrender::tree::fragment_tree::FragmentNode;
 use fastrender::tree::fragment_tree::FragmentTree;
 use fastrender::OutputFormat;
+use selectors::matching::matches_selector;
 use selectors::matching::MatchingContext;
 use selectors::matching::MatchingForInvalidation;
 use selectors::matching::MatchingMode;
@@ -1517,7 +1518,7 @@ fn resolve_filter_path(
 
   let selector_list = if let Some(selector) = filter_selector {
     let mut input = ParserInput::new(selector);
-    let mut parser = Parser::new(&mut input);
+    let mut parser = CssParser::new(&mut input);
     match SelectorList::parse(
       &PseudoClassParser,
       &mut parser,
@@ -1525,7 +1526,7 @@ fn resolve_filter_path(
     ) {
       Ok(list) => Some(list),
       Err(err) => {
-        eprintln!("warn: failed to parse filter selector {selector:?}: {err}");
+        eprintln!("warn: failed to parse filter selector {selector:?}: {err:?}");
         None
       }
     }
@@ -1765,7 +1766,7 @@ fn find_dom_path_by_selector(
     if node.is_element() || matches!(node.node_type, DomNodeType::Slot { .. }) {
       let element_ref = dom::ElementRef::with_ancestors(node, ancestors);
       if selectors
-        .0
+        .slice()
         .iter()
         .any(|sel| matches_selector(sel, 0, None, &element_ref, context))
       {

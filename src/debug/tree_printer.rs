@@ -869,7 +869,11 @@ fn display_item_value(item: &DisplayItem) -> Value {
     DisplayItem::Border(it) => map_from_pairs(vec![
       ("type", Value::String("Border".into())),
       ("rect", rect_value(it.rect, None)),
-      ("color", color_value(it.color)),
+      ("top", border_side_value(&it.top)),
+      ("right", border_side_value(&it.right)),
+      ("bottom", border_side_value(&it.bottom)),
+      ("left", border_side_value(&it.left)),
+      ("has_image", Value::from(it.image.is_some())),
     ]),
     DisplayItem::TextDecoration(it) => map_from_pairs(vec![
       ("type", Value::String("TextDecoration".into())),
@@ -889,19 +893,19 @@ fn display_item_value(item: &DisplayItem) -> Value {
     DisplayItem::PushOpacity(it) => map_from_pairs(vec![
       ("type", Value::String("PushOpacity".into())),
       ("opacity", Value::from(it.opacity)),
-      ("bounds", rect_value(it.bounds, None)),
     ]),
     DisplayItem::PopOpacity => map_from_pairs(vec![("type", Value::String("PopOpacity".into()))]),
     DisplayItem::PushTransform(it) => map_from_pairs(vec![
       ("type", Value::String("PushTransform".into())),
-      ("is_3d", Value::from(it.is_3d)),
+      ("is_identity", Value::from(it.transform.is_identity())),
+      ("matrix", transform3d_value(&it.transform)),
     ]),
     DisplayItem::PopTransform => {
       map_from_pairs(vec![("type", Value::String("PopTransform".into()))])
     }
     DisplayItem::PushBlendMode(it) => map_from_pairs(vec![
       ("type", Value::String("PushBlendMode".into())),
-      ("mode", Value::String(format!("{:?}", it.blend_mode))),
+      ("mode", Value::String(format!("{:?}", it.mode))),
     ]),
     DisplayItem::PopBlendMode => {
       map_from_pairs(vec![("type", Value::String("PopBlendMode".into()))])
@@ -909,14 +913,17 @@ fn display_item_value(item: &DisplayItem) -> Value {
     DisplayItem::PushStackingContext(it) => map_from_pairs(vec![
       ("type", Value::String("PushStackingContext".into())),
       ("bounds", rect_value(it.bounds, None)),
-      ("opacity", Value::from(it.opacity)),
+      ("z_index", Value::from(it.z_index)),
       (
-        "z_index",
-        match it.z_index {
-          Some(v) => Value::from(v),
-          None => Value::Null,
-        },
+        "mix_blend_mode",
+        Value::String(format!("{:?}", it.mix_blend_mode)),
       ),
+      ("is_isolated", Value::from(it.is_isolated)),
+      ("creates_stacking_context", Value::from(it.creates_stacking_context)),
+      ("filters", Value::from(it.filters.len() as u64)),
+      ("backdrop_filters", Value::from(it.backdrop_filters.len() as u64)),
+      ("has_transform", Value::from(it.transform.is_some())),
+      ("has_mask", Value::from(it.mask.is_some())),
     ]),
     DisplayItem::PopStackingContext => {
       map_from_pairs(vec![("type", Value::String("PopStackingContext".into()))])
@@ -935,6 +942,15 @@ fn fragment_kind(fragment: &FragmentNode) -> String {
 }
 
 fn style_summary(style: &ComputedStyle) -> Value {
+  let line_height = match style.line_height {
+    crate::style::types::LineHeight::Normal => style.font_size * 1.2,
+    crate::style::types::LineHeight::Number(n) => style.font_size * n,
+    crate::style::types::LineHeight::Length(len) => len
+      .resolve_with_context(None, 0.0, 0.0, style.font_size, style.root_font_size)
+      .unwrap_or_else(|| len.to_px()),
+    crate::style::types::LineHeight::Percentage(pct) => style.font_size * (pct / 100.0),
+  };
+
   let mut entries = vec![
     ("display", Value::String(format!("{:?}", style.display))),
     ("position", Value::String(format!("{:?}", style.position))),
@@ -955,7 +971,7 @@ fn style_summary(style: &ComputedStyle) -> Value {
     ),
     ("transform_ops", Value::from(style.transform.len() as u64)),
     ("font_size", Value::from(style.font_size)),
-    ("line_height", Value::from(style.computed_line_height())),
+    ("line_height", Value::from(line_height)),
   ];
 
   if let Some(bg) = style.background_layers.first() {
@@ -992,6 +1008,18 @@ fn color_value(color: Rgba) -> Value {
     ("b", Value::from(color.b)),
     ("a", Value::from(color.a)),
   ])
+}
+
+fn border_side_value(side: &crate::paint::display_list::BorderSide) -> Value {
+  map_from_pairs(vec![
+    ("width", Value::from(side.width)),
+    ("style", Value::String(format!("{:?}", side.style))),
+    ("color", color_value(side.color)),
+  ])
+}
+
+fn transform3d_value(transform: &crate::paint::display_list::Transform3D) -> Value {
+  Value::Array(transform.m.iter().map(|v| Value::from(*v)).collect())
 }
 
 fn rect_value(rect: Rect, offset: Option<Point>) -> Value {
