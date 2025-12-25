@@ -1332,6 +1332,25 @@ pub(crate) fn supports_parsed_declaration_is_valid(
         || keyword_in_list(parsed, &["none"])
         || keyword_parse(parsed, |kw| parse_transform_list(kw).map(|_| ()));
     }
+    "filter" | "backdrop-filter" => {
+      return parse_filter_list(parsed).is_some();
+    }
+    "clip-path" => {
+      return parse_clip_path_value(parsed).is_some();
+    }
+    "clip" => {
+      return parse_clip_value(parsed).is_some();
+    }
+    "mix-blend-mode" => return keyword_parse(parsed, parse_mix_blend_mode),
+    "isolation" => return keyword_in_list(parsed, &["isolate", "auto"]),
+    "will-change" => return parse_will_change(parsed).is_some(),
+    "contain" => return parse_containment(parsed).is_some(),
+    "container-type" => return parse_container_type_value(parsed).is_some(),
+    "container-name" => return parse_container_names(parsed).is_some(),
+    "container" => return parse_container_shorthand(parsed).is_some(),
+    "transform-box" => return keyword_parse(parsed, parse_transform_box),
+    "transform-style" => return keyword_parse(parsed, parse_transform_style),
+    "backface-visibility" => return keyword_parse(parsed, parse_backface_visibility),
 
     _ => {}
   }
