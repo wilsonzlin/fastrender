@@ -279,3 +279,34 @@ fn has_respects_shadow_boundaries() {
     "inline"
   );
 }
+
+#[test]
+fn has_inside_shadow_root_skips_nested_shadow_trees() {
+  let html = r#"
+    <div id="host">
+      <template shadowroot="open">
+        <div id="outer">
+          <div class="light"></div>
+          <div id="nested-host">
+            <template shadowroot="open">
+              <div class="inner"></div>
+            </template>
+          </div>
+        </div>
+      </template>
+    </div>
+  "#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#"
+    #outer { display: block; }
+    #outer:has(.light) { display: inline; }
+    #outer:has(.inner) { display: inline-block; }
+  "#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    display(find_by_id(&styled, "outer").expect("outer")),
+    "inline"
+  );
+}
