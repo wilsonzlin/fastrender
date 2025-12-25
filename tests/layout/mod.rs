@@ -23,6 +23,7 @@ mod scrollbar_gutter;
 mod shadow_dom;
 mod shape_outside;
 mod sideways_lr_regressions;
+mod sticky_nested;
 mod subgrid;
 mod table_anonymous_inheritance;
 mod table_columns_test;
