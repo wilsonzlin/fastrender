@@ -28,6 +28,7 @@ mod root_font_size_percent_test;
 mod rule_index_normalization_test;
 mod scope_pseudo_root_test;
 mod scope_rule_test;
+mod shadow_part_test;
 mod selector_indexing_test;
 mod svg_tag_selector_indexing_test;
 mod shadow_host_selectors_test;
