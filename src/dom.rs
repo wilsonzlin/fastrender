@@ -1664,16 +1664,22 @@ impl<'a> Element for ElementRef<'a> {
   }
 
   fn parent_element(&self) -> Option<Self> {
-    self.parent.map(|parent| {
-      // Create ElementRef for parent with its ancestors
-      if self.all_ancestors.len() > 1 {
-        // If we have multiple ancestors, the parent's ancestors are all but the last
-        ElementRef::with_ancestors(parent, &self.all_ancestors[..self.all_ancestors.len() - 1])
-      } else {
-        // Parent is the root
-        ElementRef::new(parent)
-      }
-    })
+    let parent = self.parent?;
+    if !parent.is_element() {
+      return None;
+    }
+
+    // Create ElementRef for parent with its ancestors
+    if self.all_ancestors.len() > 1 {
+      // If we have multiple ancestors, the parent's ancestors are all but the last
+      Some(ElementRef::with_ancestors(
+        parent,
+        &self.all_ancestors[..self.all_ancestors.len() - 1],
+      ))
+    } else {
+      // Parent is the root
+      Some(ElementRef::new(parent))
+    }
   }
 
   fn parent_node_is_shadow_root(&self) -> bool {
@@ -2219,12 +2225,17 @@ fn match_relative_selector_subtree<'a>(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::css::selectors::PseudoClassParser;
+  use cssparser::Parser;
+  use cssparser::ParserInput;
   use selectors::matching::MatchingContext;
   use selectors::matching::MatchingForInvalidation;
   use selectors::matching::MatchingMode;
   use selectors::matching::NeedsSelectorFlags;
   use selectors::matching::QuirksMode;
   use selectors::matching::SelectorCaches;
+  use selectors::parser::Selector;
+  use selectors::parser::SelectorList;
 
   fn element(tag: &str, children: Vec<DomNode>) -> DomNode {
     DomNode {
@@ -2286,6 +2297,61 @@ mod tests {
     );
     let element_ref = ElementRef::with_ancestors(node, ancestors);
     element_ref.match_non_ts_pseudo_class(pseudo, &mut context)
+  }
+
+  fn parse_selector(selector: &str) -> Selector<FastRenderSelectorImpl> {
+    let mut input = ParserInput::new(selector);
+    let mut parser = Parser::new(&mut input);
+    SelectorList::parse(&PseudoClassParser, &mut parser)
+      .expect("selector should parse")
+      .slice()
+      .first()
+      .expect("selector list should have at least one selector")
+      .clone()
+  }
+
+  fn selector_matches(element: &ElementRef, selector: &Selector<FastRenderSelectorImpl>) -> bool {
+    let mut caches = SelectorCaches::default();
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    matches_selector(selector, 0, None, element, &mut context)
+  }
+
+  #[test]
+  fn root_element_has_no_element_parent() {
+    let document = DomNode {
+      node_type: DomNodeType::Document,
+      children: vec![element("html", vec![element("body", vec![])])],
+    };
+
+    let html = &document.children[0];
+    let html_ancestors: Vec<&DomNode> = vec![&document];
+    let html_ref = ElementRef::with_ancestors(html, &html_ancestors);
+
+    let universal_parent = parse_selector("* > html");
+    assert!(
+      !selector_matches(&html_ref, &universal_parent),
+      "document parent should not satisfy element parent combinators"
+    );
+
+    let universal_ancestor = parse_selector("* html");
+    assert!(
+      !selector_matches(&html_ref, &universal_ancestor),
+      "document ancestor should not satisfy element ancestor combinators"
+    );
+
+    let body = &html.children[0];
+    let body_ancestors: Vec<&DomNode> = vec![&document, html];
+    let body_ref = ElementRef::with_ancestors(body, &body_ancestors);
+
+    let html_child_body = parse_selector("html > body");
+    assert!(selector_matches(&body_ref, &html_child_body));
   }
 
   #[test]
