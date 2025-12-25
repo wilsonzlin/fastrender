@@ -37,6 +37,7 @@ use crate::style::normalize_language_tag;
 use crate::style::properties::apply_declaration_with_base;
 use crate::style::properties::resolve_pending_logical_properties;
 use crate::style::properties::with_image_set_dpr;
+use crate::style::types::BorderCornerRadius;
 use crate::style::types::ColorSchemeEntry;
 use crate::style::types::ColorSchemePreference;
 use crate::style::types::ContainerType;
@@ -7666,10 +7667,14 @@ fn resolve_absolute_lengths(styles: &mut ComputedStyle, root_font_size: f32, vie
   styles.border_right_width = resolve_len(styles.border_right_width);
   styles.border_bottom_width = resolve_len(styles.border_bottom_width);
   styles.border_left_width = resolve_len(styles.border_left_width);
-  styles.border_top_left_radius = resolve_len(styles.border_top_left_radius);
-  styles.border_top_right_radius = resolve_len(styles.border_top_right_radius);
-  styles.border_bottom_right_radius = resolve_len(styles.border_bottom_right_radius);
-  styles.border_bottom_left_radius = resolve_len(styles.border_bottom_left_radius);
+  let resolve_corner = |radius: BorderCornerRadius| BorderCornerRadius {
+    x: resolve_len(radius.x),
+    y: resolve_len(radius.y),
+  };
+  styles.border_top_left_radius = resolve_corner(styles.border_top_left_radius);
+  styles.border_top_right_radius = resolve_corner(styles.border_top_right_radius);
+  styles.border_bottom_right_radius = resolve_corner(styles.border_bottom_right_radius);
+  styles.border_bottom_left_radius = resolve_corner(styles.border_bottom_left_radius);
   styles.outline_width = resolve_len(styles.outline_width);
   styles.outline_offset = resolve_len(styles.outline_offset);
   styles.border_spacing_horizontal = resolve_len(styles.border_spacing_horizontal);

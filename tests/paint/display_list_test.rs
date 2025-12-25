@@ -9,6 +9,7 @@ use fastrender::css::types::Declaration;
 use fastrender::css::types::PropertyValue;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::paint::display_list::BorderRadius as DisplayBorderRadius;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::properties::apply_declaration;
@@ -19,6 +20,7 @@ use fastrender::style::types::BackgroundBox;
 use fastrender::style::types::BackgroundImage;
 use fastrender::style::types::BackgroundLayer;
 use fastrender::style::types::BackgroundRepeat;
+use fastrender::style::types::BorderCornerRadius;
 use fastrender::style::types::BorderStyle;
 use fastrender::style::types::Containment;
 use fastrender::style::types::TextDecorationLine;
@@ -810,7 +812,8 @@ fn test_fill_rounded_rect() {
 
   if let DisplayItem::FillRoundedRect(item) = &list.items()[0] {
     assert!(item.radii.is_uniform());
-    assert_eq!(item.radii.top_left, 10.0);
+    assert_eq!(item.radii.top_left.x, 10.0);
+    assert_eq!(item.radii.top_left.y, 10.0);
   } else {
     panic!("Expected FillRoundedRect item");
   }
@@ -820,7 +823,12 @@ fn test_fill_rounded_rect() {
 fn test_stroke_rounded_rect() {
   let mut list = DisplayList::new();
 
-  let radii = BorderRadii::new(5.0, 10.0, 15.0, 20.0);
+  let radii = BorderRadii::new(
+    DisplayBorderRadius::uniform(5.0),
+    DisplayBorderRadius::uniform(10.0),
+    DisplayBorderRadius::uniform(15.0),
+    DisplayBorderRadius::uniform(20.0),
+  );
 
   list.push(DisplayItem::StrokeRoundedRect(StrokeRoundedRectItem {
     rect: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
@@ -831,10 +839,10 @@ fn test_stroke_rounded_rect() {
 
   if let DisplayItem::StrokeRoundedRect(item) = &list.items()[0] {
     assert!(!item.radii.is_uniform());
-    assert_eq!(item.radii.top_left, 5.0);
-    assert_eq!(item.radii.top_right, 10.0);
-    assert_eq!(item.radii.bottom_right, 15.0);
-    assert_eq!(item.radii.bottom_left, 20.0);
+    assert_eq!(item.radii.top_left.x, 5.0);
+    assert_eq!(item.radii.top_right.x, 10.0);
+    assert_eq!(item.radii.bottom_right.x, 15.0);
+    assert_eq!(item.radii.bottom_left.x, 20.0);
   } else {
     panic!("Expected StrokeRoundedRect item");
   }
@@ -1571,7 +1579,12 @@ fn test_border_radii_defaults() {
 
 #[test]
 fn test_border_radii_max() {
-  let radii = BorderRadii::new(5.0, 15.0, 10.0, 20.0);
+  let radii = BorderRadii::new(
+    DisplayBorderRadius::uniform(5.0),
+    DisplayBorderRadius::uniform(15.0),
+    DisplayBorderRadius::uniform(10.0),
+    DisplayBorderRadius::uniform(20.0),
+  );
   assert_eq!(radii.max_radius(), 20.0);
 }
 
@@ -1747,10 +1760,11 @@ fn paint_containment_clips_stacking_context() {
   style.border_right_width = Length::px(2.0);
   style.border_bottom_width = Length::px(2.0);
   style.border_left_width = Length::px(2.0);
-  style.border_top_left_radius = Length::px(5.0);
-  style.border_top_right_radius = Length::px(5.0);
-  style.border_bottom_right_radius = Length::px(5.0);
-  style.border_bottom_left_radius = Length::px(5.0);
+  let radius = BorderCornerRadius::uniform(Length::px(5.0));
+  style.border_top_left_radius = radius;
+  style.border_top_right_radius = radius;
+  style.border_bottom_right_radius = radius;
+  style.border_bottom_left_radius = radius;
 
   let fragment = fastrender::FragmentNode::new_block_styled(
     Rect::from_xywh(10.0, 20.0, 50.0, 30.0),

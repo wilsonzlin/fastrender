@@ -20,6 +20,7 @@ use crate::style::types::BackgroundSize;
 use crate::style::types::BackgroundSizeComponent;
 use crate::style::types::BackgroundSizeKeyword;
 use crate::style::types::BasicShape;
+use crate::style::types::BorderCornerRadius;
 use crate::style::types::ClipPath;
 use crate::style::types::ClipRadii;
 use crate::style::types::FilterColor;
@@ -53,7 +54,7 @@ pub enum AnimatedValue {
   ClipPath(ClipPath),
   BackgroundPosition(Vec<BackgroundPosition>),
   BackgroundSize(Vec<BackgroundSize>),
-  BorderRadius([Length; 4]),
+  BorderRadius([BorderCornerRadius; 4]),
 }
 
 #[derive(Clone, Copy)]
@@ -145,7 +146,7 @@ enum ResolvedClipPath {
     right: f32,
     bottom: f32,
     left: f32,
-    radii: Option<[f32; 4]>,
+    radii: Option<[BorderCornerRadius; 4]>,
     reference: Option<ReferenceBox>,
   },
   Circle {
@@ -521,27 +522,52 @@ fn background_sizes_to_resolved(list: &[BackgroundSize]) -> Vec<ResolvedBackgrou
     .collect()
 }
 
-fn resolve_radius(len: &Length, style: &ComputedStyle, ctx: &AnimationResolveContext) -> f32 {
-  let base = ctx.element_size.width.min(ctx.element_size.height);
-  resolve_length_px(len, Some(base), style, ctx)
+fn resolve_corner_radius(
+  radius: &BorderCornerRadius,
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> BorderCornerRadius {
+  BorderCornerRadius {
+    x: Length::px(resolve_length_px(
+      &radius.x,
+      Some(ctx.element_size.width),
+      style,
+      ctx,
+    )),
+    y: Length::px(resolve_length_px(
+      &radius.y,
+      Some(ctx.element_size.height),
+      style,
+      ctx,
+    )),
+  }
 }
 
-fn resolve_border_radii(style: &ComputedStyle, ctx: &AnimationResolveContext) -> [f32; 4] {
+fn resolve_border_radii(
+  style: &ComputedStyle,
+  ctx: &AnimationResolveContext,
+) -> [BorderCornerRadius; 4] {
   [
-    resolve_radius(&style.border_top_left_radius, style, ctx),
-    resolve_radius(&style.border_top_right_radius, style, ctx),
-    resolve_radius(&style.border_bottom_left_radius, style, ctx),
-    resolve_radius(&style.border_bottom_right_radius, style, ctx),
+    resolve_corner_radius(&style.border_top_left_radius, style, ctx),
+    resolve_corner_radius(&style.border_top_right_radius, style, ctx),
+    resolve_corner_radius(&style.border_bottom_right_radius, style, ctx),
+    resolve_corner_radius(&style.border_bottom_left_radius, style, ctx),
   ]
 }
 
-fn interpolate_radii(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-  [
-    lerp(a[0], b[0], t),
-    lerp(a[1], b[1], t),
-    lerp(a[2], b[2], t),
-    lerp(a[3], b[3], t),
-  ]
+fn interpolate_radii(
+  a: [BorderCornerRadius; 4],
+  b: [BorderCornerRadius; 4],
+  t: f32,
+) -> [BorderCornerRadius; 4] {
+  let mut out = [BorderCornerRadius::default(); 4];
+  for i in 0..4 {
+    out[i] = BorderCornerRadius {
+      x: Length::px(lerp(a[i].x.to_px(), b[i].x.to_px(), t)),
+      y: Length::px(lerp(a[i].y.to_px(), b[i].y.to_px(), t)),
+    };
+  }
+  out
 }
 
 fn resolve_shape_radius(
@@ -577,10 +603,37 @@ fn resolve_clip_path(
         let height = ctx.element_size.height;
         let radii = border_radius.as_ref().and_then(|r| {
           Some([
-            resolve_length_px(&r.top_left, Some(width.min(height)), style, ctx),
-            resolve_length_px(&r.top_right, Some(width.min(height)), style, ctx),
-            resolve_length_px(&r.bottom_left, Some(width.min(height)), style, ctx),
-            resolve_length_px(&r.bottom_right, Some(width.min(height)), style, ctx),
+            BorderCornerRadius {
+              x: Length::px(resolve_length_px(&r.top_left.x, Some(width), style, ctx)),
+              y: Length::px(resolve_length_px(&r.top_left.y, Some(height), style, ctx)),
+            },
+            BorderCornerRadius {
+              x: Length::px(resolve_length_px(&r.top_right.x, Some(width), style, ctx)),
+              y: Length::px(resolve_length_px(&r.top_right.y, Some(height), style, ctx)),
+            },
+            BorderCornerRadius {
+              x: Length::px(resolve_length_px(
+                &r.bottom_right.x,
+                Some(width),
+                style,
+                ctx,
+              )),
+              y: Length::px(resolve_length_px(
+                &r.bottom_right.y,
+                Some(height),
+                style,
+                ctx,
+              )),
+            },
+            BorderCornerRadius {
+              x: Length::px(resolve_length_px(&r.bottom_left.x, Some(width), style, ctx)),
+              y: Length::px(resolve_length_px(
+                &r.bottom_left.y,
+                Some(height),
+                style,
+                ctx,
+              )),
+            },
           ])
         });
         Some(ResolvedClipPath::Inset {
@@ -726,10 +779,10 @@ fn resolved_clip_to_clip_path(resolved: &ResolvedClipPath) -> ClipPath {
       reference,
     } => {
       let border_radius: Box<Option<ClipRadii>> = Box::new(radii.map(|r| ClipRadii {
-        top_left: Length::px(r[0]),
-        top_right: Length::px(r[1]),
-        bottom_left: Length::px(r[2]),
-        bottom_right: Length::px(r[3]),
+        top_left: r[0],
+        top_right: r[1],
+        bottom_right: r[2],
+        bottom_left: r[3],
       }));
       ClipPath::BasicShape(
         Box::new(BasicShape::Inset {
@@ -805,10 +858,22 @@ fn clip_path_to_resolved(path: &ClipPath) -> Option<ResolvedClipPath> {
         left: left.to_px(),
         radii: border_radius.as_ref().map(|r| {
           [
-            r.top_left.to_px(),
-            r.top_right.to_px(),
-            r.bottom_left.to_px(),
-            r.bottom_right.to_px(),
+            BorderCornerRadius {
+              x: Length::px(r.top_left.x.to_px()),
+              y: Length::px(r.top_left.y.to_px()),
+            },
+            BorderCornerRadius {
+              x: Length::px(r.top_right.x.to_px()),
+              y: Length::px(r.top_right.y.to_px()),
+            },
+            BorderCornerRadius {
+              x: Length::px(r.bottom_right.x.to_px()),
+              y: Length::px(r.bottom_right.y.to_px()),
+            },
+            BorderCornerRadius {
+              x: Length::px(r.bottom_left.x.to_px()),
+              y: Length::px(r.bottom_left.y.to_px()),
+            },
           ]
         }),
         reference: *reference,
@@ -1111,12 +1176,7 @@ fn extract_border_radius(
   ctx: &AnimationResolveContext,
 ) -> Option<AnimatedValue> {
   let radii = resolve_border_radii(style, ctx);
-  Some(AnimatedValue::BorderRadius([
-    Length::px(radii[0]),
-    Length::px(radii[1]),
-    Length::px(radii[2]),
-    Length::px(radii[3]),
-  ]))
+  Some(AnimatedValue::BorderRadius(radii))
 }
 
 fn extract_border_corner(
@@ -1135,24 +1195,22 @@ fn interpolate_border_radius_value(
   let (AnimatedValue::BorderRadius(ra), AnimatedValue::BorderRadius(rb)) = (a, b) else {
     return None;
   };
-  let to_px = |len: &Length| len.to_px();
-  let array_a = [to_px(&ra[0]), to_px(&ra[1]), to_px(&ra[2]), to_px(&ra[3])];
-  let array_b = [to_px(&rb[0]), to_px(&rb[1]), to_px(&rb[2]), to_px(&rb[3])];
-  let interpolated = interpolate_radii(array_a, array_b, t);
-  Some(AnimatedValue::BorderRadius([
-    Length::px(interpolated[0]),
-    Length::px(interpolated[1]),
-    Length::px(interpolated[2]),
-    Length::px(interpolated[3]),
-  ]))
+  let mut out = [BorderCornerRadius::default(); 4];
+  for i in 0..4 {
+    out[i] = BorderCornerRadius {
+      x: Length::px(lerp(ra[i].x.to_px(), rb[i].x.to_px(), t)),
+      y: Length::px(lerp(ra[i].y.to_px(), rb[i].y.to_px(), t)),
+    };
+  }
+  Some(AnimatedValue::BorderRadius(out))
 }
 
 fn apply_border_radius(style: &mut ComputedStyle, value: &AnimatedValue) {
   if let AnimatedValue::BorderRadius(r) = value {
     style.border_top_left_radius = r[0];
     style.border_top_right_radius = r[1];
-    style.border_bottom_left_radius = r[2];
-    style.border_bottom_right_radius = r[3];
+    style.border_bottom_right_radius = r[2];
+    style.border_bottom_left_radius = r[3];
   }
 }
 

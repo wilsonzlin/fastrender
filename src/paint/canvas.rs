@@ -43,6 +43,8 @@
 
 use super::display_list::BlendMode;
 use super::display_list::BorderRadii;
+#[cfg(test)]
+use super::display_list::BorderRadius;
 use crate::error::RenderError;
 use crate::error::Result;
 use crate::geometry::Point;
@@ -995,65 +997,13 @@ impl Canvas {
 
   /// Builds a path for a rounded rectangle
   fn build_rounded_rect_path(&self, rect: Rect, radii: BorderRadii) -> Option<tiny_skia::Path> {
-    let x = rect.x();
-    let y = rect.y();
-    let w = rect.width();
-    let h = rect.height();
-
-    // Clamp radii to half the smaller dimension
-    let max_radius = (w.min(h) / 2.0).max(0.0);
-    let tl = radii.top_left.min(max_radius);
-    let tr = radii.top_right.min(max_radius);
-    let br = radii.bottom_right.min(max_radius);
-    let bl = radii.bottom_left.min(max_radius);
-
-    let mut pb = PathBuilder::new();
-
-    // Start at top-left, after the corner radius
-    pb.move_to(x + tl, y);
-
-    // Top edge
-    pb.line_to(x + w - tr, y);
-
-    // Top-right corner
-    if tr > 0.0 {
-      pb.quad_to(x + w, y, x + w, y + tr);
-    } else {
-      pb.line_to(x + w, y);
-    }
-
-    // Right edge
-    pb.line_to(x + w, y + h - br);
-
-    // Bottom-right corner
-    if br > 0.0 {
-      pb.quad_to(x + w, y + h, x + w - br, y + h);
-    } else {
-      pb.line_to(x + w, y + h);
-    }
-
-    // Bottom edge
-    pb.line_to(x + bl, y + h);
-
-    // Bottom-left corner
-    if bl > 0.0 {
-      pb.quad_to(x, y + h, x, y + h - bl);
-    } else {
-      pb.line_to(x, y + h);
-    }
-
-    // Left edge
-    pb.line_to(x, y + tl);
-
-    // Top-left corner
-    if tl > 0.0 {
-      pb.quad_to(x, y, x + tl, y);
-    } else {
-      pb.line_to(x, y);
-    }
-
-    pb.close();
-    pb.finish()
+    crate::paint::rasterize::build_rounded_rect_path(
+      rect.x(),
+      rect.y(),
+      rect.width(),
+      rect.height(),
+      &radii,
+    )
   }
 
   /// Builds a path for a circle using cubic bezier approximation
@@ -1413,7 +1363,12 @@ mod tests {
 
   #[test]
   fn test_border_radii_different() {
-    let radii = BorderRadii::new(5.0, 10.0, 15.0, 20.0);
+    let radii = BorderRadii::new(
+      BorderRadius::uniform(5.0),
+      BorderRadius::uniform(10.0),
+      BorderRadius::uniform(15.0),
+      BorderRadius::uniform(20.0),
+    );
     assert!(radii.has_radius());
     assert!(!radii.is_uniform());
     assert_eq!(radii.max_radius(), 20.0);

@@ -1698,16 +1698,18 @@ impl Painter {
       });
 
       match (overflow_clip, clip_property) {
-        (Some(overflow), Some(prop_rect)) => overflow
-          .rect
-          .intersection(prop_rect)
-          .map(|rect| StackingClip {
-            rect,
-            radii: BorderRadii::ZERO,
-            clip_x: true,
-            clip_y: true,
-            clip_root: true,
-          }),
+        (Some(overflow), Some(prop_rect)) => {
+          overflow
+            .rect
+            .intersection(prop_rect)
+            .map(|rect| StackingClip {
+              rect,
+              radii: BorderRadii::ZERO,
+              clip_x: true,
+              clip_y: true,
+              clip_root: true,
+            })
+        }
         (Some(overflow), None) => Some(overflow),
         (None, Some(prop_rect)) => Some(StackingClip {
           rect: prop_rect,
@@ -2049,7 +2051,12 @@ impl Painter {
           if total_ms >= threshold_ms {
             let (run_count, glyph_count) = shaped_runs
               .as_deref()
-              .map(|runs| (runs.len(), runs.iter().map(|r| r.glyphs.len()).sum::<usize>()))
+              .map(|runs| {
+                (
+                  runs.len(),
+                  runs.iter().map(|r| r.glyphs.len()).sum::<usize>(),
+                )
+              })
               .unwrap_or((0, 0));
             let preview: String = text.chars().take(80).collect();
             eprintln!(
@@ -5273,12 +5280,7 @@ impl Painter {
         let resolved = self.image_cache.resolve_url(src);
         eprintln!(
           "[image-paint] #{idx} src={} resolved={} rect=({:.1},{:.1},{:.1},{:.1})",
-          src,
-          resolved,
-          x,
-          y,
-          width,
-          height
+          src, resolved, x, y, width, height
         );
       }
     }
@@ -5507,13 +5509,14 @@ impl Painter {
 
       let render_w = dest_w_device.ceil().max(1.0) as u32;
       let render_h = dest_h_device.ceil().max(1.0) as u32;
-      let pixmap = match self
-        .image_cache
-        .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
-      {
-        Ok(pixmap) => pixmap,
-        Err(_) => return false,
-      };
+      let pixmap =
+        match self
+          .image_cache
+          .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
+        {
+          Ok(pixmap) => pixmap,
+          Err(_) => return false,
+        };
 
       let scale_x = dest_w_device / render_w as f32;
       let scale_y = dest_h_device / render_h as f32;
@@ -8430,49 +8433,33 @@ fn resolve_border_radii(style: Option<&ComputedStyle>, bounds: Rect) -> BorderRa
     return BorderRadii::ZERO;
   }
 
-  fn resolve_radius(len: &Length, reference: f32, font_size: f32, root_font_size: f32) -> f32 {
-    len
-      .resolve_with_context(
-        Some(reference),
-        reference,
-        reference,
-        font_size,
-        root_font_size,
-      )
-      .unwrap_or_else(|| {
-        if len.unit.is_absolute() {
-          len.to_px()
-        } else {
-          len.value * font_size
-        }
-      })
-  }
+  let resolve_radius = |len: &Length, reference: f32| -> f32 {
+    resolve_length_for_paint(
+      len,
+      style.font_size,
+      style.root_font_size,
+      reference,
+      (w, h),
+    )
+  };
 
   let radii = BorderRadii {
-    top_left: resolve_radius(
-      &style.border_top_left_radius,
-      w,
-      style.font_size,
-      style.root_font_size,
-    ),
-    top_right: resolve_radius(
-      &style.border_top_right_radius,
-      w,
-      style.font_size,
-      style.root_font_size,
-    ),
-    bottom_right: resolve_radius(
-      &style.border_bottom_right_radius,
-      w,
-      style.font_size,
-      style.root_font_size,
-    ),
-    bottom_left: resolve_radius(
-      &style.border_bottom_left_radius,
-      w,
-      style.font_size,
-      style.root_font_size,
-    ),
+    top_left: crate::paint::display_list::BorderRadius {
+      x: resolve_radius(&style.border_top_left_radius.x, w).max(0.0),
+      y: resolve_radius(&style.border_top_left_radius.y, h).max(0.0),
+    },
+    top_right: crate::paint::display_list::BorderRadius {
+      x: resolve_radius(&style.border_top_right_radius.x, w).max(0.0),
+      y: resolve_radius(&style.border_top_right_radius.y, h).max(0.0),
+    },
+    bottom_right: crate::paint::display_list::BorderRadius {
+      x: resolve_radius(&style.border_bottom_right_radius.x, w).max(0.0),
+      y: resolve_radius(&style.border_bottom_right_radius.y, h).max(0.0),
+    },
+    bottom_left: crate::paint::display_list::BorderRadius {
+      x: resolve_radius(&style.border_bottom_left_radius.x, w).max(0.0),
+      y: resolve_radius(&style.border_bottom_left_radius.y, h).max(0.0),
+    },
   };
   radii.clamped(w, h)
 }
@@ -8553,10 +8540,22 @@ fn resolve_clip_radii(
     crate::style::types::BackgroundBox::BorderBox => base,
     crate::style::types::BackgroundBox::PaddingBox => {
       let shrunk = BorderRadii {
-        top_left: (base.top_left - border_left.max(border_top)).max(0.0),
-        top_right: (base.top_right - border_right.max(border_top)).max(0.0),
-        bottom_right: (base.bottom_right - border_right.max(border_bottom)).max(0.0),
-        bottom_left: (base.bottom_left - border_left.max(border_bottom)).max(0.0),
+        top_left: crate::paint::display_list::BorderRadius {
+          x: (base.top_left.x - border_left).max(0.0),
+          y: (base.top_left.y - border_top).max(0.0),
+        },
+        top_right: crate::paint::display_list::BorderRadius {
+          x: (base.top_right.x - border_right).max(0.0),
+          y: (base.top_right.y - border_top).max(0.0),
+        },
+        bottom_right: crate::paint::display_list::BorderRadius {
+          x: (base.bottom_right.x - border_right).max(0.0),
+          y: (base.bottom_right.y - border_bottom).max(0.0),
+        },
+        bottom_left: crate::paint::display_list::BorderRadius {
+          x: (base.bottom_left.x - border_left).max(0.0),
+          y: (base.bottom_left.y - border_bottom).max(0.0),
+        },
       };
       shrunk.clamped(rects.padding.width(), rects.padding.height())
     }
@@ -8566,10 +8565,22 @@ fn resolve_clip_radii(
       let shrink_top = border_top + padding_top;
       let shrink_bottom = border_bottom + padding_bottom;
       let shrunk = BorderRadii {
-        top_left: (base.top_left - shrink_left.max(shrink_top)).max(0.0),
-        top_right: (base.top_right - shrink_right.max(shrink_top)).max(0.0),
-        bottom_right: (base.bottom_right - shrink_right.max(shrink_bottom)).max(0.0),
-        bottom_left: (base.bottom_left - shrink_left.max(shrink_bottom)).max(0.0),
+        top_left: crate::paint::display_list::BorderRadius {
+          x: (base.top_left.x - shrink_left).max(0.0),
+          y: (base.top_left.y - shrink_top).max(0.0),
+        },
+        top_right: crate::paint::display_list::BorderRadius {
+          x: (base.top_right.x - shrink_right).max(0.0),
+          y: (base.top_right.y - shrink_top).max(0.0),
+        },
+        bottom_right: crate::paint::display_list::BorderRadius {
+          x: (base.bottom_right.x - shrink_right).max(0.0),
+          y: (base.bottom_right.y - shrink_bottom).max(0.0),
+        },
+        bottom_left: crate::paint::display_list::BorderRadius {
+          x: (base.bottom_left.x - shrink_left).max(0.0),
+          y: (base.bottom_left.y - shrink_bottom).max(0.0),
+        },
       };
       shrunk.clamped(rects.content.width(), rects.content.height())
     }

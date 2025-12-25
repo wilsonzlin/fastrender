@@ -22,6 +22,7 @@ use criterion::Criterion;
 use fastrender::build_stacking_tree;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
@@ -533,10 +534,10 @@ fn bench_display_item_creation(c: &mut Criterion) {
   group.bench_function("border_radii_custom", |b| {
     b.iter(|| {
       BorderRadii::new(
-        black_box(5.0),
-        black_box(10.0),
-        black_box(15.0),
-        black_box(20.0),
+        BorderRadius::uniform(black_box(5.0)),
+        BorderRadius::uniform(black_box(10.0)),
+        BorderRadius::uniform(black_box(15.0)),
+        BorderRadius::uniform(black_box(20.0)),
       )
     })
   });

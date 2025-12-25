@@ -5,6 +5,7 @@
 
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::paint::display_list::BorderRadius;
 use fastrender::paint::display_list::ClipShape;
 use fastrender::paint::display_list::ResolvedFilter;
 use fastrender::style::types::BackfaceVisibility;
@@ -863,13 +864,19 @@ fn test_border_radii_uniform() {
   let radii = BorderRadii::uniform(10.0);
   assert!(radii.has_radius());
   assert!(radii.is_uniform());
-  assert_eq!(radii.top_left, 10.0);
-  assert_eq!(radii.bottom_right, 10.0);
+  assert_eq!(radii.top_left.x, 10.0);
+  assert_eq!(radii.top_left.y, 10.0);
+  assert_eq!(radii.bottom_right.x, 10.0);
 }
 
 #[test]
 fn test_border_radii_non_uniform() {
-  let radii = BorderRadii::new(10.0, 20.0, 15.0, 5.0);
+  let radii = BorderRadii::new(
+    BorderRadius::uniform(10.0),
+    BorderRadius::uniform(20.0),
+    BorderRadius::uniform(15.0),
+    BorderRadius::uniform(5.0),
+  );
   assert!(radii.has_radius());
   assert!(!radii.is_uniform());
 }

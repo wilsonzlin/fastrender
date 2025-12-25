@@ -34,6 +34,8 @@
 use crate::geometry::Rect;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::display_list::BorderRadii;
+#[cfg(test)]
+use crate::paint::display_list::BorderRadius;
 use crate::style::color::Rgba;
 use tiny_skia::FillRule;
 use tiny_skia::LineCap;
@@ -331,7 +333,7 @@ pub fn stroke_rect(
 ///
 /// Creates a path with circular arcs at each corner. The radii are
 /// automatically clamped to prevent overlap.
-fn build_rounded_rect_path(
+pub(crate) fn build_rounded_rect_path(
   x: f32,
   y: f32,
   width: f32,
@@ -352,74 +354,70 @@ fn build_rounded_rect_path(
   }
 
   let mut pb = PathBuilder::new();
-
   let right = x + width;
   let bottom = y + height;
+  let tl = radii.top_left;
+  let tr = radii.top_right;
+  let br = radii.bottom_right;
+  let bl = radii.bottom_left;
 
-  // Start at top-left, after the radius
-  pb.move_to(x + radii.top_left, y);
+  const KAPPA: f32 = 0.552_284_8;
 
-  // Top edge to top-right corner
-  pb.line_to(right - radii.top_right, y);
-
-  // Top-right corner arc
-  if radii.top_right > 0.0 {
-    // Approximate arc with cubic bezier
-    // Control point factor for 90-degree arc: 0.5522847498
-    let k = 0.552_284_8;
-    let r = radii.top_right;
+  pb.move_to(x + tl.x, y);
+  pb.line_to(right - tr.x, y);
+  if tr.x > 0.0 || tr.y > 0.0 {
     pb.cubic_to(
-      right - r * (1.0 - k),
+      right - tr.x + tr.x * KAPPA,
       y,
       right,
-      y + r * (1.0 - k),
+      y + tr.y - tr.y * KAPPA,
       right,
-      y + r,
+      y + tr.y,
     );
+  } else {
+    pb.line_to(right, y);
   }
 
-  // Right edge to bottom-right corner
-  pb.line_to(right, bottom - radii.bottom_right);
-
-  // Bottom-right corner arc
-  if radii.bottom_right > 0.0 {
-    let k = 0.552_284_8;
-    let r = radii.bottom_right;
+  pb.line_to(right, bottom - br.y);
+  if br.x > 0.0 || br.y > 0.0 {
     pb.cubic_to(
       right,
-      bottom - r * (1.0 - k),
-      right - r * (1.0 - k),
+      bottom - br.y + br.y * KAPPA,
+      right - br.x * KAPPA,
       bottom,
-      right - r,
+      right - br.x,
       bottom,
     );
+  } else {
+    pb.line_to(right, bottom);
   }
 
-  // Bottom edge to bottom-left corner
-  pb.line_to(x + radii.bottom_left, bottom);
-
-  // Bottom-left corner arc
-  if radii.bottom_left > 0.0 {
-    let k = 0.552_284_8;
-    let r = radii.bottom_left;
+  pb.line_to(x + bl.x, bottom);
+  if bl.x > 0.0 || bl.y > 0.0 {
     pb.cubic_to(
-      x + r * (1.0 - k),
+      x + bl.x * (1.0 - KAPPA),
       bottom,
       x,
-      bottom - r * (1.0 - k),
+      bottom - bl.y + bl.y * KAPPA,
       x,
-      bottom - r,
+      bottom - bl.y,
     );
+  } else {
+    pb.line_to(x, bottom);
   }
 
-  // Left edge to top-left corner
-  pb.line_to(x, y + radii.top_left);
-
-  // Top-left corner arc
-  if radii.top_left > 0.0 {
-    let k = 0.552_284_8;
-    let r = radii.top_left;
-    pb.cubic_to(x, y + r * (1.0 - k), x + r * (1.0 - k), y, x + r, y);
+  pb.line_to(x, y + tl.y);
+  if tl.x > 0.0 || tl.y > 0.0 {
+    pb.cubic_to(
+      x,
+      y + tl.y * (1.0 - KAPPA),
+      x + tl.x * (1.0 - KAPPA),
+      y,
+      x + tl.x,
+      y,
+    );
+  } else {
+    pb.line_to(x, y);
   }
 
   pb.close();
@@ -837,11 +835,11 @@ fn build_top_border_path(
   let mut pb = PathBuilder::new();
 
   // Start after top-left corner
-  let start_x = x + half_left + radii.top_left;
+  let start_x = x + half_left + radii.top_left.x;
   pb.move_to(start_x, y + half_top);
 
   // Line to before top-right corner
-  let end_x = x + width - half_right - radii.top_right;
+  let end_x = x + width - half_right - radii.top_right.x;
   pb.line_to(end_x, y + half_top);
 
   pb.finish()
@@ -865,11 +863,11 @@ fn build_right_border_path(
   let mut pb = PathBuilder::new();
 
   // Start after top-right corner
-  let start_y = y + half_top + radii.top_right;
+  let start_y = y + half_top + radii.top_right.y;
   pb.move_to(right, start_y);
 
   // Line to before bottom-right corner
-  let end_y = y + height - half_bottom - radii.bottom_right;
+  let end_y = y + height - half_bottom - radii.bottom_right.y;
   pb.line_to(right, end_y);
 
   pb.finish()
@@ -893,11 +891,11 @@ fn build_bottom_border_path(
   let mut pb = PathBuilder::new();
 
   // Start after bottom-right corner
-  let start_x = x + width - half_right - radii.bottom_right;
+  let start_x = x + width - half_right - radii.bottom_right.x;
   pb.move_to(start_x, bottom);
 
   // Line to before bottom-left corner
-  let end_x = x + half_left + radii.bottom_left;
+  let end_x = x + half_left + radii.bottom_left.x;
   pb.line_to(end_x, bottom);
 
   pb.finish()
@@ -920,11 +918,11 @@ fn build_left_border_path(
   let mut pb = PathBuilder::new();
 
   // Start after bottom-left corner
-  let start_y = y + height - half_bottom - radii.bottom_left;
+  let start_y = y + height - half_bottom - radii.bottom_left.y;
   pb.move_to(left, start_y);
 
   // Line to before top-left corner
-  let end_y = y + half_top + radii.top_left;
+  let end_y = y + half_top + radii.top_left.y;
   pb.line_to(left, end_y);
 
   pb.finish()
@@ -1000,10 +998,22 @@ fn render_outset_shadow(
     height + spread * 2.0,
   );
   let radii = BorderRadii {
-    top_left: (radii.top_left + spread).max(0.0),
-    top_right: (radii.top_right + spread).max(0.0),
-    bottom_right: (radii.bottom_right + spread).max(0.0),
-    bottom_left: (radii.bottom_left + spread).max(0.0),
+    top_left: BorderRadius {
+      x: (radii.top_left.x + spread).max(0.0),
+      y: (radii.top_left.y + spread).max(0.0),
+    },
+    top_right: BorderRadius {
+      x: (radii.top_right.x + spread).max(0.0),
+      y: (radii.top_right.y + spread).max(0.0),
+    },
+    bottom_right: BorderRadius {
+      x: (radii.bottom_right.x + spread).max(0.0),
+      y: (radii.bottom_right.y + spread).max(0.0),
+    },
+    bottom_left: BorderRadius {
+      x: (radii.bottom_left.x + spread).max(0.0),
+      y: (radii.bottom_left.y + spread).max(0.0),
+    },
   };
 
   let blur_pad = (sigma * 3.0).ceil();
@@ -1369,22 +1379,30 @@ mod tests {
 
   #[test]
   fn test_border_radii_clamped() {
-    let radii = BorderRadii::new(100.0, 100.0, 100.0, 100.0);
+    let radii = BorderRadii::new(
+      BorderRadius::uniform(100.0),
+      BorderRadius::uniform(100.0),
+      BorderRadius::uniform(100.0),
+      BorderRadius::uniform(100.0),
+    );
     let clamped = radii.clamped(50.0, 50.0);
     // Should be scaled down so sum of adjacent radii doesn't exceed dimension
-    assert!(clamped.top_left + clamped.top_right <= 50.0);
-    assert!(clamped.bottom_left + clamped.bottom_right <= 50.0);
+    assert!(clamped.top_left.x + clamped.top_right.x <= 50.0);
+    assert!(clamped.bottom_left.x + clamped.bottom_right.x <= 50.0);
+    assert!(clamped.top_left.y + clamped.bottom_left.y <= 50.0);
+    assert!(clamped.top_right.y + clamped.bottom_right.y <= 50.0);
   }
 
   #[test]
   fn test_border_radii_shrink() {
     let radii = BorderRadii::uniform(10.0);
     let shrunk = radii.shrink(3.0);
-    assert_eq!(shrunk.top_left, 7.0);
-    assert_eq!(shrunk.top_right, 7.0);
+    assert_eq!(shrunk.top_left, BorderRadius::uniform(7.0));
+    assert_eq!(shrunk.top_right, BorderRadius::uniform(7.0));
 
     let over_shrunk = radii.shrink(15.0);
-    assert_eq!(over_shrunk.top_left, 0.0);
+    assert_eq!(over_shrunk.top_left, BorderRadius::ZERO);
+    assert!(over_shrunk.is_zero());
   }
 
   #[test]

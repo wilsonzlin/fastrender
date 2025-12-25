@@ -121,6 +121,37 @@ pub enum BorderStyle {
   Outset,
 }
 
+/// Per-corner border radii for the border-radius property.
+///
+/// Each corner stores independent horizontal (x) and vertical (y) radii.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BorderCornerRadius {
+  pub x: Length,
+  pub y: Length,
+}
+
+impl BorderCornerRadius {
+  pub fn uniform(radius: Length) -> Self {
+    Self {
+      x: radius,
+      y: radius,
+    }
+  }
+
+  pub fn zero() -> Self {
+    Self {
+      x: Length::px(0.0),
+      y: Length::px(0.0),
+    }
+  }
+}
+
+impl Default for BorderCornerRadius {
+  fn default() -> Self {
+    Self::zero()
+  }
+}
+
 /// Border image repeat modes per axis
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BorderImageRepeat {
@@ -2683,10 +2714,10 @@ pub enum ShapeRadius {
 /// Rounded corner radii for inset() clip paths
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClipRadii {
-  pub top_left: Length,
-  pub top_right: Length,
-  pub bottom_right: Length,
-  pub bottom_left: Length,
+  pub top_left: BorderCornerRadius,
+  pub top_right: BorderCornerRadius,
+  pub bottom_right: BorderCornerRadius,
+  pub bottom_left: BorderCornerRadius,
 }
 
 /// Basic shapes supported by CSS clip-path

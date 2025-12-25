@@ -2,6 +2,7 @@ use fastrender::css::types::Declaration;
 use fastrender::css::types::PropertyValue;
 use fastrender::style::properties::apply_declaration;
 use fastrender::style::properties::resolve_pending_logical_properties;
+use fastrender::style::types::BorderCornerRadius;
 use fastrender::style::types::WritingMode;
 use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
@@ -245,8 +246,14 @@ fn logical_border_radius_maps_in_sideways_lr_writing_mode() {
 
   // Sideways-lr: inline axis vertical, block axis horizontal left→right.
   // start-start → top-left, end-end → bottom-right.
-  assert_eq!(style.border_top_left_radius, Length::px(9.0));
-  assert_eq!(style.border_bottom_right_radius, Length::px(4.0));
+  assert_eq!(
+    style.border_top_left_radius,
+    BorderCornerRadius::uniform(Length::px(9.0))
+  );
+  assert_eq!(
+    style.border_bottom_right_radius,
+    BorderCornerRadius::uniform(Length::px(4.0))
+  );
 }
 
 #[test]

@@ -537,7 +537,7 @@ impl DisplayListBuilder {
         (
           Self::resolve_filters(&style.filter, style, self.viewport, &self.font_ctx),
           Self::resolve_filters(&style.backdrop_filter, style, self.viewport, &self.font_ctx),
-          Self::resolve_border_radii(Some(style), context.bounds),
+          Self::resolve_border_radii(Some(style), context.bounds, self.viewport),
         )
       })
       .unwrap_or((
@@ -928,6 +928,7 @@ impl DisplayListBuilder {
   fn resolve_border_radii(
     style: Option<&ComputedStyle>,
     bounds: Rect,
+    viewport: Option<(f32, f32)>,
   ) -> crate::paint::display_list::BorderRadii {
     let Some(style) = style else {
       return crate::paint::display_list::BorderRadii::ZERO;
@@ -938,27 +939,38 @@ impl DisplayListBuilder {
       return crate::paint::display_list::BorderRadii::ZERO;
     }
 
-    fn resolve_radius(len: &Length, reference: f32, font_size: f32) -> f32 {
-      let resolved = match len.unit {
-        LengthUnit::Percent => len.resolve_against(reference).unwrap_or(0.0),
-        LengthUnit::Em | LengthUnit::Rem => len
-          .resolve_with_font_size(font_size)
-          .unwrap_or(len.value * font_size),
-        _ if len.unit.is_absolute() => len.to_px(),
-        _ => len.value * font_size,
-      };
+    let resolve_radius = |len: &Length, reference: f32| -> f32 {
+      let resolved = Self::resolve_length_for_paint(
+        len,
+        style.font_size,
+        style.root_font_size,
+        reference,
+        viewport,
+      );
       if resolved.is_finite() {
         resolved.max(0.0)
       } else {
         0.0
       }
-    }
+    };
 
     crate::paint::display_list::BorderRadii {
-      top_left: resolve_radius(&style.border_top_left_radius, w, style.font_size),
-      top_right: resolve_radius(&style.border_top_right_radius, w, style.font_size),
-      bottom_right: resolve_radius(&style.border_bottom_right_radius, w, style.font_size),
-      bottom_left: resolve_radius(&style.border_bottom_left_radius, w, style.font_size),
+      top_left: crate::paint::display_list::BorderRadius {
+        x: resolve_radius(&style.border_top_left_radius.x, w),
+        y: resolve_radius(&style.border_top_left_radius.y, h),
+      },
+      top_right: crate::paint::display_list::BorderRadius {
+        x: resolve_radius(&style.border_top_right_radius.x, w),
+        y: resolve_radius(&style.border_top_right_radius.y, h),
+      },
+      bottom_right: crate::paint::display_list::BorderRadius {
+        x: resolve_radius(&style.border_bottom_right_radius.x, w),
+        y: resolve_radius(&style.border_bottom_right_radius.y, h),
+      },
+      bottom_left: crate::paint::display_list::BorderRadius {
+        x: resolve_radius(&style.border_bottom_left_radius.x, w),
+        y: resolve_radius(&style.border_bottom_left_radius.y, h),
+      },
     }
     .clamped(w, h)
   }
@@ -969,7 +981,7 @@ impl DisplayListBuilder {
     clip: BackgroundBox,
     viewport: Option<(f32, f32)>,
   ) -> crate::paint::display_list::BorderRadii {
-    let base = Self::resolve_border_radii(Some(style), rects.border);
+    let base = Self::resolve_border_radii(Some(style), rects.border, viewport);
     if base.is_zero() {
       return base;
     }
@@ -1038,10 +1050,22 @@ impl DisplayListBuilder {
       BackgroundBox::BorderBox => base,
       BackgroundBox::PaddingBox => {
         let shrunk = crate::paint::display_list::BorderRadii {
-          top_left: (base.top_left - border_left.max(border_top)).max(0.0),
-          top_right: (base.top_right - border_right.max(border_top)).max(0.0),
-          bottom_right: (base.bottom_right - border_right.max(border_bottom)).max(0.0),
-          bottom_left: (base.bottom_left - border_left.max(border_bottom)).max(0.0),
+          top_left: crate::paint::display_list::BorderRadius {
+            x: (base.top_left.x - border_left).max(0.0),
+            y: (base.top_left.y - border_top).max(0.0),
+          },
+          top_right: crate::paint::display_list::BorderRadius {
+            x: (base.top_right.x - border_right).max(0.0),
+            y: (base.top_right.y - border_top).max(0.0),
+          },
+          bottom_right: crate::paint::display_list::BorderRadius {
+            x: (base.bottom_right.x - border_right).max(0.0),
+            y: (base.bottom_right.y - border_bottom).max(0.0),
+          },
+          bottom_left: crate::paint::display_list::BorderRadius {
+            x: (base.bottom_left.x - border_left).max(0.0),
+            y: (base.bottom_left.y - border_bottom).max(0.0),
+          },
         };
         shrunk.clamped(rects.padding.width(), rects.padding.height())
       }
@@ -1051,10 +1075,22 @@ impl DisplayListBuilder {
         let shrink_top = border_top + padding_top;
         let shrink_bottom = border_bottom + padding_bottom;
         let shrunk = crate::paint::display_list::BorderRadii {
-          top_left: (base.top_left - shrink_left.max(shrink_top)).max(0.0),
-          top_right: (base.top_right - shrink_right.max(shrink_top)).max(0.0),
-          bottom_right: (base.bottom_right - shrink_right.max(shrink_bottom)).max(0.0),
-          bottom_left: (base.bottom_left - shrink_left.max(shrink_bottom)).max(0.0),
+          top_left: crate::paint::display_list::BorderRadius {
+            x: (base.top_left.x - shrink_left).max(0.0),
+            y: (base.top_left.y - shrink_top).max(0.0),
+          },
+          top_right: crate::paint::display_list::BorderRadius {
+            x: (base.top_right.x - shrink_right).max(0.0),
+            y: (base.top_right.y - shrink_top).max(0.0),
+          },
+          bottom_right: crate::paint::display_list::BorderRadius {
+            x: (base.bottom_right.x - shrink_right).max(0.0),
+            y: (base.bottom_right.y - shrink_bottom).max(0.0),
+          },
+          bottom_left: crate::paint::display_list::BorderRadius {
+            x: (base.bottom_left.x - shrink_left).max(0.0),
+            y: (base.bottom_left.y - shrink_bottom).max(0.0),
+          },
         };
         shrunk.clamped(rects.content.width(), rects.content.height())
       }
@@ -1673,7 +1709,7 @@ impl DisplayListBuilder {
   }
 
   fn border_radii(rect: Rect, style: &ComputedStyle) -> crate::paint::display_list::BorderRadii {
-    Self::resolve_border_radii(Some(style), rect)
+    Self::resolve_border_radii(Some(style), rect, None)
   }
 
   fn border_style_visible(style: crate::style::types::BorderStyle) -> bool {

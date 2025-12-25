@@ -1331,7 +1331,7 @@ enum PhysicalCorner {
 fn set_corner_radius(
   styles: &mut ComputedStyle,
   corner: PhysicalCorner,
-  value: Option<Length>,
+  value: Option<BorderCornerRadius>,
   order: i32,
 ) {
   let order_slot = match corner {
@@ -1343,7 +1343,10 @@ fn set_corner_radius(
   if order < *order_slot {
     return;
   }
-  let value = value.map(sanitize_non_negative_length);
+  let value = value.map(|v| BorderCornerRadius {
+    x: sanitize_non_negative_length(v.x),
+    y: sanitize_non_negative_length(v.y),
+  });
   match corner {
     PhysicalCorner::TopLeft => {
       if let Some(v) = value {
@@ -1367,6 +1370,102 @@ fn set_corner_radius(
     }
   }
   *order_slot = order;
+}
+
+fn extract_border_radius_length(value: &PropertyValue) -> Option<Length> {
+  match value {
+    PropertyValue::Length(len) => Some(*len),
+    PropertyValue::Percentage(p) => Some(Length::new(*p, LengthUnit::Percent)),
+    PropertyValue::Number(n) if *n == 0.0 => Some(Length::px(0.0)),
+    PropertyValue::Keyword(kw) => parse_length(kw),
+    _ => None,
+  }
+}
+
+fn expand_corner_list(values: &[Length]) -> Option<[Length; 4]> {
+  if values.is_empty() {
+    return None;
+  }
+  let v0 = values[0];
+  let v1 = *values.get(1).unwrap_or(&v0);
+  let v2 = *values.get(2).unwrap_or(&v0);
+  let v3 = *values.get(3).unwrap_or(&v1);
+  Some([v0, v1, v2, v3])
+}
+
+fn parse_border_radius_shorthand(value: &PropertyValue) -> Option<[BorderCornerRadius; 4]> {
+  let mut horizontal: Vec<Length> = Vec::new();
+  let mut vertical: Vec<Length> = Vec::new();
+  let mut seen_slash = false;
+
+  match value {
+    PropertyValue::Multiple(values) => {
+      for token in values {
+        if matches!(token, PropertyValue::Keyword(kw) if kw == "/") {
+          if seen_slash {
+            return None;
+          }
+          seen_slash = true;
+          continue;
+        }
+        let len = extract_border_radius_length(token)?;
+        if seen_slash {
+          vertical.push(len);
+        } else {
+          horizontal.push(len);
+        }
+      }
+    }
+    _ => {
+      let len = extract_border_radius_length(value)?;
+      horizontal.push(len);
+    }
+  }
+
+  if horizontal.is_empty() || horizontal.len() > 4 || vertical.len() > 4 {
+    return None;
+  }
+  if seen_slash && vertical.is_empty() {
+    return None;
+  }
+  if vertical.is_empty() {
+    vertical = horizontal.clone();
+  }
+
+  let h = expand_corner_list(&horizontal)?;
+  let v = expand_corner_list(&vertical)?;
+  Some([
+    BorderCornerRadius { x: h[0], y: v[0] },
+    BorderCornerRadius { x: h[1], y: v[1] },
+    BorderCornerRadius { x: h[2], y: v[2] },
+    BorderCornerRadius { x: h[3], y: v[3] },
+  ])
+}
+
+fn parse_single_corner_radius(value: &PropertyValue) -> Option<BorderCornerRadius> {
+  match value {
+    PropertyValue::Multiple(values) => {
+      if values
+        .iter()
+        .any(|v| matches!(v, PropertyValue::Keyword(kw) if kw == "/"))
+      {
+        return None;
+      }
+      let lengths: Vec<Length> = values
+        .iter()
+        .filter_map(extract_border_radius_length)
+        .collect();
+      match lengths.len() {
+        1 => Some(BorderCornerRadius::uniform(lengths[0])),
+        2 => Some(BorderCornerRadius {
+          x: lengths[0],
+          y: lengths[1],
+        }),
+        _ => None,
+      }
+    }
+    _ => extract_border_radius_length(value).map(BorderCornerRadius::uniform),
+  }
 }
 
 fn set_axis_dimension(
@@ -1687,7 +1786,7 @@ fn border_color_for_side(style: &ComputedStyle, side: crate::style::PhysicalSide
   }
 }
 
-fn radius_for_corner(style: &ComputedStyle, corner: PhysicalCorner) -> Length {
+fn radius_for_corner(style: &ComputedStyle, corner: PhysicalCorner) -> BorderCornerRadius {
   match corner {
     PhysicalCorner::TopLeft => style.border_top_left_radius,
     PhysicalCorner::TopRight => style.border_top_right_radius,
@@ -4890,80 +4989,80 @@ pub fn apply_declaration_with_base(
 
     // Border radius
     "border-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
-        set_corner_radius(styles, PhysicalCorner::TopLeft, Some(len), order);
-        set_corner_radius(styles, PhysicalCorner::TopRight, Some(len), order);
-        set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(len), order);
-        set_corner_radius(styles, PhysicalCorner::BottomRight, Some(len), order);
+      if let Some(radii) = parse_border_radius_shorthand(&resolved_value) {
+        set_corner_radius(styles, PhysicalCorner::TopLeft, Some(radii[0]), order);
+        set_corner_radius(styles, PhysicalCorner::TopRight, Some(radii[1]), order);
+        set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(radii[3]), order);
+        set_corner_radius(styles, PhysicalCorner::BottomRight, Some(radii[2]), order);
       }
     }
     "border-top-left-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
-        set_corner_radius(styles, PhysicalCorner::TopLeft, Some(len), order);
+      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+        set_corner_radius(styles, PhysicalCorner::TopLeft, Some(radius), order);
       }
     }
     "border-top-right-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
-        set_corner_radius(styles, PhysicalCorner::TopRight, Some(len), order);
+      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+        set_corner_radius(styles, PhysicalCorner::TopRight, Some(radius), order);
       }
     }
     "border-bottom-left-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
-        set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(len), order);
+      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+        set_corner_radius(styles, PhysicalCorner::BottomLeft, Some(radius), order);
       }
     }
     "border-bottom-right-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
-        set_corner_radius(styles, PhysicalCorner::BottomRight, Some(len), order);
+      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
+        set_corner_radius(styles, PhysicalCorner::BottomRight, Some(radius), order);
       }
     }
     "border-start-start-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderCorner {
             block_start: true,
             inline_start: true,
-            value: Some(len),
+            value: Some(radius),
           },
           order,
         );
       }
     }
     "border-start-end-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderCorner {
             block_start: true,
             inline_start: false,
-            value: Some(len),
+            value: Some(radius),
           },
           order,
         );
       }
     }
     "border-end-start-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderCorner {
             block_start: false,
             inline_start: true,
-            value: Some(len),
+            value: Some(radius),
           },
           order,
         );
       }
     }
     "border-end-end-radius" => {
-      if let Some(len) = extract_length(&resolved_value) {
+      if let Some(radius) = parse_single_corner_radius(&resolved_value) {
         push_logical(
           styles,
           crate::style::LogicalProperty::BorderCorner {
             block_start: false,
             inline_start: false,
-            value: Some(len),
+            value: Some(radius),
           },
           order,
         );
@@ -11028,40 +11127,57 @@ fn parse_clip_position<'i, 't>(
 fn parse_clip_radii<'i, 't>(
   input: &mut Parser<'i, 't>,
 ) -> Result<ClipRadii, cssparser::ParseError<'i, ()>> {
-  let mut values = Vec::new();
+  let mut horizontal = Vec::new();
   for _ in 0..4 {
     if let Ok(len) = input.try_parse(parse_length_percentage_component) {
-      values.push(len);
+      horizontal.push(len);
     } else {
       break;
     }
   }
 
-  if values.is_empty() {
+  if horizontal.is_empty() {
     return Err(cssparser::ParseError {
       kind: cssparser::ParseErrorKind::Custom(()),
       location: input.current_source_location(),
     });
   }
 
+  let mut vertical = Vec::new();
   if input.try_parse(|p| p.expect_delim('/')).is_ok() {
-    return Err(cssparser::ParseError {
-      kind: cssparser::ParseErrorKind::Custom(()),
-      location: input.current_source_location(),
-    });
-  }
-
-  while values.len() < 4 {
-    if let Some(last) = values.last().copied() {
-      values.push(last);
+    for _ in 0..4 {
+      if let Ok(len) = input.try_parse(parse_length_percentage_component) {
+        vertical.push(len);
+      } else {
+        break;
+      }
+    }
+    if vertical.is_empty() {
+      return Err(cssparser::ParseError {
+        kind: cssparser::ParseErrorKind::Custom(()),
+        location: input.current_source_location(),
+      });
     }
   }
 
+  if vertical.is_empty() {
+    vertical = horizontal.clone();
+  }
+
+  let h = expand_corner_list(&horizontal).ok_or(cssparser::ParseError {
+    kind: cssparser::ParseErrorKind::Custom(()),
+    location: input.current_source_location(),
+  })?;
+  let v = expand_corner_list(&vertical).ok_or(cssparser::ParseError {
+    kind: cssparser::ParseErrorKind::Custom(()),
+    location: input.current_source_location(),
+  })?;
+
   Ok(ClipRadii {
-    top_left: values[0],
-    top_right: values[1],
-    bottom_right: values[2],
-    bottom_left: values[3],
+    top_left: BorderCornerRadius { x: h[0], y: v[0] },
+    top_right: BorderCornerRadius { x: h[1], y: v[1] },
+    bottom_right: BorderCornerRadius { x: h[2], y: v[2] },
+    bottom_left: BorderCornerRadius { x: h[3], y: v[3] },
   })
 }
 
@@ -11983,6 +12099,7 @@ mod tests {
   use crate::style::types::AlignItems;
   use crate::style::types::AspectRatio;
   use crate::style::types::BackgroundRepeatKeyword;
+  use crate::style::types::BorderCornerRadius;
   use crate::style::types::BoxSizing;
   use crate::style::types::CaseTransform;
   use crate::style::types::FlexDirection;
@@ -15343,10 +15460,93 @@ mod tests {
       16.0,
     );
 
-    assert_eq!(style.border_top_left_radius, Length::px(0.0));
-    assert_eq!(style.border_top_right_radius, Length::px(0.0));
-    assert_eq!(style.border_bottom_right_radius, Length::px(0.0));
-    assert_eq!(style.border_bottom_left_radius, Length::px(0.0));
+    let zero = BorderCornerRadius::default();
+    assert_eq!(style.border_top_left_radius, zero);
+    assert_eq!(style.border_top_right_radius, zero);
+    assert_eq!(style.border_bottom_right_radius, zero);
+    assert_eq!(style.border_bottom_left_radius, zero);
+  }
+
+  #[test]
+  fn parses_elliptical_border_radius_single_pair() {
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "border-radius".to_string(),
+        value: PropertyValue::Multiple(vec![
+          PropertyValue::Length(Length::px(10.0)),
+          PropertyValue::Keyword("/".to_string()),
+          PropertyValue::Length(Length::px(20.0)),
+        ]),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    let expected = BorderCornerRadius {
+      x: Length::px(10.0),
+      y: Length::px(20.0),
+    };
+    assert_eq!(style.border_top_left_radius, expected);
+    assert_eq!(style.border_top_right_radius, expected);
+    assert_eq!(style.border_bottom_right_radius, expected);
+    assert_eq!(style.border_bottom_left_radius, expected);
+  }
+
+  #[test]
+  fn parses_elliptical_border_radius_with_four_values() {
+    let mut style = ComputedStyle::default();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "border-radius".to_string(),
+        value: PropertyValue::Multiple(vec![
+          PropertyValue::Length(Length::px(10.0)),
+          PropertyValue::Length(Length::px(20.0)),
+          PropertyValue::Keyword("/".to_string()),
+          PropertyValue::Length(Length::px(30.0)),
+          PropertyValue::Length(Length::px(40.0)),
+        ]),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(
+      style.border_top_left_radius,
+      BorderCornerRadius {
+        x: Length::px(10.0),
+        y: Length::px(30.0),
+      }
+    );
+    assert_eq!(
+      style.border_top_right_radius,
+      BorderCornerRadius {
+        x: Length::px(20.0),
+        y: Length::px(40.0),
+      }
+    );
+    assert_eq!(
+      style.border_bottom_right_radius,
+      BorderCornerRadius {
+        x: Length::px(10.0),
+        y: Length::px(30.0),
+      }
+    );
+    assert_eq!(
+      style.border_bottom_left_radius,
+      BorderCornerRadius {
+        x: Length::px(20.0),
+        y: Length::px(40.0),
+      }
+    );
   }
 
   #[test]
