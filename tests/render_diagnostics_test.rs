@@ -272,7 +272,9 @@ fn encode_timing_is_recorded() {
       .render_html_with_diagnostics("<p>encode</p>", options)
       .expect("render should succeed");
 
-    let (png, diagnostics) = result.encode(OutputFormat::Png).expect("encode should work");
+    let (png, diagnostics) = result
+      .encode(OutputFormat::Png)
+      .expect("encode should work");
     assert!(!png.is_empty());
 
     let stats = diagnostics.stats.expect("stats should be preserved");
