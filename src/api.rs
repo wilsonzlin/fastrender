@@ -104,6 +104,7 @@ use crate::layout::formatting_context::intrinsic_cache_reset_counters;
 use crate::layout::formatting_context::intrinsic_cache_stats;
 use crate::layout::formatting_context::set_fragmentainer_block_size_hint;
 use crate::layout::formatting_context::LayoutError as FormattingLayoutError;
+use crate::layout::fragmentation::FragmentationOptions;
 use crate::layout::pagination::{paginate_fragment_tree_with_options, PaginateOptions};
 use crate::layout::profile::layout_profile_enabled;
 use crate::layout::profile::log_layout_profile;
@@ -308,6 +309,9 @@ pub struct FastRender {
   /// Optional compatibility mode applied during DOM parsing
   dom_compat_mode: DomCompatibilityMode,
 
+  /// Manual fragmentation options when no `@page` rules are present.
+  fragmentation: Option<FragmentationOptions>,
+
   /// Resource loading policy configuration.
   resource_policy: ResourceAccessPolicy,
 
@@ -333,6 +337,7 @@ impl std::fmt::Debug for FastRender {
       .field("base_url", &self.base_url)
       .field("compat_profile", &self.compat_profile)
       .field("dom_compat_mode", &self.dom_compat_mode)
+      .field("fragmentation", &self.fragmentation)
       .field("resource_policy", &self.resource_policy)
       .field("max_iframe_depth", &self.max_iframe_depth)
       .finish_non_exhaustive()
@@ -393,6 +398,9 @@ pub struct FastRenderConfig {
   /// Whether to honor `<meta name="viewport">` when computing the layout viewport.
   pub apply_meta_viewport: bool,
 
+  /// Optional pagination/fragmentation configuration applied when no `@page` rules are present.
+  pub fragmentation: Option<FragmentationOptions>,
+
   /// When true, expand the paint canvas to fit the laid-out content bounds.
   pub fit_canvas_to_content: bool,
 
@@ -419,6 +427,7 @@ impl Default for FastRenderConfig {
       compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
+      fragmentation: None,
       fit_canvas_to_content: false,
       font_config: FontConfig::default(),
       runtime_toggles: Arc::new(RuntimeToggles::from_env()),
@@ -556,6 +565,26 @@ impl FastRenderBuilder {
   /// Sets a custom resource policy for fetches performed by this renderer.
   pub fn resource_policy(mut self, policy: ResourcePolicy) -> Self {
     self.config.resource_policy = policy;
+    self
+  }
+
+  /// Enables pagination/fragmentation when no `@page` rules are present.
+  pub fn fragmentation(mut self, options: FragmentationOptions) -> Self {
+    self.config.fragmentation = Some(options);
+    self
+  }
+
+  /// Convenience setter for page-based pagination with an optional gap.
+  pub fn paginate(mut self, page_height_css_px: f32, gap_css_px: f32) -> Self {
+    self.config.fragmentation =
+      Some(FragmentationOptions::new(page_height_css_px).with_gap(gap_css_px));
+    self
+  }
+
+  /// Convenience setter for column-based fragmentation.
+  pub fn columns(mut self, count: usize, gap: f32, fragmentainer_height: f32) -> Self {
+    self.config.fragmentation =
+      Some(FragmentationOptions::new(fragmentainer_height).with_columns(count, gap));
     self
   }
 
@@ -1611,6 +1640,31 @@ impl FastRenderConfig {
     self.compat_profile = CompatProfile::SiteCompatibility;
     self
   }
+
+  /// Enables pagination/fragmentation when no `@page` rules are present.
+  ///
+  /// Manual fragmentation is ignored if the document defines `@page` rules, which take precedence.
+  pub fn with_fragmentation(mut self, fragmentation: FragmentationOptions) -> Self {
+    self.fragmentation = Some(fragmentation);
+    self
+  }
+
+  /// Convenience setter for page-based pagination with a block-size and optional gap.
+  ///
+  /// Manual pagination is skipped when `@page` rules are present in the document.
+  pub fn with_pagination(mut self, page_size: Size, gap: f32) -> Self {
+    self.fragmentation = Some(FragmentationOptions::new(page_size.height).with_gap(gap));
+    self
+  }
+
+  /// Convenience setter for column-based fragmentation.
+  ///
+  /// Manual fragmentation is skipped when `@page` rules are present in the document.
+  pub fn with_columns(mut self, count: usize, gap: f32, fragmentainer_height: f32) -> Self {
+    self.fragmentation =
+      Some(FragmentationOptions::new(fragmentainer_height).with_columns(count, gap));
+    self
+  }
 }
 
 /// Configuration for [`FastRenderPool`].
@@ -2317,11 +2371,12 @@ impl FastRender {
     font_context: FontContext,
     image_cache_config: ImageCacheConfig,
   ) -> Result<Self> {
-    let layout_config = LayoutConfig::for_viewport(Size::new(
+    let mut layout_config = LayoutConfig::for_viewport(Size::new(
       config.default_width as f32,
       config.default_height as f32,
     ))
     .with_identifier("api");
+    layout_config.fragmentation = config.fragmentation;
     let layout_engine = LayoutEngine::with_font_context(layout_config, font_context.clone());
     let image_cache = build_image_cache(&config.base_url, Arc::clone(&fetcher), image_cache_config);
 
@@ -2341,6 +2396,7 @@ impl FastRender {
       base_url: config.base_url.clone(),
       dom_compat_mode: config.dom_compat_mode,
       compat_profile: config.compat_profile,
+      fragmentation: config.fragmentation,
       resource_policy: ResourceAccessPolicy {
         document_origin: config
           .base_url
@@ -4642,6 +4698,12 @@ impl FastRender {
       first_page_style = Some(style);
       page_base_style = Some(base_style);
     }
+    // Manual pagination requested via the builder is ignored when @page rules are present.
+    let manual_fragmentation = if page_rules.is_empty() {
+      self.fragmentation
+    } else {
+      None
+    };
 
     if let Some(start) = stage_start.as_mut() {
       let now = Instant::now();
@@ -4803,6 +4865,7 @@ impl FastRender {
     // work during flex/grid measurement (Taffy) on real pages. The cache is run-scoped and
     // guarded by conservative eligibility rules.
     let mut config = LayoutConfig::for_viewport(layout_viewport);
+    config.fragmentation = manual_fragmentation;
     config.enable_cache = !toggles.truthy("FASTR_DISABLE_LAYOUT_CACHE");
     let enable_layout_cache = config.enable_cache;
     self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
