@@ -8,8 +8,9 @@ mod common;
 
 use clap::{Parser, ValueEnum};
 use common::render_pipeline::{
-  build_render_configs, build_renderer_with_fetcher, follow_client_redirects, log_diagnostics,
-  read_cached_document, render_document_with_artifacts, RenderConfigBundle,
+  build_render_configs, build_renderer_with_fetcher, follow_client_redirects,
+  format_error_with_chain, log_diagnostics, read_cached_document, render_document_with_artifacts,
+  RenderConfigBundle,
 };
 use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::image_output::encode_image;
@@ -149,6 +150,10 @@ struct Args {
   /// Only write intermediate dumps for failures
   #[arg(long)]
   only_failures: bool,
+
+  /// Print full error chains on failure
+  #[arg(long)]
+  verbose: bool,
 
   /// Positional page filters (cache stems)
   #[arg(trailing_var_arg = true)]
@@ -407,6 +412,7 @@ fn main() {
       let user_agent = args.user_agent.clone();
       let config = config.clone();
       let options = options.clone();
+      let verbose = args.verbose;
 
       s.spawn(move |_| {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
@@ -428,11 +434,12 @@ fn main() {
         let cached = match read_cached_document(&path) {
           Ok(doc) => doc,
           Err(e) => {
-            let _ = writeln!(log, "Read error: {}", e);
+            let msg = format_error_with_chain(&e, verbose);
+            let _ = writeln!(log, "Read error: {}", msg);
             let _ = fs::write(&log_path, &log);
             results.lock().unwrap().push(PageResult {
               name,
-              status: Status::Error(format!("read: {}", e)),
+              status: Status::Error(format!("read: {}", msg)),
               time_ms: 0,
               size: None,
             });
@@ -500,7 +507,8 @@ fn main() {
 
           if let Some(secs) = timeout_secs {
             match rx.recv_timeout(Duration::from_secs(secs)) {
-              Ok(Ok(outcome)) => outcome.map_err(|e| Status::Error(e.to_string())),
+              Ok(Ok(outcome)) => outcome
+                .map_err(|e| Status::Error(format_error_with_chain(&e, verbose))),
               Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
               Err(RecvTimeoutError::Timeout) => {
                 Err(Status::Crash(format!("render timed out after {}s", secs)))
@@ -511,7 +519,8 @@ fn main() {
             }
           } else {
             match rx.recv() {
-              Ok(Ok(outcome)) => outcome.map_err(|e| Status::Error(e.to_string())),
+              Ok(Ok(outcome)) => outcome
+                .map_err(|e| Status::Error(format_error_with_chain(&e, verbose))),
               Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
               Err(_) => Err(Status::Crash("render worker disconnected".to_string())),
             }

@@ -13,8 +13,8 @@ mod common;
 use clap::Parser;
 use common::render_pipeline::{
   build_http_fetcher, build_render_configs, build_renderer_with_fetcher, decode_html_resource,
-  follow_client_redirects, log_diagnostics, read_cached_document, render_document,
-  RenderConfigBundle,
+  follow_client_redirects, format_error_with_chain, log_diagnostics, read_cached_document,
+  render_document, RenderConfigBundle,
 };
 use fastrender::image_output::encode_image;
 use fastrender::resource::normalize_user_agent_for_log;
@@ -124,6 +124,10 @@ struct Args {
   /// Enable per-stage timing logs
   #[arg(long)]
   timings: bool,
+
+  /// Print full error chains on failure
+  #[arg(long)]
+  verbose: bool,
 }
 
 fn parse_viewport(s: &str) -> std::result::Result<(u32, u32), String> {
@@ -250,9 +254,7 @@ fn render_page(
   Ok(())
 }
 
-fn main() -> Result<()> {
-  let args = Args::parse();
-
+fn try_main(args: Args) -> Result<()> {
   set_media_environment(&args);
 
   // Resolve dimensions from viewport or deprecated positional args
@@ -342,5 +344,17 @@ fn main() -> Result<()> {
         std::process::exit(1);
       }
     }
+  }
+}
+
+fn main() {
+  let args = Args::parse();
+  let verbose = args.verbose;
+  if let Err(err) = try_main(args) {
+    eprintln!("{}", format_error_with_chain(&err, verbose));
+    if !verbose && err.source().is_some() {
+      eprintln!("note: re-run with --verbose to see full error context");
+    }
+    std::process::exit(1);
   }
 }
