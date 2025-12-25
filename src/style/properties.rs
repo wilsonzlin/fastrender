@@ -3878,6 +3878,23 @@ pub fn apply_declaration_with_base(
         }
       }
     }
+    "shape-margin" => {
+      if let Some(margin) = extract_length(&resolved_value) {
+        styles.shape_margin = sanitize_non_negative_length(margin);
+      }
+    }
+    "shape-image-threshold" => {
+      if let PropertyValue::Number(threshold) = &resolved_value {
+        if threshold.is_finite() {
+          styles.shape_image_threshold = threshold.clamp(0.0, 1.0);
+        }
+      }
+    }
+    "shape-outside" => {
+      if let Some(shape) = parse_shape_outside_value(&resolved_value) {
+        styles.shape_outside = shape;
+      }
+    }
     "overflow" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
         let overflow = match kw.as_str() {
@@ -10784,6 +10801,38 @@ fn parse_clip_path_value(value: &PropertyValue) -> Option<ClipPath> {
   }
 }
 
+fn parse_shape_outside_value(value: &PropertyValue) -> Option<ShapeOutside> {
+  if let Some(image) = parse_background_image_value(value) {
+    return match image {
+      BackgroundImage::None => Some(ShapeOutside::None),
+      other => Some(ShapeOutside::Image(other)),
+    };
+  }
+
+  match value {
+    PropertyValue::Keyword(kw) => parse_shape_outside_str(kw),
+    PropertyValue::Multiple(parts) => {
+      let mut joined = String::new();
+      for (idx, part) in parts.iter().enumerate() {
+        let token = match part {
+          PropertyValue::Keyword(k) => k.as_str(),
+          _ => return None,
+        };
+        if idx > 0 {
+          joined.push(' ');
+        }
+        joined.push_str(token);
+      }
+      if joined.is_empty() {
+        None
+      } else {
+        parse_shape_outside_str(&joined)
+      }
+    }
+    _ => None,
+  }
+}
+
 #[allow(clippy::option_option)]
 fn parse_clip_value(value: &PropertyValue) -> Option<Option<ClipRect>> {
   match value {
@@ -10875,6 +10924,31 @@ fn parse_clip_path_str(input_str: &str) -> Option<ClipPath> {
 
   if let Ok(reference) = parser.parse_entirely(parse_reference_box) {
     return Some(ClipPath::Box(reference));
+  }
+
+  None
+}
+
+fn parse_shape_outside_str(input_str: &str) -> Option<ShapeOutside> {
+  let mut input = ParserInput::new(input_str);
+  let mut parser = Parser::new(&mut input);
+
+  if parser
+    .try_parse(|p| p.expect_ident_matching("none"))
+    .is_ok()
+  {
+    parser.expect_exhausted().ok()?;
+    return Some(ShapeOutside::None);
+  }
+
+  if let Ok(shape) = parser.try_parse(parse_basic_shape) {
+    let reference = parser.try_parse(parse_reference_box).ok();
+    parser.expect_exhausted().ok()?;
+    return Some(ShapeOutside::BasicShape(Box::new(shape), reference));
+  }
+
+  if let Ok(reference) = parser.parse_entirely(parse_reference_box) {
+    return Some(ShapeOutside::Box(reference));
   }
 
   None
@@ -12115,7 +12189,11 @@ mod tests {
   use crate::style::types::AlignContent;
   use crate::style::types::AlignItems;
   use crate::style::types::AspectRatio;
+  use crate::style::types::BackgroundImage;
+  use crate::style::types::BackgroundPosition;
+  use crate::style::types::BackgroundPositionComponent;
   use crate::style::types::BackgroundRepeatKeyword;
+  use crate::style::types::BasicShape;
   use crate::style::types::BoxSizing;
   use crate::style::types::CaseTransform;
   use crate::style::types::FlexDirection;
@@ -12135,10 +12213,13 @@ mod tests {
   use crate::style::types::OutlineStyle;
   use crate::style::types::PositionComponent;
   use crate::style::types::PositionKeyword;
+  use crate::style::types::ReferenceBox;
   use crate::style::types::ScrollSnapAlign;
   use crate::style::types::ScrollSnapAxis;
   use crate::style::types::ScrollSnapStop;
   use crate::style::types::ScrollSnapStrictness;
+  use crate::style::types::ShapeOutside;
+  use crate::style::types::ShapeRadius;
   use crate::style::types::TextCombineUpright;
   use crate::style::types::TextDecorationLine;
   use crate::style::types::TextDecorationStyle;
@@ -19447,6 +19528,95 @@ mod tests {
     apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
     // Invalid value leaves previous value unchanged
     assert!(matches!(style.float, crate::style::float::Float::Left));
+  }
+
+  #[test]
+  fn parses_shape_margin_and_image_threshold() {
+    let mut style = ComputedStyle::default();
+    let margin = parse_property_value("shape-margin", "10px").unwrap();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "shape-margin".to_string(),
+        value: margin,
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.shape_margin, Length::px(10.0));
+
+    let threshold = parse_property_value("shape-image-threshold", "0.4").unwrap();
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "shape-image-threshold".to_string(),
+        value: threshold,
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert!((style.shape_image_threshold - 0.4).abs() < f32::EPSILON);
+  }
+
+  #[test]
+  fn parses_shape_outside_basic_shapes_and_images() {
+    let mut style = ComputedStyle::default();
+
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "shape-outside".to_string(),
+        value: parse_property_value("shape-outside", "circle(50% at 50% 50%) margin-box").unwrap(),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    match &style.shape_outside {
+      ShapeOutside::BasicShape(shape, reference) => {
+        assert_eq!(*reference, Some(ReferenceBox::MarginBox));
+        match &**shape {
+          BasicShape::Circle { radius, position } => {
+            assert_eq!(*radius, ShapeRadius::Length(Length::percent(50.0)));
+            if let BackgroundPosition::Position { x, y } = position {
+              assert_eq!(x.offset, Length::percent(50.0));
+              assert_eq!(y.offset, Length::percent(50.0));
+            } else {
+              panic!("unexpected background position");
+            }
+          }
+          _ => panic!("expected circle shape"),
+        }
+      }
+      other => panic!("unexpected shape-outside: {:?}", other),
+    }
+
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "shape-outside".to_string(),
+        value: parse_property_value("shape-outside", "url(a.png)").unwrap(),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(
+      style.shape_outside,
+      ShapeOutside::Image(BackgroundImage::Url("a.png".to_string()))
+    );
   }
 }
 #[derive(Default)]

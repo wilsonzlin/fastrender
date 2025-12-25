@@ -343,6 +343,9 @@ const KNOWN_PROPERTIES: &[&str] = &[
   "touch-action",
   "scrollbar-color",
   "scrollbar-width",
+  "shape-image-threshold",
+  "shape-margin",
+  "shape-outside",
   "transform",
   "transform-box",
   "transform-style",
@@ -884,6 +887,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
       property,
       "object-position"
         | "border-spacing"
+        | "shape-outside"
         | "background-position"
         | "transform-origin"
         | "touch-action"
