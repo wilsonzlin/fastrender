@@ -11,6 +11,7 @@
 //! proper error trait implementations.
 
 use std::io;
+use std::sync::Arc;
 use thiserror::Error;
 
 /// Result type alias for FastRender operations
@@ -27,6 +28,110 @@ use thiserror::Error;
 /// }
 /// ```
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Stable classification for surfaced errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+  /// HTML or CSS parsing failed.
+  Parse,
+  /// Style computation or font resolution failed.
+  Style,
+  /// Layout tree construction or layout algorithms failed.
+  Layout,
+  /// Painting or rasterization failed.
+  Paint,
+  /// Resource fetching, decoding, or navigation failed.
+  Resource,
+  /// Catch-all bucket for everything else.
+  Other,
+}
+
+impl ErrorKind {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      ErrorKind::Parse => "parse",
+      ErrorKind::Style => "style",
+      ErrorKind::Layout => "layout",
+      ErrorKind::Paint => "paint",
+      ErrorKind::Resource => "resource",
+      ErrorKind::Other => "other",
+    }
+  }
+}
+
+/// Resource fetching/decoding error with captured metadata for diagnostics.
+#[derive(Debug, Clone)]
+pub struct ResourceError {
+  /// Original URL requested.
+  pub url: String,
+  /// Human-readable failure description.
+  pub message: String,
+  /// Optional lower-level cause (I/O, HTTP, etc.).
+  cause: Option<Arc<dyn std::error::Error + Send + Sync>>,
+  /// HTTP status code when applicable.
+  pub status: Option<u16>,
+  /// Final URL after redirects (if known).
+  pub final_url: Option<String>,
+  /// HTTP ETag header, if returned.
+  pub etag: Option<String>,
+  /// HTTP Last-Modified header, if returned.
+  pub last_modified: Option<String>,
+}
+
+impl ResourceError {
+  pub fn new(url: impl Into<String>, message: impl Into<String>) -> Self {
+    Self {
+      url: url.into(),
+      message: message.into(),
+      cause: None,
+      status: None,
+      final_url: None,
+      etag: None,
+      last_modified: None,
+    }
+  }
+
+  pub fn with_status(mut self, status: u16) -> Self {
+    self.status = Some(status);
+    self
+  }
+
+  pub fn with_final_url(mut self, url: impl Into<String>) -> Self {
+    self.final_url = Some(url.into());
+    self
+  }
+
+  pub fn with_validators(mut self, etag: Option<String>, last_modified: Option<String>) -> Self {
+    self.etag = etag;
+    self.last_modified = last_modified;
+    self
+  }
+
+  pub fn with_source<E>(mut self, source: E) -> Self
+  where
+    E: std::error::Error + Send + Sync + 'static,
+  {
+    self.cause = Some(Arc::new(source));
+    self
+  }
+}
+
+impl std::fmt::Display for ResourceError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let target = self.final_url.as_deref().unwrap_or(&self.url);
+    if let Some(status) = self.status {
+      write!(f, "{} (status {}): {}", target, status, self.message)
+    } else {
+      write!(f, "{}: {}", target, self.message)
+    }
+  }
+}
+
+impl std::error::Error for ResourceError {
+  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    self.cause.as_deref().map(|e| e as _)
+  }
+}
 
 /// Top-level error type for FastRender
 ///
@@ -48,43 +153,47 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Error, Debug)]
 pub enum Error {
   /// HTML or CSS parsing error
-  #[error("Parse error: {0}")]
+  #[error("[parse] {0}")]
   Parse(#[from] ParseError),
 
   /// Style computation error
-  #[error("Style error: {0}")]
+  #[error("[style] {0}")]
   Style(#[from] StyleError),
 
   /// Layout error
-  #[error("Layout error: {0}")]
+  #[error("[layout] {0}")]
   Layout(#[from] LayoutError),
 
   /// Font loading or shaping error
-  #[error("Font error: {0}")]
+  #[error("[style] {0}")]
   Font(#[from] FontError),
 
   /// Text shaping or line breaking error
-  #[error("Text error: {0}")]
+  #[error("[layout] {0}")]
   Text(#[from] TextError),
 
   /// Image loading or decoding error
-  #[error("Image error: {0}")]
+  #[error("[resource] {0}")]
   Image(#[from] ImageError),
 
   /// Rendering or rasterization error
-  #[error("Render error: {0}")]
+  #[error("[paint] {0}")]
   Render(#[from] RenderError),
 
+  /// Resource fetching error (network, filesystem, etc.)
+  #[error("[resource] {0}")]
+  Resource(#[from] ResourceError),
+
   /// Network/navigation error when fetching documents
-  #[error("Navigation error: {0}")]
+  #[error("[resource] {0}")]
   Navigation(#[from] NavigationError),
 
   /// I/O error (file reading, network, etc.)
-  #[error("I/O error: {0}")]
+  #[error("[resource] {0}")]
   Io(#[from] std::io::Error),
 
   /// Generic error for miscellaneous issues
-  #[error("{0}")]
+  #[error("[other] {0}")]
   Other(String),
 }
 
@@ -98,9 +207,26 @@ impl Clone for Error {
       Error::Text(err) => Error::Text(err.clone()),
       Error::Image(err) => Error::Image(err.clone()),
       Error::Render(err) => Error::Render(err.clone()),
+      Error::Resource(err) => Error::Resource(err.clone()),
       Error::Navigation(err) => Error::Navigation(err.clone()),
       Error::Io(err) => Error::Io(io::Error::new(err.kind(), err.to_string())),
       Error::Other(msg) => Error::Other(msg.clone()),
+    }
+  }
+}
+
+impl Error {
+  /// Stable classification useful for user-facing summaries.
+  pub fn kind(&self) -> ErrorKind {
+    match self {
+      Error::Parse(_) => ErrorKind::Parse,
+      Error::Style(_) | Error::Font(_) => ErrorKind::Style,
+      Error::Layout(_) | Error::Text(_) => ErrorKind::Layout,
+      Error::Render(_) => ErrorKind::Paint,
+      Error::Image(_) | Error::Resource(_) | Error::Navigation(_) | Error::Io(_) => {
+        ErrorKind::Resource
+      }
+      Error::Other(_) => ErrorKind::Other,
     }
   }
 }
@@ -316,7 +442,12 @@ pub enum ImageError {
 pub enum NavigationError {
   /// The document could not be fetched or decoded.
   #[error("Failed to fetch document '{url}': {reason}")]
-  FetchFailed { url: String, reason: String },
+  FetchFailed {
+    url: String,
+    reason: String,
+    #[source]
+    source: Option<Arc<Error>>,
+  },
 }
 
 /// Errors that occur during rendering and rasterization
@@ -713,6 +844,7 @@ mod tests {
     };
     let error: Error = image_error.into();
     assert!(matches!(error, Error::Image(_)));
+    assert_eq!(error.kind(), ErrorKind::Resource);
   }
 
   #[test]
@@ -782,9 +914,23 @@ mod tests {
       column: 10,
     });
     let display = format!("{}", error);
-    assert!(display.contains("Parse error"));
+    assert!(display.starts_with("[parse]"));
     assert!(display.contains("line 42"));
     assert!(display.contains("column 10"));
+    assert_eq!(error.kind(), ErrorKind::Parse);
+  }
+
+  #[test]
+  fn resource_error_includes_metadata() {
+    let error = Error::Resource(
+      ResourceError::new("https://example.com/a.css", "not found")
+        .with_status(404)
+        .with_final_url("https://example.com/a.css?v=1"),
+    );
+    let display = format!("{error}");
+    assert!(display.contains("[resource]"));
+    assert!(display.contains("status 404"));
+    assert!(display.contains("a.css?v=1"));
   }
 
   #[test]

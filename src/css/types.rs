@@ -32,6 +32,8 @@ pub struct CssParseError {
   pub line: u32,
   /// Column number (1-indexed)
   pub column: u32,
+  /// Source line containing the error, when available.
+  pub snippet: Option<String>,
 }
 
 impl CssParseError {
@@ -41,6 +43,26 @@ impl CssParseError {
       message: message.into(),
       line,
       column,
+      snippet: None,
+    }
+  }
+
+  /// Create a new parse error while capturing a relevant source snippet.
+  pub fn with_snippet(
+    message: impl Into<String>,
+    line: u32,
+    column: u32,
+    css_source: &str,
+  ) -> Self {
+    let snippet = css_source
+      .lines()
+      .nth(line.saturating_sub(1) as usize)
+      .map(|line| line.trim_end().to_string());
+    Self {
+      message: message.into(),
+      line,
+      column,
+      snippet,
     }
   }
 }
@@ -49,9 +71,20 @@ impl fmt::Display for CssParseError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(
       f,
-      "CSS error at {}:{}: {}",
+      "CSS error at line {}, column {}: {}",
       self.line, self.column, self.message
-    )
+    )?;
+
+    if let Some(snippet) = &self.snippet {
+      let caret_pos = std::cmp::min(
+        snippet.chars().count(),
+        self.column.saturating_sub(1) as usize,
+      );
+      let caret = " ".repeat(caret_pos);
+      write!(f, "\n  {snippet}\n  {caret}^")?;
+    }
+
+    Ok(())
   }
 }
 
