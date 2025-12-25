@@ -1016,9 +1016,13 @@ fn point_value(point: Point) -> Value {
 }
 
 fn map_from_pairs(entries: Vec<(&str, Value)>) -> Value {
-  let mut map = Map::new();
+  let mut sorted: BTreeMap<String, Value> = BTreeMap::new();
   for (key, value) in entries {
-    map.insert(key.to_string(), value);
+    sorted.insert(key.to_string(), value);
+  }
+  let mut map = Map::new();
+  for (k, v) in sorted {
+    map.insert(k, v);
   }
   Value::Object(map)
 }
