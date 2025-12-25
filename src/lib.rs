@@ -204,6 +204,7 @@ pub use api::FastRender;
 pub use api::FastRenderBuilder;
 pub use api::FastRenderConfig;
 pub use api::Pixmap;
+pub use api::PreparedDocument;
 pub use api::RenderDiagnostics;
 pub use api::RenderOptions;
 pub use api::RenderResult;

@@ -36,6 +36,34 @@ let options = RenderOptions::new()
 let pixmap = renderer.render_html_with_options("<p>Scrolled</p>", options)?;
 ```
 
+## Prepared documents for repeated painting
+
+`FastRender::prepare_html` runs parse/style/layout once and returns a
+`PreparedDocument` containing the DOM, resolved stylesheet (including `@import`s),
+styled tree, box tree, and laid-out fragment tree. Painting uses the same font
+context and image cache, so you can render multiple scroll offsets or animation
+timelines without re-running expensive stages.
+
+```rust
+use fastrender::{FastRender, RenderOptions};
+
+let mut renderer = FastRender::new()?;
+let session = renderer.prepare_html(
+    "<div class='hero'></div>",
+    RenderOptions::new().with_viewport(800, 600),
+)?;
+
+// Paint the default scroll position
+let initial = session.paint_default()?;
+
+// Paint a scrolled view with a darker background
+let scrolled = session.paint(0.0, 200.0, None, Some(fastrender::Rgba::BLACK))?;
+```
+
+`PreparedDocument::paint` accepts optional viewport and background overrides, and
+`paint_region` is a convenience for tiled rendering. `PreparedDocument` is `Send`
+but not `Sync`; create one session per thread when painting concurrently.
+
 ## Rendering URLs and diagnostics
 
 `FastRender::render_url`/`render_url_with_options` return a `RenderResult` containing the rendered `Pixmap` and any `RenderDiagnostics` captured while fetching resources. Subresource fetch failures (e.g. linked CSS) are recorded in `diagnostics.fetch_errors` but do not abort the render.

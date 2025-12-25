@@ -607,6 +607,139 @@ pub struct RenderResult {
   pub diagnostics: RenderDiagnostics,
 }
 
+struct LayoutArtifacts {
+  dom: DomNode,
+  stylesheet: StyleSheet,
+  styled_tree: StyledNode,
+  box_tree: BoxTree,
+  fragment_tree: FragmentTree,
+}
+
+/// A fully prepared document ready for repeated painting.
+///
+/// `PreparedDocument` owns the parsed DOM, resolved stylesheet, styled tree, box
+/// tree, and laid-out fragment tree. Painting reuses the same font and image
+/// caches, allowing callers to apply different scroll offsets or viewport
+/// translations without re-running parse/style/layout.
+///
+/// # Thread safety
+///
+/// Like `FastRender`, this type is `Send` but not `Sync`; clone or prepare a
+/// separate document per thread when painting in parallel.
+#[derive(Clone)]
+pub struct PreparedDocument {
+  dom: DomNode,
+  stylesheet: StyleSheet,
+  styled_tree: StyledNode,
+  box_tree: BoxTree,
+  fragment_tree: FragmentTree,
+  layout_viewport: Size,
+  visual_viewport: Size,
+  device_pixel_ratio: f32,
+  background_color: Rgba,
+  default_scroll: Point,
+  font_context: FontContext,
+  image_cache: ImageCache,
+}
+
+impl PreparedDocument {
+  /// Paints the prepared document using the provided scroll offsets.
+  ///
+  /// The painting path mirrors `FastRender::render_html_with_scroll`, applying
+  /// scroll snap, scroll-driven animations, sticky positioning, and a root
+  /// translation for the scroll offset before rasterization.
+  pub fn paint(
+    &self,
+    scroll_x: f32,
+    scroll_y: f32,
+    viewport_override: Option<(u32, u32)>,
+    background_override: Option<Rgba>,
+  ) -> Result<Pixmap> {
+    if let Some((w, h)) = viewport_override {
+      if w == 0 || h == 0 {
+        return Err(Error::Render(RenderError::InvalidParameters {
+          message: format!("Invalid viewport override: width={w}, height={h}"),
+        }));
+      }
+    }
+
+    let viewport = viewport_override.map(|(w, h)| Size::new(w as f32, h as f32));
+    paint_fragment_tree_with_scroll(
+      self.fragment_tree.clone(),
+      scroll_x,
+      scroll_y,
+      viewport,
+      background_override.unwrap_or(self.background_color),
+      &self.font_context,
+      &self.image_cache,
+      self.device_pixel_ratio,
+    )
+  }
+
+  /// Paints using the viewport captured during preparation and the initial
+  /// scroll offsets provided in the original `RenderOptions`.
+  pub fn paint_default(&self) -> Result<Pixmap> {
+    self.paint(self.default_scroll.x, self.default_scroll.y, None, None)
+  }
+
+  /// Paints a specific rectangular region of the prepared document.
+  ///
+  /// This is a convenience for tiled rendering and uses the rectangle as both
+  /// the viewport and scroll offset.
+  pub fn paint_region(&self, rect: Rect) -> Result<Pixmap> {
+    let viewport = (
+      rect.width().max(1.0).round() as u32,
+      rect.height().max(1.0).round() as u32,
+    );
+    self.paint(rect.x(), rect.y(), Some(viewport), None)
+  }
+
+  /// Returns the parsed DOM used during preparation.
+  pub fn dom(&self) -> &DomNode {
+    &self.dom
+  }
+
+  /// Returns the fully resolved stylesheet (including imported rules).
+  pub fn stylesheet(&self) -> &StyleSheet {
+    &self.stylesheet
+  }
+
+  /// Returns the styled tree produced during cascade.
+  pub fn styled_tree(&self) -> &StyledNode {
+    &self.styled_tree
+  }
+
+  /// Returns the generated box tree.
+  pub fn box_tree(&self) -> &BoxTree {
+    &self.box_tree
+  }
+
+  /// Returns the laid-out fragment tree prior to any scroll translations.
+  pub fn fragment_tree(&self) -> &FragmentTree {
+    &self.fragment_tree
+  }
+
+  /// Returns the layout viewport size used during preparation.
+  pub fn layout_viewport(&self) -> Size {
+    self.layout_viewport
+  }
+
+  /// Returns the visual viewport after applying `<meta name="viewport">`.
+  pub fn visual_viewport(&self) -> Size {
+    self.visual_viewport
+  }
+
+  /// Returns the device pixel ratio captured during preparation.
+  pub fn device_pixel_ratio(&self) -> f32 {
+    self.device_pixel_ratio
+  }
+
+  /// Returns the scroll offsets supplied when preparing the document.
+  pub fn default_scroll(&self) -> Point {
+    self.default_scroll
+  }
+}
+
 impl RenderResult {
   /// Extract the rendered pixels, discarding diagnostics.
   pub fn into_pixmap(self) -> Pixmap {
@@ -762,6 +895,157 @@ fn viewport_length_value(len: ViewportLength, fallback: f32) -> Option<f32> {
 fn sanitize_positive(value: Option<f32>) -> Option<f32> {
   value.filter(|v| v.is_finite() && *v > 0.0)
 }
+
+fn apply_sticky_offsets_with_context(
+  font_context: &FontContext,
+  fragment: &mut FragmentNode,
+  parent_rect: Rect,
+  scroll: Point,
+  viewport: Size,
+) {
+  let abs_origin = Point::new(
+    parent_rect.x() + fragment.bounds.x(),
+    parent_rect.y() + fragment.bounds.y(),
+  );
+  let abs_rect = Rect::from_xywh(
+    abs_origin.x,
+    abs_origin.y,
+    fragment.bounds.width(),
+    fragment.bounds.height(),
+  );
+
+  for child in fragment.children.iter_mut() {
+    apply_sticky_offsets_with_context(font_context, child, abs_rect, scroll, viewport);
+  }
+
+  let Some(style) = fragment.style.as_ref() else {
+    return;
+  };
+  if !style.position.is_sticky() {
+    return;
+  }
+
+  let inline_base = Some(parent_rect.width());
+  let block_base = if parent_rect.height() > 0.0 {
+    Some(parent_rect.height())
+  } else {
+    None
+  };
+  let containing_block =
+    ContainingBlock::with_viewport_and_bases(parent_rect, viewport, inline_base, block_base);
+  let positioned = resolve_positioned_style(style, &containing_block, viewport, font_context);
+  let constraints = crate::layout::contexts::positioned::StickyConstraints::from_style(
+    &positioned,
+    &containing_block,
+    font_context,
+  );
+  if !constraints.has_constraints() {
+    return;
+  }
+
+  let mut screen_x = abs_rect.x() - scroll.x;
+  let mut screen_y = abs_rect.y() - scroll.y;
+
+  let container_screen_min_x = parent_rect.x() - scroll.x;
+  let container_screen_max_x = parent_rect.max_x() - scroll.x;
+  let container_screen_min_y = parent_rect.y() - scroll.y;
+  let container_screen_max_y = parent_rect.max_y() - scroll.y;
+
+  let left = constraints.left.unwrap_or(0.0);
+  let right = constraints.right.unwrap_or(0.0);
+  let top = constraints.top.unwrap_or(0.0);
+  let bottom = constraints.bottom.unwrap_or(0.0);
+
+  if constraints.left.is_some() || constraints.right.is_some() {
+    let min_x = container_screen_min_x + left;
+    let max_x = container_screen_max_x - right - abs_rect.width();
+    let viewport_min_x = left;
+    let viewport_max_x = viewport.width - right - abs_rect.width();
+    let clamp_min_x = min_x.max(viewport_min_x);
+    let clamp_max_x = max_x.min(viewport_max_x);
+    screen_x = screen_x.max(clamp_min_x).min(clamp_max_x);
+  }
+
+  if constraints.top.is_some() || constraints.bottom.is_some() {
+    let min_y = container_screen_min_y + top;
+    let max_y = container_screen_max_y - bottom - abs_rect.height();
+    let viewport_min_y = top;
+    let viewport_max_y = viewport.height - bottom - abs_rect.height();
+    let clamp_min_y = min_y.max(viewport_min_y);
+    let clamp_max_y = max_y.min(viewport_max_y);
+    screen_y = screen_y.max(clamp_min_y).min(clamp_max_y);
+  }
+
+  let mut new_abs_x = screen_x + scroll.x;
+  let mut new_abs_y = screen_y + scroll.y;
+
+  let cb_min_x = parent_rect.x();
+  let cb_min_y = parent_rect.y();
+  let cb_max_x = parent_rect.max_x();
+  let cb_max_y = parent_rect.max_y();
+  new_abs_x = new_abs_x.min(cb_max_x - abs_rect.width()).max(cb_min_x);
+  new_abs_y = new_abs_y.min(cb_max_y - abs_rect.height()).max(cb_min_y);
+
+  let delta = Point::new(new_abs_x - abs_rect.x(), new_abs_y - abs_rect.y());
+  if delta.x.abs() > f32::EPSILON || delta.y.abs() > f32::EPSILON {
+    *fragment = fragment.translate(delta);
+  }
+}
+
+fn paint_fragment_tree_with_scroll(
+  mut fragment_tree: FragmentTree,
+  scroll_x: f32,
+  scroll_y: f32,
+  viewport_override: Option<Size>,
+  background: Rgba,
+  font_context: &FontContext,
+  image_cache: &ImageCache,
+  device_pixel_ratio: f32,
+) -> Result<Pixmap> {
+  let expand_full_page = std::env::var("FASTR_FULL_PAGE")
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false);
+
+  let viewport_size = viewport_override.unwrap_or_else(|| fragment_tree.viewport_size());
+  let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
+  let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
+  let scroll = scroll_result.state.viewport;
+
+  animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
+
+  apply_sticky_offsets_with_context(
+    font_context,
+    &mut fragment_tree.root,
+    Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
+    scroll,
+    viewport_size,
+  );
+
+  let viewport_width_px = viewport_size.width.max(1.0).ceil() as u32;
+  let viewport_height_px = viewport_size.height.max(1.0).ceil() as u32;
+
+  let (target_width, target_height) = if expand_full_page {
+    let content_bounds = fragment_tree.content_size();
+    let w = viewport_width_px.max(content_bounds.max_x().ceil().max(1.0) as u32);
+    let h = viewport_height_px.max(content_bounds.max_y().ceil().max(1.0) as u32);
+    (w, h)
+  } else {
+    (viewport_width_px, viewport_height_px)
+  };
+
+  let offset = Point::new(-scroll.x, -scroll.y);
+  paint_tree_with_resources_scaled_offset(
+    &fragment_tree,
+    target_width,
+    target_height,
+    background,
+    font_context.clone(),
+    image_cache.clone(),
+    device_pixel_ratio,
+    offset,
+  )
+}
+
 impl FastRender {
   fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
     let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
@@ -945,7 +1229,8 @@ impl FastRender {
   /// - Painting fails
   /// - Invalid dimensions (width or height is 0)
   pub fn render_html(&mut self, html: &str, width: u32, height: u32) -> Result<Pixmap> {
-    self.render_html_internal(html, width, height, 0.0, 0.0, MediaType::Screen)
+    let options = RenderOptions::default().with_viewport(width, height);
+    self.render_html_with_options(html, options)
   }
 
   /// Renders HTML with scroll offsets applied to the viewport
@@ -957,33 +1242,33 @@ impl FastRender {
     scroll_x: f32,
     scroll_y: f32,
   ) -> Result<Pixmap> {
-    self.render_html_internal(html, width, height, scroll_x, scroll_y, MediaType::Screen)
+    let options = RenderOptions::default()
+      .with_viewport(width, height)
+      .with_scroll(scroll_x, scroll_y);
+    self.render_html_with_options(html, options)
   }
 
   /// Renders HTML with explicit per-request options.
   pub fn render_html_with_options(&mut self, html: &str, options: RenderOptions) -> Result<Pixmap> {
-    let (width, height) = options
-      .viewport
-      .unwrap_or((self.default_width, self.default_height));
-    let original_dpr = self.device_pixel_ratio;
-    if let Some(dpr) = options.device_pixel_ratio {
-      self.device_pixel_ratio = dpr;
+    let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
+    let overall_start = timings_enabled.then(Instant::now);
+    let prepared = self.prepare_html(html, options)?;
+    let paint_start = timings_enabled.then(Instant::now);
+    let pixmap = prepared.paint_default()?;
+
+    if let Some(start) = paint_start {
+      eprintln!("timing:paint {:?}", start.elapsed());
+    }
+    if let Some(start) = overall_start {
+      eprintln!("timing:render_html_total {:?}", start.elapsed());
     }
 
-    let result = self.render_html_internal(
-      html,
-      width,
-      height,
-      options.scroll_x,
-      options.scroll_y,
-      options.media_type,
-    );
+    Ok(pixmap)
+  }
 
-    if options.device_pixel_ratio.is_some() {
-      self.device_pixel_ratio = original_dpr;
-    }
-
-    result
+  /// Prepares HTML for repeated painting without re-running parse/style/layout.
+  pub fn prepare_html(&mut self, html: &str, options: RenderOptions) -> Result<PreparedDocument> {
+    self.prepare_html_internal(html, options)
   }
 
   fn render_html_internal(
@@ -995,7 +1280,21 @@ impl FastRender {
     scroll_y: f32,
     media_type: MediaType,
   ) -> Result<Pixmap> {
-    // Validate dimensions
+    let options = RenderOptions::default()
+      .with_viewport(width, height)
+      .with_scroll(scroll_x, scroll_y)
+      .with_media_type(media_type);
+    self.render_html_with_options(html, options)
+  }
+
+  fn prepare_html_internal(
+    &mut self,
+    html: &str,
+    options: RenderOptions,
+  ) -> Result<PreparedDocument> {
+    let (width, height) = options
+      .viewport
+      .unwrap_or((self.default_width, self.default_height));
     if width == 0 || height == 0 {
       return Err(Error::Render(RenderError::InvalidParameters {
         message: format!("Invalid dimensions: width={}, height={}", width, height),
@@ -1004,9 +1303,7 @@ impl FastRender {
 
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
     let mut stage_start = timings_enabled.then(Instant::now);
-    let overall_start = stage_start.clone();
 
-    // Parse HTML to DOM
     let dom = self.parse_html(html)?;
 
     if let Some(start) = stage_start.as_mut() {
@@ -1016,231 +1313,203 @@ impl FastRender {
     }
 
     let requested_viewport = Size::new(width as f32, height as f32);
+    let base_dpr = options
+      .device_pixel_ratio
+      .unwrap_or(self.device_pixel_ratio);
     let meta_viewport = if self.apply_meta_viewport {
       crate::html::viewport::extract_viewport(&dom)
     } else {
       None
     };
-    let resolved_viewport = resolve_viewport(
-      requested_viewport,
-      self.device_pixel_ratio,
-      meta_viewport.as_ref(),
-    );
+    let resolved_viewport = resolve_viewport(requested_viewport, base_dpr, meta_viewport.as_ref());
     let layout_width = resolved_viewport.layout_viewport.width.max(1.0).round() as u32;
     let layout_height = resolved_viewport.layout_viewport.height.max(1.0).round() as u32;
 
     let previous_dpr = self.device_pixel_ratio;
-
-    let result = (|| -> Result<Pixmap> {
+    let artifacts_result = (|| -> Result<LayoutArtifacts> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
-      let mut fragment_tree =
-        self.layout_document_for_media(&dom, layout_width, layout_height, media_type)?;
-      self.pending_device_size = None;
-      let layout_viewport = fragment_tree.viewport_size();
-      if std::env::var("FASTR_LOG_FRAG_BOUNDS")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-      {
-        let bbox = fragment_tree.content_size();
-        eprintln!(
-                "[frag-bounds] viewport=({}x{}) bbox=({:.1},{:.1})→({:.1},{:.1}) size=({:.1}x{:.1}) fragments={}",
-                layout_viewport.width,
-                layout_viewport.height,
-                bbox.min_x(),
-                bbox.min_y(),
-                bbox.max_x(),
-                bbox.max_y(),
-                bbox.width(),
-                bbox.height(),
-                fragment_tree.fragment_count()
-            );
-      }
-
-      if let Ok(v) = std::env::var("FASTR_DUMP_TEXT_FRAGMENTS") {
-        if v != "0" && !v.eq_ignore_ascii_case("false") {
-          let limit: usize = v.parse().unwrap_or(20);
-          let mut total = 0usize;
-          let mut stack = vec![(&fragment_tree.root, crate::geometry::Point::ZERO)];
-          while let Some((frag, offset)) = stack.pop() {
-            let abs = crate::geometry::Rect::from_xywh(
-              frag.bounds.x() + offset.x,
-              frag.bounds.y() + offset.y,
-              frag.bounds.width(),
-              frag.bounds.height(),
-            );
-            if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &frag.content {
-              if total < limit {
-                eprintln!(
-                  "text frag {} @ ({:.1},{:.1},{:.1},{:.1}) {:?}",
-                  total,
-                  abs.x(),
-                  abs.y(),
-                  abs.width(),
-                  abs.height(),
-                  text.chars().take(80).collect::<String>()
-                );
-              }
-              total += 1;
-            }
-            for child in frag.children.iter().rev() {
-              stack.push((child, crate::geometry::Point::new(abs.x(), abs.y())));
-            }
-          }
-          eprintln!("total text fragments: {}", total);
-        }
-      }
-
-      if let Ok(query) = std::env::var("FASTR_TRACE_TEXT") {
-        fn describe_node(node: &crate::tree::fragment_tree::FragmentNode) -> String {
-          let display = node
-            .style
-            .as_ref()
-            .map(|s| format!("{:?}", s.display))
-            .unwrap_or_else(|| "None".to_string());
-          match &node.content {
-            crate::tree::fragment_tree::FragmentContent::Block { box_id } => {
-              format!("Block(box_id={:?}, display={})", box_id, display)
-            }
-            crate::tree::fragment_tree::FragmentContent::Inline {
-              box_id,
-              fragment_index,
-            } => {
-              format!(
-                "Inline(box_id={:?}, fragment_index={}, display={})",
-                box_id, fragment_index, display
-              )
-            }
-            crate::tree::fragment_tree::FragmentContent::Line { baseline } => {
-              format!("Line(baseline={:.3}, display={})", baseline, display)
-            }
-            crate::tree::fragment_tree::FragmentContent::Text {
-              text,
-              box_id,
-              baseline_offset,
-              ..
-            } => {
-              let preview: String = text.chars().take(80).collect();
-              format!(
-                "Text(box_id={:?}, baseline={:.3}, display={}, text=\"{}\")",
-                box_id, baseline_offset, display, preview
-              )
-            }
-            crate::tree::fragment_tree::FragmentContent::Replaced { box_id, .. } => {
-              format!("Replaced(box_id={:?}, display={})", box_id, display)
-            }
-          }
-        }
-
-        fn trace_text<'a>(
-          node: &'a crate::tree::fragment_tree::FragmentNode,
-          offset: crate::geometry::Point,
-          query: &str,
-          trail: &mut Vec<String>,
-        ) -> bool {
-          let raw = node.bounds;
-          let abs = crate::geometry::Rect::from_xywh(
-            node.bounds.x() + offset.x,
-            node.bounds.y() + offset.y,
-            node.bounds.width(),
-            node.bounds.height(),
-          );
-          let label = format!(
-            "{} raw=({:.1},{:.1},{:.1},{:.1}) abs=({:.1},{:.1},{:.1},{:.1})",
-            describe_node(node),
-            raw.x(),
-            raw.y(),
-            raw.width(),
-            raw.height(),
-            abs.x(),
-            abs.y(),
-            abs.width(),
-            abs.height()
-          );
-          trail.push(label);
-          if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &node.content {
-            if text.contains(query) {
-              eprintln!("trace for {:?}:", query);
-              for (depth, entry) in trail.iter().enumerate() {
-                eprintln!("  {}{}", "  ".repeat(depth), entry);
-              }
-              trail.pop();
-              return true;
-            }
-          }
-          let child_offset = crate::geometry::Point::new(abs.x(), abs.y());
-          for child in &node.children {
-            if trace_text(child, child_offset, query, trail) {
-              trail.pop();
-              return true;
-            }
-          }
-          trail.pop();
-          false
-        }
-        let mut trail = Vec::new();
-        trace_text(
-          &fragment_tree.root,
-          crate::geometry::Point::ZERO,
-          &query,
-          &mut trail,
-        );
-      }
-
-      if let Some(start) = stage_start.as_mut() {
-        let now = Instant::now();
-        eprintln!("timing:layout_document {:?}", now - *start);
-        *start = now;
-      }
-
-      let expand_full_page = std::env::var("FASTR_FULL_PAGE")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false);
-      let viewport_size = layout_viewport;
-      let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
-      let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
-      let scroll = scroll_result.state.viewport;
-
-      animation::apply_scroll_driven_animations(&mut fragment_tree, scroll);
-
-      self.apply_sticky_offsets(
-        &mut fragment_tree.root,
-        Rect::from_xywh(0.0, 0.0, viewport_size.width, viewport_size.height),
-        scroll,
-        viewport_size,
-      );
-
-      let viewport_width_px = viewport_size.width.max(1.0).ceil() as u32;
-      let viewport_height_px = viewport_size.height.max(1.0).ceil() as u32;
-
-      let (target_width, target_height) = if expand_full_page {
-        let content_bounds = fragment_tree.content_size();
-        let w = viewport_width_px.max(content_bounds.max_x().ceil().max(1.0) as u32);
-        let h = viewport_height_px.max(content_bounds.max_y().ceil().max(1.0) as u32);
-        (w, h)
-      } else {
-        (viewport_width_px, viewport_height_px)
-      };
-
-      // Paint to pixmap
-      let offset = Point::new(-scroll.x, -scroll.y);
-      let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
-
-      if let Some(start) = stage_start {
-        let now = Instant::now();
-        eprintln!("timing:paint {:?}", now - start);
-        if let Some(overall) = overall_start {
-          eprintln!("timing:render_html_total {:?}", now - overall);
-        }
-      }
-
-      Ok(pixmap)
+      self.layout_document_for_media_with_artifacts(
+        &dom,
+        layout_width,
+        layout_height,
+        options.media_type,
+      )
     })();
 
     self.device_pixel_ratio = previous_dpr;
     self.pending_device_size = None;
+    let artifacts = artifacts_result?;
 
-    result
+    let layout_viewport = artifacts.fragment_tree.viewport_size();
+    if std::env::var("FASTR_LOG_FRAG_BOUNDS")
+      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+      .unwrap_or(false)
+    {
+      let bbox = artifacts.fragment_tree.content_size();
+      eprintln!(
+              "[frag-bounds] viewport=({}x{}) bbox=({:.1},{:.1})→({:.1},{:.1}) size=({:.1}x{:.1}) fragments={}",
+              layout_viewport.width,
+              layout_viewport.height,
+              bbox.min_x(),
+              bbox.min_y(),
+              bbox.max_x(),
+              bbox.max_y(),
+              bbox.width(),
+              bbox.height(),
+              artifacts.fragment_tree.fragment_count()
+          );
+    }
+
+    if let Ok(v) = std::env::var("FASTR_DUMP_TEXT_FRAGMENTS") {
+      if v != "0" && !v.eq_ignore_ascii_case("false") {
+        let limit: usize = v.parse().unwrap_or(20);
+        let mut total = 0usize;
+        let mut stack = vec![(&artifacts.fragment_tree.root, crate::geometry::Point::ZERO)];
+        while let Some((frag, offset)) = stack.pop() {
+          let abs = crate::geometry::Rect::from_xywh(
+            frag.bounds.x() + offset.x,
+            frag.bounds.y() + offset.y,
+            frag.bounds.width(),
+            frag.bounds.height(),
+          );
+          if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &frag.content {
+            if total < limit {
+              eprintln!(
+                "text frag {} @ ({:.1},{:.1},{:.1},{:.1}) {:?}",
+                total,
+                abs.x(),
+                abs.y(),
+                abs.width(),
+                abs.height(),
+                text.chars().take(80).collect::<String>()
+              );
+            }
+            total += 1;
+          }
+          for child in frag.children.iter().rev() {
+            stack.push((child, crate::geometry::Point::new(abs.x(), abs.y())));
+          }
+        }
+        eprintln!("total text fragments: {}", total);
+      }
+    }
+
+    if let Ok(query) = std::env::var("FASTR_TRACE_TEXT") {
+      fn describe_node(node: &crate::tree::fragment_tree::FragmentNode) -> String {
+        let display = node
+          .style
+          .as_ref()
+          .map(|s| format!("{:?}", s.display))
+          .unwrap_or_else(|| "None".to_string());
+        match &node.content {
+          crate::tree::fragment_tree::FragmentContent::Block { box_id } => {
+            format!("Block(box_id={:?}, display={})", box_id, display)
+          }
+          crate::tree::fragment_tree::FragmentContent::Inline {
+            box_id,
+            fragment_index,
+          } => {
+            format!(
+              "Inline(box_id={:?}, fragment_index={}, display={})",
+              box_id, fragment_index, display
+            )
+          }
+          crate::tree::fragment_tree::FragmentContent::Line { baseline } => {
+            format!("Line(baseline={:.3}, display={})", baseline, display)
+          }
+          crate::tree::fragment_tree::FragmentContent::Text {
+            text,
+            box_id,
+            baseline_offset,
+            ..
+          } => {
+            let preview: String = text.chars().take(80).collect();
+            format!(
+              "Text(box_id={:?}, baseline={:.3}, display={}, text=\"{}\")",
+              box_id, baseline_offset, display, preview
+            )
+          }
+          crate::tree::fragment_tree::FragmentContent::Replaced { box_id, .. } => {
+            format!("Replaced(box_id={:?}, display={})", box_id, display)
+          }
+        }
+      }
+
+      fn trace_text<'a>(
+        node: &'a crate::tree::fragment_tree::FragmentNode,
+        offset: crate::geometry::Point,
+        query: &str,
+        trail: &mut Vec<String>,
+      ) -> bool {
+        let raw = node.bounds;
+        let abs = crate::geometry::Rect::from_xywh(
+          node.bounds.x() + offset.x,
+          node.bounds.y() + offset.y,
+          node.bounds.width(),
+          node.bounds.height(),
+        );
+        let label = format!(
+          "{} raw=({:.1},{:.1},{:.1},{:.1}) abs=({:.1},{:.1},{:.1},{:.1})",
+          describe_node(node),
+          raw.x(),
+          raw.y(),
+          raw.width(),
+          raw.height(),
+          abs.x(),
+          abs.y(),
+          abs.width(),
+          abs.height()
+        );
+        trail.push(label);
+        if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &node.content {
+          if text.contains(query) {
+            eprintln!("trace for {:?}:", query);
+            for (depth, entry) in trail.iter().enumerate() {
+              eprintln!("  {}{}", "  ".repeat(depth), entry);
+            }
+            trail.pop();
+            return true;
+          }
+        }
+        let child_offset = crate::geometry::Point::new(abs.x(), abs.y());
+        for child in &node.children {
+          if trace_text(child, child_offset, query, trail) {
+            trail.pop();
+            return true;
+          }
+        }
+        trail.pop();
+        false
+      }
+      let mut trail = Vec::new();
+      trace_text(
+        &artifacts.fragment_tree.root,
+        crate::geometry::Point::ZERO,
+        &query,
+        &mut trail,
+      );
+    }
+
+    if let Some(start) = stage_start {
+      let now = Instant::now();
+      eprintln!("timing:layout_document {:?}", now - start);
+    }
+
+    Ok(PreparedDocument {
+      dom: artifacts.dom,
+      stylesheet: artifacts.stylesheet,
+      styled_tree: artifacts.styled_tree,
+      box_tree: artifacts.box_tree,
+      fragment_tree: artifacts.fragment_tree,
+      layout_viewport,
+      visual_viewport: resolved_viewport.visual_viewport,
+      device_pixel_ratio: resolved_viewport.device_pixel_ratio,
+      background_color: self.background_color,
+      default_scroll: Point::new(options.scroll_x, options.scroll_y),
+      font_context: self.font_context.clone(),
+      image_cache: self.image_cache.clone(),
+    })
   }
 
   /// Renders HTML with a custom background color
@@ -1635,7 +1904,6 @@ impl FastRender {
     self.layout_document_for_media(dom, width, height, MediaType::Screen)
   }
 
-  #[allow(clippy::cognitive_complexity)]
   pub fn layout_document_for_media(
     &mut self,
     dom: &DomNode,
@@ -1643,6 +1911,19 @@ impl FastRender {
     height: u32,
     media_type: MediaType,
   ) -> Result<FragmentTree> {
+    let artifacts =
+      self.layout_document_for_media_with_artifacts(dom, width, height, media_type)?;
+    Ok(artifacts.fragment_tree)
+  }
+
+  #[allow(clippy::cognitive_complexity)]
+  fn layout_document_for_media_with_artifacts(
+    &mut self,
+    dom: &DomNode,
+    width: u32,
+    height: u32,
+    media_type: MediaType,
+  ) -> Result<LayoutArtifacts> {
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
     let overall_start = timings_enabled.then(Instant::now);
 
@@ -2217,7 +2498,13 @@ impl FastRender {
         .collect();
     }
 
-    Ok(fragment_tree)
+    Ok(LayoutArtifacts {
+      dom: dom_with_state,
+      stylesheet,
+      styled_tree,
+      box_tree,
+      fragment_tree,
+    })
   }
 
   /// Paints a fragment tree to a pixmap
@@ -2997,94 +3284,7 @@ impl FastRender {
     scroll: Point,
     viewport: Size,
   ) {
-    let abs_origin = Point::new(
-      parent_rect.x() + fragment.bounds.x(),
-      parent_rect.y() + fragment.bounds.y(),
-    );
-    let abs_rect = Rect::from_xywh(
-      abs_origin.x,
-      abs_origin.y,
-      fragment.bounds.width(),
-      fragment.bounds.height(),
-    );
-
-    for child in fragment.children.iter_mut() {
-      self.apply_sticky_offsets(child, abs_rect, scroll, viewport);
-    }
-
-    let Some(style) = fragment.style.as_ref() else {
-      return;
-    };
-    if !style.position.is_sticky() {
-      return;
-    }
-
-    let inline_base = Some(parent_rect.width());
-    let block_base = if parent_rect.height() > 0.0 {
-      Some(parent_rect.height())
-    } else {
-      None
-    };
-    let containing_block =
-      ContainingBlock::with_viewport_and_bases(parent_rect, viewport, inline_base, block_base);
-    let positioned =
-      resolve_positioned_style(style, &containing_block, viewport, &self.font_context);
-    let constraints = crate::layout::contexts::positioned::StickyConstraints::from_style(
-      &positioned,
-      &containing_block,
-      &self.font_context,
-    );
-    if !constraints.has_constraints() {
-      return;
-    }
-
-    let mut screen_x = abs_rect.x() - scroll.x;
-    let mut screen_y = abs_rect.y() - scroll.y;
-
-    let container_screen_min_x = parent_rect.x() - scroll.x;
-    let container_screen_max_x = parent_rect.max_x() - scroll.x;
-    let container_screen_min_y = parent_rect.y() - scroll.y;
-    let container_screen_max_y = parent_rect.max_y() - scroll.y;
-
-    let left = constraints.left.unwrap_or(0.0);
-    let right = constraints.right.unwrap_or(0.0);
-    let top = constraints.top.unwrap_or(0.0);
-    let bottom = constraints.bottom.unwrap_or(0.0);
-
-    if constraints.left.is_some() || constraints.right.is_some() {
-      let min_x = container_screen_min_x + left;
-      let max_x = container_screen_max_x - right - abs_rect.width();
-      let viewport_min_x = left;
-      let viewport_max_x = viewport.width - right - abs_rect.width();
-      let clamp_min_x = min_x.max(viewport_min_x);
-      let clamp_max_x = max_x.min(viewport_max_x);
-      screen_x = screen_x.max(clamp_min_x).min(clamp_max_x);
-    }
-
-    if constraints.top.is_some() || constraints.bottom.is_some() {
-      let min_y = container_screen_min_y + top;
-      let max_y = container_screen_max_y - bottom - abs_rect.height();
-      let viewport_min_y = top;
-      let viewport_max_y = viewport.height - bottom - abs_rect.height();
-      let clamp_min_y = min_y.max(viewport_min_y);
-      let clamp_max_y = max_y.min(viewport_max_y);
-      screen_y = screen_y.max(clamp_min_y).min(clamp_max_y);
-    }
-
-    let mut new_abs_x = screen_x + scroll.x;
-    let mut new_abs_y = screen_y + scroll.y;
-
-    let cb_min_x = parent_rect.x();
-    let cb_min_y = parent_rect.y();
-    let cb_max_x = parent_rect.max_x();
-    let cb_max_y = parent_rect.max_y();
-    new_abs_x = new_abs_x.min(cb_max_x - abs_rect.width()).max(cb_min_x);
-    new_abs_y = new_abs_y.min(cb_max_y - abs_rect.height()).max(cb_min_y);
-
-    let delta = Point::new(new_abs_x - abs_rect.x(), new_abs_y - abs_rect.y());
-    if delta.x.abs() > f32::EPSILON || delta.y.abs() > f32::EPSILON {
-      *fragment = fragment.translate(delta);
-    }
+    apply_sticky_offsets_with_context(&self.font_context, fragment, parent_rect, scroll, viewport);
   }
 
   // ===  // Convenience methods for encoding to image formats
