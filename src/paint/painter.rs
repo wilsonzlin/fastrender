@@ -1698,16 +1698,18 @@ impl Painter {
       });
 
       match (overflow_clip, clip_property) {
-        (Some(overflow), Some(prop_rect)) => overflow
-          .rect
-          .intersection(prop_rect)
-          .map(|rect| StackingClip {
-            rect,
-            radii: BorderRadii::ZERO,
-            clip_x: true,
-            clip_y: true,
-            clip_root: true,
-          }),
+        (Some(overflow), Some(prop_rect)) => {
+          overflow
+            .rect
+            .intersection(prop_rect)
+            .map(|rect| StackingClip {
+              rect,
+              radii: BorderRadii::ZERO,
+              clip_x: true,
+              clip_y: true,
+              clip_root: true,
+            })
+        }
         (Some(overflow), None) => Some(overflow),
         (None, Some(prop_rect)) => Some(StackingClip {
           rect: prop_rect,
@@ -2049,7 +2051,12 @@ impl Painter {
           if total_ms >= threshold_ms {
             let (run_count, glyph_count) = shaped_runs
               .as_deref()
-              .map(|runs| (runs.len(), runs.iter().map(|r| r.glyphs.len()).sum::<usize>()))
+              .map(|runs| {
+                (
+                  runs.len(),
+                  runs.iter().map(|r| r.glyphs.len()).sum::<usize>(),
+                )
+              })
               .unwrap_or((0, 0));
             let preview: String = text.chars().take(80).collect();
             eprintln!(
@@ -5273,12 +5280,7 @@ impl Painter {
         let resolved = self.image_cache.resolve_url(src);
         eprintln!(
           "[image-paint] #{idx} src={} resolved={} rect=({:.1},{:.1},{:.1},{:.1})",
-          src,
-          resolved,
-          x,
-          y,
-          width,
-          height
+          src, resolved, x, y, width, height
         );
       }
     }
@@ -5507,13 +5509,14 @@ impl Painter {
 
       let render_w = dest_w_device.ceil().max(1.0) as u32;
       let render_h = dest_h_device.ceil().max(1.0) as u32;
-      let pixmap = match self
-        .image_cache
-        .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
-      {
-        Ok(pixmap) => pixmap,
-        Err(_) => return false,
-      };
+      let pixmap =
+        match self
+          .image_cache
+          .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
+        {
+          Ok(pixmap) => pixmap,
+          Err(_) => return false,
+        };
 
       let scale_x = dest_w_device / render_w as f32;
       let scale_y = dest_h_device / render_h as f32;
