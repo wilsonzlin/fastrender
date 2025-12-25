@@ -5,7 +5,11 @@ use fastrender::style::types::BreakInside;
 use fastrender::{ComputedStyle, FragmentContent, FragmentNode, Rect};
 
 fn labeled_line(y: f32, label: &str) -> FragmentNode {
-  let text = FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), label.to_string(), 8.0);
+  let text = FragmentNode::new_text(
+    Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+    label.to_string(),
+    8.0,
+  );
   FragmentNode::new_line(Rect::from_xywh(0.0, y, 100.0, 15.0), 12.0, vec![text])
 }
 
