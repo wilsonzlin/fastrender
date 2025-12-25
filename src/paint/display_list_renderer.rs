@@ -3037,6 +3037,7 @@ impl DisplayListRenderer {
                   &dst_quad,
                   (self.canvas.width(), self.canvas.height()),
                   self.canvas.clip_mask(),
+                  self.canvas.clip_mask(),
                 )
               });
 
