@@ -53,8 +53,8 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 
 - There is no dedicated "bundle" format. Offline captures are the on-disk caches produced by the existing tools:
   - `fetch_pages` writes HTML under `fetches/html/` and a `*.html.meta` sidecar with the original content-type and final URL.
-  - `render_pages` uses a disk-caching fetcher for subresources, writing into `fetches/assets/`. After one online render, you can re-run against the same caches without network access (new URLs will still fail).
-- Asset fetches made by the CLI tools go through the disk-backed `DiskCachingFetcher` helper in `src/bin/caching_fetcher.rs`; API consumers should use the library's in-memory [`fastrender::resource::CachingFetcher`] (single-flight, no disk writes).
+  - `render_pages` and `fetch_and_render` use the shared disk-backed fetcher (when built with `--features disk_cache`) for subresources, writing into `fetches/assets/`. After one online render, you can re-run against the same caches without network access (new URLs will still fail).
+- Asset fetches made by the CLI tools go through the library cache layer: [`fastrender::resource::CachingFetcher`] in-memory by default, or [`fastrender::resource::DiskCachingFetcher`] behind the optional `disk_cache` feature.
 - To replay a single saved page, point `fetch_and_render` at a `file://` URL or path; it will read an adjacent `.meta` file (if present) to recover the cached content-type and source URL.
 
 ## Diagnostics

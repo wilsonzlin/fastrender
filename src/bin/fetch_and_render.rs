@@ -19,6 +19,10 @@ use common::render_pipeline::{
 use fastrender::image_output::encode_image;
 use fastrender::resource::normalize_user_agent_for_log;
 use fastrender::resource::url_to_filename;
+#[cfg(not(feature = "disk_cache"))]
+use fastrender::resource::CachingFetcher;
+#[cfg(feature = "disk_cache")]
+use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
@@ -32,6 +36,8 @@ use std::thread;
 use std::time::Duration;
 
 const STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
+#[cfg(feature = "disk_cache")]
+const ASSET_CACHE_DIR: &str = "fetches/assets";
 
 /// Fetch a single page and render it to an image
 #[derive(Parser, Debug)]
@@ -212,11 +218,11 @@ fn render_page(
   user_agent: &str,
   accept_language: &str,
 ) -> Result<()> {
-  let fetcher = Arc::new(build_http_fetcher(
-    user_agent,
-    accept_language,
-    timeout_secs,
-  ));
+  let http = build_http_fetcher(user_agent, accept_language, timeout_secs);
+  #[cfg(feature = "disk_cache")]
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::new(http, ASSET_CACHE_DIR));
+  #[cfg(not(feature = "disk_cache"))]
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(CachingFetcher::new(http));
 
   let mut renderer = build_renderer_with_fetcher(bundle.config, fetcher.clone())?;
   let mut log = |line: &str| println!("{line}");

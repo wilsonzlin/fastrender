@@ -4,10 +4,8 @@
 //! Logs per-page to fetches/renders/{name}.log
 //! Summary to fetches/renders/_summary.log
 
-mod caching_fetcher;
 mod common;
 
-use caching_fetcher::DiskCachingFetcher;
 use clap::Parser;
 use common::render_pipeline::{
   build_render_configs, build_renderer_with_fetcher, follow_client_redirects, log_diagnostics,
@@ -16,7 +14,12 @@ use common::render_pipeline::{
 use fastrender::image_output::encode_image;
 use fastrender::resource::normalize_page_name;
 use fastrender::resource::normalize_user_agent_for_log;
+#[cfg(not(feature = "disk_cache"))]
+use fastrender::resource::CachingFetcher;
+#[cfg(feature = "disk_cache")]
+use fastrender::resource::DiskCachingFetcher;
 use fastrender::resource::HttpFetcher;
+use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::OutputFormat;
@@ -299,11 +302,18 @@ fn main() {
   }
 
   // Create shared caching fetcher
-  let fetcher = Arc::new(DiskCachingFetcher::new(
+  #[cfg(feature = "disk_cache")]
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(DiskCachingFetcher::new(
     HttpFetcher::new()
       .with_user_agent(args.user_agent.clone())
       .with_accept_language(args.accept_language.clone()),
     ASSET_DIR,
+  ));
+  #[cfg(not(feature = "disk_cache"))]
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(CachingFetcher::new(
+    HttpFetcher::new()
+      .with_user_agent(args.user_agent.clone())
+      .with_accept_language(args.accept_language.clone()),
   ));
 
   let (viewport_w, viewport_h) = args.viewport;
@@ -403,7 +413,7 @@ fn main() {
         let worker_name = name.clone();
         let render_opts = options.clone();
         let render_config = config.clone();
-        let render_fetcher = fetcher.clone() as Arc<dyn fastrender::resource::ResourceFetcher>;
+        let render_fetcher = fetcher.clone();
         let doc_for_render = doc.clone();
         let panic_to_string = |panic: Box<dyn std::any::Any + Send + 'static>| -> String {
           panic
