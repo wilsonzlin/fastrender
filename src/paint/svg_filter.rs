@@ -1,4 +1,4 @@
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::style::color;
@@ -195,8 +195,55 @@ pub enum FilterPrimitive {
 pub enum FilterInput {
   SourceGraphic,
   SourceAlpha,
+  BackgroundImage,
+  BackgroundAlpha,
+  FillPaint,
+  StrokePaint,
   Reference(String),
   Previous,
+}
+
+#[derive(Clone, Debug)]
+struct FilterResult {
+  pixmap: Pixmap,
+  region: Rect,
+}
+
+impl FilterResult {
+  fn new(pixmap: Pixmap, region: Rect, filter_region: Rect) -> Self {
+    Self {
+      pixmap,
+      region: clip_region(region, filter_region),
+    }
+  }
+
+  fn full_region(pixmap: Pixmap, filter_region: Rect) -> Self {
+    Self::new(pixmap, filter_region, filter_region)
+  }
+}
+
+fn clip_region(region: Rect, filter_region: Rect) -> Rect {
+  region
+    .intersection(filter_region)
+    .unwrap_or(Rect::from_xywh(
+      filter_region.x(),
+      filter_region.y(),
+      0.0,
+      0.0,
+    ))
+}
+
+fn filter_region_for_pixmap(pixmap: &Pixmap) -> Rect {
+  Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32)
+}
+
+fn transparent_result(filter_region: Rect) -> Option<FilterResult> {
+  let width = filter_region.width().max(0.0).round() as u32;
+  let height = filter_region.height().max(0.0).round() as u32;
+  Some(FilterResult::full_region(
+    Pixmap::new(width, height)?,
+    filter_region,
+  ))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -451,6 +498,10 @@ pub(crate) fn collect_svg_filters(
 
 fn parse_input(attr: Option<&str>) -> FilterInput {
   match attr.map(|s| s.trim()) {
+    Some(v) if v.eq_ignore_ascii_case("backgroundimage") => FilterInput::BackgroundImage,
+    Some(v) if v.eq_ignore_ascii_case("backgroundalpha") => FilterInput::BackgroundAlpha,
+    Some(v) if v.eq_ignore_ascii_case("fillpaint") => FilterInput::FillPaint,
+    Some(v) if v.eq_ignore_ascii_case("strokepaint") => FilterInput::StrokePaint,
     Some(v) if v.eq_ignore_ascii_case("sourcealpha") => FilterInput::SourceAlpha,
     Some(v) if v.eq_ignore_ascii_case("sourcegraphic") => FilterInput::SourceGraphic,
     Some(v) if !v.is_empty() => FilterInput::Reference(v.to_string()),
@@ -840,20 +891,6 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
   } else {
     1.0
   };
-  let source = pixmap.clone();
-  let mut results: HashMap<String, Pixmap> = HashMap::new();
-  let mut current = source.clone();
-
-  for step in &def.steps {
-    if let Some(next) = apply_primitive(&step.primitive, &source, &results, &current, scale) {
-      if let Some(name) = &step.result {
-        results.insert(name.clone(), next.clone());
-      }
-      current = next;
-    }
-  }
-
-  *pixmap = current;
 
   let css_bbox = Rect::from_xywh(
     bbox.x() / scale,
@@ -861,14 +898,37 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
     bbox.width() / scale,
     bbox.height() / scale,
   );
-  let region = def.resolve_region(css_bbox);
-  let region = Rect::from_xywh(
-    region.x() * scale,
-    region.y() * scale,
-    region.width() * scale,
-    region.height() * scale,
+  let css_region = def.resolve_region(css_bbox);
+  let filter_region = Rect::from_xywh(
+    css_region.x() * scale,
+    css_region.y() * scale,
+    css_region.width() * scale,
+    css_region.height() * scale,
   );
-  clip_to_region(pixmap, region);
+
+  let source_region = clip_region(filter_region_for_pixmap(pixmap), filter_region);
+  let source = FilterResult::new(pixmap.clone(), source_region, filter_region);
+  let mut results: HashMap<String, FilterResult> = HashMap::new();
+  let mut current = source.clone();
+
+  for step in &def.steps {
+    if let Some(next) = apply_primitive(
+      &step.primitive,
+      &source,
+      &results,
+      &current,
+      scale,
+      filter_region,
+    ) {
+      if let Some(name) = &step.result {
+        results.insert(name.clone(), next.clone());
+      }
+      current = next;
+    }
+  }
+
+  *pixmap = current.pixmap;
+  clip_to_region(pixmap, filter_region);
 }
 
 fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
@@ -913,28 +973,37 @@ fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
 
 fn apply_primitive(
   primitive: &FilterPrimitive,
-  source: &Pixmap,
-  results: &HashMap<String, Pixmap>,
-  current: &Pixmap,
+  source: &FilterResult,
+  results: &HashMap<String, FilterResult>,
+  current: &FilterResult,
   scale: f32,
-) -> Option<Pixmap> {
+  filter_region: Rect,
+) -> Option<FilterResult> {
   match primitive {
-    FilterPrimitive::Flood { color, opacity } => {
-      flood(source.width(), source.height(), color, *opacity)
-    }
+    FilterPrimitive::Flood { color, opacity } => flood(
+      source.pixmap.width(),
+      source.pixmap.height(),
+      color,
+      *opacity,
+    )
+    .map(|pixmap| FilterResult::full_region(pixmap, filter_region)),
     FilterPrimitive::GaussianBlur { input, std_dev } => {
-      let mut img = resolve_input(input, source, results, current)?;
+      let mut img = resolve_input(input, source, results, current, filter_region)?;
       let radius = *std_dev * scale;
       if radius > 0.0 {
-        apply_gaussian_blur(&mut img, radius);
+        apply_gaussian_blur(&mut img.pixmap, radius);
+        let expanded = img.region.inflate(radius * 3.0);
+        img.region = clip_region(expanded, filter_region);
       }
       Some(img)
     }
-    FilterPrimitive::Offset { input, dx, dy } => resolve_input(input, source, results, current)
-      .map(|img| offset_pixmap(img, *dx * scale, *dy * scale)),
+    FilterPrimitive::Offset { input, dx, dy } => {
+      resolve_input(input, source, results, current, filter_region)
+        .map(|img| offset_result(img, *dx * scale, *dy * scale, filter_region))
+    }
     FilterPrimitive::ColorMatrix { input, kind } => {
-      let mut img = resolve_input(input, source, results, current)?;
-      apply_color_matrix(&mut img, kind);
+      let mut img = resolve_input(input, source, results, current, filter_region)?;
+      apply_color_matrix(&mut img.pixmap, kind);
       Some(img)
     }
     FilterPrimitive::Composite {
@@ -942,11 +1011,18 @@ fn apply_primitive(
       input2,
       operator,
     } => composite_pixmaps(
-      resolve_input(input1, source, results, current),
-      resolve_input(input2, source, results, current),
+      resolve_input(input1, source, results, current, filter_region),
+      resolve_input(input2, source, results, current, filter_region),
       *operator,
+      filter_region,
     ),
-    FilterPrimitive::Merge { inputs } => Some(merge_inputs(inputs, source, results, current)),
+    FilterPrimitive::Merge { inputs } => Some(merge_inputs(
+      inputs,
+      source,
+      results,
+      current,
+      filter_region,
+    )),
     FilterPrimitive::DropShadow {
       input,
       dx,
@@ -954,7 +1030,7 @@ fn apply_primitive(
       std_dev,
       color,
       opacity,
-    } => resolve_input(input, source, results, current).map(|img| {
+    } => resolve_input(input, source, results, current, filter_region).map(|img| {
       drop_shadow_pixmap(
         img,
         *dx * scale,
@@ -962,6 +1038,7 @@ fn apply_primitive(
         *std_dev * scale,
         color,
         *opacity,
+        filter_region,
       )
     }),
     FilterPrimitive::Blend {
@@ -969,35 +1046,59 @@ fn apply_primitive(
       input2,
       mode,
     } => blend_pixmaps(
-      resolve_input(input1, source, results, current),
-      resolve_input(input2, source, results, current),
+      resolve_input(input1, source, results, current, filter_region),
+      resolve_input(input2, source, results, current, filter_region),
       *mode,
+      filter_region,
     ),
     FilterPrimitive::Morphology { input, radius, op } => {
-      resolve_input(input, source, results, current).map(|mut img| {
-        apply_morphology(&mut img, *radius * scale, *op);
+      resolve_input(input, source, results, current, filter_region).map(|mut img| {
+        let r = *radius * scale;
+        apply_morphology(&mut img.pixmap, r, *op);
+        img.region = clip_region(
+          match op {
+            MorphologyOp::Dilate => img.region.inflate(r),
+            MorphologyOp::Erode => img.region.inflate(-r),
+          },
+          filter_region,
+        );
         img
       })
     }
     FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
-      resolve_input(input, source, results, current).map(|mut img| {
-        apply_component_transfer(&mut img, r, g, b, a);
+      resolve_input(input, source, results, current, filter_region).map(|mut img| {
+        apply_component_transfer(&mut img.pixmap, r, g, b, a);
         img
       })
     }
-    FilterPrimitive::Image(pix) => Some(pix.clone()),
-    FilterPrimitive::Tile { input } => resolve_input(input, source, results, current),
+    FilterPrimitive::Image(pix) => Some(FilterResult::new(
+      pix.clone(),
+      Rect::from_xywh(0.0, 0.0, pix.width() as f32, pix.height() as f32),
+      filter_region,
+    )),
+    FilterPrimitive::Tile { input } => {
+      resolve_input(input, source, results, current, filter_region)
+        .and_then(|img| tile_pixmap(img, filter_region))
+    }
     FilterPrimitive::Turbulence => Some(source.clone()),
     FilterPrimitive::DisplacementMap {
       in1,
       in2,
-      scale,
+      scale: disp_scale,
       x_channel,
       y_channel,
     } => {
-      let primary = resolve_input(in1, source, results, current)?;
-      let map = resolve_input(in2, source, results, current)?;
-      apply_displacement_map(&primary, &map, *scale, *x_channel, *y_channel)
+      let primary = resolve_input(in1, source, results, current, filter_region)?;
+      let map = resolve_input(in2, source, results, current, filter_region)?;
+      let output = apply_displacement_map(
+        &primary.pixmap,
+        &map.pixmap,
+        *disp_scale * scale,
+        *x_channel,
+        *y_channel,
+      )?;
+      let region = clip_region(primary.region.union(map.region), filter_region);
+      Some(FilterResult::new(output, region, filter_region))
     }
     FilterPrimitive::ConvolveMatrix {
       input,
@@ -1011,9 +1112,9 @@ fn apply_primitive(
       edge_mode,
       preserve_alpha,
       subregion,
-    } => resolve_input(input, source, results, current).map(|img| {
-      apply_convolve_matrix(
-        img,
+    } => resolve_input(input, source, results, current, filter_region).map(|img| {
+      let output = apply_convolve_matrix(
+        img.pixmap,
         *order_x,
         *order_y,
         kernel,
@@ -1024,28 +1125,42 @@ fn apply_primitive(
         *edge_mode,
         *preserve_alpha,
         *subregion,
-      )
+      );
+      FilterResult::new(output, img.region, filter_region)
     }),
   }
 }
 
 fn resolve_input(
   input: &FilterInput,
-  source: &Pixmap,
-  results: &HashMap<String, Pixmap>,
-  current: &Pixmap,
-) -> Option<Pixmap> {
+  source: &FilterResult,
+  results: &HashMap<String, FilterResult>,
+  current: &FilterResult,
+  filter_region: Rect,
+) -> Option<FilterResult> {
   match input {
     FilterInput::SourceGraphic => Some(source.clone()),
     FilterInput::SourceAlpha => {
-      let mut mask = Pixmap::new(source.width(), source.height())?;
-      for (dst, src) in mask.pixels_mut().iter_mut().zip(source.pixels().iter()) {
-        *dst = PremultipliedColorU8::from_rgba(0, 0, 0, src.alpha())
+      let mut mask = Pixmap::new(source.pixmap.width(), source.pixmap.height())?;
+      for (dst, src) in mask
+        .pixels_mut()
+        .iter_mut()
+        .zip(source.pixmap.pixels().iter())
+      {
+        let alpha = src.alpha();
+        *dst = PremultipliedColorU8::from_rgba(alpha, alpha, alpha, alpha)
           .unwrap_or(PremultipliedColorU8::TRANSPARENT);
       }
-      Some(mask)
+      Some(FilterResult::new(mask, source.region, filter_region))
     }
-    FilterInput::Reference(name) => results.get(name).cloned().or_else(|| Some(source.clone())),
+    FilterInput::BackgroundImage | FilterInput::BackgroundAlpha => {
+      transparent_result(filter_region)
+    }
+    FilterInput::FillPaint | FilterInput::StrokePaint => transparent_result(filter_region),
+    FilterInput::Reference(name) => results
+      .get(name)
+      .cloned()
+      .or_else(|| transparent_result(filter_region)),
     FilterInput::Previous => Some(current.clone()),
   }
 }
@@ -1068,52 +1183,112 @@ fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> Pixmap {
   out
 }
 
-fn composite_pixmaps(
-  input1: Option<Pixmap>,
-  input2: Option<Pixmap>,
-  op: CompositeOperator,
-) -> Option<Pixmap> {
-  let a = input1?;
-  let b = input2.unwrap_or_else(|| a.clone());
-  match op {
-    CompositeOperator::In => Some(mask_with(&a, &b)),
-    CompositeOperator::Over => Some(draw_over(&b, &a)),
-  }
+fn offset_result(input: FilterResult, dx: f32, dy: f32, filter_region: Rect) -> FilterResult {
+  let pixmap = offset_pixmap(input.pixmap, dx, dy);
+  let offset = Point::new(dx.round(), dy.round());
+  let region = clip_region(input.region.translate(offset), filter_region);
+  FilterResult { pixmap, region }
 }
 
-fn blend_pixmaps(a: Option<Pixmap>, b: Option<Pixmap>, mode: BlendMode) -> Option<Pixmap> {
+fn composite_pixmaps(
+  input1: Option<FilterResult>,
+  input2: Option<FilterResult>,
+  op: CompositeOperator,
+  filter_region: Rect,
+) -> Option<FilterResult> {
+  let a = input1?;
+  let b = input2.unwrap_or_else(|| a.clone());
+  let pixmap = match op {
+    CompositeOperator::In => mask_with(&a.pixmap, &b.pixmap),
+    CompositeOperator::Over => draw_over(&b.pixmap, &a.pixmap),
+  };
+  let region = match op {
+    CompositeOperator::In => clip_region(
+      a.region.intersection(b.region).unwrap_or(Rect::ZERO),
+      filter_region,
+    ),
+    CompositeOperator::Over => clip_region(a.region.union(b.region), filter_region),
+  };
+  Some(FilterResult { pixmap, region })
+}
+
+fn blend_pixmaps(
+  a: Option<FilterResult>,
+  b: Option<FilterResult>,
+  mode: BlendMode,
+  filter_region: Rect,
+) -> Option<FilterResult> {
   let mut base = a?;
   let top = b.unwrap_or_else(|| base.clone());
   let mut paint = PixmapPaint::default();
   paint.blend_mode = mode;
-  base.draw_pixmap(0, 0, top.as_ref(), &paint, Transform::identity(), None);
-  Some(base)
+  base.pixmap.draw_pixmap(
+    0,
+    0,
+    top.pixmap.as_ref(),
+    &paint,
+    Transform::identity(),
+    None,
+  );
+  let region = clip_region(base.region.union(top.region), filter_region);
+  Some(FilterResult {
+    pixmap: base.pixmap,
+    region,
+  })
 }
 
 fn merge_inputs(
   inputs: &[FilterInput],
-  source: &Pixmap,
-  results: &HashMap<String, Pixmap>,
-  current: &Pixmap,
-) -> Pixmap {
-  let mut out = Pixmap::new(source.width(), source.height()).unwrap();
+  source: &FilterResult,
+  results: &HashMap<String, FilterResult>,
+  current: &FilterResult,
+  filter_region: Rect,
+) -> FilterResult {
+  let mut out = Pixmap::new(source.pixmap.width(), source.pixmap.height()).unwrap();
+  let mut region = Rect::ZERO;
+  let mut seen_any = false;
+  let mut paint = PixmapPaint::default();
+  paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+
   for input in inputs {
-    if let Some(img) = resolve_input(input, source, results, current) {
-      out = draw_over(&out, &img);
+    if let Some(img) = resolve_input(input, source, results, current, filter_region) {
+      out.draw_pixmap(
+        0,
+        0,
+        img.pixmap.as_ref(),
+        &paint,
+        Transform::identity(),
+        None,
+      );
+      region = if seen_any {
+        region.union(img.region)
+      } else {
+        img.region
+      };
+      seen_any = true;
     }
   }
-  out
+
+  FilterResult {
+    pixmap: out,
+    region: if seen_any {
+      clip_region(region, filter_region)
+    } else {
+      Rect::ZERO
+    },
+  }
 }
 
 fn drop_shadow_pixmap(
-  input: Pixmap,
+  input: FilterResult,
   dx: f32,
   dy: f32,
   stddev: f32,
   color: &Rgba,
   opacity: f32,
-) -> Pixmap {
-  let mut tinted = input.clone();
+  filter_region: Rect,
+) -> FilterResult {
+  let mut tinted = input.pixmap.clone();
   for px in tinted.pixels_mut() {
     let alpha = px.alpha() as f32 / 255.0 * opacity * color.a;
     let premul = |v: u8| {
@@ -1135,7 +1310,7 @@ fn drop_shadow_pixmap(
     apply_gaussian_blur(&mut shadow, stddev);
   }
 
-  let mut out = Pixmap::new(input.width(), input.height()).unwrap();
+  let mut out = Pixmap::new(input.pixmap.width(), input.pixmap.height()).unwrap();
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
   out.draw_pixmap(
@@ -1146,8 +1321,29 @@ fn drop_shadow_pixmap(
     Transform::identity(),
     None,
   );
-  out.draw_pixmap(0, 0, input.as_ref(), &paint, Transform::identity(), None);
-  out
+  out.draw_pixmap(
+    0,
+    0,
+    input.pixmap.as_ref(),
+    &paint,
+    Transform::identity(),
+    None,
+  );
+
+  let base_region = input.region;
+  let blur_spread = (stddev * 3.0).max(0.0);
+  let shadow_region = clip_region(
+    base_region
+      .inflate(blur_spread)
+      .translate(Point::new(dx.round(), dy.round())),
+    filter_region,
+  );
+  let region = clip_region(base_region.union(shadow_region), filter_region);
+
+  FilterResult {
+    pixmap: out,
+    region,
+  }
 }
 
 fn draw_over(bottom: &Pixmap, top: &Pixmap) -> Pixmap {
@@ -1170,6 +1366,69 @@ fn mask_with(src: &Pixmap, mask: &Pixmap) -> Pixmap {
     *dst = PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
   }
   out
+}
+
+fn region_to_int_bounds(
+  region: Rect,
+  max_width: u32,
+  max_height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+  let x0 = region.min_x().floor().max(0.0);
+  let y0 = region.min_y().floor().max(0.0);
+  let x1 = region.max_x().ceil().min(max_width as f32);
+  let y1 = region.max_y().ceil().min(max_height as f32);
+  if x1 <= x0 || y1 <= y0 {
+    return None;
+  }
+  Some((x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
+}
+
+fn tile_pixmap(input: FilterResult, filter_region: Rect) -> Option<FilterResult> {
+  let width = input.pixmap.width();
+  let height = input.pixmap.height();
+  let mut out = Pixmap::new(width, height)?;
+  let clipped_region = clip_region(input.region, filter_region);
+  let Some((start_x, start_y, tile_width, tile_height)) =
+    region_to_int_bounds(clipped_region, width, height)
+  else {
+    return Some(FilterResult {
+      pixmap: out,
+      region: Rect::ZERO,
+    });
+  };
+  let mut tile = Pixmap::new(tile_width, tile_height)?;
+  {
+    let src_pixels = input.pixmap.pixels();
+    let dst_pixels = tile.pixels_mut();
+    let src_stride = width as usize;
+    let dst_stride = tile_width as usize;
+    for row in 0..(tile_height as usize) {
+      let src_start = (start_y as usize + row) * src_stride + start_x as usize;
+      let src_end = src_start + dst_stride;
+      let dst_start = row * dst_stride;
+      let dst_end = dst_start + dst_stride;
+      dst_pixels[dst_start..dst_end].copy_from_slice(&src_pixels[src_start..src_end]);
+    }
+  }
+
+  let mut paint = PixmapPaint::default();
+  paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+  let tile_width_i32 = tile_width as i32;
+  let tile_height_i32 = tile_height as i32;
+  let mut y = 0;
+  while y < height as i32 {
+    let mut x = 0;
+    while x < width as i32 {
+      out.draw_pixmap(x, y, tile.as_ref(), &paint, Transform::identity(), None);
+      x += tile_width_i32;
+    }
+    y += tile_height_i32;
+  }
+
+  Some(FilterResult {
+    pixmap: out,
+    region: filter_region,
+  })
 }
 
 fn apply_displacement_map(
