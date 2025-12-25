@@ -3,12 +3,15 @@ use fastrender::layout::contexts::block::BlockFormattingContext;
 use fastrender::style::color::Rgba;
 use fastrender::style::display::FormattingContextType;
 use fastrender::style::types::BorderStyle;
+use fastrender::style::types::ColumnFill;
 use fastrender::style::types::ColumnSpan;
+use fastrender::style::types::WhiteSpace;
 use fastrender::style::values::Length;
 use fastrender::style::ComputedStyle;
 use fastrender::tree::box_tree::BoxNode;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use fastrender::FormattingContext;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn find_fragment<'a>(fragment: &'a FragmentNode, id: usize) -> Option<&'a FragmentNode> {
@@ -40,6 +43,151 @@ fn find_rule_fragment<'a>(fragment: &'a FragmentNode, color: Rgba) -> Option<&'a
     }
   }
   None
+}
+
+fn collect_line_positions(fragment: &FragmentNode, out: &mut Vec<(f32, f32)>) {
+  if matches!(fragment.content, FragmentContent::Line { .. }) {
+    out.push((fragment.bounds.x(), fragment.bounds.y()));
+  }
+  for child in &fragment.children {
+    collect_line_positions(child, out);
+  }
+}
+
+#[test]
+fn long_paragraph_splits_across_columns() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(300.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(20.0);
+  let parent_style = Arc::new(parent_style);
+
+  let mut para_style = ComputedStyle::default();
+  para_style.white_space = WhiteSpace::Pre;
+  let para_style = Arc::new(para_style);
+
+  let text: String = (0..20).map(|i| format!("line {}\n", i)).collect();
+  let mut para = BoxNode::new_block(
+    para_style.clone(),
+    FormattingContextType::Block,
+    vec![BoxNode::new_text(para_style.clone(), text)],
+  );
+  para.id = 11;
+
+  let mut parent = BoxNode::new_block(parent_style, FormattingContextType::Block, vec![para]);
+  parent.id = 12;
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&parent, &LayoutConstraints::definite_width(300.0))
+    .expect("layout");
+
+  let mut lines = Vec::new();
+  collect_line_positions(&fragment, &mut lines);
+
+  assert!(
+    lines.iter().any(|(x, _)| *x >= 150.0),
+    "lines should continue into the second column"
+  );
+}
+
+#[test]
+fn balanced_fill_spreads_lines_evenly() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(360.0));
+  parent_style.column_count = Some(3);
+  parent_style.column_gap = Length::px(10.0);
+  let parent_style = Arc::new(parent_style);
+
+  let mut para_style = ComputedStyle::default();
+  para_style.white_space = WhiteSpace::Pre;
+  let para_style = Arc::new(para_style);
+
+  let text: String = (0..15).map(|i| format!("l{}\n", i)).collect();
+  let para = BoxNode::new_block(
+    para_style.clone(),
+    FormattingContextType::Block,
+    vec![BoxNode::new_text(para_style.clone(), text)],
+  );
+
+  let root = BoxNode::new_block(parent_style, FormattingContextType::Block, vec![para]);
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&root, &LayoutConstraints::definite_width(360.0))
+    .expect("layout");
+
+  let mut lines = Vec::new();
+  collect_line_positions(&fragment, &mut lines);
+
+  let column_width = (360.0 - 10.0 * 2.0) / 3.0;
+  let stride = column_width + 10.0;
+  let mut counts: HashMap<usize, usize> = HashMap::new();
+  for (x, _) in lines {
+    let col = ((x / stride).floor() as usize).min(4);
+    *counts.entry(col).or_default() += 1;
+  }
+
+  assert_eq!(counts.len(), 3, "all columns should receive content");
+  let min = counts.values().copied().min().unwrap_or(0);
+  let max = counts.values().copied().max().unwrap_or(0);
+  assert!(
+    max.saturating_sub(min) <= 1,
+    "balanced fill should distribute lines evenly"
+  );
+}
+
+#[test]
+fn column_fill_auto_uses_definite_height() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(200.0));
+  parent_style.height = Some(Length::px(60.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(10.0);
+  parent_style.column_fill = ColumnFill::Auto;
+  let parent_style = Arc::new(parent_style);
+
+  let child_style = |height: f32| -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
+    style.height = Some(Length::px(height));
+    Arc::new(style)
+  };
+
+  let mut first = BoxNode::new_block(child_style(40.0), FormattingContextType::Block, vec![]);
+  first.id = 41;
+  let mut second = BoxNode::new_block(child_style(40.0), FormattingContextType::Block, vec![]);
+  second.id = 42;
+  let mut third = BoxNode::new_block(child_style(40.0), FormattingContextType::Block, vec![]);
+  third.id = 43;
+
+  let mut parent = BoxNode::new_block(
+    parent_style,
+    FormattingContextType::Block,
+    vec![first.clone(), second.clone(), third.clone()],
+  );
+  parent.id = 40;
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&parent, &LayoutConstraints::definite_width(200.0))
+    .expect("layout");
+
+  let first_frag = find_fragment(&fragment, first.id).expect("first fragment");
+  let second_frag = find_fragment(&fragment, second.id).expect("second fragment");
+  let third_frag = find_fragment(&fragment, third.id).expect("third fragment");
+
+  assert!(
+    (first_frag.bounds.y() - 0.0).abs() < 0.1,
+    "first column should start at y=0"
+  );
+  assert!(
+    (second_frag.bounds.y() - 0.0).abs() < 0.1,
+    "second column should share the same set origin"
+  );
+  assert!(
+    (third_frag.bounds.y() - 60.0).abs() < 0.6,
+    "overflow content should begin a new set using the definite height"
+  );
 }
 
 #[test]
