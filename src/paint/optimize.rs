@@ -3,8 +3,8 @@
 //! This module provides advanced optimization passes for display lists:
 //!
 //! - **Viewport culling**: Skip items outside the visible area
-//! - **Transparent item removal**: Remove fully transparent items
-//! - **No-op removal**: Remove identity transforms, 1.0 opacity, normal blend
+//! - **Transparent item removal**: Remove fully transparent items and opacity scopes
+//! - **No-op removal**: Remove identity transforms, 1.0 opacity, normal blend, and no-effect stacking contexts
 //! - **Adjacent fill merging**: Combine adjacent fills with the same color
 //!
 //! The optimizer builds on the basic `DisplayList::cull()` and `DisplayList::optimize()`
@@ -201,10 +201,36 @@ impl DisplayListOptimizer {
 
   /// Remove fully transparent items
   fn remove_transparent_items(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
-    items
-      .into_iter()
-      .filter(|item| !Self::is_transparent(item))
-      .collect()
+    let mut result = Vec::with_capacity(items.len());
+    let mut skip_opacity_depth: usize = 0;
+
+    for item in items {
+      if skip_opacity_depth > 0 {
+        match &item {
+          DisplayItem::PushOpacity(_) => skip_opacity_depth += 1,
+          DisplayItem::PopOpacity => {
+            skip_opacity_depth -= 1;
+          }
+          _ => {}
+        }
+        continue;
+      }
+
+      if let DisplayItem::PushOpacity(opacity) = &item {
+        if opacity.opacity <= 0.0 {
+          skip_opacity_depth = 1;
+          continue;
+        }
+      }
+
+      if Self::is_transparent(&item) {
+        continue;
+      }
+
+      result.push(item);
+    }
+
+    result
   }
 
   /// Check if an item is fully transparent
@@ -220,7 +246,6 @@ impl DisplayListOptimizer {
           || (d.underline.is_none() && d.overline.is_none() && d.line_through.is_none())
       }),
       DisplayItem::BoxShadow(item) => item.color.a == 0.0,
-      DisplayItem::PushOpacity(item) => item.opacity <= 0.0,
       _ => false,
     }
   }
@@ -228,35 +253,68 @@ impl DisplayListOptimizer {
   /// Remove no-op operations (identity transforms, 1.0 opacity, normal blend)
   fn remove_noop_items(&self, items: Vec<DisplayItem>) -> Vec<DisplayItem> {
     let mut result = Vec::with_capacity(items.len());
-    let mut skip_next_pop_opacity = 0;
-    let mut skip_next_pop_transform = 0;
-    let mut skip_next_pop_blend = 0;
+    let mut opacity_stack: Vec<bool> = Vec::new();
+    let mut transform_stack: Vec<bool> = Vec::new();
+    let mut blend_stack: Vec<bool> = Vec::new();
+    let mut stacking_context_stack: Vec<bool> = Vec::new();
 
     for item in items {
       match &item {
-        DisplayItem::PushOpacity(op) if op.opacity >= 1.0 => {
-          skip_next_pop_opacity += 1;
-          continue;
+        DisplayItem::PushOpacity(op) => {
+          let removed = op.opacity >= 1.0;
+          opacity_stack.push(removed);
+          if removed {
+            continue;
+          }
         }
-        DisplayItem::PopOpacity if skip_next_pop_opacity > 0 => {
-          skip_next_pop_opacity -= 1;
-          continue;
+        DisplayItem::PopOpacity => {
+          if let Some(removed) = opacity_stack.pop() {
+            if removed {
+              continue;
+            }
+          }
         }
-        DisplayItem::PushTransform(t) if t.transform.is_identity() => {
-          skip_next_pop_transform += 1;
-          continue;
+        DisplayItem::PushTransform(t) => {
+          let removed = t.transform.is_identity();
+          transform_stack.push(removed);
+          if removed {
+            continue;
+          }
         }
-        DisplayItem::PopTransform if skip_next_pop_transform > 0 => {
-          skip_next_pop_transform -= 1;
-          continue;
+        DisplayItem::PopTransform => {
+          if let Some(removed) = transform_stack.pop() {
+            if removed {
+              continue;
+            }
+          }
         }
-        DisplayItem::PushBlendMode(b) if b.mode == BlendMode::Normal => {
-          skip_next_pop_blend += 1;
-          continue;
+        DisplayItem::PushBlendMode(b) => {
+          let removed = b.mode == BlendMode::Normal;
+          blend_stack.push(removed);
+          if removed {
+            continue;
+          }
         }
-        DisplayItem::PopBlendMode if skip_next_pop_blend > 0 => {
-          skip_next_pop_blend -= 1;
-          continue;
+        DisplayItem::PopBlendMode => {
+          if let Some(removed) = blend_stack.pop() {
+            if removed {
+              continue;
+            }
+          }
+        }
+        DisplayItem::PushStackingContext(sc) => {
+          let removed = Self::is_noop_stacking_context(sc);
+          stacking_context_stack.push(removed);
+          if removed {
+            continue;
+          }
+        }
+        DisplayItem::PopStackingContext => {
+          if let Some(removed) = stacking_context_stack.pop() {
+            if removed {
+              continue;
+            }
+          }
         }
         _ => {}
       }
@@ -264,6 +322,16 @@ impl DisplayListOptimizer {
     }
 
     result
+  }
+
+  fn is_noop_stacking_context(item: &StackingContextItem) -> bool {
+    item.transform.is_none()
+      && item.filters.is_empty()
+      && item.backdrop_filters.is_empty()
+      && item.mask.is_none()
+      && item.mix_blend_mode == BlendMode::Normal
+      && !item.is_isolated
+      && item.radii.is_zero()
   }
 
   /// Cull items outside the viewport
@@ -291,15 +359,6 @@ impl DisplayListOptimizer {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
 
-          if !clip_stack.is_empty() {
-            // A transform within a clip scope can reposition descendants; be conservative and avoid
-            // culling based solely on the clip's initial bounds.
-            for clip in &mut clip_stack {
-              clip.can_cull = false;
-            }
-            refresh_context_clipping(&mut context_stack, &clip_stack);
-          }
-
           if let Some(transform) = Self::extract_2d_transform(&t.transform) {
             if !transform_state.culling_disabled() {
               transform_state.current = transform_state.current.multiply(&transform);
@@ -319,12 +378,6 @@ impl DisplayListOptimizer {
           let pushed_transform = sc.transform.is_some();
           if let Some(transform) = sc.transform.as_ref() {
             transform_stack.push(transform_state.clone());
-            if !clip_stack.is_empty() {
-              for clip in &mut clip_stack {
-                clip.can_cull = false;
-              }
-              refresh_context_clipping(&mut context_stack, &clip_stack);
-            }
             if let Some(transform) = Self::extract_2d_transform(transform) {
               if !transform_state.culling_disabled() {
                 transform_state.current = transform_state.current.multiply(&transform);
@@ -840,10 +893,16 @@ pub fn optimize_with_stats(list: DisplayList, viewport: Rect) -> (DisplayList, O
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::paint::display_list::BorderRadii;
+  use crate::paint::display_list::ClipItem;
+  use crate::paint::display_list::ClipShape;
   use crate::paint::display_list::OpacityItem;
+  use crate::paint::display_list::StackingContextItem;
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list::TransformItem;
   use crate::style::color::Rgba;
+  use crate::style::types::BackfaceVisibility;
+  use crate::style::types::TransformStyle;
   use std::f32::consts::FRAC_PI_4;
 
   fn make_fill_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba) -> DisplayItem {
@@ -851,6 +910,38 @@ mod tests {
       rect: Rect::from_xywh(x, y, w, h),
       color,
     })
+  }
+
+  fn assert_balanced(items: &[DisplayItem]) {
+    let mut clip = 0i32;
+    let mut opacity = 0i32;
+    let mut transform = 0i32;
+    let mut blend = 0i32;
+    let mut stacking = 0i32;
+
+    for item in items {
+      match item {
+        DisplayItem::PushClip(_) => clip += 1,
+        DisplayItem::PopClip => clip -= 1,
+        DisplayItem::PushOpacity(_) => opacity += 1,
+        DisplayItem::PopOpacity => opacity -= 1,
+        DisplayItem::PushTransform(_) => transform += 1,
+        DisplayItem::PopTransform => transform -= 1,
+        DisplayItem::PushBlendMode(_) => blend += 1,
+        DisplayItem::PopBlendMode => blend -= 1,
+        DisplayItem::PushStackingContext(_) => stacking += 1,
+        DisplayItem::PopStackingContext => stacking -= 1,
+        _ => {}
+      }
+
+      assert!(clip >= 0 && opacity >= 0 && transform >= 0 && blend >= 0 && stacking >= 0);
+    }
+
+    assert_eq!(clip, 0);
+    assert_eq!(opacity, 0);
+    assert_eq!(transform, 0);
+    assert_eq!(blend, 0);
+    assert_eq!(stacking, 0);
   }
 
   #[test]
@@ -868,6 +959,21 @@ mod tests {
   }
 
   #[test]
+  fn test_transparent_opacity_scope_removed() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushOpacity(OpacityItem { opacity: 0.0 }));
+    list.push(make_fill_rect(0.0, 0.0, 50.0, 50.0, Rgba::RED));
+    list.push(DisplayItem::PopOpacity);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 200.0, 200.0);
+    let (optimized, stats) = optimize_with_stats(list, viewport);
+
+    assert_eq!(stats.transparent_removed, 3);
+    assert_eq!(optimized.len(), 0);
+    assert_balanced(optimized.items());
+  }
+
+  #[test]
   fn test_viewport_culling() {
     let mut list = DisplayList::new();
     list.push(make_fill_rect(10.0, 10.0, 50.0, 50.0, Rgba::RED));
@@ -882,6 +988,30 @@ mod tests {
   }
 
   #[test]
+  fn test_offscreen_clipped_scope_with_transform_is_culled() {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushClip(ClipItem {
+      shape: ClipShape::Rect {
+        rect: Rect::from_xywh(1000.0, 1000.0, 50.0, 50.0),
+        radii: None,
+      },
+    }));
+    list.push(DisplayItem::PushTransform(TransformItem {
+      transform: Transform3D::translate(-1000.0, -1000.0, 0.0),
+    }));
+    list.push(make_fill_rect(1000.0, 1000.0, 30.0, 30.0, Rgba::GREEN));
+    list.push(DisplayItem::PopTransform);
+    list.push(DisplayItem::PopClip);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, stats) = optimize_with_stats(list, viewport);
+
+    assert_eq!(optimized.len(), 0);
+    assert_eq!(stats.culled_count, 5);
+    assert_balanced(optimized.items());
+  }
+
+  #[test]
   fn test_noop_removal() {
     let mut list = DisplayList::new();
     list.push(DisplayItem::PushOpacity(OpacityItem { opacity: 1.0 }));
@@ -893,6 +1023,37 @@ mod tests {
 
     assert_eq!(stats.noop_removed, 2);
     assert_eq!(optimized.len(), 1);
+  }
+
+  #[test]
+  fn test_noop_stacking_context_removed() {
+    let mut list = DisplayList::new();
+    let stacking_context = StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(0.0, 0.0, 50.0, 50.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: vec![],
+      backdrop_filters: vec![],
+      radii: BorderRadii::ZERO,
+      mask: None,
+    };
+
+    list.push(DisplayItem::PushStackingContext(stacking_context));
+    list.push(make_fill_rect(10.0, 10.0, 20.0, 20.0, Rgba::BLUE));
+    list.push(DisplayItem::PopStackingContext);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, stats) = optimize_with_stats(list, viewport);
+
+    assert_eq!(stats.noop_removed, 2);
+    assert_eq!(optimized.len(), 1);
+    assert!(matches!(optimized.items()[0], DisplayItem::FillRect(_)));
+    assert_balanced(optimized.items());
   }
 
   #[test]
