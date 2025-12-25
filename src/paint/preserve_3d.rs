@@ -115,6 +115,7 @@ pub fn composite_preserve_3d_with_options(list: &DisplayList, options: Preserve3
   let items = compose_fragments(
     fragments,
     Transform3D::identity(),
+    Transform3D::identity(),
     TransformStyle::Flat,
     root_bounds,
     options,
@@ -187,14 +188,15 @@ fn parse_fragments(items: &[DisplayItem], idx: &mut usize) -> Vec<FragmentNode> 
 
 fn compose_fragments(
   fragments: Vec<FragmentNode>,
-  parent_world: Transform3D,
+  parent_world_render: Transform3D,
+  parent_world_depth: Transform3D,
   parent_style: TransformStyle,
   parent_bounds: Rect,
   options: Preserve3dOptions,
   diagnostics: &mut Vec<String>,
   depth_level: usize,
 ) -> Vec<DisplayItem> {
-  let parent_depth = evaluate_depth(&parent_world, parent_bounds);
+  let parent_depth = evaluate_depth(&parent_world_depth, parent_bounds);
   let mut renderable: Vec<RenderableFragment> = Vec::with_capacity(fragments.len());
 
   for (idx, fragment) in fragments.into_iter().enumerate() {
@@ -215,10 +217,10 @@ fn compose_fragments(
       FragmentNode::Stacking { item, children } => {
         let has_transform = item.transform.is_some();
         let local_transform = item.transform.unwrap_or_else(Transform3D::identity);
-        let world_transform = parent_world.multiply(&local_transform);
+        let depth_transform = parent_world_depth.multiply(&local_transform);
 
         let scene_item = SceneItem {
-          transform: world_transform,
+          transform: depth_transform,
           bounds: item.bounds,
           transform_style: item.transform_style,
           backface_visibility: item.backface_visibility,
@@ -227,7 +229,7 @@ fn compose_fragments(
         let depth = if matches!(classification, TransformKind::Degenerate) {
           None
         } else {
-          evaluate_depth(&world_transform, item.bounds)
+          evaluate_depth(&depth_transform, item.bounds)
         };
         let fallback = if options.warp_available && matches!(classification, TransformKind::Perspective3D) {
           FallbackPath::Warp
@@ -243,10 +245,12 @@ fn compose_fragments(
             Transform3D::from_2d(&local_transform.to_2d().unwrap_or_else(|| local_transform.approximate_2d()))
           }
         };
-        let effective_world = parent_world.multiply(&render_transform);
+        let effective_world_render = parent_world_render.multiply(&render_transform);
+        let effective_world_depth = parent_world_depth.multiply(&local_transform);
         let composed_children = compose_fragments(
           children,
-          effective_world,
+          effective_world_render,
+          effective_world_depth,
           item.transform_style,
           item.bounds,
           options,
