@@ -7,6 +7,7 @@ use crate::error::Error;
 use crate::error::ImageError;
 use crate::error::RenderError;
 use crate::error::Result;
+use crate::resource::data_url;
 use crate::resource::CachingFetcher;
 use crate::resource::CachingFetcherConfig;
 use crate::resource::FetchedResource;
@@ -63,6 +64,14 @@ struct SvgPixmapKey {
   height: u32,
 }
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct SvgPreprocessKey {
+  svg_hash: u64,
+  svg_len: usize,
+  base_hash: u64,
+  base_len: usize,
+}
+
 fn svg_pixmap_key(svg_content: &str, width: u32, height: u32) -> SvgPixmapKey {
   let mut hasher = DefaultHasher::new();
   svg_content.hash(&mut hasher);
@@ -71,6 +80,26 @@ fn svg_pixmap_key(svg_content: &str, width: u32, height: u32) -> SvgPixmapKey {
     len: svg_content.len(),
     width,
     height,
+  }
+}
+
+fn svg_preprocess_key(svg_content: &str, base_url: Option<&str>) -> SvgPreprocessKey {
+  let mut svg_hasher = DefaultHasher::new();
+  svg_content.hash(&mut svg_hasher);
+
+  let (base_hash, base_len) = if let Some(base) = base_url {
+    let mut base_hasher = DefaultHasher::new();
+    base.hash(&mut base_hasher);
+    (base_hasher.finish(), base.len())
+  } else {
+    (0, 0)
+  };
+
+  SvgPreprocessKey {
+    svg_hash: svg_hasher.finish(),
+    svg_len: svg_content.len(),
+    base_hash,
+    base_len,
   }
 }
 
@@ -209,7 +238,10 @@ fn map_svg_aspect_ratio(
     SvgAlign::XMidYMin => ((render_width - scaled_w) * 0.5, 0.0),
     SvgAlign::XMaxYMin => (render_width - scaled_w, 0.0),
     SvgAlign::XMinYMid => (0.0, (render_height - scaled_h) * 0.5),
-    SvgAlign::XMidYMid => ((render_width - scaled_w) * 0.5, (render_height - scaled_h) * 0.5),
+    SvgAlign::XMidYMid => (
+      (render_width - scaled_w) * 0.5,
+      (render_height - scaled_h) * 0.5,
+    ),
     SvgAlign::XMaxYMid => (render_width - scaled_w, (render_height - scaled_h) * 0.5),
     SvgAlign::XMinYMax => (0.0, render_height - scaled_h),
     SvgAlign::XMidYMax => ((render_width - scaled_w) * 0.5, render_height - scaled_h),
@@ -240,17 +272,14 @@ fn svg_parse_fill_color(value: &str) -> Option<Rgba> {
   if let Some(hex) = crate::style::defaults::parse_color_attribute(trimmed) {
     return Some(hex);
   }
-  trimmed
-    .parse::<csscolorparser::Color>()
-    .ok()
-    .map(|c| {
-      Rgba::new(
-        (c.r * 255.0).round() as u8,
-        (c.g * 255.0).round() as u8,
-        (c.b * 255.0).round() as u8,
-        c.a as f32,
-      )
-    })
+  trimmed.parse::<csscolorparser::Color>().ok().map(|c| {
+    Rgba::new(
+      (c.r * 255.0).round() as u8,
+      (c.g * 255.0).round() as u8,
+      (c.b * 255.0).round() as u8,
+      c.a as f32,
+    )
+  })
 }
 
 fn multiply_alpha(mut color: Rgba, alpha: f32) -> Rgba {
@@ -530,7 +559,9 @@ fn arc_to_cubic_beziers(
   }
 
   // Split the arc into segments no larger than 90 degrees.
-  let segments = (delta_angle.abs() / (std::f64::consts::FRAC_PI_2)).ceil().max(1.0) as usize;
+  let segments = (delta_angle.abs() / (std::f64::consts::FRAC_PI_2))
+    .ceil()
+    .max(1.0) as usize;
   let seg_angle = delta_angle / segments as f64;
 
   for _ in 0..segments {
@@ -563,7 +594,9 @@ fn arc_to_cubic_beziers(
     let (c1x, c1y) = map(cp1x, cp1y);
     let (c2x, c2y) = map(cp2x, cp2y);
     let (ex, ey) = map(x2, y2);
-    pb.cubic_to(c1x as f32, c1y as f32, c2x as f32, c2y as f32, ex as f32, ey as f32);
+    pb.cubic_to(
+      c1x as f32, c1y as f32, c2x as f32, c2y as f32, ex as f32, ey as f32,
+    );
   }
 
   true
@@ -590,10 +623,7 @@ fn try_render_simple_svg_pixmap(
 
   for node in root.descendants().filter(|n| n.is_element()) {
     let name = node.tag_name().name();
-    let allowed = matches!(
-      name,
-      "svg" | "g" | "path" | "title" | "desc" | "metadata"
-    );
+    let allowed = matches!(name, "svg" | "g" | "path" | "title" | "desc" | "metadata");
     if !allowed {
       return None;
     }
@@ -609,7 +639,10 @@ fn try_render_simple_svg_pixmap(
       if node.attribute("d").is_none() {
         return None;
       }
-      if node.attribute("stroke").is_some_and(|v| !v.trim().eq_ignore_ascii_case("none")) {
+      if node
+        .attribute("stroke")
+        .is_some_and(|v| !v.trim().eq_ignore_ascii_case("none"))
+      {
         return None;
       }
       if node.attribute("stroke-width").is_some()
@@ -1037,6 +1070,8 @@ pub struct ImageCache {
   meta_cache: Arc<Mutex<HashMap<String, Arc<CachedImageMetadata>>>>,
   /// In-flight probes keyed by resolved URL to de-duplicate concurrent metadata loads.
   meta_in_flight: Arc<Mutex<HashMap<String, Arc<ProbeInFlight>>>>,
+  /// Cache of preprocessed SVG content keyed by input hash and base URL hash.
+  svg_preprocessed_cache: Arc<Mutex<HashMap<SvgPreprocessKey, Arc<String>>>>,
   /// In-memory cache of rendered inline SVG pixmaps keyed by (hash, size).
   svg_pixmap_cache: Arc<Mutex<HashMap<SvgPixmapKey, Arc<tiny_skia::Pixmap>>>>,
   /// Base URL for resolving relative image sources
@@ -1119,6 +1154,7 @@ impl ImageCache {
       in_flight: Arc::new(Mutex::new(HashMap::new())),
       meta_cache: Arc::new(Mutex::new(HashMap::new())),
       meta_in_flight: Arc::new(Mutex::new(HashMap::new())),
+      svg_preprocessed_cache: Arc::new(Mutex::new(HashMap::new())),
       svg_pixmap_cache: Arc::new(Mutex::new(HashMap::new())),
       base_url,
       fetcher,
@@ -1185,22 +1221,26 @@ impl ImageCache {
     // Resolve the URL first
     let resolved_url = self.resolve_url(url);
 
+    self.load_resolved(&resolved_url)
+  }
+
+  fn load_resolved(&self, resolved_url: &str) -> Result<Arc<CachedImage>> {
     // Check cache first (using resolved URL as key)
-    if let Some(img) = self.get_cached(&resolved_url) {
+    if let Some(img) = self.get_cached(resolved_url) {
       return Ok(img);
     }
 
-    let (flight, is_owner) = self.join_inflight(&resolved_url);
+    let (flight, is_owner) = self.join_inflight(resolved_url);
     if !is_owner {
       return flight.wait();
     }
 
-    let result = self.fetch_and_decode(&resolved_url);
+    let result = self.fetch_and_decode(resolved_url);
     let shared = match &result {
       Ok(img) => SharedImageResult::Success(Arc::clone(img)),
       Err(err) => SharedImageResult::Error(err.clone()),
     };
-    self.finish_inflight(&resolved_url, &flight, shared);
+    self.finish_inflight(resolved_url, &flight, shared);
 
     result
   }
@@ -1390,6 +1430,124 @@ impl ImageCache {
     }
   }
 
+  fn effective_svg_base_url<'a>(&self, base_url_override: Option<&'a str>) -> Option<String> {
+    if let Some(base) = base_url_override {
+      if Url::parse(base).is_ok() || Url::from_file_path(base).is_ok() {
+        return Some(base.to_string());
+      }
+    }
+    self.base_url.clone()
+  }
+
+  fn preprocess_svg_images(
+    &self,
+    svg_content: &str,
+    base_url_override: Option<&str>,
+  ) -> Arc<String> {
+    let base_for_resolution = self.effective_svg_base_url(base_url_override);
+    let key = svg_preprocess_key(svg_content, base_for_resolution.as_deref());
+    if let Ok(cache) = self.svg_preprocessed_cache.lock() {
+      if let Some(cached) = cache.get(&key) {
+        return Arc::clone(cached);
+      }
+    }
+
+    let processed = self.inline_svg_images(svg_content, base_for_resolution.as_deref());
+    let processed = Arc::new(processed);
+    if let Ok(mut cache) = self.svg_preprocessed_cache.lock() {
+      cache.insert(key, Arc::clone(&processed));
+    }
+    processed
+  }
+
+  fn inline_svg_images(&self, svg_content: &str, base_url: Option<&str>) -> String {
+    let doc = match Document::parse(svg_content) {
+      Ok(doc) => doc,
+      Err(_) => return svg_content.to_string(),
+    };
+
+    let mut replacements: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+
+    for node in doc
+      .descendants()
+      .filter(|n| n.is_element() && n.tag_name().name().eq_ignore_ascii_case("image"))
+    {
+      let mut href_attr = None;
+      for attr in node.attributes() {
+        let name: &str = attr.name().as_ref();
+        if name.eq_ignore_ascii_case("href") || name.eq_ignore_ascii_case("xlink:href") {
+          href_attr = Some(attr);
+          break;
+        }
+      }
+      let Some(attr) = href_attr else {
+        continue;
+      };
+
+      let href = attr.value();
+      if href.is_empty() || href.starts_with("data:") {
+        continue;
+      }
+
+      let resolved = self.resolve_svg_href(href, base_url);
+      let Ok(image) = self.load_resolved(&resolved) else {
+        continue;
+      };
+
+      let orientation = image.orientation.unwrap_or(OrientationTransform::IDENTITY);
+      let rgba = image.to_oriented_rgba(orientation);
+      let mut png_bytes = Vec::new();
+      if image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut Cursor::new(&mut png_bytes), ImageFormat::Png)
+        .is_err()
+      {
+        continue;
+      }
+
+      let data_url = data_url::encode_base64_data_url("image/png", &png_bytes);
+      if let Some(range) = attribute_value_range(svg_content, href) {
+        replacements.push((range, data_url));
+      }
+    }
+
+    if replacements.is_empty() {
+      return svg_content.to_string();
+    }
+
+    replacements.sort_by_key(|(range, _)| range.start);
+    let additional = replacements
+      .iter()
+      .map(|(_, value)| value.len())
+      .sum::<usize>();
+    let mut output = String::with_capacity(svg_content.len() + additional);
+    let mut last = 0;
+    for (range, value) in replacements {
+      if range.start < last {
+        continue;
+      }
+      output.push_str(&svg_content[last..range.start]);
+      output.push_str(&value);
+      last = range.end;
+    }
+    output.push_str(&svg_content[last..]);
+    output
+  }
+
+  fn resolve_svg_href(&self, href: &str, base_url: Option<&str>) -> String {
+    if href.is_empty() || href.starts_with("data:") {
+      return href.to_string();
+    }
+    if let Ok(url) = Url::parse(href) {
+      return url.to_string();
+    }
+    if let Some(base) = base_url {
+      if let Some(resolved) = resolve_against_base(base, href) {
+        return resolved;
+      }
+    }
+    self.resolve_url(href)
+  }
+
   /// Render raw SVG content to an image (uncached).
   pub fn render_svg(&self, svg_content: &str) -> Result<Arc<CachedImage>> {
     let (img, intrinsic_ratio, aspect_ratio_none) = self.render_svg_to_image(svg_content)?;
@@ -1411,6 +1569,9 @@ impl ImageCache {
     url: &str,
   ) -> Result<Arc<tiny_skia::Pixmap>> {
     use resvg::usvg;
+
+    let preprocessed = self.preprocess_svg_images(svg_content, Some(url));
+    let svg_content = preprocessed.as_ref();
 
     let key = svg_pixmap_key(svg_content, render_width, render_height);
     if let Ok(cache) = self.svg_pixmap_cache.lock() {
@@ -1468,7 +1629,11 @@ impl ImageCache {
   }
 
   /// Probe intrinsic SVG metadata (dimensions/aspect ratio) from raw markup without rasterizing.
-  pub fn probe_svg_content(&self, svg_content: &str, url_hint: &str) -> Result<CachedImageMetadata> {
+  pub fn probe_svg_content(
+    &self,
+    svg_content: &str,
+    url_hint: &str,
+  ) -> Result<CachedImageMetadata> {
     const DEFAULT_WIDTH: f32 = 300.0;
     const DEFAULT_HEIGHT: f32 = 150.0;
 
@@ -1497,7 +1662,13 @@ impl ImageCache {
     let intrinsic_ratio = if aspect_ratio_none {
       None
     } else {
-      ratio.or_else(|| if height > 0 { Some(width as f32 / height as f32) } else { None })
+      ratio.or_else(|| {
+        if height > 0 {
+          Some(width as f32 / height as f32)
+        } else {
+          None
+        }
+      })
     };
 
     Ok(CachedImageMetadata {
@@ -1603,7 +1774,13 @@ impl ImageCache {
       let ratio = if aspect_ratio_none {
         None
       } else {
-        ratio.or_else(|| if height > 0 { Some(width as f32 / height as f32) } else { None })
+        ratio.or_else(|| {
+          if height > 0 {
+            Some(width as f32 / height as f32)
+          } else {
+            None
+          }
+        })
       };
 
       return Ok(CachedImageMetadata {
@@ -1622,10 +1799,12 @@ impl ImageCache {
     let sniffed_format = Self::sniff_image_format(bytes);
     let (width, height) = self
       .predecoded_dimensions(bytes, format_from_content_type, sniffed_format)
-      .ok_or_else(|| Error::Image(ImageError::DecodeFailed {
-        url: url.to_string(),
-        reason: "Unable to determine image dimensions".to_string(),
-      }))?;
+      .ok_or_else(|| {
+        Error::Image(ImageError::DecodeFailed {
+          url: url.to_string(),
+          reason: "Unable to determine image dimensions".to_string(),
+        })
+      })?;
     self.enforce_decode_limits(width, height, url)?;
 
     Ok(CachedImageMetadata {
@@ -1995,6 +2174,9 @@ impl ImageCache {
     const DEFAULT_WIDTH: f32 = 300.0;
     const DEFAULT_HEIGHT: f32 = 150.0;
 
+    let preprocessed = self.preprocess_svg_images(svg_content, Some(url));
+    let svg_content = preprocessed.as_ref();
+
     let (meta_width, meta_height, meta_ratio, aspect_ratio_none) =
       svg_intrinsic_metadata(svg_content).unwrap_or((None, None, None, false));
 
@@ -2078,6 +2260,37 @@ impl ImageCache {
       aspect_ratio_none,
     ))
   }
+}
+
+fn attribute_value_range(svg_content: &str, value: &str) -> Option<std::ops::Range<usize>> {
+  if value.is_empty() {
+    return None;
+  }
+
+  let base_ptr = svg_content.as_ptr() as usize;
+  let value_ptr = value.as_ptr() as usize;
+  let len = value.len();
+
+  if value_ptr >= base_ptr && value_ptr + len <= base_ptr + svg_content.len() {
+    let start = value_ptr - base_ptr;
+    let end = start + len;
+    if svg_content.get(start..end)? == value {
+      return Some(start..end);
+    }
+  }
+
+  for quote in ['"', '\''] {
+    let needle = format!("{quote}{value}{quote}");
+    if let Some(idx) = svg_content.find(&needle) {
+      let start = idx + 1;
+      let end = start + value.len();
+      if end <= svg_content.len() {
+        return Some(start..end);
+      }
+    }
+  }
+
+  None
 }
 
 fn parse_svg_length(value: &str) -> Option<f32> {
@@ -2201,6 +2414,7 @@ impl Clone for ImageCache {
       in_flight: Arc::clone(&self.in_flight),
       meta_cache: Arc::clone(&self.meta_cache),
       meta_in_flight: Arc::clone(&self.meta_in_flight),
+      svg_preprocessed_cache: Arc::clone(&self.svg_preprocessed_cache),
       svg_pixmap_cache: Arc::clone(&self.svg_pixmap_cache),
       base_url: self.base_url.clone(),
       fetcher: Arc::clone(&self.fetcher),

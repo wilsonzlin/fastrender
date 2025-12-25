@@ -32,7 +32,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use url::Url;
 
-mod data_url;
+pub(crate) mod data_url;
 
 /// Normalize a page identifier (full URL or hostname) to a cache/output stem.
 ///
