@@ -38,6 +38,7 @@ fn displacement_filter(scale: f32) -> SvgFilter {
         result: Some("map".to_string()),
         color_interpolation_filters: None,
         primitive: FilterPrimitive::Image(map),
+        region: None,
       },
       FilterStep {
         result: None,
@@ -49,6 +50,7 @@ fn displacement_filter(scale: f32) -> SvgFilter {
           x_channel: ChannelSelector::R,
           y_channel: ChannelSelector::B,
         },
+        region: None,
       },
     ],
     region: SvgFilterRegion {
@@ -58,6 +60,7 @@ fn displacement_filter(scale: f32) -> SvgFilter {
       height: SvgLength::Percent(1.2),
       units: SvgFilterUnits::ObjectBoundingBox,
     },
+    primitive_units: SvgFilterUnits::ObjectBoundingBox,
   }
 }
 

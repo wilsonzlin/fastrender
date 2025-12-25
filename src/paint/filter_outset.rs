@@ -224,6 +224,7 @@ mod tests {
         height: SvgLength::Percent(1.2),
         units: SvgFilterUnits::ObjectBoundingBox,
       },
+      primitive_units: SvgFilterUnits::ObjectBoundingBox,
     };
     let filters = vec![ResolvedFilter::SvgFilter(Arc::new(filter))];
     let bbox = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);

@@ -29,6 +29,7 @@ fn make_filter(kind: ColorMatrixKind, color_space: ColorInterpolationFilters) ->
         input: FilterInput::SourceGraphic,
         kind,
       },
+      region: None,
     }],
     region: SvgFilterRegion {
       x: SvgLength::Percent(-0.1),
@@ -37,6 +38,7 @@ fn make_filter(kind: ColorMatrixKind, color_space: ColorInterpolationFilters) ->
       height: SvgLength::Percent(1.2),
       units: SvgFilterUnits::ObjectBoundingBox,
     },
+    primitive_units: SvgFilterUnits::ObjectBoundingBox,
   }
 }
 

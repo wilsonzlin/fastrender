@@ -22,6 +22,7 @@ pub struct SvgFilter {
   pub color_interpolation_filters: ColorInterpolationFilters,
   pub steps: Vec<FilterStep>,
   pub region: SvgFilterRegion,
+  pub primitive_units: SvgFilterUnits,
 }
 
 #[derive(Clone, Debug)]
@@ -29,6 +30,7 @@ pub struct FilterStep {
   pub result: Option<String>,
   pub color_interpolation_filters: Option<ColorInterpolationFilters>,
   pub primitive: FilterPrimitive,
+  pub region: Option<SvgFilterRegion>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,7 +178,12 @@ pub enum FilterPrimitive {
   Tile {
     input: FilterInput,
   },
-  Turbulence,
+  Turbulence {
+    base_frequency: (f32, f32),
+    seed: u32,
+    octaves: u32,
+    kind: TurbulenceType,
+  },
   DisplacementMap {
     in1: FilterInput,
     in2: FilterInput,
@@ -287,6 +294,12 @@ pub enum EdgeMode {
   Duplicate,
   Wrap,
   None,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TurbulenceType {
+  FractalNoise,
+  Turbulence,
 }
 
 #[derive(Clone, Debug)]
@@ -517,6 +530,10 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     Some(v) if v.eq_ignore_ascii_case("userspaceonuse") => SvgFilterUnits::UserSpaceOnUse,
     _ => SvgFilterUnits::ObjectBoundingBox,
   };
+  let primitive_units = match node.attribute("primitiveUnits") {
+    Some(v) if v.eq_ignore_ascii_case("userspaceonuse") => SvgFilterUnits::UserSpaceOnUse,
+    _ => SvgFilterUnits::UserSpaceOnUse,
+  };
   let filter_color_interpolation_filters =
     parse_color_interpolation_filters(node.attribute("color-interpolation-filters"))
       .unwrap_or(ColorInterpolationFilters::LinearRGB);
@@ -535,6 +552,23 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     let color_interpolation_filters =
       parse_color_interpolation_filters(child.attribute("color-interpolation-filters"));
     let tag = child.tag_name().name().to_ascii_lowercase();
+    let region_override = {
+      let x = SvgLength::parse(child.attribute("x"));
+      let y = SvgLength::parse(child.attribute("y"));
+      let width = SvgLength::parse(child.attribute("width"));
+      let height = SvgLength::parse(child.attribute("height"));
+      if x.is_some() || y.is_some() || width.is_some() || height.is_some() {
+        Some(SvgFilterRegion {
+          x: x.unwrap_or(region.x),
+          y: y.unwrap_or(region.y),
+          width: width.unwrap_or(region.width),
+          height: height.unwrap_or(region.height),
+          units: primitive_units,
+        })
+      } else {
+        None
+      }
+    };
     let primitive = match tag.as_str() {
       "feflood" => parse_fe_flood(&child),
       "fegaussianblur" => parse_fe_gaussian_blur(&child),
@@ -548,7 +582,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
       "fecomponenttransfer" => parse_fe_component_transfer(&child),
       "feimage" => parse_fe_image(&child, image_cache),
       "fetile" => parse_fe_tile(&child),
-      "feturbulence" => Some(FilterPrimitive::Turbulence),
+      "feturbulence" => parse_fe_turbulence(&child),
       "fedisplacementmap" => parse_fe_displacement_map(&child),
       "feconvolvematrix" => parse_fe_convolve_matrix(&child),
       _ => None,
@@ -558,6 +592,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
         result: result_name,
         color_interpolation_filters,
         primitive: prim,
+        region: region_override.clone(),
       });
     }
   }
@@ -570,6 +605,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     color_interpolation_filters: filter_color_interpolation_filters,
     steps,
     region,
+    primitive_units,
   }))
 }
 
@@ -908,6 +944,42 @@ fn parse_fe_tile(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   Some(FilterPrimitive::Tile { input })
 }
 
+fn parse_fe_turbulence(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let base_freq_values: Vec<f32> = node
+    .attribute("baseFrequency")
+    .unwrap_or("0.05")
+    .split_whitespace()
+    .filter_map(|v| v.parse::<f32>().ok())
+    .collect();
+  let fx = base_freq_values.get(0).copied().unwrap_or(0.05).abs();
+  let fy = base_freq_values.get(1).copied().unwrap_or(fx).abs();
+  let seed = node
+    .attribute("seed")
+    .and_then(|v| v.parse::<u32>().ok())
+    .unwrap_or(0);
+  let octaves = node
+    .attribute("numOctaves")
+    .and_then(|v| v.parse::<u32>().ok())
+    .unwrap_or(1)
+    .max(1);
+  let kind = match node
+    .attribute("type")
+    .unwrap_or("turbulence")
+    .to_ascii_lowercase()
+    .as_str()
+  {
+    "fractalnoise" => TurbulenceType::FractalNoise,
+    _ => TurbulenceType::Turbulence,
+  };
+
+  Some(FilterPrimitive::Turbulence {
+    base_frequency: (fx, fy),
+    seed,
+    octaves,
+    kind,
+  })
+}
+
 fn parse_fe_displacement_map(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let in1 = parse_input(node.attribute("in"));
   let in2 = parse_input(node.attribute("in2"));
@@ -1020,6 +1092,13 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
     css_region.width() * scale,
     css_region.height() * scale,
   );
+  let default_primitive_region = SvgFilterRegion {
+    x: def.region.x,
+    y: def.region.y,
+    width: def.region.width,
+    height: def.region.height,
+    units: def.primitive_units,
+  };
 
   let source_region = clip_region(filter_region_for_pixmap(pixmap), filter_region);
   let source = FilterResult::new(pixmap.clone(), source_region, filter_region);
@@ -1030,13 +1109,22 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
     let color_interpolation_filters = step
       .color_interpolation_filters
       .unwrap_or(def.color_interpolation_filters);
+    let primitive_region_spec = step.region.as_ref().unwrap_or(&default_primitive_region);
+    let css_prim_region = primitive_region_spec.resolve(css_bbox);
+    let mut primitive_region = Rect::from_xywh(
+      css_prim_region.x() * scale,
+      css_prim_region.y() * scale,
+      css_prim_region.width() * scale,
+      css_prim_region.height() * scale,
+    );
+    primitive_region = clip_region(primitive_region, filter_region);
     if let Some(next) = apply_primitive(
       &step.primitive,
       &source,
       &results,
       &current,
       scale,
-      filter_region,
+      primitive_region,
       color_interpolation_filters,
     ) {
       if let Some(name) = &step.result {
@@ -1200,7 +1288,22 @@ fn apply_primitive(
       resolve_input(input, source, results, current, filter_region)
         .and_then(|img| tile_pixmap(img, filter_region))
     }
-    FilterPrimitive::Turbulence => Some(source.clone()),
+    FilterPrimitive::Turbulence {
+      base_frequency,
+      seed,
+      octaves,
+      kind,
+    } => {
+      let pixmap = render_turbulence(
+        source.pixmap.width(),
+        source.pixmap.height(),
+        *base_frequency,
+        *seed,
+        *octaves,
+        *kind,
+      )?;
+      Some(FilterResult::full_region(pixmap, filter_region))
+    }
     FilterPrimitive::DisplacementMap {
       in1,
       in2,
@@ -1549,6 +1652,70 @@ fn tile_pixmap(input: FilterResult, filter_region: Rect) -> Option<FilterResult>
     pixmap: out,
     region: filter_region,
   })
+}
+
+fn turbulence_noise(x: f32, y: f32, seed: u32) -> f32 {
+  let xi = x.floor() as i32;
+  let yi = y.floor() as i32;
+  let xf = x - xi as f32;
+  let yf = y - yi as f32;
+  let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+  let hash = |x: i32, y: i32| -> f32 {
+    let mut h = (x as u32)
+      .wrapping_mul(374761393)
+      .wrapping_add((y as u32).wrapping_mul(668265263))
+      .wrapping_add(seed.wrapping_mul(2147483647));
+    h ^= h >> 13;
+    h = h.wrapping_mul(1274126177);
+    (h & 0xffff) as f32 / 65535.0
+  };
+  let n00 = hash(xi, yi);
+  let n10 = hash(xi + 1, yi);
+  let n01 = hash(xi, yi + 1);
+  let n11 = hash(xi + 1, yi + 1);
+  let u = smooth(xf);
+  let v = smooth(yf);
+  let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+  lerp(lerp(n00, n10, u), lerp(n01, n11, u), v)
+}
+
+fn render_turbulence(
+  width: u32,
+  height: u32,
+  base_frequency: (f32, f32),
+  seed: u32,
+  octaves: u32,
+  kind: TurbulenceType,
+) -> Option<Pixmap> {
+  let mut pixmap = Pixmap::new(width, height)?;
+  let max_octaves = octaves.max(1);
+  for y in 0..height {
+    for x in 0..width {
+      let mut freq_x = base_frequency.0.max(0.0);
+      let mut freq_y = base_frequency.1.max(0.0);
+      let mut amplitude = 1.0;
+      let mut total = 0.0;
+      let mut weight = 0.0;
+      for o in 0..max_octaves {
+        let n = turbulence_noise(x as f32 * freq_x, y as f32 * freq_y, seed + o);
+        let sample = match kind {
+          TurbulenceType::FractalNoise => n,
+          TurbulenceType::Turbulence => n.abs(),
+        };
+        total += sample * amplitude;
+        weight += amplitude;
+        amplitude *= 0.5;
+        freq_x *= 2.0;
+        freq_y *= 2.0;
+      }
+      let value = if weight > 0.0 { total / weight } else { 0.0 };
+      let byte = (value.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8;
+      let idx = (y * width + x) as usize;
+      pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(byte, byte, byte, 255)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+  Some(pixmap)
 }
 
 fn apply_displacement_map(
