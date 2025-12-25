@@ -32,6 +32,7 @@ mod selector_indexing_test;
 mod svg_tag_selector_indexing_test;
 mod shadow_host_selectors_test;
 mod shadow_dom_scoping_test;
+mod shadow_slotted_test;
 mod supports_rule_test;
 mod supports_selector_test;
 mod supports_writing_mode_test;
