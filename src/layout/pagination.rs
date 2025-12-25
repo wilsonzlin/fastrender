@@ -158,16 +158,16 @@ pub fn paginate_fragment_tree(
     enable_layout_cache,
     fallback_page_size,
   )?;
-  let base_total_height = base_layout.total_height;
+  let base_total_height = base_layout.total_height.max(EPSILON);
   let base_spans = base_layout.page_name_spans.clone();
   let base_root = base_layout.root.clone();
 
   let mut pages = Vec::new();
-  let mut consumed_fraction = 0.0f32;
+  let mut consumed_base = 0.0f32;
   let mut page_index = 0usize;
 
   loop {
-    let start_in_base = consumed_fraction * base_total_height;
+    let start_in_base = consumed_base;
     let page_name =
       page_name_for_position(&base_spans, start_in_base, initial_page_name.as_deref());
     let side = if (page_index + 1) % 2 == 0 {
@@ -200,7 +200,7 @@ pub fn paginate_fragment_tree(
       break;
     }
 
-    let mut start = (consumed_fraction * total_height).min(total_height);
+    let mut start = ((consumed_base / base_total_height) * total_height).min(total_height);
     if start >= total_height - EPSILON {
       break;
     }
@@ -251,10 +251,11 @@ pub fn paginate_fragment_tree(
       .extend(build_margin_box_fragments(&page_style, font_ctx));
 
     pages.push(page_root);
-    consumed_fraction = (end / total_height).min(1.0);
+    let base_advance = (end / total_height) * base_total_height;
+    consumed_base = (consumed_base + base_advance).min(base_total_height);
     page_index += 1;
 
-    if consumed_fraction >= 0.999 {
+    if consumed_base >= base_total_height - EPSILON {
       break;
     }
   }
