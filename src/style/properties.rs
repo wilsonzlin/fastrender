@@ -6823,17 +6823,35 @@ pub fn apply_declaration_with_base(
         };
       }
     }
-    "break-before" | "break-after" => {
+    "break-before" | "break-after" | "column-break-before" | "column-break-after" => {
       let from_page_break = matches!(
         decl.property.as_str(),
         "page-break-before" | "page-break-after"
       );
+      let column_alias = matches!(property, "column-break-before" | "column-break-after");
       if let PropertyValue::Keyword(kw) = &resolved_value {
         let value = match kw.as_str() {
           "auto" => BreakBetween::Auto,
-          "avoid" => BreakBetween::Avoid,
-          "always" if from_page_break => BreakBetween::Page,
-          "always" => BreakBetween::Always,
+          "avoid" => {
+            if from_page_break {
+              BreakBetween::AvoidPage
+            } else if column_alias {
+              BreakBetween::AvoidColumn
+            } else {
+              BreakBetween::Avoid
+            }
+          }
+          "avoid-page" => BreakBetween::AvoidPage,
+          "avoid-column" => BreakBetween::AvoidColumn,
+          "always" => {
+            if from_page_break {
+              BreakBetween::Page
+            } else if column_alias {
+              BreakBetween::Column
+            } else {
+              BreakBetween::Always
+            }
+          }
           "column" => BreakBetween::Column,
           "page" => BreakBetween::Page,
           "left" => BreakBetween::Left,
@@ -6842,18 +6860,28 @@ pub fn apply_declaration_with_base(
           "verso" => BreakBetween::Verso,
           _ => BreakBetween::Auto,
         };
-        if property == "break-before" {
+        if matches!(property, "break-before" | "column-break-before") {
           styles.break_before = value;
         } else {
           styles.break_after = value;
         }
       }
     }
-    "break-inside" => {
+    "break-inside" | "column-break-inside" => {
       if let PropertyValue::Keyword(kw) = &resolved_value {
+        let column_alias = decl.property == "column-break-inside";
         styles.break_inside = match kw.as_str() {
           "auto" => BreakInside::Auto,
-          "avoid" => BreakInside::Avoid,
+          "avoid" => {
+            if column_alias {
+              BreakInside::AvoidColumn
+            } else {
+              BreakInside::Avoid
+            }
+          }
+          "avoid-page" => BreakInside::AvoidPage,
+          "avoid-column" => BreakInside::AvoidColumn,
+          "always" if column_alias => BreakInside::AvoidColumn,
           _ => styles.break_inside,
         };
       }
@@ -20136,6 +20164,46 @@ mod tests {
       style.shape_outside,
       ShapeOutside::Image(BackgroundImage::Url("a.png".to_string()))
     );
+  }
+
+  #[test]
+  fn parses_break_properties_and_column_aliases() {
+    let mut style = ComputedStyle::default();
+    let decl = Declaration {
+      property: "break-before".to_string(),
+      value: PropertyValue::Keyword("avoid-page".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+    assert!(matches!(style.break_before, BreakBetween::AvoidPage));
+
+    let decl = Declaration {
+      property: "break-after".to_string(),
+      value: PropertyValue::Keyword("avoid-column".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+    assert!(matches!(style.break_after, BreakBetween::AvoidColumn));
+
+    let decl = Declaration {
+      property: "column-break-before".to_string(),
+      value: PropertyValue::Keyword("always".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+    assert!(matches!(style.break_before, BreakBetween::Column));
+
+    let decl = Declaration {
+      property: "column-break-inside".to_string(),
+      value: PropertyValue::Keyword("avoid".to_string()),
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+    assert!(matches!(style.break_inside, BreakInside::AvoidColumn));
   }
 }
 

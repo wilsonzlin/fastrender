@@ -1106,19 +1106,23 @@ pub enum BreakBetween {
   Auto,
   /// Avoid breaking before/after the element
   Avoid,
+  /// Avoid breaking across pages but allow column breaks.
+  AvoidPage,
+  /// Avoid breaking across columns but allow page breaks.
+  AvoidColumn,
   /// Force a fragment break
   Always,
   /// Force a column break
   Column,
   /// Force a page break
   Page,
-  /// Force a page break and target a left/verso page
+  /// Force a break to the next left page (treated as a page break for now)
   Left,
-  /// Force a page break and target a right/recto page
+  /// Force a break to the next right page (treated as a page break for now)
   Right,
-  /// Alias for a right-hand page break
+  /// Force a break to the next recto page (treated as a page break for now)
   Recto,
-  /// Alias for a left-hand page break
+  /// Force a break to the next verso page (treated as a page break for now)
   Verso,
 }
 
@@ -1135,6 +1139,10 @@ pub enum BreakInside {
   Auto,
   /// Avoid breaking inside the element
   Avoid,
+  /// Avoid breaking the element across pages.
+  AvoidPage,
+  /// Avoid breaking the element across columns.
+  AvoidColumn,
 }
 
 impl Default for BreakInside {
