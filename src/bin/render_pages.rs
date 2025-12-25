@@ -6,12 +6,14 @@
 
 mod common;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use common::render_pipeline::{
   build_render_configs, build_renderer_with_fetcher, follow_client_redirects, log_diagnostics,
-  read_cached_document, render_document, RenderConfigBundle,
+  read_cached_document, render_document_with_artifacts, RenderConfigBundle,
 };
+use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::image_output::encode_image;
+use fastrender::paint::display_list::DisplayItem;
 use fastrender::resource::normalize_page_name;
 use fastrender::resource::normalize_user_agent_for_log;
 #[cfg(not(feature = "disk_cache"))]
@@ -22,12 +24,18 @@ use fastrender::resource::HttpFetcher;
 use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
+use fastrender::style::cascade::StyledNode;
+use fastrender::tree::box_tree::{BoxNode, BoxType};
+use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use fastrender::OutputFormat;
+use fastrender::{BoxTree, DisplayList, FragmentTree, RenderArtifactRequest, RenderArtifacts};
+use serde::Serialize;
+use serde_json;
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::fs;
 use std::panic::AssertUnwindSafe;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
@@ -40,6 +48,23 @@ const HTML_DIR: &str = "fetches/html";
 const ASSET_DIR: &str = "fetches/assets";
 const RENDER_DIR: &str = "fetches/renders";
 const RENDER_STACK_SIZE: usize = 64 * 1024 * 1024; // 64MB to avoid stack overflows on large pages
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum DumpMode {
+  None,
+  Summary,
+  Full,
+}
+
+impl DumpMode {
+  fn artifact_request(self) -> RenderArtifactRequest {
+    match self {
+      DumpMode::None => RenderArtifactRequest::none(),
+      DumpMode::Summary => RenderArtifactRequest::summary(),
+      DumpMode::Full => RenderArtifactRequest::full(),
+    }
+  }
+}
 
 /// Render all cached pages in parallel
 #[derive(Parser, Debug)]
@@ -112,6 +137,18 @@ struct Args {
   /// Enable per-stage timing logs
   #[arg(long)]
   timings: bool,
+
+  /// Write structured diagnostics alongside renders
+  #[arg(long)]
+  diagnostics_json: bool,
+
+  /// Dump intermediate artifacts (summary|full)
+  #[arg(long, value_enum, default_value = "none")]
+  dump_intermediate: DumpMode,
+
+  /// Only write intermediate dumps for failures
+  #[arg(long)]
+  only_failures: bool,
 
   /// Positional page filters (cache stems)
   #[arg(trailing_var_arg = true)]
@@ -195,6 +232,12 @@ enum Status {
   Ok,
   Crash(String),
   Error(String),
+}
+
+struct RenderOutcome {
+  png: Vec<u8>,
+  diagnostics: fastrender::RenderDiagnostics,
+  artifacts: RenderArtifacts,
 }
 
 fn main() {
@@ -351,6 +394,10 @@ fn main() {
     .expect("create thread pool");
 
   let timeout_secs = args.timeout;
+  let dump_mode = args.dump_intermediate;
+  let only_failures = args.only_failures;
+  let diagnostics_json = args.diagnostics_json;
+  let artifact_request = dump_mode.artifact_request();
 
   pool.scope(|s| {
     for path in &entries {
@@ -415,6 +462,7 @@ fn main() {
         let render_config = config.clone();
         let render_fetcher = fetcher.clone();
         let doc_for_render = doc.clone();
+        let render_request = artifact_request;
         let panic_to_string = |panic: Box<dyn std::any::Any + Send + 'static>| -> String {
           panic
             .downcast_ref::<&str>()
@@ -423,14 +471,22 @@ fn main() {
             .unwrap_or_else(|| "unknown panic".to_string())
         };
 
-        let run_render = move || -> Result<(Vec<u8>, fastrender::RenderDiagnostics), Status> {
-          let render_work =
-            move || -> Result<(Vec<u8>, fastrender::RenderDiagnostics), fastrender::Error> {
-              let mut renderer = build_renderer_with_fetcher(render_config, render_fetcher)?;
-              let result = render_document(&mut renderer, doc_for_render, &render_opts)?;
-              let png = encode_image(&result.pixmap, OutputFormat::Png)?;
-              Ok((png, result.diagnostics))
-            };
+        let run_render = move || -> Result<RenderOutcome, Status> {
+          let render_work = move || -> Result<RenderOutcome, fastrender::Error> {
+            let mut renderer = build_renderer_with_fetcher(render_config, render_fetcher)?;
+            let report = render_document_with_artifacts(
+              &mut renderer,
+              doc_for_render,
+              &render_opts,
+              render_request,
+            )?;
+            let png = encode_image(&report.pixmap, OutputFormat::Png)?;
+            Ok(RenderOutcome {
+              png,
+              diagnostics: report.diagnostics,
+              artifacts: report.artifacts,
+            })
+          };
 
           let (tx, rx) = channel();
           thread::Builder::new()
@@ -444,7 +500,7 @@ fn main() {
 
           if let Some(secs) = timeout_secs {
             match rx.recv_timeout(Duration::from_secs(secs)) {
-              Ok(Ok(png)) => png.map_err(|e| Status::Error(e.to_string())),
+              Ok(Ok(outcome)) => outcome.map_err(|e| Status::Error(e.to_string())),
               Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
               Err(RecvTimeoutError::Timeout) => {
                 Err(Status::Crash(format!("render timed out after {}s", secs)))
@@ -455,7 +511,7 @@ fn main() {
             }
           } else {
             match rx.recv() {
-              Ok(Ok(png)) => png.map_err(|e| Status::Error(e.to_string())),
+              Ok(Ok(outcome)) => outcome.map_err(|e| Status::Error(e.to_string())),
               Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
               Err(_) => Err(Status::Crash("render worker disconnected".to_string())),
             }
@@ -467,22 +523,27 @@ fn main() {
         let elapsed = page_start.elapsed();
         let time_ms = elapsed.as_millis();
 
+        let mut captured_artifacts: Option<RenderArtifacts> = None;
+        let mut diagnostics = fastrender::RenderDiagnostics::default();
+
         let (status, size) = match result {
-          Ok((png_data, diagnostics)) => {
+          Ok(outcome) => {
+            diagnostics = outcome.diagnostics;
             log_diagnostics(&diagnostics, |line| {
               let _ = writeln!(log, "{line}");
             });
 
-            let size = png_data.len();
+            let size = outcome.png.len();
             let _ = writeln!(log, "PNG size: {} bytes", size);
             let _ = writeln!(log, "Time: {}ms", time_ms);
             log.push_str("Status: OK\n");
 
-            if let Err(e) = fs::write(&output_path, &png_data) {
+            if let Err(e) = fs::write(&output_path, &outcome.png) {
               let _ = writeln!(log, "Write error: {}", e);
               (Status::Error(format!("write: {}", e)), None)
             } else {
               println!("✓ {} ({}b, {}ms)", name, size, time_ms);
+              captured_artifacts = Some(outcome.artifacts);
               (Status::Ok, Some(size))
             }
           }
@@ -506,6 +567,79 @@ fn main() {
             Status::Ok => (Status::Error("unexpected ok status".to_string()), None),
           },
         };
+
+        let should_dump =
+          dump_mode != DumpMode::None && (!only_failures || !matches!(status, Status::Ok));
+
+        let summary = captured_artifacts.as_ref().map(build_intermediate_summary);
+
+        if diagnostics_json {
+          let diag_path = PathBuf::from(RENDER_DIR).join(format!("{}.diagnostics.json", name));
+          let diag_report = DiagnosticsFile {
+            page: name.clone(),
+            status: status_label(&status).to_string(),
+            error: status_error(&status).map(str::to_string),
+            time_ms,
+            png_size: size,
+            diagnostics: diagnostics.clone(),
+            summary: summary.clone(),
+          };
+          if let Err(err) = serde_json::to_string_pretty(&diag_report)
+            .and_then(|s| fs::write(&diag_path, s).map_err(Into::into))
+          {
+            let _ = writeln!(
+              log,
+              "Failed to write diagnostics JSON {}: {}",
+              diag_path.display(),
+              err
+            );
+          }
+        }
+
+        if should_dump {
+          if let Some(artifacts) = captured_artifacts.as_ref() {
+            match dump_mode {
+              DumpMode::None => {}
+              DumpMode::Summary => {
+                if let Some(summary) = summary.as_ref() {
+                  let summary_path =
+                    PathBuf::from(RENDER_DIR).join(format!("{}.intermediate.json", name));
+                  if let Err(err) = serde_json::to_string_pretty(summary)
+                    .and_then(|s| fs::write(&summary_path, s).map_err(Into::into))
+                  {
+                    let _ = writeln!(
+                      log,
+                      "Failed to write summary {}: {}",
+                      summary_path.display(),
+                      err
+                    );
+                  }
+                } else {
+                  let _ = writeln!(log, "Summary requested but no artifacts captured");
+                }
+              }
+              DumpMode::Full => {
+                if let Some(summary) = summary.as_ref() {
+                  let summary_path =
+                    PathBuf::from(RENDER_DIR).join(format!("{}.intermediate.json", name));
+                  if let Err(err) = serde_json::to_string_pretty(summary)
+                    .and_then(|s| fs::write(&summary_path, s).map_err(Into::into))
+                  {
+                    let _ = writeln!(
+                      log,
+                      "Failed to write summary {}: {}",
+                      summary_path.display(),
+                      err
+                    );
+                  }
+                }
+                write_full_artifacts(Path::new(RENDER_DIR), &name, artifacts, &mut log);
+              }
+            }
+          } else {
+            let _ = writeln!(log, "Artifacts requested but not captured for {}", name);
+          }
+        }
 
         // Write per-page log
         let _ = fs::write(&log_path, &log);
@@ -605,6 +739,420 @@ fn main() {
   if crash > 0 || error > 0 {
     std::process::exit(1);
   }
+}
+
+const TEXT_PREVIEW: usize = 160;
+
+#[derive(Debug, Clone, Serialize)]
+struct DiagnosticsFile {
+  page: String,
+  status: String,
+  error: Option<String>,
+  time_ms: u128,
+  png_size: Option<usize>,
+  diagnostics: fastrender::RenderDiagnostics,
+  summary: Option<IntermediateSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+struct IntermediateSummary {
+  dom_nodes: Option<usize>,
+  styled_nodes: Option<usize>,
+  boxes: Option<usize>,
+  text_boxes: Option<usize>,
+  fragments: Option<usize>,
+  text_fragments: Option<usize>,
+  display_items: Option<usize>,
+  warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SerializableDomNode {
+  kind: String,
+  namespace: Option<String>,
+  tag: Option<String>,
+  attributes: Option<Vec<(String, String)>>,
+  text: Option<String>,
+  children: Vec<SerializableDomNode>,
+}
+
+#[derive(Debug, Serialize)]
+struct SerializableStyledNode {
+  node_id: usize,
+  tag: Option<String>,
+  id: Option<String>,
+  classes: Vec<String>,
+  display: String,
+  children: Vec<SerializableStyledNode>,
+}
+
+#[derive(Debug, Serialize)]
+struct SerializableBoxNode {
+  id: usize,
+  kind: String,
+  display: String,
+  debug: Option<String>,
+  text: Option<String>,
+  children: Vec<SerializableBoxNode>,
+}
+
+#[derive(Debug, Serialize)]
+struct SerializableFragmentTree {
+  root: SerializableFragmentNode,
+  additional: Vec<SerializableFragmentNode>,
+}
+
+#[derive(Debug, Serialize)]
+struct SerializableFragmentNode {
+  kind: String,
+  bounds: SerializableRect,
+  text: Option<String>,
+  style: Option<String>,
+  children: Vec<SerializableFragmentNode>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+struct SerializableRect {
+  x: f32,
+  y: f32,
+  width: f32,
+  height: f32,
+}
+
+#[derive(Debug, Serialize)]
+struct SerializableDisplayList {
+  items: Vec<SerializableDisplayItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct SerializableDisplayItem {
+  kind: String,
+  bounds: Option<SerializableRect>,
+}
+
+fn status_label(status: &Status) -> &'static str {
+  match status {
+    Status::Ok => "ok",
+    Status::Crash(_) => "crash",
+    Status::Error(_) => "error",
+  }
+}
+
+fn status_error(status: &Status) -> Option<&str> {
+  match status {
+    Status::Crash(msg) | Status::Error(msg) => Some(msg.as_str()),
+    Status::Ok => None,
+  }
+}
+
+fn build_intermediate_summary(artifacts: &RenderArtifacts) -> IntermediateSummary {
+  let mut summary = IntermediateSummary::default();
+  summary.dom_nodes = artifacts.dom.as_ref().map(count_dom_nodes);
+  summary.styled_nodes = artifacts.styled_tree.as_ref().map(count_styled_nodes);
+  summary.boxes = artifacts.box_tree.as_ref().map(BoxTree::count_boxes);
+  summary.text_boxes = artifacts.box_tree.as_ref().map(BoxTree::count_text_boxes);
+  summary.fragments = artifacts
+    .fragment_tree
+    .as_ref()
+    .map(FragmentTree::fragment_count);
+  summary.text_fragments = artifacts.fragment_tree.as_ref().map(|tree| {
+    let mut total = count_text_fragments(&tree.root);
+    for extra in &tree.additional_fragments {
+      total += count_text_fragments(extra);
+    }
+    total
+  });
+  summary.display_items = artifacts.display_list.as_ref().map(DisplayList::len);
+
+  if matches!(summary.fragments, Some(0)) {
+    summary.warnings.push("fragment_tree_empty".to_string());
+  }
+  if matches!(summary.display_items, Some(0)) {
+    summary.warnings.push("display_list_empty".to_string());
+  }
+
+  summary
+}
+
+fn count_dom_nodes(node: &DomNode) -> usize {
+  1 + node.children.iter().map(count_dom_nodes).sum::<usize>()
+}
+
+fn count_styled_nodes(node: &StyledNode) -> usize {
+  1 + node.children.iter().map(count_styled_nodes).sum::<usize>()
+}
+
+fn count_text_fragments(node: &FragmentNode) -> usize {
+  let self_count = match node.content {
+    FragmentContent::Text { .. } => 1,
+    _ => 0,
+  };
+  self_count
+    + node
+      .children
+      .iter()
+      .map(count_text_fragments)
+      .sum::<usize>()
+}
+
+fn write_stage_json(path: PathBuf, value: &impl Serialize, log: &mut String) {
+  if let Err(err) =
+    serde_json::to_string_pretty(value).and_then(|s| fs::write(&path, s).map_err(Into::into))
+  {
+    let _ = writeln!(log, "Failed to write {}: {}", path.display(), err);
+  }
+}
+
+fn write_full_artifacts(base: &Path, name: &str, artifacts: &RenderArtifacts, log: &mut String) {
+  if let Some(dom) = &artifacts.dom {
+    let serializable = serialize_dom(dom);
+    write_stage_json(base.join(format!("{}.dom.json", name)), &serializable, log);
+  } else {
+    let _ = writeln!(log, "Missing DOM artifact for {}", name);
+  }
+
+  if let Some(styled) = &artifacts.styled_tree {
+    write_stage_json(
+      base.join(format!("{}.styled.json", name)),
+      &serialize_styled(styled),
+      log,
+    );
+  } else {
+    let _ = writeln!(log, "Missing styled tree for {}", name);
+  }
+
+  if let Some(box_tree) = &artifacts.box_tree {
+    write_stage_json(
+      base.join(format!("{}.boxes.json", name)),
+      &serialize_box_node(&box_tree.root),
+      log,
+    );
+  } else {
+    let _ = writeln!(log, "Missing box tree for {}", name);
+  }
+
+  if let Some(fragment_tree) = &artifacts.fragment_tree {
+    let serializable = SerializableFragmentTree {
+      root: serialize_fragment_node(&fragment_tree.root),
+      additional: fragment_tree
+        .additional_fragments
+        .iter()
+        .map(serialize_fragment_node)
+        .collect(),
+    };
+    write_stage_json(
+      base.join(format!("{}.fragments.json", name)),
+      &serializable,
+      log,
+    );
+  } else {
+    let _ = writeln!(log, "Missing fragment tree for {}", name);
+  }
+
+  if let Some(list) = &artifacts.display_list {
+    write_stage_json(
+      base.join(format!("{}.display_list.json", name)),
+      &serialize_display_list(list),
+      log,
+    );
+  } else {
+    let _ = writeln!(log, "Missing display list for {}", name);
+  }
+}
+
+fn serialize_dom(node: &DomNode) -> SerializableDomNode {
+  let (kind, namespace, tag, attributes, text) = match &node.node_type {
+    DomNodeType::Document => ("document".to_string(), None, None, None, None),
+    DomNodeType::ShadowRoot { .. } => ("shadow-root".to_string(), None, None, None, None),
+    DomNodeType::Slot {
+      namespace,
+      attributes,
+    } => (
+      "slot".to_string(),
+      Some(namespace.clone()),
+      None,
+      Some(attributes.clone()),
+      None,
+    ),
+    DomNodeType::Element {
+      tag_name,
+      namespace,
+      attributes,
+    } => (
+      "element".to_string(),
+      Some(namespace.clone()),
+      Some(tag_name.clone()),
+      Some(attributes.clone()),
+      None,
+    ),
+    DomNodeType::Text { content } => (
+      "text".to_string(),
+      None,
+      None,
+      None,
+      Some(truncate_text(content, TEXT_PREVIEW)),
+    ),
+  };
+
+  SerializableDomNode {
+    kind,
+    namespace,
+    tag,
+    attributes,
+    text,
+    children: node.children.iter().map(serialize_dom).collect(),
+  }
+}
+
+fn element_metadata(node: &DomNode) -> (Option<String>, Option<String>, Vec<String>) {
+  if let DomNodeType::Element {
+    tag_name,
+    attributes,
+    ..
+  } = &node.node_type
+  {
+    let mut id = None;
+    let mut classes = Vec::new();
+    for (name, value) in attributes {
+      if name.eq_ignore_ascii_case("id") {
+        id = Some(value.clone());
+      } else if name.eq_ignore_ascii_case("class") {
+        classes.extend(value.split_whitespace().map(|c| c.to_string()));
+      }
+    }
+    (Some(tag_name.clone()), id, classes)
+  } else {
+    (None, None, Vec::new())
+  }
+}
+
+fn serialize_styled(node: &StyledNode) -> SerializableStyledNode {
+  let (tag, id, classes) = element_metadata(&node.node);
+  SerializableStyledNode {
+    node_id: node.node_id,
+    tag,
+    id,
+    classes,
+    display: format!("{:?}", node.styles.display),
+    children: node.children.iter().map(serialize_styled).collect(),
+  }
+}
+
+fn serialize_box_node(node: &BoxNode) -> SerializableBoxNode {
+  let (kind, text) = match &node.box_type {
+    BoxType::Block(_) => ("block".to_string(), None),
+    BoxType::Inline(_) => ("inline".to_string(), None),
+    BoxType::Text(t) => (
+      "text".to_string(),
+      Some(truncate_text(&t.text, TEXT_PREVIEW)),
+    ),
+    BoxType::Marker(marker) => {
+      let payload = match &marker.content {
+        fastrender::tree::box_tree::MarkerContent::Text(text) => truncate_text(text, TEXT_PREVIEW),
+        fastrender::tree::box_tree::MarkerContent::Image(_) => "[image]".to_string(),
+      };
+      ("marker".to_string(), Some(payload))
+    }
+    BoxType::Replaced(_) => ("replaced".to_string(), None),
+    BoxType::Anonymous(anon) => (format!("anonymous({:?})", anon.anonymous_type), None),
+  };
+
+  SerializableBoxNode {
+    id: node.id,
+    kind,
+    display: format!("{:?}", node.style.display),
+    debug: node.debug_info.as_ref().map(|d| d.to_selector()),
+    text,
+    children: node.children.iter().map(serialize_box_node).collect(),
+  }
+}
+
+fn serialize_fragment_node(node: &FragmentNode) -> SerializableFragmentNode {
+  let (kind, text) = match &node.content {
+    FragmentContent::Block { .. } => ("block".to_string(), None),
+    FragmentContent::Inline { .. } => ("inline".to_string(), None),
+    FragmentContent::Text { text, .. } => {
+      ("text".to_string(), Some(truncate_text(text, TEXT_PREVIEW)))
+    }
+    FragmentContent::Line { .. } => ("line".to_string(), None),
+    FragmentContent::Replaced { .. } => ("replaced".to_string(), None),
+  };
+  let style = node
+    .style
+    .as_ref()
+    .map(|style| format!("{:?}", style.display));
+
+  SerializableFragmentNode {
+    kind,
+    bounds: SerializableRect {
+      x: node.bounds.x(),
+      y: node.bounds.y(),
+      width: node.bounds.width(),
+      height: node.bounds.height(),
+    },
+    text,
+    style,
+    children: node.children.iter().map(serialize_fragment_node).collect(),
+  }
+}
+
+fn serialize_display_list(list: &DisplayList) -> SerializableDisplayList {
+  SerializableDisplayList {
+    items: list
+      .items()
+      .iter()
+      .map(|item| SerializableDisplayItem {
+        kind: display_item_name(item).to_string(),
+        bounds: item.bounds().map(|r| SerializableRect {
+          x: r.x(),
+          y: r.y(),
+          width: r.width(),
+          height: r.height(),
+        }),
+      })
+      .collect(),
+  }
+}
+
+fn display_item_name(item: &DisplayItem) -> &'static str {
+  match item {
+    DisplayItem::FillRect(_) => "fill_rect",
+    DisplayItem::StrokeRect(_) => "stroke_rect",
+    DisplayItem::Outline(_) => "outline",
+    DisplayItem::FillRoundedRect(_) => "fill_rounded_rect",
+    DisplayItem::StrokeRoundedRect(_) => "stroke_rounded_rect",
+    DisplayItem::Text(_) => "text",
+    DisplayItem::Image(_) => "image",
+    DisplayItem::BoxShadow(_) => "box_shadow",
+    DisplayItem::ListMarker(_) => "list_marker",
+    DisplayItem::LinearGradient(_) => "linear_gradient",
+    DisplayItem::RadialGradient(_) => "radial_gradient",
+    DisplayItem::ConicGradient(_) => "conic_gradient",
+    DisplayItem::Border(_) => "border",
+    DisplayItem::TextDecoration(_) => "text_decoration",
+    DisplayItem::PushClip(_) => "push_clip",
+    DisplayItem::PopClip => "pop_clip",
+    DisplayItem::PushOpacity(_) => "push_opacity",
+    DisplayItem::PopOpacity => "pop_opacity",
+    DisplayItem::PushTransform(_) => "push_transform",
+    DisplayItem::PopTransform => "pop_transform",
+    DisplayItem::PushBlendMode(_) => "push_blend_mode",
+    DisplayItem::PopBlendMode => "pop_blend_mode",
+    DisplayItem::PushStackingContext(_) => "push_stacking_context",
+    DisplayItem::PopStackingContext => "pop_stacking_context",
+  }
+}
+
+fn truncate_text(text: &str, limit: usize) -> String {
+  let mut out = String::new();
+  for (idx, ch) in text.chars().enumerate() {
+    if idx >= limit {
+      out.push('…');
+      break;
+    }
+    out.push(ch);
+  }
+  out
 }
 
 #[cfg(test)]

@@ -27,6 +27,9 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
 - Accepts `--shard <index>/<total>` to render a slice of the cached pages in a stable order.
+- Optional outputs:
+  - `--diagnostics-json` writes `fetches/renders/<page>.diagnostics.json` containing status, timing, and `RenderDiagnostics`.
+  - `--dump-intermediate {summary|full}` emits per-page summaries or full JSON dumps of DOM/styled/box/fragment/display-list stages (use `--only-failures` to gate large artifacts on errors).
 
 ## `fetch_and_render`
 
@@ -61,4 +64,4 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 
 - `render_pages` emits per-page logs in `fetches/renders/<page>.log` plus a summary in `_summary.log`. CSS fetch failures show up there and correspond to `ResourceKind::Stylesheet` entries in the library diagnostics model.
 - The library API exposes structured diagnostics via `render_url_with_options` returning `RenderResult { pixmap, diagnostics }`. Set `RenderOptions::allow_partial(true)` to receive a placeholder image and a `document_error` string when the root fetch fails; subresource fetch errors are collected in `diagnostics.fetch_errors`.
-- The shipped binaries do not currently print `RenderDiagnostics`; prefer a small custom harness when you need the structured output, or rely on the per-page logs above for quick investigation.
+- `render_pages` can emit structured reports via `--diagnostics-json` (per-page) plus `--dump-intermediate` for summaries or full intermediate dumps.

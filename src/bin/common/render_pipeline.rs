@@ -1,7 +1,8 @@
 //! Shared helpers for CLI render binaries.
 
 use fastrender::api::{
-  FastRender, FastRenderConfig, RenderDiagnostics, RenderOptions, RenderResult, ResourceKind,
+  FastRender, FastRenderConfig, RenderArtifactRequest, RenderDiagnostics, RenderOptions,
+  RenderReport, RenderResult, ResourceKind,
 };
 use fastrender::css::loader::{infer_base_url, resolve_href};
 use fastrender::html::encoding::decode_html_bytes;
@@ -169,6 +170,21 @@ pub fn render_document(
   options: &RenderOptions,
 ) -> Result<RenderResult> {
   renderer.render_html_with_stylesheets(&doc.html, &doc.base_hint, options.clone())
+}
+
+/// Render a prepared document while capturing intermediate artifacts.
+pub fn render_document_with_artifacts(
+  renderer: &mut FastRender,
+  doc: PreparedDocument,
+  options: &RenderOptions,
+  artifacts: RenderArtifactRequest,
+) -> Result<RenderReport> {
+  renderer.render_html_with_stylesheets_report(
+    &doc.html,
+    &doc.base_hint,
+    options.clone(),
+    artifacts,
+  )
 }
 
 /// Log render diagnostics in a consistent human-readable format.
