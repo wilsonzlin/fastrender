@@ -210,7 +210,10 @@ fn page_break_before_forces_new_page() {
   let tree = renderer.layout_document(&dom, 400, 400).unwrap();
   let page_roots = pages(&tree);
 
-  assert!(page_roots.len() >= 2, "expected pagination to create multiple pages");
+  assert!(
+    page_roots.len() >= 2,
+    "expected pagination to create multiple pages"
+  );
 
   let first = page_roots[0];
   let second = page_roots[1];

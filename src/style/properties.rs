@@ -3708,12 +3708,12 @@ pub fn apply_declaration_with_base(
   };
 
   // Resolve var() references in the value
-  let resolved_value = match resolve_var_for_property(&decl.value, &styles.custom_properties, property)
-  {
-    VarResolutionResult::Resolved(v) => *v,
-    // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
-    _ => return,
-  };
+  let resolved_value =
+    match resolve_var_for_property(&decl.value, &styles.custom_properties, property) {
+      VarResolutionResult::Resolved(v) => *v,
+      // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
+      _ => return,
+    };
   let order = styles.logical.next_order();
   if let Some(global) = global_keyword(&resolved_value) {
     let defaults = ComputedStyle::default();
