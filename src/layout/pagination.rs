@@ -13,7 +13,7 @@ use crate::layout::fragmentation::{
   clip_node, collect_forced_boundaries, propagate_fragment_metadata,
 };
 use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
-use crate::style::display::FormattingContextType;
+use crate::style::display::{Display, FormattingContextType};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
 use crate::style::position::Position;
 use crate::style::types::WritingMode;
@@ -496,6 +496,16 @@ fn build_margin_box_fragments(
   let mut fragments = Vec::new();
 
   for (area, box_style) in &style.margin_boxes {
+    if matches!(
+      box_style.content_value,
+      ContentValue::None | ContentValue::Normal
+    ) {
+      continue;
+    }
+    if matches!(box_style.display, Display::None) {
+      continue;
+    }
+
     if let Some(bounds) = margin_box_bounds(*area, style) {
       if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
         continue;
