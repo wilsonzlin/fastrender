@@ -12,6 +12,7 @@ mod display_list_skip_ink_test;
 mod display_list_test;
 mod math_render;
 mod optimize_test;
+mod paged_media_margin_boxes;
 mod picture_source_selection;
 mod rasterize_test;
 mod stacking_test;
