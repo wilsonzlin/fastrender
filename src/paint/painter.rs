@@ -47,9 +47,12 @@ use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::BorderRadii;
+use crate::paint::display_list_builder::DisplayListBuilder;
+use crate::paint::display_list_renderer::DisplayListRenderer;
 use crate::paint::filter_outset::{compute_filter_outset, FilterOutsetExt};
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
+use crate::paint::optimize::DisplayListOptimizer;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
 use crate::paint::svg_filter::SvgFilterResolver;
@@ -9505,39 +9508,70 @@ fn tile_positions(
   }
 }
 
-/// Paints a fragment tree to a pixmap
-///
-/// This is the main entry point for painting.
-pub fn paint_tree(
-  tree: &FragmentTree,
-  width: u32,
-  height: u32,
-  background: Rgba,
-) -> Result<Pixmap> {
-  paint_tree_scaled(tree, width, height, background, 1.0)
+/// Painting backends supported by the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintBackend {
+  Legacy,
+  DisplayList,
 }
 
-/// Paints a fragment tree at the given device scale.
-pub fn paint_tree_scaled(
+fn paint_backend_from_env() -> PaintBackend {
+  static BACKEND: OnceLock<PaintBackend> = OnceLock::new();
+  *BACKEND.get_or_init(|| {
+    let Ok(raw) = std::env::var("FASTR_PAINT_BACKEND") else {
+      return PaintBackend::Legacy;
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+      "display_list" | "display-list" | "displaylist" => PaintBackend::DisplayList,
+      "legacy" | "immediate" => PaintBackend::Legacy,
+      _ => PaintBackend::Legacy,
+    }
+  })
+}
+
+fn legacy_paint_tree_with_resources_scaled_offset(
   tree: &FragmentTree,
   width: u32,
   height: u32,
   background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
   scale: f32,
+  offset: Point,
 ) -> Result<Pixmap> {
-  let painter = Painter::with_resources_scaled(
-    width,
-    height,
-    background,
-    FontContext::new(),
-    ImageCache::new(),
-    scale,
-  )?;
-  painter.paint(tree)
+  let painter =
+    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
+  painter.paint_with_offset(tree, offset)
 }
 
-/// Paints a fragment tree using provided font and image resources.
-pub fn paint_tree_with_resources(
+/// Paints a fragment tree via the display-list pipeline (builder → optimize → renderer).
+pub fn paint_tree_display_list_with_resources_scaled_offset(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+) -> Result<Pixmap> {
+  let viewport = tree.viewport_size();
+  let display_list = DisplayListBuilder::with_image_cache(image_cache)
+    .with_font_context(font_ctx.clone())
+    .with_device_pixel_ratio(scale)
+    .with_viewport_size(viewport.width, viewport.height)
+    .build_with_stacking_tree_offset(&tree.root, offset);
+
+  let optimizer = DisplayListOptimizer::new();
+  let viewport_rect = Rect::from_xywh(0.0, 0.0, viewport.width, viewport.height);
+  let (optimized, _) = optimizer.optimize(display_list, viewport_rect);
+
+  let renderer = DisplayListRenderer::new_scaled(width, height, background, font_ctx, scale)?;
+  renderer.render(&optimized)
+}
+
+/// Paints a fragment tree via the display-list pipeline using explicit resources.
+pub fn paint_tree_display_list_with_resources(
   tree: &FragmentTree,
   width: u32,
   height: u32,
@@ -9545,7 +9579,96 @@ pub fn paint_tree_with_resources(
   font_ctx: FontContext,
   image_cache: ImageCache,
 ) -> Result<Pixmap> {
-  paint_tree_with_resources_scaled(tree, width, height, background, font_ctx, image_cache, 1.0)
+  paint_tree_display_list_with_resources_scaled_offset(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    1.0,
+    Point::ZERO,
+  )
+}
+
+/// Paints a fragment tree via the display-list pipeline with default resources.
+pub fn paint_tree_display_list(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+) -> Result<Pixmap> {
+  paint_tree_display_list_with_resources_scaled_offset(
+    tree,
+    width,
+    height,
+    background,
+    FontContext::new(),
+    ImageCache::new(),
+    1.0,
+    Point::ZERO,
+  )
+}
+
+/// Paints a fragment tree at a device scale with an additional translation applied using the
+/// selected backend.
+pub fn paint_tree_with_resources_scaled_offset_backend(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+  backend: PaintBackend,
+) -> Result<Pixmap> {
+  match backend {
+    PaintBackend::Legacy => legacy_paint_tree_with_resources_scaled_offset(
+      tree,
+      width,
+      height,
+      background,
+      font_ctx,
+      image_cache,
+      scale,
+      offset,
+    ),
+    PaintBackend::DisplayList => paint_tree_display_list_with_resources_scaled_offset(
+      tree,
+      width,
+      height,
+      background,
+      font_ctx,
+      image_cache,
+      scale,
+      offset,
+    ),
+  }
+}
+
+/// Paints a fragment tree at a device scale with an additional translation applied.
+pub fn paint_tree_with_resources_scaled_offset(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+) -> Result<Pixmap> {
+  paint_tree_with_resources_scaled_offset_backend(
+    tree,
+    width,
+    height,
+    background,
+    font_ctx,
+    image_cache,
+    scale,
+    offset,
+    paint_backend_from_env(),
+  )
 }
 
 /// Paints a fragment tree using explicit resources at the provided device scale.
@@ -9570,20 +9693,47 @@ pub fn paint_tree_with_resources_scaled(
   )
 }
 
-/// Paints a fragment tree at a device scale with an additional translation applied.
-pub fn paint_tree_with_resources_scaled_offset(
+/// Paints a fragment tree using provided font and image resources.
+pub fn paint_tree_with_resources(
   tree: &FragmentTree,
   width: u32,
   height: u32,
   background: Rgba,
   font_ctx: FontContext,
   image_cache: ImageCache,
-  scale: f32,
-  offset: Point,
 ) -> Result<Pixmap> {
-  let painter =
-    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
-  painter.paint_with_offset(tree, offset)
+  paint_tree_with_resources_scaled(tree, width, height, background, font_ctx, image_cache, 1.0)
+}
+
+/// Paints a fragment tree at the given device scale.
+pub fn paint_tree_scaled(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  scale: f32,
+) -> Result<Pixmap> {
+  paint_tree_with_resources_scaled(
+    tree,
+    width,
+    height,
+    background,
+    FontContext::new(),
+    ImageCache::new(),
+    scale,
+  )
+}
+
+/// Paints a fragment tree to a pixmap
+///
+/// This is the main entry point for painting.
+pub fn paint_tree(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+) -> Result<Pixmap> {
+  paint_tree_scaled(tree, width, height, background, 1.0)
 }
 
 /// Paints a fragment tree with tracing enabled.

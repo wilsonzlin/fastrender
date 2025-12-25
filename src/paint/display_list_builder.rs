@@ -371,6 +371,21 @@ impl DisplayListBuilder {
     self.list
   }
 
+  /// Builds a display list by first constructing a stacking context tree from the fragment tree
+  /// and applying an additional offset to all fragments.
+  pub fn build_with_stacking_tree_offset(
+    mut self,
+    root: &FragmentNode,
+    offset: Point,
+  ) -> DisplayList {
+    if self.viewport.is_none() {
+      self.viewport = Some((root.bounds.width(), root.bounds.height()));
+    }
+    let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
+    self.build_stacking_context(&stacking, offset, true);
+    self.list
+  }
+
   /// Builds a display list with clipping support
   ///
   /// Fragments with box_ids in the `clips` set will have clipping applied.
