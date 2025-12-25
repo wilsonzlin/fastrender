@@ -615,6 +615,7 @@ fn try_render_simple_svg_pixmap(
 
   let doc = Document::parse(svg_content).ok()?;
   let root = doc.root_element();
+  let has_view_box_attr = root.attribute("viewBox").is_some();
   if !root.tag_name().name().eq_ignore_ascii_case("svg") {
     return None;
   }
@@ -682,7 +683,12 @@ fn try_render_simple_svg_pixmap(
     return None;
   }
 
-  let preserve = SvgPreserveAspectRatio::parse(root.attribute("preserveAspectRatio"));
+  let mut preserve = SvgPreserveAspectRatio::parse(root.attribute("preserveAspectRatio"));
+  // Without a viewBox, the viewport and user coordinate systems are the same, so the
+  // viewBox-to-viewport preserveAspectRatio mapping must be ignored (equivalent to `none`).
+  if !has_view_box_attr {
+    preserve.none = true;
+  }
   let transform = map_svg_aspect_ratio(
     view_box,
     preserve,
@@ -2397,6 +2403,24 @@ mod tests {
     assert_eq!(img.height(), 150);
     assert!(img.aspect_ratio_none);
     assert_eq!(img.intrinsic_ratio(OrientationTransform::IDENTITY), None);
+  }
+
+  #[test]
+  fn svg_fast_path_without_viewbox_scales_non_uniformly() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'>\
+      <path d='M0 0 H100 V100 H0 Z' fill='red'/>\
+    </svg>";
+
+    let pixmap = cache
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://fast-path")
+      .expect("rendered pixmap");
+    let pixel = pixmap.pixel(10, 50).expect("pixel");
+
+    assert_eq!(
+      (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
+      (255, 0, 0, 255)
+    );
   }
 
   #[test]
