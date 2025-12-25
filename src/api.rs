@@ -497,6 +497,8 @@ pub struct RenderOptions {
   pub viewport: Option<(u32, u32)>,
   /// Optional device pixel ratio override for media queries and image selection.
   pub device_pixel_ratio: Option<f32>,
+  /// Controls structured diagnostics capture for this render.
+  pub diagnostics_level: DiagnosticsLevel,
   /// Media type used for evaluating media queries.
   pub media_type: MediaType,
   /// Horizontal scroll offset applied before painting.
@@ -520,6 +522,7 @@ impl Default for RenderOptions {
     Self {
       viewport: None,
       device_pixel_ratio: None,
+      diagnostics_level: DiagnosticsLevel::None,
       media_type: MediaType::Screen,
       scroll_x: 0.0,
       scroll_y: 0.0,
@@ -537,6 +540,7 @@ impl std::fmt::Debug for RenderOptions {
     f.debug_struct("RenderOptions")
       .field("viewport", &self.viewport)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
+      .field("diagnostics_level", &self.diagnostics_level)
       .field("media_type", &self.media_type)
       .field("scroll_x", &self.scroll_x)
       .field("scroll_y", &self.scroll_y)
@@ -556,6 +560,12 @@ impl RenderOptions {
   /// Create a new options struct with defaults.
   pub fn new() -> Self {
     Self::default()
+  }
+
+  /// Enable structured diagnostics for this render.
+  pub fn with_diagnostics_level(mut self, level: DiagnosticsLevel) -> Self {
+    self.diagnostics_level = level;
+    self
   }
 
   /// Override the viewport size for this render.
@@ -623,6 +633,8 @@ pub struct RenderDiagnostics {
   pub document_error: Option<String>,
   /// Stage at which rendering timed out, when allow_partial is used.
   pub timeout_stage: Option<RenderStage>,
+  /// Optional structured statistics gathered during rendering.
+  pub stats: Option<RenderStats>,
 }
 
 impl RenderDiagnostics {
@@ -721,7 +733,7 @@ impl ResourceFetchError {
 }
 
 /// Classification of resource types for diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ResourceKind {
   /// The root HTML document
   Document,
@@ -893,6 +905,209 @@ impl RenderResult {
   /// Return the captured accessibility tree, if present.
   pub fn accessibility(&self) -> Option<&AccessibilityNode> {
     self.accessibility.as_ref()
+  }
+
+  /// Encode the rendered pixmap to an image format, annotating diagnostics when available.
+  pub fn encode(self, format: OutputFormat) -> Result<(Vec<u8>, RenderDiagnostics)> {
+    let encode_timer = self.diagnostics.stats.as_ref().map(|_| Instant::now());
+    let encoded = encode_image(&self.pixmap, format)?;
+    let mut diagnostics = self.diagnostics;
+    if let (Some(stats), Some(start)) = (diagnostics.stats.as_mut(), encode_timer) {
+      stats.timings.encode_ms = Some(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    Ok((encoded, diagnostics))
+  }
+}
+
+/// Controls the amount of diagnostics gathered during a render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiagnosticsLevel {
+  /// Do not collect diagnostics beyond fetch errors.
+  None,
+  /// Capture basic timing/counter information.
+  Basic,
+  /// Capture extra, potentially expensive diagnostics.
+  Verbose,
+}
+
+impl Default for DiagnosticsLevel {
+  fn default() -> Self {
+    DiagnosticsLevel::None
+  }
+}
+
+/// Timing information for each pipeline stage (milliseconds).
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct RenderStageTimings {
+  pub html_decode_ms: Option<f64>,
+  pub dom_parse_ms: Option<f64>,
+  pub css_inlining_ms: Option<f64>,
+  pub css_parse_ms: Option<f64>,
+  pub cascade_ms: Option<f64>,
+  pub box_tree_ms: Option<f64>,
+  pub layout_ms: Option<f64>,
+  pub paint_build_ms: Option<f64>,
+  pub paint_optimize_ms: Option<f64>,
+  pub paint_rasterize_ms: Option<f64>,
+  pub encode_ms: Option<f64>,
+}
+
+/// Common counters gathered during rendering.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct RenderCounts {
+  pub dom_nodes: Option<usize>,
+  pub styled_nodes: Option<usize>,
+  pub box_nodes: Option<usize>,
+  pub fragments: Option<usize>,
+}
+
+/// Cascade selector matching statistics.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct CascadeDiagnostics {
+  pub nodes: Option<u64>,
+  pub rule_candidates: Option<u64>,
+  pub rule_matches: Option<u64>,
+  pub selector_time_ms: Option<f64>,
+  pub declaration_time_ms: Option<f64>,
+  pub pseudo_time_ms: Option<f64>,
+}
+
+/// Layout cache and intrinsic sizing statistics.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct LayoutDiagnostics {
+  pub intrinsic_lookups: Option<usize>,
+  pub intrinsic_hits: Option<usize>,
+  pub intrinsic_stores: Option<usize>,
+  pub block_intrinsic: Option<usize>,
+  pub flex_intrinsic: Option<usize>,
+  pub inline_intrinsic: Option<usize>,
+  pub layout_cache_lookups: Option<usize>,
+  pub layout_cache_hits: Option<usize>,
+  pub layout_cache_stores: Option<usize>,
+  pub layout_cache_evictions: Option<usize>,
+}
+
+/// Paint pipeline statistics.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct PaintDiagnostics {
+  pub display_items: Option<usize>,
+  pub optimized_items: Option<usize>,
+  pub culled_items: Option<usize>,
+  pub transparent_removed: Option<usize>,
+  pub noop_removed: Option<usize>,
+  pub merged_items: Option<usize>,
+}
+
+/// Resource loading counters.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ResourceDiagnostics {
+  pub fetch_counts: HashMap<ResourceKind, usize>,
+  pub image_cache_hits: Option<usize>,
+  pub image_cache_misses: Option<usize>,
+}
+
+/// Structured report describing a render.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct RenderStats {
+  pub timings: RenderStageTimings,
+  pub counts: RenderCounts,
+  pub cascade: CascadeDiagnostics,
+  pub layout: LayoutDiagnostics,
+  pub paint: PaintDiagnostics,
+  pub resources: ResourceDiagnostics,
+}
+
+fn diagnostics_level_from_env() -> DiagnosticsLevel {
+  match std::env::var("FASTR_DIAGNOSTICS_LEVEL")
+    .or_else(|_| std::env::var("FASTR_DIAGNOSTICS"))
+    .map(|v| v.to_ascii_lowercase())
+  {
+    Ok(v) if v == "verbose" || v == "2" => DiagnosticsLevel::Verbose,
+    Ok(v) if v == "basic" || v == "1" => DiagnosticsLevel::Basic,
+    Ok(v) if v == "none" || v == "0" => DiagnosticsLevel::None,
+    _ => DiagnosticsLevel::None,
+  }
+}
+
+fn merge_image_cache_diagnostics(stats: &mut RenderStats) {
+  if let Some(image_stats) = crate::image_loader::take_image_cache_diagnostics() {
+    stats.resources.image_cache_hits = Some(image_stats.cache_hits);
+    stats.resources.image_cache_misses = Some(image_stats.cache_misses);
+    if image_stats.cache_misses > 0 {
+      *stats
+        .resources
+        .fetch_counts
+        .entry(ResourceKind::Image)
+        .or_default() += image_stats.cache_misses;
+    }
+  }
+}
+
+#[derive(Default)]
+struct RenderStatsRecorder {
+  level: DiagnosticsLevel,
+  stats: RenderStats,
+}
+
+impl RenderStatsRecorder {
+  fn new(level: DiagnosticsLevel) -> Self {
+    Self {
+      level,
+      stats: RenderStats::default(),
+    }
+  }
+
+  fn enabled(&self) -> bool {
+    !matches!(self.level, DiagnosticsLevel::None)
+  }
+
+  fn verbose(&self) -> bool {
+    matches!(self.level, DiagnosticsLevel::Verbose)
+  }
+
+  fn timer(&self) -> Option<Instant> {
+    self.enabled().then(Instant::now)
+  }
+
+  fn record_ms(target: &mut Option<f64>, start: Option<Instant>) {
+    if let Some(s) = start {
+      *target = Some(s.elapsed().as_secs_f64() * 1000.0);
+    }
+  }
+
+  fn record_fetch(&mut self, kind: ResourceKind) {
+    *self.stats.resources.fetch_counts.entry(kind).or_default() += 1;
+  }
+
+  fn finish(self) -> RenderStats {
+    self.stats
+  }
+}
+
+fn count_dom_nodes_api(node: &DomNode) -> usize {
+  1 + node.children.iter().map(count_dom_nodes_api).sum::<usize>()
+}
+
+fn count_box_nodes_api(node: &BoxNode) -> usize {
+  1 + node.children.iter().map(count_box_nodes_api).sum::<usize>()
+}
+
+struct CascadeProfileOverride {
+  previous: bool,
+}
+
+impl CascadeProfileOverride {
+  fn enable() -> Self {
+    let previous = crate::style::cascade::cascade_profile_enabled();
+    crate::style::cascade::set_cascade_profile_enabled(true);
+    crate::style::cascade::reset_cascade_profile();
+    Self { previous }
+  }
+}
+
+impl Drop for CascadeProfileOverride {
+  fn drop(&mut self) {
+    crate::style::cascade::set_cascade_profile_enabled(self.previous);
   }
 }
 
@@ -1977,8 +2192,82 @@ impl FastRender {
 
   /// Renders HTML with explicit per-request options.
   pub fn render_html_with_options(&mut self, html: &str, options: RenderOptions) -> Result<Pixmap> {
-    let outputs = self.render_html_with_options_internal(html, options, None)?;
+    let outputs = self.render_html_with_options_internal(html, options, None, None)?;
     Ok(outputs.pixmap)
+  }
+
+  /// Renders HTML with diagnostics, returning a `RenderResult`.
+  pub fn render_html_with_diagnostics(
+    &mut self,
+    html: &str,
+    mut options: RenderOptions,
+  ) -> Result<RenderResult> {
+    if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
+      let env_level = diagnostics_level_from_env();
+      if !matches!(env_level, DiagnosticsLevel::None) {
+        options.diagnostics_level = env_level;
+      }
+    }
+    let diagnostics_level = options.diagnostics_level;
+    let mut stats_recorder = (!matches!(diagnostics_level, DiagnosticsLevel::None))
+      .then(|| RenderStatsRecorder::new(diagnostics_level));
+    let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
+      Some(crate::style::cascade::cascade_profile_enabled())
+    } else {
+      None
+    };
+    if stats_recorder.is_some() {
+      crate::image_loader::enable_image_cache_diagnostics();
+      crate::paint::painter::enable_paint_diagnostics();
+      intrinsic_cache_reset_counters();
+      crate::layout::formatting_context::layout_cache_reset_counters();
+      if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
+        crate::style::cascade::set_cascade_profile_enabled(true);
+        crate::style::cascade::reset_cascade_profile();
+      }
+    }
+
+    let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
+    let previous_sink = self.diagnostics.take();
+    self.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
+    let outputs = self.render_html_with_options_internal(
+      html,
+      options,
+      None,
+      stats_recorder.as_mut(),
+    );
+    self.set_diagnostics_sink(previous_sink);
+    let outputs = match outputs {
+      Ok(outputs) => outputs,
+      Err(err) => {
+        if stats_recorder.is_some() {
+          let _ = crate::image_loader::take_image_cache_diagnostics();
+          let _ = crate::paint::painter::take_paint_diagnostics();
+        }
+        if let Some(previous) = restore_cascade_profile {
+          crate::style::cascade::set_cascade_profile_enabled(previous);
+        }
+        return Err(err);
+      }
+    };
+
+    if let Some(recorder) = stats_recorder {
+      let mut stats = recorder.finish();
+      merge_image_cache_diagnostics(&mut stats);
+      if let Ok(mut guard) = diagnostics.lock() {
+        guard.stats = Some(stats);
+      }
+    }
+    if let Some(previous) = restore_cascade_profile {
+      crate::style::cascade::set_cascade_profile_enabled(previous);
+    }
+    let diagnostics = diagnostics.lock().unwrap().clone();
+
+    Ok(RenderResult {
+      pixmap: outputs.pixmap,
+      accessibility: outputs.accessibility,
+      diagnostics,
+    })
   }
 
   /// Renders HTML with options while capturing requested artifacts.
@@ -1988,7 +2277,7 @@ impl FastRender {
     options: RenderOptions,
     artifacts: &mut RenderArtifacts,
   ) -> Result<Pixmap> {
-    let outputs = self.render_html_with_options_internal(html, options, Some(artifacts))?;
+    let outputs = self.render_html_with_options_internal(html, options, Some(artifacts), None)?;
     Ok(outputs.pixmap)
   }
 
@@ -1999,7 +2288,7 @@ impl FastRender {
     mut options: RenderOptions,
   ) -> Result<(Pixmap, AccessibilityNode)> {
     options.capture_accessibility = true;
-    let outputs = self.render_html_with_options_internal(html, options, None)?;
+    let outputs = self.render_html_with_options_internal(html, options, None, None)?;
     let Some(tree) = outputs.accessibility else {
       return Err(Error::Render(RenderError::InvalidParameters {
         message: "Accessibility capture was requested but not produced".to_string(),
@@ -2027,9 +2316,16 @@ impl FastRender {
     html: &str,
     options: RenderOptions,
     artifacts: Option<&mut RenderArtifacts>,
+    stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<RenderOutputs> {
     let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
-    self.render_html_with_options_internal_with_deadline(html, options, artifacts, Some(&deadline))
+    self.render_html_with_options_internal_with_deadline(
+      html,
+      options,
+      artifacts,
+      Some(&deadline),
+      stats,
+    )
   }
 
   fn render_html_with_options_internal_with_deadline(
@@ -2038,6 +2334,7 @@ impl FastRender {
     options: RenderOptions,
     artifacts: Option<&mut RenderArtifacts>,
     deadline: Option<&RenderDeadline>,
+    stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<RenderOutputs> {
     let (width, height) = options
       .viewport
@@ -2057,6 +2354,7 @@ impl FastRender {
       options.capture_accessibility,
       deadline,
       artifacts,
+      stats,
     );
     let result = match result {
       Ok(outputs) => Ok(outputs),
@@ -2107,6 +2405,7 @@ impl FastRender {
     capture_accessibility: bool,
     deadline: Option<&RenderDeadline>,
     mut artifacts: Option<&mut RenderArtifacts>,
+    mut stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<RenderOutputs> {
     // Validate dimensions
     if width == 0 || height == 0 {
@@ -2122,7 +2421,12 @@ impl FastRender {
     let overall_start = stage_start.clone();
 
     // Parse HTML to DOM
+    let parse_timer = stats.as_deref().and_then(|rec| rec.timer());
     let dom = self.parse_html(html)?;
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::record_ms(&mut rec.stats.timings.dom_parse_ms, parse_timer);
+      rec.stats.counts.dom_nodes = Some(count_dom_nodes_api(&dom));
+    }
     if let Some(store) = artifacts.as_deref_mut() {
       if store.request().dom {
         store.dom = Some(dom.clone());
@@ -2152,6 +2456,7 @@ impl FastRender {
     let result = (|| -> Result<RenderOutputs> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
+      let layout_timer = stats.as_deref().and_then(|rec| rec.timer());
       let layout_artifacts = self.layout_document_for_media_with_artifacts(
         &dom,
         layout_width,
@@ -2160,6 +2465,39 @@ impl FastRender {
         LayoutDocumentOptions::default(),
         deadline,
       )?;
+      if let Some(rec) = stats.as_deref_mut() {
+        RenderStatsRecorder::record_ms(&mut rec.stats.timings.layout_ms, layout_timer);
+        rec.stats.counts.styled_nodes = Some(count_styled_nodes_api(&layout_artifacts.styled_tree));
+        rec.stats.counts.box_nodes = Some(count_box_nodes_api(&layout_artifacts.box_tree.root));
+        rec.stats.counts.fragments = Some(layout_artifacts.fragment_tree.fragment_count());
+
+        let (lookups, hits, stores, block_calls, flex_calls, inline_calls) =
+          intrinsic_cache_stats();
+        rec.stats.layout.intrinsic_lookups = Some(lookups);
+        rec.stats.layout.intrinsic_hits = Some(hits);
+        rec.stats.layout.intrinsic_stores = Some(stores);
+        rec.stats.layout.block_intrinsic = Some(block_calls);
+        rec.stats.layout.flex_intrinsic = Some(flex_calls);
+        rec.stats.layout.inline_intrinsic = Some(inline_calls);
+
+        let (cache_lookups, cache_hits, cache_stores, cache_evictions) =
+          crate::layout::formatting_context::layout_cache_stats();
+        rec.stats.layout.layout_cache_lookups = Some(cache_lookups);
+        rec.stats.layout.layout_cache_hits = Some(cache_hits);
+        rec.stats.layout.layout_cache_stores = Some(cache_stores);
+        rec.stats.layout.layout_cache_evictions = Some(cache_evictions);
+
+        if rec.verbose() {
+          let profile = crate::style::cascade::capture_cascade_profile();
+          rec.stats.cascade.nodes = Some(profile.nodes);
+          rec.stats.cascade.rule_candidates = Some(profile.rule_candidates);
+          rec.stats.cascade.rule_matches = Some(profile.rule_matches);
+          rec.stats.cascade.selector_time_ms = Some(profile.selector_time_ns as f64 / 1_000_000.0);
+          rec.stats.cascade.declaration_time_ms =
+            Some(profile.declaration_time_ns as f64 / 1_000_000.0);
+          rec.stats.cascade.pseudo_time_ms = Some(profile.pseudo_time_ns as f64 / 1_000_000.0);
+        }
+      }
       self.pending_device_size = None;
       let LayoutArtifacts {
         styled_tree,
@@ -2382,6 +2720,13 @@ impl FastRender {
       // Paint to pixmap
       let offset = Point::new(-scroll.x, -scroll.y);
       let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
+      if let Some(rec) = stats.as_deref_mut() {
+        if let Some(diag) = crate::paint::painter::take_paint_diagnostics() {
+          rec.stats.timings.paint_build_ms = Some(diag.build_ms);
+          rec.stats.timings.paint_rasterize_ms = Some(diag.raster_ms);
+          rec.stats.paint.display_items = Some(diag.command_count);
+        }
+      }
 
       if let Some(start) = stage_start {
         let now = Instant::now();
@@ -2702,46 +3047,101 @@ impl FastRender {
   pub fn render_url_with_options_report(
     &mut self,
     url: &str,
-    options: RenderOptions,
+    mut options: RenderOptions,
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
+    if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
+      let env_level = diagnostics_level_from_env();
+      if !matches!(env_level, DiagnosticsLevel::None) {
+        options.diagnostics_level = env_level;
+      }
+    }
+    let diagnostics_level = options.diagnostics_level;
+    let mut stats_recorder = (!matches!(diagnostics_level, DiagnosticsLevel::None))
+      .then(|| RenderStatsRecorder::new(diagnostics_level));
+    let restore_cascade_profile = if matches!(diagnostics_level, DiagnosticsLevel::Verbose) {
+      Some(crate::style::cascade::cascade_profile_enabled())
+    } else {
+      None
+    };
+    if let Some(stats) = stats_recorder.as_mut() {
+      crate::image_loader::enable_image_cache_diagnostics();
+      crate::paint::painter::enable_paint_diagnostics();
+      intrinsic_cache_reset_counters();
+      crate::layout::formatting_context::layout_cache_reset_counters();
+      if stats.verbose() {
+        crate::style::cascade::set_cascade_profile_enabled(true);
+        crate::style::cascade::reset_cascade_profile();
+      }
+      stats.record_fetch(ResourceKind::Document);
+    }
+
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
     let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
     self.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
-    let resource = match self.fetcher.fetch(url) {
-      Ok(res) => res,
-      Err(e) => {
+    let result = (|| -> Result<RenderReport> {
+      let resource = match self.fetcher.fetch(url) {
+        Ok(res) => res,
+        Err(e) => {
+          if let Ok(mut guard) = diagnostics.lock() {
+            guard.record_error(ResourceKind::Document, url, &e);
+            guard.document_error = Some(e.to_string());
+            if let Some(recorder) = stats_recorder.take() {
+              let mut stats = recorder.finish();
+              merge_image_cache_diagnostics(&mut stats);
+              let _ = crate::paint::painter::take_paint_diagnostics();
+              guard.stats = Some(stats);
+            }
+          }
+          if options.allow_partial {
+            let pixmap = self.render_error_overlay(width, height)?;
+            let diagnostics = diagnostics.lock().unwrap().clone();
+            return Ok(RenderReport {
+              pixmap,
+              accessibility: None,
+              diagnostics,
+              artifacts: RenderArtifacts::new(artifacts),
+            });
+          }
+          let reason = e.to_string();
+          let source = Arc::new(e);
+          return Err(Error::Navigation(NavigationError::FetchFailed {
+            url: url.to_string(),
+            reason,
+            source: Some(source),
+          }));
+        }
+      };
+
+      let mut report = self.render_fetched_html_with_options_report_internal(
+        &resource,
+        Some(url),
+        options,
+        artifacts,
+        stats_recorder.as_mut(),
+      )?;
+      if let Some(recorder) = stats_recorder.take() {
+        let mut stats = recorder.finish();
+        merge_image_cache_diagnostics(&mut stats);
         if let Ok(mut guard) = diagnostics.lock() {
-          guard.record_error(ResourceKind::Document, url, &e);
-          guard.document_error = Some(e.to_string());
+          guard.stats = Some(stats);
         }
-        self.set_diagnostics_sink(None);
-        if options.allow_partial {
-          let pixmap = self.render_error_overlay(width, height)?;
-          let diagnostics = diagnostics.lock().unwrap().clone();
-          return Ok(RenderReport {
-            pixmap,
-            accessibility: None,
-            diagnostics,
-            artifacts: RenderArtifacts::new(artifacts),
-          });
-        }
-        let reason = e.to_string();
-        let source = Arc::new(e);
-        return Err(Error::Navigation(NavigationError::FetchFailed {
-          url: url.to_string(),
-          reason,
-          source: Some(source),
-        }));
       }
-    };
-    let mut report =
-      self.render_fetched_html_with_options_report(&resource, Some(url), options, artifacts)?;
+      report.diagnostics = diagnostics.lock().unwrap().clone();
+      Ok(report)
+    })();
+
     self.set_diagnostics_sink(None);
-    report.diagnostics = diagnostics.lock().unwrap().clone();
-    Ok(report)
+    if let Some(previous) = restore_cascade_profile {
+      crate::style::cascade::set_cascade_profile_enabled(previous);
+    }
+    if result.is_err() && stats_recorder.is_some() {
+      let _ = crate::image_loader::take_image_cache_diagnostics();
+      let _ = crate::paint::painter::take_paint_diagnostics();
+    }
+    result
   }
 
   /// Render already-fetched HTML while inlining linked stylesheets using the configured fetcher.
@@ -2770,6 +3170,23 @@ impl FastRender {
     options: RenderOptions,
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
+    self.render_fetched_html_with_options_report_internal(
+      resource,
+      base_hint,
+      options,
+      artifacts,
+      None,
+    )
+  }
+
+  fn render_fetched_html_with_options_report_internal(
+    &mut self,
+    resource: &crate::resource::FetchedResource,
+    base_hint: Option<&str>,
+    mut options: RenderOptions,
+    artifacts: RenderArtifactRequest,
+    mut stats: Option<&mut RenderStatsRecorder>,
+  ) -> Result<RenderReport> {
     let had_sink = self.diagnostics.is_some();
     let diagnostics = if let Some(existing) = &self.diagnostics {
       Arc::clone(existing)
@@ -2778,8 +3195,42 @@ impl FastRender {
       self.set_diagnostics_sink(Some(Arc::clone(&diag)));
       diag
     };
+    let mut stats = stats.map(|stats| &mut *stats);
+    if stats.is_none() && matches!(options.diagnostics_level, DiagnosticsLevel::None) {
+      let env_level = diagnostics_level_from_env();
+      if !matches!(env_level, DiagnosticsLevel::None) {
+        options.diagnostics_level = env_level;
+      }
+    }
+    let mut local_recorder =
+      if stats.is_none() && !matches!(options.diagnostics_level, DiagnosticsLevel::None) {
+        Some(RenderStatsRecorder::new(options.diagnostics_level))
+      } else {
+        None
+      };
+    if stats.is_none() && local_recorder.is_some() {
+      crate::image_loader::enable_image_cache_diagnostics();
+      crate::paint::painter::enable_paint_diagnostics();
+      intrinsic_cache_reset_counters();
+      crate::layout::formatting_context::layout_cache_reset_counters();
+    }
+    let _cascade_profile_override = if stats.is_none()
+      && local_recorder.is_some()
+      && matches!(options.diagnostics_level, DiagnosticsLevel::Verbose)
+    {
+      Some(CascadeProfileOverride::enable())
+    } else {
+      None
+    };
+    if let Some(recorder) = local_recorder.as_mut() {
+      stats = Some(recorder);
+    }
     let hint = resource.final_url.as_deref().or(base_hint).unwrap_or("");
+    let decode_start = stats.as_deref().and_then(|rec| rec.timer());
     let html = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::record_ms(&mut rec.stats.timings.html_decode_ms, decode_start);
+    }
     let base_url = infer_base_url(&html, hint).into_owned();
     self.set_base_url(base_url.clone());
     let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
@@ -2796,6 +3247,7 @@ impl FastRender {
         options.css_limit,
         &mut guard,
         Some(&deadline),
+        stats.as_deref_mut(),
       ) {
         Ok(inlined) => inlined,
         Err(err) => {
@@ -2805,6 +3257,10 @@ impl FastRender {
               let diagnostics = guard.clone();
               if !had_sink {
                 self.set_diagnostics_sink(None);
+              }
+              if local_recorder.is_some() {
+                let _ = crate::image_loader::take_image_cache_diagnostics();
+                let _ = crate::paint::painter::take_paint_diagnostics();
               }
               let pixmap = self.render_error_overlay(width, height)?;
               return Ok(RenderReport {
@@ -2819,6 +3275,10 @@ impl FastRender {
           if !had_sink {
             self.set_diagnostics_sink(None);
           }
+          if local_recorder.is_some() {
+            let _ = crate::image_loader::take_image_cache_diagnostics();
+            let _ = crate::paint::painter::take_paint_diagnostics();
+          }
           return Err(Error::Render(err));
         }
       }
@@ -2829,18 +3289,35 @@ impl FastRender {
       options,
       Some(&mut captured),
       Some(&deadline),
-    )?;
+      stats.as_deref_mut(),
+    );
     if !had_sink {
       self.set_diagnostics_sink(None);
     }
+    let outputs = match outputs {
+      Ok(outputs) => outputs,
+      Err(err) => {
+        if local_recorder.is_some() {
+          let _ = crate::image_loader::take_image_cache_diagnostics();
+          let _ = crate::paint::painter::take_paint_diagnostics();
+        }
+        return Err(err);
+      }
+    };
     let diagnostics = diagnostics.lock().unwrap().clone();
 
-    Ok(RenderReport {
+    let mut report = RenderReport {
       pixmap: outputs.pixmap,
       accessibility: outputs.accessibility,
       diagnostics,
       artifacts: captured,
-    })
+    };
+    if let Some(recorder) = local_recorder {
+      let mut finished = recorder.finish();
+      merge_image_cache_diagnostics(&mut finished);
+      report.diagnostics.stats = Some(finished);
+    }
+    Ok(report)
   }
 
   /// Renders an HTML string after inlining linked stylesheets.
@@ -2887,6 +3364,7 @@ impl FastRender {
         options.css_limit,
         &mut guard,
         Some(&deadline),
+        None,
       ) {
         Ok(inlined) => inlined,
         Err(err) => {
@@ -2920,6 +3398,7 @@ impl FastRender {
       options,
       Some(&mut captured),
       Some(&deadline),
+      None,
     )?;
     if !had_sink {
       self.set_diagnostics_sink(None);
@@ -4215,8 +4694,9 @@ impl FastRender {
     css_limit: Option<usize>,
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
+    stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
-    Self::inline_stylesheets_for_html(
+    Self::inline_stylesheets_for_html_with_stats(
       self.fetcher.as_ref(),
       html,
       base_url,
@@ -4224,6 +4704,7 @@ impl FastRender {
       css_limit,
       diagnostics,
       deadline,
+      stats,
     )
   }
 
@@ -4237,7 +4718,15 @@ impl FastRender {
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
   ) -> std::result::Result<String, RenderError> {
-    self.inline_stylesheets(html, base_url, media_type, css_limit, diagnostics, deadline)
+    self.inline_stylesheets(
+      html,
+      base_url,
+      media_type,
+      css_limit,
+      diagnostics,
+      deadline,
+      None,
+    )
   }
 
   /// Fetch linked stylesheets using an arbitrary fetcher and inject them into the HTML.
@@ -4250,6 +4739,29 @@ impl FastRender {
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
   ) -> std::result::Result<String, RenderError> {
+    Self::inline_stylesheets_for_html_with_stats(
+      fetcher,
+      html,
+      base_url,
+      media_type,
+      css_limit,
+      diagnostics,
+      deadline,
+      None,
+    )
+  }
+
+  fn inline_stylesheets_for_html_with_stats(
+    fetcher: &dyn ResourceFetcher,
+    html: &str,
+    base_url: &str,
+    media_type: MediaType,
+    css_limit: Option<usize>,
+    diagnostics: &mut RenderDiagnostics,
+    deadline: Option<&RenderDeadline>,
+    mut stats: Option<&mut RenderStatsRecorder>,
+  ) -> std::result::Result<String, RenderError> {
+    let inlining_start = stats.as_deref().and_then(|rec| rec.timer());
     let mut css_links = extract_css_links(html, base_url, media_type);
     if let Some(limit) = css_limit {
       if css_links.len() > limit {
@@ -4268,6 +4780,9 @@ impl FastRender {
 
     for css_url in css_links {
       seen_imports.insert(css_url.clone());
+      if let Some(rec) = stats.as_deref_mut() {
+        rec.record_fetch(ResourceKind::Stylesheet);
+      }
       match fetcher.fetch(&css_url) {
         Ok(res) => {
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
@@ -4275,6 +4790,9 @@ impl FastRender {
           let mut import_diags: Vec<(String, String)> = Vec::new();
           let inlined = {
             let mut import_fetch = |u: &str| -> Result<String> {
+              if let Some(rec) = stats.as_deref_mut() {
+                rec.record_fetch(ResourceKind::Stylesheet);
+              }
               match fetcher.fetch(u) {
                 Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
                 Err(err) => {
@@ -4307,11 +4825,15 @@ impl FastRender {
       }
     }
 
-    Ok(if combined_css.is_empty() {
+    let output = if combined_css.is_empty() {
       html.to_string()
     } else {
       inject_css_into_html(html, &combined_css)
-    })
+    };
+    if let Some(rec) = stats.as_deref_mut() {
+      RenderStatsRecorder::record_ms(&mut rec.stats.timings.css_inlining_ms, inlining_start);
+    }
+    Ok(output)
   }
 
   /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
@@ -6423,6 +6945,7 @@ pub(crate) fn render_html_with_shared_resources(
       0.0,
       MediaType::Screen,
       false,
+      None,
       None,
       None,
     )

@@ -47,6 +47,7 @@ Fetches blocked by policy (disallowed scheme/host, over budget, etc.) are record
 
 - `viewport: Option<(u32, u32)>` – override the viewport for this render (falls back to the renderer’s `default_width`/`default_height`).
 - `device_pixel_ratio: Option<f32>` – temporarily override the DPR used for media queries and image/srcset selection.
+- `diagnostics_level: DiagnosticsLevel` – enable structured diagnostics (`None`/`Basic`/`Verbose`).
 - `media_type: MediaType` – defaults to `MediaType::Screen`.
 - `scroll_x`, `scroll_y` – apply CSS px scroll offsets before painting.
 - `css_limit: Option<usize>` – limit the number of linked stylesheets inlined by the fetch helpers.
@@ -100,12 +101,14 @@ but not `Sync`; create one session per thread when painting concurrently.
 When `RenderOptions::allow_partial(true)` is set, a failed document fetch records `diagnostics.document_error` and returns a placeholder pixmap instead of an error. Otherwise the fetch failure is returned as `Error::Navigation`.
 
 ```rust
-use fastrender::{FastRender, RenderOptions};
+use fastrender::{DiagnosticsLevel, FastRender, RenderOptions};
 
 let mut renderer = FastRender::new()?;
 let result = renderer.render_url_with_options(
     "https://example.com",
-    RenderOptions::new().allow_partial(true),
+    RenderOptions::new()
+        .allow_partial(true)
+        .with_diagnostics_level(DiagnosticsLevel::Basic),
 )?;
 
 if let Some(reason) = &result.diagnostics.document_error {
@@ -114,11 +117,21 @@ if let Some(reason) = &result.diagnostics.document_error {
 for error in &result.diagnostics.fetch_errors {
     eprintln!("[{:#?}] {}: {}", error.kind, error.url, error.message);
 }
+if let Some(stats) = &result.diagnostics.stats {
+    eprintln!("DOM nodes: {:?}", stats.counts.dom_nodes);
+    eprintln!("Paint time (ms): {:?}", stats.timings.paint_rasterize_ms);
+}
 
 result.pixmap.save_png("example.png")?;
 ```
 
-`RenderResult::into_pixmap()` discards diagnostics when they are not needed.
+`RenderResult::encode` returns encoded bytes while annotating `timings.encode_ms` when diagnostics are present:
+
+```rust
+let (png, diagnostics) = result.encode(fastrender::OutputFormat::Png)?;
+```
+
+`RenderResult::into_pixmap()` discards diagnostics when they are not needed. To collect diagnostics when rendering raw HTML, use `render_html_with_diagnostics`.
 
 ## Parallel rendering
 

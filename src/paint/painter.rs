@@ -123,6 +123,7 @@ use image::codecs::png::PngEncoder;
 use image::ColorType;
 use image::ImageEncoder;
 use percent_encoding::percent_decode;
+use std::cell::RefCell;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -186,6 +187,39 @@ struct PaintStats {
   replaced: (usize, f64),
   outline: (usize, f64),
   stacking: (usize, f64),
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct PaintDiagnosticsSummary {
+  pub command_count: usize,
+  pub build_ms: f64,
+  pub raster_ms: f64,
+}
+
+thread_local! {
+  static PAINT_DIAGNOSTICS: RefCell<Option<PaintDiagnosticsSummary>> = RefCell::new(None);
+}
+
+pub(crate) fn enable_paint_diagnostics() {
+  PAINT_DIAGNOSTICS.with(|cell| {
+    *cell.borrow_mut() = Some(PaintDiagnosticsSummary::default());
+  });
+}
+
+pub(crate) fn take_paint_diagnostics() -> Option<PaintDiagnosticsSummary> {
+  PAINT_DIAGNOSTICS.with(|cell| cell.borrow_mut().take())
+}
+
+fn paint_diagnostics_enabled() -> bool {
+  PAINT_DIAGNOSTICS.with(|cell| cell.borrow().is_some())
+}
+
+fn with_paint_diagnostics<F: FnOnce(&mut PaintDiagnosticsSummary)>(f: F) {
+  PAINT_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      f(stats);
+    }
+  });
 }
 
 #[derive(Copy, Clone)]
@@ -1114,6 +1148,7 @@ impl Painter {
     let profiling = std::env::var("FASTR_PAINT_STATS")
       .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
       .unwrap_or(false);
+    let diagnostics_enabled = paint_diagnostics_enabled();
     let mut stats = PaintStats::default();
     check_active(RenderStage::Paint).map_err(Error::Render)?;
 
@@ -1156,6 +1191,14 @@ impl Painter {
     check_active(RenderStage::Paint).map_err(Error::Render)?;
     if profiling {
       stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
+    }
+    if diagnostics_enabled {
+      let build_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
+      let count = items.len();
+      with_paint_diagnostics(|diag| {
+        diag.build_ms = build_ms;
+        diag.command_count = count;
+      });
     }
     if dump_stack_enabled() {
       let total_items = items.len();
@@ -1327,6 +1370,8 @@ impl Painter {
       }
     }
 
+    let command_len = items.len();
+    let raster_start = diagnostics_enabled.then(Instant::now);
     for item in items {
       if let Err(RenderError::Timeout { stage, elapsed }) = check_active(RenderStage::Paint) {
         return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
@@ -1338,6 +1383,15 @@ impl Painter {
       } else {
         self.execute_command(item)?;
       }
+    }
+    if let (true, Some(start)) = (diagnostics_enabled, raster_start) {
+      let raster_ms = start.elapsed().as_secs_f64() * 1000.0;
+      with_paint_diagnostics(|diag| {
+        diag.raster_ms = raster_ms;
+        if diag.command_count == 0 {
+          diag.command_count = command_len;
+        }
+      });
     }
 
     if profiling {

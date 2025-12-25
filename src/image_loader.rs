@@ -28,6 +28,7 @@ use image::ImageDecoder;
 use image::ImageFormat;
 use image::RgbaImage;
 use roxmltree::Document;
+use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -55,6 +56,52 @@ fn image_profile_threshold_ms() -> Option<f64> {
     })
     .as_ref()
     .copied()
+}
+
+/// Per-thread image cache diagnostics collection.
+#[derive(Debug, Default, Clone)]
+pub struct ImageCacheDiagnostics {
+  pub requests: usize,
+  pub cache_hits: usize,
+  pub cache_misses: usize,
+}
+
+thread_local! {
+  static IMAGE_CACHE_DIAGNOSTICS: RefCell<Option<ImageCacheDiagnostics>> = RefCell::new(None);
+}
+
+pub(crate) fn enable_image_cache_diagnostics() {
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
+    *cell.borrow_mut() = Some(ImageCacheDiagnostics::default());
+  });
+}
+
+pub(crate) fn take_image_cache_diagnostics() -> Option<ImageCacheDiagnostics> {
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| cell.borrow_mut().take())
+}
+
+fn record_image_cache_request() {
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.requests += 1;
+    }
+  });
+}
+
+fn record_image_cache_hit() {
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.cache_hits += 1;
+    }
+  });
+}
+
+fn record_image_cache_miss() {
+  IMAGE_CACHE_DIAGNOSTICS.with(|cell| {
+    if let Some(stats) = cell.borrow_mut().as_mut() {
+      stats.cache_misses += 1;
+    }
+  });
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -1074,6 +1121,8 @@ pub struct ImageCache {
   in_flight: Arc<Mutex<HashMap<String, Arc<DecodeInFlight>>>>,
   /// In-memory cache of probed metadata (keyed by resolved URL).
   meta_cache: Arc<Mutex<HashMap<String, Arc<CachedImageMetadata>>>>,
+  /// Raw resources captured during metadata probes to avoid duplicate fetches between layout and paint.
+  raw_cache: Arc<Mutex<HashMap<String, Arc<FetchedResource>>>>,
   /// In-flight probes keyed by resolved URL to de-duplicate concurrent metadata loads.
   meta_in_flight: Arc<Mutex<HashMap<String, Arc<ProbeInFlight>>>>,
   /// In-memory cache of rendered inline SVG pixmaps keyed by (hash, size).
@@ -1159,6 +1208,7 @@ impl ImageCache {
       cache: Arc::new(Mutex::new(HashMap::new())),
       in_flight: Arc::new(Mutex::new(HashMap::new())),
       meta_cache: Arc::new(Mutex::new(HashMap::new())),
+      raw_cache: Arc::new(Mutex::new(HashMap::new())),
       meta_in_flight: Arc::new(Mutex::new(HashMap::new())),
       svg_pixmap_cache: Arc::new(Mutex::new(HashMap::new())),
       base_url,
@@ -1233,15 +1283,32 @@ impl ImageCache {
     let resolved_url = self.resolve_url(url);
 
     // Check cache first (using resolved URL as key)
+    record_image_cache_request();
     if let Some(img) = self.get_cached(&resolved_url) {
+      record_image_cache_hit();
       return Ok(img);
     }
-
     let (flight, is_owner) = self.join_inflight(&resolved_url);
     if !is_owner {
+      record_image_cache_hit();
       return flight.wait();
     }
 
+    if let Some(resource) = self.take_raw_cached_resource(&resolved_url) {
+      record_image_cache_hit();
+      let result = self.decode_resource_into_cache(&resolved_url, &resource);
+      let shared = match &result {
+        Ok(img) => SharedImageResult::Success(Arc::clone(img)),
+        Err(err) => {
+          self.record_image_error(&resolved_url, err);
+          SharedImageResult::Error(err.clone())
+        }
+      };
+      self.finish_inflight(&resolved_url, &flight, shared);
+      return result;
+    }
+
+    record_image_cache_miss();
     let result = self.fetch_and_decode(&resolved_url);
     let shared = match &result {
       Ok(img) => SharedImageResult::Success(Arc::clone(img)),
@@ -1257,19 +1324,23 @@ impl ImageCache {
   pub fn probe(&self, url: &str) -> Result<Arc<CachedImageMetadata>> {
     let resolved_url = self.resolve_url(url);
 
+    record_image_cache_request();
     if let Some(img) = self.get_cached(&resolved_url) {
+      record_image_cache_hit();
       return Ok(Arc::new(CachedImageMetadata::from(&*img)));
     }
 
     if let Some(meta) = self.get_cached_meta(&resolved_url) {
+      record_image_cache_hit();
       return Ok(meta);
     }
-
     let (flight, is_owner) = self.join_meta_inflight(&resolved_url);
     if !is_owner {
+      record_image_cache_hit();
       return flight.wait();
     }
 
+    record_image_cache_miss();
     let result = self.fetch_and_probe(&resolved_url);
     let shared = match &result {
       Ok(meta) => SharedMetaResult::Success(Arc::clone(meta)),
@@ -1294,6 +1365,14 @@ impl ImageCache {
       .lock()
       .ok()
       .and_then(|cache| cache.get(resolved_url).cloned())
+  }
+
+  fn take_raw_cached_resource(&self, resolved_url: &str) -> Option<Arc<FetchedResource>> {
+    self
+      .raw_cache
+      .lock()
+      .ok()
+      .and_then(|mut cache| cache.remove(resolved_url))
   }
 
   fn record_image_error(&self, url: &str, error: &Error) {
@@ -1368,6 +1447,58 @@ impl ImageCache {
     Ok(img_arc)
   }
 
+  fn decode_resource_into_cache(
+    &self,
+    resolved_url: &str,
+    resource: &FetchedResource,
+  ) -> Result<Arc<CachedImage>> {
+    let threshold_ms = image_profile_threshold_ms();
+    let profile_enabled = threshold_ms.is_some();
+    let total_start = profile_enabled.then(Instant::now);
+    let decode_start = profile_enabled.then(Instant::now);
+    let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none) =
+      self.decode_resource(resource, resolved_url)?;
+    let decode_ms = decode_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+
+    let img_arc = Arc::new(CachedImage {
+      image: Arc::new(img),
+      orientation,
+      resolution,
+      is_vector,
+      intrinsic_ratio,
+      aspect_ratio_none,
+    });
+
+    if let Ok(mut cache) = self.cache.lock() {
+      cache.insert(resolved_url.to_string(), Arc::clone(&img_arc));
+    }
+
+    if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
+      let total_ms = total_start.elapsed().as_secs_f64() * 1000.0;
+      if total_ms >= threshold_ms {
+        let content_type = resource
+          .content_type
+          .as_deref()
+          .unwrap_or("<unknown>")
+          .split(';')
+          .next()
+          .unwrap_or("<unknown>");
+        eprintln!(
+          "image_profile kind=decode total_ms={total_ms:.2} fetch_ms=0.00 decode_ms={:.2} bytes={} dims={}x{} vector={} url={}",
+          decode_ms.unwrap_or(0.0),
+          resource.bytes.len(),
+          img_arc.image.width(),
+          img_arc.image.height(),
+          img_arc.is_vector,
+          resolved_url
+        );
+        eprintln!(" image_profile content_type={content_type}");
+      }
+    }
+
+    Ok(img_arc)
+  }
+
   fn fetch_and_probe(&self, resolved_url: &str) -> Result<Arc<CachedImageMetadata>> {
     let threshold_ms = image_profile_threshold_ms();
     let profile_enabled = threshold_ms.is_some();
@@ -1380,6 +1511,7 @@ impl ImageCache {
         return Err(err);
       }
     };
+    let resource = Arc::new(resource);
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let probe_start = profile_enabled.then(Instant::now);
     let meta = match self.probe_resource(&resource, resolved_url) {
@@ -1394,6 +1526,13 @@ impl ImageCache {
 
     if let Ok(mut cache) = self.meta_cache.lock() {
       cache.insert(resolved_url.to_string(), Arc::clone(&meta));
+    }
+
+    const RAW_RESOURCE_CACHE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
+    if resource.bytes.len() <= RAW_RESOURCE_CACHE_LIMIT_BYTES {
+      if let Ok(mut cache) = self.raw_cache.lock() {
+        cache.insert(resolved_url.to_string(), Arc::clone(&resource));
+      }
     }
 
     if let (Some(threshold_ms), Some(total_start)) = (threshold_ms, total_start) {
@@ -2297,6 +2436,7 @@ impl Clone for ImageCache {
       cache: Arc::clone(&self.cache),
       in_flight: Arc::clone(&self.in_flight),
       meta_cache: Arc::clone(&self.meta_cache),
+      raw_cache: Arc::clone(&self.raw_cache),
       meta_in_flight: Arc::clone(&self.meta_in_flight),
       svg_pixmap_cache: Arc::clone(&self.svg_pixmap_cache),
       base_url: self.base_url.clone(),

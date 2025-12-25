@@ -62,6 +62,7 @@ use selectors::Element;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -85,7 +86,8 @@ fn is_root_element(ancestors: &[&DomNode]) -> bool {
 static CASCADE_PROFILE_FIND_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_DECL_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_PSEUDO_TIME_NS: AtomicU64 = AtomicU64::new(0);
-static CASCADE_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
+static CASCADE_PROFILE_ENABLED: AtomicBool = AtomicBool::new(false);
+static CASCADE_PROFILE_INITIALIZED: OnceLock<()> = OnceLock::new();
 
 fn attr_truthy_value(value: &str) -> bool {
   matches!(
@@ -172,12 +174,46 @@ fn node_is_inert(node: &DomNode, ancestors: &[&DomNode]) -> bool {
   ancestors.iter().any(|a| explicit_inert(a))
 }
 
-fn cascade_profile_enabled() -> bool {
-  *CASCADE_PROFILE_ENABLED.get_or_init(|| {
-    std::env::var("FASTR_CASCADE_PROFILE")
+pub(crate) fn cascade_profile_enabled() -> bool {
+  ensure_cascade_profile_initialized();
+  CASCADE_PROFILE_ENABLED.load(Ordering::Relaxed)
+}
+
+fn ensure_cascade_profile_initialized() {
+  CASCADE_PROFILE_INITIALIZED.get_or_init(|| {
+    let enabled = std::env::var("FASTR_CASCADE_PROFILE")
       .map(|v| v != "0")
-      .unwrap_or(false)
-  })
+      .unwrap_or(false);
+    CASCADE_PROFILE_ENABLED.store(enabled, Ordering::Relaxed);
+  });
+}
+
+/// Enable or disable cascade profiling independent of the FASTR_CASCADE_PROFILE env var.
+pub(crate) fn set_cascade_profile_enabled(enabled: bool) {
+  ensure_cascade_profile_initialized();
+  CASCADE_PROFILE_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Snapshot of cascade profiling counters.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CascadeProfileStats {
+  pub nodes: u64,
+  pub rule_candidates: u64,
+  pub rule_matches: u64,
+  pub selector_time_ns: u64,
+  pub declaration_time_ns: u64,
+  pub pseudo_time_ns: u64,
+}
+
+pub(crate) fn capture_cascade_profile() -> CascadeProfileStats {
+  CascadeProfileStats {
+    nodes: CASCADE_PROFILE_NODES.load(Ordering::Relaxed),
+    rule_candidates: CASCADE_PROFILE_RULE_CANDIDATES.load(Ordering::Relaxed),
+    rule_matches: CASCADE_PROFILE_RULE_MATCHES.load(Ordering::Relaxed),
+    selector_time_ns: CASCADE_PROFILE_FIND_TIME_NS.load(Ordering::Relaxed),
+    declaration_time_ns: CASCADE_PROFILE_DECL_TIME_NS.load(Ordering::Relaxed),
+    pseudo_time_ns: CASCADE_PROFILE_PSEUDO_TIME_NS.load(Ordering::Relaxed),
+  }
 }
 
 fn user_agent_stylesheet() -> &'static StyleSheet {
@@ -185,7 +221,7 @@ fn user_agent_stylesheet() -> &'static StyleSheet {
     .get_or_init(|| parse_stylesheet(USER_AGENT_STYLESHEET).unwrap_or_else(|_| StyleSheet::new()))
 }
 
-fn reset_cascade_profile() {
+pub(crate) fn reset_cascade_profile() {
   CASCADE_PROFILE_NODES.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_CANDIDATES.store(0, Ordering::Relaxed);
   CASCADE_PROFILE_RULE_MATCHES.store(0, Ordering::Relaxed);
