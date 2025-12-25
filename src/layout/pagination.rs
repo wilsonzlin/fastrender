@@ -3,12 +3,13 @@
 use std::sync::Arc;
 
 use crate::css::types::CollectedPageRule;
-use crate::geometry::{Rect, Size};
+use crate::geometry::{Point, Rect, Size};
 use crate::layout::fragmentation::{
   clip_node, collect_forced_boundaries, fragmentation_axis, propagate_fragment_metadata, BlockAxis,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
+use crate::style::position::Position;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
@@ -48,6 +49,8 @@ pub fn paginate_fragment_tree(
   forced.push(total_block);
   forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
   forced.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+
+  let fixed_fragments = collect_fixed_fragments(root);
 
   let mut pages = Vec::new();
   let mut pos = 0.0;
@@ -107,6 +110,7 @@ pub fn paginate_fragment_tree(
     );
 
     if let Some(mut content) = clipped {
+      strip_fixed_fragments(&mut content);
       content.bounds = Rect::from_xywh(
         content.bounds.x(),
         content.bounds.y(),
@@ -115,6 +119,25 @@ pub fn paginate_fragment_tree(
       );
       translate_fragment(&mut content, style.content_origin.x, style.content_origin.y);
       page_root.children.push(content);
+    }
+
+    for fixed in &fixed_fragments {
+      if let Some(mut clipped_fixed) = clip_node(
+        fixed,
+        0.0,
+        page_block,
+        0.0,
+        0.0,
+        page_index,
+        0,
+      ) {
+        translate_fragment(
+          &mut clipped_fixed,
+          style.content_origin.x,
+          style.content_origin.y,
+        );
+        page_root.children.push(clipped_fixed);
+      }
     }
 
     page_root
@@ -189,6 +212,58 @@ fn page_name_for_position(
   }
 
   fallback.map(|s| s.to_string())
+}
+
+fn collect_fixed_fragments(root: &FragmentNode) -> Vec<FragmentNode> {
+  let mut fragments = Vec::new();
+  collect_fixed_fragments_inner(root, Point::ZERO, &mut fragments);
+  fragments
+}
+
+fn collect_fixed_fragments_inner(
+  node: &FragmentNode,
+  parent_abs_origin: Point,
+  out: &mut Vec<FragmentNode>,
+) {
+  let current_origin = Point::new(
+    parent_abs_origin.x + node.bounds.x(),
+    parent_abs_origin.y + node.bounds.y(),
+  );
+
+  if is_fixed_fragment(node) {
+    out.push(clone_fixed_fragment(node, current_origin));
+    return;
+  }
+
+  for child in &node.children {
+    collect_fixed_fragments_inner(child, current_origin, out);
+  }
+}
+
+fn clone_fixed_fragment(node: &FragmentNode, abs_origin: Point) -> FragmentNode {
+  let mut cloned = node.clone();
+  cloned.bounds = Rect::from_xywh(
+    abs_origin.x,
+    abs_origin.y,
+    node.bounds.width(),
+    node.bounds.height(),
+  );
+  cloned
+}
+
+fn is_fixed_fragment(node: &FragmentNode) -> bool {
+  node
+    .style
+    .as_ref()
+    .map(|style| matches!(style.position, Position::Fixed))
+    .unwrap_or(false)
+}
+
+fn strip_fixed_fragments(node: &mut FragmentNode) {
+  node.children.retain(|child| !is_fixed_fragment(child));
+  for child in &mut node.children {
+    strip_fixed_fragments(child);
+  }
 }
 
 fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {

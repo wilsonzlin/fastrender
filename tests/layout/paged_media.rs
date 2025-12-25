@@ -143,3 +143,44 @@ fn margin_box_content_is_positioned_in_margins() {
   assert!(header.bounds.y() < content.bounds.y());
   assert!(footer.bounds.y() > content.bounds.y());
 }
+
+#[test]
+fn fixed_headers_repeat_per_page() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 200px; margin: 0; }
+          body { margin: 0; }
+          .header { position: fixed; top: 0; left: 0; height: 20px; }
+          .spacer { height: 500px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">FixedHeader</div>
+        <div class="spacer"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2);
+
+  let first_header_y = find_text(page_roots[0], "FixedHeader")
+    .expect("header on first page")
+    .bounds
+    .y();
+
+  for (index, page) in page_roots.iter().enumerate() {
+    let header = find_text(page, "FixedHeader")
+      .unwrap_or_else(|| panic!("missing header on page {}", index + 1));
+    assert!(
+      (header.bounds.y() - first_header_y).abs() < 0.1,
+      "header should be consistently positioned across pages"
+    );
+  }
+}
