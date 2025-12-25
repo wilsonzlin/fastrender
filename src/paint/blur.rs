@@ -72,9 +72,12 @@ fn clamp_channel_to_alpha(channel: i32, alpha: i32) -> u8 {
   channel.clamp(0, alpha).clamp(0, 255) as u8
 }
 
-fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) {
-  let (kernel, radius, scale) = gaussian_kernel_fixed(sigma);
-  if radius == 0 || kernel.is_empty() || scale <= 0 {
+fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
+  let (kernel_x, radius_x, scale_x) = gaussian_kernel_fixed(sigma_x);
+  let (kernel_y, radius_y, scale_y) = gaussian_kernel_fixed(sigma_y);
+  if (radius_x == 0 || kernel_x.is_empty() || scale_x <= 0)
+    && (radius_y == 0 || kernel_y.is_empty() || scale_y <= 0)
+  {
     return;
   }
 
@@ -85,47 +88,56 @@ fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) {
   }
 
   let len = width * height * 4;
-  let mut tmp = pixmap.data().to_vec();
+  let mut src = pixmap.data().to_vec();
   let mut buf = vec![0u8; len];
 
-  // Horizontal pass: tmp -> buf
-  for y in 0..height {
-    let row_start = y * width * 4;
-    for x in 0..width {
-      let mut acc_r: i32 = 0;
-      let mut acc_g: i32 = 0;
-      let mut acc_b: i32 = 0;
-      let mut acc_a: i32 = 0;
-      for (i, &w) in kernel.iter().enumerate() {
-        let offset = i as isize - radius as isize;
-        let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-        let idx = row_start + cx * 4;
-        acc_r += w * tmp[idx] as i32;
-        acc_g += w * tmp[idx + 1] as i32;
-        acc_b += w * tmp[idx + 2] as i32;
-        acc_a += w * tmp[idx + 3] as i32;
+  if radius_x == 0 || kernel_x.is_empty() || scale_x <= 0 {
+    buf.copy_from_slice(&src);
+  } else {
+    // Horizontal pass: src -> buf
+    for y in 0..height {
+      let row_start = y * width * 4;
+      for x in 0..width {
+        let mut acc_r: i32 = 0;
+        let mut acc_g: i32 = 0;
+        let mut acc_b: i32 = 0;
+        let mut acc_a: i32 = 0;
+        for (i, &w) in kernel_x.iter().enumerate() {
+          let offset = i as isize - radius_x as isize;
+          let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+          let idx = row_start + cx * 4;
+          acc_r += w * src[idx] as i32;
+          acc_g += w * src[idx + 1] as i32;
+          acc_b += w * src[idx + 2] as i32;
+          acc_a += w * src[idx + 3] as i32;
+        }
+        let out_idx = row_start + x * 4;
+        let a = ((acc_a + scale_x / 2) / scale_x).clamp(0, 255);
+        let r = (acc_r + scale_x / 2) / scale_x;
+        let g = (acc_g + scale_x / 2) / scale_x;
+        let b = (acc_b + scale_x / 2) / scale_x;
+        buf[out_idx] = clamp_channel_to_alpha(r, a);
+        buf[out_idx + 1] = clamp_channel_to_alpha(g, a);
+        buf[out_idx + 2] = clamp_channel_to_alpha(b, a);
+        buf[out_idx + 3] = a as u8;
       }
-      let out_idx = row_start + x * 4;
-      let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-      let r = (acc_r + scale / 2) / scale;
-      let g = (acc_g + scale / 2) / scale;
-      let b = (acc_b + scale / 2) / scale;
-      buf[out_idx] = clamp_channel_to_alpha(r, a);
-      buf[out_idx + 1] = clamp_channel_to_alpha(g, a);
-      buf[out_idx + 2] = clamp_channel_to_alpha(b, a);
-      buf[out_idx + 3] = a as u8;
     }
   }
 
-  // Vertical pass: buf -> tmp (reuse tmp storage)
+  if radius_y == 0 || kernel_y.is_empty() || scale_y <= 0 {
+    pixmap.data_mut().copy_from_slice(&buf);
+    return;
+  }
+
+  // Vertical pass: buf -> src (reuse src storage)
   for y in 0..height {
     for x in 0..width {
       let mut acc_r: i32 = 0;
       let mut acc_g: i32 = 0;
       let mut acc_b: i32 = 0;
       let mut acc_a: i32 = 0;
-      for (i, &w) in kernel.iter().enumerate() {
-        let offset = i as isize - radius as isize;
+      for (i, &w) in kernel_y.iter().enumerate() {
+        let offset = i as isize - radius_y as isize;
         let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
         let idx = (cy * width + x) * 4;
         acc_r += w * buf[idx] as i32;
@@ -134,18 +146,18 @@ fn gaussian_convolve_premultiplied(pixmap: &mut Pixmap, sigma: f32) {
         acc_a += w * buf[idx + 3] as i32;
       }
       let out_idx = (y * width + x) * 4;
-      let a = ((acc_a + scale / 2) / scale).clamp(0, 255);
-      let r = (acc_r + scale / 2) / scale;
-      let g = (acc_g + scale / 2) / scale;
-      let b = (acc_b + scale / 2) / scale;
-      tmp[out_idx] = clamp_channel_to_alpha(r, a);
-      tmp[out_idx + 1] = clamp_channel_to_alpha(g, a);
-      tmp[out_idx + 2] = clamp_channel_to_alpha(b, a);
-      tmp[out_idx + 3] = a as u8;
+      let a = ((acc_a + scale_y / 2) / scale_y).clamp(0, 255);
+      let r = (acc_r + scale_y / 2) / scale_y;
+      let g = (acc_g + scale_y / 2) / scale_y;
+      let b = (acc_b + scale_y / 2) / scale_y;
+      src[out_idx] = clamp_channel_to_alpha(r, a);
+      src[out_idx + 1] = clamp_channel_to_alpha(g, a);
+      src[out_idx + 2] = clamp_channel_to_alpha(b, a);
+      src[out_idx + 3] = a as u8;
     }
   }
 
-  pixmap.data_mut().copy_from_slice(&tmp);
+  pixmap.data_mut().copy_from_slice(&src);
 }
 
 fn box_sizes_for_gauss(sigma: f32, n: usize) -> [usize; 3] {
@@ -263,9 +275,10 @@ fn box_blur_v(src: &[u8], dst: &mut [u8], width: usize, height: usize, radius: u
   }
 }
 
-fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) {
-  let sigma = sigma.abs();
-  if sigma <= 0.0 {
+fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
+  let sigma_x = sigma_x.abs();
+  let sigma_y = sigma_y.abs();
+  if sigma_x == 0.0 && sigma_y == 0.0 {
     return;
   }
   let width = pixmap.width() as usize;
@@ -277,23 +290,37 @@ fn gaussian_blur_box_approx(pixmap: &mut Pixmap, sigma: f32) {
   let mut a = pixmap.data().to_vec();
   let mut b = vec![0u8; len];
 
-  let sizes = box_sizes_for_gauss(sigma, 3);
-  for size in sizes {
-    let radius = size.saturating_sub(1) / 2;
-    if radius == 0 {
+  let sizes_x = box_sizes_for_gauss(sigma_x, 3);
+  let sizes_y = box_sizes_for_gauss(sigma_y, 3);
+  for i in 0..3 {
+    let radius_x = sizes_x[i].saturating_sub(1) / 2;
+    let radius_y = sizes_y[i].saturating_sub(1) / 2;
+    if radius_x == 0 && radius_y == 0 {
       continue;
     }
-    box_blur_h(&a, &mut b, width, height, radius);
-    box_blur_v(&b, &mut a, width, height, radius);
+    if radius_x > 0 {
+      box_blur_h(&a, &mut b, width, height, radius_x);
+    } else {
+      b.copy_from_slice(&a);
+    }
+    if radius_y > 0 {
+      box_blur_v(&b, &mut a, width, height, radius_y);
+    } else {
+      a.copy_from_slice(&b);
+    }
   }
 
   pixmap.data_mut().copy_from_slice(&a);
 }
 
-pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
-  let sigma = sigma.abs();
-  let radius = (sigma * 3.0).ceil() as usize;
-  if radius == 0 {
+pub(crate) fn apply_gaussian_blur_anisotropic(
+  pixmap: &mut Pixmap,
+  sigma_x: f32,
+  sigma_y: f32,
+) {
+  let sigma_x = sigma_x.abs();
+  let sigma_y = sigma_y.abs();
+  if sigma_x == 0.0 && sigma_y == 0.0 {
     return;
   }
 
@@ -301,16 +328,25 @@ pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
     .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
     .unwrap_or(false);
   if fast_enabled {
-    if sigma <= FAST_GAUSS_THRESHOLD_SIGMA {
-      gaussian_convolve_premultiplied(pixmap, sigma);
+    if sigma_x <= FAST_GAUSS_THRESHOLD_SIGMA && sigma_y <= FAST_GAUSS_THRESHOLD_SIGMA {
+      gaussian_convolve_premultiplied(pixmap, sigma_x, sigma_y);
     } else {
-      gaussian_blur_box_approx(pixmap, sigma);
+      gaussian_blur_box_approx(pixmap, sigma_x, sigma_y);
     }
     return;
   }
 
-  let (kernel, radius) = gaussian_kernel(sigma);
-  if kernel.is_empty() {
+  gaussian_blur_precise(pixmap, sigma_x, sigma_y);
+}
+
+pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
+  apply_gaussian_blur_anisotropic(pixmap, sigma, sigma);
+}
+
+fn gaussian_blur_precise(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
+  let (kernel_x, radius_x) = gaussian_kernel(sigma_x);
+  let (kernel_y, radius_y) = gaussian_kernel(sigma_y);
+  if (radius_x == 0 || kernel_x.is_empty()) && (radius_y == 0 || kernel_y.is_empty()) {
     return;
   }
 
@@ -336,53 +372,59 @@ pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
   let mut temp = vec![[0.0; 4]; src.len()];
   let mut dst = vec![[0.0; 4]; src.len()];
 
-  // Horizontal pass
-  for y in 0..height {
-    for x in 0..width {
-      let mut accum = [0.0; 4];
-      let mut weight_sum = 0.0;
-      for (i, weight) in kernel.iter().enumerate() {
-        let offset = i as isize - radius as isize;
-        let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
-        let sample = src[y * width + cx];
-        accum[0] += sample[0] * weight;
-        accum[1] += sample[1] * weight;
-        accum[2] += sample[2] * weight;
-        accum[3] += sample[3] * weight;
-        weight_sum += weight;
+  if radius_x == 0 || kernel_x.is_empty() {
+    temp.copy_from_slice(&src);
+  } else {
+    for y in 0..height {
+      for x in 0..width {
+        let mut accum = [0.0; 4];
+        let mut weight_sum = 0.0;
+        for (i, weight) in kernel_x.iter().enumerate() {
+          let offset = i as isize - radius_x as isize;
+          let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+          let sample = src[y * width + cx];
+          accum[0] += sample[0] * weight;
+          accum[1] += sample[1] * weight;
+          accum[2] += sample[2] * weight;
+          accum[3] += sample[3] * weight;
+          weight_sum += weight;
+        }
+        let idx = y * width + x;
+        temp[idx] = [
+          accum[0] / weight_sum,
+          accum[1] / weight_sum,
+          accum[2] / weight_sum,
+          accum[3] / weight_sum,
+        ];
       }
-      let idx = y * width + x;
-      temp[idx] = [
-        accum[0] / weight_sum,
-        accum[1] / weight_sum,
-        accum[2] / weight_sum,
-        accum[3] / weight_sum,
-      ];
     }
   }
 
-  // Vertical pass
-  for y in 0..height {
-    for x in 0..width {
-      let mut accum = [0.0; 4];
-      let mut weight_sum = 0.0;
-      for (i, weight) in kernel.iter().enumerate() {
-        let offset = i as isize - radius as isize;
-        let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
-        let sample = temp[cy * width + x];
-        accum[0] += sample[0] * weight;
-        accum[1] += sample[1] * weight;
-        accum[2] += sample[2] * weight;
-        accum[3] += sample[3] * weight;
-        weight_sum += weight;
+  if radius_y == 0 || kernel_y.is_empty() {
+    dst.copy_from_slice(&temp);
+  } else {
+    for y in 0..height {
+      for x in 0..width {
+        let mut accum = [0.0; 4];
+        let mut weight_sum = 0.0;
+        for (i, weight) in kernel_y.iter().enumerate() {
+          let offset = i as isize - radius_y as isize;
+          let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+          let sample = temp[cy * width + x];
+          accum[0] += sample[0] * weight;
+          accum[1] += sample[1] * weight;
+          accum[2] += sample[2] * weight;
+          accum[3] += sample[3] * weight;
+          weight_sum += weight;
+        }
+        let idx = y * width + x;
+        dst[idx] = [
+          accum[0] / weight_sum,
+          accum[1] / weight_sum,
+          accum[2] / weight_sum,
+          accum[3] / weight_sum,
+        ];
       }
-      let idx = y * width + x;
-      dst[idx] = [
-        accum[0] / weight_sum,
-        accum[1] / weight_sum,
-        accum[2] / weight_sum,
-        accum[3] / weight_sum,
-      ];
     }
   }
 
@@ -393,5 +435,39 @@ pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
     let a = (vals[3] * 255.0).round().clamp(0.0, 255.0) as u8;
     *src_px = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a)
       .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tiny_skia::PremultipliedColorU8;
+
+  #[test]
+  fn blur_with_zero_sigma_x_only_blurs_vertically() {
+    let mut pixmap = Pixmap::new(3, 5).unwrap();
+    let idx = 2 * 3 + 1;
+    pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+
+    apply_gaussian_blur_anisotropic(&mut pixmap, 0.0, 2.0);
+
+    let pixels = pixmap.pixels();
+    let mut center_non_zero = 0;
+    for (i, px) in pixels.iter().enumerate() {
+      let x = i % 3;
+      if x == 1 {
+        if px.alpha() > 0 {
+          center_non_zero += 1;
+        }
+      } else {
+        assert_eq!(
+          px.alpha(),
+          0,
+          "blur spread horizontally to column {}",
+          x
+        );
+      }
+    }
+    assert!(center_non_zero > 1, "expected vertical spread in center column");
   }
 }

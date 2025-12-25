@@ -1,5 +1,5 @@
 use crate::image_loader::ImageCache;
-use crate::paint::blur::apply_gaussian_blur;
+use crate::paint::blur::apply_gaussian_blur_anisotropic;
 use crate::style::color;
 use crate::Rgba;
 use rayon::prelude::*;
@@ -35,7 +35,7 @@ pub enum FilterPrimitive {
   },
   GaussianBlur {
     input: FilterInput,
-    std_dev: f32,
+    std_dev: (f32, f32),
   },
   Offset {
     input: FilterInput,
@@ -58,7 +58,7 @@ pub enum FilterPrimitive {
     input: FilterInput,
     dx: f32,
     dy: f32,
-    std_dev: f32,
+    std_dev: (f32, f32),
     color: Rgba,
     opacity: f32,
   },
@@ -69,7 +69,7 @@ pub enum FilterPrimitive {
   },
   Morphology {
     input: FilterInput,
-    radius: f32,
+    radius: (f32, f32),
     op: MorphologyOp,
   },
   ComponentTransfer {
@@ -83,7 +83,9 @@ pub enum FilterPrimitive {
   Tile {
     input: FilterInput,
   },
-  Turbulence,
+  Turbulence {
+    base_frequency: (f32, f32),
+  },
   DisplacementMap {
     input: FilterInput,
   },
@@ -190,7 +192,7 @@ fn parse_filter_definition(
       "fecomponenttransfer" => parse_fe_component_transfer(&child),
       "feimage" => parse_fe_image(&child, image_cache),
       "fetile" => parse_fe_tile(&child),
-      "feturbulence" => Some(FilterPrimitive::Turbulence),
+      "feturbulence" => parse_fe_turbulence(&child),
       "fedisplacementmap" => parse_fe_displacement_map(&child),
       "feconvolvematrix" => parse_fe_convolve_matrix(&child),
       _ => None,
@@ -226,6 +228,25 @@ fn parse_number(value: Option<&str>) -> f32 {
     .unwrap_or(0.0)
 }
 
+fn parse_number_list(attr: Option<&str>) -> Vec<f32> {
+  attr
+    .map(|raw| {
+      raw
+        .split(|c| c == ',' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .filter_map(|v| v.parse::<f32>().ok())
+        .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn parse_pair(attr: Option<&str>, default: f32) -> (f32, f32) {
+  let values = parse_number_list(attr);
+  let first = values.get(0).copied().unwrap_or(default);
+  let second = values.get(1).copied().unwrap_or(first);
+  (first, second)
+}
+
 fn parse_color(value: Option<&str>) -> Option<Rgba> {
   let raw = value?.trim();
   if let Ok(parsed) = color::Color::parse(raw) {
@@ -246,7 +267,8 @@ fn parse_fe_flood(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 
 fn parse_fe_gaussian_blur(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(node.attribute("in"));
-  let std_dev = parse_number(node.attribute("stdDeviation")).abs();
+  let std_dev = parse_pair(node.attribute("stdDeviation"), 0.0);
+  let std_dev = (std_dev.0.abs(), std_dev.1.abs());
   Some(FilterPrimitive::GaussianBlur { input, std_dev })
 }
 
@@ -323,7 +345,8 @@ fn parse_fe_morphology(node: &roxmltree::Node) -> Option<FilterPrimitive> {
     true => MorphologyOp::Dilate,
     false => MorphologyOp::Erode,
   };
-  let radius = parse_number(node.attribute("radius")).abs();
+  let radius = parse_pair(node.attribute("radius"), 0.0);
+  let radius = (radius.0.abs(), radius.1.abs());
   Some(FilterPrimitive::Morphology { input, radius, op })
 }
 
@@ -406,7 +429,8 @@ fn parse_fe_drop_shadow(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(node.attribute("in"));
   let dx = parse_number(node.attribute("dx"));
   let dy = parse_number(node.attribute("dy"));
-  let std_dev = parse_number(node.attribute("stdDeviation")).abs();
+  let std_dev = parse_pair(node.attribute("stdDeviation"), 0.0);
+  let std_dev = (std_dev.0.abs(), std_dev.1.abs());
   let color = parse_color(node.attribute("flood-color")).unwrap_or(Rgba::BLACK);
   let opacity = node
     .attribute("flood-opacity")
@@ -439,6 +463,12 @@ fn parse_fe_image(node: &roxmltree::Node, cache: &ImageCache) -> Option<FilterPr
 fn parse_fe_tile(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(node.attribute("in"));
   Some(FilterPrimitive::Tile { input })
+}
+
+fn parse_fe_turbulence(node: &roxmltree::Node) -> Option<FilterPrimitive> {
+  let base_frequency = parse_pair(node.attribute("baseFrequency"), 0.0);
+  let base_frequency = (base_frequency.0.max(0.0), base_frequency.1.max(0.0));
+  Some(FilterPrimitive::Turbulence { base_frequency })
 }
 
 fn parse_fe_displacement_map(node: &roxmltree::Node) -> Option<FilterPrimitive> {
@@ -480,8 +510,8 @@ fn apply_primitive(
     }
     FilterPrimitive::GaussianBlur { input, std_dev } => {
       let mut img = resolve_input(input, source, results, current)?;
-      if *std_dev > 0.0 {
-        apply_gaussian_blur(&mut img, *std_dev);
+      if std_dev.0 > 0.0 || std_dev.1 > 0.0 {
+        apply_gaussian_blur_anisotropic(&mut img, std_dev.0, std_dev.1);
       }
       Some(img)
     }
@@ -523,7 +553,7 @@ fn apply_primitive(
     ),
     FilterPrimitive::Morphology { input, radius, op } => {
       resolve_input(input, source, results, current).map(|mut img| {
-        apply_morphology(&mut img, *radius, *op);
+        apply_morphology(&mut img, radius.0, radius.1, *op);
         img
       })
     }
@@ -535,7 +565,7 @@ fn apply_primitive(
     }
     FilterPrimitive::Image(pix) => Some(pix.clone()),
     FilterPrimitive::Tile { input } => resolve_input(input, source, results, current),
-    FilterPrimitive::Turbulence => Some(source.clone()),
+    FilterPrimitive::Turbulence { .. } => Some(source.clone()),
     FilterPrimitive::DisplacementMap { input } => resolve_input(input, source, results, current),
     FilterPrimitive::ConvolveMatrix { input } => resolve_input(input, source, results, current),
   }
@@ -621,7 +651,7 @@ fn drop_shadow_pixmap(
   input: Pixmap,
   dx: f32,
   dy: f32,
-  stddev: f32,
+  stddev: (f32, f32),
   color: &Rgba,
   opacity: f32,
 ) -> Pixmap {
@@ -643,8 +673,8 @@ fn drop_shadow_pixmap(
   }
 
   let mut shadow = tinted.clone();
-  if stddev > 0.0 {
-    apply_gaussian_blur(&mut shadow, stddev);
+  if stddev.0 > 0.0 || stddev.1 > 0.0 {
+    apply_gaussian_blur_anisotropic(&mut shadow, stddev.0, stddev.1);
   }
 
   let mut out = Pixmap::new(input.width(), input.height()).unwrap();
@@ -684,9 +714,10 @@ fn mask_with(src: &Pixmap, mask: &Pixmap) -> Pixmap {
   out
 }
 
-fn apply_morphology(pixmap: &mut Pixmap, radius: f32, op: MorphologyOp) {
-  let radius = radius.abs().ceil() as i32;
-  if radius <= 0 {
+fn apply_morphology(pixmap: &mut Pixmap, radius_x: f32, radius_y: f32, op: MorphologyOp) {
+  let radius_x = radius_x.abs().ceil() as i32;
+  let radius_y = radius_y.abs().ceil() as i32;
+  if radius_x <= 0 && radius_y <= 0 {
     return;
   }
   let width = pixmap.width() as i32;
@@ -703,8 +734,8 @@ fn apply_morphology(pixmap: &mut Pixmap, radius: f32, op: MorphologyOp) {
       MorphologyOp::Dilate => [0u8; 4],
       MorphologyOp::Erode => [255u8; 4],
     };
-    for dy in -radius..=radius {
-      for dx in -radius..=radius {
+    for dy in -radius_y..=radius_y {
+      for dx in -radius_x..=radius_x {
         let ny = (y + dy).clamp(0, height - 1);
         let nx = (x + dx).clamp(0, width - 1);
         let sample_idx = (ny as usize) * row_len + nx as usize;
@@ -853,5 +884,51 @@ fn apply_color_matrix_values(pixmap: &mut Pixmap, matrix: &[f32; 20]) {
     let a_byte = (a_out * 255.0).round().clamp(0.0, 255.0) as u8;
     *px = PremultipliedColorU8::from_rgba(to_channel(r2), to_channel(g2), to_channel(b2), a_byte)
       .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use roxmltree::Document;
+  use tiny_skia::{Pixmap, PremultipliedColorU8};
+
+  #[test]
+  fn morphology_dilate_only_expands_horizontally_when_vertical_radius_zero() {
+    let mut pixmap = Pixmap::new(5, 3).unwrap();
+    let idx = 1 * 5 + 2;
+    pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+
+    apply_morphology(&mut pixmap, 1.0, 0.0, MorphologyOp::Dilate);
+
+    let pixels = pixmap.pixels();
+    for y in 0..3 {
+      for x in 0..5 {
+        let idx = (y * 5 + x) as usize;
+        let alpha = pixels[idx].alpha();
+        if y == 1 && (1..=3).contains(&x) {
+          assert!(alpha > 0, "expected dilation at ({x},{y})");
+        } else {
+          assert_eq!(alpha, 0, "unexpected pixel affected at ({x},{y})");
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn turbulence_base_frequency_parses_pair() {
+    let doc = Document::parse("<filter><feTurbulence baseFrequency=\"0.1 0.2\"/></filter>").unwrap();
+    let node = doc
+      .descendants()
+      .find(|n| n.has_tag_name("feTurbulence"))
+      .unwrap();
+    let primitive = parse_fe_turbulence(&node).expect("should parse turbulence");
+    match primitive {
+      FilterPrimitive::Turbulence { base_frequency } => {
+        assert!((base_frequency.0 - 0.1).abs() < 1e-6);
+        assert!((base_frequency.1 - 0.2).abs() < 1e-6);
+      }
+      _ => panic!("expected turbulence primitive"),
+    }
   }
 }
