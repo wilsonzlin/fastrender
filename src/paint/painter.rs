@@ -46,6 +46,7 @@ use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
+use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
@@ -429,6 +430,7 @@ enum ResolvedFilter {
     spread: f32,
     color: Rgba,
   },
+  SvgFilter(Arc<crate::paint::svg_filter::SvgFilter>),
 }
 
 #[derive(Debug, Clone)]
@@ -1084,6 +1086,17 @@ impl Painter {
     let mut items = Vec::new();
     let collect_start = Instant::now();
     let treat_root_as_canvas = tree.has_explicit_viewport();
+    let mut svg_filter_roots: Vec<&FragmentNode> =
+      Vec::with_capacity(1 + tree.additional_fragments.len());
+    svg_filter_roots.push(&tree.root);
+    for root in &tree.additional_fragments {
+      svg_filter_roots.push(root);
+    }
+    let mut svg_filter_resolver = SvgFilterResolver::new(
+      tree.svg_filter_defs.clone(),
+      svg_filter_roots,
+      Some(&self.image_cache),
+    );
     self.collect_stacking_context(
       &tree.root,
       offset,
@@ -1091,6 +1104,7 @@ impl Painter {
       true,
       treat_root_as_canvas,
       &mut items,
+      &mut svg_filter_resolver,
     );
     if profiling {
       stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
@@ -1308,6 +1322,7 @@ impl Painter {
     is_root_context: bool,
     treat_root_as_canvas: bool,
     items: &mut Vec<DisplayCommand>,
+    svg_filters: &mut SvgFilterResolver,
   ) {
     let debug_fragments = dump_fragments_enabled();
     let is_root_fragment = treat_root_as_canvas && is_root_context && parent_style.is_none();
@@ -1414,6 +1429,7 @@ impl Painter {
           false,
           treat_root_as_canvas,
           &mut local_commands,
+          svg_filters,
         );
       }
 
@@ -1425,6 +1441,7 @@ impl Painter {
           false,
           treat_root_as_canvas,
           &mut local_commands,
+          svg_filters,
         );
       }
       for idx in inlines {
@@ -1435,6 +1452,7 @@ impl Painter {
           false,
           treat_root_as_canvas,
           &mut local_commands,
+          svg_filters,
         );
       }
       for idx in positioned_auto {
@@ -1445,6 +1463,7 @@ impl Painter {
           false,
           treat_root_as_canvas,
           &mut local_commands,
+          svg_filters,
         );
       }
 
@@ -1457,6 +1476,7 @@ impl Painter {
           false,
           treat_root_as_canvas,
           &mut local_commands,
+          svg_filters,
         );
       }
 
@@ -1469,6 +1489,7 @@ impl Painter {
           false,
           treat_root_as_canvas,
           &mut local_commands,
+          svg_filters,
         );
       }
 
@@ -1536,6 +1557,7 @@ impl Painter {
         false,
         treat_root_as_canvas,
         &mut local_commands,
+        svg_filters,
       );
     }
 
@@ -1549,6 +1571,7 @@ impl Painter {
         false,
         treat_root_as_canvas,
         &mut local_commands,
+        svg_filters,
       );
     }
     for idx in inlines {
@@ -1559,6 +1582,7 @@ impl Painter {
         false,
         treat_root_as_canvas,
         &mut local_commands,
+        svg_filters,
       );
     }
     for idx in positioned_auto {
@@ -1569,6 +1593,7 @@ impl Painter {
         false,
         treat_root_as_canvas,
         &mut local_commands,
+        svg_filters,
       );
     }
 
@@ -1581,6 +1606,7 @@ impl Painter {
         false,
         treat_root_as_canvas,
         &mut local_commands,
+        svg_filters,
       );
     }
 
@@ -1593,6 +1619,7 @@ impl Painter {
         false,
         treat_root_as_canvas,
         &mut local_commands,
+        svg_filters,
       );
     }
 
@@ -1607,11 +1634,11 @@ impl Painter {
       .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
       .unwrap_or(false);
     let filters = style_ref
-      .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx))
+      .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx, svg_filters))
       .unwrap_or_default();
     let has_filters = !filters.is_empty();
     let backdrop_filters = style_ref
-      .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx))
+      .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx, svg_filters))
       .unwrap_or_default();
     let has_backdrop = !backdrop_filters.is_empty();
     let clip: Option<StackingClip> = style_ref.and_then(|style| {
@@ -1698,16 +1725,18 @@ impl Painter {
       });
 
       match (overflow_clip, clip_property) {
-        (Some(overflow), Some(prop_rect)) => overflow
-          .rect
-          .intersection(prop_rect)
-          .map(|rect| StackingClip {
-            rect,
-            radii: BorderRadii::ZERO,
-            clip_x: true,
-            clip_y: true,
-            clip_root: true,
-          }),
+        (Some(overflow), Some(prop_rect)) => {
+          overflow
+            .rect
+            .intersection(prop_rect)
+            .map(|rect| StackingClip {
+              rect,
+              radii: BorderRadii::ZERO,
+              clip_x: true,
+              clip_y: true,
+              clip_root: true,
+            })
+        }
         (Some(overflow), None) => Some(overflow),
         (None, Some(prop_rect)) => Some(StackingClip {
           rect: prop_rect,
@@ -2049,7 +2078,12 @@ impl Painter {
           if total_ms >= threshold_ms {
             let (run_count, glyph_count) = shaped_runs
               .as_deref()
-              .map(|runs| (runs.len(), runs.iter().map(|r| r.glyphs.len()).sum::<usize>()))
+              .map(|runs| {
+                (
+                  runs.len(),
+                  runs.iter().map(|r| r.glyphs.len()).sum::<usize>(),
+                )
+              })
               .unwrap_or((0, 0));
             let preview: String = text.chars().take(80).collect();
             eprintln!(
@@ -5273,12 +5307,7 @@ impl Painter {
         let resolved = self.image_cache.resolve_url(src);
         eprintln!(
           "[image-paint] #{idx} src={} resolved={} rect=({:.1},{:.1},{:.1},{:.1})",
-          src,
-          resolved,
-          x,
-          y,
-          width,
-          height
+          src, resolved, x, y, width, height
         );
       }
     }
@@ -5507,13 +5536,14 @@ impl Painter {
 
       let render_w = dest_w_device.ceil().max(1.0) as u32;
       let render_h = dest_h_device.ceil().max(1.0) as u32;
-      let pixmap = match self
-        .image_cache
-        .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
-      {
-        Ok(pixmap) => pixmap,
-        Err(_) => return false,
-      };
+      let pixmap =
+        match self
+          .image_cache
+          .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
+        {
+          Ok(pixmap) => pixmap,
+          Err(_) => return false,
+        };
 
       let scale_x = dest_w_device / render_w as f32;
       let scale_y = dest_h_device / render_h as f32;
@@ -7742,6 +7772,7 @@ fn resolve_filters(
   style: &ComputedStyle,
   viewport: (f32, f32),
   font_ctx: &FontContext,
+  svg_filters: &mut SvgFilterResolver,
 ) -> Vec<ResolvedFilter> {
   filters
     .iter()
@@ -7778,7 +7809,7 @@ fn resolve_filters(
           color,
         })
       }
-      FilterFunction::Url(_) => None,
+      FilterFunction::Url(url) => svg_filters.resolve(url).map(ResolvedFilter::SvgFilter),
     })
     .collect()
 }
@@ -7805,9 +7836,9 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
   let mut bottom: f32 = 0.0;
 
   for filter in filters {
-    match *filter {
+    match filter {
       ResolvedFilter::Blur(radius) => {
-        let delta = (radius * scale).abs() * 3.0;
+        let delta = (*radius * scale).abs() * 3.0;
         left += delta;
         right += delta;
         top += delta;
@@ -7820,10 +7851,10 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
         spread,
         ..
       } => {
-        let dx = offset_x * scale;
-        let dy = offset_y * scale;
-        let blur = blur_radius * scale;
-        let spread = spread * scale;
+        let dx = *offset_x * scale;
+        let dy = *offset_y * scale;
+        let blur = *blur_radius * scale;
+        let spread = *spread * scale;
         let delta = (blur.abs() * 3.0 + spread).max(0.0);
         let shadow_left = left + delta - dx;
         let shadow_right = right + delta + dx;
@@ -7843,24 +7874,24 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
 
 fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
   for filter in filters {
-    match *filter {
-      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
+    match filter {
+      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
       ResolvedFilter::Brightness(amount) => {
-        apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
       }
       ResolvedFilter::Contrast(amount) => {
-        apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (apply_contrast(c, *amount), a))
       }
       ResolvedFilter::Grayscale(amount) => {
-        apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (grayscale(c, *amount), a))
       }
-      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, amount), a)),
+      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, *amount), a)),
       ResolvedFilter::Saturate(amount) => {
-        apply_color_filter(pixmap, |c, a| (saturate(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))
       }
-      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, deg), a)),
-      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, amount), a)),
-      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * amount)),
+      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a)),
+      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a)),
+      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount)),
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
@@ -7869,12 +7900,15 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
         color,
       } => apply_drop_shadow(
         pixmap,
-        offset_x * scale,
-        offset_y * scale,
-        blur_radius * scale,
-        spread * scale,
-        color,
+        *offset_x * scale,
+        *offset_y * scale,
+        *blur_radius * scale,
+        *spread * scale,
+        *color,
       ),
+      ResolvedFilter::SvgFilter(filter) => {
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap);
+      }
     }
   }
 }
@@ -9952,7 +9986,16 @@ mod tests {
 
     let painter = Painter::new(100, 10, Rgba::WHITE).expect("painter");
     let mut commands = Vec::new();
-    painter.collect_stacking_context(&root, Point::ZERO, None, true, false, &mut commands);
+    let mut svg_filters = SvgFilterResolver::new(None, vec![&root], None);
+    painter.collect_stacking_context(
+      &root,
+      Point::ZERO,
+      None,
+      true,
+      false,
+      &mut commands,
+      &mut svg_filters,
+    );
 
     // Background commands occur in paint order; filter child backgrounds to check ordering.
     let xs: Vec<f32> = commands
@@ -10282,7 +10325,14 @@ mod tests {
   fn filter_lengths_resolve_viewport_units() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::new(10.0, LengthUnit::Vw))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &mut resolver,
+    );
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!((radius - 20.0).abs() < 0.001),
       other => panic!("expected blur filter, got {:?}", other),
@@ -10293,7 +10343,14 @@ mod tests {
   fn filter_lengths_ignore_percentages() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::percent(50.0))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &mut resolver,
+    );
     assert!(filters.is_empty(), "percentage blur should be discarded");
   }
 
@@ -10302,7 +10359,14 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_size = 20.0;
     style.filter = vec![FilterFunction::Blur(Length::new(1.0, LengthUnit::Ex))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &mut resolver,
+    );
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!(
         (radius - 10.0).abs() < 2.0,
@@ -10316,7 +10380,14 @@ mod tests {
   fn negative_blur_lengths_resolve_to_no_filter() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::px(-2.0))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &mut resolver,
+    );
     assert!(filters.is_empty(), "negative blur should drop the filter");
   }
 
@@ -10443,7 +10514,14 @@ mod tests {
       FilterFunction::Invert(1.3),
       FilterFunction::Opacity(1.7),
     ];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &mut resolver,
+    );
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
       ResolvedFilter::Grayscale(v) | ResolvedFilter::Sepia(v) | ResolvedFilter::Invert(v) =>
@@ -10461,7 +10539,14 @@ mod tests {
       FilterFunction::Contrast(1.7),
       FilterFunction::Saturate(3.2),
     ];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &mut resolver,
+    );
     assert_eq!(filters.len(), 3);
     assert!(filters
       .iter()

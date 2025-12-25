@@ -1712,6 +1712,7 @@ impl FastRender {
     }
     let first_style_fingerprints =
       has_container_queries.then(|| styled_fingerprint_map(&styled_tree));
+    let mut svg_filter_defs = crate::tree::box_generation::collect_svg_filter_defs(&styled_tree);
 
     let fallback_page_size = viewport_size;
     let page_rules =
@@ -2006,6 +2007,7 @@ impl FastRender {
           Some(&container_scope),
           Some(&reuse_map),
         );
+        svg_filter_defs = crate::tree::box_generation::collect_svg_filter_defs(&styled_tree);
 
         if let (true, Some(ids)) = (log_container_pass, log_container_ids.as_ref()) {
           let summaries = styled_summary_map(&styled_tree);
@@ -2154,6 +2156,7 @@ impl FastRender {
       }
     }
 
+    let svg_filter_defs = (!svg_filter_defs.is_empty()).then(|| Arc::new(svg_filter_defs));
     if let Some(start) = layout_start {
       let now = Instant::now();
       eprintln!("timing:layout {:?}", now - start);
@@ -2182,6 +2185,10 @@ impl FastRender {
         page_name_hint.clone(),
       );
       fragment_tree = FragmentTree::from_fragments(pages, viewport);
+    }
+
+    if let Some(defs) = svg_filter_defs.clone() {
+      fragment_tree.svg_filter_defs = Some(defs);
     }
 
     if report_intrinsic {
@@ -2812,10 +2819,12 @@ impl FastRender {
         if needs_intrinsic || needs_ratio {
           if let Some(candidate) = poster.as_deref().filter(|s| !s.is_empty()) {
             let candidate_trimmed = candidate.trim_start();
-            let inline_svg = candidate_trimmed.starts_with("<svg")
-              || candidate_trimmed.starts_with("<?xml");
+            let inline_svg =
+              candidate_trimmed.starts_with("<svg") || candidate_trimmed.starts_with("<?xml");
             let meta = if inline_svg {
-              self.image_cache.probe_svg_content(candidate, "video-poster")
+              self
+                .image_cache
+                .probe_svg_content(candidate, "video-poster")
             } else {
               self
                 .image_cache
@@ -2868,10 +2877,12 @@ impl FastRender {
               .probe(content.svg.as_str())
               .map(|meta| (*meta).clone())
           } else {
-            Err(crate::error::Error::Image(crate::error::ImageError::LoadFailed {
-              url: "svg".to_string(),
-              reason: "empty content".to_string(),
-            }))
+            Err(crate::error::Error::Image(
+              crate::error::ImageError::LoadFailed {
+                url: "svg".to_string(),
+                reason: "empty content".to_string(),
+              },
+            ))
           };
 
           if let Ok(meta) = meta {
