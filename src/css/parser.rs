@@ -1095,12 +1095,22 @@ fn parse_page_block<'i, 't>(
 
 fn parse_margin_area(name: &str) -> Option<PageMarginArea> {
   match name.to_ascii_lowercase().as_str() {
-    "top-left" | "top-left-corner" => Some(PageMarginArea::TopLeft),
+    "top-left-corner" => Some(PageMarginArea::TopLeftCorner),
+    "top-left" => Some(PageMarginArea::TopLeft),
     "top-center" => Some(PageMarginArea::TopCenter),
-    "top-right" | "top-right-corner" => Some(PageMarginArea::TopRight),
-    "bottom-left" | "bottom-left-corner" => Some(PageMarginArea::BottomLeft),
+    "top-right" => Some(PageMarginArea::TopRight),
+    "top-right-corner" => Some(PageMarginArea::TopRightCorner),
+    "right-top" => Some(PageMarginArea::RightTop),
+    "right-middle" => Some(PageMarginArea::RightMiddle),
+    "right-bottom" => Some(PageMarginArea::RightBottom),
+    "bottom-right-corner" => Some(PageMarginArea::BottomRightCorner),
+    "bottom-right" => Some(PageMarginArea::BottomRight),
     "bottom-center" => Some(PageMarginArea::BottomCenter),
-    "bottom-right" | "bottom-right-corner" => Some(PageMarginArea::BottomRight),
+    "bottom-left" => Some(PageMarginArea::BottomLeft),
+    "bottom-left-corner" => Some(PageMarginArea::BottomLeftCorner),
+    "left-bottom" => Some(PageMarginArea::LeftBottom),
+    "left-middle" => Some(PageMarginArea::LeftMiddle),
+    "left-top" => Some(PageMarginArea::LeftTop),
     _ => None,
   }
 }
