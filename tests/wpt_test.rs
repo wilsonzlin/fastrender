@@ -38,6 +38,7 @@ mod wpt_runner_tests {
 
     assert_eq!(runner.stats().total, 0);
     assert_eq!(runner.config().pixel_tolerance, 0);
+    assert!(runner.config().compare_alpha);
   }
 
   #[test]
@@ -62,6 +63,8 @@ mod wpt_runner_tests {
       .output_dir("target/custom-output")
       .tolerance(5)
       .max_diff(1.0)
+      .ignore_alpha()
+      .perceptual_distance(0.1)
       .fail_fast()
       .save_rendered()
       .save_diffs()
@@ -81,6 +84,8 @@ mod wpt_runner_tests {
     );
     assert_eq!(runner.config().pixel_tolerance, 5);
     assert_eq!(runner.config().max_diff_percentage, 1.0);
+    assert!(!runner.config().compare_alpha);
+    assert_eq!(runner.config().max_perceptual_distance, Some(0.1));
     assert!(runner.config().fail_fast);
     assert!(runner.config().save_rendered);
     assert!(runner.config().save_diffs);

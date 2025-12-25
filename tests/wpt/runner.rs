@@ -819,18 +819,14 @@ impl WptRunner {
     expected: Vec<u8>,
   ) -> TestResult {
     let duration = start.elapsed();
+    let compare_config = config.comparison_config();
 
-    match compare_images(
-      &rendered,
-      &expected,
-      config.pixel_tolerance,
-      Some(config.max_diff_percentage),
-    ) {
-      Ok((diff_pixels, _total_pixels, diff_percentage)) => {
-        if diff_percentage <= config.max_diff_percentage {
+    match compare_images(&rendered, &expected, &compare_config) {
+      Ok(diff) => {
+        if diff.is_match() {
           TestResult::pass(metadata.clone(), duration)
             .with_images(rendered, expected)
-            .with_diff(diff_pixels, diff_percentage)
+            .with_comparison(&diff)
         } else if config.update_expected {
           let expected_path = Self::get_expected_image_path(config, metadata);
           if let Err(err) = Self::save_expected_image(&expected_path, &rendered) {
@@ -843,20 +839,17 @@ impl WptRunner {
 
           let mut result = TestResult::pass(metadata.clone(), duration)
             .with_images(rendered, expected)
-            .with_diff(diff_pixels, diff_percentage);
+            .with_comparison(&diff);
           result.message = Some("Updated expected image".to_string());
           result
         } else {
           TestResult::fail(
             metadata.clone(),
             duration,
-            format!(
-              "Image mismatch: {}% difference ({} pixels)",
-              diff_percentage, diff_pixels
-            ),
+            format!("Image mismatch: {}", diff.summary()),
           )
           .with_images(rendered, expected)
-          .with_diff(diff_pixels, diff_percentage)
+          .with_comparison(&diff)
         }
       }
       Err(e) => TestResult::error(
@@ -1090,10 +1083,18 @@ impl WptRunner {
 
     // Save diff image if failed
     if result.status == TestStatus::Fail && self.config.save_diffs {
-      if let (Some(ref rendered), Some(ref expected)) =
+      if let Some(ref diff_png) = result.diff_image {
+        if let Some(parent) = paths.diff.parent() {
+          let _ = fs::create_dir_all(parent);
+        }
+        if let Err(e) = fs::write(&paths.diff, diff_png) {
+          eprintln!("Failed to save diff image: {}", e);
+        }
+      } else if let (Some(ref rendered), Some(ref expected)) =
         (&result.rendered_image, &result.expected_image)
       {
-        if let Ok(diff) = generate_diff_image(rendered, expected, self.config.pixel_tolerance) {
+        let config = self.config.comparison_config();
+        if let Ok(diff) = generate_diff_image(rendered, expected, &config) {
           if let Some(parent) = paths.diff.parent() {
             let _ = fs::create_dir_all(parent);
           }
@@ -1154,6 +1155,18 @@ impl WptRunnerBuilder {
   /// Sets the maximum allowed difference percentage
   pub fn max_diff(mut self, max_diff: f64) -> Self {
     self.config.max_diff_percentage = max_diff;
+    self
+  }
+
+  /// Ignores alpha channel during comparisons.
+  pub fn ignore_alpha(mut self) -> Self {
+    self.config.compare_alpha = false;
+    self
+  }
+
+  /// Sets a perceptual distance threshold (0.0 identical).
+  pub fn perceptual_distance(mut self, distance: f64) -> Self {
+    self.config.max_perceptual_distance = Some(distance);
     self
   }
 
@@ -1265,6 +1278,8 @@ mod tests {
       .test_dir("custom/tests")
       .tolerance(10)
       .max_diff(2.0)
+      .ignore_alpha()
+      .perceptual_distance(0.3)
       .fail_fast()
       .parallel(3)
       .manifest("custom/manifest.toml")
@@ -1274,6 +1289,8 @@ mod tests {
     assert_eq!(runner.config().test_dir, PathBuf::from("custom/tests"));
     assert_eq!(runner.config().pixel_tolerance, 10);
     assert_eq!(runner.config().max_diff_percentage, 2.0);
+    assert!(!runner.config().compare_alpha);
+    assert_eq!(runner.config().max_perceptual_distance, Some(0.3));
     assert!(runner.config().fail_fast);
     assert!(runner.config().parallel);
     assert_eq!(runner.config().workers, 3);
