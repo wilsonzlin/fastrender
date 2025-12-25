@@ -340,6 +340,7 @@ fn fragmentation_fingerprint(options: Option<FragmentationOptions>) -> u64 {
     opts.fragmentainer_gap.to_bits().hash(&mut h);
     opts.column_count.hash(&mut h);
     opts.column_gap.to_bits().hash(&mut h);
+    opts.kind.hash(&mut h);
     h.finish()
   } else {
     0

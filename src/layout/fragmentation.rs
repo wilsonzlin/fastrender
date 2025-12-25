@@ -17,6 +17,15 @@ use crate::style::ComputedStyle;
 use crate::style::{block_axis_is_horizontal, block_axis_positive};
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentainerPath};
 
+/// Kind of fragmentainers we are splitting content into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FragmentationKind {
+  /// Paginated media (pages)
+  Page,
+  /// Multi-column fragmentainers
+  Column,
+}
+
 /// Options controlling how fragments are split across fragmentainers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FragmentationOptions {
@@ -28,6 +37,8 @@ pub struct FragmentationOptions {
   pub column_count: usize,
   /// Gap between columns.
   pub column_gap: f32,
+  /// What kind of fragmentainer we are creating.
+  pub kind: FragmentationKind,
 }
 
 impl FragmentationOptions {
@@ -38,6 +49,7 @@ impl FragmentationOptions {
       fragmentainer_gap: 0.0,
       column_count: 1,
       column_gap: 0.0,
+      kind: FragmentationKind::Page,
     }
   }
 
@@ -51,6 +63,13 @@ impl FragmentationOptions {
   pub fn with_columns(mut self, count: usize, gap: f32) -> Self {
     self.column_count = count.max(1);
     self.column_gap = gap.max(0.0);
+    self.kind = FragmentationKind::Column;
+    self
+  }
+
+  /// Sets the fragmentation kind explicitly.
+  pub fn with_kind(mut self, kind: FragmentationKind) -> Self {
+    self.kind = kind;
     self
   }
 }
@@ -68,6 +87,12 @@ enum BreakStrength {
   Avoid,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ForcedBreak {
+  pub position: f32,
+  pub kind: BreakBetween,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpportunityKind {
   BreakBefore,
@@ -83,6 +108,7 @@ struct BreakCandidate {
   pos: f32,
   strength: BreakStrength,
   kind: OpportunityKind,
+  break_kind: BreakBetween,
   container_id: Option<usize>,
   details: Option<String>,
 }
@@ -371,6 +397,7 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       root_block_size,
       &axis,
       &mut plan,
+      options.kind,
       &mut debug_sink,
     );
     // Always allow breaking at the end of the content range so the final fragment closes.
@@ -378,6 +405,7 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       pos: total_block_size,
       strength: BreakStrength::Forced,
       kind: OpportunityKind::FinalContentEdge,
+      break_kind: BreakBetween::Always,
       container_id: Some(fragment_debug_id(root)),
       details: Some("end of content".to_string()),
     });
@@ -399,7 +427,9 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     });
     plan
       .candidates
-      .dedup_by(|a, b| (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength);
+      .dedup_by(|a, b| {
+        (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength && a.break_kind == b.break_kind
+      });
 
     compute_boundaries(
       total_block_size,
@@ -623,13 +653,16 @@ fn normalize_break_plan(plan: &mut BreakPlan) {
   });
   plan
     .candidates
-    .dedup_by(|a, b| (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength);
+    .dedup_by(|a, b| {
+      (a.pos - b.pos).abs() < 0.01 && a.strength == b.strength && a.break_kind == b.break_kind
+    });
 }
 
 pub(crate) fn build_break_plan(
   root: &FragmentNode,
   abs_start: f32,
   total_block_size: f32,
+  kind: FragmentationKind,
 ) -> BreakPlan {
   let axis = fragmentation_axis(root);
   let root_block_size = axis.block_size(&root.bounds);
@@ -641,12 +674,14 @@ pub(crate) fn build_break_plan(
     root_block_size,
     &axis,
     &mut plan,
+    kind,
     &mut debug,
   );
   plan.candidates.push(BreakCandidate {
     pos: total_block_size,
     strength: BreakStrength::Forced,
     kind: OpportunityKind::FinalContentEdge,
+    break_kind: BreakBetween::Always,
     container_id: Some(fragment_debug_id(root)),
     details: Some("end of content".to_string()),
   });
@@ -744,6 +779,7 @@ fn collect_break_plan(
   parent_block_size: f32,
   axis: &BlockAxis,
   plan: &mut BreakPlan,
+  kind: FragmentationKind,
   debug: &mut Option<&mut dyn DebugSink>,
 ) {
   let default_style = default_style();
@@ -758,7 +794,7 @@ fn collect_break_plan(
   let abs_end = node_abs_start + node_block_size;
   let container_id = Some(fragment_debug_id(node));
 
-  if forces_break(style.break_before) {
+  if forces_break(kind, style.break_before) {
     let detail = debug
       .is_some()
       .then(|| format!("break-before={:?}", style.break_before));
@@ -766,6 +802,7 @@ fn collect_break_plan(
       pos: node_abs_start,
       strength: BreakStrength::Forced,
       kind: OpportunityKind::BreakBefore,
+      break_kind: style.break_before,
       container_id,
       details: detail.clone(),
     });
@@ -863,6 +900,7 @@ fn collect_break_plan(
           pos: line_end,
           strength: BreakStrength::Auto,
           kind: OpportunityKind::LineEnd,
+          break_kind: BreakBetween::Auto,
           container_id,
           details: detail.clone(),
         });
@@ -937,6 +975,7 @@ fn collect_break_plan(
         pos: child_abs_end,
         strength: BreakStrength::Auto,
         kind: OpportunityKind::ChildEnd,
+        break_kind: BreakBetween::Auto,
         container_id: Some(fragment_debug_id(child)),
         details: detail.clone(),
       });
@@ -954,10 +993,10 @@ fn collect_break_plan(
       }
     }
 
-    collect_break_plan(child, child_abs_start, node_block_size, axis, plan, debug);
+    collect_break_plan(child, child_abs_start, node_block_size, axis, plan, kind, debug);
   }
 
-  if forces_break(style.break_after) {
+  if forces_break(kind, style.break_after) {
     let detail = debug
       .is_some()
       .then(|| format!("break-after={:?}", style.break_after));
@@ -965,6 +1004,7 @@ fn collect_break_plan(
       pos: abs_end,
       strength: BreakStrength::Forced,
       kind: OpportunityKind::BreakAfter,
+      break_kind: style.break_after,
       container_id,
       details: detail.clone(),
     });
@@ -1004,15 +1044,22 @@ fn collect_break_plan(
   }
 }
 
-pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> Vec<f32> {
+pub(crate) fn collect_forced_boundaries(
+  node: &FragmentNode,
+  abs_start: f32,
+  kind: FragmentationKind,
+) -> Vec<ForcedBreak> {
   let axis = fragmentation_axis(node);
   let total_block_size = axis.block_size(&node.bounding_box());
-  let plan = build_break_plan(node, abs_start, total_block_size);
+  let plan = build_break_plan(node, abs_start, total_block_size, kind);
   plan
     .candidates
     .into_iter()
     .filter(|c| c.strength == BreakStrength::Forced)
-    .map(|c| c.pos)
+    .map(|c| ForcedBreak {
+      position: c.pos,
+      kind: c.break_kind,
+    })
     .collect()
 }
 
@@ -1141,11 +1188,19 @@ fn is_forbidden(pos: f32, forbidden: &[ForbiddenRange]) -> bool {
   matching_forbidden(pos, forbidden).is_some()
 }
 
-fn forces_break(value: BreakBetween) -> bool {
-  matches!(
-    value,
-    BreakBetween::Always | BreakBetween::Page | BreakBetween::Column
-  )
+pub(crate) fn forces_break(kind: FragmentationKind, value: BreakBetween) -> bool {
+  match kind {
+    FragmentationKind::Page => matches!(
+      value,
+      BreakBetween::Always
+        | BreakBetween::Page
+        | BreakBetween::Left
+        | BreakBetween::Right
+        | BreakBetween::Recto
+        | BreakBetween::Verso
+    ),
+    FragmentationKind::Column => matches!(value, BreakBetween::Always | BreakBetween::Column),
+  }
 }
 
 fn avoids_break(value: BreakBetween) -> bool {

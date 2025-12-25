@@ -5,12 +5,14 @@ use std::sync::Arc;
 use crate::css::types::CollectedPageRule;
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::fragmentation::{
-  build_break_plan, clip_node, fragmentation_axis, propagate_fragment_metadata,
-  select_fragmentainer_boundary, BlockAxis,
+  build_break_plan, clip_node, collect_forced_boundaries, fragmentation_axis,
+  propagate_fragment_metadata, select_fragmentainer_boundary, BlockAxis, ForcedBreak,
+  FragmentationKind,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
 use crate::style::position::Position;
+use crate::style::types::BreakBetween;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::{FragmentNode, FragmentainerPath};
@@ -98,21 +100,62 @@ pub fn paginate_fragment_tree_with_options(
   let total_block = axis
     .block_size(&root.bounding_box())
     .max(fallback_block_size);
-  let break_plan = build_break_plan(root, 0.0, total_block);
+  let break_plan = build_break_plan(root, 0.0, total_block, FragmentationKind::Page);
+
+  let mut forced = collect_forced_boundaries(root, 0.0, FragmentationKind::Page);
+  forced.push(ForcedBreak {
+    position: total_block,
+    kind: BreakBetween::Always,
+  });
+  forced.sort_by(|a, b| {
+    a.position
+      .partial_cmp(&b.position)
+      .unwrap_or(std::cmp::Ordering::Equal)
+  });
+  forced.dedup_by(|a, b| (a.position - b.position).abs() < 0.01 && a.kind == b.kind);
 
   let fixed_fragments = collect_fixed_fragments(root, &axis, root_block_size);
 
   let mut pages = Vec::new();
   let mut pos = 0.0;
   let mut page_index = 0;
+  let mut pending_side: Option<PageSide> = None;
 
   while pos < total_block - 0.01 {
+    while let Some(required_side) = pending_side {
+      let current_side = page_side_for_index(page_index);
+      if current_side == required_side {
+        pending_side = None;
+        break;
+      }
+
+      let page_name = page_name_for_position(&spans, pos, initial_page_name.as_deref());
+      let style = resolve_page_style(
+        rules,
+        page_index,
+        page_name.as_deref(),
+        current_side,
+        fallback_page_size,
+        root_font_size,
+      );
+
+      let mut blank_page = FragmentNode::new_block(
+        Rect::from_xywh(0.0, 0.0, style.total_size.width, style.total_size.height),
+        Vec::new(),
+      );
+      for fixed in &fixed_fragments {
+        let mut repeated = fixed.fragment.clone();
+        translate_fragment(&mut repeated, style.content_origin.x, style.content_origin.y);
+        blank_page.children.push(repeated);
+      }
+      blank_page
+        .children
+        .extend(build_margin_box_fragments(&style, font_ctx));
+      pages.push(blank_page);
+      page_index += 1;
+    }
     let page_name = page_name_for_position(&spans, pos, initial_page_name.as_deref());
-    let side = if (page_index + 1) % 2 == 0 {
-      PageSide::Left
-    } else {
-      PageSide::Right
-    };
+    let side = page_side_for_index(page_index);
 
     let style = resolve_page_style(
       rules,
@@ -129,7 +172,22 @@ pub fn paginate_fragment_tree_with_options(
       style.content_size.height
     }
     .max(1.0);
-    let end = select_fragmentainer_boundary(pos, page_block, total_block, &break_plan);
+    let mut end = select_fragmentainer_boundary(pos, page_block, total_block, &break_plan);
+    let mut next_side_hint = None;
+    if let Some(boundary) = forced
+      .iter()
+      .copied()
+      .find(|b| b.position > pos + 0.01 && b.position < end - 0.01)
+    {
+      end = boundary.position;
+      next_side_hint = break_side_hint(boundary.kind);
+    } else if let Some(boundary) = forced
+      .iter()
+      .copied()
+      .find(|b| (b.position - end).abs() < 0.01)
+    {
+      next_side_hint = break_side_hint(boundary.kind);
+    }
 
     if end <= pos + 0.01 {
       break;
@@ -183,6 +241,7 @@ pub fn paginate_fragment_tree_with_options(
     pages.push(page_root);
     pos = end;
     page_index += 1;
+    pending_side = next_side_hint;
   }
 
   if pages.is_empty() {
@@ -312,6 +371,22 @@ fn page_name_for_position(
   }
 
   fallback.map(|s| s.to_string())
+}
+
+fn page_side_for_index(page_index: usize) -> PageSide {
+  if (page_index + 1) % 2 == 0 {
+    PageSide::Left
+  } else {
+    PageSide::Right
+  }
+}
+
+fn break_side_hint(kind: BreakBetween) -> Option<PageSide> {
+  match kind {
+    BreakBetween::Left | BreakBetween::Verso => Some(PageSide::Left),
+    BreakBetween::Right | BreakBetween::Recto => Some(PageSide::Right),
+    _ => None,
+  }
 }
 
 fn is_fixed_fragment(node: &FragmentNode) -> bool {

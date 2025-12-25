@@ -1077,10 +1077,18 @@ pub enum BreakBetween {
   Avoid,
   /// Force a fragment break
   Always,
-  /// Force a column break (treated the same as `always` for now)
+  /// Force a column break
   Column,
-  /// Force a page break (treated the same as `always` for now)
+  /// Force a page break
   Page,
+  /// Force a page break and target a left/verso page
+  Left,
+  /// Force a page break and target a right/recto page
+  Right,
+  /// Alias for a right-hand page break
+  Recto,
+  /// Alias for a left-hand page break
+  Verso,
 }
 
 impl Default for BreakBetween {

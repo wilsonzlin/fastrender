@@ -6734,7 +6734,10 @@ pub fn apply_declaration_with_base(
           "always" => BreakBetween::Always,
           "column" => BreakBetween::Column,
           "page" => BreakBetween::Page,
-          "left" | "right" => BreakBetween::Page,
+          "left" => BreakBetween::Left,
+          "right" => BreakBetween::Right,
+          "recto" => BreakBetween::Recto,
+          "verso" => BreakBetween::Verso,
           _ => BreakBetween::Auto,
         };
         if property == "break-before" {
