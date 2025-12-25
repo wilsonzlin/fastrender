@@ -32,6 +32,8 @@ These are emitted by the paint pipeline:
 - `FASTR_DUMP_COMMANDS=<N>` (omit `N` to dump all)
 - `FASTR_TRACE_IMAGE_PAINT=<N>` – log up to N image paints (empty value defaults to 50).
 - `FASTR_LOG_IMAGE_FAIL=1` – log failed image loads/placeholders.
+- `FASTR_PRESERVE3D_DEBUG=1` – log preserve-3d classification/fallback decisions.
+- `FASTR_PRESERVE3D_WARP=1` – indicate that projective warping is available (otherwise perspective is approximated to 2D).
 
 ## Debug dumps (layout / fragments)
 
