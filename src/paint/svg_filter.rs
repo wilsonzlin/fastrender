@@ -485,11 +485,22 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap) {
 }
 
 fn run_filter(def: &SvgFilter, source: &Pixmap) -> Pixmap {
+  run_filter_scaled(def, source, 1.0, 1.0)
+}
+
+fn run_filter_scaled(def: &SvgFilter, source: &Pixmap, scale_x: f32, scale_y: f32) -> Pixmap {
   let mut results: HashMap<String, Pixmap> = HashMap::new();
   let mut current = source.clone();
 
   for step in &def.steps {
-    if let Some(next) = apply_primitive(&step.primitive, source, &results, &current) {
+    if let Some(next) = apply_primitive(
+      &step.primitive,
+      source,
+      &results,
+      &current,
+      scale_x,
+      scale_y,
+    ) {
       if let Some(name) = &step.result {
         results.insert(name.clone(), next.clone());
       }
@@ -516,7 +527,9 @@ fn apply_filter_with_res(def: &SvgFilter, source: &Pixmap, res_w: u32, res_h: u3
     Some(p) => p,
     None => return run_filter(def, source),
   };
-  let working_result = run_filter(def, &working_source);
+  let scale_x = res_w as f32 / target_w as f32;
+  let scale_y = res_h as f32 / target_h as f32;
+  let working_result = run_filter_scaled(def, &working_source, scale_x, scale_y);
   resize_pixmap(&working_result, target_w, target_h).unwrap_or_else(|| run_filter(def, source))
 }
 
@@ -525,6 +538,8 @@ fn apply_primitive(
   source: &Pixmap,
   results: &HashMap<String, Pixmap>,
   current: &Pixmap,
+  scale_x: f32,
+  scale_y: f32,
 ) -> Option<Pixmap> {
   match primitive {
     FilterPrimitive::Flood { color, opacity } => {
@@ -532,13 +547,15 @@ fn apply_primitive(
     }
     FilterPrimitive::GaussianBlur { input, std_dev } => {
       let mut img = resolve_input(input, source, results, current)?;
-      if *std_dev > 0.0 {
-        apply_gaussian_blur(&mut img, *std_dev);
+      let scaled_std = *std_dev * 0.5 * (scale_x + scale_y);
+      if scaled_std > 0.0 {
+        apply_gaussian_blur(&mut img, scaled_std);
       }
       Some(img)
     }
     FilterPrimitive::Offset { input, dx, dy } => {
-      resolve_input(input, source, results, current).map(|img| offset_pixmap(img, *dx, *dy))
+      resolve_input(input, source, results, current)
+        .map(|img| offset_pixmap(img, *dx * scale_x, *dy * scale_y))
     }
     FilterPrimitive::ColorMatrix { input, kind } => {
       let mut img = resolve_input(input, source, results, current)?;
@@ -563,7 +580,10 @@ fn apply_primitive(
       color,
       opacity,
     } => resolve_input(input, source, results, current)
-      .map(|img| drop_shadow_pixmap(img, *dx, *dy, *std_dev, color, *opacity)),
+      .map(|img| {
+        let scaled_std = *std_dev * 0.5 * (scale_x + scale_y);
+        drop_shadow_pixmap(img, *dx * scale_x, *dy * scale_y, scaled_std, color, *opacity)
+      }),
     FilterPrimitive::Blend {
       input1,
       input2,
@@ -575,7 +595,8 @@ fn apply_primitive(
     ),
     FilterPrimitive::Morphology { input, radius, op } => {
       resolve_input(input, source, results, current).map(|mut img| {
-        apply_morphology(&mut img, *radius, *op);
+        let scaled_radius = *radius * 0.5 * (scale_x + scale_y);
+        apply_morphology(&mut img, scaled_radius, *op);
         img
       })
     }
