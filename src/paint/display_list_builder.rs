@@ -487,6 +487,10 @@ impl DisplayListBuilder {
       }
     }
 
+    if matches!(fragment.content, FragmentContent::RunningAnchor { .. }) {
+      return;
+    }
+
     let opacity = style_opt.map(|s| s.opacity).unwrap_or(1.0);
     if opacity <= f32::EPSILON {
       return;
@@ -598,6 +602,10 @@ impl DisplayListBuilder {
       ) {
         return;
       }
+    }
+
+    if matches!(fragment.content, FragmentContent::RunningAnchor { .. }) {
+      return;
     }
 
     let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
@@ -2544,6 +2552,7 @@ impl DisplayListBuilder {
       FragmentContent::Inline { box_id, .. } => *box_id,
       FragmentContent::Text { box_id, .. } => *box_id,
       FragmentContent::Replaced { box_id, .. } => *box_id,
+      FragmentContent::RunningAnchor { .. } => None,
       FragmentContent::Line { .. } => None,
       FragmentContent::RunningAnchor { .. } => None,
     }

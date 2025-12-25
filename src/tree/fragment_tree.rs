@@ -120,11 +120,13 @@ pub enum FragmentContent {
     box_id: Option<usize>,
   },
 
-  /// Running element anchor snapshot used for paged margin boxes.
+  /// Anchor for `position: running()` elements.
+  ///
+  /// Captures the rendered subtree of the running element without affecting in-flow layout.
   RunningAnchor {
-    /// Identifier for the running element.
+    /// Name provided to `position: running(<name>)`.
     name: String,
-    /// Snapshot of the running element fragment subtree.
+    /// Snapshot of the laid-out running element subtree.
     snapshot: Box<FragmentNode>,
   },
 }
@@ -582,6 +584,18 @@ impl FragmentNode {
       FragmentContent::Replaced {
         replaced_type,
         box_id: None,
+      },
+      vec![],
+    )
+  }
+
+  /// Creates a new running anchor fragment with a captured snapshot.
+  pub fn new_running_anchor(bounds: Rect, name: String, snapshot: FragmentNode) -> Self {
+    Self::new(
+      bounds,
+      FragmentContent::RunningAnchor {
+        name,
+        snapshot: Box::new(snapshot),
       },
       vec![],
     )

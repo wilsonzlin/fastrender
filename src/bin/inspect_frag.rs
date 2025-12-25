@@ -1603,7 +1603,7 @@ fn print_fragment_tree(node: &FragmentNode, indent: usize, max_lines: usize) {
       FragmentContent::Line { .. } => "line".into(),
       FragmentContent::Text { text, .. } => format!("text {:?}", text),
       FragmentContent::Replaced { box_id, .. } => format!("replaced box_id={:?}", box_id),
-      FragmentContent::RunningAnchor { .. } => "running-anchor".into(),
+      FragmentContent::RunningAnchor { name, .. } => format!("running-anchor name={name}"),
     }
   }
 
@@ -2303,6 +2303,7 @@ fn fragment_box_id(fragment: &FragmentNode) -> Option<usize> {
     | FragmentContent::Inline { box_id, .. }
     | FragmentContent::Text { box_id, .. }
     | FragmentContent::Replaced { box_id, .. } => *box_id,
+    FragmentContent::RunningAnchor { .. } => None,
     FragmentContent::Line { .. } => None,
     FragmentContent::RunningAnchor { .. } => None,
   }

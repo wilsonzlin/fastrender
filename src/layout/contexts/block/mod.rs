@@ -1420,6 +1420,50 @@ impl BlockFormattingContext {
         }
       }
 
+      if let Some(running_name) = child.style.running_position.as_ref() {
+        let pending_margin = margin_ctx.pending_margin();
+        let hypo_width = compute_block_width(
+          &child.style,
+          containing_width,
+          self.viewport_size,
+          inline_axis_sides(&child.style),
+          inline_axis_positive(child.style.writing_mode, child.style.direction),
+        );
+        let static_x = hypo_width.margin_left;
+        let static_y = current_y + pending_margin;
+
+        let mut snapshot_node = child.clone();
+        let mut snapshot_style = snapshot_node.style.as_ref().clone();
+        snapshot_style.running_position = None;
+        snapshot_style.position = Position::Static;
+        snapshot_node.style = Arc::new(snapshot_style);
+
+        let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+          self.font_context.clone(),
+          self.viewport_size,
+          *nearest_positioned_cb,
+        );
+        let fc_type = snapshot_node.formatting_context().unwrap_or_else(|| {
+          if snapshot_node.is_block_level() {
+            FormattingContextType::Block
+          } else {
+            FormattingContextType::Inline
+          }
+        });
+        let fc = factory.create(fc_type);
+        let snapshot_constraints = LayoutConstraints::new(
+          AvailableSpace::Definite(containing_width),
+          AvailableSpace::Indefinite,
+        );
+        let snapshot_fragment = fc.layout(&snapshot_node, &snapshot_constraints)?;
+        let anchor_bounds = Rect::from_xywh(static_x, static_y, 0.0, 0.01);
+        let mut anchor =
+          FragmentNode::new_running_anchor(anchor_bounds, running_name.clone(), snapshot_fragment);
+        anchor.style = Some(child.style.clone());
+        fragments.push(anchor);
+        continue;
+      }
+
       // Skip out-of-flow positioned boxes (absolute/fixed)
       if is_out_of_flow(child) {
         if trace_positioned.contains(&child.id) {
@@ -3477,7 +3521,8 @@ fn convert_fragment_axes(
 /// Checks if a box is out of normal flow (absolute/fixed positioned or float)
 fn is_out_of_flow(box_node: &BoxNode) -> bool {
   let position = box_node.style.position;
-  matches!(position, Position::Absolute | Position::Fixed)
+  box_node.style.running_position.is_some()
+    || matches!(position, Position::Absolute | Position::Fixed)
 }
 
 fn count_text_fragments(fragment: &FragmentNode) -> (usize, usize) {

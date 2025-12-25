@@ -209,6 +209,7 @@ pub struct StaticPositionAnchor {
   pub box_id: usize,
   pub direction: Direction,
   pub unicode_bidi: UnicodeBidi,
+  pub running: Option<RunningInfo>,
 }
 
 impl StaticPositionAnchor {
@@ -217,12 +218,25 @@ impl StaticPositionAnchor {
       box_id,
       direction,
       unicode_bidi,
+      running: None,
     }
   }
 
   pub fn metrics() -> BaselineMetrics {
     BaselineMetrics::new(0.0, 0.0, 0.0, 0.0)
   }
+
+  pub fn with_running(mut self, running: RunningInfo) -> Self {
+    self.running = Some(running);
+    self
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct RunningInfo {
+  pub name: String,
+  pub snapshot: FragmentNode,
+  pub style: Arc<ComputedStyle>,
 }
 
 fn allows_soft_wrap(style: &ComputedStyle) -> bool {

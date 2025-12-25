@@ -407,6 +407,9 @@ pub struct ComputedStyle {
   pub display: Display,
   pub position: Position,
   /// Running element name when authored via `position: running(<ident>)`.
+  ///
+  /// When set, the element is treated as a paged-media running element (to be used via
+  /// `content: element(...)` in page margin boxes) and is removed from normal flow during layout.
   pub running_position: Option<String>,
   pub appearance: Appearance,
   pub scroll_behavior: ScrollBehavior,
@@ -773,6 +776,7 @@ impl Default for ComputedStyle {
       scroll_margin_right: Length::px(0.0),
       scroll_margin_bottom: Length::px(0.0),
       scroll_margin_left: Length::px(0.0),
+      running_position: None,
       scrollbar_gutter: ScrollbarGutter::default(),
       overflow_anchor: OverflowAnchor::Auto,
       pointer_events: PointerEvents::Auto,

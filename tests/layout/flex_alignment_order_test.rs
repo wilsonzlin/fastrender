@@ -68,8 +68,7 @@ fn align_self_respects_in_flow_child_order() {
       | FragmentContent::Inline { box_id, .. }
       | FragmentContent::Replaced { box_id, .. }
       | FragmentContent::Text { box_id, .. } => *box_id,
-      FragmentContent::Line { .. } => None,
-      FragmentContent::RunningAnchor { .. } => None,
+      FragmentContent::Line { .. } | FragmentContent::RunningAnchor { .. } => None,
     };
     debug_children.push((
       id,

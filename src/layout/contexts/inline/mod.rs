@@ -122,6 +122,7 @@ use line_builder::ReplacedItem;
 use line_builder::RubyItem;
 use line_builder::RubyLineSpacing;
 use line_builder::RubySegmentLayout;
+use line_builder::RunningInfo;
 use line_builder::StaticPositionAnchor;
 use line_builder::TabItem;
 use line_builder::TextItem;
@@ -337,6 +338,59 @@ impl InlineFormattingContext {
     ))
   }
 
+  fn create_running_anchor(&self, child: &BoxNode, running: RunningInfo) -> InlineItem {
+    InlineItem::StaticPositionAnchor(
+      StaticPositionAnchor::new(
+        ensure_box_id(child),
+        child.style.direction,
+        child.style.unicode_bidi,
+      )
+      .with_running(running),
+    )
+  }
+
+  fn snapshot_running_fragment(
+    &self,
+    child: &BoxNode,
+    available_width: f32,
+    running_name: &str,
+  ) -> Result<RunningInfo, LayoutError> {
+    let mut snapshot_node = child.clone();
+    let mut snapshot_style = snapshot_node.style.as_ref().clone();
+    snapshot_style.running_position = None;
+    snapshot_style.position = crate::style::position::Position::Static;
+    snapshot_node.style = Arc::new(snapshot_style);
+
+    let inline_size = if available_width.is_finite() {
+      available_width.max(0.0)
+    } else {
+      self.viewport_size.width
+    };
+    let factory = FormattingContextFactory::with_font_context_viewport_and_cb(
+      self.font_context.clone(),
+      self.viewport_size,
+      self.nearest_positioned_cb,
+    );
+    let fc_type = snapshot_node.formatting_context().unwrap_or_else(|| {
+      if snapshot_node.is_block_level() {
+        FormattingContextType::Block
+      } else {
+        FormattingContextType::Inline
+      }
+    });
+    let fc = factory.create(fc_type);
+    let snapshot_constraints = LayoutConstraints::new(
+      AvailableSpace::Definite(inline_size),
+      AvailableSpace::Indefinite,
+    );
+    let snapshot_fragment = fc.layout(&snapshot_node, &snapshot_constraints)?;
+    Ok(RunningInfo {
+      name: running_name.to_string(),
+      snapshot: snapshot_fragment,
+      style: child.style.clone(),
+    })
+  }
+
   /// Collects inline items from box node children using the author's base direction.
   #[allow(dead_code)]
   fn collect_inline_items(
@@ -421,6 +475,13 @@ impl InlineFormattingContext {
       if let Some(space) = pending_space.take() {
         let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
         current_items.push(space_item);
+      }
+
+      if let Some(running_name) = child.style.running_position.as_ref() {
+        let running = self.snapshot_running_fragment(child, available_width, running_name)?;
+        let anchor = self.create_running_anchor(child, running);
+        current_items.push(anchor);
+        continue;
       }
 
       if matches!(
@@ -1081,6 +1142,12 @@ impl InlineFormattingContext {
       if let Some(space) = pending_space.take() {
         let space_item = self.create_collapsed_space_item(&space.style, space.allow_soft_wrap)?;
         items.push(space_item);
+      }
+      if let Some(running_name) = child.style.running_position.as_ref() {
+        let running = self.snapshot_running_fragment(child, available_width, running_name)?;
+        let anchor = self.create_running_anchor(child, running);
+        items.push(anchor);
+        continue;
       }
       if matches!(
         child.style.position,
@@ -4086,14 +4153,41 @@ impl InlineFormattingContext {
       }
 
       if let InlineItem::StaticPositionAnchor(anchor) = &positioned.item {
-        if let Some(map) = anchor_positions.as_deref_mut() {
-          let inline_origin = line.left_offset + inline_pos;
-          let anchor_point = if inline_vertical {
-            Point::new(anchor_block_position, inline_origin)
-          } else {
-            Point::new(inline_origin, anchor_block_position)
-          };
-          map.insert(anchor.box_id, anchor_point);
+        if anchor.running.is_none() {
+          if let Some(map) = anchor_positions.as_deref_mut() {
+            let inline_origin = line.left_offset + inline_pos;
+            let anchor_point = if inline_vertical {
+              Point::new(anchor_block_position, inline_origin)
+            } else {
+              Point::new(inline_origin, anchor_block_position)
+            };
+            map.insert(anchor.box_id, anchor_point);
+          }
+        } else {
+          let fragment = self.create_item_fragment_oriented(
+            &positioned.item,
+            block_pos,
+            inline_pos,
+            inline_vertical,
+            line_origin,
+            anchor_positions.as_deref_mut(),
+            positioned_containing_blocks.as_deref_mut(),
+          );
+          if log_line {
+            let metrics = positioned.item.baseline_metrics();
+            eprintln!(
+                      "  item#{i} width={:.2} block_pos={:.2} baseline_offset={:.2} metrics(base={:.2} h={:.2} asc={:.2} desc={:.2}) kind={:?}",
+                      item_width,
+                      block_pos,
+                      positioned.baseline_offset,
+                      metrics.baseline_offset,
+                      metrics.height,
+                      metrics.ascent,
+                      metrics.descent,
+                      positioned.item
+                  );
+          }
+          children.push(fragment);
         }
       } else {
         let fragment = self.create_item_fragment_oriented(
@@ -4594,7 +4688,22 @@ impl InlineFormattingContext {
           };
           map.insert(anchor.box_id, anchor_point);
         }
-        FragmentNode::new_inline(Rect::from_xywh(inline_pos, block_pos, 0.0, 0.0), 0, vec![])
+        if let Some(running) = anchor.running.as_ref() {
+          let bounds = if inline_vertical {
+            Rect::from_xywh(block_pos, inline_pos, 0.0, 0.01)
+          } else {
+            Rect::from_xywh(inline_pos, block_pos, 0.0, 0.01)
+          };
+          let mut fragment = FragmentNode::new_running_anchor(
+            bounds,
+            running.name.clone(),
+            running.snapshot.clone(),
+          );
+          fragment.style = Some(running.style.clone());
+          fragment
+        } else {
+          FragmentNode::new_inline(Rect::from_xywh(inline_pos, block_pos, 0.0, 0.0), 0, vec![])
+        }
       }
     }
   }
