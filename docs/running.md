@@ -40,6 +40,18 @@ Cache layout:
 
 `fetch_and_render` supports `file://…` inputs for local repros. Run with `--help` for the full flag list.
 
+## Capture and replay a self-contained bundle
+
+- Fetch and bundle (captures HTML + subresources + metadata):  
+  `cargo run --release --bin bundle_page -- fetch <url> --out capture_dir`
+- Render strictly from the bundle without touching the network:  
+  `cargo run --release --bin bundle_page -- render capture_dir --out output.png`
+
+Bundles are deterministic directories or `.tar` archives containing:
+- Raw document bytes with content-type and final URL
+- All fetched CSS/image/font resources with bytes and HTTP metadata
+- A manifest mapping the original URLs to bundle paths plus the render settings (viewport/dpr/scroll/full-page) used during capture
+
 ## Responsive captures and `<meta name="viewport">`
 
 `<meta name="viewport">` is ignored by default so renders stay deterministic. When

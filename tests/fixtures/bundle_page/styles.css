@@ -1,0 +1,24 @@
+@font-face {
+  font-family: "BundleFont";
+  src: url("../../fonts/ColorTestCOLR.ttf") format("truetype");
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: #fafafa;
+  font-family: "BundleFont", sans-serif;
+}
+
+.box {
+  margin: 16px;
+  padding: 8px;
+  width: 120px;
+  background: rgb(0, 128, 255);
+  color: white;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+}

@@ -37,6 +37,14 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Entry: `src/bin/fetch_and_render.rs`
 - Run: `cargo run --release --bin fetch_and_render -- --help`
 
+## `bundle_page`
+
+- Purpose: capture a page (HTML + subresources) into a self-contained bundle and replay it offline.
+- Entry: `src/bin/bundle_page.rs`
+- Run:
+  - Fetch: `cargo run --release --bin bundle_page -- fetch <url> --out <bundle_dir|.tar>`
+  - Render: `cargo run --release --bin bundle_page -- render <bundle> --out <png>`
+
 ## `inspect_frag`
 
 - Purpose: inspect fragment output (and related style/layout state) for a single input.
@@ -63,11 +71,12 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 
 ## Offline / cached captures
 
-- There is no dedicated "bundle" format. Offline captures are the on-disk caches produced by the existing tools:
+- Use `bundle_page fetch` to save a single reproducible capture (HTML bytes, content-type + final URL, all fetched CSS/image/font subresources with HTTP metadata, and a manifest mapping original URLs to bundle paths). Bundles can be directories or `.tar` archives and are deterministic.
+- Replay with `bundle_page render <bundle> --out out.png` to render strictly from the bundle with zero network calls.
+- For larger batch workflows, offline captures are also available via the existing on-disk caches:
   - `fetch_pages` writes HTML under `fetches/html/` and a `*.html.meta` sidecar with the original content-type and final URL.
   - `render_pages` and `fetch_and_render` use the shared disk-backed fetcher (when built with `--features disk_cache`) for subresources, writing into `fetches/assets/`. After one online render, you can re-run against the same caches without network access (new URLs will still fail).
-- Asset fetches made by the CLI tools go through the library cache layer: [`fastrender::resource::CachingFetcher`] in-memory by default, or [`fastrender::resource::DiskCachingFetcher`] behind the optional `disk_cache` feature.
-- To replay a single saved page, point `fetch_and_render` at a `file://` URL or path; it will read an adjacent `.meta` file (if present) to recover the cached content-type and source URL.
+- Asset fetches in library code go through [`fastrender::resource::CachingFetcher`] in-memory by default, or [`fastrender::resource::DiskCachingFetcher`] behind the optional `disk_cache` feature.
 
 ## Diagnostics
 

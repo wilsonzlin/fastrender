@@ -35,6 +35,7 @@ use std::time::Duration;
 use ureq::ResponseExt;
 use url::Url;
 
+pub mod bundle;
 mod data_url;
 #[cfg(feature = "disk_cache")]
 pub mod disk_cache;
