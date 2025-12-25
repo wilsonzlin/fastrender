@@ -253,3 +253,29 @@ fn has_uses_most_specific_argument_for_specificity() {
     "inline"
   );
 }
+
+#[test]
+fn has_respects_shadow_boundaries() {
+  let html = r#"
+    <div id="host">
+      <template shadowroot="open">
+        <slot></slot>
+        <div class="shadow-child"></div>
+      </template>
+      <div class="light-child"></div>
+    </div>
+  "#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#"
+    #host { display: block; }
+    #host:has(.light-child) { display: inline; }
+    #host:has(.shadow-child) { display: inline-block; }
+  "#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    display(find_by_id(&styled, "host").expect("host")),
+    "inline"
+  );
+}
