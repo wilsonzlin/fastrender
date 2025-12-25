@@ -26,7 +26,7 @@
 //! println!("Reduced items by {:.1}%", stats.reduction_percentage());
 //! ```
 
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::DisplayItem;
 use crate::paint::display_list::DisplayList;
@@ -35,6 +35,7 @@ use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
 use crate::paint::filter_outset::filter_outset_with_bounds;
+use crate::paint::homography::Homography;
 
 // ============================================================================
 // Optimization Configuration
@@ -358,14 +359,17 @@ impl DisplayListOptimizer {
       match &item {
         DisplayItem::PushTransform(t) => {
           transform_stack.push(transform_state.clone());
-
-          if let Some(transform) = Self::extract_2d_transform(&t.transform) {
-            if !transform_state.culling_disabled() {
-              transform_state.current = transform_state.current.multiply(&transform);
+          if !clip_stack.is_empty() {
+            // A transform within a clip scope can reposition descendants; be conservative and avoid
+            // culling based solely on the clip's initial bounds.
+            for clip in &mut clip_stack {
+              clip.can_cull = false;
             }
-          } else {
-            transform_state.unsupported_depth += 1;
+            refresh_context_clipping(&mut context_stack, &clip_stack);
           }
+
+          let mapping = Self::transform_mapping(&t.transform);
+          transform_state.current = transform_state.current.multiply(&mapping);
           include_item = true;
         }
         DisplayItem::PopTransform => {
@@ -378,30 +382,30 @@ impl DisplayListOptimizer {
           let pushed_transform = sc.transform.is_some();
           if let Some(transform) = sc.transform.as_ref() {
             transform_stack.push(transform_state.clone());
-            if let Some(transform) = Self::extract_2d_transform(transform) {
-              if !transform_state.culling_disabled() {
-                transform_state.current = transform_state.current.multiply(&transform);
+            if !clip_stack.is_empty() {
+              for clip in &mut clip_stack {
+                clip.can_cull = false;
               }
-            } else {
-              transform_state.unsupported_depth += 1;
+              refresh_context_clipping(&mut context_stack, &clip_stack);
             }
+            let mapping = Self::transform_mapping(transform);
+            transform_state.current = transform_state.current.multiply(&mapping);
           }
           let filters_outset = filter_outset_with_bounds(&sc.filters, 1.0, Some(sc.bounds));
           let backdrop_outset =
             filter_outset_with_bounds(&sc.backdrop_filters, 1.0, Some(sc.bounds));
           let max_outset = filters_outset.max_side().max(backdrop_outset.max_side());
-          let scale = Self::transform_scale_factor(&transform_state.current);
           let world_outset = if transform_state.culling_disabled() {
             0.0
           } else {
-            max_outset * scale
+            max_outset * Self::transform_scale_factor(&transform_state.current, sc.bounds)
           };
           filter_stack.push(world_outset);
 
           let transform_for_bounds = if transform_state.culling_disabled() {
             None
           } else {
-            Some(transform_state.current)
+            Some(transform_state.current.clone())
           };
 
           context_stack.push(ContextRecord {
@@ -435,7 +439,7 @@ impl DisplayListOptimizer {
               let ctx_bounds = self.stacking_context_bounds(
                 &record.item,
                 record.bounds,
-                record.transform_for_bounds,
+                record.transform_for_bounds.as_ref(),
               );
               let keep = if record.item.mask.is_some() {
                 true
@@ -470,13 +474,16 @@ impl DisplayListOptimizer {
           };
           let can_cull = if transform_state.culling_disabled() {
             false
-          } else {
-            let mut world_bounds = transform_state.current.transform_rect(local_bounds);
+          } else if let Some(mut world_bounds) =
+            Self::transform_rect_any(&transform_state.current, local_bounds)
+          {
             let inflate = filter_stack.iter().copied().sum::<f32>();
             if inflate > 0.0 {
               world_bounds = world_bounds.inflate(inflate);
             }
             !viewport.intersects(world_bounds)
+          } else {
+            false
           };
           clip_stack.push(ClipRecord {
             start_index: result.len(),
@@ -502,34 +509,37 @@ impl DisplayListOptimizer {
       if !include_item {
         if transform_state.culling_disabled() {
           include_item = true;
-        } else {
-          transformed_bounds = self.item_bounds(&item).map(|b| {
-            let mut bounds = transform_state.current.transform_rect(b);
+        } else if let Some(local_bounds) = self.item_bounds(&item) {
+          if let Some(mut bounds) = Self::transform_rect_any(&transform_state.current, local_bounds)
+          {
             let inflate = filter_stack.iter().copied().sum::<f32>();
             if inflate > 0.0 {
               bounds = bounds.inflate(inflate);
             }
-            bounds
-          });
-
-          include_item = match transformed_bounds {
-            Some(bounds) => viewport.intersects(bounds),
-            None => item.is_stack_operation(),
-          };
+            include_item = viewport.intersects(bounds);
+            transformed_bounds = Some(bounds);
+          } else {
+            include_item = true;
+          }
+        } else {
+          include_item = item.is_stack_operation();
         }
       }
 
       if include_item {
         result.push(item.clone());
         if transformed_bounds.is_none() && !transform_state.culling_disabled() {
-          transformed_bounds = self.item_bounds(result.last().unwrap()).map(|b| {
-            let mut bounds = transform_state.current.transform_rect(b);
-            let inflate = filter_stack.iter().copied().sum::<f32>();
-            if inflate > 0.0 {
-              bounds = bounds.inflate(inflate);
+          if let Some(local_bounds) = self.item_bounds(result.last().unwrap()) {
+            if let Some(mut bounds) =
+              Self::transform_rect_any(&transform_state.current, local_bounds)
+            {
+              let inflate = filter_stack.iter().copied().sum::<f32>();
+              if inflate > 0.0 {
+                bounds = bounds.inflate(inflate);
+              }
+              transformed_bounds = Some(bounds);
             }
-            bounds
-          });
+          }
         }
         if let Some(bounds) = transformed_bounds {
           if !transform_state.culling_disabled() && clip_stack.iter().all(|c| !c.can_cull) {
@@ -680,82 +690,103 @@ impl DisplayListOptimizer {
     }
   }
 
-  fn extract_2d_transform(transform: &Transform3D) -> Option<Transform2D> {
-    let candidate = transform.to_2d().or_else(|| {
-      if Self::has_perspective(transform) {
-        None
-      } else {
-        Some(transform.approximate_2d())
+  fn transform_mapping(transform: &Transform3D) -> TransformMapping {
+    let homography = Homography::from_transform3d_z0(transform);
+    if let Some(affine) = homography.to_affine() {
+      if affine.inverse().is_some() {
+        return TransformMapping::Affine(affine);
       }
-    })?;
-    if candidate.inverse().is_none() {
-      return None;
     }
-    Some(candidate)
+    if homography.is_invertible() {
+      TransformMapping::Projective(homography)
+    } else {
+      TransformMapping::Unsupported
+    }
   }
 
-  fn has_perspective(transform: &Transform3D) -> bool {
-    const EPS: f32 = 1e-6;
-    transform.m[3].abs() > EPS || transform.m[7].abs() > EPS || transform.m[11].abs() > EPS
+  fn transform_rect_any(mapping: &TransformMapping, rect: Rect) -> Option<Rect> {
+    match mapping {
+      TransformMapping::Affine(transform) => Some(transform.transform_rect(rect)),
+      TransformMapping::Projective(homography) => homography.map_rect_aabb(rect),
+      TransformMapping::Unsupported => None,
+    }
   }
 
-  fn transform_scale_factor(transform: &Transform2D) -> f32 {
-    let scale_x = (transform.a * transform.a + transform.b * transform.b).sqrt();
-    let scale_y = (transform.c * transform.c + transform.d * transform.d).sqrt();
-    scale_x.max(scale_y)
+  fn transform_scale_factor(transform: &TransformMapping, reference: Rect) -> f32 {
+    match transform {
+      TransformMapping::Affine(transform) => {
+        let scale_x = (transform.a * transform.a + transform.b * transform.b).sqrt();
+        let scale_y = (transform.c * transform.c + transform.d * transform.d).sqrt();
+        scale_x.max(scale_y)
+      }
+      TransformMapping::Projective(homography) => {
+        let samples = [
+          reference.origin,
+          Point::new(reference.max_x(), reference.min_y()),
+          Point::new(reference.min_x(), reference.max_y()),
+          Point::new(reference.max_x(), reference.max_y()),
+          Point::new(
+            reference.min_x() + reference.width() * 0.5,
+            reference.min_y() + reference.height() * 0.5,
+          ),
+        ];
+        let mut max_scale = 1.0;
+        for p in samples {
+          let base = match homography.map_point(p) {
+            Some(p) => p,
+            None => return 1.0,
+          };
+          let dx = match homography.map_point(Point::new(p.x + 1.0, p.y)) {
+            Some(p) => p,
+            None => return 1.0,
+          };
+          let dy = match homography.map_point(Point::new(p.x, p.y + 1.0)) {
+            Some(p) => p,
+            None => return 1.0,
+          };
+          let scale_x = ((dx.x - base.x).powi(2) + (dx.y - base.y).powi(2)).sqrt();
+          let scale_y = ((dy.x - base.x).powi(2) + (dy.y - base.y).powi(2)).sqrt();
+          max_scale = max_scale.max(scale_x.max(scale_y));
+        }
+        max_scale
+      }
+      TransformMapping::Unsupported => 1.0,
+    }
   }
 
   fn stacking_context_bounds(
     &self,
     item: &StackingContextItem,
     children: Option<Rect>,
-    transform: Option<Transform2D>,
+    transform: Option<&TransformMapping>,
   ) -> Option<Rect> {
-    if let Some(bounds) = children {
-      let filters_outset = filter_outset_with_bounds(&item.filters, 1.0, Some(bounds));
-      let backdrop_outset = filter_outset_with_bounds(&item.backdrop_filters, 1.0, Some(bounds));
-      let expand_left = filters_outset.left.max(backdrop_outset.left);
-      let expand_top = filters_outset.top.max(backdrop_outset.top);
-      let expand_right = filters_outset.right.max(backdrop_outset.right);
-      let expand_bottom = filters_outset.bottom.max(backdrop_outset.bottom);
-
-      let scale = transform
-        .as_ref()
-        .map(Self::transform_scale_factor)
-        .unwrap_or(1.0);
-
-      let mut expanded = bounds;
-      if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
-        expanded = Rect::from_xywh(
-          expanded.min_x() - expand_left * scale,
-          expanded.min_y() - expand_top * scale,
-          expanded.width() + (expand_left + expand_right) * scale,
-          expanded.height() + (expand_top + expand_bottom) * scale,
-        );
-      }
-      return Some(expanded);
-    }
-
     let filters_outset = filter_outset_with_bounds(&item.filters, 1.0, Some(item.bounds));
     let backdrop_outset = filter_outset_with_bounds(&item.backdrop_filters, 1.0, Some(item.bounds));
     let expand_left = filters_outset.left.max(backdrop_outset.left);
     let expand_top = filters_outset.top.max(backdrop_outset.top);
     let expand_right = filters_outset.right.max(backdrop_outset.right);
     let expand_bottom = filters_outset.bottom.max(backdrop_outset.bottom);
-    let mut bounds = item.bounds;
+
+    let mut bounds = match children {
+      Some(bounds) => bounds,
+      None => match transform {
+        Some(transform) => Self::transform_rect_any(transform, item.bounds)?,
+        None => item.bounds,
+      },
+    };
     if expand_left > 0.0 || expand_top > 0.0 || expand_right > 0.0 || expand_bottom > 0.0 {
+      let scale = transform
+        .map(|t| Self::transform_scale_factor(t, item.bounds))
+        .unwrap_or(1.0);
       bounds = Rect::from_xywh(
-        bounds.min_x() - expand_left,
-        bounds.min_y() - expand_top,
-        bounds.width() + expand_left + expand_right,
-        bounds.height() + expand_top + expand_bottom,
+        bounds.min_x() - expand_left * scale,
+        bounds.min_y() - expand_top * scale,
+        bounds.width() + (expand_left + expand_right) * scale,
+        bounds.height() + (expand_top + expand_bottom) * scale,
       );
     }
 
-    match transform {
-      Some(transform) => Some(transform.transform_rect(bounds)),
-      None => Some(bounds),
-    }
+    Some(bounds)
   }
 
   /// Try to merge two fill rects
@@ -836,29 +867,76 @@ struct ContextRecord {
   start_index: usize,
   bounds: Option<Rect>,
   item: StackingContextItem,
-  transform_for_bounds: Option<Transform2D>,
+  transform_for_bounds: Option<TransformMapping>,
   clipped_by_clip: bool,
   culling_disabled: bool,
   pushed_transform: bool,
 }
 
 #[derive(Clone)]
+enum TransformMapping {
+  Affine(Transform2D),
+  Projective(Homography),
+  Unsupported,
+}
+
+impl TransformMapping {
+  fn identity() -> Self {
+    Self::Affine(Transform2D::identity())
+  }
+
+  fn as_homography(&self) -> Option<Homography> {
+    match self {
+      TransformMapping::Affine(t) => Some(Homography::from_affine(t)),
+      TransformMapping::Projective(h) => Some(*h),
+      TransformMapping::Unsupported => None,
+    }
+  }
+
+  fn multiply(&self, other: &TransformMapping) -> TransformMapping {
+    match (self, other) {
+      (TransformMapping::Unsupported, _) | (_, TransformMapping::Unsupported) => {
+        TransformMapping::Unsupported
+      }
+      (TransformMapping::Affine(a), TransformMapping::Affine(b)) => {
+        TransformMapping::Affine(a.multiply(b))
+      }
+      (lhs, rhs) => {
+        if let (Some(lhs), Some(rhs)) = (lhs.as_homography(), rhs.as_homography()) {
+          let combined = lhs.multiply(&rhs);
+          if let Some(affine) = combined.to_affine() {
+            if affine.inverse().is_some() {
+              return TransformMapping::Affine(affine);
+            }
+          }
+          if combined.is_invertible() {
+            TransformMapping::Projective(combined)
+          } else {
+            TransformMapping::Unsupported
+          }
+        } else {
+          TransformMapping::Unsupported
+        }
+      }
+    }
+  }
+}
+
+#[derive(Clone)]
 struct TransformState {
-  current: Transform2D,
-  unsupported_depth: usize,
+  current: TransformMapping,
 }
 
 impl TransformState {
   fn culling_disabled(&self) -> bool {
-    self.unsupported_depth > 0
+    matches!(self.current, TransformMapping::Unsupported)
   }
 }
 
 impl Default for TransformState {
   fn default() -> Self {
     Self {
-      current: Transform2D::identity(),
-      unsupported_depth: 0,
+      current: TransformMapping::identity(),
     }
   }
 }
@@ -1288,12 +1366,35 @@ mod tests {
   }
 
   #[test]
-  fn test_perspective_transform_disables_culling() {
+  fn test_perspective_transform_culls_offscreen_rect() {
+    let mut transform = Transform3D::identity();
+    transform.m[3] = 0.001;
+    transform.m[12] = 500.0;
+
     let mut list = DisplayList::new();
-    list.push(DisplayItem::PushTransform(TransformItem {
-      transform: Transform3D::perspective(500.0),
-    }));
-    list.push(make_fill_rect(500.0, 0.0, 50.0, 50.0, Rgba::GREEN));
+    list.push(DisplayItem::PushTransform(TransformItem { transform }));
+    list.push(make_fill_rect(0.0, 0.0, 50.0, 50.0, Rgba::GREEN));
+    list.push(DisplayItem::PopTransform);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, stats) = optimize_with_stats(list, viewport);
+
+    assert_eq!(stats.culled_count, 1);
+    assert!(!optimized
+      .items()
+      .iter()
+      .any(|item| matches!(item, DisplayItem::FillRect(_))));
+  }
+
+  #[test]
+  fn test_degenerate_homography_falls_back_conservative() {
+    let mut transform = Transform3D::identity();
+    transform.m[3] = -0.002;
+    transform.m[12] = 500.0;
+
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushTransform(TransformItem { transform }));
+    list.push(make_fill_rect(500.0, 0.0, 50.0, 50.0, Rgba::BLUE));
     list.push(DisplayItem::PopTransform);
 
     let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);

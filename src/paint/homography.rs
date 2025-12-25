@@ -98,6 +98,38 @@ impl Homography {
     }
   }
 
+  /// Converts a 2D affine transform into a homography.
+  pub fn from_affine(t: &Transform2D) -> Self {
+    Self {
+      m: [t.a, t.c, t.e, t.b, t.d, t.f, 0.0, 0.0, 1.0],
+    }
+  }
+
+  /// Multiplies two homographies (apply `other` first, then `self`).
+  pub fn multiply(&self, other: &Homography) -> Homography {
+    let mut out = [0.0_f32; 9];
+    for row in 0..3 {
+      for col in 0..3 {
+        out[row * 3 + col] = self.m[row * 3 + 0] * other.m[0 * 3 + col]
+          + self.m[row * 3 + 1] * other.m[1 * 3 + col]
+          + self.m[row * 3 + 2] * other.m[2 * 3 + col];
+      }
+    }
+    Homography { m: out }
+  }
+
+  /// Determinant of the 3×3 homography matrix.
+  pub fn determinant(&self) -> f32 {
+    let [a, b, c, d, e, f, g, h, i] = self.m;
+    a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+  }
+
+  /// Returns true if the homography is invertible.
+  pub fn is_invertible(&self) -> bool {
+    let det = self.determinant();
+    det.is_finite() && det.abs() >= EPSILON
+  }
+
   /// Returns the inverse homography, if it exists and is numerically stable.
   pub fn invert(&self) -> Option<Self> {
     let [a, b, c, d, e, f, g, h, i] = self.m;
@@ -187,7 +219,10 @@ impl Homography {
 
   /// Returns true if the homography is (approximately) affine.
   pub fn is_affine(&self) -> bool {
-    self.m[6].abs() < EPSILON && self.m[7].abs() < EPSILON && (self.m[8] - 1.0).abs() < EPSILON
+    self.m[6].abs() < EPSILON
+      && self.m[7].abs() < EPSILON
+      && self.m[8].is_finite()
+      && self.m[8].abs() >= EPSILON
   }
 
   /// Converts to a 2D affine transform if the homography is affine.
@@ -197,12 +232,12 @@ impl Homography {
     }
 
     Some(Transform2D {
-      a: self.m[0],
-      b: self.m[3],
-      c: self.m[1],
-      d: self.m[4],
-      e: self.m[2],
-      f: self.m[5],
+      a: self.m[0] / self.m[8],
+      b: self.m[3] / self.m[8],
+      c: self.m[1] / self.m[8],
+      d: self.m[4] / self.m[8],
+      e: self.m[2] / self.m[8],
+      f: self.m[5] / self.m[8],
     })
   }
 }
