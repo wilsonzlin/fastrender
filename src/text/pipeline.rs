@@ -82,7 +82,6 @@ use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::time::Instant;
 use ttf_parser::Face as ParserFace;
 use ttf_parser::Tag;
 use unicode_bidi::BidiInfo;
@@ -2136,10 +2135,9 @@ fn push_font_run(
   features: &[Feature],
   authored_variations: &[Variation],
   style: &ComputedStyle,
-  font_context: &FontContext,
+  _font_context: &FontContext,
 ) {
   let segment_text = &run.text[start..end];
-  let font = font_context.subset_font_for_text(&font, segment_text);
   let mut variations = authored_variations.to_vec();
   if let Ok(face) = font.as_ttf_face() {
     let axes: Vec<_> = face.variation_axes().into_iter().collect();
@@ -2738,12 +2736,9 @@ impl ShapingPipeline {
     };
     if let Ok(cache) = self.cache.lock() {
       if let Some(cached) = cache.get(&cache_key) {
-        font_context.record_shape_cache_hit();
         return Ok((**cached).clone());
       }
     }
-    font_context.record_shape_cache_miss();
-    let shape_start = Instant::now();
 
     // Step 1: Bidi analysis
     let mut resolved_base_dir = base_direction.unwrap_or(match style.direction {
@@ -2810,7 +2805,6 @@ impl ShapingPipeline {
     if let Ok(mut cache) = self.cache.lock() {
       cache.insert(cache_key, std::sync::Arc::new(shaped_runs.clone()));
     }
-    font_context.record_shaping_time(shape_start.elapsed());
 
     Ok(shaped_runs)
   }

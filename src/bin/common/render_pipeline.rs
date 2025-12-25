@@ -226,21 +226,6 @@ pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str
       fetch_error.url, fetch_error.message
     ));
   }
-
-  if let Some(font) = &diagnostics.font {
-    log(&format!(
-      "Font stats: loads={} load_ms={:.2} shaping_runs={} shaping_ms={:.2} shape_cache_hit/miss={} / {} subset_hit/miss={} / {} plan_ms={:.2}",
-      font.font_loads,
-      font.font_load_ms,
-      font.shaping_runs,
-      font.shaping_ms,
-      font.shape_cache_hits,
-      font.shape_cache_misses,
-      font.subset_cache_hits,
-      font.subset_cache_misses,
-      font.plan_ms
-    ));
-  }
 }
 
 /// Format an error, optionally including its source chain.

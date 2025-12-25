@@ -77,8 +77,6 @@ pub mod justify;
 pub mod line_break;
 pub mod pipeline;
 
-pub use self::font_db::FontPipelineStats;
-pub use self::font_db::FontSubsetMode;
 pub use pipeline::itemize_text;
 pub use pipeline::BidiAnalysis;
 pub use pipeline::BidiRun;

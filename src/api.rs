@@ -79,7 +79,6 @@ use crate::geometry::Size;
 use crate::html::encoding::decode_html_bytes;
 use crate::html::viewport::ViewportLength;
 use crate::image_loader::ImageCache;
-use crate::image_loader::ImageCacheConfig;
 use crate::image_output::encode_image;
 use crate::image_output::OutputFormat;
 use crate::layout::absolute_positioning::resolve_positioned_style;
@@ -116,9 +115,7 @@ use crate::style::page::PageSide;
 use crate::style::types::ContainerType;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
-use crate::text::font_db::FontCacheConfig;
 use crate::text::font_db::FontDatabase;
-use crate::text::font_db::FontPipelineStats;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::ScaledMetrics;
@@ -148,14 +145,15 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
+#[cfg(test)]
 use url::Url;
 
 const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 use std::time::Instant;
 // Re-export Pixmap from tiny-skia for public use
 pub use crate::image_loader::ImageCacheConfig;
-pub use crate::text::font_db::FontCacheConfig;
 pub use crate::layout::pagination::PageStacking;
+pub use crate::text::font_db::FontCacheConfig;
 pub use tiny_skia::Pixmap;
 
 #[derive(Default, Debug, Clone)]
@@ -566,8 +564,6 @@ pub struct RenderDiagnostics {
   pub fetch_errors: Vec<ResourceFetchError>,
   /// Document-level fetch failure message when a placeholder render is produced.
   pub document_error: Option<String>,
-  /// Font pipeline statistics captured during rendering.
-  pub font: Option<FontPipelineStats>,
 }
 
 impl RenderDiagnostics {
@@ -1041,7 +1037,7 @@ impl FastRenderConfig {
 }
 
 /// Configuration for [`FastRenderPool`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FastRenderPoolConfig {
   /// Base renderer configuration applied to each worker.
   pub renderer: FastRenderConfig,
@@ -2662,7 +2658,6 @@ impl FastRender {
     let mut captured = RenderArtifacts::new(artifacts);
     let outputs =
       self.render_html_with_options_internal(&html_with_css, options, Some(&mut captured))?;
-    diagnostics.font = Some(self.font_context.font_stats_snapshot());
 
     Ok(RenderReport {
       pixmap: outputs.pixmap,
@@ -2706,7 +2701,6 @@ impl FastRender {
     let mut captured = RenderArtifacts::new(artifacts);
     let outputs =
       self.render_html_with_options_internal(&html_with_css, options, Some(&mut captured))?;
-    diagnostics.font = Some(self.font_context.font_stats_snapshot());
 
     Ok(RenderReport {
       pixmap: outputs.pixmap,
@@ -3107,8 +3101,6 @@ impl FastRender {
   ) -> Result<LayoutArtifacts> {
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
     let overall_start = timings_enabled.then(Instant::now);
-    self.font_context.reset_font_stats();
-    self.font_context.clear_font_plan();
 
     let mut dom_with_state = dom.clone();
     let modal_open = modal_dialog_present(&dom_with_state);
@@ -3152,7 +3144,6 @@ impl FastRender {
       self.base_url.as_deref(),
       Some(&used_codepoints),
     );
-    self.font_context.prime_font_plan(&used_codepoints);
     let keyframes =
       stylesheet.collect_keyframes_with_cache(&media_ctx, Some(&mut media_query_cache));
     let has_container_queries = stylesheet.has_container_rules();
