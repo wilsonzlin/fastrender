@@ -3,6 +3,7 @@
 //! This module provides image loading from various sources (HTTP, file, data URLs)
 //! with in-memory caching and support for various image formats including SVG.
 
+use crate::api::{RenderDiagnostics, ResourceKind};
 use crate::error::Error;
 use crate::error::ImageError;
 use crate::error::RenderError;
@@ -1083,6 +1084,8 @@ pub struct ImageCache {
   fetcher: Arc<dyn ResourceFetcher>,
   /// Decode limits.
   config: ImageCacheConfig,
+  /// Optional diagnostics sink for recording fetch failures.
+  diagnostics: Option<Arc<Mutex<RenderDiagnostics>>>,
 }
 
 impl ImageCache {
@@ -1161,6 +1164,7 @@ impl ImageCache {
       base_url,
       fetcher,
       config,
+      diagnostics: None,
     }
   }
 
@@ -1187,6 +1191,11 @@ impl ImageCache {
   /// Returns a reference to the current fetcher
   pub fn fetcher(&self) -> &Arc<dyn ResourceFetcher> {
     &self.fetcher
+  }
+
+  /// Attach a diagnostics sink for recording fetch failures.
+  pub fn set_diagnostics_sink(&mut self, diagnostics: Option<Arc<Mutex<RenderDiagnostics>>>) {
+    self.diagnostics = diagnostics;
   }
 
   /// Resolve a potentially relative URL to an absolute URL
@@ -1287,16 +1296,36 @@ impl ImageCache {
       .and_then(|cache| cache.get(resolved_url).cloned())
   }
 
+  fn record_image_error(&self, url: &str, error: &Error) {
+    if let Some(diag) = &self.diagnostics {
+      if let Ok(mut guard) = diag.lock() {
+        guard.record_error(ResourceKind::Image, url, error);
+      }
+    }
+  }
+
   fn fetch_and_decode(&self, resolved_url: &str) -> Result<Arc<CachedImage>> {
     let threshold_ms = image_profile_threshold_ms();
     let profile_enabled = threshold_ms.is_some();
     let total_start = profile_enabled.then(Instant::now);
     let fetch_start = profile_enabled.then(Instant::now);
-    let resource = self.fetcher.fetch(resolved_url)?;
+    let resource = match self.fetcher.fetch(resolved_url) {
+      Ok(res) => res,
+      Err(err) => {
+        self.record_image_error(resolved_url, &err);
+        return Err(err);
+      }
+    };
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let decode_start = profile_enabled.then(Instant::now);
     let (img, orientation, resolution, is_vector, intrinsic_ratio, aspect_ratio_none) =
-      self.decode_resource(&resource, resolved_url)?;
+      match self.decode_resource(&resource, resolved_url) {
+        Ok(decoded) => decoded,
+        Err(err) => {
+          self.record_image_error(resolved_url, &err);
+          return Err(err);
+        }
+      };
     let decode_ms = decode_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
 
     let img_arc = Arc::new(CachedImage {
@@ -1344,10 +1373,22 @@ impl ImageCache {
     let profile_enabled = threshold_ms.is_some();
     let total_start = profile_enabled.then(Instant::now);
     let fetch_start = profile_enabled.then(Instant::now);
-    let resource = self.fetcher.fetch(resolved_url)?;
+    let resource = match self.fetcher.fetch(resolved_url) {
+      Ok(res) => res,
+      Err(err) => {
+        self.record_image_error(resolved_url, &err);
+        return Err(err);
+      }
+    };
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let probe_start = profile_enabled.then(Instant::now);
-    let meta = self.probe_resource(&resource, resolved_url)?;
+    let meta = match self.probe_resource(&resource, resolved_url) {
+      Ok(meta) => meta,
+      Err(err) => {
+        self.record_image_error(resolved_url, &err);
+        return Err(err);
+      }
+    };
     let probe_ms = probe_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let meta = Arc::new(meta);
 
@@ -2261,6 +2302,7 @@ impl Clone for ImageCache {
       base_url: self.base_url.clone(),
       fetcher: Arc::clone(&self.fetcher),
       config: self.config,
+      diagnostics: self.diagnostics.clone(),
     }
   }
 }

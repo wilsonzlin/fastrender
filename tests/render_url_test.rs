@@ -1,4 +1,4 @@
-use fastrender::api::FastRender;
+use fastrender::{FastRender, RenderOptions, ResourceKind, ResourcePolicy};
 use tiny_skia::Color;
 
 fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
@@ -43,4 +43,48 @@ fn render_url_loads_external_css_and_images_from_file() {
 
   assert_eq!(pixel(&pixmap, 1, 1), (0, 200, 0, 255));
   assert_eq!(pixel(&pixmap, 15, 15), (20, 30, 40, 255));
+}
+
+#[test]
+fn render_url_records_policy_blocked_fetches() {
+  let html = r#"
+    <html>
+      <head>
+        <link rel="stylesheet" href="http://blocked.test/style.css">
+      </head>
+      <body>
+        <img src="http://blocked.test/image.png">
+      </body>
+    </html>
+  "#;
+
+  let dir = tempfile::tempdir().expect("temp dir");
+  let html_path = dir.path().join("page.html");
+  std::fs::write(&html_path, html).expect("write html");
+  let file_url = format!("file://{}", html_path.display());
+
+  let policy = ResourcePolicy::default()
+    .allow_http(false)
+    .allow_https(false);
+  let mut renderer = FastRender::builder()
+    .resource_policy(policy)
+    .build()
+    .expect("renderer");
+  let options = RenderOptions::new().allow_partial(true);
+
+  let result = renderer
+    .render_url_with_options(&file_url, options)
+    .expect("render should succeed");
+
+  assert!(result.diagnostics.document_error.is_none());
+  assert!(result
+    .diagnostics
+    .fetch_errors
+    .iter()
+    .any(|e| e.kind == ResourceKind::Stylesheet && e.url.contains("blocked.test/style.css")));
+  assert!(result
+    .diagnostics
+    .fetch_errors
+    .iter()
+    .any(|e| e.kind == ResourceKind::Image && e.url.contains("blocked.test/image.png")));
 }

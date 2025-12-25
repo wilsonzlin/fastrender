@@ -22,8 +22,12 @@
 use crate::error::{Error, ImageError, ResourceError, Result};
 use lru::LruCache;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::convert::TryFrom;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
@@ -162,6 +166,324 @@ pub const DEFAULT_USER_AGENT: &str =
 
 /// Default Accept-Language header value
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
+
+/// Allowed URL schemes for resource fetching.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllowedSchemes {
+  /// Whether `http://` URLs are permitted.
+  pub http: bool,
+  /// Whether `https://` URLs are permitted.
+  pub https: bool,
+  /// Whether `file://` URLs (and bare filesystem paths) are permitted.
+  pub file: bool,
+  /// Whether `data:` URLs are permitted.
+  pub data: bool,
+}
+
+impl AllowedSchemes {
+  /// Allow all supported schemes.
+  pub const fn all() -> Self {
+    Self {
+      http: true,
+      https: true,
+      file: true,
+      data: true,
+    }
+  }
+
+  fn allows(&self, scheme: ResourceScheme) -> bool {
+    match scheme {
+      ResourceScheme::Http => self.http,
+      ResourceScheme::Https => self.https,
+      ResourceScheme::File | ResourceScheme::Relative => self.file,
+      ResourceScheme::Data => self.data,
+      ResourceScheme::Other => false,
+    }
+  }
+}
+
+#[derive(Debug)]
+struct ResourceBudget {
+  consumed: AtomicUsize,
+}
+
+impl ResourceBudget {
+  fn new() -> Self {
+    Self {
+      consumed: AtomicUsize::new(0),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceScheme {
+  Http,
+  Https,
+  File,
+  Data,
+  Relative,
+  Other,
+}
+
+/// Policy controlling which resources may be fetched and how large they may be.
+///
+/// The policy is clonable; clones share the same underlying byte budget so limits apply across
+/// wrapper fetchers (e.g., [`CachingFetcher`]) that share a policy instance.
+#[derive(Debug, Clone)]
+pub struct ResourcePolicy {
+  /// Permitted URL schemes.
+  pub allowed_schemes: AllowedSchemes,
+  /// Maximum bytes to read per response. Defaults to 50MB.
+  pub max_response_bytes: usize,
+  /// Total bytes budget across all responses. `None` disables the budget.
+  pub total_bytes_budget: Option<usize>,
+  /// Per-request timeout.
+  pub request_timeout: Duration,
+  /// Maximum number of request attempts when following redirects.
+  pub max_redirects: usize,
+  /// Optional hostname allowlist applied to HTTP(S) requests.
+  pub host_allowlist: Option<HashSet<String>>,
+  /// Optional hostname denylist applied to HTTP(S) requests.
+  pub host_denylist: Option<HashSet<String>>,
+  budget: Arc<ResourceBudget>,
+}
+
+/// Alias for callers that prefer fetch-oriented terminology.
+pub type FetchPolicy = ResourcePolicy;
+
+impl Default for ResourcePolicy {
+  fn default() -> Self {
+    Self {
+      allowed_schemes: AllowedSchemes::all(),
+      max_response_bytes: 50 * 1024 * 1024,
+      total_bytes_budget: None,
+      request_timeout: Duration::from_secs(30),
+      max_redirects: 10,
+      host_allowlist: None,
+      host_denylist: None,
+      budget: Arc::new(ResourceBudget::new()),
+    }
+  }
+}
+
+impl ResourcePolicy {
+  /// Create a new policy with defaults matching the historical behavior.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Override allowed schemes.
+  pub fn with_allowed_schemes(mut self, allowed: AllowedSchemes) -> Self {
+    self.allowed_schemes = allowed;
+    self
+  }
+
+  /// Allow or disallow `http://` URLs.
+  pub fn allow_http(mut self, allow: bool) -> Self {
+    self.allowed_schemes.http = allow;
+    self
+  }
+
+  /// Allow or disallow `https://` URLs.
+  pub fn allow_https(mut self, allow: bool) -> Self {
+    self.allowed_schemes.https = allow;
+    self
+  }
+
+  /// Allow or disallow `file://` URLs and bare filesystem paths.
+  pub fn allow_file(mut self, allow: bool) -> Self {
+    self.allowed_schemes.file = allow;
+    self
+  }
+
+  /// Allow or disallow `data:` URLs.
+  pub fn allow_data(mut self, allow: bool) -> Self {
+    self.allowed_schemes.data = allow;
+    self
+  }
+
+  /// Override the maximum response size for a single resource.
+  pub fn with_max_response_bytes(mut self, max: usize) -> Self {
+    self.max_response_bytes = max;
+    self
+  }
+
+  /// Override the total byte budget across all fetched resources.
+  pub fn with_total_bytes_budget(mut self, budget: Option<usize>) -> Self {
+    self.total_bytes_budget = budget;
+    self.budget = Arc::new(ResourceBudget::new());
+    self
+  }
+
+  /// Override the per-request timeout.
+  pub fn with_request_timeout(mut self, timeout: Duration) -> Self {
+    self.request_timeout = timeout;
+    self
+  }
+
+  /// Override the maximum number of request attempts when following redirects.
+  ///
+  /// This is the number of HTTP requests allowed per fetch, including the initial request.
+  pub fn with_max_redirects(mut self, max_redirects: usize) -> Self {
+    self.max_redirects = max_redirects.max(1);
+    self
+  }
+
+  /// Restrict fetches to the provided hostnames (case-insensitive).
+  pub fn with_host_allowlist<I, S>(mut self, hosts: I) -> Self
+  where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+  {
+    self.host_allowlist = normalize_hosts(hosts);
+    self
+  }
+
+  /// Deny fetches to the provided hostnames (case-insensitive).
+  pub fn with_host_denylist<I, S>(mut self, hosts: I) -> Self
+  where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+  {
+    self.host_denylist = normalize_hosts(hosts);
+    self
+  }
+
+  fn remaining_budget(&self) -> Option<usize> {
+    self
+      .total_bytes_budget
+      .map(|limit| limit.saturating_sub(self.budget.consumed.load(Ordering::Relaxed)))
+  }
+
+  fn reserve_budget(&self, amount: usize) -> Result<()> {
+    if let Some(limit) = self.total_bytes_budget {
+      let mut current = self.budget.consumed.load(Ordering::Relaxed);
+      loop {
+        let next = current.saturating_add(amount);
+        if next > limit {
+          return Err(policy_error(format!(
+            "total bytes budget exceeded ({} of {} bytes)",
+            next, limit
+          )));
+        }
+        match self.budget.consumed.compare_exchange(
+          current,
+          next,
+          Ordering::SeqCst,
+          Ordering::SeqCst,
+        ) {
+          Ok(_) => break,
+          Err(actual) => current = actual,
+        }
+      }
+    }
+    Ok(())
+  }
+
+  fn ensure_url_allowed(&self, url: &str) -> Result<ResourceScheme> {
+    let scheme = classify_scheme(url);
+    if !self.allowed_schemes.allows(scheme) {
+      return Err(policy_error(format!("scheme {:?} is not allowed", scheme)));
+    }
+
+    if matches!(scheme, ResourceScheme::Http | ResourceScheme::Https) {
+      let parsed = Url::parse(url).map_err(|e| policy_error(format!("invalid URL: {e}")))?;
+      let host = parsed.host_str();
+      self.check_host_lists(host)?;
+    }
+
+    Ok(scheme)
+  }
+
+  fn check_host_lists(&self, host: Option<&str>) -> Result<()> {
+    let Some(host) = host.map(str::to_ascii_lowercase) else {
+      if self.host_allowlist.is_some() {
+        return Err(policy_error(
+          "host missing and host allowlist is configured",
+        ));
+      }
+      return Ok(());
+    };
+
+    if let Some(allowlist) = &self.host_allowlist {
+      if !allowlist.contains(&host) {
+        return Err(policy_error(format!("host {host} is not in the allowlist")));
+      }
+    }
+
+    if let Some(denylist) = &self.host_denylist {
+      if denylist.contains(&host) {
+        return Err(policy_error(format!("host {host} is denied")));
+      }
+    }
+
+    Ok(())
+  }
+
+  fn allowed_response_limit(&self) -> Result<usize> {
+    if self.max_response_bytes == 0 {
+      return Err(policy_error("max_response_bytes is zero"));
+    }
+
+    let limit = match self.remaining_budget() {
+      Some(0) => {
+        return Err(policy_error("total bytes budget exhausted"));
+      }
+      Some(remaining) => remaining.min(self.max_response_bytes),
+      None => self.max_response_bytes,
+    };
+
+    Ok(limit)
+  }
+}
+
+fn normalize_hosts<I, S>(hosts: I) -> Option<HashSet<String>>
+where
+  I: IntoIterator<Item = S>,
+  S: Into<String>,
+{
+  let normalized: HashSet<String> = hosts
+    .into_iter()
+    .map(|h| h.into().to_ascii_lowercase())
+    .filter(|h| !h.is_empty())
+    .collect();
+  if normalized.is_empty() {
+    None
+  } else {
+    Some(normalized)
+  }
+}
+
+fn classify_scheme(url: &str) -> ResourceScheme {
+  let lower = url.to_ascii_lowercase();
+  if lower.starts_with("data:") {
+    return ResourceScheme::Data;
+  }
+  if lower.starts_with("file://") {
+    return ResourceScheme::File;
+  }
+  if lower.starts_with("http://") {
+    return ResourceScheme::Http;
+  }
+  if lower.starts_with("https://") {
+    return ResourceScheme::Https;
+  }
+
+  match Url::parse(url) {
+    Ok(parsed) => match parsed.scheme() {
+      "http" => ResourceScheme::Http,
+      "https" => ResourceScheme::Https,
+      "file" => ResourceScheme::File,
+      "data" => ResourceScheme::Data,
+      _ => ResourceScheme::Other,
+    },
+    Err(_) => ResourceScheme::Relative,
+  }
+}
+
+fn policy_error(reason: impl Into<String>) -> Error {
+  Error::Other(format!("fetch blocked by policy: {}", reason.into()))
+}
 
 /// Strip a leading "User-Agent:" prefix so logs don't double-prefix when callers
 /// pass a full header value. Case-insensitive and trims surrounding whitespace after the prefix.
@@ -374,10 +696,9 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
 /// ```
 #[derive(Debug, Clone)]
 pub struct HttpFetcher {
-  timeout: Duration,
   user_agent: String,
   accept_language: String,
-  max_size: usize,
+  policy: ResourcePolicy,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -394,7 +715,7 @@ impl HttpFetcher {
 
   /// Set the request timeout
   pub fn with_timeout(mut self, timeout: Duration) -> Self {
-    self.timeout = timeout;
+    self.policy.request_timeout = timeout;
     self
   }
 
@@ -412,7 +733,19 @@ impl HttpFetcher {
 
   /// Set the maximum response size in bytes
   pub fn with_max_size(mut self, max_size: usize) -> Self {
-    self.max_size = max_size;
+    self.policy.max_response_bytes = max_size;
+    self
+  }
+
+  /// Apply a complete resource policy.
+  pub fn with_policy(mut self, policy: ResourcePolicy) -> Self {
+    self.policy = policy;
+    self
+  }
+
+  /// Override the maximum redirect attempts.
+  pub fn with_max_redirects(mut self, max_redirects: usize) -> Self {
+    self.policy.max_redirects = max_redirects.max(1);
     self
   }
 
@@ -429,13 +762,16 @@ impl HttpFetcher {
   ) -> Result<FetchedResource> {
     let config = ureq::Agent::config_builder()
       .http_status_as_error(false)
-      .timeout_global(Some(self.timeout))
+      .timeout_global(Some(self.policy.request_timeout))
       .build();
     let agent: ureq::Agent = config.into();
 
     let mut current = url.to_string();
     let mut validators = validators;
-    for _ in 0..10 {
+    for _ in 0..self.policy.max_redirects {
+      self.policy.ensure_url_allowed(&current)?;
+      let allowed_limit = self.policy.allowed_response_limit()? as u64;
+
       let mut request = agent
         .get(&current)
         .header("User-Agent", &self.user_agent)
@@ -477,6 +813,7 @@ impl HttpFetcher {
             .and_then(|base| base.join(loc).ok())
             .map(|u| u.to_string())
             .unwrap_or_else(|| loc.to_string());
+          self.policy.ensure_url_allowed(&next)?;
           current = next;
           validators = None;
           continue;
@@ -502,7 +839,7 @@ impl HttpFetcher {
       let body_result = response
         .body_mut()
         .with_config()
-        .limit(self.max_size as u64)
+        .limit(allowed_limit)
         .read_to_vec()
         .map_err(|e| e.into_io());
 
@@ -514,6 +851,7 @@ impl HttpFetcher {
               .with_final_url(response.get_uri().to_string());
             return Err(Error::Resource(err));
           }
+          self.policy.reserve_budget(bytes.len())?;
           let final_url = response.get_uri().to_string();
           let mut resource = FetchedResource::with_final_url(bytes, content_type, Some(final_url));
           resource.status = Some(status.as_u16());
@@ -535,13 +873,30 @@ impl HttpFetcher {
     }
 
     Err(Error::Resource(
-      ResourceError::new(url, "too many redirects").with_final_url(current),
+      ResourceError::new(
+        url,
+        format!("too many redirects (limit {})", self.policy.max_redirects),
+      )
+      .with_final_url(current),
     ))
   }
 
   /// Fetch from a file:// URL
   fn fetch_file(&self, url: &str) -> Result<FetchedResource> {
     let path = url.strip_prefix("file://").unwrap_or(url);
+    let limit = self.policy.allowed_response_limit()?;
+    if let Ok(meta) = std::fs::metadata(path) {
+      if let Ok(len) = usize::try_from(meta.len()) {
+        if len > limit {
+          return Err(policy_error(format!(
+            "response too large ({} > {} bytes)",
+            len, limit
+          )));
+        }
+      } else {
+        return Err(policy_error("file is larger than supported limit"));
+      }
+    }
     let bytes = std::fs::read(path).map_err(|e| {
       Error::Resource(
         ResourceError::new(url.to_string(), e.to_string())
@@ -549,6 +904,15 @@ impl HttpFetcher {
           .with_source(e),
       )
     })?;
+
+    if bytes.len() > limit {
+      return Err(policy_error(format!(
+        "response too large ({} > {} bytes)",
+        bytes.len(),
+        limit
+      )));
+    }
+    self.policy.reserve_budget(bytes.len())?;
 
     let content_type = guess_content_type_from_path(path);
     Ok(FetchedResource::with_final_url(
@@ -560,32 +924,38 @@ impl HttpFetcher {
 
   /// Decode a data: URL
   fn fetch_data(&self, url: &str) -> Result<FetchedResource> {
-    data_url::decode_data_url(url)
+    let limit = self.policy.allowed_response_limit()?;
+    let resource = data_url::decode_data_url(url)?;
+    if resource.bytes.len() > limit {
+      return Err(policy_error(format!(
+        "response too large ({} > {} bytes)",
+        resource.bytes.len(),
+        limit
+      )));
+    }
+    self.policy.reserve_budget(resource.bytes.len())?;
+    Ok(resource)
   }
 }
 
 impl Default for HttpFetcher {
   fn default() -> Self {
     Self {
-      timeout: Duration::from_secs(30),
       user_agent: DEFAULT_USER_AGENT.to_string(),
       accept_language: DEFAULT_ACCEPT_LANGUAGE.to_string(),
-      max_size: 50 * 1024 * 1024, // 50MB default limit
+      policy: ResourcePolicy::default(),
     }
   }
 }
 
 impl ResourceFetcher for HttpFetcher {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
-    if url.starts_with("data:") {
-      self.fetch_data(url)
-    } else if url.starts_with("file://") {
-      self.fetch_file(url)
-    } else if url.starts_with("http://") || url.starts_with("https://") {
-      self.fetch_http(url)
-    } else {
-      // Treat as local file path
-      self.fetch_file(&format!("file://{}", url))
+    match self.policy.ensure_url_allowed(url)? {
+      ResourceScheme::Data => self.fetch_data(url),
+      ResourceScheme::File => self.fetch_file(url),
+      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http(url),
+      ResourceScheme::Relative => self.fetch_file(&format!("file://{}", url)),
+      ResourceScheme::Other => Err(policy_error("unsupported URL scheme")),
     }
   }
 
@@ -595,18 +965,17 @@ impl ResourceFetcher for HttpFetcher {
     etag: Option<&str>,
     last_modified: Option<&str>,
   ) -> Result<FetchedResource> {
-    if url.starts_with("http://") || url.starts_with("https://") {
-      return self.fetch_http_with_accept(
+    match self.policy.ensure_url_allowed(url)? {
+      ResourceScheme::Http | ResourceScheme::Https => self.fetch_http_with_accept(
         url,
         None,
         Some(HttpCacheValidators {
           etag,
           last_modified,
         }),
-      );
+      ),
+      _ => self.fetch(url),
     }
-
-    self.fetch(url)
   }
 }
 
@@ -756,12 +1125,14 @@ pub struct CachingFetcher<F: ResourceFetcher> {
   state: Arc<Mutex<CacheState>>,
   in_flight: Arc<Mutex<HashMap<String, Arc<InFlight>>>>,
   config: CachingFetcherConfig,
+  policy: Option<ResourcePolicy>,
 }
 
 impl<F: ResourceFetcher> std::fmt::Debug for CachingFetcher<F> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("CachingFetcher")
       .field("config", &self.config)
+      .field("policy", &self.policy)
       .finish_non_exhaustive()
   }
 }
@@ -779,6 +1150,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
       state: Arc::new(Mutex::new(CacheState::new())),
       in_flight: Arc::new(Mutex::new(HashMap::new())),
       config,
+      policy: None,
     }
   }
 
@@ -803,6 +1175,12 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
   /// Enables or disables conditional requests using cached ETag/Last-Modified headers.
   pub fn with_http_cache_validation(mut self, enabled: bool) -> Self {
     self.config.honor_http_cache_headers = enabled;
+    self
+  }
+
+  /// Apply a resource policy. When set, disallowed URLs are rejected before consulting the cache.
+  pub fn with_policy(mut self, policy: ResourcePolicy) -> Self {
+    self.policy = Some(policy);
     self
   }
 
@@ -896,6 +1274,10 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
 
 impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
+    if let Some(policy) = &self.policy {
+      policy.ensure_url_allowed(url)?;
+    }
+
     let cached = self.cached_entry(url);
     let needs_revalidate = cached
       .as_ref()
@@ -1561,7 +1943,7 @@ mod tests {
   #[test]
   fn test_http_fetcher_defaults() {
     let fetcher = HttpFetcher::new();
-    assert_eq!(fetcher.timeout, Duration::from_secs(30));
+    assert_eq!(fetcher.policy.request_timeout, Duration::from_secs(30));
     assert!(fetcher.user_agent.contains("fastrender"));
   }
 
@@ -1572,9 +1954,63 @@ mod tests {
       .with_user_agent("Test/1.0")
       .with_max_size(1024);
 
-    assert_eq!(fetcher.timeout, Duration::from_secs(60));
+    assert_eq!(fetcher.policy.request_timeout, Duration::from_secs(60));
     assert_eq!(fetcher.user_agent, "Test/1.0");
-    assert_eq!(fetcher.max_size, 1024);
+    assert_eq!(fetcher.policy.max_response_bytes, 1024);
+  }
+
+  #[test]
+  fn resource_policy_blocks_disallowed_scheme() {
+    let fetcher = HttpFetcher::new().with_policy(
+      ResourcePolicy::default()
+        .allow_http(false)
+        .allow_https(false),
+    );
+    let err = fetcher.fetch("http://example.test/").unwrap_err();
+    assert!(
+      err.to_string().contains("not allowed"),
+      "unexpected error: {err:?}"
+    );
+  }
+
+  #[test]
+  fn resource_policy_blocks_denied_host() {
+    let fetcher = HttpFetcher::new()
+      .with_policy(ResourcePolicy::default().with_host_denylist(["example.test"]));
+    let err = fetcher.fetch("http://example.test/blocked").unwrap_err();
+    assert!(
+      err.to_string().contains("denied"),
+      "unexpected error: {err:?}"
+    );
+  }
+
+  #[test]
+  fn resource_policy_enforces_response_size_for_data_urls() {
+    let fetcher =
+      HttpFetcher::new().with_policy(ResourcePolicy::default().with_max_response_bytes(4));
+    let err = fetcher
+      .fetch("data:text/plain,hello")
+      .expect_err("fetch should fail due to size limit");
+    assert!(
+      err.to_string().contains("response too large"),
+      "unexpected error: {err:?}"
+    );
+  }
+
+  #[test]
+  fn resource_policy_tracks_total_budget() {
+    let fetcher =
+      HttpFetcher::new().with_policy(ResourcePolicy::default().with_total_bytes_budget(Some(5)));
+    fetcher
+      .fetch("data:text/plain,abc")
+      .expect("first fetch within budget");
+    let err = fetcher
+      .fetch("data:text/plain,def")
+      .expect_err("budget should be exhausted");
+    assert!(
+      err.to_string().contains("budget"),
+      "unexpected error: {err:?}"
+    );
   }
 
   #[test]

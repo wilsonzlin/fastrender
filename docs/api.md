@@ -14,6 +14,33 @@ pixmap.save_png("out.png")?;
 
 Use `FastRender::builder()` to set defaults (viewport size, background color, base URL, etc.) when constructing a renderer.
 
+## Resource fetch policy
+
+Resource loading is controlled by a `ResourcePolicy` (`FetchPolicy` is an alias) configured on `FastRenderConfig` or via `FastRenderBuilder::resource_policy(...)`. The default mirrors the historical behavior: allow `http`, `https`, `file`, and `data` URLs; a 50 MB per-response cap; a 30 second timeout; up to 10 redirects; and no host allow/deny rules or total budget.
+
+Key knobs:
+
+- `allowed_schemes` – enable/disable `http`, `https`, `file`, `data`
+- `max_response_bytes` – per-resource cap (responses larger than this are rejected)
+- `total_bytes_budget` – overall byte budget across all fetched resources
+- `request_timeout` – per-request timeout
+- `max_redirects` – maximum requests when following redirects
+- `host_allowlist` / `host_denylist` – optional hostname filters for HTTP(S)
+
+```rust
+use fastrender::{FastRender, ResourcePolicy};
+
+let policy = ResourcePolicy::default()
+    .allow_http(false) // block http: loads
+    .with_total_bytes_budget(Some(5 * 1024 * 1024)); // 5 MB total budget
+
+let mut renderer = FastRender::builder()
+    .resource_policy(policy)
+    .build()?;
+```
+
+Fetches blocked by policy (disallowed scheme/host, over budget, etc.) are recorded in `RenderDiagnostics.fetch_errors` when rendering URLs.
+
 ## Per-request render options
 
 `RenderOptions` overrides defaults for a single render without mutating the renderer:
