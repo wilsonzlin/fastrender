@@ -1336,11 +1336,11 @@ pub(crate) fn supports_parsed_declaration_is_valid(
     _ => {}
   }
 
-  // For properties not explicitly handled above, fall back to accepting parsed values.
-  // This keeps behavior permissive for properties whose supported grammar we haven't
-  // enumerated yet while still rejecting known-invalid cases handled earlier.
+  // For properties not explicitly handled above, fall back to accepting parsed values
+  // that produced concrete types. Keywords are rejected here because our generic parser
+  // often returns Keyword for unknown tokens, which would be too permissive for @supports.
   match parsed {
-    PropertyValue::Keyword(_) => true,
+    PropertyValue::Keyword(_) => false,
     _ => true,
   }
 }
