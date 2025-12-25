@@ -39,6 +39,11 @@ impl SelectorImpl for FastRenderSelectorImpl {
   type NamespaceUrl = CssString;
   type NonTSPseudoClass = PseudoClass;
   type PseudoElement = PseudoElement;
+
+  fn should_collect_attr_hash(_name: &Self::LocalName) -> bool {
+    // Attribute selectors are indexed in RuleIndex; allow bloom filters to prune on them.
+    true
+  }
 }
 
 // ============================================================================
