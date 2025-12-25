@@ -65,7 +65,7 @@ pub fn warp_pixmap(
   }
 
   let mut output = Pixmap::new(width, height)?;
-  let clip_data = clip.map(|m| (m.data(), m.width() as usize));
+  let clip_data = clip.map(|m| (m.data(), m.width() as usize, m.height() as usize));
   let area = width.saturating_mul(height);
 
   let process_row = |row_idx: usize, row: &mut [PremultipliedColorU8]| {
@@ -74,7 +74,13 @@ pub fn warp_pixmap(
       let global_x = min_x_i + col_idx as i32;
       let clip_alpha = clip_data
         .as_ref()
-        .and_then(|(data, stride)| data.get(global_y as usize * *stride + global_x as usize))
+        .and_then(|(data, stride, height)| {
+          if global_x < 0 || global_y < 0 || global_y as usize >= *height {
+            None
+          } else {
+            data.get(global_y as usize * *stride + global_x as usize)
+          }
+        })
         .copied()
         .unwrap_or(255);
       if clip_alpha == 0 {
