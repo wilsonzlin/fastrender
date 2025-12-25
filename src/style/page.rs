@@ -119,7 +119,11 @@ pub fn resolve_page_style(
     for margin_rule in &rule.rule.margin_rules {
       let style = margin_styles
         .entry(margin_rule.area)
-        .or_insert_with(|| default_margin_style(base_style, root_font_size));
+        .or_insert_with(|| {
+          let mut style = default_margin_style(base_style, root_font_size);
+          style.text_align = default_margin_text_align(margin_rule.area);
+          style
+        });
       for decl in &margin_rule.declarations {
         apply_declaration_with_base(
           style,
@@ -507,6 +511,26 @@ fn default_margin_style(base_style: Option<&ComputedStyle>, root_font_size: f32)
   }
   style.display = Display::Block;
   style
+}
+
+fn default_margin_text_align(area: PageMarginArea) -> TextAlign {
+  match area {
+    PageMarginArea::TopLeftCorner
+    | PageMarginArea::TopLeft
+    | PageMarginArea::BottomLeft
+    | PageMarginArea::BottomLeftCorner
+    | PageMarginArea::LeftTop
+    | PageMarginArea::LeftMiddle
+    | PageMarginArea::LeftBottom => TextAlign::Left,
+    PageMarginArea::TopCenter | PageMarginArea::BottomCenter => TextAlign::Center,
+    PageMarginArea::TopRightCorner
+    | PageMarginArea::TopRight
+    | PageMarginArea::BottomRight
+    | PageMarginArea::BottomRightCorner
+    | PageMarginArea::RightTop
+    | PageMarginArea::RightMiddle
+    | PageMarginArea::RightBottom => TextAlign::Right,
+  }
 }
 
 impl PageNamedSize {
