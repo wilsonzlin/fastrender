@@ -325,7 +325,7 @@ impl FontSubsetCache {
       .inner
       .lock()
       .ok()
-      .and_then(|mut cache| cache.get(key).cloned())
+      .and_then(|cache| cache.get(key).cloned())
   }
 
   fn put(&self, key: SubsetCacheKey, data: Arc<Vec<u8>>) {

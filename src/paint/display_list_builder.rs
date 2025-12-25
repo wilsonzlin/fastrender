@@ -275,13 +275,13 @@ impl DisplayListBuilder {
   }
 
   fn rebuild_svg_filter_registry_from_tree(&mut self, tree: &FragmentTree) {
-    self.svg_filter_registry =
-      SvgFilterRegistry::from_fragment_tree(tree, self.image_cache.as_ref());
+    let registry = SvgFilterRegistry::from_fragment_tree(&tree.root);
+    self.svg_filter_registry = (!registry.is_empty()).then_some(registry);
   }
 
   fn rebuild_svg_filter_registry_from_root(&mut self, root: &FragmentNode) {
-    self.svg_filter_registry =
-      SvgFilterRegistry::from_fragment_root(root, self.image_cache.as_ref());
+    let registry = SvgFilterRegistry::from_fragment_tree(root);
+    self.svg_filter_registry = (!registry.is_empty()).then_some(registry);
   }
 
   /// Builds a display list from a fragment tree root
@@ -1459,7 +1459,7 @@ impl DisplayListBuilder {
           }
           if let Some(fragment) = trimmed.strip_prefix('#') {
             svg_filters
-              .and_then(|registry| registry.get(fragment))
+              .and_then(|registry| image_cache.and_then(|cache| registry.lookup(fragment, cache)))
               .map(ResolvedFilter::SvgFilter)
           } else {
             image_cache

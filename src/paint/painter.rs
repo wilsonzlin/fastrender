@@ -7890,8 +7890,8 @@ fn resolve_filter_length(
 
 fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bbox: Rect) {
   for filter in filters {
-    match *filter {
-      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
+    match filter {
+      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
       ResolvedFilter::Brightness(amount) => {
         apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
       }

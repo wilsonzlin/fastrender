@@ -13,6 +13,18 @@ pub struct SvgFilterRegistry {
   cache: Mutex<HashMap<String, Arc<SvgFilter>>>,
 }
 
+impl Clone for SvgFilterRegistry {
+  fn clone(&self) -> Self {
+    let definitions = self.definitions.clone();
+    let cache = if let Ok(guard) = self.cache.lock() {
+      Mutex::new(guard.clone())
+    } else {
+      Mutex::new(HashMap::new())
+    };
+    Self { definitions, cache }
+  }
+}
+
 impl SvgFilterRegistry {
   /// Build a registry by walking the fragment tree and collecting `<filter id="...">` definitions.
   ///

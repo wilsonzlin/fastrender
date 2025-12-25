@@ -1860,13 +1860,6 @@ fn apply_animations_to_node(
   keyframes: &HashMap<String, KeyframesRule>,
   timelines: &HashMap<String, TimelineState>,
 ) {
-  let abs = Rect::from_xywh(
-    origin.x,
-    origin.y,
-    node.bounds.width(),
-    node.bounds.height(),
-  );
-
   if let Some(style_arc) = node.style.clone() {
     let names = &style_arc.animation_names;
     if !names.is_empty() {

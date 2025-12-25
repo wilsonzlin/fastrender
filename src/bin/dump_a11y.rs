@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
   if let Some(secs) = args.timeout {
     http_fetcher = http_fetcher.with_timeout(Duration::from_secs(secs));
   }
-  let fetcher = Arc::new(http_fetcher);
+  let fetcher: Arc<dyn ResourceFetcher> = Arc::new(http_fetcher);
 
   let (html, base_hint) = load_html(&args.input, fetcher.as_ref())?;
 
