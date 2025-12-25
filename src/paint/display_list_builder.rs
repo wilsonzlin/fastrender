@@ -400,6 +400,8 @@ impl DisplayListBuilder {
     // 3. Content (text, images)
     // 4. Children
 
+    // Clip descendant/content painting but leave outer effects (e.g., box shadows, outlines)
+    // unaffected.
     let mut pushed_clips = 0;
     if let Some(clip) = overflow_clip {
       self.list.push(DisplayItem::PushClip(clip));
