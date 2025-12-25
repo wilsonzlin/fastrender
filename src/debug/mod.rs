@@ -22,4 +22,5 @@
 //! println!("{}", printer.print_box_tree(&root));
 //! ```
 
+pub mod inspect;
 pub mod tree_printer;

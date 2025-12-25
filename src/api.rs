@@ -67,6 +67,7 @@ use crate::css::parser::{
   extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
+use crate::debug::inspect::{InspectQuery, InspectionSnapshot};
 use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
@@ -3271,6 +3272,9 @@ impl FastRender {
   /// println!("Fragment count: {}", fragment_tree.fragment_count());
   /// println!("Viewport: {:?}", fragment_tree.viewport_size());
   /// ```
+  ///
+  /// When debugging, use [`inspect`](#method.inspect) to retrieve the styled and
+  /// box trees alongside the fragments.
   pub fn layout_document(
     &mut self,
     dom: &DomNode,
@@ -3704,7 +3708,7 @@ impl FastRender {
           })
           .filter(|v| !v.is_empty());
 
-        let styled_tree = apply_styles_with_media_target_and_imports(
+        let new_styled_tree = apply_styles_with_media_target_and_imports(
           dom,
           &stylesheet,
           &media_ctx,
@@ -3717,13 +3721,13 @@ impl FastRender {
         );
 
         if let (true, Some(ids)) = (log_container_pass, log_container_ids.as_ref()) {
-          let summaries = styled_summary_map(&styled_tree);
+          let summaries = styled_summary_map(&new_styled_tree);
           for id in ids {
             let summary = summaries
               .get(id)
               .cloned()
               .unwrap_or_else(|| "<unknown>".to_string());
-            if let Some(node) = find_styled_by_id(&styled_tree, *id) {
+            if let Some(node) = find_styled_by_id(&new_styled_tree, *id) {
               eprintln!(
                 "[container-pass] styled_id={} node={} styles={}",
                 id,
@@ -3742,10 +3746,11 @@ impl FastRender {
         let fingerprints_match = first_style_fingerprints
           .as_ref()
           .map(|first| {
-            let second = styled_fingerprint_map(&styled_tree);
+            let second = styled_fingerprint_map(&new_styled_tree);
             *first == second
           })
           .unwrap_or(false);
+        styled_tree = new_styled_tree;
 
         if fingerprints_match {
           if log_container_pass {
@@ -3946,6 +3951,40 @@ impl FastRender {
       box_tree,
       fragment_tree,
     })
+  }
+
+  /// Inspect nodes matching a query without painting.
+  ///
+  /// This runs styling, box generation, and layout, then returns snapshots of
+  /// the matched DOM node, computed styles, box nodes, and fragments.
+  pub fn inspect(
+    &mut self,
+    dom: &DomNode,
+    width: u32,
+    height: u32,
+    query: InspectQuery,
+  ) -> Result<Vec<InspectionSnapshot>> {
+    if width == 0 || height == 0 {
+      return Err(Error::Render(RenderError::InvalidParameters {
+        message: "Viewport width and height must be positive".to_string(),
+      }));
+    }
+
+    let artifacts = self.layout_document_for_media_with_artifacts(
+      dom,
+      width,
+      height,
+      MediaType::Screen,
+      LayoutDocumentOptions::default(),
+      None,
+    )?;
+
+    crate::debug::inspect::inspect(
+      &artifacts.styled_tree,
+      &artifacts.box_tree.root,
+      &artifacts.fragment_tree,
+      query,
+    )
   }
 
   /// Paints a fragment tree to a pixmap
