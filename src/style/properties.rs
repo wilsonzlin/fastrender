@@ -3708,12 +3708,17 @@ pub fn apply_declaration_with_base(
   };
 
   // Resolve var() references in the value
-  let resolved_value =
+  let (resolved_value, resolved_css_text) =
     match resolve_var_for_property(&decl.value, &styles.custom_properties, property) {
-      VarResolutionResult::Resolved(v) => *v,
+      VarResolutionResult::Resolved { value, css_text } => (*value, css_text),
       // Unresolved or invalid at computed-value time -> declaration is ignored per spec.
       _ => return,
     };
+  let resolved_css_text_str = if resolved_css_text.is_empty() {
+    decl.raw_value.as_str()
+  } else {
+    resolved_css_text.as_str()
+  };
   let order = styles.logical.next_order();
   if let Some(global) = global_keyword(&resolved_value) {
     let defaults = ComputedStyle::default();
@@ -6974,19 +6979,19 @@ pub fn apply_declaration_with_base(
       }
     }
     "scroll-timeline" => {
-      styles.scroll_timelines = parse_scroll_timeline_list(&decl.raw_value);
+      styles.scroll_timelines = parse_scroll_timeline_list(resolved_css_text_str);
     }
     "view-timeline" => {
-      styles.view_timelines = parse_view_timeline_list(&decl.raw_value);
+      styles.view_timelines = parse_view_timeline_list(resolved_css_text_str);
     }
     "animation-timeline" => {
-      styles.animation_timelines = parse_animation_timeline_list(&decl.raw_value);
+      styles.animation_timelines = parse_animation_timeline_list(resolved_css_text_str);
     }
     "animation-range" => {
-      styles.animation_ranges = parse_animation_range_list(&decl.raw_value);
+      styles.animation_ranges = parse_animation_range_list(resolved_css_text_str);
     }
     "animation-name" => {
-      styles.animation_names = parse_animation_names(&decl.raw_value);
+      styles.animation_names = parse_animation_names(resolved_css_text_str);
     }
     "scrollbar-gutter" => {
       let mut stable = false;

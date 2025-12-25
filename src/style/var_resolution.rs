@@ -21,7 +21,10 @@ const MAX_RECURSION_DEPTH: usize = 10;
 #[derive(Debug, Clone)]
 pub enum VarResolutionResult {
   /// Successfully resolved to a value
-  Resolved(Box<PropertyValue>),
+  Resolved {
+    value: Box<PropertyValue>,
+    css_text: String,
+  },
   /// The variable was not found and no fallback was provided (or the fallback failed to resolve)
   NotFound(String),
   /// Recursion depth exceeded (possible circular reference)
@@ -34,14 +37,26 @@ impl VarResolutionResult {
   /// Returns the resolved value if successful, otherwise returns the original value
   pub fn unwrap_or(self, default: PropertyValue) -> PropertyValue {
     match self {
-      VarResolutionResult::Resolved(value) => *value,
+      VarResolutionResult::Resolved { value, .. } => *value,
       _ => default,
     }
   }
 
   /// Returns true if the resolution was successful
   pub fn is_resolved(&self) -> bool {
-    matches!(self, VarResolutionResult::Resolved(_))
+    matches!(self, VarResolutionResult::Resolved { .. })
+  }
+
+  /// Returns the CSS serialization of the resolved value if available.
+  ///
+  /// For invalid syntax, this returns the resolved string that failed to parse,
+  /// which is still useful for consumers that need the token-stream result.
+  pub fn css_text(&self) -> Option<&str> {
+    match self {
+      VarResolutionResult::Resolved { css_text, .. } => Some(css_text.as_str()),
+      VarResolutionResult::InvalidSyntax(text) => Some(text.as_str()),
+      _ => None,
+    }
   }
 }
 
@@ -56,7 +71,7 @@ pub fn resolve_var(
   custom_properties: &HashMap<String, String>,
 ) -> PropertyValue {
   match resolve_var_recursive(value, custom_properties, 0, "") {
-    VarResolutionResult::Resolved(v) => *v,
+    VarResolutionResult::Resolved { value, .. } => *value,
     other => other.unwrap_or(value.clone()),
   }
 }
@@ -86,7 +101,7 @@ pub fn resolve_var_with_depth(
   depth: usize,
 ) -> PropertyValue {
   match resolve_var_recursive(value, custom_properties, depth, "") {
-    VarResolutionResult::Resolved(v) => *v,
+    VarResolutionResult::Resolved { value, .. } => *value,
     other => other.unwrap_or(value.clone()),
   }
 }
@@ -107,7 +122,10 @@ fn resolve_var_recursive(
       resolve_from_string(raw, custom_properties, depth, property_name)
     }
     PropertyValue::Custom(raw) => resolve_from_string(raw, custom_properties, depth, property_name),
-    _ => VarResolutionResult::Resolved(Box::new(value.clone())),
+    _ => VarResolutionResult::Resolved {
+      value: Box::new(value.clone()),
+      css_text: String::new(),
+    },
   }
 }
 
@@ -122,7 +140,10 @@ fn resolve_from_string(
     Ok(tokens) => {
       let resolved = tokens_to_css_string(&tokens);
       match parse_value_after_resolution(&resolved, property_name) {
-        Some(value) => VarResolutionResult::Resolved(Box::new(value)),
+        Some(value) => VarResolutionResult::Resolved {
+          value: Box::new(value),
+          css_text: resolved,
+        },
         None => VarResolutionResult::InvalidSyntax(resolved),
       }
     }
@@ -591,7 +612,7 @@ mod tests {
     let value = PropertyValue::Keyword("var(--bg)".to_string());
     let resolved = resolve_var_for_property(&value, &props, "background-image");
 
-    if let VarResolutionResult::Resolved(boxed) = resolved {
+    if let VarResolutionResult::Resolved { value: boxed, .. } = resolved {
       let list = match *boxed {
         PropertyValue::Multiple(list) => list,
         _ => panic!("Expected Multiple for background layers, got {:?}", boxed),
@@ -723,8 +744,10 @@ mod tests {
 
   #[test]
   fn test_resolve_var_result_methods() {
-    let resolved =
-      VarResolutionResult::Resolved(Box::new(PropertyValue::Keyword("blue".to_string())));
+    let resolved = VarResolutionResult::Resolved {
+      value: Box::new(PropertyValue::Keyword("blue".to_string())),
+      css_text: "blue".to_string(),
+    };
     assert!(resolved.is_resolved());
 
     let default = PropertyValue::Keyword("red".to_string());
