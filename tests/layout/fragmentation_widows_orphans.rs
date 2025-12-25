@@ -4,13 +4,17 @@ use fastrender::layout::fragmentation::{fragment_tree, FragmentationOptions};
 use fastrender::style::types::BreakInside;
 use fastrender::{ComputedStyle, FragmentContent, FragmentNode, Rect};
 
-fn labeled_line(y: f32, label: &str) -> FragmentNode {
+fn labeled_line(y: f32, line_height: f32, label: &str) -> FragmentNode {
   let text = FragmentNode::new_text(
     Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
     label.to_string(),
     8.0,
   );
-  FragmentNode::new_line(Rect::from_xywh(0.0, y, 100.0, 15.0), 12.0, vec![text])
+  FragmentNode::new_line(
+    Rect::from_xywh(0.0, y, 100.0, line_height),
+    line_height * 0.8,
+    vec![text],
+  )
 }
 
 #[test]
@@ -20,7 +24,7 @@ fn widows_and_orphans_respected_across_multiple_fragmentainers() {
   style.widows = 2;
   style.orphans = 2;
   let lines: Vec<_> = (0..6)
-    .map(|idx| labeled_line(idx as f32 * 15.0, &format!("line-{idx}")))
+    .map(|idx| labeled_line(idx as f32 * 15.0, 15.0, &format!("line-{idx}")))
     .collect();
   let paragraph = FragmentNode::new_block_styled(
     Rect::from_xywh(0.0, 0.0, 120.0, 90.0),
@@ -75,7 +79,7 @@ fn widows_and_orphans_are_soft_constraints() {
   style.orphans = 3;
   style.widows = 2;
   let lines: Vec<_> = (0..4)
-    .map(|idx| labeled_line(idx as f32 * 10.0, &format!("line-{idx}")))
+    .map(|idx| labeled_line(idx as f32 * 10.0, 10.0, &format!("line-{idx}")))
     .collect();
   let paragraph = FragmentNode::new_block_styled(
     Rect::from_xywh(0.0, 0.0, 120.0, 40.0),

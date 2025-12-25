@@ -9,8 +9,50 @@ use fastrender::{
   BoxTree, ComputedStyle, FragmentContent, FragmentNode, LayoutConfig, LayoutEngine, Rect, Size,
 };
 
-fn line(y: f32) -> FragmentNode {
-  FragmentNode::new_line(Rect::from_xywh(0.0, y, 80.0, 15.0), 12.0, vec![])
+fn line(y: f32, height: f32) -> FragmentNode {
+  FragmentNode::new_line(
+    Rect::from_xywh(0.0, y, 80.0, height),
+    height * 0.8,
+    vec![],
+  )
+}
+
+fn count_lines(node: &FragmentNode) -> usize {
+  node
+    .iter_fragments()
+    .filter(|fragment| matches!(fragment.content, FragmentContent::Line { .. }))
+    .count()
+}
+
+#[test]
+fn paragraph_breaks_on_line_boundaries() {
+  let lines: Vec<_> = (0..6).map(|i| line(i as f32 * 12.0, 12.0)).collect();
+  let para_height = lines.last().map(|l| l.bounds.max_y()).unwrap_or(0.0);
+  let paragraph =
+    FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, para_height), lines.clone());
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, 120.0, para_height),
+    vec![paragraph],
+  );
+
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(24.0));
+
+  assert_eq!(fragments.len(), 3);
+  let per_fragment: Vec<_> = fragments.iter().map(count_lines).collect();
+  assert_eq!(per_fragment, vec![2, 2, 2]);
+  assert_eq!(per_fragment.iter().sum::<usize>(), lines.len());
+
+  for fragment in &fragments {
+    for line in fragment
+      .iter_fragments()
+      .filter(|f| matches!(f.content, FragmentContent::Line { .. }))
+    {
+      assert!(
+        (line.bounds.height() - 12.0).abs() < 0.01,
+        "lines must not be clipped"
+      );
+    }
+  }
 }
 
 #[test]
@@ -66,7 +108,12 @@ fn widows_and_orphans_keep_paragraph_together() {
   para_style.break_inside = BreakInside::Auto;
   para_style.widows = 3;
   para_style.orphans = 3;
-  let lines = vec![line(0.0), line(18.0), line(36.0), line(54.0)];
+  let lines = vec![
+    line(0.0, 15.0),
+    line(18.0, 15.0),
+    line(36.0, 15.0),
+    line(54.0, 15.0),
+  ];
   let paragraph = FragmentNode::new_block_styled(
     Rect::from_xywh(0.0, 0.0, 120.0, 80.0),
     lines,
@@ -85,41 +132,128 @@ fn widows_and_orphans_keep_paragraph_together() {
     "content should span multiple fragmentainers when it overflows"
   );
 
-  fn count_lines(node: &FragmentNode) -> usize {
-    let self_count = usize::from(matches!(node.content, FragmentContent::Line { .. }));
-    self_count + node.children.iter().map(count_lines).sum::<usize>()
-  }
-
   let total_lines: usize = fragments.iter().map(count_lines).sum();
   assert_eq!(total_lines, 4, "all line fragments should be retained");
 }
 
 #[test]
 fn line_fragments_remain_atomic_when_boundary_slices_through() {
-  let atomic_line = line(10.0);
+  let atomic_line = line(10.0, 15.0);
   let original_height = atomic_line.bounds.height();
   let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 25.0), vec![atomic_line]);
 
   let fragments = fragment_tree(&root, &FragmentationOptions::new(15.0));
 
   assert_eq!(fragments.len(), 2);
-  let first_fragment_lines: Vec<&FragmentNode> = fragments[0]
+  let first_fragment_lines = count_lines(&fragments[0]);
+  let second_fragment_lines: Vec<&FragmentNode> = fragments[1]
     .children
     .iter()
     .filter(|child| matches!(child.content, FragmentContent::Line { .. }))
     .collect();
-  assert_eq!(first_fragment_lines.len(), 1);
+  assert_eq!(first_fragment_lines, 0);
+  assert_eq!(second_fragment_lines.len(), 1);
   assert!(
-    (first_fragment_lines[0].bounds.height() - original_height).abs() < 0.01,
+    (second_fragment_lines[0].bounds.height() - original_height).abs() < 0.01,
     "line fragments should keep their full height even when clipped mid-line"
   );
   assert!(
-    fragments[1]
-      .children
-      .iter()
-      .all(|child| !matches!(child.content, FragmentContent::Line { .. })),
-    "line should only appear in the fragment that contains its start"
+    fragments.iter().map(count_lines).sum::<usize>() == 1,
+    "line should only appear once across fragments"
   );
+}
+
+#[test]
+fn widows_and_orphans_enforced_across_multiple_breaks() {
+  let mut style = ComputedStyle::default();
+  style.widows = 2;
+  style.orphans = 2;
+
+  let lines: Vec<_> = (0..10).map(|i| line(i as f32 * 10.0, 10.0)).collect();
+  let para_height = lines.last().map(|l| l.bounds.max_y()).unwrap_or(0.0);
+  let paragraph = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 120.0, para_height),
+    lines,
+    Arc::new(style),
+  );
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, 120.0, para_height),
+    vec![paragraph],
+  );
+
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(30.0));
+  let per_fragment: Vec<_> = fragments
+    .iter()
+    .map(count_lines)
+    .filter(|c| *c > 0)
+    .collect();
+
+  assert_eq!(per_fragment.iter().sum::<usize>(), 10);
+  assert_eq!(per_fragment, vec![3, 3, 2, 2]);
+  assert!(per_fragment.iter().all(|count| *count >= 2));
+}
+
+#[test]
+fn break_inside_avoid_prefers_unbroken_but_splits_when_needed() {
+  let mut avoid_style = ComputedStyle::default();
+  avoid_style.break_inside = BreakInside::Avoid;
+  let avoid_style = Arc::new(avoid_style);
+
+  // Fits entirely within the first fragmentainer.
+  let fitting_lines: Vec<_> = (0..3).map(|i| line(i as f32 * 12.0, 12.0)).collect();
+  let fitting_block = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 100.0, 36.0),
+    fitting_lines,
+    avoid_style.clone(),
+  );
+  let trailing = FragmentNode::new_block(Rect::from_xywh(0.0, 40.0, 100.0, 20.0), vec![]);
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, 120.0, 60.0),
+    vec![fitting_block, trailing],
+  );
+
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(50.0));
+  let per_fragment: Vec<_> = fragments.iter().map(count_lines).collect();
+  assert_eq!(per_fragment.iter().sum::<usize>(), 3);
+  assert_eq!(per_fragment[0], 3);
+
+  // Taller than a fragmentainer: must break even with avoid.
+  let tall_lines: Vec<_> = (0..6).map(|i| line(i as f32 * 12.0, 12.0)).collect();
+  let tall_block = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 100.0, 72.0),
+    tall_lines.clone(),
+    avoid_style,
+  );
+  let tall_root =
+    FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 72.0), vec![tall_block]);
+
+  let tall_fragments = fragment_tree(&tall_root, &FragmentationOptions::new(40.0));
+  let tall_counts: Vec<_> = tall_fragments.iter().map(count_lines).collect();
+  assert!(tall_fragments.len() > 1);
+  assert_eq!(tall_counts.iter().sum::<usize>(), tall_lines.len());
+  assert!(tall_counts.iter().all(|count| *count > 0));
+}
+
+#[test]
+fn forced_break_overrides_natural_flow() {
+  let mut breaker_style = ComputedStyle::default();
+  breaker_style.break_after = BreakBetween::Always;
+  let breaker = FragmentNode::new_block_styled(
+    Rect::from_xywh(0.0, 0.0, 50.0, 30.0),
+    vec![],
+    Arc::new(breaker_style),
+  );
+  let follower = FragmentNode::new_block(Rect::from_xywh(0.0, 30.0, 50.0, 30.0), vec![]);
+  let root = FragmentNode::new_block(
+    Rect::from_xywh(0.0, 0.0, 50.0, 60.0),
+    vec![breaker, follower],
+  );
+
+  let fragments = fragment_tree(&root, &FragmentationOptions::new(200.0));
+
+  assert_eq!(fragments.len(), 2);
+  assert_eq!(fragments[0].children.len(), 1);
+  assert_eq!(fragments[1].children.len(), 1);
 }
 
 #[test]

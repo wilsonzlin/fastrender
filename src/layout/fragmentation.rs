@@ -122,7 +122,10 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     return vec![root.clone()];
   }
 
-  let total_height = root.bounding_box().height().max(options.fragmentainer_size);
+  let total_height = root
+    .logical_bounding_box()
+    .height()
+    .max(options.fragmentainer_size);
   let mut collection = BreakCollection::default();
   collect_break_opportunities(root, 0.0, &mut collection, 0);
   // Always allow breaking at the end of the content range so the final fragment closes.
@@ -228,8 +231,11 @@ pub(crate) fn clip_node(
 ) -> Option<FragmentNode> {
   let node_abs_start = parent_abs_start + node.bounds.y();
   let node_abs_end = node_abs_start + node.bounds.height();
+  let node_bbox = node.logical_bounding_box();
+  let node_bbox_abs_start = parent_abs_start + node_bbox.min_y();
+  let node_bbox_abs_end = parent_abs_start + node_bbox.max_y();
 
-  if node_abs_end <= fragment_start || node_abs_start >= fragment_end {
+  if node_bbox_abs_end <= fragment_start || node_bbox_abs_start >= fragment_end {
     return None;
   }
 
@@ -245,15 +251,23 @@ pub(crate) fn clip_node(
   cloned.fragmentainer_index = fragment_index;
 
   if matches!(node.content, FragmentContent::Line { .. }) {
-    // Keep line boxes whole. If a fragment boundary slices through a line,
-    // include it in the fragment that contains its start to avoid producing
-    // partial-height line fragments.
+    // Line boxes are indivisible. If a break lands inside a line, move the whole
+    // line to the fragment that starts within the line box (instead of letting
+    // it overflow the fragment that ends mid-line).
+    let overlaps = node_abs_end > fragment_start && node_abs_start < fragment_end;
+    let fragment_starts_inside = fragment_start > node_abs_start && fragment_start < node_abs_end;
+    let fragment_is_last = fragment_index + 1 == fragment_count;
+    let fragment_contains_line_start = node_abs_start >= fragment_start && node_abs_start < fragment_end;
     let fully_contained = node_abs_start >= fragment_start && node_abs_end <= fragment_end;
-    if !fully_contained && node_abs_start < fragment_start {
+    if !overlaps
+      || (!fully_contained
+        && !fragment_starts_inside
+        && !(fragment_is_last && fragment_contains_line_start))
+    {
       return None;
     }
 
-    let line_y = node_abs_start - parent_clipped_abs_start;
+    let line_y = clipped_abs_start - parent_clipped_abs_start;
     cloned.bounds = Rect::from_xywh(
       node.bounds.x(),
       line_y,
