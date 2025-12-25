@@ -2058,6 +2058,7 @@ impl DisplayListBuilder {
     DisplayListBuilder {
       list: DisplayList::new(),
       image_cache: self.image_cache.clone(),
+      svg_filter_registry: self.svg_filter_registry.clone(),
       viewport: self.viewport,
       font_ctx: self.font_ctx.clone(),
       shaper: self.shaper.clone(),
