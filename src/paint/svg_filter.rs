@@ -157,6 +157,55 @@ pub enum TransferFn {
   },
 }
 
+#[derive(Clone, Copy, Debug)]
+struct UnpremultipliedColor {
+  r: f32,
+  g: f32,
+  b: f32,
+  a: f32,
+}
+
+fn clamp01(v: f32) -> f32 {
+  v.clamp(0.0, 1.0)
+}
+
+/// Convert a premultiplied pixel into unpremultiplied RGBA in [0, 1].
+fn to_unpremultiplied(px: PremultipliedColorU8) -> UnpremultipliedColor {
+  let a = px.alpha() as f32 / 255.0;
+  if a <= 0.0 {
+    return UnpremultipliedColor {
+      r: 0.0,
+      g: 0.0,
+      b: 0.0,
+      a: 0.0,
+    };
+  }
+  let inv_a = 1.0 / a;
+  UnpremultipliedColor {
+    r: clamp01(px.red() as f32 / 255.0 * inv_a),
+    g: clamp01(px.green() as f32 / 255.0 * inv_a),
+    b: clamp01(px.blue() as f32 / 255.0 * inv_a),
+    a,
+  }
+}
+
+/// Convert unpremultiplied RGBA in [0, 1] back to premultiplied u8.
+fn to_premultiplied(color: UnpremultipliedColor) -> PremultipliedColorU8 {
+  let a = clamp01(color.a);
+  let a_byte = (a * 255.0).round().clamp(0.0, 255.0) as u8;
+  let premul_channel = |v: f32| -> u8 {
+    let scaled = (clamp01(v) * a * 255.0).round().clamp(0.0, 255.0) as u8;
+    scaled.min(a_byte)
+  };
+  PremultipliedColorU8::from_rgba(
+    premul_channel(color.r),
+    premul_channel(color.g),
+    premul_channel(color.b),
+    a_byte,
+  )
+  .unwrap_or(PremultipliedColorU8::TRANSPARENT)
+}
+
 /// Load and parse an SVG filter from a URL (including data URLs), caching the result.
 pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFilter>> {
   let resolved = image_cache.resolve_url(url);
@@ -1091,31 +1140,16 @@ fn apply_component_transfer(
     let idx = (clamp_unit(v) * 255.0).round() as usize;
     lut[idx.min(255)]
   };
-  let to_byte = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
 
   for px in pixmap.pixels_mut() {
-    let alpha = px.alpha() as f32 / 255.0;
-    let (r_in, g_in, b_in) = if alpha > 0.0 {
-      let inv_a = 1.0 / alpha;
-      (
-        clamp_unit(px.red() as f32 / 255.0 * inv_a),
-        clamp_unit(px.green() as f32 / 255.0 * inv_a),
-        clamp_unit(px.blue() as f32 / 255.0 * inv_a),
-      )
-    } else {
-      (0.0, 0.0, 0.0)
+    let input = to_unpremultiplied(*px);
+    let out = UnpremultipliedColor {
+      r: sample(&r_lut, input.r),
+      g: sample(&g_lut, input.g),
+      b: sample(&b_lut, input.b),
+      a: sample(&a_lut, input.a),
     };
-    let a_out = sample(&a_lut, alpha);
-    let r_out = sample(&r_lut, r_in);
-    let g_out = sample(&g_lut, g_in);
-    let b_out = sample(&b_lut, b_in);
-    *px = PremultipliedColorU8::from_rgba(
-      to_byte(r_out * a_out),
-      to_byte(g_out * a_out),
-      to_byte(b_out * a_out),
-      to_byte(a_out),
-    )
-    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    *px = to_premultiplied(out);
   }
 }
 
@@ -1183,14 +1217,14 @@ fn apply_color_matrix(pixmap: &mut Pixmap, kind: &ColorMatrixKind) {
     ColorMatrixKind::LuminanceToAlpha => {
       let pixels = pixmap.pixels_mut();
       for px in pixels.iter_mut() {
-        let a = px.alpha() as f32 / 255.0;
-        let r = px.red() as f32 / 255.0;
-        let g = px.green() as f32 / 255.0;
-        let b = px.blue() as f32 / 255.0;
-        let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        let alpha = (lum * a * 255.0).round().clamp(0.0, 255.0) as u8;
-        *px = PremultipliedColorU8::from_rgba(0, 0, 0, alpha)
-          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        let color = to_unpremultiplied(*px);
+        let lum = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+        *px = to_premultiplied(UnpremultipliedColor {
+          r: 0.0,
+          g: 0.0,
+          b: 0.0,
+          a: clamp01(lum),
+        });
       }
     }
     ColorMatrixKind::Saturate(amount) => {
@@ -1253,20 +1287,33 @@ fn apply_color_matrix(pixmap: &mut Pixmap, kind: &ColorMatrixKind) {
 fn apply_color_matrix_values(pixmap: &mut Pixmap, matrix: &[f32; 20]) {
   let pixels = pixmap.pixels_mut();
   for px in pixels.iter_mut() {
-    let r = px.red() as f32 / 255.0;
-    let g = px.green() as f32 / 255.0;
-    let b = px.blue() as f32 / 255.0;
-    let a = px.alpha() as f32 / 255.0;
-    let r2 = matrix[0] * r + matrix[1] * g + matrix[2] * b + matrix[3] * a + matrix[4];
-    let g2 = matrix[5] * r + matrix[6] * g + matrix[7] * b + matrix[8] * a + matrix[9];
-    let b2 = matrix[10] * r + matrix[11] * g + matrix[12] * b + matrix[13] * a + matrix[14];
-    let a2 = matrix[15] * r + matrix[16] * g + matrix[17] * b + matrix[18] * a + matrix[19];
-    let clamp = |v: f32| v.clamp(0.0, 1.0);
-    let a_out = clamp(a2);
-    let to_channel = |v: f32| (clamp(v) * a_out * 255.0).round().clamp(0.0, 255.0) as u8;
-    let a_byte = (a_out * 255.0).round().clamp(0.0, 255.0) as u8;
-    *px = PremultipliedColorU8::from_rgba(to_channel(r2), to_channel(g2), to_channel(b2), a_byte)
-      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    let input = to_unpremultiplied(*px);
+    let r2 = matrix[0] * input.r
+      + matrix[1] * input.g
+      + matrix[2] * input.b
+      + matrix[3] * input.a
+      + matrix[4];
+    let g2 = matrix[5] * input.r
+      + matrix[6] * input.g
+      + matrix[7] * input.b
+      + matrix[8] * input.a
+      + matrix[9];
+    let b2 = matrix[10] * input.r
+      + matrix[11] * input.g
+      + matrix[12] * input.b
+      + matrix[13] * input.a
+      + matrix[14];
+    let a2 = matrix[15] * input.r
+      + matrix[16] * input.g
+      + matrix[17] * input.b
+      + matrix[18] * input.a
+      + matrix[19];
+    *px = to_premultiplied(UnpremultipliedColor {
+      r: clamp01(r2),
+      g: clamp01(g2),
+      b: clamp01(b2),
+      a: clamp01(a2),
+    });
   }
 }
 
@@ -1290,6 +1337,77 @@ mod tests {
       .iter()
       .map(|px| (px.red(), px.green(), px.blue(), px.alpha()))
       .collect()
+  }
+
+  fn premul(r: u8, g: u8, b: u8, a: u8) -> PremultipliedColorU8 {
+    let alpha = a as f32 / 255.0;
+    let pm = |v: u8| ((v as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+    PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
+  }
+
+  #[test]
+  fn color_matrix_uses_unpremultiplied_channels() {
+    let mut pixmap = Pixmap::new(1, 1).unwrap();
+    pixmap.pixels_mut()[0] =
+      PremultipliedColorU8::from_rgba(128, 0, 0, 128).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+
+    let matrix = [
+      0.0, 0.0, 0.0, 0.0, 0.0, //
+      1.0, 0.0, 0.0, 0.0, 0.0, //
+      0.0, 0.0, 0.0, 0.0, 0.0, //
+      0.0, 0.0, 0.0, 1.0, 0.0, //
+    ];
+
+    apply_color_matrix_values(&mut pixmap, &matrix);
+
+    let px = pixmap.pixels()[0];
+    assert_eq!(px.red(), 0);
+    assert_eq!(px.green(), 128);
+    assert_eq!(px.blue(), 0);
+    assert_eq!(px.alpha(), 128);
+  }
+
+  #[test]
+  fn component_transfer_operates_on_unpremultiplied_rgb() {
+    let mut pixmap = Pixmap::new(1, 1).unwrap();
+    pixmap.pixels_mut()[0] =
+      PremultipliedColorU8::from_rgba(128, 0, 0, 128).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+
+    apply_component_transfer(
+      &mut pixmap,
+      &TransferFn::Linear {
+        slope: 1.0,
+        intercept: 0.25,
+      },
+      &TransferFn::Identity,
+      &TransferFn::Identity,
+      &TransferFn::Identity,
+    );
+
+    let px = pixmap.pixels()[0];
+    assert_eq!(px.red(), 128);
+    assert_eq!(px.green(), 0);
+    assert_eq!(px.blue(), 0);
+    assert_eq!(px.alpha(), 128);
+  }
+
+  #[test]
+  fn luminance_to_alpha_uses_unpremultiplied_rgb() {
+    let mut pixmap = Pixmap::new(1, 1).unwrap();
+    pixmap.pixels_mut()[0] =
+      PremultipliedColorU8::from_rgba(128, 64, 0, 128).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+
+    apply_color_matrix(&mut pixmap, &ColorMatrixKind::LuminanceToAlpha);
+
+    let px = pixmap.pixels()[0];
+    assert_eq!(px.red(), 0);
+    assert_eq!(px.green(), 0);
+    assert_eq!(px.blue(), 0);
+
+    let expected_alpha = (255.0 * (0.2126 * 1.0 + 0.7152 * 0.5 + 0.0722 * 0.0))
+      .round()
+      .clamp(0.0, 255.0) as u8;
+    assert_eq!(px.alpha(), expected_alpha);
   }
 
   #[test]
@@ -1360,12 +1478,6 @@ mod tests {
       pixels_to_vec(&pixmap),
       vec![(16, 115, 0, 191), (130, 115, 0, 191)]
     );
-  }
-
-  fn premul(r: u8, g: u8, b: u8, a: u8) -> PremultipliedColorU8 {
-    let alpha = a as f32 / 255.0;
-    let pm = |v: u8| ((v as f32) * alpha).round().clamp(0.0, 255.0) as u8;
-    PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
   }
 
   #[test]
