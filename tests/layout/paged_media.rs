@@ -412,17 +412,58 @@ fn margin_box_content_is_positioned_in_margins() {
   let page_roots = pages(&tree);
   let page = page_roots[0];
 
+  let (header_parent, header) = find_text_with_parent(page, "Header").expect("header margin box");
+  let (footer_parent, footer) = find_text_with_parent(page, "Footer").expect("footer margin box");
   let content = page.children.first().expect("content");
-  let content_y = page.bounds.y() + content.bounds.y();
-  let header_y = find_text_position(page, "Header", (0.0, 0.0))
-    .expect("header margin box")
-    .1;
-  let footer_y = find_text_position(page, "Footer", (0.0, 0.0))
-    .expect("footer margin box")
-    .1;
+  let epsilon = 0.1;
 
-  assert!(header_y < content_y);
-  assert!(footer_y > content_y);
+  assert!(header_parent.bounds.y() < content.bounds.y());
+  assert!(footer_parent.bounds.y() > content.bounds.y());
+  assert!(header.bounds.x() >= -epsilon);
+  assert!(header.bounds.y() >= -epsilon);
+  assert!(header.bounds.max_x() <= header_parent.bounds.width() + epsilon);
+  assert!(header.bounds.max_y() <= header_parent.bounds.height() + epsilon);
+  assert!(footer.bounds.x() >= -epsilon);
+  assert!(footer.bounds.y() >= -epsilon);
+  assert!(footer.bounds.max_x() <= footer_parent.bounds.width() + epsilon);
+  assert!(footer.bounds.max_y() <= footer_parent.bounds.height() + epsilon);
+}
+
+#[test]
+fn content_descendants_use_local_coordinates() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 400px; margin: 20px; }
+          html, body { margin: 0; padding: 0; }
+          #fill { height: 360px; }
+        </style>
+      </head>
+      <body>
+        <div id="fill"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 800, 1000).unwrap();
+  let page_roots = pages(&tree);
+  let page = page_roots[0];
+  let content = page.children.first().expect("page content");
+
+  let target_child = content
+    .children
+    .iter()
+    .find(|child| (child.bounds.height() - content.bounds.height()).abs() < 0.5)
+    .unwrap_or_else(|| content.children.first().expect("content child"));
+
+  let epsilon = 0.1;
+  assert!(target_child.bounds.x() >= -epsilon);
+  assert!(target_child.bounds.y() >= -epsilon);
+  assert!(target_child.bounds.max_x() <= content.bounds.width() + epsilon);
+  assert!(target_child.bounds.max_y() <= content.bounds.height() + epsilon);
 }
 
 #[test]
