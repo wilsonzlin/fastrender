@@ -1491,3 +1491,45 @@ fn blank_page_inserted_for_forced_side() {
   assert!(find_text(page_roots[0], "Blank").is_none());
   assert!(find_text(page_roots[2], "Blank").is_none());
 }
+
+#[test]
+fn paginated_trees_compute_scroll_metadata() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 150px; margin: 0; }
+          html, body {
+            margin: 0;
+            height: 100%;
+            scroll-snap-type: y mandatory;
+          }
+          section { height: 120px; scroll-snap-align: start; }
+        </style>
+      </head>
+      <body>
+        <section>First</section>
+        <section>Second</section>
+        <section>Third</section>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 200, 150).unwrap();
+
+  assert!(
+    !tree.additional_fragments.is_empty(),
+    "expected pagination to produce multiple pages"
+  );
+
+  let metadata = tree
+    .scroll_metadata
+    .as_ref()
+    .expect("paginated trees should populate scroll metadata");
+  assert!(
+    metadata.containers.iter().any(|c| c.uses_viewport_scroll),
+    "expected viewport scroll metadata"
+  );
+}
