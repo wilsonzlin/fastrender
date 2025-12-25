@@ -47,6 +47,8 @@ use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::stacking::creates_stacking_context;
+use crate::paint::svg_filter;
+use crate::paint::svg_filter_registry::SvgFilterRegistry;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
@@ -1119,6 +1121,8 @@ impl Painter {
     }
 
     // Build display list in stacking-context order then paint
+    let svg_filter_registry = SvgFilterRegistry::from_fragment_tree(&tree.root);
+    let registry_ref = (!svg_filter_registry.is_empty()).then_some(&svg_filter_registry);
     let mut items = Vec::new();
     let collect_start = Instant::now();
     let treat_root_as_canvas = tree.has_explicit_viewport();
@@ -1128,6 +1132,7 @@ impl Painter {
       None,
       true,
       treat_root_as_canvas,
+      registry_ref,
       &mut items,
     );
     if profiling {
@@ -1345,6 +1350,7 @@ impl Painter {
     parent_style: Option<&ComputedStyle>,
     is_root_context: bool,
     treat_root_as_canvas: bool,
+    svg_filter_registry: Option<&SvgFilterRegistry>,
     items: &mut Vec<DisplayCommand>,
   ) {
     let debug_fragments = dump_fragments_enabled();
@@ -1451,6 +1457,7 @@ impl Painter {
           style_ref,
           false,
           treat_root_as_canvas,
+          svg_filter_registry,
           &mut local_commands,
         );
       }
@@ -1462,6 +1469,7 @@ impl Painter {
           style_ref,
           false,
           treat_root_as_canvas,
+          svg_filter_registry,
           &mut local_commands,
         );
       }
@@ -1472,6 +1480,7 @@ impl Painter {
           style_ref,
           false,
           treat_root_as_canvas,
+          svg_filter_registry,
           &mut local_commands,
         );
       }
@@ -1482,6 +1491,7 @@ impl Painter {
           style_ref,
           false,
           treat_root_as_canvas,
+          svg_filter_registry,
           &mut local_commands,
         );
       }
@@ -1494,6 +1504,7 @@ impl Painter {
           style_ref,
           false,
           treat_root_as_canvas,
+          svg_filter_registry,
           &mut local_commands,
         );
       }
@@ -1506,6 +1517,7 @@ impl Painter {
           style_ref,
           false,
           treat_root_as_canvas,
+          svg_filter_registry,
           &mut local_commands,
         );
       }
@@ -1573,6 +1585,7 @@ impl Painter {
         style_ref,
         false,
         treat_root_as_canvas,
+        svg_filter_registry,
         &mut local_commands,
       );
     }
@@ -1586,6 +1599,7 @@ impl Painter {
         style_ref,
         false,
         treat_root_as_canvas,
+        svg_filter_registry,
         &mut local_commands,
       );
     }
@@ -1596,6 +1610,7 @@ impl Painter {
         style_ref,
         false,
         treat_root_as_canvas,
+        svg_filter_registry,
         &mut local_commands,
       );
     }
@@ -1606,6 +1621,7 @@ impl Painter {
         style_ref,
         false,
         treat_root_as_canvas,
+        svg_filter_registry,
         &mut local_commands,
       );
     }
@@ -1618,6 +1634,7 @@ impl Painter {
         style_ref,
         false,
         treat_root_as_canvas,
+        svg_filter_registry,
         &mut local_commands,
       );
     }
@@ -1630,6 +1647,7 @@ impl Painter {
         style_ref,
         false,
         treat_root_as_canvas,
+        svg_filter_registry,
         &mut local_commands,
       );
     }
@@ -1645,7 +1663,20 @@ impl Painter {
       .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
       .unwrap_or(false);
     let filters = style_ref
+<<<<<<< HEAD
       .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx, &self.image_cache))
+=======
+      .map(|s| {
+        resolve_filters(
+          &s.filter,
+          s,
+          viewport,
+          &self.font_ctx,
+          &self.image_cache,
+          svg_filter_registry,
+        )
+      })
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
       .unwrap_or_default();
     let has_filters = !filters.is_empty();
     let backdrop_filters = style_ref
@@ -1656,6 +1687,10 @@ impl Painter {
           viewport,
           &self.font_ctx,
           &self.image_cache,
+<<<<<<< HEAD
+=======
+          svg_filter_registry,
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
         )
       })
       .unwrap_or_default();
@@ -7791,6 +7826,10 @@ fn resolve_filters(
   viewport: (f32, f32),
   font_ctx: &FontContext,
   image_cache: &ImageCache,
+<<<<<<< HEAD
+=======
+  svg_filter_registry: Option<&SvgFilterRegistry>,
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
 ) -> Vec<ResolvedFilter> {
   filters
     .iter()
@@ -7828,7 +7867,17 @@ fn resolve_filters(
         })
       }
       FilterFunction::Url(url) => {
-        crate::paint::svg_filter::load_svg_filter(url, image_cache).map(ResolvedFilter::SvgFilter)
+        let trimmed = url.trim();
+        if trimmed.is_empty() {
+          return None;
+        }
+        if trimmed.starts_with('#') {
+          svg_filter_registry
+            .and_then(|registry| registry.lookup(trimmed.trim_start_matches('#'), image_cache))
+            .map(ResolvedFilter::SvgFilter)
+        } else {
+          svg_filter::load_svg_filter(trimmed, image_cache).map(ResolvedFilter::SvgFilter)
+        }
       }
     })
     .collect()
@@ -7851,8 +7900,8 @@ fn resolve_filter_length(
 
 fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bbox: Rect) {
   for filter in filters {
-    match filter {
-      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
+    match *filter {
+      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
       ResolvedFilter::Brightness(amount) => {
         apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
       }
@@ -9960,7 +10009,7 @@ mod tests {
 
     let painter = Painter::new(100, 10, Rgba::WHITE).expect("painter");
     let mut commands = Vec::new();
-    painter.collect_stacking_context(&root, Point::ZERO, None, true, false, &mut commands);
+    painter.collect_stacking_context(&root, Point::ZERO, None, true, false, None, &mut commands);
 
     // Background commands occur in paint order; filter child backgrounds to check ordering.
     let xs: Vec<f32> = commands
@@ -10290,13 +10339,21 @@ mod tests {
   fn filter_lengths_resolve_viewport_units() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::new(10.0, LengthUnit::Vw))];
+<<<<<<< HEAD
     let cache = ImageCache::new();
+=======
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     let filters = resolve_filters(
       &style.filter,
       &style,
       (200.0, 100.0),
       &FontContext::new(),
+<<<<<<< HEAD
       &cache,
+=======
+      &ImageCache::new(),
+      None,
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     );
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!((radius - 20.0).abs() < 0.001),
@@ -10308,13 +10365,21 @@ mod tests {
   fn filter_lengths_ignore_percentages() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::percent(50.0))];
+<<<<<<< HEAD
     let cache = ImageCache::new();
+=======
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     let filters = resolve_filters(
       &style.filter,
       &style,
       (200.0, 100.0),
       &FontContext::new(),
+<<<<<<< HEAD
       &cache,
+=======
+      &ImageCache::new(),
+      None,
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     );
     assert!(filters.is_empty(), "percentage blur should be discarded");
   }
@@ -10324,13 +10389,21 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_size = 20.0;
     style.filter = vec![FilterFunction::Blur(Length::new(1.0, LengthUnit::Ex))];
+<<<<<<< HEAD
     let cache = ImageCache::new();
+=======
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     let filters = resolve_filters(
       &style.filter,
       &style,
       (200.0, 100.0),
       &FontContext::new(),
+<<<<<<< HEAD
       &cache,
+=======
+      &ImageCache::new(),
+      None,
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     );
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!(
@@ -10345,13 +10418,21 @@ mod tests {
   fn negative_blur_lengths_resolve_to_no_filter() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::px(-2.0))];
+<<<<<<< HEAD
     let cache = ImageCache::new();
+=======
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     let filters = resolve_filters(
       &style.filter,
       &style,
       (200.0, 100.0),
       &FontContext::new(),
+<<<<<<< HEAD
       &cache,
+=======
+      &ImageCache::new(),
+      None,
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     );
     assert!(filters.is_empty(), "negative blur should drop the filter");
   }
@@ -10483,13 +10564,21 @@ mod tests {
       FilterFunction::Invert(1.3),
       FilterFunction::Opacity(1.7),
     ];
+<<<<<<< HEAD
     let cache = ImageCache::new();
+=======
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     let filters = resolve_filters(
       &style.filter,
       &style,
       (200.0, 100.0),
       &FontContext::new(),
+<<<<<<< HEAD
       &cache,
+=======
+      &ImageCache::new(),
+      None,
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     );
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
@@ -10508,13 +10597,21 @@ mod tests {
       FilterFunction::Contrast(1.7),
       FilterFunction::Saturate(3.2),
     ];
+<<<<<<< HEAD
     let cache = ImageCache::new();
+=======
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     let filters = resolve_filters(
       &style.filter,
       &style,
       (200.0, 100.0),
       &FontContext::new(),
+<<<<<<< HEAD
       &cache,
+=======
+      &ImageCache::new(),
+      None,
+>>>>>>> a6ccfa7 (Support svg url filters in painter)
     );
     assert_eq!(filters.len(), 3);
     assert!(filters

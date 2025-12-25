@@ -1,68 +1,89 @@
 use crate::image_loader::ImageCache;
-use crate::paint::svg_filter::collect_svg_filters;
-use crate::paint::svg_filter::SvgFilter;
+use crate::paint::svg_filter::{parse_svg_filter_from_svg_document, SvgFilter};
 use crate::tree::box_tree::ReplacedType;
-use crate::tree::box_tree::SvgContent;
-use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+use roxmltree::Document;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-/// Registry of SVG filters defined within a document.
-///
-/// This is populated from inline `<svg>` content found in the fragment tree so
-/// CSS `filter: url(#id)` references can be resolved without fetching
-/// external resources.
-#[derive(Clone, Default)]
+/// Registry of document-local SVG filter definitions discovered in inline `<svg>` elements.
+#[derive(Default)]
 pub struct SvgFilterRegistry {
-  filters: HashMap<String, Arc<SvgFilter>>,
+  definitions: HashMap<String, String>,
+  cache: Mutex<HashMap<String, Arc<SvgFilter>>>,
 }
 
 impl SvgFilterRegistry {
-  /// Builds a registry from the provided fragment tree. Requires an image cache
-  /// to resolve any `feImage` references during parsing.
-  pub fn from_fragment_tree(tree: &FragmentTree, image_cache: Option<&ImageCache>) -> Option<Self> {
-    let cache = image_cache?;
-    let mut registry = SvgFilterRegistry::default();
-    registry.collect_from_fragment(&tree.root, cache);
-    for root in &tree.additional_fragments {
-      registry.collect_from_fragment(root, cache);
+  /// Build a registry by walking the fragment tree and collecting `<filter id="...">` definitions.
+  ///
+  /// Definitions are keyed by their `id` and store the full serialized SVG document string they
+  /// were found in. Duplicate IDs keep the first occurrence in document order.
+  pub fn from_fragment_tree(root: &FragmentNode) -> Self {
+    let mut definitions = HashMap::new();
+    collect_filters(root, &mut definitions);
+    Self {
+      definitions,
+      cache: Mutex::new(HashMap::new()),
     }
-    Some(registry)
   }
 
-  /// Builds a registry from a single fragment root (e.g., when only the root
-  /// fragment is available).
-  pub fn from_fragment_root(root: &FragmentNode, image_cache: Option<&ImageCache>) -> Option<Self> {
-    let cache = image_cache?;
-    let mut registry = SvgFilterRegistry::default();
-    registry.collect_from_fragment(root, cache);
-    Some(registry)
+  pub fn is_empty(&self) -> bool {
+    self.definitions.is_empty()
   }
 
-  /// Returns a parsed filter definition for the given id, if present.
-  pub fn get(&self, id: &str) -> Option<Arc<SvgFilter>> {
-    self.filters.get(id).cloned()
-  }
+  /// Resolve a filter `id` against the registry, parsing it into an [`SvgFilter`] on first use.
+  pub fn lookup(&self, id: &str, image_cache: &ImageCache) -> Option<Arc<SvgFilter>> {
+    let id = id.strip_prefix('#').unwrap_or(id);
+    if id.is_empty() {
+      return None;
+    }
 
-  fn collect_from_fragment(&mut self, fragment: &FragmentNode, cache: &ImageCache) {
-    if let FragmentContent::Replaced { replaced_type, .. } = &fragment.content {
-      if let ReplacedType::Svg { content } = replaced_type {
-        self.register_svg_content(content, cache);
+    if let Ok(guard) = self.cache.lock() {
+      if let Some(existing) = guard.get(id) {
+        return Some(existing.clone());
       }
     }
 
-    for child in &fragment.children {
-      self.collect_from_fragment(child, cache);
+    let svg = self.definitions.get(id)?;
+    let parsed = parse_svg_filter_from_svg_document(svg, Some(id), image_cache)?;
+
+    if let Ok(mut guard) = self.cache.lock() {
+      guard.insert(id.to_string(), parsed.clone());
+    }
+
+    Some(parsed)
+  }
+}
+
+fn collect_filters(node: &FragmentNode, definitions: &mut HashMap<String, String>) {
+  if let FragmentContent::Replaced { replaced_type, .. } = &node.content {
+    if let ReplacedType::Svg { content } = replaced_type {
+      register_filters(&content.svg, definitions);
+      if content.fallback_svg != content.svg {
+        register_filters(&content.fallback_svg, definitions);
+      }
     }
   }
 
-  fn register_svg_content(&mut self, content: &SvgContent, cache: &ImageCache) {
-    for (id, filter) in collect_svg_filters(&content.svg, cache) {
-      self.filters.entry(id).or_insert(filter);
-    }
-    if content.fallback_svg != content.svg {
-      for (id, filter) in collect_svg_filters(&content.fallback_svg, cache) {
-        self.filters.entry(id).or_insert(filter);
+  for child in &node.children {
+    collect_filters(child, definitions);
+  }
+}
+
+fn register_filters(svg: &str, definitions: &mut HashMap<String, String>) {
+  if svg.trim().is_empty() {
+    return;
+  }
+
+  let doc = match Document::parse(svg) {
+    Ok(doc) => doc,
+    Err(_) => return,
+  };
+
+  for node in doc.descendants().filter(|n| n.has_tag_name("filter")) {
+    if let Some(id) = node.attribute("id") {
+      if !id.is_empty() && !definitions.contains_key(id) {
+        definitions.insert(id.to_string(), svg.to_string());
       }
     }
   }

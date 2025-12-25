@@ -328,13 +328,28 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
 
   let resource = image_cache.fetcher().fetch(&resource_url).ok()?;
   let text = String::from_utf8(resource.bytes.clone()).ok()?;
-  let filter = parse_filter_definition(&text, fragment.as_deref(), image_cache)?;
+  let mut scoped_cache = image_cache.clone();
+  scoped_cache.set_base_url(resource_url.clone());
+  let filter = parse_filter_definition(&text, fragment.as_deref(), &scoped_cache)?;
 
   if let Ok(mut guard) = filter_cache().lock() {
     guard.insert(cache_key, filter.clone());
   }
 
   Some(filter)
+}
+
+/// Parse an SVG filter definition from a raw SVG document string.
+///
+/// This shares the same parsing logic as [`load_svg_filter`] but assumes the caller already has
+/// the SVG markup available (e.g. inline `<svg>` content) and does not perform any fetching or
+/// cross-document caching.
+pub fn parse_svg_filter_from_svg_document(
+  svg: &str,
+  fragment: Option<&str>,
+  image_cache: &ImageCache,
+) -> Option<Arc<SvgFilter>> {
+  parse_filter_definition(svg, fragment, image_cache)
 }
 
 fn parse_filter_definition(
