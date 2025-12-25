@@ -46,35 +46,6 @@ pub enum SvgFilterUnits {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum SvgLength {
-  Px(f32),
-  Percent(f32),
-}
-
-impl SvgLength {
-  fn parse(raw: Option<&str>) -> Option<Self> {
-    let raw = raw?.trim();
-    if raw.is_empty() {
-      return None;
-    }
-
-    if let Some(value) = raw.strip_suffix('%') {
-      let number = value.trim().parse::<f32>().ok()? / 100.0;
-      Some(SvgLength::Percent(number))
-    } else {
-      raw.parse::<f32>().ok().map(SvgLength::Px)
-    }
-  }
-
-  fn resolve(&self, basis: f32) -> f32 {
-    match self {
-      SvgLength::Px(v) => *v,
-      SvgLength::Percent(p) => *p * basis,
-    }
-  }
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct SvgFilterRegion {
   pub x: SvgLength,
   pub y: SvgLength,
@@ -97,22 +68,14 @@ impl SvgFilterRegion {
   pub fn resolve(&self, bbox: Rect) -> Rect {
     let width_basis = bbox.width();
     let height_basis = bbox.height();
-    let resolve_x = |len: SvgLength| match self.units {
-      SvgFilterUnits::ObjectBoundingBox => bbox.min_x() + len.resolve(width_basis),
-      SvgFilterUnits::UserSpaceOnUse => bbox.min_x() + len.resolve(width_basis),
+    let units = match self.units {
+      SvgFilterUnits::ObjectBoundingBox => SvgCoordinateUnits::ObjectBoundingBox,
+      SvgFilterUnits::UserSpaceOnUse => SvgCoordinateUnits::UserSpaceOnUse,
     };
-    let resolve_y = |len: SvgLength| match self.units {
-      SvgFilterUnits::ObjectBoundingBox => bbox.min_y() + len.resolve(height_basis),
-      SvgFilterUnits::UserSpaceOnUse => bbox.min_y() + len.resolve(height_basis),
-    };
-    let resolve_width = |len: SvgLength| match self.units {
-      SvgFilterUnits::ObjectBoundingBox => len.resolve(width_basis),
-      SvgFilterUnits::UserSpaceOnUse => len.resolve(width_basis),
-    };
-    let resolve_height = |len: SvgLength| match self.units {
-      SvgFilterUnits::ObjectBoundingBox => len.resolve(height_basis),
-      SvgFilterUnits::UserSpaceOnUse => len.resolve(height_basis),
-    };
+    let resolve_x = |len: SvgLength| bbox.min_x() + len.resolve(units, width_basis);
+    let resolve_y = |len: SvgLength| bbox.min_y() + len.resolve(units, height_basis);
+    let resolve_width = |len: SvgLength| len.resolve(units, width_basis);
+    let resolve_height = |len: SvgLength| len.resolve(units, height_basis);
 
     let width = resolve_width(self.width).max(0.0);
     let height = resolve_height(self.height).max(0.0);
@@ -235,7 +198,7 @@ impl SvgCoordinateUnits {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum SvgLength {
+pub enum SvgLength {
   Number(f32),
   Percent(f32),
 }
@@ -617,11 +580,15 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
       .unwrap_or(ColorInterpolationFilters::LinearRGB);
   let default_region = SvgFilterRegion::default_for_units(units);
   let region = SvgFilterRegion {
-    x: SvgLength::parse(node.attribute("x")).unwrap_or(default_region.x),
-    y: SvgLength::parse(node.attribute("y")).unwrap_or(default_region.y),
-    width: SvgLength::parse(node.attribute("width")).unwrap_or(default_region.width),
-    height: SvgLength::parse(node.attribute("height")).unwrap_or(default_region.height),
+    x: SvgLength::parse(node.attribute("x"), default_region.x),
+    y: SvgLength::parse(node.attribute("y"), default_region.y),
+    width: SvgLength::parse(node.attribute("width"), default_region.width),
+    height: SvgLength::parse(node.attribute("height"), default_region.height),
     units,
+  };
+  let primitive_units_coord = match primitive_units {
+    SvgFilterUnits::ObjectBoundingBox => SvgCoordinateUnits::ObjectBoundingBox,
+    SvgFilterUnits::UserSpaceOnUse => SvgCoordinateUnits::UserSpaceOnUse,
   };
 
   let mut steps = Vec::new();
@@ -631,16 +598,16 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
       parse_color_interpolation_filters(child.attribute("color-interpolation-filters"));
     let tag = child.tag_name().name().to_ascii_lowercase();
     let region_override = {
-      let x = SvgLength::parse(child.attribute("x"));
-      let y = SvgLength::parse(child.attribute("y"));
-      let width = SvgLength::parse(child.attribute("width"));
-      let height = SvgLength::parse(child.attribute("height"));
-      if x.is_some() || y.is_some() || width.is_some() || height.is_some() {
+      let x_attr = child.attribute("x");
+      let y_attr = child.attribute("y");
+      let width_attr = child.attribute("width");
+      let height_attr = child.attribute("height");
+      if x_attr.is_some() || y_attr.is_some() || width_attr.is_some() || height_attr.is_some() {
         Some(SvgFilterRegion {
-          x: x.unwrap_or(region.x),
-          y: y.unwrap_or(region.y),
-          width: width.unwrap_or(region.width),
-          height: height.unwrap_or(region.height),
+          x: SvgLength::parse(x_attr, region.x),
+          y: SvgLength::parse(y_attr, region.y),
+          width: SvgLength::parse(width_attr, region.width),
+          height: SvgLength::parse(height_attr, region.height),
           units: primitive_units,
         })
       } else {
@@ -658,7 +625,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
       "feblend" => parse_fe_blend(&child),
       "femorphology" => parse_fe_morphology(&child),
       "fecomponenttransfer" => parse_fe_component_transfer(&child),
-      "feimage" => parse_fe_image(&child, image_cache, primitive_units),
+      "feimage" => parse_fe_image(&child, image_cache, primitive_units_coord),
       "fetile" => parse_fe_tile(&child),
       "feturbulence" => parse_fe_turbulence(&child),
       "fedisplacementmap" => parse_fe_displacement_map(&child),
@@ -1442,13 +1409,6 @@ fn apply_primitive(
       );
       FilterResult::new(output, img.region, filter_region)
     }),
-=======
-    FilterPrimitive::Image(prim) => render_fe_image(prim, source.width(), source.height()),
-    FilterPrimitive::Tile { input } => resolve_input(input, source, results, current),
-    FilterPrimitive::Turbulence => Some(source.clone()),
-    FilterPrimitive::DisplacementMap { input } => resolve_input(input, source, results, current),
-    FilterPrimitive::ConvolveMatrix { input } => resolve_input(input, source, results, current),
->>>>>>> 5870d0a (Render feImage into filter coordinate space)
   }
 }
 
