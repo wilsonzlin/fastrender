@@ -24,6 +24,14 @@ fn find_text<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNod
   None
 }
 
+fn find_in_margin_boxes<'a>(page: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNode> {
+  page
+    .children
+    .iter()
+    .skip(1)
+    .find_map(|child| find_text(child, needle))
+}
+
 fn find_text_eq<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNode> {
   if let FragmentContent::Text { text, .. } = &node.content {
     if text == needle {
@@ -423,6 +431,84 @@ fn margin_box_content_is_positioned_in_margins() {
 
   assert!(header_y < content_y);
   assert!(footer_y > content_y);
+}
+
+#[test]
+fn running_header_carries_forward() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-center { content: element(header); }
+          }
+          h1 { position: running(header); }
+        </style>
+      </head>
+      <body>
+        <h1>Chapter Title</h1>
+        <div style="height: 400px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2);
+  let page1 = page_roots[0];
+  let page2 = page_roots[1];
+
+  assert!(
+    find_in_margin_boxes(page1, "Chapter Title").is_some(),
+    "page 1 should show running header in margin"
+  );
+  assert!(
+    find_in_margin_boxes(page2, "Chapter Title").is_some(),
+    "page 2 should carry forward running header"
+  );
+}
+
+#[test]
+fn element_last_uses_last_anchor_on_page() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-center { content: element(header, last); }
+          }
+          h2 { position: running(header); }
+        </style>
+      </head>
+      <body>
+        <h2>First Header</h2>
+        <h2>Second Header</h2>
+        <div style="height: 50px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page = pages(&tree)[0];
+
+  let margin_header = find_in_margin_boxes(page, "Header").expect("margin header");
+  if let FragmentContent::Text { text, .. } = &margin_header.content {
+    assert!(
+      text.contains("Second"),
+      "element(header, last) should pick the last running element on the page"
+    );
+  } else {
+    panic!("expected text fragment for margin header");
+  }
 }
 
 #[test]
