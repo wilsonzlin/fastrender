@@ -4634,6 +4634,7 @@ impl FastRender {
         0,
         page_name_hint.as_deref(),
         PageSide::Right,
+        false,
         fallback_page_size,
         styled_tree.styles.root_font_size,
         Some(base_style.as_ref()),

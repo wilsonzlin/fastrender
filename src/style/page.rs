@@ -76,6 +76,7 @@ pub fn resolve_page_style(
   page_index: usize,
   page_name: Option<&str>,
   side: PageSide,
+  is_blank: bool,
   fallback_size: Size,
   root_font_size: f32,
   base_style: Option<&ComputedStyle>,
@@ -93,7 +94,7 @@ pub fn resolve_page_style(
   for rule in rules {
     let mut matched_spec: Option<u8> = None;
     for selector in &rule.rule.selectors {
-      if selector_matches(selector, page_index, page_name, side) {
+      if selector_matches(selector, page_index, page_name, side, is_blank) {
         let spec = selector_specificity(selector);
         matched_spec = Some(matched_spec.map_or(spec, |s| s.max(spec)));
       }
@@ -232,6 +233,7 @@ fn selector_matches(
   page_index: usize,
   page_name: Option<&str>,
   side: PageSide,
+  is_blank: bool,
 ) -> bool {
   if let Some(name) = &selector.name {
     if let Some(actual) = page_name {
@@ -260,7 +262,11 @@ fn selector_matches(
           return false;
         }
       }
-      PagePseudoClass::Blank => return false,
+      PagePseudoClass::Blank => {
+        if !is_blank {
+          return false;
+        }
+      }
     }
   }
 

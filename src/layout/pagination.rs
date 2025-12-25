@@ -12,7 +12,7 @@ use crate::layout::formatting_context::{
 };
 use crate::layout::fragmentation::{
   clip_node, collect_atomic_ranges, collect_forced_boundaries, normalize_atomic_ranges,
-  normalize_fragment_margins, propagate_fragment_metadata, AtomicRange,
+  normalize_fragment_margins, propagate_fragment_metadata, AtomicRange, ForcedBoundary,
 };
 use crate::layout::running_strings::{collect_string_set_events, StringSetEvent};
 use crate::style::content::{
@@ -54,11 +54,55 @@ impl Default for PaginateOptions {
 
 const EPSILON: f32 = 0.01;
 
+fn page_side_for_index(page_index: usize) -> PageSide {
+  if (page_index + 1) % 2 == 0 {
+    PageSide::Left
+  } else {
+    PageSide::Right
+  }
+}
+
+fn required_page_side(boundaries: &[ForcedBoundary], pos: f32) -> Option<PageSide> {
+  boundaries
+    .iter()
+    .find(|b| (b.position - pos).abs() < EPSILON)
+    .and_then(|b| b.page_side)
+}
+
+fn next_forced_boundary(boundaries: &[ForcedBoundary], start: f32, limit: f32) -> Option<f32> {
+  boundaries
+    .iter()
+    .map(|b| b.position)
+    .find(|p| *p > start + EPSILON && *p < limit - EPSILON)
+}
+
+fn dedup_forced_boundaries(mut boundaries: Vec<ForcedBoundary>) -> Vec<ForcedBoundary> {
+  boundaries.sort_by(|a, b| {
+    a.position
+      .partial_cmp(&b.position)
+      .unwrap_or(std::cmp::Ordering::Equal)
+  });
+
+  let mut deduped: Vec<ForcedBoundary> = Vec::new();
+  for boundary in boundaries.drain(..) {
+    if let Some(last) = deduped.last_mut() {
+      if (last.position - boundary.position).abs() < EPSILON {
+        if last.page_side.is_none() {
+          last.page_side = boundary.page_side;
+        }
+        continue;
+      }
+    }
+    deduped.push(boundary);
+  }
+  deduped
+}
+
 #[derive(Debug, Clone)]
 struct CachedLayout {
   root: FragmentNode,
   total_height: f32,
-  forced_boundaries: Vec<f32>,
+  forced_boundaries: Vec<ForcedBoundary>,
   atomic_ranges: Vec<AtomicRange>,
   page_name_spans: Vec<PageNameSpan>,
 }
@@ -78,17 +122,29 @@ impl CachedLayout {
     });
 
     let mut forced = collect_forced_boundaries(&root, 0.0);
-    forced.extend(page_name_boundaries(&spans, fallback_page_name));
+    forced.extend(
+      page_name_boundaries(&spans, fallback_page_name)
+        .into_iter()
+        .map(|position| ForcedBoundary {
+          position,
+          page_side: None,
+        }),
+    );
     let mut atomic_ranges = Vec::new();
     collect_atomic_ranges(&root, 0.0, &mut atomic_ranges);
     normalize_atomic_ranges(&mut atomic_ranges);
-    let total_height = root
-      .logical_bounding_box()
-      .height()
-      .max(style.content_size.height);
-    forced.push(total_height);
-    forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    forced.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
+
+    let content_height = root.logical_bounding_box().height();
+    let total_height = if content_height > EPSILON {
+      content_height
+    } else {
+      style.content_size.height
+    };
+    forced.push(ForcedBoundary {
+      position: total_height,
+      page_side: None,
+    });
+    forced = dedup_forced_boundaries(forced);
 
     Self {
       root,
@@ -166,6 +222,7 @@ pub fn paginate_fragment_tree(
     0,
     initial_page_name.as_deref(),
     PageSide::Right,
+    false,
     fallback_page_size,
     root_font_size,
     base_style_for_margins,
@@ -182,6 +239,7 @@ pub fn paginate_fragment_tree(
   )?;
   let base_total_height = base_layout.total_height.max(EPSILON);
   let base_spans = base_layout.page_name_spans.clone();
+  let base_forced = base_layout.forced_boundaries.clone();
   let base_root = base_layout.root.clone();
 
   let mut string_set_events = collect_string_set_events(&base_root, box_tree);
@@ -198,17 +256,16 @@ pub fn paginate_fragment_tree(
     let start_in_base = consumed_base;
     let mut page_name =
       page_name_for_position(&base_spans, start_in_base, initial_page_name.as_deref());
-    let side = if (page_index + 1) % 2 == 0 {
-      PageSide::Left
-    } else {
-      PageSide::Right
-    };
+    let side = page_side_for_index(page_index);
+    let required_side = required_page_side(&base_forced, start_in_base);
+    let is_blank_page = required_side.map_or(false, |required| required != side);
 
     let mut page_style = resolve_page_style(
       rules,
       page_index,
       page_name.as_deref(),
       side,
+      is_blank_page,
       fallback_page_size,
       root_font_size,
       base_style_for_margins,
@@ -229,64 +286,6 @@ pub fn paginate_fragment_tree(
       break;
     }
 
-    let mut start = ((consumed_base / base_total_height) * total_height).min(total_height);
-    let actual_page_name =
-      page_name_for_position(&layout.page_name_spans, start, initial_page_name.as_deref());
-    if actual_page_name != page_name {
-      page_name = actual_page_name;
-      page_style = resolve_page_style(
-        rules,
-        page_index,
-        page_name.as_deref(),
-        side,
-        fallback_page_size,
-        root_font_size,
-        base_style_for_margins,
-      );
-      key = PageLayoutKey::new(&page_style, style_hash, font_generation);
-      layout = layout_for_style(
-        &page_style,
-        key,
-        &mut layouts,
-        box_tree,
-        font_ctx,
-        fallback_page_name,
-        enable_layout_cache,
-      )?;
-      total_height = layout.total_height;
-      start = ((consumed_base / base_total_height) * total_height).min(total_height);
-    }
-
-    if start >= total_height - EPSILON {
-      break;
-    }
-
-    let page_block = page_style.content_size.height.max(1.0);
-    let mut end = (start + page_block).min(total_height);
-    if let Some(boundary) = layout
-      .forced_boundaries
-      .iter()
-      .copied()
-      .find(|b| *b > start + EPSILON && *b < end - EPSILON)
-    {
-      end = boundary;
-    }
-
-    end = adjust_for_atomic_ranges(start, end, &layout.atomic_ranges).min(total_height);
-
-    if end <= start + EPSILON {
-      end = adjust_for_atomic_ranges(
-        start,
-        (start + page_block).min(total_height),
-        &layout.atomic_ranges,
-      )
-      .min(total_height);
-      if end <= start + EPSILON {
-        break;
-      }
-    }
-
-    let clipped = clip_node(&layout.root, start, end, 0.0, start, page_index, 0);
     let mut fixed_fragments = Vec::new();
     collect_fixed_fragments(&layout.root, Point::ZERO, &mut fixed_fragments);
     let mut page_root = FragmentNode::new_block(
@@ -299,21 +298,82 @@ pub fn paginate_fragment_tree(
       Vec::new(),
     );
 
-    if let Some(mut content) = clipped {
-      strip_fixed_fragments(&mut content);
-      normalize_fragment_margins(&mut content, page_index == 0, end >= total_height - 0.01);
-      content.bounds = Rect::from_xywh(
-        content.bounds.x(),
-        content.bounds.y(),
-        page_style.content_size.width,
-        content.bounds.height(),
-      );
-      translate_fragment(
-        &mut content,
-        page_style.content_origin.x,
-        page_style.content_origin.y,
-      );
-      page_root.children.push(content);
+    let mut end_in_base = start_in_base;
+
+    if !is_blank_page {
+      let mut start = ((consumed_base / base_total_height) * total_height).min(total_height);
+      let actual_page_name =
+        page_name_for_position(&layout.page_name_spans, start, initial_page_name.as_deref());
+      if actual_page_name != page_name {
+        page_name = actual_page_name;
+        page_style = resolve_page_style(
+          rules,
+          page_index,
+          page_name.as_deref(),
+          side,
+          is_blank_page,
+          fallback_page_size,
+          root_font_size,
+          base_style_for_margins,
+        );
+        key = PageLayoutKey::new(&page_style, style_hash, font_generation);
+        layout = layout_for_style(
+          &page_style,
+          key,
+          &mut layouts,
+          box_tree,
+          font_ctx,
+          fallback_page_name,
+          enable_layout_cache,
+        )?;
+        total_height = layout.total_height;
+        start = ((consumed_base / base_total_height) * total_height).min(total_height);
+      }
+
+      if start >= total_height - EPSILON {
+        break;
+      }
+
+      let page_block = page_style.content_size.height.max(1.0);
+      let mut end = (start + page_block).min(total_height);
+      if let Some(boundary) = next_forced_boundary(&layout.forced_boundaries, start, end) {
+        end = boundary;
+      }
+
+      end = adjust_for_atomic_ranges(start, end, &layout.atomic_ranges).min(total_height);
+
+      if end <= start + EPSILON {
+        end = adjust_for_atomic_ranges(
+          start,
+          (start + page_block).min(total_height),
+          &layout.atomic_ranges,
+        )
+        .min(total_height);
+        if end <= start + EPSILON {
+          break;
+        }
+      }
+
+      let clipped = clip_node(&layout.root, start, end, 0.0, start, page_index, 0);
+      if let Some(mut content) = clipped {
+        strip_fixed_fragments(&mut content);
+        normalize_fragment_margins(&mut content, page_index == 0, end >= total_height - 0.01);
+        content.bounds = Rect::from_xywh(
+          content.bounds.x(),
+          content.bounds.y(),
+          page_style.content_size.width,
+          content.bounds.height(),
+        );
+        translate_fragment(
+          &mut content,
+          page_style.content_origin.x,
+          page_style.content_origin.y,
+        );
+        page_root.children.push(content);
+      }
+
+      let base_advance = ((end - start).max(0.0) / total_height) * base_total_height;
+      end_in_base = (consumed_base + base_advance).min(base_total_height);
     }
 
     for mut fixed in fixed_fragments {
@@ -325,8 +385,6 @@ pub fn paginate_fragment_tree(
       page_root.children.push(fixed);
     }
 
-    let base_advance = ((end - start).max(0.0) / total_height) * base_total_height;
-    let end_in_base = (consumed_base + base_advance).min(base_total_height);
     let page_strings = running_strings_for_page(
       &string_set_events,
       &mut string_event_idx,
@@ -336,7 +394,9 @@ pub fn paginate_fragment_tree(
     );
 
     pages.push((page_root, page_style, page_strings));
-    consumed_base = end_in_base;
+    if !is_blank_page {
+      consumed_base = end_in_base;
+    }
     page_index += 1;
 
     if consumed_base >= base_total_height - EPSILON {

@@ -1126,13 +1126,13 @@ pub enum BreakBetween {
   Column,
   /// Force a page break
   Page,
-  /// Force a break to the next left page (treated as a page break for now)
+  /// Force a page break and start the next page on the left/verso side.
   Left,
-  /// Force a break to the next right page (treated as a page break for now)
+  /// Force a page break and start the next page on the right/recto side.
   Right,
-  /// Force a break to the next recto page (treated as a page break for now)
+  /// Force a page break and start the next page on the right/recto side.
   Recto,
-  /// Force a break to the next verso page (treated as a page break for now)
+  /// Force a page break and start the next page on the left/verso side.
   Verso,
 }
 

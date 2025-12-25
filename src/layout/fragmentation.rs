@@ -11,6 +11,7 @@ use std::sync::OnceLock;
 
 use crate::geometry::{Point, Rect};
 use crate::style::display::Display;
+use crate::style::page::PageSide;
 use crate::style::types::{BreakBetween, BreakInside};
 use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentSliceInfo, FragmentainerPath};
@@ -104,6 +105,12 @@ struct LineContainer {
 pub(crate) struct AtomicRange {
   pub(crate) start: f32,
   pub(crate) end: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ForcedBoundary {
+  pub position: f32,
+  pub page_side: Option<PageSide>,
 }
 
 #[derive(Default, Debug)]
@@ -791,7 +798,7 @@ fn collect_break_opportunities(
   }
 }
 
-pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> Vec<f32> {
+pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> Vec<ForcedBoundary> {
   fn is_forced_page_break(between: BreakBetween) -> bool {
     matches!(
       between,
@@ -804,10 +811,18 @@ pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> 
     )
   }
 
+  fn break_side_hint(between: BreakBetween) -> Option<PageSide> {
+    match between {
+      BreakBetween::Left | BreakBetween::Verso => Some(PageSide::Left),
+      BreakBetween::Right | BreakBetween::Recto => Some(PageSide::Right),
+      _ => None,
+    }
+  }
+
   fn collect(
     node: &FragmentNode,
     abs_start: f32,
-    forced: &mut Vec<f32>,
+    forced: &mut Vec<ForcedBoundary>,
     default_style: &ComputedStyle,
   ) {
     for (idx, child) in node.children.iter().enumerate() {
@@ -826,7 +841,10 @@ pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> 
         .unwrap_or(default_style);
 
       if idx == 0 && is_forced_page_break(child_style.break_before) {
-        forced.push(child_abs_start);
+        forced.push(ForcedBoundary {
+          position: child_abs_start,
+          page_side: break_side_hint(child_style.break_before),
+        });
       }
 
       if is_forced_page_break(child_style.break_after)
@@ -844,7 +862,10 @@ pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> 
           }
           boundary = candidate;
         }
-        forced.push(boundary);
+        forced.push(ForcedBoundary {
+          position: boundary,
+          page_side: break_side_hint(next_style.break_before).or(break_side_hint(child_style.break_after)),
+        });
       }
 
       collect(child, child_abs_start, forced, default_style);
@@ -852,9 +873,9 @@ pub(crate) fn collect_forced_boundaries(node: &FragmentNode, abs_start: f32) -> 
   }
 
   let default_style = default_style();
-  let mut forced = Vec::new();
-  collect(node, abs_start, &mut forced, default_style);
-  forced
+  let mut boundaries = Vec::new();
+  collect(node, abs_start, &mut boundaries, default_style);
+  boundaries
 }
 
 fn select_next_boundary(
