@@ -3,7 +3,7 @@ use fastrender::paint::svg_filter::{
   apply_svg_filter, ColorInterpolationFilters, ColorMatrixKind, FilterInput, FilterPrimitive,
   FilterStep, SvgFilter, SvgFilterRegion, SvgFilterUnits, SvgLength,
 };
-use tiny_skia::{Pixmap, PremultipliedColorU8};
+use tiny_skia::{ColorU8, Pixmap, PremultipliedColorU8};
 
 fn double_matrix() -> [f32; 20] {
   [
@@ -75,34 +75,36 @@ fn color_matrix_respects_color_interpolation_filters() {
 #[test]
 fn identity_matrix_is_a_noop_in_all_color_spaces() {
   let mut base = Pixmap::new(1, 1).unwrap();
-  base.pixels_mut()[0] = PremultipliedColorU8::from_rgba(50, 100, 150, 128).unwrap();
+  base.pixels_mut()[0] = ColorU8::from_rgba(50, 100, 150, 128).premultiply();
 
   let identity = ColorMatrixKind::Matrix(identity_matrix());
 
   let mut linear_result = base.clone();
+  let linear_bbox = Rect::from_xywh(
+    0.0,
+    0.0,
+    linear_result.width() as f32,
+    linear_result.height() as f32,
+  );
   apply_svg_filter(
     &make_filter(identity.clone(), ColorInterpolationFilters::LinearRGB),
     &mut linear_result,
     1.0,
-    Rect::from_xywh(
-      0.0,
-      0.0,
-      linear_result.width() as f32,
-      linear_result.height() as f32,
-    ),
+    linear_bbox,
   );
 
   let mut srgb_result = base.clone();
+  let srgb_bbox = Rect::from_xywh(
+    0.0,
+    0.0,
+    srgb_result.width() as f32,
+    srgb_result.height() as f32,
+  );
   apply_svg_filter(
     &make_filter(identity, ColorInterpolationFilters::SRGB),
     &mut srgb_result,
     1.0,
-    Rect::from_xywh(
-      0.0,
-      0.0,
-      srgb_result.width() as f32,
-      srgb_result.height() as f32,
-    ),
+    srgb_bbox,
   );
 
   assert_eq!(base.data(), linear_result.data());

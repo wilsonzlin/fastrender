@@ -2004,8 +2004,8 @@ mod tests {
   #[test]
   fn known_properties_are_unique() {
     for (name, props) in [
-      ("KNOWN_STYLE_PROPERTIES", KNOWN_STYLE_PROPERTIES.as_slice()),
-      ("KNOWN_PAGE_PROPERTIES", KNOWN_PAGE_PROPERTIES.as_slice()),
+      ("KNOWN_STYLE_PROPERTIES", KNOWN_STYLE_PROPERTIES),
+      ("KNOWN_PAGE_PROPERTIES", KNOWN_PAGE_PROPERTIES),
     ] {
       let mut list = props.to_vec();
       let original_len = list.len();
@@ -2024,7 +2024,11 @@ mod tests {
   #[test]
   fn known_properties_match_applied_properties() {
     let supported: BTreeSet<_> = supported_properties().iter().copied().collect();
-    let known: BTreeSet<_> = KNOWN_PROPERTIES.iter().copied().collect();
+    let known: BTreeSet<_> = KNOWN_STYLE_PROPERTIES
+      .iter()
+      .chain(KNOWN_PAGE_PROPERTIES.iter())
+      .copied()
+      .collect();
 
     let missing: Vec<_> = supported.difference(&known).copied().collect();
     let extra: Vec<_> = known.difference(&supported).copied().collect();

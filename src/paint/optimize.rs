@@ -898,13 +898,14 @@ mod tests {
   use crate::paint::display_list::ClipItem;
   use crate::paint::display_list::ClipShape;
   use crate::paint::display_list::OpacityItem;
+  use crate::paint::display_list::ResolvedFilter;
   use crate::paint::display_list::StackingContextItem;
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list::TransformItem;
-  use crate::paint::display_list::TransformStyle;
   use crate::paint::filter_outset::filter_outset;
   use crate::style::color::Rgba;
   use crate::style::types::BackfaceVisibility;
+  use crate::style::types::TransformStyle;
   use std::f32::consts::FRAC_PI_4;
 
   fn make_fill_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba) -> DisplayItem {
