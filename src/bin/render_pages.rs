@@ -507,8 +507,9 @@ fn main() {
 
           if let Some(secs) = timeout_secs {
             match rx.recv_timeout(Duration::from_secs(secs)) {
-              Ok(Ok(outcome)) => outcome
-                .map_err(|e| Status::Error(format_error_with_chain(&e, verbose))),
+              Ok(Ok(outcome)) => {
+                outcome.map_err(|e| Status::Error(format_error_with_chain(&e, verbose)))
+              }
               Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
               Err(RecvTimeoutError::Timeout) => {
                 Err(Status::Crash(format!("render timed out after {}s", secs)))
@@ -519,8 +520,9 @@ fn main() {
             }
           } else {
             match rx.recv() {
-              Ok(Ok(outcome)) => outcome
-                .map_err(|e| Status::Error(format_error_with_chain(&e, verbose))),
+              Ok(Ok(outcome)) => {
+                outcome.map_err(|e| Status::Error(format_error_with_chain(&e, verbose)))
+              }
               Ok(Err(panic)) => Err(Status::Crash(panic_to_string(panic))),
               Err(_) => Err(Status::Crash("render worker disconnected".to_string())),
             }

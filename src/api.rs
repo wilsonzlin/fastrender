@@ -630,9 +630,6 @@ impl ResourceFetchError {
   pub fn from_error(kind: ResourceKind, url: impl Into<String>, error: &Error) -> Self {
     let message = match error {
       Error::Resource(res) => res.message.clone(),
-      Error::Image(image) => image.to_string(),
-      Error::Navigation(nav) => nav.reason.clone(),
-      Error::Io(io) => io.to_string(),
       _ => error.to_string(),
     };
     let mut entry = Self::new(kind, url, message);
@@ -643,7 +640,11 @@ impl ResourceFetchError {
         entry.etag = res.etag.clone();
         entry.last_modified = res.last_modified.clone();
       }
-      Error::Navigation(nav) => entry.final_url = Some(nav.url.clone()),
+      Error::Navigation(nav) => match nav {
+        crate::error::NavigationError::FetchFailed { url, .. } => {
+          entry.final_url = Some(url.clone());
+        }
+      },
       Error::Image(image) => match image {
         crate::error::ImageError::LoadFailed { url, .. }
         | crate::error::ImageError::DecodeFailed { url, .. }
@@ -3746,7 +3747,7 @@ impl FastRender {
             )
           };
           for (url, reason) in import_diags.drain(..) {
-            diagnostics.record(ResourceKind::Stylesheet, &url, &reason);
+            diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
           }
           combined_css.push_str(&inlined);
           combined_css.push('\n');

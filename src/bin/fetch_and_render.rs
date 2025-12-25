@@ -28,6 +28,7 @@ use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::OutputFormat;
 use fastrender::Result;
+use std::error::Error;
 use std::path::Path;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::RecvTimeoutError;

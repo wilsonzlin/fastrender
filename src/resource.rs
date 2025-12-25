@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
 use std::time::Duration;
+use ureq::ResponseExt;
 use url::Url;
 
 mod data_url;
@@ -427,6 +428,7 @@ impl HttpFetcher {
     validators: Option<HttpCacheValidators<'_>>,
   ) -> Result<FetchedResource> {
     let config = ureq::Agent::config_builder()
+      .http_status_as_error(false)
       .timeout_global(Some(self.timeout))
       .build();
     let agent: ureq::Agent = config.into();
@@ -455,28 +457,7 @@ impl HttpFetcher {
 
       let mut response = match request.call() {
         Ok(resp) => resp,
-        Err(ureq::Error::Status(status, response)) => {
-          let headers = response.headers();
-          let etag = headers
-            .get("etag")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string());
-          let last_modified = headers
-            .get("last-modified")
-            .and_then(|h| h.to_str().ok())
-            .map(|s| s.to_string());
-          let final_url = response.get_url().to_string();
-          let message = response
-            .status_text()
-            .map(|text| format!("HTTP {status} {text}"))
-            .unwrap_or_else(|| format!("HTTP {status}"));
-          let err = ResourceError::new(current.clone(), message)
-            .with_status(status.into())
-            .with_final_url(final_url)
-            .with_validators(etag, last_modified);
-          return Err(Error::Resource(err));
-        }
-        Err(ureq::Error::Transport(err)) => {
+        Err(err) => {
           let err = ResourceError::new(current.clone(), err.to_string())
             .with_final_url(current.clone())
             .with_source(err);
@@ -530,10 +511,10 @@ impl HttpFetcher {
           if bytes.is_empty() && status.as_u16() != 304 {
             let err = ResourceError::new(current.clone(), "empty HTTP response body")
               .with_status(status.as_u16())
-              .with_final_url(response.get_url().to_string());
+              .with_final_url(response.get_uri().to_string());
             return Err(Error::Resource(err));
           }
-          let final_url = response.get_url().to_string();
+          let final_url = response.get_uri().to_string();
           let mut resource = FetchedResource::with_final_url(bytes, content_type, Some(final_url));
           resource.status = Some(status.as_u16());
           resource.etag = etag;
@@ -546,7 +527,7 @@ impl HttpFetcher {
         Err(err) => {
           let err = ResourceError::new(current.clone(), err.to_string())
             .with_status(status.as_u16())
-            .with_final_url(response.get_url().to_string())
+            .with_final_url(response.get_uri().to_string())
             .with_source(err);
           return Err(Error::Resource(err));
         }
