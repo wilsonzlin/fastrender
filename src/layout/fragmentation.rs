@@ -207,9 +207,11 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
       // Translate fragments to account for fragmentainer gaps so downstream consumers
       // can reason about the absolute position of each fragmentainer stack.
       let vertical_offset = index as f32 * (options.fragmentainer_size + options.fragmentainer_gap);
-      let translated = clipped.translate(Point::new(0.0, vertical_offset));
+      clipped.bounds = clipped
+        .bounds
+        .translate(Point::new(0.0, vertical_offset));
 
-      fragments.push(translated);
+      fragments.push(clipped);
     }
   }
 

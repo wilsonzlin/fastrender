@@ -956,6 +956,7 @@ impl fmt::Display for FragmentTree {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::layout::fragmentation::{fragment_tree as split_fragment_tree, FragmentationOptions};
 
   // Constructor tests
   #[test]
@@ -1181,6 +1182,22 @@ mod tests {
 
     let hits = tree.hit_test(Point::new(120.0, 120.0));
     assert_eq!(hits.len(), 2); // child and root
+  }
+
+  #[test]
+  fn test_fragmentation_stacks_roots_without_offsetting_children() {
+    let child = FragmentNode::new_block(Rect::from_xywh(0.0, 60.0, 10.0, 10.0), vec![]);
+    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 20.0, 120.0), vec![child]);
+    let options = FragmentationOptions::new(60.0).with_gap(20.0);
+
+    let fragments = split_fragment_tree(&root, &options);
+    assert_eq!(fragments.len(), 2);
+
+    let second = &fragments[1];
+    assert_eq!(second.bounds.y(), 80.0); // 60 fragment height + 20 gap
+    assert_eq!(second.children.len(), 1);
+    assert_eq!(second.children[0].bounds.y(), 0.0); // child clipped into second fragment starts at top
+    assert!((second.bounds.y() + second.children[0].bounds.y() - 80.0).abs() < 0.001);
   }
 
 
