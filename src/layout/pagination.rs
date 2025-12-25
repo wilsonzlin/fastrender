@@ -4,13 +4,19 @@ use std::sync::Arc;
 
 use crate::css::types::CollectedPageRule;
 use crate::geometry::{Rect, Size};
+use crate::layout::constraints::LayoutConstraints;
+use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::layout::fragmentation::{
   clip_node, collect_forced_boundaries, propagate_fragment_metadata,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
+use crate::style::display::FormattingContextType;
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
+use crate::style::types::BoxSizing;
+use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
+use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
 
 /// Split a laid out fragment tree into pages using the provided @page rules.
@@ -173,7 +179,7 @@ fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
 
 fn build_margin_box_fragments(
   style: &ResolvedPageStyle,
-  _font_ctx: &FontContext,
+  font_ctx: &FontContext,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
   let generator = ContentGenerator::new();
@@ -185,27 +191,34 @@ fn build_margin_box_fragments(
         continue;
       }
 
-      let text = generator.generate(&box_style.content_value, &mut context);
+      let mut root_style: ComputedStyle = box_style.clone();
+      root_style.width = Some(Length::px(bounds.width()));
+      root_style.height = Some(Length::px(bounds.height()));
+      root_style.box_sizing = BoxSizing::BorderBox;
+      root_style.margin_top = Some(Length::px(0.0));
+      root_style.margin_right = Some(Length::px(0.0));
+      root_style.margin_bottom = Some(Length::px(0.0));
+      root_style.margin_left = Some(Length::px(0.0));
+      let root_style = Arc::new(root_style);
+
       let mut children = Vec::new();
-      if !text.is_empty() {
-        let (text_w, text_h, baseline) = measure_text(&text, box_style);
-        let text_x = bounds.x() + (bounds.width() - text_w).max(0.0) / 2.0;
-        let text_y = bounds.y() + (bounds.height() - text_h).max(0.0) / 2.0;
-        let text_bounds = Rect::from_xywh(text_x, text_y, text_w, text_h);
-        children.push(FragmentNode::new_text_shaped(
-          text_bounds,
-          text,
-          baseline,
-          Vec::new(),
-          Arc::new(box_style.clone()),
-        ));
+      if ContentGenerator::is_text_only(&box_style.content_value) {
+        let text = generator.generate(&box_style.content_value, &mut context);
+        children.push(BoxNode::new_text(Arc::new(box_style.clone()), text));
       }
 
-      fragments.push(FragmentNode::new_block_styled(
-        bounds,
-        children,
-        Arc::new(box_style.clone()),
-      ));
+      let root_box = BoxNode::new_block(root_style.clone(), FormattingContextType::Block, children);
+      let layout_config = LayoutConfig::new(Size::new(bounds.width(), bounds.height()));
+      let engine = LayoutEngine::with_font_context(layout_config, font_ctx.clone());
+      let constraints = LayoutConstraints::definite(bounds.width(), bounds.height());
+
+      if let Ok(mut fragment) = engine.layout_subtree(&root_box, &constraints) {
+        if fragment.style.is_none() {
+          fragment.style = Some(root_style.clone());
+        }
+        translate_fragment(&mut fragment, bounds.x(), bounds.y());
+        fragments.push(fragment);
+      }
     }
   }
 
@@ -259,12 +272,4 @@ fn margin_box_bounds(
       style.margin_bottom,
     )),
   }
-}
-
-fn measure_text(text: &str, style: &ComputedStyle) -> (f32, f32, f32) {
-  let font_size = style.font_size.max(1.0);
-  let width = text.chars().count() as f32 * font_size * 0.6;
-  let height = font_size * 1.2;
-  let baseline = font_size * 0.9;
-  (width, height, baseline)
 }
