@@ -334,6 +334,82 @@ fn pixel(pixmap: &tiny_skia::Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
   (px.red(), px.green(), px.blue(), px.alpha())
 }
 
+fn project_point_2d(transform: &Transform3D, point: (f32, f32)) -> Option<(f32, f32)> {
+  let (tx, ty, _tz, tw) = transform.transform_point(point.0, point.1, 0.0);
+  if tw.abs() < 1e-3 {
+    None
+  } else {
+    Some((tx / tw, ty / tw))
+  }
+}
+
+fn project_quad(transform: &Transform3D, rect: Rect) -> Option<[(f32, f32); 4]> {
+  Some([
+    project_point_2d(transform, (rect.min_x(), rect.min_y()))?,
+    project_point_2d(transform, (rect.max_x(), rect.min_y()))?,
+    project_point_2d(transform, (rect.max_x(), rect.max_y()))?,
+    project_point_2d(transform, (rect.min_x(), rect.max_y()))?,
+  ])
+}
+
+fn quad_orientation(quad: &[(f32, f32); 4]) -> f32 {
+  let mut area = 0.0;
+  for i in 0..4 {
+    let (x1, y1) = quad[i];
+    let (x2, y2) = quad[(i + 1) % 4];
+    area += x1 * y2 - x2 * y1;
+  }
+  area * 0.5
+}
+
+fn quad_bounds(quad: &[(f32, f32); 4]) -> (f32, f32, f32, f32) {
+  let mut min_x = f32::INFINITY;
+  let mut min_y = f32::INFINITY;
+  let mut max_x = f32::NEG_INFINITY;
+  let mut max_y = f32::NEG_INFINITY;
+  for (x, y) in quad {
+    min_x = min_x.min(*x);
+    min_y = min_y.min(*y);
+    max_x = max_x.max(*x);
+    max_y = max_y.max(*y);
+  }
+  (min_x, min_y, max_x, max_y)
+}
+
+fn edge_outside_points(quad: &[(f32, f32); 4], margin: f32) -> Vec<(f32, f32)> {
+  let orientation = quad_orientation(quad);
+  let mut out = Vec::with_capacity(4);
+  for i in 0..4 {
+    let (x1, y1) = quad[i];
+    let (x2, y2) = quad[(i + 1) % 4];
+    let dx = x2 - x1;
+    let dy = y2 - y1;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len <= 1e-3 {
+      continue;
+    }
+    let (nx, ny) = if orientation >= 0.0 {
+      (dy / len, -dx / len)
+    } else {
+      (-dy / len, dx / len)
+    };
+    out.push(((x1 + x2) * 0.5 + nx * margin, (y1 + y2) * 0.5 + ny * margin));
+  }
+  out
+}
+
+fn sample_pixel_at(pixmap: &tiny_skia::Pixmap, point: (f32, f32)) -> Option<(u8, u8, u8, u8)> {
+  if !point.0.is_finite() || !point.1.is_finite() {
+    return None;
+  }
+  let x = point.0.round() as i32;
+  let y = point.1.round() as i32;
+  if x < 0 || y < 0 || x >= pixmap.width() as i32 || y >= pixmap.height() as i32 {
+    return None;
+  }
+  Some(pixel(pixmap, x as u32, y as u32))
+}
+
 #[test]
 fn mix_blend_mode_multiplies_backdrop_when_not_isolated() {
   let mut list = DisplayList::new();
@@ -557,6 +633,217 @@ fn many_perspective_layers_use_cropped_surfaces() {
   let pixmap = renderer.render(&list).expect("render");
   let painted = bounding_box_for_color(&pixmap, |(_, _, _, a)| a > 0);
   assert!(painted.is_some(), "expected rendered content");
+}
+
+#[test]
+fn perspective_respects_border_radius_clip() {
+  let renderer = DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new()).unwrap();
+  let bounds = Rect::from_xywh(30.0, 30.0, 40.0, 40.0);
+  let center = bounds.center();
+  let transform = Transform3D::perspective(500.0)
+    .multiply(&Transform3D::translate(0.0, 0.0, 120.0))
+    .multiply(&Transform3D::translate(center.x, center.y, 0.0))
+    .multiply(&Transform3D::rotate_y(std::f32::consts::FRAC_PI_4))
+    .multiply(&Transform3D::translate(-center.x, -center.y, 0.0));
+  let quad = project_quad(&transform, bounds).expect("projected quad");
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: Some(transform),
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::uniform(12.0),
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+
+  let Some((min_x, min_y, max_x, max_y)) =
+    bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b)
+  else {
+    panic!("expected projected content");
+  };
+
+  let center_proj = project_point_2d(&transform, (center.x, center.y)).expect("center projected");
+  let center_sample = sample_pixel_at(&pixmap, center_proj).expect("center sample");
+  assert!(
+    center_sample.0 > center_sample.1 && center_sample.0 > center_sample.2 && center_sample.3 > 0,
+    "center should stay filled after projection, got {center_sample:?}"
+  );
+
+  for pt in edge_outside_points(&quad, 3.0) {
+    if let Some(sample) = sample_pixel_at(&pixmap, pt) {
+      assert_eq!(
+        sample,
+        (255, 255, 255, 255),
+        "pixels outside warped outline should remain background at {pt:?}"
+      );
+    }
+  }
+
+  let width = max_x - min_x + 1;
+  let height = max_y - min_y + 1;
+  assert!(
+    width < pixmap.width() && height < pixmap.height(),
+    "projected area should be contained, got bbox {min_x},{min_y} to {max_x},{max_y}"
+  );
+}
+
+#[test]
+fn perspective_blur_is_clipped_by_border_radius() {
+  let renderer = DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new()).unwrap();
+  let bounds = Rect::from_xywh(30.0, 30.0, 40.0, 40.0);
+  let center = bounds.center();
+  let transform = Transform3D::perspective(500.0)
+    .multiply(&Transform3D::translate(0.0, 0.0, 120.0))
+    .multiply(&Transform3D::translate(center.x, center.y, 0.0))
+    .multiply(&Transform3D::rotate_y(std::f32::consts::FRAC_PI_4))
+    .multiply(&Transform3D::translate(-center.x, -center.y, 0.0));
+  let quad = project_quad(&transform, bounds).expect("projected quad");
+  let (quad_min_x, quad_min_y, quad_max_x, quad_max_y) = quad_bounds(&quad);
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: Some(transform),
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![ResolvedFilter::Blur(6.0)],
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::uniform(12.0),
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::GREEN,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+
+  let Some((min_x, min_y, max_x, max_y)) =
+    bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && g > r && g > b)
+  else {
+    panic!("expected blurred content");
+  };
+
+  for pt in edge_outside_points(&quad, 3.0) {
+    if let Some(sample) = sample_pixel_at(&pixmap, pt) {
+      assert_eq!(
+        sample,
+        (255, 255, 255, 255),
+        "blur should not leak past projected clip at {pt:?}"
+      );
+    }
+  }
+
+  let width = max_x - min_x + 1;
+  let height = max_y - min_y + 1;
+  assert!(
+    min_x as f32 >= quad_min_x.floor() - 2.0
+      && min_y as f32 >= quad_min_y.floor() - 2.0
+      && max_x as f32 <= quad_max_x.ceil() + 2.0
+      && max_y as f32 <= quad_max_y.ceil() + 2.0,
+    "blurred clip should stay near projected bounds; bbox=({min_x},{min_y})-({max_x},{max_y}), quad=({quad_min_x},{quad_min_y})-({quad_max_x},{quad_max_y})"
+  );
+  assert!(
+    width < pixmap.width() && height < pixmap.height(),
+    "blurred region should not cover full canvas"
+  );
+}
+
+#[test]
+fn clip_path_warped_with_perspective_transform() {
+  let renderer = DisplayListRenderer::new(120, 120, Rgba::WHITE, FontContext::new()).unwrap();
+  let bounds = Rect::from_xywh(30.0, 30.0, 40.0, 40.0);
+  let center = bounds.center();
+  let transform = Transform3D::perspective(500.0)
+    .multiply(&Transform3D::translate(0.0, 0.0, 120.0))
+    .multiply(&Transform3D::translate(center.x, center.y, 0.0))
+    .multiply(&Transform3D::rotate_y(std::f32::consts::FRAC_PI_4))
+    .multiply(&Transform3D::translate(-center.x, -center.y, 0.0));
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: Some(transform),
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::PushClip(ClipItem {
+    shape: ClipShape::Path {
+      path: fastrender::paint::clip_path::ResolvedClipPath::Circle {
+        center,
+        radius: 16.0,
+      },
+    },
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::BLUE,
+  }));
+  list.push(DisplayItem::PopClip);
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = renderer.render(&list).unwrap();
+  let Some((min_x, min_y, max_x, max_y)) =
+    bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && b > r && b > g)
+  else {
+    panic!("expected clipped content");
+  };
+
+  let center_proj = project_point_2d(&transform, (center.x, center.y)).expect("center projected");
+  let center_sample = sample_pixel_at(&pixmap, center_proj).expect("center sample");
+  assert!(
+    center_sample.2 > center_sample.0 && center_sample.2 > center_sample.1 && center_sample.3 > 0,
+    "center should be inside warped clip-path"
+  );
+
+  for corner in [
+    (bounds.min_x(), bounds.min_y()),
+    (bounds.max_x(), bounds.min_y()),
+    (bounds.max_x(), bounds.max_y()),
+    (bounds.min_x(), bounds.max_y()),
+  ] {
+    if let Some(sample) = project_point_2d(&transform, corner).and_then(|p| sample_pixel_at(&pixmap, p)) {
+      assert_eq!(
+        sample,
+        (255, 255, 255, 255),
+        "corners outside the clip-path should remain background"
+      );
+    }
+  }
+
+  let width = max_x - min_x + 1;
+  let height = max_y - min_y + 1;
+  assert!(
+    width < bounds.width() as u32 && height < bounds.height() as u32,
+    "clip-path should tighten the projected bounds, got {width}x{height}"
+  );
 }
 
 #[test]
