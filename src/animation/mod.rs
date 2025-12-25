@@ -1846,8 +1846,8 @@ fn collect_timelines(
     }
   }
 
-  let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
   for child in &node.children {
+    let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
     collect_timelines(child, child_offset, viewport, content, scroll, map);
   }
 }
@@ -1932,8 +1932,8 @@ fn apply_animations_to_node(
     }
   }
 
-  let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
   for child in &mut node.children {
+    let child_offset = Point::new(origin.x + child.bounds.x(), origin.y + child.bounds.y());
     apply_animations_to_node(child, child_offset, viewport, scroll, keyframes, timelines);
   }
 }

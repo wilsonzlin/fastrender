@@ -39,6 +39,7 @@ use fontdb::Family as FontDbFamily;
 use fontdb::Query as FontDbQuery;
 use fontdb::ID;
 use lru::LruCache;
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -142,7 +143,7 @@ fn ns_to_ms(ns: u64) -> f64 {
 }
 
 /// Snapshot of font pipeline statistics for diagnostics.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FontPipelineStats {
   pub font_load_ms: f64,
   pub font_loads: u64,
