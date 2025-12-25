@@ -4,7 +4,7 @@ use fastrender::paint::display_list::{
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::color::Rgba;
 use fastrender::style::types::{BackfaceVisibility, TransformStyle};
-use fastrender::FontContext;
+use fastrender::text::font_loader::FontContext;
 use fastrender::Rect;
 
 #[test]
