@@ -655,22 +655,6 @@ impl DebugConfig {
       parse_presence_bool(raw.get("FASTR_LOG_FLEX_ROOT")),
     );
     config.insert_bool(
-      "FASTR_LOG_SKINNY_FLEX",
-      truthy(raw.get("FASTR_LOG_SKINNY_FLEX"), false),
-    );
-    config.insert_bool(
-      "FASTR_LOG_SMALL_FLEX",
-      truthy(raw.get("FASTR_LOG_SMALL_FLEX"), false),
-    );
-    config.insert_bool(
-      "FASTR_LOG_FLEX_OVERFLOW",
-      truthy(raw.get("FASTR_LOG_FLEX_OVERFLOW"), false),
-    );
-    config.insert_bool(
-      "FASTR_LOG_FLEX_DRIFT",
-      truthy(raw.get("FASTR_LOG_FLEX_DRIFT"), false),
-    );
-    config.insert_bool(
       "FASTR_ABORT_FLEX_AFTER_FIRST_N",
       parse_presence_bool(raw.get("FASTR_ABORT_FLEX_AFTER_FIRST_N")),
     );
@@ -1003,8 +987,14 @@ mod tests {
     assert!(toggles.truthy("FASTR_RENDER_TIMINGS"));
     assert!(!toggles.truthy_with_default("FASTR_DISPLAY_LIST_PARALLEL", true));
     assert_eq!(toggles.get("FASTR_TRACE_TEXT"), Some("needle"));
-    assert_eq!(toggles.usize_list("FASTR_TRACE_FLEX_TEXT"), Some(vec![4, 5]));
+    assert_eq!(
+      toggles.usize_list("FASTR_TRACE_FLEX_TEXT"),
+      Some(vec![4, 5])
+    );
     assert_eq!(toggles.u128("FASTR_LOG_SLOW_LAYOUT_MS"), Some(250));
-    assert_eq!(toggles.config().media.prefers_color_scheme, Some(ColorScheme::Dark));
+    assert_eq!(
+      toggles.config().media.prefers_color_scheme,
+      Some(ColorScheme::Dark)
+    );
   }
 }

@@ -29,6 +29,7 @@ use crate::css::types::FontFaceRule;
 use crate::css::types::FontFaceSource;
 use crate::css::types::FontFaceStyle;
 use crate::css::types::FontSourceFormat;
+use crate::debug::runtime;
 use crate::error::Error;
 use crate::error::Result;
 use crate::resource::ResourceFetcher;
@@ -55,7 +56,6 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::time::Duration;
 use std::time::Instant;
@@ -571,13 +571,7 @@ impl FontContext {
     base_url: Option<&str>,
     used_codepoints: Option<&[u32]>,
   ) -> Result<()> {
-    static MAX_FONTS: OnceLock<usize> = OnceLock::new();
-    let max_fonts = *MAX_FONTS.get_or_init(|| {
-      std::env::var("FASTR_MAX_WEB_FONTS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(8)
-    });
+    let max_fonts = runtime::runtime_toggles().usize_with_default("FASTR_MAX_WEB_FONTS", 8);
     if max_fonts == 0 {
       return Ok(());
     }
@@ -631,8 +625,7 @@ impl FontContext {
       std::thread::spawn(move || {
         let _pending = guard;
         let start = Instant::now();
-        let _ =
-          ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
+        let _ = ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
         if let Some(tx) = done_tx {
           let _ = tx.send(());
         }

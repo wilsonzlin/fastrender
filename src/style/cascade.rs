@@ -18,6 +18,7 @@ use crate::css::types::PropertyValue;
 use crate::css::types::ScopeContext;
 use crate::css::types::StyleRule;
 use crate::css::types::StyleSheet;
+use crate::debug::runtime;
 use crate::dom::resolve_first_strong_direction;
 use crate::dom::with_target_fragment;
 use crate::dom::DomNode;
@@ -83,7 +84,6 @@ fn is_root_element(ancestors: &[&DomNode]) -> bool {
 static CASCADE_PROFILE_FIND_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_DECL_TIME_NS: AtomicU64 = AtomicU64::new(0);
 static CASCADE_PROFILE_PSEUDO_TIME_NS: AtomicU64 = AtomicU64::new(0);
-static CASCADE_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
 
 fn attr_truthy_value(value: &str) -> bool {
   matches!(
@@ -171,11 +171,7 @@ fn node_is_inert(node: &DomNode, ancestors: &[&DomNode]) -> bool {
 }
 
 fn cascade_profile_enabled() -> bool {
-  *CASCADE_PROFILE_ENABLED.get_or_init(|| {
-    std::env::var("FASTR_CASCADE_PROFILE")
-      .map(|v| v != "0")
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_CASCADE_PROFILE")
 }
 
 fn user_agent_stylesheet() -> &'static StyleSheet {
@@ -1103,9 +1099,7 @@ pub fn apply_styles_with_media_target_and_imports_cached(
   if profile_enabled {
     reset_cascade_profile();
   }
-  let log_reuse = std::env::var("FASTR_LOG_CONTAINER_REUSE")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(false);
+  let log_reuse = runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_REUSE");
   let mut reuse_counter: usize = 0;
 
   // Parse user-agent stylesheet once

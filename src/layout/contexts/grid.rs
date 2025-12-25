@@ -62,7 +62,6 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use taffy::geometry::Line;
 use taffy::prelude::TaffyFitContent;
 use taffy::prelude::TaffyMaxContent;
@@ -1399,7 +1398,8 @@ impl GridFormattingContext {
       return;
     }
 
-    let debug_baseline = std::env::var_os("FASTR_DEBUG_GRID_BASELINE").is_some();
+    let debug_baseline =
+      crate::debug::runtime::runtime_toggles().truthy("FASTR_DEBUG_GRID_BASELINE");
 
     let mut target = 0.0;
     for item in group {
@@ -1518,7 +1518,8 @@ impl GridFormattingContext {
         .unwrap_or(TaffyAlignContent::Stretch),
     );
 
-    let debug_baseline = std::env::var_os("FASTR_DEBUG_GRID_BASELINE").is_some();
+    let debug_baseline =
+      crate::debug::runtime::runtime_toggles().truthy("FASTR_DEBUG_GRID_BASELINE");
     if debug_baseline {
       eprintln!(
         "[grid-baseline] rows sizes={:?} gutters={:?} offsets={:?}",
@@ -2023,12 +2024,8 @@ impl FormattingContext for GridFormattingContext {
       return Ok(cached);
     }
 
-    static TRACE_GRID_LAYOUT: OnceLock<bool> = OnceLock::new();
-    let trace_grid_layout = *TRACE_GRID_LAYOUT.get_or_init(|| {
-      std::env::var("FASTR_TRACE_GRID_LAYOUT")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
+    let trace_grid_layout =
+      crate::debug::runtime::runtime_toggles().truthy("FASTR_TRACE_GRID_LAYOUT");
     let grid_trace_start = trace_grid_layout.then(std::time::Instant::now);
 
     // Create fresh Taffy tree for this layout
@@ -2333,9 +2330,7 @@ impl FormattingContext for GridFormattingContext {
     // Convert back to FragmentNode tree and layout each in-flow child using its formatting context.
     let mut fragment = self.convert_to_fragments(&taffy, root_id, root_id, &constraints)?;
 
-    if let Some(trace_id) = std::env::var("FASTR_TRACE_GRID_TEXT")
-      .ok()
-      .and_then(|v| v.parse::<usize>().ok())
+    if let Some(trace_id) = crate::debug::runtime::runtime_toggles().usize("FASTR_TRACE_GRID_TEXT")
     {
       if trace_id == box_node.id {
         fn count_texts(node: &FragmentNode) -> usize {

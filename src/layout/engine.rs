@@ -15,6 +15,7 @@
 //! This allows formatting contexts to focus purely on layout algorithms while
 //! the engine handles cross-cutting concerns.
 
+use crate::debug::runtime;
 use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
@@ -485,12 +486,7 @@ impl LayoutEngine {
     let fc = self.factory.create(fc_type);
 
     // Optional slow-layout logging for debugging large pages.
-    static SLOW_LAYOUT_MS: std::sync::OnceLock<Option<u128>> = std::sync::OnceLock::new();
-    let slow_threshold_ms = *SLOW_LAYOUT_MS.get_or_init(|| {
-      std::env::var("FASTR_LOG_SLOW_LAYOUT_MS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-    });
+    let slow_threshold_ms = runtime::runtime_toggles().u128("FASTR_LOG_SLOW_LAYOUT_MS");
     let slow_timer = slow_threshold_ms.map(|_| std::time::Instant::now());
 
     // Call the FC's layout method

@@ -27,6 +27,7 @@ use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
 use crate::css::types::Transform as CssTransform;
+use crate::debug::runtime;
 use crate::error::RenderError;
 use crate::error::Result;
 use crate::geometry::Point;
@@ -125,7 +126,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::time::Instant;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::FilterQuality;
@@ -246,92 +246,33 @@ fn is_backface_culled(style: &ComputedStyle) -> bool {
 }
 
 fn dump_stack_enabled() -> bool {
-  static FLAG: OnceLock<bool> = OnceLock::new();
-  *FLAG.get_or_init(|| {
-    std::env::var("FASTR_DUMP_STACK")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_DUMP_STACK")
 }
 
 fn dump_fragments_enabled() -> bool {
-  static FLAG: OnceLock<bool> = OnceLock::new();
-  *FLAG.get_or_init(|| {
-    std::env::var("FASTR_DUMP_FRAGMENTS")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_DUMP_FRAGMENTS")
 }
 
 fn trace_image_paint_limit() -> Option<usize> {
-  static LIMIT: OnceLock<Option<usize>> = OnceLock::new();
-  *LIMIT.get_or_init(|| {
-    let raw = std::env::var("FASTR_TRACE_IMAGE_PAINT").ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-      return Some(50);
-    }
-    if matches!(trimmed, "0" | "false" | "off") {
-      return None;
-    }
-    trimmed.parse::<usize>().ok().or(Some(50))
-  })
+  runtime::runtime_toggles().usize("FASTR_TRACE_IMAGE_PAINT")
 }
 
 static TRACE_IMAGE_PAINT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 fn dump_counts_enabled() -> bool {
-  static FLAG: OnceLock<bool> = OnceLock::new();
-  *FLAG.get_or_init(|| {
-    std::env::var("FASTR_DUMP_COUNTS")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_DUMP_COUNTS")
 }
 
 fn stack_profile_threshold_ms() -> Option<f64> {
-  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
-  THRESHOLD
-    .get_or_init(|| {
-      let raw = std::env::var("FASTR_STACK_PROFILE_MS").ok()?;
-      let trimmed = raw.trim();
-      if trimmed.is_empty() {
-        return None;
-      }
-      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
-    })
-    .as_ref()
-    .copied()
+  runtime::runtime_toggles().f64("FASTR_STACK_PROFILE_MS")
 }
 
 fn text_profile_threshold_ms() -> Option<f64> {
-  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
-  THRESHOLD
-    .get_or_init(|| {
-      let raw = std::env::var("FASTR_TEXT_PROFILE_MS").ok()?;
-      let trimmed = raw.trim();
-      if trimmed.is_empty() || matches!(trimmed, "0" | "false" | "off") {
-        return None;
-      }
-      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
-    })
-    .as_ref()
-    .copied()
+  runtime::runtime_toggles().f64("FASTR_TEXT_PROFILE_MS")
 }
 
 fn cmd_profile_threshold_ms() -> Option<f64> {
-  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
-  THRESHOLD
-    .get_or_init(|| {
-      let raw = std::env::var("FASTR_CMD_PROFILE_MS").ok()?;
-      let trimmed = raw.trim();
-      if trimmed.is_empty() || matches!(trimmed, "0" | "false" | "off") {
-        return None;
-      }
-      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
-    })
-    .as_ref()
-    .copied()
+  runtime::runtime_toggles().f64("FASTR_CMD_PROFILE_MS")
 }
 
 fn is_identity_transform(transform: &Transform) -> bool {
@@ -1060,9 +1001,7 @@ impl Painter {
 
   /// Paints a fragment tree with an additional offset applied to all fragments.
   pub fn paint_with_offset(mut self, tree: &FragmentTree, offset: Point) -> Result<Pixmap> {
-    let profiling = std::env::var("FASTR_PAINT_STATS")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false);
+    let profiling = runtime::runtime_toggles().truthy("FASTR_PAINT_STATS");
     let mut stats = PaintStats::default();
 
     if dump_counts_enabled() {
@@ -1130,137 +1069,133 @@ impl Painter {
     }
 
     // Optional debug: dump a few text commands with positions/colors
-    if let Ok(v) = std::env::var("FASTR_DUMP_TEXT_ITEMS") {
-      if v != "0" && !v.eq_ignore_ascii_case("false") {
-        let limit: usize = v.parse().unwrap_or(20);
-        fn collect_text<'a>(cmds: &'a [DisplayCommand], out: &mut Vec<&'a DisplayCommand>) {
-          for cmd in cmds {
-            match cmd {
-              DisplayCommand::Text { .. } => out.push(cmd),
-              DisplayCommand::StackingContext { commands, .. } => collect_text(commands, out),
-              _ => {}
-            }
+    if let Some(limit) = runtime::runtime_toggles().usize("FASTR_DUMP_TEXT_ITEMS") {
+      fn collect_text<'a>(cmds: &'a [DisplayCommand], out: &mut Vec<&'a DisplayCommand>) {
+        for cmd in cmds {
+          match cmd {
+            DisplayCommand::Text { .. } => out.push(cmd),
+            DisplayCommand::StackingContext { commands, .. } => collect_text(commands, out),
+            _ => {}
           }
         }
-        let mut texts = Vec::new();
-        collect_text(&items, &mut texts);
-        eprintln!(
-          "dumping first {} text commands ({} total)",
-          limit.min(texts.len()),
-          texts.len()
-        );
-        for (idx, cmd) in texts.iter().take(limit).enumerate() {
-          if let DisplayCommand::Text {
-            rect,
-            baseline_offset,
-            text,
-            style,
-            ..
-          } = cmd
-          {
-            let (r, g, b, a) = (style.color.r, style.color.g, style.color.b, style.color.a);
-            eprintln!(
-                            "  [{idx}] text {:?} rect=({:.1},{:.1},{:.1},{:.1}) baseline_off={:.1} color=rgba({},{},{},{:.2})",
-                            text.chars().take(60).collect::<String>(),
-                            rect.x(),
-                            rect.y(),
-                            rect.width(),
-                            rect.height(),
-                            baseline_offset,
-                            r,
-                            g,
-                            b,
-                            a
-                        );
-          }
+      }
+      let mut texts = Vec::new();
+      collect_text(&items, &mut texts);
+      eprintln!(
+        "dumping first {} text commands ({} total)",
+        limit.min(texts.len()),
+        texts.len()
+      );
+      for (idx, cmd) in texts.iter().take(limit).enumerate() {
+        if let DisplayCommand::Text {
+          rect,
+          baseline_offset,
+          text,
+          style,
+          ..
+        } = cmd
+        {
+          let (r, g, b, a) = (style.color.r, style.color.g, style.color.b, style.color.a);
+          eprintln!(
+                          "  [{idx}] text {:?} rect=({:.1},{:.1},{:.1},{:.1}) baseline_off={:.1} color=rgba({},{},{},{:.2})",
+                          text.chars().take(60).collect::<String>(),
+                          rect.x(),
+                          rect.y(),
+                          rect.width(),
+                          rect.height(),
+                          baseline_offset,
+                          r,
+                          g,
+                          b,
+                          a
+                      );
         }
       }
     }
 
     // Optional debug: dump the first N display commands with their rects/types.
-    if let Ok(v) = std::env::var("FASTR_DUMP_COMMANDS") {
-      if v != "0" && !v.eq_ignore_ascii_case("false") {
-        let limit: usize = v.parse().unwrap_or(50);
-        fn collect_commands<'a>(
-          cmds: &'a [DisplayCommand],
-          out: &mut Vec<(&'a DisplayCommand, usize)>,
-          depth: usize,
-        ) {
-          for cmd in cmds {
-            out.push((cmd, depth));
-            if let DisplayCommand::StackingContext { commands, .. } = cmd {
-              collect_commands(commands, out, depth + 1);
-            }
+    if let Some(limit) = runtime::runtime_toggles().usize("FASTR_DUMP_COMMANDS") {
+      fn collect_commands<'a>(
+        cmds: &'a [DisplayCommand],
+        out: &mut Vec<(&'a DisplayCommand, usize)>,
+        depth: usize,
+      ) {
+        for cmd in cmds {
+          out.push((cmd, depth));
+          if let DisplayCommand::StackingContext { commands, .. } = cmd {
+            collect_commands(commands, out, depth + 1);
           }
         }
-        let mut flat = Vec::new();
-        collect_commands(&items, &mut flat, 0);
-        eprintln!(
-          "dumping first {} commands ({} total)",
-          limit.min(flat.len()),
-          flat.len()
-        );
-        for (idx, (cmd, depth)) in flat.iter().take(limit).enumerate() {
-          match cmd {
-            DisplayCommand::Background { rect, style } => eprintln!(
-              "  [{idx}] {:indent$}background ({:.1},{:.1},{:.1},{:.1}) color=rgba({},{},{},{:.2})",
-              "",
-              rect.x(),
-              rect.y(),
-              rect.width(),
-              rect.height(),
-              style.background_color.r,
-              style.background_color.g,
-              style.background_color.b,
-              style.background_color.a,
-              indent = depth * 2
-            ),
-            DisplayCommand::Border { rect, .. } => eprintln!(
-              "  [{idx}] {:indent$}border ({:.1},{:.1},{:.1},{:.1})",
-              "",
-              rect.x(),
-              rect.y(),
-              rect.width(),
-              rect.height(),
-              indent = depth * 2
-            ),
-            DisplayCommand::Outline { rect, .. } => eprintln!(
-              "  [{idx}] {:indent$}outline ({:.1},{:.1},{:.1},{:.1})",
-              "",
-              rect.x(),
-              rect.y(),
-              rect.width(),
-              rect.height(),
-              indent = depth * 2
-            ),
-            DisplayCommand::Text { rect, .. } => eprintln!(
-              "  [{idx}] {:indent$}text ({:.1},{:.1},{:.1},{:.1})",
-              "",
-              rect.x(),
-              rect.y(),
-              rect.width(),
-              rect.height(),
-              indent = depth * 2
-            ),
-            DisplayCommand::Replaced { rect, .. } => eprintln!(
-              "  [{idx}] {:indent$}replaced ({:.1},{:.1},{:.1},{:.1})",
-              "",
-              rect.x(),
-              rect.y(),
-              rect.width(),
-              rect.height(),
-              indent = depth * 2
-            ),
-            DisplayCommand::StackingContext { rect, .. } => eprintln!(
-              "  [{idx}] {:indent$}stack ({:.1},{:.1},{:.1},{:.1})",
-              "",
-              rect.x(),
-              rect.y(),
-              rect.width(),
-              rect.height(),
-              indent = depth * 2
-            ),
-          }
+      }
+
+      let mut flat = Vec::new();
+      collect_commands(&items, &mut flat, 0);
+      eprintln!(
+        "dumping first {} commands ({} total)",
+        limit.min(flat.len()),
+        flat.len()
+      );
+
+      for (idx, (cmd, depth)) in flat.iter().take(limit).enumerate() {
+        match cmd {
+          DisplayCommand::Background { rect, style } => eprintln!(
+            "  [{idx}] {:indent$}background ({:.1},{:.1},{:.1},{:.1}) color=rgba({},{},{},{:.2})",
+            "",
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            style.background_color.r,
+            style.background_color.g,
+            style.background_color.b,
+            style.background_color.a,
+            indent = depth * 2
+          ),
+          DisplayCommand::Border { rect, .. } => eprintln!(
+            "  [{idx}] {:indent$}border ({:.1},{:.1},{:.1},{:.1})",
+            "",
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            indent = depth * 2
+          ),
+          DisplayCommand::Outline { rect, .. } => eprintln!(
+            "  [{idx}] {:indent$}outline ({:.1},{:.1},{:.1},{:.1})",
+            "",
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            indent = depth * 2
+          ),
+          DisplayCommand::Text { rect, .. } => eprintln!(
+            "  [{idx}] {:indent$}text ({:.1},{:.1},{:.1},{:.1})",
+            "",
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            indent = depth * 2
+          ),
+          DisplayCommand::Replaced { rect, .. } => eprintln!(
+            "  [{idx}] {:indent$}replaced ({:.1},{:.1},{:.1},{:.1})",
+            "",
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            indent = depth * 2
+          ),
+          DisplayCommand::StackingContext { rect, .. } => eprintln!(
+            "  [{idx}] {:indent$}stack ({:.1},{:.1},{:.1},{:.1})",
+            "",
+            rect.x(),
+            rect.y(),
+            rect.width(),
+            rect.height(),
+            indent = depth * 2
+          ),
         }
       }
     }
@@ -1698,16 +1633,18 @@ impl Painter {
       });
 
       match (overflow_clip, clip_property) {
-        (Some(overflow), Some(prop_rect)) => overflow
-          .rect
-          .intersection(prop_rect)
-          .map(|rect| StackingClip {
-            rect,
-            radii: BorderRadii::ZERO,
-            clip_x: true,
-            clip_y: true,
-            clip_root: true,
-          }),
+        (Some(overflow), Some(prop_rect)) => {
+          overflow
+            .rect
+            .intersection(prop_rect)
+            .map(|rect| StackingClip {
+              rect,
+              radii: BorderRadii::ZERO,
+              clip_x: true,
+              clip_y: true,
+              clip_root: true,
+            })
+        }
         (Some(overflow), None) => Some(overflow),
         (None, Some(prop_rect)) => Some(StackingClip {
           rect: prop_rect,
@@ -2049,7 +1986,12 @@ impl Painter {
           if total_ms >= threshold_ms {
             let (run_count, glyph_count) = shaped_runs
               .as_deref()
-              .map(|runs| (runs.len(), runs.iter().map(|r| r.glyphs.len()).sum::<usize>()))
+              .map(|runs| {
+                (
+                  runs.len(),
+                  runs.iter().map(|r| r.glyphs.len()).sum::<usize>(),
+                )
+              })
               .unwrap_or((0, 0));
             let preview: String = text.chars().take(80).collect();
             eprintln!(
@@ -5273,22 +5215,12 @@ impl Painter {
         let resolved = self.image_cache.resolve_url(src);
         eprintln!(
           "[image-paint] #{idx} src={} resolved={} rect=({:.1},{:.1},{:.1},{:.1})",
-          src,
-          resolved,
-          x,
-          y,
-          width,
-          height
+          src, resolved, x, y, width, height
         );
       }
     }
 
-    static LOG_IMAGE_FAIL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let log_image_fail = *LOG_IMAGE_FAIL.get_or_init(|| {
-      std::env::var("FASTR_LOG_IMAGE_FAIL")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
+    let log_image_fail = runtime::runtime_toggles().truthy("FASTR_LOG_IMAGE_FAIL");
 
     let image = match self.image_cache.load(src) {
       Ok(img) => img,
@@ -5507,13 +5439,14 @@ impl Painter {
 
       let render_w = dest_w_device.ceil().max(1.0) as u32;
       let render_h = dest_h_device.ceil().max(1.0) as u32;
-      let pixmap = match self
-        .image_cache
-        .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
-      {
-        Ok(pixmap) => pixmap,
-        Err(_) => return false,
-      };
+      let pixmap =
+        match self
+          .image_cache
+          .render_svg_pixmap_at_size(content, render_w, render_h, "inline-svg")
+        {
+          Ok(pixmap) => pixmap,
+          Err(_) => return false,
+        };
 
       let scale_x = dest_w_device / render_w as f32;
       let scale_y = dest_h_device / render_h as f32;
@@ -5653,12 +5586,7 @@ impl Painter {
     style: Option<&ComputedStyle>,
     rect: Rect,
   ) {
-    static LOG_IMAGE_PLACEHOLDER: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let log_placeholder = *LOG_IMAGE_PLACEHOLDER.get_or_init(|| {
-      std::env::var("FASTR_LOG_IMAGE_FAIL")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
+    let log_placeholder = runtime::runtime_toggles().truthy("FASTR_LOG_IMAGE_FAIL");
     if log_placeholder {
       if let ReplacedType::Image { src, .. } = replaced_type {
         eprintln!("[image-placeholder] src={}", src);

@@ -449,11 +449,13 @@ impl FormattingContext for FlexFormattingContext {
     static LOG_FIRST_N_COUNTER: std::sync::OnceLock<std::sync::Mutex<usize>> =
       std::sync::OnceLock::new();
     record_taffy_invocation(TaffyAdapterKind::Flex);
+    let measure_toggles = toggles.clone();
     taffy_tree
             .compute_layout_with_measure(
                 root_node,
                 available_space,
                 move |mut known_dimensions, mut avail, _node_id, node_context, _style| {
+                    let toggles = measure_toggles.as_ref();
                     // Treat zero/near-zero definite sizes as absent to avoid pathological
                     // measurement probes when Taffy propagates a 0px available size. This
                     // aligns with constraints_from_taffy, which promotes tiny definites to
@@ -2726,6 +2728,7 @@ impl FlexFormattingContext {
       } else {
         matches!(box_node.style.overflow_y, CssOverflow::Visible)
       };
+    let toggles = crate::debug::runtime::runtime_toggles();
     let mut fallback_cursor_x = 0.0;
     let mut fallback_cursor_y = 0.0;
     let mut last_layout_x: Option<f32> = None;

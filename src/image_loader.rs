@@ -3,6 +3,7 @@
 //! This module provides image loading from various sources (HTTP, file, data URLs)
 //! with in-memory caching and support for various image formats including SVG.
 
+use crate::debug::runtime;
 use crate::error::Error;
 use crate::error::ImageError;
 use crate::error::RenderError;
@@ -36,23 +37,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::time::Instant;
 use url::Url;
 
 fn image_profile_threshold_ms() -> Option<f64> {
-  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
-  THRESHOLD
-    .get_or_init(|| {
-      let raw = std::env::var("FASTR_IMAGE_PROFILE_MS").ok()?;
-      let trimmed = raw.trim();
-      if trimmed.is_empty() {
-        return None;
-      }
-      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
-    })
-    .as_ref()
-    .copied()
+  runtime::runtime_toggles().f64("FASTR_IMAGE_PROFILE_MS")
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -209,7 +198,10 @@ fn map_svg_aspect_ratio(
     SvgAlign::XMidYMin => ((render_width - scaled_w) * 0.5, 0.0),
     SvgAlign::XMaxYMin => (render_width - scaled_w, 0.0),
     SvgAlign::XMinYMid => (0.0, (render_height - scaled_h) * 0.5),
-    SvgAlign::XMidYMid => ((render_width - scaled_w) * 0.5, (render_height - scaled_h) * 0.5),
+    SvgAlign::XMidYMid => (
+      (render_width - scaled_w) * 0.5,
+      (render_height - scaled_h) * 0.5,
+    ),
     SvgAlign::XMaxYMid => (render_width - scaled_w, (render_height - scaled_h) * 0.5),
     SvgAlign::XMinYMax => (0.0, render_height - scaled_h),
     SvgAlign::XMidYMax => ((render_width - scaled_w) * 0.5, render_height - scaled_h),
@@ -240,17 +232,14 @@ fn svg_parse_fill_color(value: &str) -> Option<Rgba> {
   if let Some(hex) = crate::style::defaults::parse_color_attribute(trimmed) {
     return Some(hex);
   }
-  trimmed
-    .parse::<csscolorparser::Color>()
-    .ok()
-    .map(|c| {
-      Rgba::new(
-        (c.r * 255.0).round() as u8,
-        (c.g * 255.0).round() as u8,
-        (c.b * 255.0).round() as u8,
-        c.a as f32,
-      )
-    })
+  trimmed.parse::<csscolorparser::Color>().ok().map(|c| {
+    Rgba::new(
+      (c.r * 255.0).round() as u8,
+      (c.g * 255.0).round() as u8,
+      (c.b * 255.0).round() as u8,
+      c.a as f32,
+    )
+  })
 }
 
 fn multiply_alpha(mut color: Rgba, alpha: f32) -> Rgba {
@@ -530,7 +519,9 @@ fn arc_to_cubic_beziers(
   }
 
   // Split the arc into segments no larger than 90 degrees.
-  let segments = (delta_angle.abs() / (std::f64::consts::FRAC_PI_2)).ceil().max(1.0) as usize;
+  let segments = (delta_angle.abs() / (std::f64::consts::FRAC_PI_2))
+    .ceil()
+    .max(1.0) as usize;
   let seg_angle = delta_angle / segments as f64;
 
   for _ in 0..segments {
@@ -563,7 +554,9 @@ fn arc_to_cubic_beziers(
     let (c1x, c1y) = map(cp1x, cp1y);
     let (c2x, c2y) = map(cp2x, cp2y);
     let (ex, ey) = map(x2, y2);
-    pb.cubic_to(c1x as f32, c1y as f32, c2x as f32, c2y as f32, ex as f32, ey as f32);
+    pb.cubic_to(
+      c1x as f32, c1y as f32, c2x as f32, c2y as f32, ex as f32, ey as f32,
+    );
   }
 
   true
@@ -590,10 +583,7 @@ fn try_render_simple_svg_pixmap(
 
   for node in root.descendants().filter(|n| n.is_element()) {
     let name = node.tag_name().name();
-    let allowed = matches!(
-      name,
-      "svg" | "g" | "path" | "title" | "desc" | "metadata"
-    );
+    let allowed = matches!(name, "svg" | "g" | "path" | "title" | "desc" | "metadata");
     if !allowed {
       return None;
     }
@@ -609,7 +599,10 @@ fn try_render_simple_svg_pixmap(
       if node.attribute("d").is_none() {
         return None;
       }
-      if node.attribute("stroke").is_some_and(|v| !v.trim().eq_ignore_ascii_case("none")) {
+      if node
+        .attribute("stroke")
+        .is_some_and(|v| !v.trim().eq_ignore_ascii_case("none"))
+      {
         return None;
       }
       if node.attribute("stroke-width").is_some()
@@ -1468,7 +1461,11 @@ impl ImageCache {
   }
 
   /// Probe intrinsic SVG metadata (dimensions/aspect ratio) from raw markup without rasterizing.
-  pub fn probe_svg_content(&self, svg_content: &str, url_hint: &str) -> Result<CachedImageMetadata> {
+  pub fn probe_svg_content(
+    &self,
+    svg_content: &str,
+    url_hint: &str,
+  ) -> Result<CachedImageMetadata> {
     const DEFAULT_WIDTH: f32 = 300.0;
     const DEFAULT_HEIGHT: f32 = 150.0;
 
@@ -1497,7 +1494,13 @@ impl ImageCache {
     let intrinsic_ratio = if aspect_ratio_none {
       None
     } else {
-      ratio.or_else(|| if height > 0 { Some(width as f32 / height as f32) } else { None })
+      ratio.or_else(|| {
+        if height > 0 {
+          Some(width as f32 / height as f32)
+        } else {
+          None
+        }
+      })
     };
 
     Ok(CachedImageMetadata {
@@ -1603,7 +1606,13 @@ impl ImageCache {
       let ratio = if aspect_ratio_none {
         None
       } else {
-        ratio.or_else(|| if height > 0 { Some(width as f32 / height as f32) } else { None })
+        ratio.or_else(|| {
+          if height > 0 {
+            Some(width as f32 / height as f32)
+          } else {
+            None
+          }
+        })
       };
 
       return Ok(CachedImageMetadata {
@@ -1622,10 +1631,12 @@ impl ImageCache {
     let sniffed_format = Self::sniff_image_format(bytes);
     let (width, height) = self
       .predecoded_dimensions(bytes, format_from_content_type, sniffed_format)
-      .ok_or_else(|| Error::Image(ImageError::DecodeFailed {
-        url: url.to_string(),
-        reason: "Unable to determine image dimensions".to_string(),
-      }))?;
+      .ok_or_else(|| {
+        Error::Image(ImageError::DecodeFailed {
+          url: url.to_string(),
+          reason: "Unable to determine image dimensions".to_string(),
+        })
+      })?;
     self.enforce_decode_limits(width, height, url)?;
 
     Ok(CachedImageMetadata {

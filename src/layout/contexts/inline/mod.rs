@@ -162,12 +162,7 @@ pub struct InlineFormattingContext {
 }
 
 fn dump_text_enabled() -> bool {
-  static FLAG: OnceLock<bool> = OnceLock::new();
-  *FLAG.get_or_init(|| {
-    std::env::var("FASTR_DUMP_TEXT")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-  })
+  crate::debug::runtime::runtime_toggles().truthy("FASTR_DUMP_TEXT")
 }
 
 fn truncate_text(text: &str, limit: usize) -> String {
@@ -1830,17 +1825,9 @@ impl InlineFormattingContext {
       LayoutConstraints::new(AvailableSpace::Definite(constraint_width), height_space);
     let fragment = fc.layout(box_node, &constraints)?;
     let mut fragment = fragment;
-    static LOG_IDS: OnceLock<Vec<usize>> = OnceLock::new();
-    let log_ids = LOG_IDS.get_or_init(|| {
-      std::env::var("FASTR_LOG_INTRINSIC_IDS")
-        .ok()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
+    let log_ids = crate::debug::runtime::runtime_toggles()
+      .usize_list("FASTR_LOG_INTRINSIC_IDS")
+      .unwrap_or_default();
     if !log_ids.is_empty() && log_ids.contains(&box_node.id) {
       let selector = box_node
         .debug_info
@@ -3955,21 +3942,15 @@ impl InlineFormattingContext {
     mut anchor_positions: Option<&mut HashMap<usize, Point>>,
     mut positioned_containing_blocks: Option<&mut HashMap<usize, ContainingBlock>>,
   ) -> FragmentNode {
-    static LOG_BASELINE: OnceLock<Option<AtomicUsize>> = OnceLock::new();
-    let log_line = LOG_BASELINE
-      .get_or_init(|| {
-        if std::env::var("FASTR_LOG_INLINE_BASELINE")
-          .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-          .unwrap_or(false)
-        {
-          Some(AtomicUsize::new(0))
-        } else {
-          None
-        }
-      })
-      .as_ref()
-      .map(|counter| counter.fetch_add(1, Ordering::Relaxed) < 5)
-      .unwrap_or(false);
+    static LOG_BASELINE: OnceLock<AtomicUsize> = OnceLock::new();
+    let log_line = if crate::debug::runtime::runtime_toggles().truthy("FASTR_LOG_INLINE_BASELINE") {
+      LOG_BASELINE
+        .get_or_init(|| AtomicUsize::new(0))
+        .fetch_add(1, Ordering::Relaxed)
+        < 5
+    } else {
+      false
+    };
 
     let should_justify =
       is_justify_align(line_align) && !matches!(resolved_justify, TextJustify::None);
@@ -6566,7 +6547,7 @@ impl InlineFormattingContext {
       } else {
         limit
       };
-      if std::env::var("FASTR_LOG_OVERFLOW_TEST").is_ok() {
+      if crate::debug::runtime::runtime_toggles().truthy("FASTR_LOG_OVERFLOW_TEST") {
         eprintln!(
           "[text-overflow] width={:.2} limit={:.2} indent={:.2} usable={:.2}",
           line.width, limit, line.indent, usable_limit
@@ -6634,7 +6615,7 @@ impl InlineFormattingContext {
     let mut items: Vec<InlineItem> = line.items.iter().map(|p| p.item.clone()).collect();
     let markers_total = start_width + end_width;
 
-    if std::env::var("FASTR_LOG_OVERFLOW_TEST").is_ok() {
+    if crate::debug::runtime::runtime_toggles().truthy("FASTR_LOG_OVERFLOW_TEST") {
       eprintln!(
         "[text-overflow] markers start={:.2} end={:.2} total={:.2} usable_limit={:.2}",
         start_width, end_width, markers_total, usable_limit
@@ -11957,7 +11938,7 @@ mod tests {
 
     let mut texts = Vec::new();
     collect_text_fragments(&fragment, &mut texts);
-    if std::env::var("FASTR_LOG_OVERFLOW_TEST").is_ok() {
+    if crate::debug::runtime::runtime_toggles().truthy("FASTR_LOG_OVERFLOW_TEST") {
       if let Some(line) = fragment
         .children
         .iter()

@@ -1,3 +1,4 @@
+use crate::debug::runtime;
 use tiny_skia::Pixmap;
 
 const FAST_GAUSS_THRESHOLD_SIGMA: f32 = 4.0;
@@ -297,9 +298,7 @@ pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
     return;
   }
 
-  let fast_enabled = std::env::var("FASTR_FAST_BLUR")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(false);
+  let fast_enabled = runtime::runtime_toggles().truthy("FASTR_FAST_BLUR");
   if fast_enabled {
     if sigma <= FAST_GAUSS_THRESHOLD_SIGMA {
       gaussian_convolve_premultiplied(pixmap, sigma);

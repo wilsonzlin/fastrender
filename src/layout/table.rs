@@ -26,6 +26,7 @@
 //! - CSS Tables Module Level 3
 //! - HTML 5.2 Section 4.9: Tabular data
 
+use crate::debug::runtime;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::layout::absolute_positioning::resolve_positioned_style;
@@ -68,7 +69,6 @@ use crate::tree::box_tree::MarkerContent;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 // ============================================================================
 // Table Structure Types
@@ -3723,12 +3723,7 @@ impl FormattingContext for TableFormattingContext {
     ) {
       return Ok(cached);
     }
-    static DUMP_TABLE: OnceLock<bool> = OnceLock::new();
-    let dump = *DUMP_TABLE.get_or_init(|| {
-      std::env::var("FASTR_DUMP_TABLE")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
+    let dump = runtime::runtime_toggles().truthy("FASTR_DUMP_TABLE");
     let mut positioned_children: Vec<BoxNode> = Vec::new();
     for child in &box_node.children {
       if matches!(
@@ -5491,17 +5486,9 @@ impl FormattingContext for TableFormattingContext {
         column_constraints.iter().map(|c| c.max_width).sum::<f32>() + spacing + edges
       }
     };
-    static LOG_IDS: OnceLock<Vec<usize>> = OnceLock::new();
-    let log_ids = LOG_IDS.get_or_init(|| {
-      std::env::var("FASTR_LOG_INTRINSIC_IDS")
-        .ok()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
+    let log_ids = runtime::runtime_toggles()
+      .usize_list("FASTR_LOG_INTRINSIC_IDS")
+      .unwrap_or_default();
     let log_this = !log_ids.is_empty() && log_ids.contains(&box_node.id);
     if log_this {
       let selector = box_node
