@@ -8,6 +8,7 @@ use crate::layout::fragmentation::{
   clip_node, collect_forced_boundaries, propagate_fragment_metadata,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
+use crate::style::counter_styles::CounterStyleRegistry;
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
@@ -25,6 +26,12 @@ pub fn paginate_fragment_tree(
   if rules.is_empty() {
     return vec![root.clone()];
   }
+
+  let counter_styles = root
+    .style
+    .as_ref()
+    .map(|s| s.counter_styles.clone())
+    .unwrap_or_else(|| Arc::new(CounterStyleRegistry::with_builtins()));
 
   let mut spans = Vec::new();
   collect_page_name_spans(root, 0.0, &mut spans);
@@ -94,7 +101,12 @@ pub fn paginate_fragment_tree(
 
     page_root
       .children
-      .extend(build_margin_box_fragments(&style, font_ctx));
+      .extend(build_margin_box_fragments(
+        &style,
+        font_ctx,
+        counter_styles.clone(),
+        page_index,
+      ));
 
     pages.push(page_root);
     pos = end;
@@ -174,10 +186,13 @@ fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
 fn build_margin_box_fragments(
   style: &ResolvedPageStyle,
   _font_ctx: &FontContext,
+  counter_styles: Arc<CounterStyleRegistry>,
+  page_index: usize,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
-  let generator = ContentGenerator::new();
+  let generator = ContentGenerator::with_counter_styles(counter_styles);
   let mut context = ContentContext::new();
+  context.set_counter("page", (page_index + 1) as i32);
 
   for (area, box_style) in &style.margin_boxes {
     if let Some(bounds) = margin_box_bounds(*area, style) {
