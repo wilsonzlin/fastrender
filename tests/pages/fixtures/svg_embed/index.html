@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SVG embedding</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 10px">
+      <span class="pill">Vector coverage</span>
+      <h1>Embedded SVGs</h1>
+      <p class="muted">Both external and inline SVGs show up here; the external one used to skip image decode on file:// pages.</p>
+    </header>
+
+    <section class="svg-grid">
+      <div class="card svg-card">
+        <strong>External asset</strong>
+        <img src="../assets/images/illustration.svg" alt="abstract illustration" />
+        <div class="badge-row">
+          <span class="tag">file://</span>
+          <span class="tag">svg</span>
+        </div>
+      </div>
+      <div class="card svg-card">
+        <strong>Inline gradient</strong>
+        <svg class="inline-svg" viewBox="0 0 320 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="inline vector">
+          <defs>
+            <linearGradient id="inlineGradient" x1="0" y1="0" x2="1" y2="1">
+              <stop stop-color="#2563EB" />
+              <stop offset="1" stop-color="#D946EF" />
+            </linearGradient>
+          </defs>
+          <rect x="16" y="18" width="288" height="184" rx="18" fill="url(#inlineGradient)" opacity="0.85" />
+          <circle cx="110" cy="110" r="46" fill="#E0F2FE" opacity="0.8" />
+          <circle cx="198" cy="96" r="34" fill="#111827" opacity="0.35" />
+          <path d="M60 152C92 126 122 150 158 118C190 92 228 80 266 94V180H60V152Z" fill="#0F172A" opacity="0.4" />
+        </svg>
+      </div>
+    </section>
+  </body>
+</html>

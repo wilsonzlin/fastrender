@@ -1,0 +1,90 @@
+@font-face {
+  font-family: "DejaVu Pages";
+  src: url("../fonts/DejaVuSans-subset.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --ink: #1f2937;
+  --subtle: #6b7280;
+  --border: #d6d9df;
+  --accent: #2563eb;
+  --accent-2: #d946ef;
+  --surface: #f9fafb;
+  --card: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 32px;
+  font-family: "DejaVu Pages", "DejaVu Sans", sans-serif;
+  color: var(--ink);
+  background: linear-gradient(180deg, #f5f7fb 0%, #eef2ff 100%);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #0f172a;
+}
+
+p {
+  margin: 0;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+section {
+  margin-bottom: 28px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 8px 18px rgba(17, 24, 39, 0.06);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.muted {
+  color: var(--subtle);
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+}
+
+.divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border), transparent);
+  margin: 16px 0;
+}
+
+img,
+svg {
+  max-width: 100%;
+  display: block;
+}

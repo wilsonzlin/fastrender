@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Form controls</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 12px">
+      <span class="pill">Form suite</span>
+      <h1>Native controls</h1>
+      <p class="muted">Inputs render with default UA styling so regressions in replaced elements surface quickly.</p>
+    </header>
+
+    <div class="form-shell">
+      <form>
+        <label for="name">Name</label>
+        <input id="name" type="text" placeholder="Alex Doe" />
+
+        <label for="email">Email</label>
+        <input id="email" type="email" placeholder="team@example.com" />
+
+        <label for="type">Plan</label>
+        <select id="type">
+          <option>Starter</option>
+          <option>Growth</option>
+          <option>Enterprise</option>
+        </select>
+
+        <label for="message">Notes</label>
+        <textarea id="message" rows="3">We rely on print captures and offline fixtures.</textarea>
+
+        <div class="controls-row">
+          <label><input type="checkbox" checked /> Alerts</label>
+          <label><input type="checkbox" /> Weekly summary</label>
+        </div>
+
+        <div class="controls-row">
+          <label><input type="radio" name="channel" checked /> Email</label>
+          <label><input type="radio" name="channel" /> Push</label>
+        </div>
+
+        <label for="confidence">Confidence</label>
+        <input id="confidence" type="range" min="0" max="100" value="68" />
+
+        <div class="controls-row" style="justify-content: space-between">
+          <span class="chip">keyboard-focus</span>
+          <button type="button">Submit</button>
+        </div>
+      </form>
+
+      <aside class="aside">
+        <h2>Why include forms?</h2>
+        <p>
+          Native controls pull in UA styles and replaced elements, which previously diverged between windows and file:// captures.
+          This fixture keeps that path covered without hitting the network.
+        </p>
+      </aside>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Writing modes</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 10px">
+      <span class="pill">Typography</span>
+      <h1>Vertical flow</h1>
+      <p class="muted">Vertical-rl and sideways modes once flipped inline padding; this snapshot keeps the mapping correct.</p>
+    </header>
+
+    <div class="writing-panel">
+      <div class="vertical card">
+        <div class="label">縦書き</div>
+        <div style="margin-top: 12px">南北朝</div>
+        <div>書道</div>
+        <div>サンプル</div>
+      </div>
+      <div class="mixed">
+        <div class="box">
+          <strong>sideways-lr</strong>
+          <div style="writing-mode: sideways-lr; padding: 6px">Annotated callouts</div>
+        </div>
+        <div class="box">
+          <strong>vertical-lr</strong>
+          <div style="writing-mode: vertical-lr; text-orientation: mixed; padding: 6px">
+            Mixed english / 日本語
+          </div>
+        </div>
+        <div class="box">
+          <strong>horizontal</strong>
+          <p class="muted">Reference block keeps logical properties intact.</p>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

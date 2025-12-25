@@ -1,0 +1,30 @@
+.article {
+  column-count: 3;
+  column-gap: 24px;
+  column-rule: 1px solid var(--border);
+  text-align: justify;
+}
+
+.article h2 {
+  column-span: all;
+  margin-bottom: 8px;
+}
+
+.article .lede::first-letter {
+  float: left;
+  font-size: 48px;
+  line-height: 1;
+  padding: 6px 10px 6px 0;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.pullquote {
+  column-span: all;
+  margin: 18px 0;
+  padding: 14px;
+  border-left: 4px solid var(--accent);
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.06), transparent);
+  color: #0f172a;
+  font-style: italic;
+}

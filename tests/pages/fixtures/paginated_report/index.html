@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Paginated report</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="report">
+    <section class="cover">
+      <h1>Quarterly print proof</h1>
+      <p>
+        This page uses @page rules, named page margins, and explicit break points. It mirrors the PDF export path that once
+        dropped headers when pages alternated between left and right rules.
+      </p>
+      <div class="columns">
+        <div class="card">
+          <strong>Highlights</strong>
+          <ul class="list">
+            <li>Page headers and footers render on each sheet.</li>
+            <li>Left/right margin differences stay intact.</li>
+            <li>Break tokens align with the nearest block boundary.</li>
+          </ul>
+        </div>
+        <div class="card note">
+          <strong>Regression guard</strong>
+          <p>
+            A past bug dropped positioned children during page layout; the badges below stay pinned across page fragments.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card page-break">
+      <h2>Operational metrics</h2>
+      <div class="columns">
+        <div class="chart-box">
+          <strong>Fulfillment</strong>
+          <p class="muted">Order processing holds at 96% within the SLA window.</p>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 8px">
+            <div class="progress"><span style="width: 78%"></span></div>
+            <div class="progress"><span style="width: 92%"></span></div>
+            <div class="progress"><span style="width: 66%"></span></div>
+            <div class="progress"><span style="width: 81%"></span></div>
+          </div>
+        </div>
+        <div class="chart-box">
+          <strong>Print readiness</strong>
+          <p class="muted">Non-paged content reflows into discrete sheets with consistent gutters.</p>
+          <div class="progress"><span style="width: 54%"></span></div>
+          <p class="muted">Media type: print</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card page-break">
+      <h2>Appendix</h2>
+      <p class="muted">
+        Each page uses the same base styles as the live captures. The mix of flex, grid, and list formatting contexts ensures
+        pagination interacts with multiple layout paths.
+      </p>
+      <div class="columns" style="margin-top: 10px">
+        <div class="card">
+          <strong>Notes</strong>
+          <ul class="list">
+            <li>Footers stay visible even when the body overflows.</li>
+            <li>Margin boxes inherit the document font.</li>
+            <li>Images from disk resolve relative to the file:// base URL.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <strong>Badges</strong>
+          <div style="position: relative; padding: 14px; border: 1px dashed var(--border); border-radius: 10px">
+            <span style="position: absolute; top: 10px; right: 12px; background: rgba(37, 99, 235, 0.12); padding: 6px 10px; border-radius: 999px; font-weight: 700">
+              Persist
+            </span>
+            <p class="muted">Absolutely positioned children remain after pagination.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Positioned badge regression</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 10px">
+      <span class="pill">Regression</span>
+      <h1>Badges stay anchored</h1>
+      <p class="muted">
+        Guards against the historical bug where absolutely positioned children were dropped during block layout pagination.
+      </p>
+    </header>
+
+    <section class="regression-grid">
+      <article class="regression-card">
+        <span class="badge">beta</span>
+        <span class="flag">Pinned</span>
+        <h2>Release candidates</h2>
+        <p class="muted">Cards with badges rendered from live captures once lost the badge after pagination.</p>
+        <footer>
+          <span class="status-dot" aria-hidden="true"></span>
+          <span class="muted">Status propagated</span>
+        </footer>
+      </article>
+
+      <article class="regression-card" style="background: url('../assets/images/pattern.png'), linear-gradient(135deg, #ffffff, #f8fafc)">
+        <span class="badge">ops</span>
+        <span class="flag" style="background: #111827">Badge</span>
+        <h2>Ops notebook</h2>
+        <p class="muted">Mixes background images with positioned overlays to hit the painter path.</p>
+        <footer>
+          <span class="status-dot" aria-hidden="true" style="background: #f97316; box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.2)"></span>
+          <span class="muted">Follow-up needed</span>
+        </footer>
+      </article>
+
+      <article class="regression-card">
+        <span class="badge">sync</span>
+        <span class="flag" style="top: 18px; left: auto; right: 32px; transform: rotate(1deg)">Persist</span>
+        <h2>Data sync</h2>
+        <p class="muted">Ensures positioned children stay attached even when the container becomes a fragmentainer.</p>
+        <footer>
+          <span class="status-dot" aria-hidden="true" style="background: #06b6d4; box-shadow: 0 0 0 4px rgba(6, 182, 212, 0.2)"></span>
+          <span class="muted">Running</span>
+        </footer>
+      </article>
+    </section>
+  </body>
+</html>

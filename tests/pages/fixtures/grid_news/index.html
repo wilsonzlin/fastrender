@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Grid news layout</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 12px">
+      <span class="pill">Editors' digest</span>
+      <h1>Morning brief</h1>
+      <p class="muted">Grid heavy page used in captures to exercise intrinsic sizing and aspect locking.</p>
+    </header>
+
+    <section class="grid-news">
+      <article class="story card">
+        <div class="kicker">Frontend</div>
+        <div class="preview">
+          <svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect width="120" height="80" rx="12" fill="#2563EB" opacity="0.35" />
+            <path d="M12 62C42 36 54 44 84 22C98 12 110 14 116 18V80H12V62Z" fill="#0F172A" opacity="0.55" />
+            <circle cx="32" cy="26" r="10" fill="#E0F2FE" />
+          </svg>
+        </div>
+        <div class="title">Component library shipped with print styles baked in.</div>
+        <div class="meta">
+          <span>6 min read</span>
+          <div class="tags">
+            <span class="tag">grid</span>
+            <span class="tag">accessibility</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="story card">
+        <div class="kicker">Perf</div>
+        <div class="preview">
+          <svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect width="120" height="80" rx="12" fill="#0F172A" opacity="0.7" />
+            <polyline points="12,64 36,32 58,52 84,18 108,34" fill="none" stroke="#93C5FD" stroke-width="6" stroke-linecap="round" />
+          </svg>
+        </div>
+        <div class="title">Image cache regression resolved after eager decode fix.</div>
+        <div class="meta">
+          <span>4 min read</span>
+          <div class="tags">
+            <span class="tag">raster</span>
+            <span class="tag">cache</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="story card">
+        <div class="kicker">Analytics</div>
+        <div class="preview">
+          <svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+              <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+                <stop stop-color="#D946EF" />
+                <stop offset="1" stop-color="#2563EB" />
+              </linearGradient>
+            </defs>
+            <rect width="120" height="80" rx="12" fill="url(#grad)" opacity="0.5" />
+            <rect x="12" y="26" width="18" height="42" rx="4" fill="#E0F2FE" />
+            <rect x="38" y="18" width="18" height="50" rx="4" fill="#E0F2FE" />
+            <rect x="64" y="34" width="18" height="34" rx="4" fill="#E0F2FE" />
+            <rect x="90" y="22" width="18" height="46" rx="4" fill="#E0F2FE" />
+          </svg>
+        </div>
+        <div class="title">Stacked cards share the same baseline to avoid snapping.</div>
+        <div class="meta">
+          <span>8 min read</span>
+          <div class="tags">
+            <span class="tag">grid</span>
+            <span class="tag">charts</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="story card">
+        <div class="kicker">Research</div>
+        <div class="preview">
+          <svg viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect width="120" height="80" rx="12" fill="#0F172A" opacity="0.66" />
+            <circle cx="40" cy="40" r="18" fill="#2563EB" />
+            <circle cx="70" cy="44" r="22" fill="#D946EF" opacity="0.82" />
+          </svg>
+        </div>
+        <div class="title">Typography study feeds the writing-mode snapshots.</div>
+        <div class="meta">
+          <span>5 min read</span>
+          <div class="tags">
+            <span class="tag">type</span>
+            <span class="tag">labs</span>
+          </div>
+        </div>
+      </article>
+    </section>
+  </body>
+</html>

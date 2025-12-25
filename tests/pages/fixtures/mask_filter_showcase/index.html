@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Masks and filters</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 10px">
+      <span class="pill">Visual effects</span>
+      <h1>Masked avatar board</h1>
+      <p class="muted">Combines CSS masks with filters to hit the rasterization code paths that failed on gradients.</p>
+    </header>
+
+    <section class="mask-board">
+      <div class="mask-card card">
+        <strong>Masked portrait</strong>
+        <div class="masked-shape" aria-hidden="true"></div>
+        <p class="muted">The alpha mask comes from a local PNG to avoid network fetches.</p>
+      </div>
+      <div class="mask-card card">
+        <strong>Filtered band</strong>
+        <div class="filtered" aria-hidden="true">
+          <svg viewBox="0 0 240 140" xmlns="http://www.w3.org/2000/svg">
+            <path d="M0 90C60 40 140 120 200 72C220 56 240 64 240 64V140H0V90Z" fill="#2563EB" opacity="0.28" />
+            <circle cx="56" cy="52" r="20" fill="#D946EF" opacity="0.8" />
+            <circle cx="102" cy="38" r="14" fill="#0F172A" opacity="0.35" />
+          </svg>
+        </div>
+        <p class="muted">A soft drop-shadow used to previously ignore mask alpha.</p>
+      </div>
+      <div class="mask-card card">
+        <strong>Texture check</strong>
+        <div class="filtered" aria-hidden="true" style="background: url('../assets/images/pattern.png'); filter: grayscale(0.25) drop-shadow(0 4px 8px rgba(0,0,0,0.2))">
+          <svg viewBox="0 0 240 140" xmlns="http://www.w3.org/2000/svg">
+            <rect x="24" y="34" width="48" height="72" rx="10" fill="#111827" opacity="0.6" />
+            <rect x="86" y="24" width="48" height="82" rx="10" fill="#2563EB" opacity="0.7" />
+            <rect x="148" y="54" width="48" height="52" rx="10" fill="#D946EF" opacity="0.75" />
+          </svg>
+        </div>
+        <p class="muted">Filters apply over tiled PNG backgrounds.</p>
+      </div>
+    </section>
+  </body>
+</html>

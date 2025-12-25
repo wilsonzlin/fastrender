@@ -43,6 +43,15 @@ Comparisons are strict by default. To allow small local differences (fonts, GPU,
 
 New columns/transform/form fixtures ship with checked-in goldens; keep these up to date when adjusting layouts.
 
+## Offline page regression suite
+
+- Run: `cargo test pages_regression`
+- Refresh goldens: `UPDATE_PAGES_GOLDEN=1 cargo test pages_regression`
+
+This suite renders a curated set of realistic pages under `tests/pages/fixtures/` (flex/grid/table, multicol, pagination, masks/filters, SVG, writing modes, form controls, plus a positioned-child regression) and compares them against goldens in `tests/pages/golden/`.
+
+Artifacts for failures land in `target/pages_diffs/<page>_{actual,expected,diff}.png`. Comparison defaults to strict pixel matching but respects the same knobs as the fixture harness with `PAGES_TOLERANCE`, `PAGES_MAX_DIFFERENT_PERCENT`, and `PAGES_FUZZY=1`.
+
 ## WPT harness (local, visual)
 
 There is a self-contained WPT-style runner under `tests/wpt/` for local “render and compare” tests. It does not talk to upstream WPT and never fetches from the network.

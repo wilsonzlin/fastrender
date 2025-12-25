@@ -155,6 +155,8 @@
 
 pub mod compare;
 pub mod harness;
+#[allow(dead_code)]
+pub mod image_compare;
 
 // Re-export main types for convenience
 // Note: These are public API for external test consumers
@@ -182,3 +184,11 @@ pub use harness::RefTestHarness;
 pub use harness::RefTestResult;
 #[allow(unused_imports)]
 pub use harness::RefTestResults;
+#[allow(unused_imports)]
+pub use image_compare::compare_config_from_env;
+#[allow(unused_imports)]
+pub use image_compare::compare_pngs;
+#[allow(unused_imports)]
+pub use image_compare::ArtifactPaths;
+#[allow(unused_imports)]
+pub use image_compare::CompareEnvVars;

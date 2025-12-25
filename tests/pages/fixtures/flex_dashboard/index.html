@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Flex dashboard snapshot</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="page-flex-dashboard">
+    <section class="hero">
+      <div class="title">
+        <span class="pill">Ops pulse</span>
+        <h1>Engagement overview</h1>
+        <p class="muted">Real content pulled from the reporting widgets we mirror in captures.</p>
+      </div>
+      <div class="metrics">
+        <div class="metric">+18% week over week</div>
+        <div class="metric">Syncs: 42</div>
+      </div>
+    </section>
+
+    <section class="stats">
+      <div class="card">
+        <div class="stat-row">
+          <strong>Live sessions</strong>
+          <span class="muted">1,204</span>
+        </div>
+        <div class="progress"><span style="width: 68%"></span></div>
+        <p class="muted">Healthy mix of desktop and mobile visitors.</p>
+      </div>
+      <div class="card">
+        <div class="stat-row">
+          <strong>Conversion</strong>
+          <span class="muted">3.8%</span>
+        </div>
+        <div class="progress"><span style="width: 42%"></span></div>
+        <p class="muted">Recent landing changes boosted the flow.</p>
+      </div>
+      <div class="card">
+        <div class="stat-row">
+          <strong>Support queue</strong>
+          <span class="muted">7 open</span>
+        </div>
+        <div class="progress"><span style="width: 24%"></span></div>
+        <p class="muted">Tickets remain under the SLA threshold.</p>
+      </div>
+    </section>
+
+    <section class="activity">
+      <div class="timeline card">
+        <h2>Recent activity</h2>
+        <div class="divider"></div>
+        <div class="timeline-entry">
+          <div class="dot"></div>
+          <div class="content">
+            <strong>Content refresh shipped</strong>
+            <p class="muted">Hero text and feature bullets updated for the seasonal campaign.</p>
+          </div>
+        </div>
+        <div class="timeline-entry">
+          <div class="dot"></div>
+          <div class="content">
+            <strong>Checkout latency</strong>
+            <p class="muted">Stripe hand-off stayed under 110ms after CDN rule tuning.</p>
+          </div>
+        </div>
+        <div class="timeline-entry">
+          <div class="dot"></div>
+          <div class="content">
+            <strong>Notification burst</strong>
+            <p class="muted">Push cohort delivered with 98.7% success rate.</p>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar">
+        <div class="chart">
+          <strong>Infrastructure budget</strong>
+          <div class="sparkline" aria-hidden="true">
+            <span style="height: 26px"></span>
+            <span style="height: 44px"></span>
+            <span style="height: 32px"></span>
+            <span style="height: 58px"></span>
+            <span style="height: 64px"></span>
+            <span style="height: 52px"></span>
+            <span style="height: 38px"></span>
+            <span style="height: 47px"></span>
+          </div>
+          <p class="muted" style="margin-top: 8px">Tracks the same stacked bars that triggered a layering bug last quarter.</p>
+        </div>
+        <div class="card">
+          <strong>Next milestones</strong>
+          <p class="muted">- Ship accessibility sweep<br />- Roll out the print-friendly pages</p>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

@@ -1,0 +1,74 @@
+@page {
+  size: 820px 1080px;
+  margin: 34px 46px;
+  @top-center {
+    content: "Quarterly Health";
+    color: #0f172a;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+  }
+  @bottom-right {
+    content: counter(page) " / " counter(pages);
+    color: #64748b;
+    font-size: 11px;
+  }
+}
+
+@page :left {
+  margin-left: 72px;
+  margin-right: 38px;
+}
+
+body {
+  background: #f3f4f6;
+}
+
+.report {
+  display: grid;
+  gap: 16px;
+}
+
+.page-break {
+  break-before: page;
+}
+
+.cover {
+  background: linear-gradient(135deg, #0f172a, #1f2937);
+  color: #e5e7eb;
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.25);
+}
+
+.cover h1 {
+  color: #f8fafc;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.note {
+  background: #fff7ed;
+  border: 1px dashed #fb923c;
+  color: #9a3412;
+}
+
+.list {
+  list-style: disc;
+  padding-left: 20px;
+  margin: 8px 0;
+}
+
+.chart-box {
+  border: 1px solid var(--border);
+  background: #ffffff;
+  padding: 14px;
+  border-radius: 12px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.06);
+  break-inside: avoid;
+}

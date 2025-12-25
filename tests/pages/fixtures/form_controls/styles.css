@@ -1,0 +1,67 @@
+.form-shell {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+}
+
+form {
+  display: grid;
+  gap: 12px;
+  background: var(--card);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+label {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+input[type="text"],
+input[type="email"],
+select,
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font: inherit;
+}
+
+input[type="range"] {
+  width: 100%;
+}
+
+.controls-row {
+  display: flex;
+  gap: 12px;
+}
+
+.chip {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.1);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  font-weight: 600;
+}
+
+button {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: none;
+  color: #fff;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.aside {
+  background: #0f172a;
+  color: #e5e7eb;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}

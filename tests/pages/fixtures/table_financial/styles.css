@@ -1,0 +1,68 @@
+.financial-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 20px rgba(17, 24, 39, 0.08);
+}
+
+.financial-table thead {
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.1), rgba(37, 99, 235, 0.05));
+}
+
+.financial-table th,
+.financial-table td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.financial-table th {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--subtle);
+  text-transform: uppercase;
+}
+
+.financial-table tbody tr:nth-child(odd) {
+  background: #f8fafc;
+}
+
+.financial-table tbody tr:hover td {
+  background: #eef2ff;
+}
+
+.financial-table .positive {
+  color: #16a34a;
+  font-weight: 700;
+}
+
+.financial-table .negative {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.legend .item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--subtle);
+}
+
+.legend .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}

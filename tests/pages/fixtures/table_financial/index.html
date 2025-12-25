@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Financial table</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 10px">
+      <span class="pill">Quarterly snapshot</span>
+      <h1>Pipeline summary</h1>
+      <p class="muted">Table layout stays in its own formatting context to guard against the old flex fallback bug.</p>
+    </header>
+    <table class="financial-table" aria-label="financial overview">
+      <thead>
+        <tr>
+          <th scope="col">Product</th>
+          <th scope="col">MRR</th>
+          <th scope="col">Variance</th>
+          <th scope="col">Region</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Analytics Cloud</td>
+          <td>$420k</td>
+          <td class="positive">+6.4%</td>
+          <td>US/EU</td>
+        </tr>
+        <tr>
+          <td>Edge CDN</td>
+          <td>$210k</td>
+          <td class="positive">+1.2%</td>
+          <td>Global</td>
+        </tr>
+        <tr>
+          <td>Commerce</td>
+          <td>$320k</td>
+          <td class="negative">-0.8%</td>
+          <td>APAC</td>
+        </tr>
+        <tr>
+          <td>Docs platform</td>
+          <td>$96k</td>
+          <td class="positive">+3.1%</td>
+          <td>EU</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="legend">
+      <div class="item">
+        <span class="dot" aria-hidden="true"></span>
+        <span>Positive variance is tinted green.</span>
+      </div>
+      <div class="item">
+        <span class="dot" aria-hidden="true" style="background: #dc2626; box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.16)"></span>
+        <span>Negative variance remains isolated from other contexts.</span>
+      </div>
+    </div>
+  </body>
+</html>

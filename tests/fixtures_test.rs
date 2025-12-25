@@ -36,7 +36,8 @@
 mod r#ref;
 
 use fastrender::FastRender;
-use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig, ImageDiff};
+use r#ref::compare::load_png_from_bytes;
+use r#ref::image_compare::{compare_config_from_env, compare_pngs, CompareEnvVars};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Once;
@@ -109,157 +110,6 @@ fn should_update_golden() -> bool {
   std::env::var("UPDATE_GOLDEN").is_ok()
 }
 
-fn fixture_compare_config() -> Result<CompareConfig, String> {
-  let mut config = if std::env::var("FIXTURE_FUZZY").is_ok() {
-    CompareConfig::fuzzy()
-  } else {
-    CompareConfig::strict()
-  };
-
-  if let Ok(tolerance) = std::env::var("FIXTURE_TOLERANCE") {
-    let parsed = tolerance
-      .parse::<u8>()
-      .map_err(|e| format!("Invalid FIXTURE_TOLERANCE '{}': {}", tolerance, e))?;
-    config = config.with_channel_tolerance(parsed);
-  }
-
-  if let Ok(percent) = std::env::var("FIXTURE_MAX_DIFFERENT_PERCENT") {
-    let parsed = percent
-      .parse::<f64>()
-      .map_err(|e| format!("Invalid FIXTURE_MAX_DIFFERENT_PERCENT '{}': {}", percent, e))?;
-    config = config.with_max_different_percent(parsed);
-  }
-
-  if std::env::var("FIXTURE_IGNORE_ALPHA").is_ok() {
-    config = config.with_compare_alpha(false);
-  }
-
-  if let Ok(distance) = std::env::var("FIXTURE_MAX_PERCEPTUAL_DISTANCE") {
-    let parsed = distance.parse::<f64>().map_err(|e| {
-      format!(
-        "Invalid FIXTURE_MAX_PERCEPTUAL_DISTANCE '{}': {}",
-        distance, e
-      )
-    })?;
-    config = config.with_max_perceptual_distance(Some(parsed));
-  }
-
-  // Always generate diff images for fixture failures to aid debugging
-  config.generate_diff_image = true;
-
-  Ok(config)
-}
-
-struct ArtifactPaths {
-  output_dir: PathBuf,
-  actual: PathBuf,
-  expected: PathBuf,
-  diff: Option<PathBuf>,
-}
-
-fn save_fixture_artifacts(
-  name: &str,
-  rendered_png: &[u8],
-  golden_png: &[u8],
-  diff: &ImageDiff,
-) -> Result<ArtifactPaths, String> {
-  let output_dir = fixtures_diff_dir();
-  fs::create_dir_all(&output_dir).map_err(|e| {
-    format!(
-      "Failed to create diff output directory {}: {}",
-      output_dir.display(),
-      e
-    )
-  })?;
-
-  let actual_path = output_dir.join(format!("{}_actual.png", name));
-  fs::write(&actual_path, rendered_png).map_err(|e| {
-    format!(
-      "Failed to write actual image to {}: {}",
-      actual_path.display(),
-      e
-    )
-  })?;
-
-  let expected_path = output_dir.join(format!("{}_expected.png", name));
-  fs::write(&expected_path, golden_png).map_err(|e| {
-    format!(
-      "Failed to write expected image to {}: {}",
-      expected_path.display(),
-      e
-    )
-  })?;
-
-  let diff_path = output_dir.join(format!("{}_diff.png", name));
-  let saved_diff_path = if diff.diff_image.is_some() {
-    diff.save_diff_image(&diff_path).map_err(|e| {
-      format!(
-        "Failed to write diff image to {}: {}",
-        diff_path.display(),
-        e
-      )
-    })?;
-    Some(diff_path)
-  } else {
-    None
-  };
-
-  Ok(ArtifactPaths {
-    output_dir,
-    actual: actual_path,
-    expected: expected_path,
-    diff: saved_diff_path,
-  })
-}
-
-fn compare_rendered_to_golden(
-  name: &str,
-  rendered_png: &[u8],
-  golden_png: &[u8],
-  config: &CompareConfig,
-) -> Result<(), String> {
-  let actual = load_png_from_bytes(rendered_png)
-    .map_err(|e| format!("Failed to decode rendered PNG for {}: {}", name, e))?;
-  let expected = load_png_from_bytes(golden_png)
-    .map_err(|e| format!("Failed to decode golden PNG for {}: {}", name, e))?;
-
-  let image_diff = compare_images(&actual, &expected, config);
-
-  if image_diff.is_match() {
-    return Ok(());
-  }
-
-  let artifact_result = save_fixture_artifacts(name, rendered_png, golden_png, &image_diff);
-
-  let mut message = format!(
-    "Fixture '{}' image mismatch: {}",
-    name,
-    image_diff.summary()
-  );
-
-  match artifact_result {
-    Ok(paths) => {
-      message.push_str(&format!(
-        "\nSaved artifacts to {} (actual: {}, expected: {})",
-        paths.output_dir.display(),
-        paths.actual.display(),
-        paths.expected.display()
-      ));
-
-      if let Some(diff_path) = paths.diff {
-        message.push_str(&format!("\nDiff image: {}", diff_path.display()));
-      } else if !image_diff.dimensions_match {
-        message.push_str("\nDiff image not generated due to dimension mismatch");
-      }
-    }
-    Err(e) => {
-      message.push_str(&format!("\nFailed to save diff artifacts: {}", e));
-    }
-  }
-
-  Err(message)
-}
-
 /// Render a fixture and optionally compare against golden image
 ///
 /// Returns true if test passes (either rendering succeeds and matches golden,
@@ -270,7 +120,7 @@ fn test_fixture(name: &str) -> Result<(), String> {
   std::thread::Builder::new()
     .stack_size(64 * 1024 * 1024)
     .spawn(move || {
-      let compare_config = fixture_compare_config()?;
+      let compare_config = compare_config_from_env(CompareEnvVars::fixtures())?;
       let name = name_owned;
       let html = load_fixture(&name);
       let golden = load_golden(&name);
@@ -296,7 +146,13 @@ fn test_fixture(name: &str) -> Result<(), String> {
 
       // If golden exists, compare
       if let Some(golden) = golden {
-        compare_rendered_to_golden(&name, &rendered, &golden, &compare_config)
+        compare_pngs(
+          &name,
+          &rendered,
+          &golden,
+          &compare_config,
+          &fixtures_diff_dir(),
+        )
       } else {
         // No golden exists - just verify rendering succeeds
         load_png_from_bytes(&rendered)

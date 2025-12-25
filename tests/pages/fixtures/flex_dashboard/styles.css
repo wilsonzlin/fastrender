@@ -1,0 +1,137 @@
+.page-flex-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  background: linear-gradient(135deg, #111827, #1f2937),
+    url("../assets/images/pattern.png");
+  color: #e5e7eb;
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.18);
+}
+
+.hero .title {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hero .metrics {
+  display: flex;
+  gap: 12px;
+}
+
+.hero .metric {
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.stats .card {
+  flex: 1 1 200px;
+  min-width: 220px;
+}
+
+.stat-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.activity {
+  display: flex;
+  gap: 14px;
+}
+
+.activity .timeline {
+  flex: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.timeline-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.timeline-entry .dot {
+  width: 12px;
+  height: 12px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.15);
+}
+
+.timeline-entry .content {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.activity .sidebar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chart {
+  background: radial-gradient(circle at 20% 20%, rgba(37, 99, 235, 0.16), transparent 40%),
+    radial-gradient(circle at 80% 30%, rgba(217, 70, 239, 0.14), transparent 44%),
+    #0f172a;
+  color: #e5e7eb;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sparkline {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.sparkline span {
+  display: block;
+  width: 100%;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, #93c5fd, rgba(255, 255, 255, 0.2));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}

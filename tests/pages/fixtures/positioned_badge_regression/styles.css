@@ -1,0 +1,54 @@
+.regression-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.regression-card {
+  position: relative;
+  padding: 18px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ffffff, #f8fafc);
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.06);
+}
+
+.regression-card .badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(217, 70, 239, 0.1);
+  color: #be185d;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.regression-card .flag {
+  position: absolute;
+  left: -12px;
+  top: 36px;
+  padding: 6px 12px;
+  transform: rotate(-2deg);
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 6px 12px rgba(37, 99, 235, 0.25);
+}
+
+.regression-card footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.regression-card .status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #16a34a;
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.16);
+}

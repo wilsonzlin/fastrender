@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Multicolumn article</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <article class="article card">
+      <h2>Columns keep flowing</h2>
+      <p class="lede">
+        Multi-column layout lets the text wrap across balanced columns while respecting the drop cap and pull quotes.
+      </p>
+      <p>
+        Designers rely on the print-friendly article view to stay intact when rendered off-screen. This page exercises column
+        balancing, column-span headers, and the interaction with margins when pagination kicks in. Inline links, numbers, and
+        headings appear in a single pass without JavaScript.
+      </p>
+      <p>
+        Body copy spans long enough to force column breaks. The renderer previously clipped backgrounds when a column had a
+        drop cap next to a floated image; this snapshot keeps the shape simple but keeps the marker in place.
+      </p>
+      <div class="pullquote">“Columns remain one of the quickest ways to stress the inline layout code path.”</div>
+      <p>
+        The text continues with a few lines in each column. Metrics, summary boxes, and stitched paragraphs ensure the
+        allocator chooses sensible breakpoints. Padding and borders come from shared styles to mirror how components are
+        composed downstream.
+      </p>
+      <p>
+        Logical properties stay neutral: margin collapsing, balanced column heights, and the column rule all share the
+        available space. Vertical rhythm is kept in rem units to keep the baseline grid crisp at higher DPIs.
+      </p>
+    </article>
+  </body>
+</html>
