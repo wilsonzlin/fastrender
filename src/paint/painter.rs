@@ -27,6 +27,7 @@ use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
 use crate::css::types::Transform as CssTransform;
+use crate::debug::trace::TraceHandle;
 use crate::error::Error;
 use crate::error::RenderError;
 use crate::error::RenderStage;
@@ -173,6 +174,8 @@ pub struct Painter {
   image_cache: ImageCache,
   /// Cache of shaped runs keyed by style and text to avoid reshaping identical content during paint
   text_shape_cache: Arc<Mutex<HashMap<TextCacheKey, Vec<ShapedRun>>>>,
+  /// Optional trace collector for Chrome trace output.
+  trace: TraceHandle,
 }
 
 #[derive(Default)]
@@ -1088,7 +1091,14 @@ impl Painter {
       font_ctx,
       image_cache,
       text_shape_cache: Arc::new(Mutex::new(HashMap::new())),
+      trace: TraceHandle::disabled(),
     })
+  }
+
+  /// Attach a trace handle used for Chrome trace export.
+  pub fn with_trace(mut self, trace: TraceHandle) -> Self {
+    self.trace = trace;
+    self
   }
 
   #[inline]
@@ -1151,6 +1161,8 @@ impl Painter {
     let diagnostics_enabled = paint_diagnostics_enabled();
     let mut stats = PaintStats::default();
     check_active(RenderStage::Paint).map_err(Error::Render)?;
+    let trace = self.trace.clone();
+    let _paint_span = trace.span("paint", "paint");
 
     if dump_counts_enabled() {
       let (total, text, replaced, lines, inline) = fragment_tree_counts(tree);
@@ -1172,6 +1184,7 @@ impl Painter {
     let registry_ref = (!svg_filter_registry.is_empty()).then_some(&svg_filter_registry);
     let mut items = Vec::new();
     let collect_start = Instant::now();
+    let _display_list_span = trace.span("display_list_build", "paint");
     let root_paint = RootPaintOptions {
       use_root_background: tree.has_explicit_viewport(),
       extend_background_to_viewport: tree.has_explicit_viewport()
@@ -1188,6 +1201,7 @@ impl Painter {
         &mut items,
       );
     }
+    drop(_display_list_span);
     check_active(RenderStage::Paint).map_err(Error::Render)?;
     if profiling {
       stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
@@ -1372,6 +1386,7 @@ impl Painter {
 
     let command_len = items.len();
     let raster_start = diagnostics_enabled.then(Instant::now);
+    let _raster_span = trace.span("rasterize", "paint");
     for item in items {
       if let Err(RenderError::Timeout { stage, elapsed }) = check_active(RenderStage::Paint) {
         return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
@@ -1384,6 +1399,7 @@ impl Painter {
         self.execute_command(item)?;
       }
     }
+    drop(_raster_span);
     if let (true, Some(start)) = (diagnostics_enabled, raster_start) {
       let raster_ms = start.elapsed().as_secs_f64() * 1000.0;
       with_paint_diagnostics(|diag| {
@@ -9609,6 +9625,24 @@ pub fn paint_tree_with_resources_scaled_offset(
 ) -> Result<Pixmap> {
   let painter =
     Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?;
+  painter.paint_with_offset(tree, offset)
+}
+
+/// Paints a fragment tree with tracing enabled.
+pub fn paint_tree_with_resources_scaled_offset_with_trace(
+  tree: &FragmentTree,
+  width: u32,
+  height: u32,
+  background: Rgba,
+  font_ctx: FontContext,
+  image_cache: ImageCache,
+  scale: f32,
+  offset: Point,
+  trace: TraceHandle,
+) -> Result<Pixmap> {
+  let painter =
+    Painter::with_resources_scaled(width, height, background, font_ctx, image_cache, scale)?
+      .with_trace(trace);
   painter.paint_with_offset(tree, offset)
 }
 

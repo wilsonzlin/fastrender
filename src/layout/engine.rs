@@ -15,6 +15,7 @@
 //! This allows formatting contexts to focus purely on layout algorithms while
 //! the engine handles cross-cutting concerns.
 
+use crate::debug::trace::TraceHandle;
 use crate::error::{RenderError, RenderStage};
 use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
@@ -27,6 +28,7 @@ use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation;
 use crate::layout::fragmentation::FragmentationOptions;
 use crate::render_control::{check_active, DeadlineGuard, RenderDeadline};
+use crate::style::display::FormattingContextType;
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
@@ -364,7 +366,16 @@ impl LayoutEngine {
   /// let fragment_tree = engine.layout_tree(&box_tree).unwrap();
   /// ```
   pub fn layout_tree(&self, box_tree: &BoxTree) -> Result<FragmentTree, LayoutError> {
-    self.layout_tree_internal(box_tree, !self.config.enable_incremental)
+    self.layout_tree_internal(box_tree, !self.config.enable_incremental, None)
+  }
+
+  /// Performs layout while emitting trace spans to the provided handle.
+  pub fn layout_tree_with_trace(
+    &self,
+    box_tree: &BoxTree,
+    trace: &TraceHandle,
+  ) -> Result<FragmentTree, LayoutError> {
+    self.layout_tree_internal(box_tree, !self.config.enable_incremental, Some(trace))
   }
 
   /// Performs layout on a box tree while observing an optional deadline.
@@ -377,7 +388,7 @@ impl LayoutEngine {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
-    self.layout_tree_internal(box_tree, !self.config.enable_incremental)
+    self.layout_tree_internal(box_tree, !self.config.enable_incremental, None)
   }
 
   /// Performs layout on a box tree, optionally reusing shared caches.
@@ -386,13 +397,23 @@ impl LayoutEngine {
   /// callers (e.g., container query second passes) to reuse expensive measurements when
   /// the box structure is stable across cascades.
   pub fn layout_tree_reuse_caches(&self, box_tree: &BoxTree) -> Result<FragmentTree, LayoutError> {
-    self.layout_tree_internal(box_tree, false)
+    self.layout_tree_internal(box_tree, false, None)
+  }
+
+  /// Performs layout while reusing caches and emitting trace spans.
+  pub fn layout_tree_reuse_caches_with_trace(
+    &self,
+    box_tree: &BoxTree,
+    trace: &TraceHandle,
+  ) -> Result<FragmentTree, LayoutError> {
+    self.layout_tree_internal(box_tree, false, Some(trace))
   }
 
   fn layout_tree_internal(
     &self,
     box_tree: &BoxTree,
     reset_caches: bool,
+    trace: Option<&TraceHandle>,
   ) -> Result<FragmentTree, LayoutError> {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
@@ -427,7 +448,7 @@ impl LayoutEngine {
     let constraints = LayoutConstraints::definite(icb.width, constraint_height);
 
     // Layout the root box
-    let root_fragment = self.layout_subtree(&box_tree.root, &constraints)?;
+    let root_fragment = self.layout_subtree_internal(&box_tree.root, &constraints, trace)?;
 
     if let Some(options) = &self.config.fragmentation {
       let fragments = fragmentation::fragment_tree(&root_fragment, options);
@@ -495,6 +516,15 @@ impl LayoutEngine {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
+    self.layout_subtree_internal(box_node, constraints, None)
+  }
+
+  fn layout_subtree_internal(
+    &self,
+    box_node: &BoxNode,
+    constraints: &LayoutConstraints,
+    trace: Option<&TraceHandle>,
+  ) -> Result<FragmentNode, LayoutError> {
     // Future: Check cache first
     // if let Some(cached) = self.check_cache(box_node, constraints) {
     //     return Ok(cached);
@@ -518,7 +548,9 @@ impl LayoutEngine {
     let slow_timer = slow_threshold_ms.map(|_| std::time::Instant::now());
 
     // Call the FC's layout method
+    let span = trace.map(|t| t.span(formatting_context_span_name(fc_type), "layout"));
     let fragment = fc.layout(box_node, constraints)?;
+    drop(span);
 
     if let (Some(threshold), Some(start)) = (slow_threshold_ms, slow_timer) {
       let elapsed = start.elapsed().as_millis();
@@ -626,6 +658,16 @@ impl LayoutEngine {
   //
   // pub fn invalidate_cache(&mut self, box_id: BoxId) { ... }
   // pub fn layout_incremental(&self, ...) -> Result<...> { ... }
+}
+
+fn formatting_context_span_name(fc_type: FormattingContextType) -> &'static str {
+  match fc_type {
+    FormattingContextType::Block => "layout_block",
+    FormattingContextType::Inline => "layout_inline",
+    FormattingContextType::Flex => "layout_flex",
+    FormattingContextType::Grid => "layout_grid",
+    FormattingContextType::Table => "layout_table",
+  }
 }
 
 impl Default for LayoutEngine {

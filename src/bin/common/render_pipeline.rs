@@ -9,7 +9,7 @@ use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher};
 use fastrender::{Error, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,17 +28,19 @@ pub fn build_render_configs(
   dpr: f32,
   css_limit: Option<usize>,
   apply_meta_viewport: bool,
+  trace_output: Option<PathBuf>,
 ) -> RenderConfigBundle {
   let config = FastRenderConfig::new()
     .with_default_viewport(viewport.0, viewport.1)
     .with_device_pixel_ratio(dpr)
     .with_meta_viewport(apply_meta_viewport);
 
-  let options = RenderOptions::new()
+  let mut options = RenderOptions::new()
     .with_viewport(viewport.0, viewport.1)
     .with_device_pixel_ratio(dpr)
     .with_scroll(scroll_x, scroll_y)
     .with_stylesheet_limit(css_limit);
+  options.trace_output = trace_output;
 
   RenderConfigBundle { config, options }
 }

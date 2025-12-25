@@ -21,6 +21,6 @@
 //! let printer = EnhancedTreePrinter::with_config(PrintConfig::detailed());
 //! println!("{}", printer.print_box_tree(&root));
 //! ```
-
 pub mod inspect;
+pub(crate) mod trace;
 pub mod tree_printer;

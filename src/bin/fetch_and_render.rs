@@ -29,7 +29,7 @@ use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::OutputFormat;
 use fastrender::Result;
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
@@ -125,6 +125,10 @@ struct Args {
   /// Enable per-stage timing logs
   #[arg(long)]
   timings: bool,
+
+  /// Write a Chrome trace to this path
+  #[arg(long, value_name = "PATH")]
+  trace_out: Option<PathBuf>,
 
   /// Print full error chains on failure
   #[arg(long)]
@@ -301,6 +305,7 @@ fn try_main(args: Args) -> Result<()> {
     args.dpr,
     args.css_limit,
     true,
+    args.trace_out.clone(),
   );
 
   let (tx, rx) = channel();

@@ -372,6 +372,7 @@ fn main() {
     args.dpr,
     args.css_limit,
     true,
+    None,
   );
 
   println!(

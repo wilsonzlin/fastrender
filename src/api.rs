@@ -68,6 +68,7 @@ use crate::css::parser::{
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::debug::inspect::{InspectQuery, InspectionSnapshot};
+use crate::debug::trace::TraceHandle;
 use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
@@ -104,6 +105,7 @@ use crate::layout::profile::reset_layout_profile;
 use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::painter::paint_tree_with_resources_scaled;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
+use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::render_control::{CancelCallback, DeadlineGuard, RenderDeadline};
 use crate::resource::CachingFetcherConfig;
 use crate::resource::{CachingFetcher, HttpFetcher, ResourceFetcher, ResourcePolicy};
@@ -150,6 +152,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 #[cfg(test)]
 use url::Url;
@@ -515,6 +518,8 @@ pub struct RenderOptions {
   pub timeout: Option<Duration>,
   /// Optional cooperative cancellation callback.
   pub cancel_callback: Option<Arc<CancelCallback>>,
+  /// Optional path to write a Chrome trace of this render.
+  pub trace_output: Option<PathBuf>,
 }
 
 impl Default for RenderOptions {
@@ -531,6 +536,7 @@ impl Default for RenderOptions {
       allow_partial: false,
       timeout: None,
       cancel_callback: None,
+      trace_output: None,
     }
   }
 }
@@ -552,6 +558,7 @@ impl std::fmt::Debug for RenderOptions {
         "cancel_callback",
         &self.cancel_callback.as_ref().map(|_| "<callback>"),
       )
+      .field("trace_output", &self.trace_output)
       .finish()
   }
 }
@@ -620,6 +627,12 @@ impl RenderOptions {
   /// Provide a cooperative cancellation callback that returns true when rendering should stop.
   pub fn with_cancel_callback(mut self, callback: Option<Arc<CancelCallback>>) -> Self {
     self.cancel_callback = callback;
+    self
+  }
+
+  /// Emit a Chrome trace of the render pipeline to the given path.
+  pub fn with_trace_output(mut self, path: impl Into<PathBuf>) -> Self {
+    self.trace_output = Some(path.into());
     self
   }
 }
@@ -1227,6 +1240,46 @@ impl RenderReport {
 impl From<RenderReport> for RenderResult {
   fn from(report: RenderReport) -> Self {
     report.into_result()
+  }
+}
+
+#[derive(Clone)]
+struct TraceSession {
+  handle: TraceHandle,
+  output: Option<PathBuf>,
+}
+
+impl TraceSession {
+  fn new(trace_output: Option<PathBuf>) -> Self {
+    let output = trace_output.or_else(|| std::env::var_os("FASTR_TRACE_OUT").map(PathBuf::from));
+    let handle = if output.is_some() {
+      TraceHandle::enabled()
+    } else {
+      TraceHandle::disabled()
+    };
+    Self { handle, output }
+  }
+
+  fn from_options(options: Option<&RenderOptions>) -> Self {
+    let path = options.and_then(|opts| opts.trace_output.clone());
+    Self::new(path)
+  }
+
+  fn handle(&self) -> &TraceHandle {
+    &self.handle
+  }
+
+  fn finalize<T>(self, result: Result<T>) -> Result<T> {
+    if let Some(path) = self.output {
+      let write_result = self.handle.write_chrome_trace(&path).map_err(Error::Io);
+      match (result, write_result) {
+        (Ok(val), Ok(())) => Ok(val),
+        (Ok(_), Err(err)) => Err(err),
+        (Err(err), _) => Err(err),
+      }
+    } else {
+      result
+    }
   }
 }
 
@@ -2318,14 +2371,21 @@ impl FastRender {
     artifacts: Option<&mut RenderArtifacts>,
     stats: Option<&mut RenderStatsRecorder>,
   ) -> Result<RenderOutputs> {
+    let trace = TraceSession::from_options(Some(&options));
+    let trace_handle = trace.handle();
+    let _root_span = trace_handle.span("render", "pipeline");
+
     let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
-    self.render_html_with_options_internal_with_deadline(
+    let result = self.render_html_with_options_internal_with_deadline(
       html,
       options,
       artifacts,
       Some(&deadline),
       stats,
-    )
+      trace_handle,
+    );
+    drop(_root_span);
+    trace.finalize(result)
   }
 
   fn render_html_with_options_internal_with_deadline(
@@ -2335,6 +2395,7 @@ impl FastRender {
     artifacts: Option<&mut RenderArtifacts>,
     deadline: Option<&RenderDeadline>,
     stats: Option<&mut RenderStatsRecorder>,
+    trace: &TraceHandle,
   ) -> Result<RenderOutputs> {
     let (width, height) = options
       .viewport
@@ -2355,6 +2416,7 @@ impl FastRender {
       deadline,
       artifacts,
       stats,
+      trace,
     );
     let result = match result {
       Ok(outputs) => Ok(outputs),
@@ -2406,6 +2468,7 @@ impl FastRender {
     deadline: Option<&RenderDeadline>,
     mut artifacts: Option<&mut RenderArtifacts>,
     mut stats: Option<&mut RenderStatsRecorder>,
+    trace: &TraceHandle,
   ) -> Result<RenderOutputs> {
     // Validate dimensions
     if width == 0 || height == 0 {
@@ -2422,7 +2485,10 @@ impl FastRender {
 
     // Parse HTML to DOM
     let parse_timer = stats.as_deref().and_then(|rec| rec.timer());
-    let dom = self.parse_html(html)?;
+    let dom = {
+      let _span = trace.span("dom_parse", "parse");
+      self.parse_html(html)?
+    };
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.dom_parse_ms, parse_timer);
       rec.stats.counts.dom_nodes = Some(count_dom_nodes_api(&dom));
@@ -2464,6 +2530,7 @@ impl FastRender {
         media_type,
         LayoutDocumentOptions::default(),
         deadline,
+        trace,
       )?;
       if let Some(rec) = stats.as_deref_mut() {
         RenderStatsRecorder::record_ms(&mut rec.stats.timings.layout_ms, layout_timer);
@@ -2719,7 +2786,8 @@ impl FastRender {
 
       // Paint to pixmap
       let offset = Point::new(-scroll.x, -scroll.y);
-      let pixmap = self.paint_with_offset(&fragment_tree, target_width, target_height, offset)?;
+      let pixmap =
+        self.paint_with_offset_traced(&fragment_tree, target_width, target_height, offset, trace)?;
       if let Some(rec) = stats.as_deref_mut() {
         if let Some(diag) = crate::paint::painter::take_paint_diagnostics() {
           rec.stats.timings.paint_build_ms = Some(diag.build_ms);
@@ -2796,6 +2864,7 @@ impl FastRender {
     let artifacts_result = (|| -> Result<LayoutArtifacts> {
       self.device_pixel_ratio = resolved_viewport.device_pixel_ratio;
       self.pending_device_size = Some(resolved_viewport.visual_viewport);
+      let trace = TraceHandle::disabled();
       self.layout_document_for_media_with_artifacts(
         &dom,
         layout_width,
@@ -2803,6 +2872,7 @@ impl FastRender {
         options.media_type,
         LayoutDocumentOptions::default(),
         None,
+        &trace,
       )
     })();
 
@@ -3050,6 +3120,10 @@ impl FastRender {
     mut options: RenderOptions,
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
+    let trace = TraceSession::from_options(Some(&options));
+    let trace_handle = trace.handle();
+    let _root_span = trace_handle.span("render", "pipeline");
+
     if matches!(options.diagnostics_level, DiagnosticsLevel::None) {
       let env_level = diagnostics_level_from_env();
       if !matches!(env_level, DiagnosticsLevel::None) {
@@ -3082,7 +3156,9 @@ impl FastRender {
     let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
     self.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
     let result = (|| -> Result<RenderReport> {
-      let resource = match self.fetcher.fetch(url) {
+      let resource = {
+        let _span = trace_handle.span("html_fetch", "network");
+        match self.fetcher.fetch(url) {
         Ok(res) => res,
         Err(e) => {
           if let Ok(mut guard) = diagnostics.lock() {
@@ -3113,6 +3189,7 @@ impl FastRender {
             source: Some(source),
           }));
         }
+        }
       };
 
       let mut report = self.render_fetched_html_with_options_report_internal(
@@ -3121,6 +3198,7 @@ impl FastRender {
         options,
         artifacts,
         stats_recorder.as_mut(),
+        trace_handle,
       )?;
       if let Some(recorder) = stats_recorder.take() {
         let mut stats = recorder.finish();
@@ -3141,7 +3219,8 @@ impl FastRender {
       let _ = crate::image_loader::take_image_cache_diagnostics();
       let _ = crate::paint::painter::take_paint_diagnostics();
     }
-    result
+    drop(_root_span);
+    trace.finalize(result)
   }
 
   /// Render already-fetched HTML while inlining linked stylesheets using the configured fetcher.
@@ -3170,13 +3249,19 @@ impl FastRender {
     options: RenderOptions,
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
-    self.render_fetched_html_with_options_report_internal(
+    let trace = TraceSession::from_options(Some(&options));
+    let trace_handle = trace.handle();
+    let _root_span = trace_handle.span("render", "pipeline");
+    let result = self.render_fetched_html_with_options_report_internal(
       resource,
       base_hint,
       options,
       artifacts,
       None,
-    )
+      trace_handle,
+    );
+    drop(_root_span);
+    trace.finalize(result)
   }
 
   fn render_fetched_html_with_options_report_internal(
@@ -3186,6 +3271,7 @@ impl FastRender {
     mut options: RenderOptions,
     artifacts: RenderArtifactRequest,
     mut stats: Option<&mut RenderStatsRecorder>,
+    trace: &TraceHandle,
   ) -> Result<RenderReport> {
     let had_sink = self.diagnostics.is_some();
     let diagnostics = if let Some(existing) = &self.diagnostics {
@@ -3227,7 +3313,10 @@ impl FastRender {
     }
     let hint = resource.final_url.as_deref().or(base_hint).unwrap_or("");
     let decode_start = stats.as_deref().and_then(|rec| rec.timer());
-    let html = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
+    let html = {
+      let _span = trace.span("html_decode", "parse");
+      decode_html_bytes(&resource.bytes, resource.content_type.as_deref())
+    };
     if let Some(rec) = stats.as_deref_mut() {
       RenderStatsRecorder::record_ms(&mut rec.stats.timings.html_decode_ms, decode_start);
     }
@@ -3239,6 +3328,7 @@ impl FastRender {
       .unwrap_or((self.default_width, self.default_height));
 
     let html_with_css = {
+      let _span = trace.span("css_inline", "style");
       let mut guard = diagnostics.lock().unwrap();
       match self.inline_stylesheets(
         &html,
@@ -3290,6 +3380,7 @@ impl FastRender {
       Some(&mut captured),
       Some(&deadline),
       stats.as_deref_mut(),
+      trace,
     );
     if !had_sink {
       self.set_diagnostics_sink(None);
@@ -3340,6 +3431,10 @@ impl FastRender {
     options: RenderOptions,
     artifacts: RenderArtifactRequest,
   ) -> Result<RenderReport> {
+    let trace = TraceSession::from_options(Some(&options));
+    let trace_handle = trace.handle();
+    let _root_span = trace_handle.span("render", "pipeline");
+
     let had_sink = self.diagnostics.is_some();
     let diagnostics = if let Some(existing) = &self.diagnostics {
       Arc::clone(existing)
@@ -3354,63 +3449,62 @@ impl FastRender {
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
-
-    let html_with_css = {
-      let mut guard = diagnostics.lock().unwrap();
-      match self.inline_stylesheets(
-        html,
-        &base_url,
-        options.media_type,
-        options.css_limit,
-        &mut guard,
+    let result = (|| -> Result<RenderReport> {
+      let html_with_css = {
+        let _span = trace_handle.span("css_inline", "style");
+        let mut guard = diagnostics.lock().unwrap();
+        match self.inline_stylesheets(
+          html,
+          &base_url,
+          options.media_type,
+          options.css_limit,
+          &mut guard,
+          Some(&deadline),
+          None,
+        ) {
+          Ok(inlined) => inlined,
+          Err(err) => {
+            if options.allow_partial {
+              if let RenderError::Timeout { stage, .. } = &err {
+                guard.timeout_stage = Some(*stage);
+                let diagnostics = guard.clone();
+                let pixmap = self.render_error_overlay(width, height)?;
+                return Ok(RenderReport {
+                  pixmap,
+                  accessibility: None,
+                  diagnostics,
+                  artifacts: RenderArtifacts::new(artifacts),
+                });
+              }
+            }
+            return Err(Error::Render(err));
+          }
+        }
+      };
+      let mut captured = RenderArtifacts::new(artifacts);
+      let outputs = self.render_html_with_options_internal_with_deadline(
+        &html_with_css,
+        options,
+        Some(&mut captured),
         Some(&deadline),
         None,
-      ) {
-        Ok(inlined) => inlined,
-        Err(err) => {
-          if options.allow_partial {
-            if let RenderError::Timeout { stage, .. } = &err {
-              guard.timeout_stage = Some(*stage);
-              let diagnostics = guard.clone();
-              if !had_sink {
-                self.set_diagnostics_sink(None);
-              }
-              let pixmap = self.render_error_overlay(width, height)?;
-              return Ok(RenderReport {
-                pixmap,
-                accessibility: None,
-                diagnostics,
-                artifacts: RenderArtifacts::new(artifacts),
-              });
-            }
-          }
-          drop(guard);
-          if !had_sink {
-            self.set_diagnostics_sink(None);
-          }
-          return Err(Error::Render(err));
-        }
-      }
-    };
-    let mut captured = RenderArtifacts::new(artifacts);
-    let outputs = self.render_html_with_options_internal_with_deadline(
-      &html_with_css,
-      options,
-      Some(&mut captured),
-      Some(&deadline),
-      None,
-    )?;
+        trace_handle,
+      )?;
+      let diagnostics = diagnostics.lock().unwrap().clone();
+
+      Ok(RenderReport {
+        pixmap: outputs.pixmap,
+        accessibility: outputs.accessibility,
+        diagnostics,
+        artifacts: captured,
+      })
+    })();
+
     if !had_sink {
       self.set_diagnostics_sink(None);
     }
-    let diagnostics = diagnostics.lock().unwrap().clone();
-
-    Ok(RenderReport {
-      pixmap: outputs.pixmap,
-      accessibility: outputs.accessibility,
-      diagnostics,
-      artifacts: captured,
-    })
+    drop(_root_span);
+    trace.finalize(result)
   }
 
   /// Parses HTML into a DOM tree
@@ -3808,8 +3902,9 @@ impl FastRender {
     options: LayoutDocumentOptions,
     deadline: Option<&RenderDeadline>,
   ) -> Result<FragmentTree> {
+    let trace = TraceHandle::disabled();
     let artifacts = self.layout_document_for_media_with_artifacts(
-      dom, width, height, media_type, options, deadline,
+      dom, width, height, media_type, options, deadline, &trace,
     )?;
     Ok(artifacts.fragment_tree)
   }
@@ -3823,6 +3918,7 @@ impl FastRender {
     media_type: MediaType,
     options: LayoutDocumentOptions,
     deadline: Option<&RenderDeadline>,
+    trace: &TraceHandle,
   ) -> Result<LayoutArtifacts> {
     let _deadline_guard = DeadlineGuard::install(deadline);
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
@@ -3847,8 +3943,10 @@ impl FastRender {
 
     let css_parse_start = timings_enabled.then(Instant::now);
     let mut media_query_cache = MediaQueryCache::default();
-    let stylesheet =
-      self.collect_document_stylesheet(&dom_with_state, &media_ctx, &mut media_query_cache);
+    let stylesheet = {
+      let _span = trace.span("css_parse", "style");
+      self.collect_document_stylesheet(&dom_with_state, &media_ctx, &mut media_query_cache)
+    };
     if let Some(start) = css_parse_start {
       eprintln!("timing:css_parse {:?}", start.elapsed());
     }
@@ -3877,19 +3975,22 @@ impl FastRender {
       eprintln!("timing:style_prepare {:?}", start.elapsed());
     }
     let style_apply_start = timings_enabled.then(Instant::now);
-    let mut styled_tree = apply_styles_with_media_target_and_imports_cached_with_deadline(
-      &dom_with_state,
-      &stylesheet,
-      &media_ctx,
-      target_fragment.as_deref(),
-      None,
-      None,
-      None,
-      None,
-      None,
-      Some(&mut media_query_cache),
-      deadline,
-    )?;
+    let mut styled_tree = {
+      let _span = trace.span("cascade", "style");
+      apply_styles_with_media_target_and_imports_cached_with_deadline(
+        &dom_with_state,
+        &stylesheet,
+        &media_ctx,
+        target_fragment.as_deref(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&mut media_query_cache),
+        deadline,
+      )?
+    };
     check_deadline(deadline, RenderStage::Cascade)?;
     if let Some(start) = style_apply_start {
       eprintln!("timing:style_apply {:?}", start.elapsed());
@@ -3925,22 +4026,23 @@ impl FastRender {
     // Generate box tree
     let box_gen_options = self.box_generation_options();
     let box_gen_start = timings_enabled.then(Instant::now);
-    let mut box_tree =
+    let mut box_tree = {
+      let _span = trace.span("box_gen", "layout");
       crate::tree::box_generation::generate_box_tree_with_anonymous_fixup_with_options(
         &styled_tree,
         &box_gen_options,
-      );
+      )
+    };
     if let Some(start) = box_gen_start {
       eprintln!("timing:box_gen {:?}", start.elapsed());
     }
 
     // Resolve intrinsic sizes for replaced elements using the image cache
     let intrinsic_start = timings_enabled.then(Instant::now);
-    self.resolve_replaced_intrinsic_sizes_for_media(
-      &mut box_tree.root,
-      layout_viewport,
-      media_type,
-    );
+    {
+      let _span = trace.span("replaced_intrinsic", "layout");
+      self.resolve_replaced_intrinsic_sizes_for_media(&mut box_tree.root, layout_viewport, media_type);
+    }
     if let Some(start) = intrinsic_start {
       eprintln!("timing:intrinsic_sizes {:?}", start.elapsed());
     }
@@ -4103,7 +4205,7 @@ impl FastRender {
     // Perform initial layout
     let mut fragment_tree = self
       .layout_engine
-      .layout_tree_with_deadline(&box_tree, deadline)
+      .layout_tree_with_trace(&box_tree, trace)
       .map_err(|e| match e {
         FormattingLayoutError::Timeout { elapsed } => Error::Render(RenderError::Timeout {
           stage: RenderStage::Layout,
@@ -4337,7 +4439,7 @@ impl FastRender {
           layout_start = timings_enabled.then(Instant::now);
           fragment_tree = self
             .layout_engine
-            .layout_tree_reuse_caches(&box_tree)
+            .layout_tree_reuse_caches_with_trace(&box_tree, trace)
             .map_err(|e| {
               Error::Render(RenderError::InvalidParameters {
                 message: format!("Layout failed: {:?}", e),
@@ -4449,6 +4551,7 @@ impl FastRender {
       }));
     }
 
+    let trace = TraceHandle::disabled();
     let artifacts = self.layout_document_for_media_with_artifacts(
       dom,
       width,
@@ -4456,6 +4559,7 @@ impl FastRender {
       MediaType::Screen,
       LayoutDocumentOptions::default(),
       None,
+      &trace,
     )?;
 
     crate::debug::inspect::inspect(
@@ -4511,7 +4615,19 @@ impl FastRender {
     height: u32,
     offset: Point,
   ) -> Result<Pixmap> {
-    paint_tree_with_resources_scaled_offset(
+    let trace = TraceHandle::disabled();
+    self.paint_with_offset_traced(fragment_tree, width, height, offset, &trace)
+  }
+
+  fn paint_with_offset_traced(
+    &self,
+    fragment_tree: &FragmentTree,
+    width: u32,
+    height: u32,
+    offset: Point,
+    trace: &TraceHandle,
+  ) -> Result<Pixmap> {
+    paint_tree_with_resources_scaled_offset_with_trace(
       fragment_tree,
       width,
       height,
@@ -4520,6 +4636,7 @@ impl FastRender {
       self.image_cache.clone(),
       self.device_pixel_ratio,
       offset,
+      trace.clone(),
     )
   }
 
@@ -6936,6 +7053,7 @@ pub(crate) fn render_html_with_shared_resources(
     dom_compat_mode: DomCompatibilityMode::Standard,
   };
 
+  let trace = TraceHandle::disabled();
   renderer
     .render_html_internal(
       html,
@@ -6948,6 +7066,7 @@ pub(crate) fn render_html_with_shared_resources(
       None,
       None,
       None,
+      &trace,
     )
     .map(|out| out.pixmap)
 }
