@@ -155,6 +155,28 @@ impl fmt::Display for ContentValue {
   }
 }
 
+/// Selector for running elements used by `element()`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningElementSelect {
+  /// First occurrence of the running element
+  First,
+  /// Start-most occurrence of the running element
+  Start,
+  /// Last occurrence of the running element
+  Last,
+}
+
+impl fmt::Display for RunningElementSelect {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let name = match self {
+      RunningElementSelect::First => "first",
+      RunningElementSelect::Start => "start",
+      RunningElementSelect::Last => "last",
+    };
+    write!(f, "{}", name)
+  }
+}
+
 /// A single content item within a content value
 ///
 /// Content items are concatenated together to form the final content.
@@ -243,6 +265,18 @@ pub enum ContentItem {
   /// CSS: `content: url(image.png);`
   /// Note: Image content requires special handling during layout/paint.
   Url(String),
+
+  /// A running element reference
+  ///
+  /// CSS: `content: element(header);`
+  /// Retrieves content from a named running element, optionally selecting
+  /// a specific occurrence.
+  Element {
+    /// Identifier of the running element
+    ident: String,
+    /// Which occurrence to select (first/start/last)
+    select: RunningElementSelect,
+  },
 }
 
 /// Which value of a named string set to resolve.
@@ -405,6 +439,10 @@ impl fmt::Display for ContentItem {
       ContentItem::NoOpenQuote => write!(f, "no-open-quote"),
       ContentItem::NoCloseQuote => write!(f, "no-close-quote"),
       ContentItem::Url(url) => write!(f, "url(\"{}\")", url),
+      ContentItem::Element { ident, select } => match select {
+        RunningElementSelect::First => write!(f, "element({})", ident),
+        _ => write!(f, "element({}, {})", ident, select),
+      },
     }
   }
 }
@@ -1169,6 +1207,10 @@ impl ContentGenerator {
         // Return empty string - the caller should handle this specially
         String::new()
       }
+      ContentItem::Element { .. } => {
+        // Running elements produce replaced content; placeholder until resolved.
+        String::new()
+      }
     }
   }
 
@@ -1180,7 +1222,7 @@ impl ContentGenerator {
       ContentValue::None | ContentValue::Normal => true,
       ContentValue::Items(items) => items
         .iter()
-        .all(|item| !matches!(item, ContentItem::Url(_))),
+        .all(|item| !matches!(item, ContentItem::Url(_) | ContentItem::Element { .. })),
     }
   }
 }
@@ -1445,6 +1487,38 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
         args
       };
       Some(ContentItem::Url(url.to_string()))
+    }
+    "element" => {
+      let args = args.trim();
+      if args.is_empty() {
+        return None;
+      }
+
+      let mut parts = args.splitn(2, ',');
+      let ident = parts.next()?.trim();
+      if ident.is_empty()
+        || !ident
+          .chars()
+          .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+      {
+        return None;
+      }
+
+      let select = if let Some(raw_select) = parts.next() {
+        match raw_select.trim().to_ascii_lowercase().as_str() {
+          "first" => RunningElementSelect::First,
+          "start" => RunningElementSelect::Start,
+          "last" => RunningElementSelect::Last,
+          _ => return None,
+        }
+      } else {
+        RunningElementSelect::First
+      };
+
+      Some(ContentItem::Element {
+        ident: ident.to_string(),
+        select,
+      })
     }
     "image-set" => {
       let full = format!("image-set({})", args);
@@ -2037,6 +2111,39 @@ mod tests {
   }
 
   #[test]
+  fn test_parse_element_default() {
+    let content = parse_content("element(header)").unwrap();
+    assert_eq!(
+      content,
+      ContentValue::Items(vec![ContentItem::Element {
+        ident: "header".to_string(),
+        select: RunningElementSelect::First,
+      }])
+    );
+  }
+
+  #[test]
+  fn test_parse_element_selectors() {
+    let start = parse_content("element(header, start)").unwrap();
+    assert_eq!(
+      start,
+      ContentValue::Items(vec![ContentItem::Element {
+        ident: "header".to_string(),
+        select: RunningElementSelect::Start,
+      }])
+    );
+
+    let last = parse_content("element(header, LAST)").unwrap();
+    assert_eq!(
+      last,
+      ContentValue::Items(vec![ContentItem::Element {
+        ident: "header".to_string(),
+        select: RunningElementSelect::Last,
+      }])
+    );
+  }
+
+  #[test]
   fn test_parse_multiple_items() {
     let content = parse_content("\"Chapter \" counter(chapter) \": \"").unwrap();
     if let ContentValue::Items(items) = content {
@@ -2067,6 +2174,12 @@ mod tests {
 
     let with_url = ContentValue::Items(vec![ContentItem::Url("image.png".to_string())]);
     assert!(!ContentGenerator::is_text_only(&with_url));
+
+    let with_element = ContentValue::Items(vec![ContentItem::Element {
+      ident: "header".to_string(),
+      select: RunningElementSelect::First,
+    }]);
+    assert!(!ContentGenerator::is_text_only(&with_element));
   }
 
   #[test]

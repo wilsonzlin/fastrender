@@ -12463,6 +12463,7 @@ mod tests {
   use super::*;
   use crate::css::properties::parse_property_value;
   use crate::geometry::Size;
+  use crate::style::content::{ContentItem, ContentValue, RunningElementSelect};
   use crate::style::string_set::{StringSetAssignment, StringSetValue};
   use crate::style::types::AlignContent;
   use crate::style::types::AlignItems;
@@ -12532,6 +12533,19 @@ mod tests {
     let out = extract_margin_values(&calc_len).expect("calc(0) should be accepted");
     assert_eq!(out.len(), 1);
     assert!(out[0].unwrap().is_zero());
+  }
+
+  #[test]
+  fn parses_content_element_function() {
+    let parsed = parse_property_value("content", "element(header, last)").expect("property");
+    let content = content_value_from_property(&parsed).expect("content");
+    assert_eq!(
+      content,
+      ContentValue::Items(vec![ContentItem::Element {
+        ident: "header".to_string(),
+        select: RunningElementSelect::Last,
+      }])
+    );
   }
 
   #[test]

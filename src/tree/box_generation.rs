@@ -1566,6 +1566,9 @@ fn create_pseudo_element_box(
       }
       ContentItem::NoOpenQuote => context.push_quote(),
       ContentItem::NoCloseQuote => context.pop_quote(),
+      ContentItem::Element { .. } => {
+        // Running elements are not yet resolved into generated content.
+      }
       ContentItem::Url(url) => {
         flush_text(&mut text_buf, &pseudo_style, &mut children);
         let replaced = ReplacedBox {
@@ -1725,6 +1728,9 @@ pub(crate) fn marker_content_from_style(
           }
           ContentItem::NoOpenQuote => context.push_quote(),
           ContentItem::NoCloseQuote => context.pop_quote(),
+          ContentItem::Element { .. } => {
+            // Running elements are not supported for list markers yet.
+          }
           ContentItem::Url(url) => {
             // If the author supplies multiple URLs we take the last; mixed text+image returns text.
             image = Some(url.clone());
