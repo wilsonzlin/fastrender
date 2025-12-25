@@ -13,6 +13,7 @@
 //! - **attr()**: `content: attr(data-label);` - Gets element attribute value
 //! - **counter()**: `content: counter(chapter);` - Gets counter value
 //! - **counters()**: `content: counters(section, ".");` - Gets nested counter values
+//! - **string()**: `content: string(header, start);` - Gets a running named string
 //! - **Quotes**: `content: open-quote;` - Gets quote characters
 //! - **Keywords**: `none`, `normal`
 //!
@@ -232,6 +233,41 @@ pub enum ContentItem {
   /// CSS: `content: url(image.png);`
   /// Note: Image content requires special handling during layout/paint.
   Url(String),
+
+  /// A named string, typically used for running headers/footers in margin boxes.
+  ///
+  /// CSS: `content: string(header[, first|start|last]);`
+  NamedString {
+    /// The name of the string to resolve.
+    name: String,
+    /// Which running string value to use.
+    position: RunningStringPosition,
+  },
+}
+
+/// Which value of a running string to use when resolving `string()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunningStringPosition {
+  First,
+  Start,
+  Last,
+}
+
+impl Default for RunningStringPosition {
+  fn default() -> Self {
+    RunningStringPosition::First
+  }
+}
+
+impl fmt::Display for RunningStringPosition {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    let value = match self {
+      RunningStringPosition::First => "first",
+      RunningStringPosition::Start => "start",
+      RunningStringPosition::Last => "last",
+    };
+    write!(f, "{}", value)
+  }
 }
 
 impl ContentItem {
@@ -349,6 +385,13 @@ impl fmt::Display for ContentItem {
       ContentItem::NoOpenQuote => write!(f, "no-open-quote"),
       ContentItem::NoCloseQuote => write!(f, "no-close-quote"),
       ContentItem::Url(url) => write!(f, "url(\"{}\")", url),
+      ContentItem::NamedString { name, position } => {
+        if *position == RunningStringPosition::First {
+          write!(f, "string({})", name)
+        } else {
+          write!(f, "string({}, {})", name, position)
+        }
+      }
     }
   }
 }
@@ -719,6 +762,20 @@ fn to_greek(n: i32) -> String {
   GREEK[(n - 1) as usize].to_string()
 }
 
+/// Values for a named running string on the current page.
+#[derive(Debug, Clone, Default)]
+pub struct RunningStringValues {
+  pub start: Option<String>,
+  pub first: Option<String>,
+  pub last: Option<String>,
+}
+
+impl RunningStringValues {
+  pub fn new(start: Option<String>, first: Option<String>, last: Option<String>) -> Self {
+    Self { start, first, last }
+  }
+}
+
 /// Context for content generation
 ///
 /// Contains all the information needed to resolve content values,
@@ -746,6 +803,11 @@ pub struct ContentContext {
   /// Key: attribute name, Value: attribute value
   attributes: HashMap<String, String>,
 
+  /// Named strings for running headers/footers (per page).
+  ///
+  /// Key: string name, Value: running string values for the page.
+  named_strings: HashMap<String, RunningStringValues>,
+
   /// Quote nesting level (0 = no open quotes)
   quote_depth: usize,
 
@@ -762,6 +824,7 @@ impl ContentContext {
     Self {
       counters: HashMap::new(),
       attributes: HashMap::new(),
+      named_strings: HashMap::new(),
       quote_depth: 0,
       quotes: default_quotes(),
     }
@@ -940,6 +1003,53 @@ impl ContentContext {
   pub fn quote_depth(&self) -> usize {
     self.quote_depth
   }
+
+  /// Sets the values for a named running string on the current page.
+  pub fn set_named_string_values(&mut self, name: &str, values: RunningStringValues) {
+    self.named_strings.insert(name.to_string(), values);
+  }
+
+  /// Sets a single value for a running string position.
+  pub fn set_named_string(
+    &mut self,
+    name: &str,
+    position: RunningStringPosition,
+    value: impl Into<String>,
+  ) {
+    let entry = self
+      .named_strings
+      .entry(name.to_string())
+      .or_insert_with(RunningStringValues::default);
+
+    let value = Some(value.into());
+    match position {
+      RunningStringPosition::Start => entry.start = value,
+      RunningStringPosition::First => entry.first = value,
+      RunningStringPosition::Last => entry.last = value,
+    }
+  }
+
+  /// Resolves a named string for the given position, applying fallback rules.
+  pub fn resolve_named_string(&self, name: &str, position: RunningStringPosition) -> String {
+    let values = match self.named_strings.get(name) {
+      Some(values) => values,
+      None => return String::new(),
+    };
+
+    match position {
+      RunningStringPosition::Start => values.start.clone().unwrap_or_default(),
+      RunningStringPosition::First => values
+        .first
+        .clone()
+        .or_else(|| values.start.clone())
+        .unwrap_or_default(),
+      RunningStringPosition::Last => values
+        .last
+        .clone()
+        .or_else(|| values.start.clone())
+        .unwrap_or_default(),
+    }
+  }
 }
 
 /// Content generator
@@ -1087,6 +1197,8 @@ impl ContentGenerator {
         // Return empty string - the caller should handle this specially
         String::new()
       }
+
+      ContentItem::NamedString { name, position } => context.resolve_named_string(name, *position),
     }
   }
 
@@ -1248,7 +1360,7 @@ fn parse_string(chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<Stri
   None
 }
 
-/// Parses a content function (attr, counter, counters, url)
+/// Parses a content function (attr, counter, counters, url, string)
 fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
   match name {
     "attr" => {
@@ -1335,6 +1447,29 @@ fn parse_function(name: &str, args: &str) -> Option<ContentItem> {
       } else {
         None
       }
+    }
+
+    "string" => {
+      let parts: Vec<&str> = args.split(',').map(|part| part.trim()).collect();
+      if parts.is_empty() || parts[0].is_empty() || parts.len() > 2 {
+        return None;
+      }
+
+      let name = parts[0].to_string();
+      let position = if parts.len() == 1 {
+        RunningStringPosition::First
+      } else if parts[1].is_empty() {
+        return None;
+      } else {
+        match parts[1].to_lowercase().as_str() {
+          "first" => RunningStringPosition::First,
+          "start" => RunningStringPosition::Start,
+          "last" => RunningStringPosition::Last,
+          _ => return None,
+        }
+      };
+
+      Some(ContentItem::NamedString { name, position })
     }
 
     "url" => {
@@ -1732,6 +1867,37 @@ mod tests {
   }
 
   #[test]
+  fn test_generate_named_strings() {
+    let gen = ContentGenerator::new();
+    let mut ctx = ContentContext::new();
+    ctx.set_named_string("header", RunningStringPosition::Start, "A");
+    ctx.set_named_string("header", RunningStringPosition::First, "B");
+    ctx.set_named_string("header", RunningStringPosition::Last, "C");
+
+    let start_content = ContentValue::Items(vec![ContentItem::NamedString {
+      name: "header".to_string(),
+      position: RunningStringPosition::Start,
+    }]);
+    let first_content = ContentValue::Items(vec![ContentItem::NamedString {
+      name: "header".to_string(),
+      position: RunningStringPosition::First,
+    }]);
+    let last_content = ContentValue::Items(vec![ContentItem::NamedString {
+      name: "header".to_string(),
+      position: RunningStringPosition::Last,
+    }]);
+
+    assert_eq!(gen.generate(&start_content, &mut ctx), "A");
+    assert_eq!(gen.generate(&first_content, &mut ctx), "B");
+    assert_eq!(gen.generate(&last_content, &mut ctx), "C");
+
+    let mut fallback_ctx = ContentContext::new();
+    fallback_ctx.set_named_string("header", RunningStringPosition::Start, "A");
+    assert_eq!(gen.generate(&first_content, &mut fallback_ctx), "A");
+    assert_eq!(gen.generate(&last_content, &mut fallback_ctx), "A");
+  }
+
+  #[test]
   fn test_generate_combined() {
     let gen = ContentGenerator::new();
     let content = ContentValue::Items(vec![
@@ -1851,6 +2017,36 @@ mod tests {
       content,
       ContentValue::Items(vec![ContentItem::Url("image.png".to_string())])
     );
+  }
+
+  #[test]
+  fn test_parse_string_function() {
+    let content = parse_content("string(header)").unwrap();
+    assert_eq!(
+      content,
+      ContentValue::Items(vec![ContentItem::NamedString {
+        name: "header".to_string(),
+        position: RunningStringPosition::First
+      }])
+    );
+  }
+
+  #[test]
+  fn test_parse_string_function_with_position() {
+    let content = parse_content("string(header, START)").unwrap();
+    assert_eq!(
+      content,
+      ContentValue::Items(vec![ContentItem::NamedString {
+        name: "header".to_string(),
+        position: RunningStringPosition::Start
+      }])
+    );
+  }
+
+  #[test]
+  fn test_parse_string_function_invalid() {
+    assert!(parse_content("string()").is_none());
+    assert!(parse_content("string(header, middle)").is_none());
   }
 
   #[test]
