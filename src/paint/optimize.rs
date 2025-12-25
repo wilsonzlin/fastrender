@@ -397,6 +397,8 @@ impl DisplayListOptimizer {
           let max_outset = filters_outset.max_side().max(backdrop_outset.max_side());
           let world_outset = if transform_state.culling_disabled() {
             0.0
+          } else if max_outset == 0.0 {
+            0.0
           } else {
             max_outset * Self::transform_scale_factor(&transform_state.current, sc.bounds)
           };
@@ -734,15 +736,15 @@ impl DisplayListOptimizer {
         for p in samples {
           let base = match homography.map_point(p) {
             Some(p) => p,
-            None => return 1.0,
+            None => return f32::INFINITY,
           };
           let dx = match homography.map_point(Point::new(p.x + 1.0, p.y)) {
             Some(p) => p,
-            None => return 1.0,
+            None => return f32::INFINITY,
           };
           let dy = match homography.map_point(Point::new(p.x, p.y + 1.0)) {
             Some(p) => p,
-            None => return 1.0,
+            None => return f32::INFINITY,
           };
           let scale_x = ((dx.x - base.x).powi(2) + (dx.y - base.y).powi(2)).sqrt();
           let scale_y = ((dy.x - base.x).powi(2) + (dy.y - base.y).powi(2)).sqrt();
