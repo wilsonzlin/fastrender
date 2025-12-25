@@ -1418,10 +1418,7 @@ impl FormattingContext for FlexFormattingContext {
       if let Ok(layout) = taffy_tree.layout(root_node) {
         eprintln!(
           "[flex-taffy-root-layout] size=({:.2},{:.2}) loc=({:.2},{:.2})",
-          layout.size.width,
-          layout.size.height,
-          layout.location.x,
-          layout.location.y,
+          layout.size.width, layout.size.height, layout.location.x, layout.location.y,
         );
       }
     }
@@ -2577,7 +2574,8 @@ impl FlexFormattingContext {
     // flex items on real pages. Flexbox specifies that scroll containers use a 0 automatic minimum.
     if !is_root {
       if let Some(container) = containing_flex {
-        let container_inline_is_horizontal = matches!(container.writing_mode, WritingMode::HorizontalTb);
+        let container_inline_is_horizontal =
+          matches!(container.writing_mode, WritingMode::HorizontalTb);
         let container_main_is_inline = matches!(
           container.flex_direction,
           FlexDirection::Row | FlexDirection::RowReverse
@@ -2589,7 +2587,8 @@ impl FlexFormattingContext {
         };
 
         if container_main_is_horizontal {
-          if min_width_dimension == Dimension::AUTO && matches!(style.overflow_x, CssOverflow::Visible)
+          if min_width_dimension == Dimension::AUTO
+            && matches!(style.overflow_x, CssOverflow::Visible)
           {
             if let Ok(min_content) =
               self.compute_intrinsic_inline_size(box_node, IntrinsicSizingMode::MinContent)
@@ -3030,7 +3029,11 @@ impl FlexFormattingContext {
                 if resolved_height <= eps && !main_axis_is_row {
                   manual_col_positions = true;
                 }
-                if allow_overflow_fallback && main_axis_is_row && rect_w.is_finite() && rect_w > wrap_eps {
+                if allow_overflow_fallback
+                  && main_axis_is_row
+                  && rect_w.is_finite()
+                  && rect_w > wrap_eps
+                {
                   let runaway = child_loc_x.abs() > rect_w * 2.0;
                   if runaway {
                     manual_row_positions = true;
@@ -3290,8 +3293,7 @@ impl FlexFormattingContext {
                 }),
                 CrateAvailableSpace::MaxContent,
               )
-            }
-            ;
+            };
             let mc_timer = flex_profile::node_timer();
             let mc_selector = mc_timer
               .as_ref()
@@ -4792,9 +4794,14 @@ mod tests {
       ));
     }
 
-    let container =
-      BoxNode::new_block(Arc::new(container_style), FormattingContextType::Flex, items);
-    let fragment = fc.layout(&container, &LayoutConstraints::definite(400.0, 200.0)).unwrap();
+    let container = BoxNode::new_block(
+      Arc::new(container_style),
+      FormattingContextType::Flex,
+      items,
+    );
+    let fragment = fc
+      .layout(&container, &LayoutConstraints::definite(400.0, 200.0))
+      .unwrap();
 
     for (idx, child) in fragment.children.iter().enumerate() {
       assert!(

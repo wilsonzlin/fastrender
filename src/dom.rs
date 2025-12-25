@@ -811,6 +811,17 @@ impl<'a> ElementRef<'a> {
     )
   }
 
+  fn is_shadow_host(&self) -> bool {
+    matches!(
+      self.node.node_type,
+      DomNodeType::Element { .. } | DomNodeType::Slot { .. }
+    ) && self
+      .node
+      .children
+      .iter()
+      .any(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+  }
+
   /// Position (index, total) among siblings filtered by a predicate.
   fn position_in_siblings<F>(&self, predicate: F) -> Option<(usize, usize)>
   where
@@ -1664,16 +1675,14 @@ impl<'a> Element for ElementRef<'a> {
   }
 
   fn parent_element(&self) -> Option<Self> {
-    self.parent.map(|parent| {
-      // Create ElementRef for parent with its ancestors
-      if self.all_ancestors.len() > 1 {
-        // If we have multiple ancestors, the parent's ancestors are all but the last
-        ElementRef::with_ancestors(parent, &self.all_ancestors[..self.all_ancestors.len() - 1])
-      } else {
-        // Parent is the root
-        ElementRef::new(parent)
+    for (idx, ancestor) in self.all_ancestors.iter().enumerate().rev() {
+      if !ancestor.is_element() {
+        continue;
       }
-    })
+      let ancestors = &self.all_ancestors[..idx];
+      return Some(ElementRef::with_ancestors(ancestor, ancestors));
+    }
+    None
   }
 
   fn parent_node_is_shadow_root(&self) -> bool {
@@ -1855,6 +1864,45 @@ impl<'a> Element for ElementRef<'a> {
           return false;
         }
         matches_has_relative(self, relative, _context)
+      }
+      PseudoClass::Host(selectors) => {
+        if !self.is_shadow_host() {
+          return false;
+        }
+        match selectors {
+          None => true,
+          Some(selectors) => selectors
+            .slice()
+            .iter()
+            .any(|selector| matches_selector(selector, 0, None, self, _context)),
+        }
+      }
+      PseudoClass::HostContext(selectors) => {
+        if !self.is_shadow_host() {
+          return false;
+        }
+        if selectors
+          .slice()
+          .iter()
+          .any(|selector| matches_selector(selector, 0, None, self, _context))
+        {
+          return true;
+        }
+
+        for (idx, ancestor) in self.all_ancestors.iter().enumerate() {
+          if !ancestor.is_element() {
+            continue;
+          }
+          let ancestor_ref = ElementRef::with_ancestors(*ancestor, &self.all_ancestors[..idx]);
+          if selectors
+            .slice()
+            .iter()
+            .any(|selector| matches_selector(selector, 0, None, &ancestor_ref, _context))
+          {
+            return true;
+          }
+        }
+        false
       }
       PseudoClass::Root => {
         matches!(self.node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)

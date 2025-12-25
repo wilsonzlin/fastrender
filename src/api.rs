@@ -2812,10 +2812,12 @@ impl FastRender {
         if needs_intrinsic || needs_ratio {
           if let Some(candidate) = poster.as_deref().filter(|s| !s.is_empty()) {
             let candidate_trimmed = candidate.trim_start();
-            let inline_svg = candidate_trimmed.starts_with("<svg")
-              || candidate_trimmed.starts_with("<?xml");
+            let inline_svg =
+              candidate_trimmed.starts_with("<svg") || candidate_trimmed.starts_with("<?xml");
             let meta = if inline_svg {
-              self.image_cache.probe_svg_content(candidate, "video-poster")
+              self
+                .image_cache
+                .probe_svg_content(candidate, "video-poster")
             } else {
               self
                 .image_cache
@@ -2868,10 +2870,12 @@ impl FastRender {
               .probe(content.svg.as_str())
               .map(|meta| (*meta).clone())
           } else {
-            Err(crate::error::Error::Image(crate::error::ImageError::LoadFailed {
-              url: "svg".to_string(),
-              reason: "empty content".to_string(),
-            }))
+            Err(crate::error::Error::Image(
+              crate::error::ImageError::LoadFailed {
+                url: "svg".to_string(),
+                reason: "empty content".to_string(),
+              },
+            ))
           };
 
           if let Ok(meta) = meta {

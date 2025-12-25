@@ -24,6 +24,7 @@ mod order_property_test;
 mod root_font_size_percent_test;
 mod scope_rule_test;
 mod selector_indexing_test;
+mod shadow_host_selectors_test;
 mod supports_rule_test;
 mod supports_selector_test;
 mod supports_writing_mode_test;

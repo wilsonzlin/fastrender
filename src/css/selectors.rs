@@ -7,6 +7,7 @@ use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ToCss;
 use cssparser::Token;
+use selectors::parser::Selector;
 use selectors::parser::SelectorImpl;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
@@ -49,6 +50,8 @@ impl SelectorImpl for FastRenderSelectorImpl {
 #[derive(Clone, PartialEq, Eq)]
 pub enum PseudoClass {
   Has(Box<[RelativeSelector<FastRenderSelectorImpl>]>),
+  Host(Option<SelectorList<FastRenderSelectorImpl>>),
+  HostContext(SelectorList<FastRenderSelectorImpl>),
   Root,
   FirstChild,
   LastChild,
@@ -141,6 +144,17 @@ impl ToCss for PseudoClass {
           first = false;
           rel.selector.to_css(dest)?;
         }
+        dest.write_str(")")
+      }
+      PseudoClass::Host(None) => dest.write_str(":host"),
+      PseudoClass::Host(Some(selectors)) => {
+        dest.write_str(":host(")?;
+        selectors.to_css(dest)?;
+        dest.write_str(")")
+      }
+      PseudoClass::HostContext(selectors) => {
+        dest.write_str(":host-context(")?;
+        selectors.to_css(dest)?;
         dest.write_str(")")
       }
       PseudoClass::Root => dest.write_str(":root"),
@@ -252,6 +266,7 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
   ) -> std::result::Result<PseudoClass, ParseError<'i, Self::Error>> {
     let lowered = name.to_ascii_lowercase();
     match lowered.as_str() {
+      "host" => Ok(PseudoClass::Host(None)),
       "root" => Ok(PseudoClass::Root),
       "first-child" => Ok(PseudoClass::FirstChild),
       "last-child" => Ok(PseudoClass::LastChild),
@@ -303,6 +318,37 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
   ) -> std::result::Result<PseudoClass, ParseError<'i, Self::Error>> {
     let lowered = name.to_ascii_lowercase();
     match lowered.as_str() {
+      "host" => {
+        let selectors = SelectorList::parse(
+          &PseudoClassParser,
+          parser,
+          selectors::parser::ParseRelative::No,
+        )
+        .map_err(|_| {
+          parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+            name.clone(),
+          ))
+        })?;
+        if selectors.slice().iter().any(selector_has_combinators) {
+          return Err(parser.new_custom_error(
+            SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
+          ));
+        }
+        Ok(PseudoClass::Host(Some(selectors)))
+      }
+      "host-context" => {
+        let selectors = SelectorList::parse(
+          &PseudoClassParser,
+          parser,
+          selectors::parser::ParseRelative::No,
+        )
+        .map_err(|_| {
+          parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+            name.clone(),
+          ))
+        })?;
+        Ok(PseudoClass::HostContext(selectors))
+      }
       "has" => {
         let list = SelectorList::parse(
           &PseudoClassParser,
@@ -457,6 +503,17 @@ fn build_relative_selectors(
     })
     .collect::<Vec<_>>()
     .into_boxed_slice()
+}
+
+fn selector_has_combinators(selector: &Selector<FastRenderSelectorImpl>) -> bool {
+  let mut iter = selector.iter();
+  loop {
+    while iter.next().is_some() {}
+    match iter.next_sequence() {
+      Some(_) => return true,
+      None => return false,
+    }
+  }
 }
 
 /// Parse nth-child/nth-last-child expressions

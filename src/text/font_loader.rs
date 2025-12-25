@@ -631,8 +631,7 @@ impl FontContext {
       std::thread::spawn(move || {
         let _pending = guard;
         let start = Instant::now();
-        let _ =
-          ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
+        let _ = ctx.load_face_sources(&family_clone, &face_clone, base.as_deref(), order, start);
         if let Some(tx) = done_tx {
           let _ = tx.send(());
         }
