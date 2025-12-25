@@ -53,6 +53,20 @@ fn paragraph_breaks_on_line_boundaries() {
   }
 }
 
+fn collect_lines<'a>(fragment: &'a FragmentNode) -> Vec<&'a FragmentNode> {
+  let mut lines = Vec::new();
+  let mut stack = vec![fragment];
+  while let Some(node) = stack.pop() {
+    if matches!(node.content, FragmentContent::Line { .. }) {
+      lines.push(node);
+    }
+    for child in &node.children {
+      stack.push(child);
+    }
+  }
+  lines
+}
+
 #[test]
 fn pagination_respects_gap_and_forced_break() {
   let mut breaker_style = ComputedStyle::default();
@@ -512,4 +526,43 @@ fn find_sticky<'a>(node: &'a FragmentNode) -> Option<(Point, &'a FragmentNode)> 
   }
 
   None
+}
+
+#[test]
+fn column_fragmentation_uses_column_width_for_layout() {
+  let text = "Wrap this text inside columns";
+  let text_node = BoxNode::new_text(Arc::new(ComputedStyle::default()), text.to_string());
+  let root = BoxNode::new_block(
+    Arc::new(ComputedStyle::default()),
+    FormattingContextType::Block,
+    vec![text_node],
+  );
+  let box_tree = BoxTree::new(root);
+
+  let viewport = Size::new(320.0, 400.0);
+  let base_engine = LayoutEngine::new(LayoutConfig::for_viewport(viewport));
+  let base_tree = base_engine
+    .layout_tree(&box_tree)
+    .expect("layout without fragmentation");
+  let base_lines = collect_lines(&base_tree.root);
+  assert_eq!(
+    base_lines.len(),
+    1,
+    "text should fit on one line without column fragmentation"
+  );
+
+  let fragmentation = FragmentationOptions::new(400.0).with_columns(2, 20.0);
+  let engine =
+    LayoutEngine::new(LayoutConfig::for_viewport(viewport).with_fragmentation(fragmentation));
+  let tree = engine.layout_tree(&box_tree).expect("layout with columns");
+
+  let expected_column_width = (viewport.width - 20.0) / 2.0;
+  assert!((tree.root.bounds.width() - expected_column_width).abs() < 0.1);
+  assert_eq!(tree.viewport_size().width, viewport.width);
+
+  let column_lines = collect_lines(&tree.root);
+  assert!(
+    column_lines.len() > 1,
+    "text should wrap when constrained to column width"
+  );
 }
