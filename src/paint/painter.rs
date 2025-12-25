@@ -430,6 +430,7 @@ enum ResolvedFilter {
     spread: f32,
     color: Rgba,
   },
+  SvgFilter(Arc<crate::paint::svg_filter::SvgFilter>),
 }
 
 impl FilterOutset for ResolvedFilter {
@@ -1644,11 +1645,19 @@ impl Painter {
       .map(|s| matches!(s.isolation, crate::style::types::Isolation::Isolate))
       .unwrap_or(false);
     let filters = style_ref
-      .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx))
+      .map(|s| resolve_filters(&s.filter, s, viewport, &self.font_ctx, &self.image_cache))
       .unwrap_or_default();
     let has_filters = !filters.is_empty();
     let backdrop_filters = style_ref
-      .map(|s| resolve_filters(&s.backdrop_filter, s, viewport, &self.font_ctx))
+      .map(|s| {
+        resolve_filters(
+          &s.backdrop_filter,
+          s,
+          viewport,
+          &self.font_ctx,
+          &self.image_cache,
+        )
+      })
       .unwrap_or_default();
     let has_backdrop = !backdrop_filters.is_empty();
     let clip: Option<StackingClip> = style_ref.and_then(|style| {
@@ -7781,6 +7790,7 @@ fn resolve_filters(
   style: &ComputedStyle,
   viewport: (f32, f32),
   font_ctx: &FontContext,
+  image_cache: &ImageCache,
 ) -> Vec<ResolvedFilter> {
   filters
     .iter()
@@ -7817,7 +7827,9 @@ fn resolve_filters(
           color,
         })
       }
-      FilterFunction::Url(_) => None,
+      FilterFunction::Url(url) => {
+        crate::paint::svg_filter::load_svg_filter(url, image_cache).map(ResolvedFilter::SvgFilter)
+      }
     })
     .collect()
 }
@@ -7839,24 +7851,24 @@ fn resolve_filter_length(
 
 fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
   for filter in filters {
-    match *filter {
-      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, radius * scale),
+    match filter {
+      ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
       ResolvedFilter::Brightness(amount) => {
-        apply_color_filter(pixmap, |c, a| (scale_color(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (scale_color(c, *amount), a))
       }
       ResolvedFilter::Contrast(amount) => {
-        apply_color_filter(pixmap, |c, a| (apply_contrast(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (apply_contrast(c, *amount), a))
       }
       ResolvedFilter::Grayscale(amount) => {
-        apply_color_filter(pixmap, |c, a| (grayscale(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (grayscale(c, *amount), a))
       }
-      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, amount), a)),
+      ResolvedFilter::Sepia(amount) => apply_color_filter(pixmap, |c, a| (sepia(c, *amount), a)),
       ResolvedFilter::Saturate(amount) => {
-        apply_color_filter(pixmap, |c, a| (saturate(c, amount), a))
+        apply_color_filter(pixmap, |c, a| (saturate(c, *amount), a))
       }
-      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, deg), a)),
-      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, amount), a)),
-      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * amount)),
+      ResolvedFilter::HueRotate(deg) => apply_color_filter(pixmap, |c, a| (hue_rotate(c, *deg), a)),
+      ResolvedFilter::Invert(amount) => apply_color_filter(pixmap, |c, a| (invert(c, *amount), a)),
+      ResolvedFilter::Opacity(amount) => apply_color_filter(pixmap, |c, a| (c, a * *amount)),
       ResolvedFilter::DropShadow {
         offset_x,
         offset_y,
@@ -7865,12 +7877,15 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
         color,
       } => apply_drop_shadow(
         pixmap,
-        offset_x * scale,
-        offset_y * scale,
-        blur_radius * scale,
-        spread * scale,
-        color,
+        *offset_x * scale,
+        *offset_y * scale,
+        *blur_radius * scale,
+        *spread * scale,
+        *color,
       ),
+      ResolvedFilter::SvgFilter(filter) => {
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap);
+      }
     }
   }
 }
@@ -10275,7 +10290,14 @@ mod tests {
   fn filter_lengths_resolve_viewport_units() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::new(10.0, LengthUnit::Vw))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let cache = ImageCache::new();
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &cache,
+    );
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!((radius - 20.0).abs() < 0.001),
       other => panic!("expected blur filter, got {:?}", other),
@@ -10286,7 +10308,14 @@ mod tests {
   fn filter_lengths_ignore_percentages() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::percent(50.0))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let cache = ImageCache::new();
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &cache,
+    );
     assert!(filters.is_empty(), "percentage blur should be discarded");
   }
 
@@ -10295,7 +10324,14 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_size = 20.0;
     style.filter = vec![FilterFunction::Blur(Length::new(1.0, LengthUnit::Ex))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let cache = ImageCache::new();
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &cache,
+    );
     match filters.first() {
       Some(ResolvedFilter::Blur(radius)) => assert!(
         (radius - 10.0).abs() < 2.0,
@@ -10309,7 +10345,14 @@ mod tests {
   fn negative_blur_lengths_resolve_to_no_filter() {
     let mut style = ComputedStyle::default();
     style.filter = vec![FilterFunction::Blur(Length::px(-2.0))];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let cache = ImageCache::new();
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &cache,
+    );
     assert!(filters.is_empty(), "negative blur should drop the filter");
   }
 
@@ -10440,7 +10483,14 @@ mod tests {
       FilterFunction::Invert(1.3),
       FilterFunction::Opacity(1.7),
     ];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let cache = ImageCache::new();
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &cache,
+    );
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
       ResolvedFilter::Grayscale(v) | ResolvedFilter::Sepia(v) | ResolvedFilter::Invert(v) =>
@@ -10458,7 +10508,14 @@ mod tests {
       FilterFunction::Contrast(1.7),
       FilterFunction::Saturate(3.2),
     ];
-    let filters = resolve_filters(&style.filter, &style, (200.0, 100.0), &FontContext::new());
+    let cache = ImageCache::new();
+    let filters = resolve_filters(
+      &style.filter,
+      &style,
+      (200.0, 100.0),
+      &FontContext::new(),
+      &cache,
+    );
     assert_eq!(filters.len(), 3);
     assert!(filters
       .iter()

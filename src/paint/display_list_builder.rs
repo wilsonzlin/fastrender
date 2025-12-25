@@ -1391,6 +1391,7 @@ impl DisplayListBuilder {
   }
 
   fn resolve_filters(
+    &self,
     filters: &[crate::style::types::FilterFunction],
     style: &ComputedStyle,
     viewport: Option<(f32, f32)>,
@@ -5816,7 +5817,8 @@ mod tests {
       LengthUnit::Ex,
     ))];
 
-    let filters = DisplayListBuilder::resolve_filters(
+    let builder = DisplayListBuilder::new();
+    let filters = builder.resolve_filters(
       &style.filter,
       &style,
       Some((200.0, 100.0)),
@@ -5852,7 +5854,8 @@ mod tests {
       crate::style::types::FilterFunction::Opacity(1.8),
     ];
 
-    let filters = DisplayListBuilder::resolve_filters(
+    let builder = DisplayListBuilder::new();
+    let filters = builder.resolve_filters(
       &style.filter,
       &style,
       Some((200.0, 100.0)),
@@ -5878,7 +5881,8 @@ mod tests {
       crate::style::types::FilterFunction::Saturate(3.75),
     ];
 
-    let filters = DisplayListBuilder::resolve_filters(
+    let builder = DisplayListBuilder::new();
+    let filters = builder.resolve_filters(
       &style.filter,
       &style,
       Some((200.0, 100.0)),
