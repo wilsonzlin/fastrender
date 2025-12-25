@@ -1,5 +1,6 @@
 use fastrender::api::{FastRender, LayoutDocumentOptions, PageStacking};
 use fastrender::Rgba;
+use fastrender::style::media::MediaType;
 use fastrender::tree::box_tree::ReplacedType;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 
@@ -21,6 +22,19 @@ fn find_text<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNod
     }
   }
   None
+}
+
+fn collect_floats<'a>(node: &'a FragmentNode, out: &mut Vec<&'a FragmentNode>) {
+  if node
+    .style
+    .as_ref()
+    .is_some_and(|style| style.float.is_floating())
+  {
+    out.push(node);
+  }
+  for child in &node.children {
+    collect_floats(child, out);
+  }
 }
 
 fn find_text_with_parent<'a>(
@@ -1025,5 +1039,78 @@ fn margin_box_default_text_align_right_for_top_right() {
   assert!(
     right_offset < margin_box.bounds.width() * 0.2,
     "text should sit near the right edge"
+  );
+}
+
+#[test]
+fn floats_defer_to_next_page_and_clear_following_text() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 200px; margin: 0; }
+          body { margin: 0; }
+          .spacer { height: 150px; }
+          .float { float: left; width: 80px; height: 80px; }
+          p { clear: both; margin: 0; }
+        </style>
+      </head>
+      <body>
+        <div class="spacer"></div>
+        <div class="float">Float box</div>
+        <p>After float paragraph</p>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer
+    .layout_document_for_media(&dom, 200, 200, MediaType::Print)
+    .unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "float deferral should create a second page for overflow"
+  );
+
+  fn collect_float_bottoms(node: &FragmentNode, origin: (f32, f32), out: &mut Vec<f32>) {
+    let current = (origin.0 + node.bounds.x(), origin.1 + node.bounds.y());
+    if node
+      .style
+      .as_ref()
+      .is_some_and(|style| style.float.is_floating())
+    {
+      out.push(current.1 + node.bounds.height());
+    }
+    for child in &node.children {
+      collect_float_bottoms(child, current, out);
+    }
+  }
+
+  let mut first_page_floats = Vec::new();
+  collect_float_bottoms(page_roots[0], (0.0, 0.0), &mut first_page_floats);
+  assert!(
+    first_page_floats.is_empty(),
+    "float should not be clipped across the first page"
+  );
+
+  let mut second_page_floats = Vec::new();
+  collect_float_bottoms(page_roots[1], (0.0, 0.0), &mut second_page_floats);
+  assert_eq!(second_page_floats.len(), 1, "float should move to page 2");
+
+  let float_bottom = second_page_floats[0];
+
+  let text_pos =
+    find_text_position(page_roots[1], "After float", (0.0, 0.0)).expect("paragraph on page 2");
+  assert!(
+    text_pos.1 >= float_bottom - 0.1,
+    "clearing text should appear below the float"
+  );
+  let page_bottom = page_roots[1].bounds.y() + page_roots[1].bounds.height();
+  assert!(
+    float_bottom <= page_bottom + 0.1,
+    "float should fit entirely within the second page"
   );
 }
