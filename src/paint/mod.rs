@@ -106,6 +106,7 @@ pub mod svg_filter;
 pub mod svg_filter_registry;
 pub mod text_rasterize;
 pub mod text_shadow;
+pub mod transform_resolver;
 
 /// Stable debug snapshot for display lists.
 pub fn snapshot_display_list(

@@ -82,7 +82,6 @@ use crate::paint::display_list::TextDecorationItem;
 use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
-use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
@@ -122,7 +121,6 @@ use crate::style::types::TextEmphasisPosition;
 use crate::style::types::TextEmphasisStyle;
 use crate::style::types::TextUnderlineOffset;
 use crate::style::types::TextUnderlinePosition;
-use crate::style::types::TransformBox;
 use crate::style::types::TransformStyle;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
@@ -1194,21 +1192,6 @@ impl DisplayListBuilder {
     })
   }
 
-  fn transform_reference_box(
-    style: &ComputedStyle,
-    bounds: Rect,
-    viewport: Option<(f32, f32)>,
-  ) -> Rect {
-    let rects = Self::background_rects(bounds, style, viewport);
-    match style.transform_box {
-      TransformBox::ContentBox => rects.content,
-      TransformBox::BorderBox
-      | TransformBox::FillBox
-      | TransformBox::StrokeBox
-      | TransformBox::ViewBox => rects.border,
-    }
-  }
-
   fn resolve_border_radii(
     style: Option<&ComputedStyle>,
     bounds: Rect,
@@ -2015,217 +1998,7 @@ impl DisplayListBuilder {
     bounds: Rect,
     viewport: Option<(f32, f32)>,
   ) -> Option<Transform3D> {
-    let reference = Self::transform_reference_box(style, bounds, viewport);
-    let percentage_width = reference.width();
-    let percentage_height = reference.height();
-
-    let resolved_perspective = style.perspective.as_ref().and_then(|len| {
-      len
-        .resolve_with_context(
-          Some(percentage_width),
-          viewport.map(|v| v.0).unwrap_or(0.0),
-          viewport.map(|v| v.1).unwrap_or(0.0),
-          style.font_size,
-          style.root_font_size,
-        )
-        .filter(|v| *v > 0.0)
-    });
-
-    let mut transform_from_list: Option<Transform3D> = None;
-
-    if !style.transform.is_empty() || resolved_perspective.is_some() {
-      let mut ts = Transform3D::identity();
-      const EPS: f32 = 1e-6;
-      for component in &style.transform {
-        let next = match component {
-          crate::css::types::Transform::Translate(x, y) => {
-            let tx = Self::resolve_transform_length(
-              x,
-              style.font_size,
-              style.root_font_size,
-              percentage_width,
-            );
-            let ty = Self::resolve_transform_length(
-              y,
-              style.font_size,
-              style.root_font_size,
-              percentage_height,
-            );
-            Transform3D::translate(tx, ty, 0.0)
-          }
-          crate::css::types::Transform::TranslateX(x) => {
-            let tx = Self::resolve_transform_length(
-              x,
-              style.font_size,
-              style.root_font_size,
-              percentage_width,
-            );
-            Transform3D::translate(tx, 0.0, 0.0)
-          }
-          crate::css::types::Transform::TranslateY(y) => {
-            let ty = Self::resolve_transform_length(
-              y,
-              style.font_size,
-              style.root_font_size,
-              percentage_height,
-            );
-            Transform3D::translate(0.0, ty, 0.0)
-          }
-          crate::css::types::Transform::TranslateZ(z) => Transform3D::translate(
-            0.0,
-            0.0,
-            Self::resolve_transform_length(
-              z,
-              style.font_size,
-              style.root_font_size,
-              percentage_width,
-            ),
-          ),
-          crate::css::types::Transform::Translate3d(x, y, z) => {
-            let tx = Self::resolve_transform_length(
-              x,
-              style.font_size,
-              style.root_font_size,
-              percentage_width,
-            );
-            let ty = Self::resolve_transform_length(
-              y,
-              style.font_size,
-              style.root_font_size,
-              percentage_height,
-            );
-            let tz = Self::resolve_transform_length(
-              z,
-              style.font_size,
-              style.root_font_size,
-              percentage_width,
-            );
-            Transform3D::translate(tx, ty, tz)
-          }
-          crate::css::types::Transform::Scale(sx, sy) => Transform3D::scale(*sx, *sy, 1.0),
-          crate::css::types::Transform::ScaleX(sx) => Transform3D::scale(*sx, 1.0, 1.0),
-          crate::css::types::Transform::ScaleY(sy) => Transform3D::scale(1.0, *sy, 1.0),
-          crate::css::types::Transform::ScaleZ(sz) => Transform3D::scale(1.0, 1.0, *sz),
-          crate::css::types::Transform::Scale3d(sx, sy, sz) => Transform3D::scale(*sx, *sy, *sz),
-          crate::css::types::Transform::Rotate(deg)
-          | crate::css::types::Transform::RotateZ(deg) => Transform3D::rotate_z(deg.to_radians()),
-          crate::css::types::Transform::RotateX(deg) => Transform3D::rotate_x(deg.to_radians()),
-          crate::css::types::Transform::RotateY(deg) => Transform3D::rotate_y(deg.to_radians()),
-          crate::css::types::Transform::Rotate3d(x, y, z, deg) => {
-            let len = (x * x + y * y + z * z).sqrt();
-            if len < EPS {
-              Transform3D::identity()
-            } else {
-              let ax = *x / len;
-              let ay = *y / len;
-              let az = *z / len;
-              let angle = deg.to_radians();
-              let (s, c) = angle.sin_cos();
-              let t = 1.0 - c;
-
-              let m00 = t * ax * ax + c;
-              let m01 = t * ax * ay + s * az;
-              let m02 = t * ax * az - s * ay;
-              let m10 = t * ax * ay - s * az;
-              let m11 = t * ay * ay + c;
-              let m12 = t * ay * az + s * ax;
-              let m20 = t * ax * az + s * ay;
-              let m21 = t * ay * az - s * ax;
-              let m22 = t * az * az + c;
-
-              Transform3D {
-                m: [
-                  m00, m10, m20, 0.0, // column 1
-                  m01, m11, m21, 0.0, // column 2
-                  m02, m12, m22, 0.0, // column 3
-                  0.0, 0.0, 0.0, 1.0, // column 4
-                ],
-              }
-            }
-          }
-          crate::css::types::Transform::SkewX(deg) => Transform3D::skew(deg.to_radians(), 0.0),
-          crate::css::types::Transform::SkewY(deg) => Transform3D::skew(0.0, deg.to_radians()),
-          crate::css::types::Transform::Skew(ax, ay) => {
-            Transform3D::skew(ax.to_radians(), ay.to_radians())
-          }
-          crate::css::types::Transform::Perspective(len) => {
-            Transform3D::perspective(Self::resolve_transform_length(
-              len,
-              style.font_size,
-              style.root_font_size,
-              percentage_width,
-            ))
-          }
-          crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
-            Transform3D::from_2d(&Transform2D {
-              a: *a,
-              b: *b,
-              c: *c,
-              d: *d,
-              e: *e,
-              f: *f,
-            })
-          }
-          crate::css::types::Transform::Matrix3d(values) => Transform3D { m: *values },
-        };
-        ts = ts.multiply(&next);
-      }
-
-      let origin_x = Self::resolve_transform_length(
-        &style.transform_origin.x,
-        style.font_size,
-        style.root_font_size,
-        percentage_width,
-      );
-      let origin_y = Self::resolve_transform_length(
-        &style.transform_origin.y,
-        style.font_size,
-        style.root_font_size,
-        percentage_height,
-      );
-      let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
-
-      let mut matrix = Transform3D::translate(origin.x, origin.y, 0.0)
-        .multiply(&ts)
-        .multiply(&Transform3D::translate(-origin.x, -origin.y, 0.0));
-
-      if let Some(perspective) = resolved_perspective {
-        let po_x = Self::resolve_transform_length(
-          &style.perspective_origin.x,
-          style.font_size,
-          style.root_font_size,
-          percentage_width,
-        );
-        let po_y = Self::resolve_transform_length(
-          &style.perspective_origin.y,
-          style.font_size,
-          style.root_font_size,
-          percentage_height,
-        );
-        let perspective_origin = Point::new(reference.x() + po_x, reference.y() + po_y);
-        let perspective_matrix =
-          Transform3D::translate(perspective_origin.x, perspective_origin.y, 0.0)
-            .multiply(&Transform3D::perspective(perspective))
-            .multiply(&Transform3D::translate(
-              -perspective_origin.x,
-              -perspective_origin.y,
-              0.0,
-            ));
-        matrix = perspective_matrix.multiply(&matrix);
-      }
-
-      transform_from_list = Some(matrix);
-    }
-
-    let motion = crate::paint::motion_path::compute_motion_transform(style, bounds, viewport)
-      .map(|t| Transform3D::from_2d(&t));
-
-    match (motion, transform_from_list) {
-      (None, None) => None,
-      (Some(motion), None) => Some(motion),
-      (None, Some(matrix)) => Some(matrix),
-      (Some(motion), Some(matrix)) => Some(matrix.multiply(&motion)),
-    }
+    crate::paint::transform_resolver::resolve_transform3d(style, bounds, viewport)
   }
 
   /// Exposes transform resolution for debugging/inspection tools.
@@ -2234,55 +2007,11 @@ impl DisplayListBuilder {
     bounds: Rect,
     viewport: Option<(f32, f32)>,
   ) -> Option<Transform3D> {
-    Self::build_transform(style, bounds, viewport)
+    crate::paint::transform_resolver::resolve_transform3d(style, bounds, viewport)
   }
 
   fn backface_is_hidden(transform: &Transform3D) -> bool {
-    let project = |x: f32, y: f32, m: &Transform3D| -> [f32; 3] {
-      let (tx, ty, tz, tw) = m.transform_point(x, y, 0.0);
-      if tw.abs() < 1e-6 {
-        [tx, ty, tz]
-      } else {
-        [tx / tw, ty / tw, tz / tw]
-      }
-    };
-
-    let p0 = project(0.0, 0.0, transform);
-    let p1 = project(1.0, 0.0, transform);
-    let p2 = project(0.0, 1.0, transform);
-    let ux = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-    let uy = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-
-    let normal = [
-      ux[1] * uy[2] - ux[2] * uy[1],
-      ux[2] * uy[0] - ux[0] * uy[2],
-      ux[0] * uy[1] - ux[1] * uy[0],
-    ];
-
-    normal[2] < 0.0
-  }
-
-  fn resolve_transform_length(
-    len: &Length,
-    font_size: f32,
-    root_font_size: f32,
-    percentage_base: f32,
-  ) -> f32 {
-    let needs_viewport = len.unit.is_viewport_relative()
-      || len
-        .calc
-        .as_ref()
-        .map(|c| c.has_viewport_relative())
-        .unwrap_or(false);
-    let (vw, vh) = if needs_viewport {
-      (f32::NAN, f32::NAN)
-    } else {
-      (0.0, 0.0)
-    };
-
-    len
-      .resolve_with_context(Some(percentage_base), vw, vh, font_size, root_font_size)
-      .unwrap_or(len.value)
+    crate::paint::transform_resolver::backface_is_hidden(transform)
   }
 
   fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point) {
