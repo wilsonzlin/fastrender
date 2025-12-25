@@ -102,6 +102,7 @@ pub mod motion_path;
 pub mod object_fit;
 pub mod optimize;
 pub mod painter;
+pub mod projective_warp;
 pub mod rasterize;
 pub mod stacking;
 pub mod svg_filter;
