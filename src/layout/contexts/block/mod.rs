@@ -48,7 +48,8 @@ use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation::{
-  clip_node, propagate_fragment_metadata, resolve_fragmentation_boundaries,
+  clip_node, propagate_fragment_metadata, resolve_fragmentation_boundaries_with_context,
+  FragmentationContext,
 };
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
@@ -2016,17 +2017,29 @@ impl BlockFormattingContext {
     {
       let mut low = column_height;
       let mut high = flow_height;
-      let count_at_low = resolve_fragmentation_boundaries(&flow_root, low)
+      let count_at_low = resolve_fragmentation_boundaries_with_context(
+        &flow_root,
+        low,
+        FragmentationContext::Column,
+      )
         .len()
         .saturating_sub(1);
       if count_at_low > column_count {
-        let count_at_high = resolve_fragmentation_boundaries(&flow_root, high)
+        let count_at_high = resolve_fragmentation_boundaries_with_context(
+          &flow_root,
+          high,
+          FragmentationContext::Column,
+        )
           .len()
           .saturating_sub(1);
         if count_at_high <= column_count {
           for _ in 0..12 {
             let mid = (low + high) / 2.0;
-            let count_at_mid = resolve_fragmentation_boundaries(&flow_root, mid)
+            let count_at_mid = resolve_fragmentation_boundaries_with_context(
+              &flow_root,
+              mid,
+              FragmentationContext::Column,
+            )
               .len()
               .saturating_sub(1);
             if count_at_mid <= column_count {
@@ -2056,7 +2069,11 @@ impl BlockFormattingContext {
       ));
     }
 
-    let boundaries = resolve_fragmentation_boundaries(&flow_root, column_height);
+    let boundaries = resolve_fragmentation_boundaries_with_context(
+      &flow_root,
+      column_height,
+      FragmentationContext::Column,
+    );
     let fragment_count = boundaries.len().saturating_sub(1);
     if fragment_count == 0 {
       return Ok((

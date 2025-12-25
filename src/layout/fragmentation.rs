@@ -14,6 +14,15 @@ use crate::style::types::{BreakBetween, BreakInside};
 use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentainerPath};
 
+/// The fragmentation context determines how break hints are interpreted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FragmentationContext {
+  /// Fragmentation across pages.
+  Page,
+  /// Fragmentation across columns.
+  Column,
+}
+
 /// Options controlling how fragments are split across fragmentainers.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FragmentationOptions {
@@ -118,13 +127,21 @@ const LINE_FALLBACK_EPSILON: f32 = 1.0;
 /// at least one fragmentainer). When `fragmentainer_size` is non-positive, a single fragment
 /// containing all content is implied.
 pub fn resolve_fragmentation_boundaries(root: &FragmentNode, fragmentainer_size: f32) -> Vec<f32> {
+  resolve_fragmentation_boundaries_with_context(root, fragmentainer_size, FragmentationContext::Page)
+}
+
+pub fn resolve_fragmentation_boundaries_with_context(
+  root: &FragmentNode,
+  fragmentainer_size: f32,
+  context: FragmentationContext,
+) -> Vec<f32> {
   if fragmentainer_size <= 0.0 {
     return vec![0.0, root.logical_bounding_box().height()];
   }
 
   let total_height = root.logical_bounding_box().height().max(fragmentainer_size);
   let mut collection = BreakCollection::default();
-  collect_break_opportunities(root, 0.0, &mut collection, 0, 0);
+  collect_break_opportunities(root, 0.0, &mut collection, 0, 0, context);
   collection.opportunities.push(BreakOpportunity {
     pos: total_height,
     strength: BreakStrength::Forced,
@@ -332,6 +349,7 @@ fn collect_break_opportunities(
   collection: &mut BreakCollection,
   avoid_depth: usize,
   inline_depth: usize,
+  context: FragmentationContext,
 ) {
   let default_style = default_style();
   let style = node
@@ -339,7 +357,7 @@ fn collect_break_opportunities(
     .as_ref()
     .map(|s| s.as_ref())
     .unwrap_or(default_style);
-  let inside_avoid = avoid_depth + usize::from(matches!(style.break_inside, BreakInside::Avoid));
+  let inside_avoid = avoid_depth + usize::from(avoids_break_inside(style.break_inside, context));
   let inside_inline = inline_depth
     + usize::from(matches!(
       node.content,
@@ -403,7 +421,7 @@ fn collect_break_opportunities(
     }
 
     if idx == 0 && !matches!(child_style.break_before, BreakBetween::Auto) {
-      let mut strength = combine_breaks(BreakBetween::Auto, child_style.break_before);
+      let mut strength = combine_breaks(BreakBetween::Auto, child_style.break_before, context);
       strength = apply_avoid_penalty(strength, inside_avoid > 0);
       if strength == BreakStrength::Auto
         && matches!(child.content, FragmentContent::Block { box_id: None })
@@ -423,9 +441,10 @@ fn collect_break_opportunities(
       collection,
       inside_avoid,
       inside_inline,
+      context,
     );
 
-    let mut strength = combine_breaks(child_style.break_after, next_style.break_before);
+    let mut strength = combine_breaks(child_style.break_after, next_style.break_before, context);
     strength = apply_avoid_penalty(strength, inside_avoid > 0);
     if strength == BreakStrength::Auto
       && matches!(child.content, FragmentContent::Block { box_id: None })
@@ -653,22 +672,47 @@ fn update_line_starts(boundary: f32, line_containers: &[LineContainer], line_sta
   }
 }
 
-fn combine_breaks(after: BreakBetween, before: BreakBetween) -> BreakStrength {
-  if matches!(
-    after,
-    BreakBetween::Always | BreakBetween::Page | BreakBetween::Column
-  ) || matches!(
-    before,
-    BreakBetween::Always | BreakBetween::Page | BreakBetween::Column
-  ) {
+fn combine_breaks(after: BreakBetween, before: BreakBetween, context: FragmentationContext) -> BreakStrength {
+  if forces_break_between(after, context) || forces_break_between(before, context) {
     return BreakStrength::Forced;
   }
 
-  if matches!(after, BreakBetween::Avoid) || matches!(before, BreakBetween::Avoid) {
+  if avoids_break_between(after, context) || avoids_break_between(before, context) {
     return BreakStrength::Avoid;
   }
 
   BreakStrength::Auto
+}
+
+pub(crate) fn forces_break_between(value: BreakBetween, context: FragmentationContext) -> bool {
+  match value {
+    BreakBetween::Always => true,
+    BreakBetween::Column => matches!(context, FragmentationContext::Column),
+    BreakBetween::Page
+    | BreakBetween::Left
+    | BreakBetween::Right
+    | BreakBetween::Recto
+    | BreakBetween::Verso => matches!(context, FragmentationContext::Page),
+    _ => false,
+  }
+}
+
+pub(crate) fn avoids_break_between(value: BreakBetween, context: FragmentationContext) -> bool {
+  match value {
+    BreakBetween::Avoid => true,
+    BreakBetween::AvoidPage => matches!(context, FragmentationContext::Page),
+    BreakBetween::AvoidColumn => matches!(context, FragmentationContext::Column),
+    _ => false,
+  }
+}
+
+pub(crate) fn avoids_break_inside(value: BreakInside, context: FragmentationContext) -> bool {
+  match value {
+    BreakInside::Avoid => true,
+    BreakInside::AvoidPage => matches!(context, FragmentationContext::Page),
+    BreakInside::AvoidColumn => matches!(context, FragmentationContext::Column),
+    _ => false,
+  }
 }
 
 fn apply_avoid_penalty(strength: BreakStrength, inside_avoid: bool) -> BreakStrength {
