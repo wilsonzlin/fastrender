@@ -165,38 +165,76 @@ pub fn resolve_first_strong_direction(node: &DomNode) -> Option<TextDirection> {
   None
 }
 
+fn node_is_hidden(attributes: &[(String, String)]) -> bool {
+  attributes.iter().any(|(name, value)| {
+    if name.eq_ignore_ascii_case("hidden") {
+      return true;
+    }
+    if name.eq_ignore_ascii_case("aria-hidden") {
+      return value.is_empty() || value.eq_ignore_ascii_case("true");
+    }
+    if name.eq_ignore_ascii_case("data-fastr-hidden") {
+      return value.eq_ignore_ascii_case("true");
+    }
+    false
+  })
+}
+
+fn node_is_inert_like(attributes: &[(String, String)]) -> bool {
+  attributes.iter().any(|(name, value)| {
+    if name.eq_ignore_ascii_case("inert") {
+      return true;
+    }
+    if name.eq_ignore_ascii_case("data-fastr-inert") {
+      return value.eq_ignore_ascii_case("true");
+    }
+    false
+  })
+}
+
 /// Collects the set of Unicode codepoints present in text nodes.
 ///
-/// Script and style contents are skipped to avoid counting non-visible text.
+/// Script and style contents are skipped to avoid counting non-visible text. Nodes marked as
+/// hidden or inert are ignored along with their descendants to avoid fetching unnecessary font
+/// subsets for invisible content.
 pub fn collect_text_codepoints(node: &DomNode) -> Vec<u32> {
-  let mut stack = vec![node];
+  let mut stack = vec![(node, false)];
   let mut seen: HashSet<u32> = HashSet::new();
 
-  while let Some(current) = stack.pop() {
+  while let Some((current, suppressed)) = stack.pop() {
+    if suppressed {
+      continue;
+    }
     match &current.node_type {
       DomNodeType::Text { content } => {
         for ch in content.chars() {
           seen.insert(ch as u32);
         }
       }
-      DomNodeType::Element { tag_name, .. } => {
+      DomNodeType::Element {
+        tag_name,
+        attributes,
+        ..
+      } => {
         let skip =
           tag_name.eq_ignore_ascii_case("script") || tag_name.eq_ignore_ascii_case("style");
         if skip {
           continue;
         }
+        let suppress_children = node_is_hidden(attributes) || node_is_inert_like(attributes);
         for child in &current.children {
-          stack.push(child);
+          stack.push((child, suppress_children));
         }
       }
-      DomNodeType::Slot { .. } => {
+      DomNodeType::Slot { attributes, .. } => {
+        let suppress_children = node_is_hidden(attributes) || node_is_inert_like(attributes);
         for child in &current.children {
-          stack.push(child);
+          stack.push((child, suppress_children));
         }
       }
       DomNodeType::ShadowRoot { .. } | DomNodeType::Document => {
         for child in &current.children {
-          stack.push(child);
+          stack.push((child, false));
         }
       }
     }
