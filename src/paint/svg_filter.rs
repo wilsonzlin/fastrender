@@ -98,6 +98,7 @@ pub enum FilterPrimitive {
     target_y: i32,
     edge_mode: EdgeMode,
     preserve_alpha: bool,
+    subregion: Option<(f32, f32, f32, f32)>,
   },
 }
 
@@ -576,6 +577,15 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
       lower == "true" || lower == "1"
     })
     .unwrap_or(false);
+  let subregion = match (
+    node.attribute("x").and_then(|v| v.parse::<f32>().ok()),
+    node.attribute("y").and_then(|v| v.parse::<f32>().ok()),
+    node.attribute("width").and_then(|v| v.parse::<f32>().ok()),
+    node.attribute("height").and_then(|v| v.parse::<f32>().ok()),
+  ) {
+    (Some(x), Some(y), Some(w), Some(h)) => Some((x, y, w, h)),
+    _ => None,
+  };
 
   Some(FilterPrimitive::ConvolveMatrix {
     input,
@@ -588,6 +598,7 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
     target_y,
     edge_mode,
     preserve_alpha,
+    subregion,
   })
 }
 
@@ -688,6 +699,7 @@ fn apply_primitive(
       target_y,
       edge_mode,
       preserve_alpha,
+      subregion,
     } => resolve_input(input, source, results, current).map(|img| {
       apply_convolve_matrix(
         img,
@@ -700,6 +712,7 @@ fn apply_primitive(
         *target_y,
         *edge_mode,
         *preserve_alpha,
+        *subregion,
       )
     }),
   }
@@ -859,6 +872,7 @@ fn apply_convolve_matrix(
   target_y: i32,
   edge_mode: EdgeMode,
   preserve_alpha: bool,
+  subregion: Option<(f32, f32, f32, f32)>,
 ) -> Pixmap {
   if order_x == 0 || order_y == 0 || kernel.is_empty() || input.width() == 0 || input.height() == 0
   {
@@ -883,8 +897,28 @@ fn apply_convolve_matrix(
   let width_i32 = input.width() as i32;
   let height_i32 = input.height() as i32;
   let mut out = Pixmap::new(input.width(), input.height()).unwrap();
+  for px in out.pixels_mut() {
+    *px = PremultipliedColorU8::TRANSPARENT;
+  }
   let src_pixels = input.pixels();
   let dst_pixels = out.pixels_mut();
+  let (sub_min_x, sub_min_y, sub_max_x, sub_max_y) = subregion
+    .map(|(x, y, w, h)| {
+      let min_x = x.floor() as i32;
+      let min_y = y.floor() as i32;
+      let max_x = (x + w).ceil() as i32;
+      let max_y = (y + h).ceil() as i32;
+      (
+        min_x.max(0),
+        min_y.max(0),
+        max_x.min(width_i32),
+        max_y.min(height_i32),
+      )
+    })
+    .unwrap_or((0, 0, width_i32, height_i32));
+  if sub_min_x >= sub_max_x || sub_min_y >= sub_max_y {
+    return out;
+  }
 
   dst_pixels
     .par_iter_mut()
@@ -892,6 +926,9 @@ fn apply_convolve_matrix(
     .for_each(|(idx, dst_px)| {
       let y = (idx / width) as i32;
       let x = (idx % width) as i32;
+      if x < sub_min_x || x >= sub_max_x || y < sub_min_y || y >= sub_max_y {
+        return;
+      }
       let preserved_alpha = if preserve_alpha {
         src_pixels[idx].alpha() as f32 / 255.0
       } else {
@@ -1355,6 +1392,7 @@ mod tests {
       target_y: 1,
       edge_mode: EdgeMode::Duplicate,
       preserve_alpha: false,
+      subregion: None,
     };
     let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap).unwrap();
     assert_eq!(pixmap.pixels(), out.pixels());
@@ -1379,6 +1417,7 @@ mod tests {
       target_y: 1,
       edge_mode: EdgeMode::Duplicate,
       preserve_alpha: false,
+      subregion: None,
     };
 
     let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap).unwrap();
@@ -1407,6 +1446,7 @@ mod tests {
       target_y: 1,
       edge_mode: EdgeMode::Duplicate,
       preserve_alpha: false,
+      subregion: None,
     };
     let mut none_mode = base.clone();
     none_mode.edge_mode = EdgeMode::None;
