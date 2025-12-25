@@ -67,27 +67,7 @@ criterion = "0.5"
 tempfile = "3"
 
 [[bench]]
-name = "cascade_bench"
-harness = false
-
-[[bench]]
-name = "render_benchmark"
-harness = false
-
-[[bench]]
-name = "comprehensive"
-harness = false
-
-[[bench]]
-name = "layout_benches"
-harness = false
-
-[[bench]]
-name = "paint_benches"
-harness = false
-
-[[bench]]
-name = "text_shaping"
+name = "perf_regressions"
 harness = false
 
 [profile.release]

@@ -1,0 +1,262 @@
+use std::time::Duration;
+
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+mod common;
+
+fn perf_criterion() -> Criterion {
+  Criterion::default()
+    .sample_size(25)
+    .warm_up_time(Duration::from_secs(1))
+    .measurement_time(Duration::from_secs(4))
+    .configure_from_args()
+}
+
+fn bench_parse_dom(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_parse_dom");
+
+  for (name, html) in [
+    ("block_simple", common::BLOCK_SIMPLE_HTML),
+    ("form_controls", common::FORM_CONTROLS_HTML),
+  ] {
+    group.bench_function(name, |b| b.iter(|| common::parse_dom(black_box(html))));
+  }
+
+  group.finish();
+}
+
+fn bench_css_parse(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_css_parse");
+
+  let small_media = common::media_context(common::SMALL_VIEWPORT);
+  let small_dom = common::parse_dom(common::BLOCK_SIMPLE_HTML);
+  let small_css = common::inline_css_text(&small_dom, &small_media);
+  group.bench_function("block_simple", |b| {
+    b.iter(|| common::parse_stylesheet_text(black_box(&small_css)))
+  });
+
+  let realistic_media = common::media_context(common::REALISTIC_VIEWPORT);
+  let realistic_dom = common::parse_dom(common::FORM_CONTROLS_HTML);
+  let realistic_css = common::inline_css_text(&realistic_dom, &realistic_media);
+  group.bench_function("form_controls", |b| {
+    b.iter(|| common::parse_stylesheet_text(black_box(&realistic_css)))
+  });
+
+  group.finish();
+}
+
+fn bench_cascade(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_cascade");
+
+  let small_media = common::media_context(common::SMALL_VIEWPORT);
+  let small_dom = common::parse_dom(common::BLOCK_SIMPLE_HTML);
+  let small_sheet = common::stylesheet_for_dom(&small_dom, &small_media);
+  group.bench_function("block_simple", |b| {
+    b.iter(|| common::cascade(black_box(&small_dom), black_box(&small_sheet), &small_media))
+  });
+
+  let realistic_media = common::media_context(common::REALISTIC_VIEWPORT);
+  let realistic_dom = common::parse_dom(common::FORM_CONTROLS_HTML);
+  let realistic_sheet = common::stylesheet_for_dom(&realistic_dom, &realistic_media);
+  group.bench_function("form_controls", |b| {
+    b.iter(|| {
+      common::cascade(
+        black_box(&realistic_dom),
+        black_box(&realistic_sheet),
+        &realistic_media,
+      )
+    })
+  });
+
+  group.finish();
+}
+
+fn bench_box_generation(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_box_generation");
+
+  let media = common::media_context(common::REALISTIC_VIEWPORT);
+  let dom = common::parse_dom(common::FORM_CONTROLS_HTML);
+  let sheet = common::stylesheet_for_dom(&dom, &media);
+  let styled = common::cascade(&dom, &sheet, &media);
+  group.bench_function("form_controls", |b| {
+    b.iter(|| common::box_tree_from_styled(black_box(&styled)))
+  });
+
+  group.finish();
+}
+
+fn bench_layout_block(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_layout_block");
+  let viewport = (960, 720);
+  let media = common::media_context(viewport);
+  let dom = common::parse_dom(common::BLOCK_SIMPLE_HTML);
+  let sheet = common::stylesheet_for_dom(&dom, &media);
+  let styled = common::cascade(&dom, &sheet, &media);
+  let box_tree = common::box_tree_from_styled(&styled);
+  let font_ctx = common::fixed_font_context();
+  let engine = common::layout_engine(viewport, &font_ctx);
+
+  group.bench_function("block_simple", |b| {
+    b.iter(|| engine.layout_tree(black_box(&box_tree)).unwrap())
+  });
+
+  group.finish();
+}
+
+fn bench_layout_flex(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_layout_flex");
+  let viewport = (960, 720);
+  let media = common::media_context(viewport);
+  let dom = common::parse_dom(common::FLEX_HTML);
+  let sheet = common::stylesheet_for_dom(&dom, &media);
+  let styled = common::cascade(&dom, &sheet, &media);
+  let box_tree = common::box_tree_from_styled(&styled);
+  let font_ctx = common::fixed_font_context();
+  let engine = common::layout_engine(viewport, &font_ctx);
+
+  group.bench_function("flex_grow_shrink", |b| {
+    b.iter(|| engine.layout_tree(black_box(&box_tree)).unwrap())
+  });
+
+  group.finish();
+}
+
+fn bench_layout_grid(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_layout_grid");
+  let viewport = (1100, 820);
+  let media = common::media_context(viewport);
+  let dom = common::parse_dom(common::GRID_HTML);
+  let sheet = common::stylesheet_for_dom(&dom, &media);
+  let styled = common::cascade(&dom, &sheet, &media);
+  let box_tree = common::box_tree_from_styled(&styled);
+  let font_ctx = common::fixed_font_context();
+  let engine = common::layout_engine(viewport, &font_ctx);
+
+  group.bench_function("grid_template", |b| {
+    b.iter(|| engine.layout_tree(black_box(&box_tree)).unwrap())
+  });
+
+  group.finish();
+}
+
+fn bench_layout_table(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_layout_table");
+  let viewport = (960, 720);
+  let media = common::media_context(viewport);
+  let dom = common::parse_dom(common::TABLE_HTML);
+  let sheet = common::stylesheet_for_dom(&dom, &media);
+  let styled = common::cascade(&dom, &sheet, &media);
+  let box_tree = common::box_tree_from_styled(&styled);
+  let font_ctx = common::fixed_font_context();
+  let engine = common::layout_engine(viewport, &font_ctx);
+
+  group.bench_function("table_span", |b| {
+    b.iter(|| engine.layout_tree(black_box(&box_tree)).unwrap())
+  });
+
+  group.finish();
+}
+
+fn bench_paint_display_list_build(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_paint_display_list_build");
+  let viewport = common::REALISTIC_VIEWPORT;
+  let media = common::media_context(viewport);
+  let dom = common::parse_dom(common::FORM_CONTROLS_HTML);
+  let sheet = common::stylesheet_for_dom(&dom, &media);
+  let styled = common::cascade(&dom, &sheet, &media);
+  let box_tree = common::box_tree_from_styled(&styled);
+  let font_ctx = common::fixed_font_context();
+  let engine = common::layout_engine(viewport, &font_ctx);
+  let fragments = common::layout_fragment_tree(&engine, &box_tree);
+
+  group.bench_function("form_controls", |b| {
+    b.iter(|| common::build_display_list(black_box(&fragments), &font_ctx))
+  });
+
+  group.finish();
+}
+
+fn bench_paint_optimize(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_paint_optimize");
+  let viewport = common::REALISTIC_VIEWPORT;
+  let media = common::media_context(viewport);
+  let dom = common::parse_dom(common::FORM_CONTROLS_HTML);
+  let sheet = common::stylesheet_for_dom(&dom, &media);
+  let styled = common::cascade(&dom, &sheet, &media);
+  let box_tree = common::box_tree_from_styled(&styled);
+  let font_ctx = common::fixed_font_context();
+  let engine = common::layout_engine(viewport, &font_ctx);
+  let fragments = common::layout_fragment_tree(&engine, &box_tree);
+  let base_list = common::build_display_list(&fragments, &font_ctx);
+
+  group.bench_function("form_controls", |b| {
+    b.iter(|| common::optimize_display_list(black_box(&base_list), viewport))
+  });
+
+  group.finish();
+}
+
+fn bench_paint_rasterize(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_paint_rasterize");
+  let viewport = common::REALISTIC_VIEWPORT;
+  let media = common::media_context(viewport);
+  let dom = common::parse_dom(common::FORM_CONTROLS_HTML);
+  let sheet = common::stylesheet_for_dom(&dom, &media);
+  let styled = common::cascade(&dom, &sheet, &media);
+  let box_tree = common::box_tree_from_styled(&styled);
+  let font_ctx = common::fixed_font_context();
+  let engine = common::layout_engine(viewport, &font_ctx);
+  let fragments = common::layout_fragment_tree(&engine, &box_tree);
+  let base_list = common::build_display_list(&fragments, &font_ctx);
+  let optimized = common::optimize_display_list(&base_list, viewport);
+
+  group.bench_function("form_controls", |b| {
+    b.iter(|| common::rasterize_display_list(black_box(&optimized), viewport, &font_ctx))
+  });
+
+  group.finish();
+}
+
+fn bench_end_to_end_small(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_end_to_end_small");
+  let viewport = common::SMALL_VIEWPORT;
+  let font_ctx = common::fixed_font_context();
+
+  group.bench_function("block_simple", |b| {
+    b.iter(|| common::render_pipeline(common::BLOCK_SIMPLE_HTML, viewport, &font_ctx))
+  });
+
+  group.finish();
+}
+
+fn bench_end_to_end_realistic(c: &mut Criterion) {
+  let mut group = c.benchmark_group("bench_end_to_end_realistic");
+  let viewport = common::REALISTIC_VIEWPORT;
+  let font_ctx = common::fixed_font_context();
+
+  group.bench_function("form_controls", |b| {
+    b.iter(|| common::render_pipeline(common::FORM_CONTROLS_HTML, viewport, &font_ctx))
+  });
+
+  group.finish();
+}
+
+criterion_group!(
+  name = benches;
+  config = perf_criterion;
+  targets =
+    bench_parse_dom,
+    bench_css_parse,
+    bench_cascade,
+    bench_box_generation,
+    bench_layout_block,
+    bench_layout_flex,
+    bench_layout_grid,
+    bench_layout_table,
+    bench_paint_display_list_build,
+    bench_paint_optimize,
+    bench_paint_rasterize,
+    bench_end_to_end_small,
+    bench_end_to_end_realistic
+);
+criterion_main!(benches);

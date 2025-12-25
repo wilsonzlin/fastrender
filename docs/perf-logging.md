@@ -30,3 +30,29 @@ These env vars are read in the rendering binaries (`render_pages`, `fetch_and_re
 - `FASTR_DISPLAY_LIST_PARALLEL_MIN=<N>` — lowers the display list parallel fan-out threshold when debugging determinism or forcing rayon paths in tests.
 
 All profiling logs are best run in release builds to reflect real performance.
+
+## Pipeline benchmarks (Criterion)
+
+Run `cargo bench --bench perf_regressions` to exercise each stage of the rendering pipeline with fixed fixtures and bundled fonts (`tests/fixtures/fonts/DejaVuSans-subset.*`):
+
+- `bench_parse_dom`
+- `bench_css_parse`
+- `bench_cascade`
+- `bench_box_generation`
+- `bench_layout_{block,flex,grid,table}`
+- `bench_paint_{display_list_build,optimize,rasterize}`
+- `bench_end_to_end_small` / `bench_end_to_end_realistic`
+
+Outputs are written under `target/criterion/<bench>/new/estimates.json` and do not require network access.
+
+### Comparing runs
+
+Use the helper to flag regressions between two Criterion output trees:
+
+```
+cargo run --bin bench_compare \
+  -- --baseline ../baseline/criterion --new target/criterion \
+  --regression-threshold 0.05 --metric mean
+```
+
+`--metric` accepts `mean` or `median`; `--regression-threshold` is a relative delta (e.g., 0.05 = 5%). A non-zero exit status indicates regressions suitable for CI gating.
