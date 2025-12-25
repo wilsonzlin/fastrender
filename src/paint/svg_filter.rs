@@ -10,6 +10,8 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use tiny_skia::{BlendMode, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
 
+const MAX_FILTER_RES: u32 = 4096;
+
 static FILTER_CACHE: OnceLock<Mutex<HashMap<String, Arc<SvgFilter>>>> = OnceLock::new();
 
 fn filter_cache() -> &'static Mutex<HashMap<String, Arc<SvgFilter>>> {
@@ -18,6 +20,7 @@ fn filter_cache() -> &'static Mutex<HashMap<String, Arc<SvgFilter>>> {
 
 #[derive(Clone, Debug)]
 pub struct SvgFilter {
+  pub filter_res: Option<(u32, u32)>,
   pub steps: Vec<FilterStep>,
 }
 
@@ -173,6 +176,7 @@ fn parse_filter_definition(
         .unwrap_or(true)
   })?;
 
+  let filter_res = parse_filter_res(filter_node.attribute("filterRes"));
   let mut steps = Vec::new();
   for child in filter_node.children().filter(|c| c.is_element()) {
     let result_name = child.attribute("result").map(|s| s.to_string());
@@ -207,7 +211,7 @@ fn parse_filter_definition(
     return None;
   }
 
-  Some(Arc::new(SvgFilter { steps }))
+  Some(Arc::new(SvgFilter { filter_res, steps }))
 }
 
 fn parse_input(attr: Option<&str>) -> FilterInput {
@@ -224,6 +228,27 @@ fn parse_number(value: Option<&str>) -> f32 {
     .and_then(|v| v.split_whitespace().next())
     .and_then(|v| v.parse::<f32>().ok())
     .unwrap_or(0.0)
+}
+
+fn parse_filter_res(value: Option<&str>) -> Option<(u32, u32)> {
+  let raw = value?.trim();
+  if raw.is_empty() {
+    return None;
+  }
+  let mut nums = raw
+    .split(|c: char| c.is_whitespace() || c == ',')
+    .filter(|s| !s.is_empty())
+    .filter_map(|s| s.parse::<f32>().ok());
+  let first = nums.next()?;
+  let second = nums.next().unwrap_or(first);
+  let clamp_dim = |v: f32| -> Option<u32> {
+    if !v.is_finite() || v <= 0.0 {
+      None
+    } else {
+      Some(v.round().clamp(1.0, MAX_FILTER_RES as f32) as u32)
+    }
+  };
+  Some((clamp_dim(first)?, clamp_dim(second)?))
 }
 
 fn parse_color(value: Option<&str>) -> Option<Rgba> {
@@ -452,12 +477,19 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 }
 
 pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap) {
-  let source = pixmap.clone();
+  let result = match def.filter_res {
+    Some((res_w, res_h)) => apply_filter_with_res(def, pixmap, res_w, res_h),
+    None => run_filter(def, pixmap),
+  };
+  *pixmap = result;
+}
+
+fn run_filter(def: &SvgFilter, source: &Pixmap) -> Pixmap {
   let mut results: HashMap<String, Pixmap> = HashMap::new();
   let mut current = source.clone();
 
   for step in &def.steps {
-    if let Some(next) = apply_primitive(&step.primitive, &source, &results, &current) {
+    if let Some(next) = apply_primitive(&step.primitive, source, &results, &current) {
       if let Some(name) = &step.result {
         results.insert(name.clone(), next.clone());
       }
@@ -465,7 +497,27 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap) {
     }
   }
 
-  *pixmap = current;
+  current
+}
+
+fn apply_filter_with_res(def: &SvgFilter, source: &Pixmap, res_w: u32, res_h: u32) -> Pixmap {
+  let target_w = source.width();
+  let target_h = source.height();
+  let res_w = res_w.min(MAX_FILTER_RES);
+  let res_h = res_h.min(MAX_FILTER_RES);
+  if res_w == 0 || res_h == 0 || target_w == 0 || target_h == 0 {
+    return run_filter(def, source);
+  }
+  if res_w == target_w && res_h == target_h {
+    return run_filter(def, source);
+  }
+
+  let working_source = match resize_pixmap(source, res_w, res_h) {
+    Some(p) => p,
+    None => return run_filter(def, source),
+  };
+  let working_result = run_filter(def, &working_source);
+  resize_pixmap(&working_result, target_w, target_h).unwrap_or_else(|| run_filter(def, source))
 }
 
 fn apply_primitive(
@@ -560,6 +612,80 @@ fn resolve_input(
     FilterInput::Reference(name) => results.get(name).cloned().or_else(|| Some(source.clone())),
     FilterInput::Previous => Some(current.clone()),
   }
+}
+
+fn resize_pixmap(source: &Pixmap, width: u32, height: u32) -> Option<Pixmap> {
+  if width == 0 || height == 0 {
+    return None;
+  }
+  if source.width() == width && source.height() == height {
+    return Some(source.clone());
+  }
+  let mut out = Pixmap::new(width, height)?;
+  let scale_x = source.width() as f32 / width as f32;
+  let scale_y = source.height() as f32 / height as f32;
+
+  {
+    let dst_pixels = out.pixels_mut();
+    let mut idx = 0;
+    for y in 0..height {
+      let src_y = (y as f32 + 0.5) * scale_y - 0.5;
+      for x in 0..width {
+        let src_x = (x as f32 + 0.5) * scale_x - 0.5;
+        dst_pixels[idx] = sample_bilinear(source, src_x, src_y);
+        idx += 1;
+      }
+    }
+  }
+
+  Some(out)
+}
+
+fn sample_bilinear(pixmap: &Pixmap, x: f32, y: f32) -> PremultipliedColorU8 {
+  let width = pixmap.width() as i32;
+  let height = pixmap.height() as i32;
+  if width == 0 || height == 0 {
+    return PremultipliedColorU8::TRANSPARENT;
+  }
+
+  let clamped_x = x.clamp(0.0, (width - 1) as f32);
+  let clamped_y = y.clamp(0.0, (height - 1) as f32);
+  let x0 = clamped_x.floor() as i32;
+  let y0 = clamped_y.floor() as i32;
+  let x1 = (x0 + 1).min(width - 1);
+  let y1 = (y0 + 1).min(height - 1);
+
+  let fx = clamped_x - x0 as f32;
+  let fy = clamped_y - y0 as f32;
+  let inv_fx = 1.0 - fx;
+  let inv_fy = 1.0 - fy;
+  let w00 = inv_fx * inv_fy;
+  let w10 = fx * inv_fy;
+  let w01 = inv_fx * fy;
+  let w11 = fx * fy;
+
+  let pixels = pixmap.pixels();
+  let stride = width as usize;
+  let idx = |px: i32, py: i32| -> usize { py as usize * stride + px as usize };
+  let p00 = pixels[idx(x0, y0)];
+  let p10 = pixels[idx(x1, y0)];
+  let p01 = pixels[idx(x0, y1)];
+  let p11 = pixels[idx(x1, y1)];
+
+  let r = p00.red() as f32 * w00 + p10.red() as f32 * w10 + p01.red() as f32 * w01 + p11.red() as f32 * w11;
+  let g =
+    p00.green() as f32 * w00 + p10.green() as f32 * w10 + p01.green() as f32 * w01 + p11.green() as f32 * w11;
+  let b = p00.blue() as f32 * w00 + p10.blue() as f32 * w10 + p01.blue() as f32 * w01 + p11.blue() as f32 * w11;
+  let a =
+    p00.alpha() as f32 * w00 + p10.alpha() as f32 * w10 + p01.alpha() as f32 * w01 + p11.alpha() as f32 * w11;
+
+  PremultipliedColorU8::from_rgba(
+    r.round().clamp(0.0, 255.0) as u8,
+    g.round().clamp(0.0, 255.0) as u8,
+    b.round().clamp(0.0, 255.0) as u8,
+    a.round().clamp(0.0, 255.0) as u8,
+  )
+  .unwrap_or(PremultipliedColorU8::TRANSPARENT)
 }
 
 fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> {
@@ -853,5 +979,89 @@ fn apply_color_matrix_values(pixmap: &mut Pixmap, matrix: &[f32; 20]) {
     let a_byte = (a_out * 255.0).round().clamp(0.0, 255.0) as u8;
     *px = PremultipliedColorU8::from_rgba(to_channel(r2), to_channel(g2), to_channel(b2), a_byte)
       .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use base64::{engine::general_purpose, Engine as _};
+  use crate::image_loader::ImageCache;
+  use tiny_skia::{Color, Pixmap};
+
+  fn data_url(svg: &str) -> String {
+    format!("data:image/svg+xml;base64,{}", general_purpose::STANDARD.encode(svg))
+  }
+
+  fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+    let idx = (y * pixmap.width() + x) as usize;
+    let px = pixmap.pixels()[idx];
+    (px.red(), px.green(), px.blue(), px.alpha())
+  }
+
+  fn basic_source() -> Pixmap {
+    let mut pixmap = Pixmap::new(12, 12).unwrap();
+    pixmap.fill(Color::from_rgba8(0, 0, 0, 0));
+    for y in 4..8 {
+      for x in 4..8 {
+        let idx = (y * 12 + x) as usize;
+        pixmap.pixels_mut()[idx] =
+          PremultipliedColorU8::from_rgba(255, 0, 0, 255).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
+    pixmap
+  }
+
+  #[test]
+  fn filter_res_downsamples_filter_graph() {
+    let cache = ImageCache::new();
+    let svg_full =
+      "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feGaussianBlur stdDeviation='2'/></filter></svg>";
+    let svg_low = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterRes='4 4'><feGaussianBlur stdDeviation='2'/></filter></svg>";
+
+    let filter_full = load_svg_filter(&data_url(svg_full), &cache).expect("full res filter");
+    let filter_low = load_svg_filter(&data_url(svg_low), &cache).expect("low res filter");
+
+    let mut high_res = basic_source();
+    let mut low_res = basic_source();
+    let mut low_res_repeat = basic_source();
+
+    apply_svg_filter(filter_full.as_ref(), &mut high_res);
+    apply_svg_filter(filter_low.as_ref(), &mut low_res);
+    apply_svg_filter(filter_low.as_ref(), &mut low_res_repeat);
+
+    assert_ne!(high_res.data(), low_res.data(), "filterRes should alter filter output");
+    assert_eq!(
+      low_res.data(),
+      low_res_repeat.data(),
+      "filter output with filterRes should be deterministic"
+    );
+    assert!(
+      pixel(&low_res, 6, 6).3 > 0,
+      "filtered output should retain source content at reduced resolution"
+    );
+  }
+
+  #[test]
+  fn filter_res_respects_filter_region_bounds() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterRes='2 2'><feOffset dx='10' dy='0'/></filter></svg>";
+    let filter = load_svg_filter(&data_url(svg), &cache).expect("parsed filter");
+
+    let mut pixmap = Pixmap::new(5, 5).unwrap();
+    pixmap.fill(Color::from_rgba8(0, 0, 0, 0));
+    pixmap.pixels_mut()[2 * 5 + 2] = PremultipliedColorU8::from_rgba(0, 0, 255, 255).unwrap();
+
+    apply_svg_filter(filter.as_ref(), &mut pixmap);
+
+    let mut all_zero = true;
+    for y in 0..pixmap.height() {
+      for x in 0..pixmap.width() {
+        if pixel(&pixmap, x, y).3 != 0 {
+          all_zero = false;
+        }
+      }
+    }
+    assert!(all_zero, "content shifted fully outside filter region should be clipped");
   }
 }
