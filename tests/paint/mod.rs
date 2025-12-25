@@ -14,6 +14,7 @@ mod optimize_test;
 mod picture_source_selection;
 mod rasterize_test;
 mod stacking_test;
+mod svg_filter_test;
 mod svg_inline_test;
 mod text_rasterize_test;
 mod top_layer_test;

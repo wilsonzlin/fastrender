@@ -85,7 +85,11 @@ pub enum FilterPrimitive {
   },
   Turbulence,
   DisplacementMap {
-    input: FilterInput,
+    in1: FilterInput,
+    in2: FilterInput,
+    scale: f32,
+    x_channel: ChannelSelector,
+    y_channel: ChannelSelector,
   },
   ConvolveMatrix {
     input: FilterInput,
@@ -108,6 +112,14 @@ pub enum FilterInput {
   SourceAlpha,
   Reference(String),
   Previous,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ChannelSelector {
+  R,
+  G,
+  B,
+  A,
 }
 
 #[derive(Clone, Debug)]
@@ -327,6 +339,16 @@ fn parse_color(value: Option<&str>) -> Option<Rgba> {
     return Some(parsed.to_rgba(Rgba::BLACK));
   }
   None
+}
+
+fn parse_channel_selector(value: Option<&str>) -> ChannelSelector {
+  match value.map(|v| v.trim().to_ascii_lowercase()) {
+    Some(v) if v == "r" => ChannelSelector::R,
+    Some(v) if v == "g" => ChannelSelector::G,
+    Some(v) if v == "b" => ChannelSelector::B,
+    Some(v) if v == "a" => ChannelSelector::A,
+    _ => ChannelSelector::A,
+  }
 }
 
 fn parse_fe_flood(node: &roxmltree::Node) -> Option<FilterPrimitive> {
@@ -574,8 +596,18 @@ fn parse_fe_tile(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 }
 
 fn parse_fe_displacement_map(node: &roxmltree::Node) -> Option<FilterPrimitive> {
-  let input = parse_input(node.attribute("in"));
-  Some(FilterPrimitive::DisplacementMap { input })
+  let in1 = parse_input(node.attribute("in"));
+  let in2 = parse_input(node.attribute("in2"));
+  let scale = parse_number(node.attribute("scale"));
+  let x_channel = parse_channel_selector(node.attribute("xChannelSelector"));
+  let y_channel = parse_channel_selector(node.attribute("yChannelSelector"));
+  Some(FilterPrimitive::DisplacementMap {
+    in1,
+    in2,
+    scale,
+    x_channel,
+    y_channel,
+  })
 }
 
 fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
@@ -736,7 +768,17 @@ fn apply_primitive(
     FilterPrimitive::Image(pix) => Some(pix.clone()),
     FilterPrimitive::Tile { input } => resolve_input(input, source, results, current),
     FilterPrimitive::Turbulence => Some(source.clone()),
-    FilterPrimitive::DisplacementMap { input } => resolve_input(input, source, results, current),
+    FilterPrimitive::DisplacementMap {
+      in1,
+      in2,
+      scale,
+      x_channel,
+      y_channel,
+    } => {
+      let primary = resolve_input(in1, source, results, current)?;
+      let map = resolve_input(in2, source, results, current)?;
+      apply_displacement_map(&primary, &map, *scale, *x_channel, *y_channel)
+    }
     FilterPrimitive::ConvolveMatrix {
       input,
       order_x,
@@ -908,6 +950,98 @@ fn mask_with(src: &Pixmap, mask: &Pixmap) -> Pixmap {
     *dst = PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
   }
   out
+}
+
+fn apply_displacement_map(
+  primary: &Pixmap,
+  map: &Pixmap,
+  scale: f32,
+  x_channel: ChannelSelector,
+  y_channel: ChannelSelector,
+) -> Option<Pixmap> {
+  let mut out = Pixmap::new(primary.width(), primary.height())?;
+  let width = primary.width() as usize;
+
+  for (idx, dst) in out.pixels_mut().iter_mut().enumerate() {
+    let y = (idx / width) as u32;
+    let x = (idx % width) as u32;
+
+    let map_sample = sample_premultiplied(map, x as f32, y as f32);
+    let channel_value_x = channel_value(map_sample, x_channel);
+    let channel_value_y = channel_value(map_sample, y_channel);
+    let dx = (channel_value_x - 0.5) * scale;
+    let dy = (channel_value_y - 0.5) * scale;
+
+    let sample = sample_premultiplied(primary, x as f32 + dx, y as f32 + dy);
+    let a = to_byte(sample[3]);
+    *dst = PremultipliedColorU8::from_rgba(
+      to_byte(sample[0].min(sample[3])),
+      to_byte(sample[1].min(sample[3])),
+      to_byte(sample[2].min(sample[3])),
+      a,
+    )
+    .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  }
+
+  Some(out)
+}
+
+fn channel_value(sample: [f32; 4], selector: ChannelSelector) -> f32 {
+  let alpha = sample[3];
+  let unpremul = |v: f32| {
+    if alpha <= 0.0 {
+      0.0
+    } else {
+      (v / alpha).clamp(0.0, 1.0)
+    }
+  };
+  match selector {
+    ChannelSelector::R => unpremul(sample[0]),
+    ChannelSelector::G => unpremul(sample[1]),
+    ChannelSelector::B => unpremul(sample[2]),
+    ChannelSelector::A => alpha.clamp(0.0, 1.0),
+  }
+}
+
+fn sample_premultiplied(pixmap: &Pixmap, x: f32, y: f32) -> [f32; 4] {
+  let width = pixmap.width() as i32;
+  let height = pixmap.height() as i32;
+  let x0 = x.floor() as i32;
+  let y0 = y.floor() as i32;
+  let tx = (x - x0 as f32).clamp(0.0, 1.0);
+  let ty = (y - y0 as f32).clamp(0.0, 1.0);
+
+  let mut accum = [0.0; 4];
+  let mut weight_sum = 0.0;
+  for dy in 0..=1 {
+    for dx in 0..=1 {
+      let sx = x0 + dx;
+      let sy = y0 + dy;
+      let weight = if dx == 0 { 1.0 - tx } else { tx } * if dy == 0 { 1.0 - ty } else { ty };
+      if weight <= 0.0 {
+        continue;
+      }
+      weight_sum += weight;
+      if sx < 0 || sy < 0 || sx >= width || sy >= height {
+        continue;
+      }
+      let px = pixmap.pixel(sx as u32, sy as u32).unwrap();
+      accum[0] += px.red() as f32 / 255.0 * weight;
+      accum[1] += px.green() as f32 / 255.0 * weight;
+      accum[2] += px.blue() as f32 / 255.0 * weight;
+      accum[3] += px.alpha() as f32 / 255.0 * weight;
+    }
+  }
+  if weight_sum > 0.0 {
+    accum.iter_mut().for_each(|v| *v /= weight_sum);
+  } else {
+    return [0.0; 4];
+  }
+  accum
+}
+
+fn to_byte(v: f32) -> u8 {
+  (v.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
 fn apply_convolve_matrix(
