@@ -250,6 +250,11 @@ pub struct FragmentNode {
   /// All coordinates are in the coordinate space of the containing fragment.
   pub bounds: Rect,
 
+  /// Optional logical bounds used for fragmentation decisions.
+  ///
+  /// When absent, logical bounds match `bounds`.
+  pub logical_override: Option<Rect>,
+
   /// The content type of this fragment
   pub content: FragmentContent,
 
@@ -291,6 +296,9 @@ pub struct FragmentNode {
   /// Scrollable overflow area for this fragment (including descendants),
   /// expressed in the fragment's local coordinate space.
   pub scroll_overflow: Rect,
+
+  /// Fragmentation metadata for nested fragmentainers (e.g., multi-column containers).
+  pub fragmentation: Option<FragmentationInfo>,
 }
 
 impl FragmentNode {
@@ -313,6 +321,7 @@ impl FragmentNode {
     let fragmentainer = FragmentainerPath::default();
     Self {
       bounds,
+      logical_override: None,
       content,
       baseline: None,
       children,
@@ -322,6 +331,7 @@ impl FragmentNode {
       fragmentainer_index: fragmentainer.flattened_index(),
       fragmentainer,
       scroll_overflow,
+      fragmentation: None,
     }
   }
 
@@ -336,6 +346,7 @@ impl FragmentNode {
     let fragmentainer = FragmentainerPath::default();
     Self {
       bounds,
+      logical_override: None,
       content,
       baseline: None,
       children,
@@ -345,6 +356,7 @@ impl FragmentNode {
       fragmentainer_index: fragmentainer.flattened_index(),
       fragmentainer,
       scroll_overflow,
+      fragmentation: None,
     }
   }
 
@@ -576,6 +588,23 @@ impl FragmentNode {
     bbox
   }
 
+  /// Returns the logical bounds used for fragmentation decisions.
+  ///
+  /// When no override is set, this matches `bounds`.
+  pub fn logical_bounds(&self) -> Rect {
+    self.logical_override.unwrap_or(self.bounds)
+  }
+
+  /// Computes a bounding box using logical bounds for this fragment and descendants.
+  pub fn logical_bounding_box(&self) -> Rect {
+    let mut bbox = self.logical_bounds();
+    for child in &self.children {
+      let child_bbox = child.logical_bounding_box();
+      bbox = bbox.union(child_bbox);
+    }
+    bbox
+  }
+
   /// Translates this fragment and all children by the given offset
   ///
   /// This is useful when repositioning a subtree during layout or
@@ -599,6 +628,7 @@ impl FragmentNode {
   pub fn translate(&self, offset: Point) -> Self {
     Self {
       bounds: self.bounds.translate(offset),
+      logical_override: self.logical_override.map(|r| r.translate(offset)),
       content: self.content.clone(),
       baseline: self.baseline,
       children: self
@@ -612,6 +642,7 @@ impl FragmentNode {
       fragmentainer_index: self.fragmentainer_index,
       fragmentainer: self.fragmentainer,
       scroll_overflow: self.scroll_overflow,
+      fragmentation: self.fragmentation.clone(),
     }
   }
 
@@ -709,6 +740,15 @@ impl FragmentNode {
   pub fn children(&self) -> impl Iterator<Item = &FragmentNode> {
     self.children.iter()
   }
+}
+
+/// Metadata describing nested fragmentation contexts (e.g., multi-column containers).
+#[derive(Debug, Clone)]
+pub struct FragmentationInfo {
+  pub column_count: usize,
+  pub column_gap: f32,
+  pub column_width: f32,
+  pub flow_height: f32,
 }
 
 /// Iterator over fragments in paint order (depth-first, pre-order)

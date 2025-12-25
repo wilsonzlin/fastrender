@@ -1730,6 +1730,12 @@ fn translate_fragment_tree(fragment: &mut FragmentNode, delta: Point) {
     Point::new(fragment.bounds.x() + delta.x, fragment.bounds.y() + delta.y),
     fragment.bounds.size,
   );
+  if let Some(logical) = fragment.logical_override {
+    fragment.logical_override = Some(Rect::new(
+      Point::new(logical.x() + delta.x, logical.y() + delta.y),
+      logical.size,
+    ));
+  }
   for child in &mut fragment.children {
     translate_fragment_tree(child, delta);
   }

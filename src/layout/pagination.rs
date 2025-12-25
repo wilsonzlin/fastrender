@@ -5,46 +5,13 @@ use std::sync::Arc;
 use crate::css::types::CollectedPageRule;
 use crate::geometry::{Rect, Size};
 use crate::layout::fragmentation::{
-  build_break_plan, clip_node, collect_forced_boundaries, fragmentation_axis,
-  propagate_fragment_metadata, BlockAxis, BreakResolver, ForcedBreak, FragmentationKind,
+  clip_node, collect_forced_boundaries, propagate_fragment_metadata,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
-use crate::style::position::Position;
-use crate::style::types::BreakBetween;
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
-use crate::tree::fragment_tree::{FragmentNode, FragmentainerPath};
-
-/// Controls how paginated pages are positioned in the fragment tree.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PageStacking {
-  /// Translate each page along the block axis so they don't overlap.
-  ///
-  /// The provided gap is inserted between successive pages (clamped to >= 0).
-  Stacked { gap: f32 },
-  /// Leave all pages at the origin so they can be painted independently.
-  Untranslated,
-}
-
-/// Options for pagination.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PaginateOptions {
-  pub stacking: PageStacking,
-}
-
-impl Default for PaginateOptions {
-  fn default() -> Self {
-    Self {
-      stacking: PageStacking::Stacked { gap: 0.0 },
-    }
-  }
-}
-
-#[derive(Clone)]
-struct FixedFragment {
-  fragment: FragmentNode,
-}
+use crate::tree::fragment_tree::FragmentNode;
 
 /// Split a laid out fragment tree into pages using the provided @page rules.
 pub fn paginate_fragment_tree(
@@ -55,109 +22,38 @@ pub fn paginate_fragment_tree(
   root_font_size: f32,
   initial_page_name: Option<String>,
 ) -> Vec<FragmentNode> {
-  paginate_fragment_tree_with_options(
-    root,
-    rules,
-    fallback_page_size,
-    font_ctx,
-    root_font_size,
-    initial_page_name,
-    PaginateOptions::default(),
-  )
-}
-
-/// Split a laid out fragment tree into pages using the provided @page rules with options.
-pub fn paginate_fragment_tree_with_options(
-  root: &FragmentNode,
-  rules: &[CollectedPageRule<'_>],
-  fallback_page_size: Size,
-  font_ctx: &FontContext,
-  root_font_size: f32,
-  initial_page_name: Option<String>,
-  options: PaginateOptions,
-) -> Vec<FragmentNode> {
   if rules.is_empty() {
     return vec![root.clone()];
   }
 
-  let axis = fragmentation_axis(root);
   let mut spans = Vec::new();
-  let root_block_size = axis.block_size(&root.bounds);
-  collect_page_name_spans(root, 0.0, root_block_size, &axis, &mut spans);
+  collect_page_name_spans(root, 0.0, &mut spans);
   spans.sort_by(|a, b| {
     a.start
       .partial_cmp(&b.start)
       .unwrap_or(std::cmp::Ordering::Equal)
   });
 
-  let fallback_block_size = if axis.horizontal {
-    fallback_page_size.width
-  } else {
-    fallback_page_size.height
-  };
-  let total_block = axis
-    .block_size(&root.bounding_box())
-    .max(fallback_block_size);
-  let break_plan = build_break_plan(root, 0.0, total_block, FragmentationKind::Page);
-  let mut break_resolver = BreakResolver::from_plan(break_plan, total_block);
-
-  let mut forced = collect_forced_boundaries(root, 0.0, FragmentationKind::Page);
-  forced.push(ForcedBreak {
-    position: total_block,
-    kind: BreakBetween::Always,
-  });
-  forced.sort_by(|a, b| {
-    a.position
-      .partial_cmp(&b.position)
-      .unwrap_or(std::cmp::Ordering::Equal)
-  });
-  forced.dedup_by(|a, b| (a.position - b.position).abs() < 0.01 && a.kind == b.kind);
-
-  let fixed_fragments = collect_fixed_fragments(root, &axis, root_block_size);
+  let mut forced = collect_forced_boundaries(root, 0.0);
+  let total_height = root
+    .logical_bounding_box()
+    .height()
+    .max(fallback_page_size.height);
+  forced.push(total_height);
+  forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+  forced.dedup_by(|a, b| (*a - *b).abs() < 0.01);
 
   let mut pages = Vec::new();
   let mut pos = 0.0;
   let mut page_index = 0;
-  let mut pending_side: Option<PageSide> = None;
 
-  while pos < total_block - 0.01 {
-    while let Some(required_side) = pending_side {
-      let current_side = page_side_for_index(page_index);
-      if current_side == required_side {
-        break;
-      }
-
-      let page_name = page_name_for_position(&spans, pos, initial_page_name.as_deref());
-      let style = resolve_page_style(
-        rules,
-        page_index,
-        page_name.as_deref(),
-        current_side,
-        fallback_page_size,
-        root_font_size,
-      );
-
-      let mut blank_page = FragmentNode::new_block(
-        Rect::from_xywh(0.0, 0.0, style.total_size.width, style.total_size.height),
-        Vec::new(),
-      );
-      for fixed in &fixed_fragments {
-        let mut repeated = fixed.fragment.clone();
-        translate_fragment(
-          &mut repeated,
-          style.content_origin.x,
-          style.content_origin.y,
-        );
-        blank_page.children.push(repeated);
-      }
-      blank_page
-        .children
-        .extend(build_margin_box_fragments(&style, font_ctx));
-      pages.push(blank_page);
-      page_index += 1;
-    }
+  while pos < total_height - 0.01 {
     let page_name = page_name_for_position(&spans, pos, initial_page_name.as_deref());
-    let side = page_side_for_index(page_index);
+    let side = if (page_index + 1) % 2 == 0 {
+      PageSide::Left
+    } else {
+      PageSide::Right
+    };
 
     let style = resolve_page_style(
       rules,
@@ -168,44 +64,27 @@ pub fn paginate_fragment_tree_with_options(
       root_font_size,
     );
 
-    let page_block = if axis.horizontal {
-      style.content_size.width
-    } else {
-      style.content_size.height
-    }
-    .max(1.0);
-    let end = break_resolver.next_boundary(pos, page_block);
-    let next_side_hint = forced
+    let page_block = style.content_size.height.max(1.0);
+    let mut end = (pos + page_block).min(total_height);
+    if let Some(boundary) = forced
       .iter()
       .copied()
-      .find(|b| (b.position - end).abs() < 0.01)
-      .and_then(|b| break_side_hint(b.kind));
+      .find(|b| *b > pos + 0.01 && *b < end - 0.01)
+    {
+      end = boundary;
+    }
 
     if end <= pos + 0.01 {
       break;
     }
 
-    let fragmentainer = FragmentainerPath::new(page_index);
-    let clipped = clip_node(
-      root,
-      pos,
-      end,
-      0.0,
-      pos,
-      root_block_size,
-      end - pos,
-      &axis,
-      page_index,
-      0,
-      fragmentainer,
-    );
+    let clipped = clip_node(root, pos, end, 0.0, pos, page_index, 0, page_block);
     let mut page_root = FragmentNode::new_block(
       Rect::from_xywh(0.0, 0.0, style.total_size.width, style.total_size.height),
       Vec::new(),
     );
 
     if let Some(mut content) = clipped {
-      strip_fixed_fragments(&mut content);
       content.bounds = Rect::from_xywh(
         content.bounds.x(),
         content.bounds.y(),
@@ -216,16 +95,6 @@ pub fn paginate_fragment_tree_with_options(
       page_root.children.push(content);
     }
 
-    for fixed in &fixed_fragments {
-      let mut repeated = fixed.fragment.clone();
-      translate_fragment(
-        &mut repeated,
-        style.content_origin.x,
-        style.content_origin.y,
-      );
-      page_root.children.push(repeated);
-    }
-
     page_root
       .children
       .extend(build_margin_box_fragments(&style, font_ctx));
@@ -233,18 +102,15 @@ pub fn paginate_fragment_tree_with_options(
     pages.push(page_root);
     pos = end;
     page_index += 1;
-    pending_side = next_side_hint;
   }
 
   if pages.is_empty() {
     return vec![root.clone()];
   }
 
-  apply_page_stacking(&mut pages, &axis, options.stacking);
-
   let count = pages.len();
   for (idx, page) in pages.iter_mut().enumerate() {
-    propagate_fragment_metadata(page, idx, count, FragmentainerPath::new(idx));
+    propagate_fragment_metadata(page, idx, count);
   }
 
   pages
@@ -257,16 +123,10 @@ struct PageNameSpan {
   name: String,
 }
 
-fn collect_page_name_spans(
-  node: &FragmentNode,
-  abs_start: f32,
-  parent_block_size: f32,
-  axis: &BlockAxis,
-  spans: &mut Vec<PageNameSpan>,
-) {
-  let node_block_size = axis.block_size(&node.bounds);
-  let start = abs_start + axis.block_offset_in_parent(&node.bounds, parent_block_size);
-  let end = start + node_block_size;
+fn collect_page_name_spans(node: &FragmentNode, abs_start: f32, spans: &mut Vec<PageNameSpan>) {
+  let logical = node.logical_bounds();
+  let start = abs_start + logical.y();
+  let end = start + logical.height();
 
   if let Some(style) = node.style.as_ref() {
     if let Some(name) = &style.page {
@@ -279,66 +139,7 @@ fn collect_page_name_spans(
   }
 
   for child in &node.children {
-    collect_page_name_spans(child, start, node_block_size, axis, spans);
-  }
-}
-
-fn collect_fixed_fragments(
-  root: &FragmentNode,
-  axis: &BlockAxis,
-  root_block_size: f32,
-) -> Vec<FixedFragment> {
-  let mut fixed = Vec::new();
-  collect_fixed_fragments_inner(root, axis, root_block_size, 0.0, 0.0, &mut fixed);
-  fixed
-}
-
-fn collect_fixed_fragments_inner(
-  node: &FragmentNode,
-  axis: &BlockAxis,
-  parent_block_size: f32,
-  abs_x: f32,
-  abs_y: f32,
-  out: &mut Vec<FixedFragment>,
-) {
-  let (node_abs_x, node_abs_y) = {
-    let offset_block = axis.block_offset_in_parent(&node.bounds, parent_block_size);
-    let inline_offset = if axis.horizontal {
-      node.bounds.y()
-    } else {
-      node.bounds.x()
-    };
-    if axis.horizontal {
-      (abs_x + offset_block, abs_y + inline_offset)
-    } else {
-      (abs_x + inline_offset, abs_y + offset_block)
-    }
-  };
-
-  if node
-    .style
-    .as_ref()
-    .is_some_and(|style| style.position == Position::Fixed)
-  {
-    let mut cloned = node.clone();
-    cloned.bounds = Rect::from_xywh(
-      node_abs_x,
-      node_abs_y,
-      node.bounds.width(),
-      node.bounds.height(),
-    );
-    cloned.scroll_overflow =
-      Rect::from_xywh(0.0, 0.0, cloned.bounds.width(), cloned.bounds.height());
-    cloned.fragmentainer_index = 0;
-    cloned.fragment_count = 1;
-    cloned.fragment_index = 0;
-    out.push(FixedFragment { fragment: cloned });
-    return;
-  }
-
-  let node_block_size = axis.block_size(&node.bounds);
-  for child in &node.children {
-    collect_fixed_fragments_inner(child, axis, node_block_size, node_abs_x, node_abs_y, out);
+    collect_page_name_spans(child, start, spans);
   }
 }
 
@@ -362,61 +163,6 @@ fn page_name_for_position(
   fallback.map(|s| s.to_string())
 }
 
-fn page_side_for_index(page_index: usize) -> PageSide {
-  if (page_index + 1) % 2 == 0 {
-    PageSide::Left
-  } else {
-    PageSide::Right
-  }
-}
-
-fn break_side_hint(kind: BreakBetween) -> Option<PageSide> {
-  match kind {
-    BreakBetween::Left | BreakBetween::Verso => Some(PageSide::Left),
-    BreakBetween::Right | BreakBetween::Recto => Some(PageSide::Right),
-    _ => None,
-  }
-}
-
-fn is_fixed_fragment(node: &FragmentNode) -> bool {
-  node
-    .style
-    .as_ref()
-    .map(|style| matches!(style.position, Position::Fixed))
-    .unwrap_or(false)
-}
-
-fn strip_fixed_fragments(node: &mut FragmentNode) {
-  node.children.retain(|child| !is_fixed_fragment(child));
-  for child in &mut node.children {
-    strip_fixed_fragments(child);
-  }
-}
-
-fn apply_page_stacking(pages: &mut [FragmentNode], axis: &BlockAxis, stacking: PageStacking) {
-  let PageStacking::Stacked { gap } = stacking else {
-    return;
-  };
-
-  let gap = gap.max(0.0);
-  let mut offset = 0.0;
-  let mut last_extent = None;
-
-  for page in pages.iter_mut() {
-    if let Some(extent) = last_extent {
-      offset += extent + gap;
-    }
-
-    if axis.horizontal {
-      translate_fragment(page, offset, 0.0);
-    } else {
-      translate_fragment(page, 0.0, offset);
-    }
-
-    last_extent = Some(axis.block_size(&page.bounds));
-  }
-}
-
 fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
   node.bounds = Rect::from_xywh(
     node.bounds.x() + dx,
@@ -424,6 +170,14 @@ fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
     node.bounds.width(),
     node.bounds.height(),
   );
+  if let Some(logical) = node.logical_override {
+    node.logical_override = Some(Rect::from_xywh(
+      logical.x() + dx,
+      logical.y() + dy,
+      logical.width(),
+      logical.height(),
+    ));
+  }
   for child in &mut node.children {
     translate_fragment(child, dx, dy);
   }
