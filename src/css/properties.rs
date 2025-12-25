@@ -880,6 +880,7 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         | "background-position"
         | "transform-origin"
         | "touch-action"
+        | "cursor"
         | "list-style"
         | "flex"
         | "background"
@@ -899,6 +900,10 @@ pub fn parse_property_value(property: &str, value_str: &str) -> Option<PropertyV
         | "mask-clip"
         | "mask-composite"
         | "border"
+        | "border-image"
+        | "border-image-slice"
+        | "border-image-width"
+        | "border-image-outset"
         | "border-top"
         | "border-right"
         | "border-bottom"
@@ -1794,6 +1799,32 @@ mod tests {
       matches!(list[1], PropertyValue::Length(len) if (len.value - 25.0).abs() < 0.01 && len.unit.is_percentage())
         || matches!(list[1], PropertyValue::Percentage(p) if (p - 25.0).abs() < 0.01)
     );
+  }
+
+  #[test]
+  fn cursor_tokenization_preserves_comma_separated_image_list() {
+    let parsed = parse_property_value("cursor", "url(a.cur) 1 2, pointer");
+    let PropertyValue::Multiple(list) = parsed.expect("parsed") else {
+      panic!("expected Multiple");
+    };
+    assert_eq!(list.len(), 5);
+    assert!(matches!(&list[0], PropertyValue::Url(url) if url == "a.cur"));
+    assert!(matches!(&list[1], PropertyValue::Number(n) if (*n - 1.0).abs() < 1e-6));
+    assert!(matches!(&list[2], PropertyValue::Number(n) if (*n - 2.0).abs() < 1e-6));
+    assert!(matches!(&list[3], PropertyValue::Keyword(k) if k == ","));
+    assert!(matches!(&list[4], PropertyValue::Keyword(k) if k.eq_ignore_ascii_case("pointer")));
+  }
+
+  #[test]
+  fn border_image_slice_keeps_multiple_tokens() {
+    let parsed = parse_property_value("border-image-slice", "30 30 fill");
+    let PropertyValue::Multiple(list) = parsed.expect("parsed") else {
+      panic!("expected Multiple");
+    };
+    assert_eq!(list.len(), 3);
+    assert!(matches!(&list[0], PropertyValue::Number(n) if (*n - 30.0).abs() < 1e-6));
+    assert!(matches!(&list[1], PropertyValue::Number(n) if (*n - 30.0).abs() < 1e-6));
+    assert!(matches!(&list[2], PropertyValue::Keyword(k) if k.eq_ignore_ascii_case("fill")));
   }
 
   #[test]
