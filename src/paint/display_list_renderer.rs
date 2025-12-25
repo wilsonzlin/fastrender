@@ -500,7 +500,7 @@ fn set_paint_color(paint: &mut tiny_skia::Paint, color: &Rgba, opacity: f32) {
   paint.set_color_rgba8(color.r, color.g, color.b, alpha);
 }
 
-fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
+fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bbox: Rect) {
   for filter in filters {
     match filter {
       ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
@@ -535,7 +535,7 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
         *color,
       ),
       ResolvedFilter::SvgFilter(ref filter) => {
-        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap);
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, bbox);
       }
     }
   }
@@ -597,7 +597,13 @@ fn apply_backdrop_filters(
       .copy_from_slice(&data[src_idx..src_idx + region_row_bytes]);
   }
 
-  apply_filters(&mut region, filters, scale);
+  let local_bbox = Rect::from_xywh(
+    bounds.x() - clamped_x as f32,
+    bounds.y() - clamped_y as f32,
+    bounds.width(),
+    bounds.height(),
+  );
+  apply_filters(&mut region, filters, scale, local_bbox);
 
   let radii_mask = if !radii.is_zero() {
     let mut mask = match Pixmap::new(region_w, region_h) {
@@ -2706,7 +2712,7 @@ impl DisplayListRenderer {
               }
             }
             if !record.filters.is_empty() {
-              apply_filters(&mut layer, &record.filters, self.scale);
+              apply_filters(&mut layer, &record.filters, self.scale, record.mask_bounds);
             }
             if !record.radii.is_zero() || !record.filters.is_empty() {
               let (out_l, out_t, out_r, out_b) =
@@ -2730,7 +2736,12 @@ impl DisplayListRenderer {
               }
             }
             if !record.filters.is_empty() {
-              apply_filters(self.canvas.pixmap_mut(), &record.filters, self.scale);
+              apply_filters(
+                self.canvas.pixmap_mut(),
+                &record.filters,
+                self.scale,
+                record.mask_bounds,
+              );
             }
             if !record.radii.is_zero() || !record.filters.is_empty() {
               let (out_l, out_t, out_r, out_b) =
@@ -5661,6 +5672,96 @@ mod tests {
     assert!(
       center.1 < center.0,
       "red flood should dominate other channels"
+    );
+  }
+
+  #[test]
+  fn svg_filter_default_region_extends_bounds() {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let svg =
+      "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feGaussianBlur stdDeviation='2'/></filter></svg>";
+    let data_url = format!(
+      "data:image/svg+xml;base64,{}",
+      general_purpose::STANDARD.encode(svg)
+    );
+    let cache = crate::image_loader::ImageCache::new();
+    let filter =
+      crate::paint::svg_filter::load_svg_filter(&data_url, &cache).expect("parsed svg filter");
+
+    let renderer = DisplayListRenderer::new(40, 40, Rgba::TRANSPARENT, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    let bounds = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds,
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: vec![ResolvedFilter::SvgFilter(filter)],
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: bounds,
+      color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let outside = pixel(&pixmap, 31, 20);
+    assert!(
+      outside.3 > 0,
+      "default filter region should allow blur to extend outside bounds (alpha={})",
+      outside.3
+    );
+  }
+
+  #[test]
+  fn svg_filter_explicit_region_clips_to_bounds() {
+    use base64::{engine::general_purpose, Engine as _};
+
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' x='0' y='0' width='100%' height='100%'><feGaussianBlur stdDeviation='2'/></filter></svg>";
+    let data_url = format!(
+      "data:image/svg+xml;base64,{}",
+      general_purpose::STANDARD.encode(svg)
+    );
+    let cache = crate::image_loader::ImageCache::new();
+    let filter =
+      crate::paint::svg_filter::load_svg_filter(&data_url, &cache).expect("parsed svg filter");
+
+    let renderer = DisplayListRenderer::new(40, 40, Rgba::TRANSPARENT, FontContext::new()).unwrap();
+    let mut list = DisplayList::new();
+    let bounds = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds,
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: vec![ResolvedFilter::SvgFilter(filter)],
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: bounds,
+      color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let pixmap = renderer.render(&list).unwrap();
+    let outside = pixel(&pixmap, 31, 20);
+    assert_eq!(
+      outside.3, 0,
+      "explicit region matching bounds should clip blur outside"
     );
   }
 

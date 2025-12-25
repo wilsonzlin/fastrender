@@ -815,7 +815,7 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   })
 }
 
-pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap) {
+pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, bbox: Rect) {
   let source = pixmap.clone();
   let mut results: HashMap<String, Pixmap> = HashMap::new();
   let mut current = source.clone();
@@ -830,6 +830,49 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap) {
   }
 
   *pixmap = current;
+
+  let region = def.resolve_region(bbox);
+  clip_to_region(pixmap, region);
+}
+
+fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
+  let width = pixmap.width() as i32;
+  let height = pixmap.height() as i32;
+  if width == 0 || height == 0 {
+    return;
+  }
+
+  let min_x = region.min_x().floor() as i32;
+  let min_y = region.min_y().floor() as i32;
+  let max_x = region.max_x().ceil() as i32;
+  let max_y = region.max_y().ceil() as i32;
+
+  let clamped_min_x = min_x.clamp(0, width);
+  let clamped_min_y = min_y.clamp(0, height);
+  let clamped_max_x = max_x.clamp(0, width);
+  let clamped_max_y = max_y.clamp(0, height);
+
+  if clamped_min_x == 0 && clamped_min_y == 0 && clamped_max_x == width && clamped_max_y == height {
+    return;
+  }
+
+  let row_stride = pixmap.width() as usize;
+  for (y, row) in pixmap.pixels_mut().chunks_mut(row_stride).enumerate() {
+    let y = y as i32;
+    if y < clamped_min_y || y >= clamped_max_y {
+      for px in row {
+        *px = PremultipliedColorU8::TRANSPARENT;
+      }
+      continue;
+    }
+
+    for (x, px) in row.iter_mut().enumerate() {
+      let x = x as i32;
+      if x < clamped_min_x || x >= clamped_max_x {
+        *px = PremultipliedColorU8::TRANSPARENT;
+      }
+    }
+  }
 }
 
 fn apply_primitive(

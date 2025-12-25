@@ -1,3 +1,4 @@
+use fastrender::geometry::Rect;
 use fastrender::paint::svg_filter::{
   apply_svg_filter, ChannelSelector, FilterInput, FilterPrimitive, FilterStep, SvgFilter,
   SvgFilterRegion, SvgFilterUnits, SvgLength,
@@ -62,7 +63,11 @@ fn displacement_map_shifts_pixels_right() {
   let mut pixmap = gradient_pixmap();
   let filter = displacement_filter(2.0);
 
-  apply_svg_filter(&filter, &mut pixmap);
+  apply_svg_filter(
+    &filter,
+    &mut pixmap,
+    Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32),
+  );
 
   assert_eq!(pixel(&pixmap, 0), (0, 255, 0, 255));
   assert_eq!(pixel(&pixmap, 1), (0, 0, 255, 255));
@@ -75,7 +80,11 @@ fn displacement_map_scale_zero_is_identity() {
   let expected: Vec<_> = (0..pixmap.width()).map(|x| pixel(&pixmap, x)).collect();
 
   let filter = displacement_filter(0.0);
-  apply_svg_filter(&filter, &mut pixmap);
+  apply_svg_filter(
+    &filter,
+    &mut pixmap,
+    Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32),
+  );
 
   for x in 0..pixmap.width() {
     assert_eq!(pixel(&pixmap, x), expected[x as usize]);

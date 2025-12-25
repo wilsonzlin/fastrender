@@ -2502,7 +2502,7 @@ impl Painter {
         }
         if !filters.is_empty() {
           let filter_start = profile_enabled.then(Instant::now);
-          apply_filters(&mut layer_pixmap, &filters, self.scale);
+          apply_filters(&mut layer_pixmap, &filters, self.scale, device_root_rect);
           if let Some(start) = filter_start {
             filter_ms = start.elapsed().as_secs_f64() * 1000.0;
           }
@@ -7849,7 +7849,7 @@ fn resolve_filter_length(
   }
 }
 
-fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
+fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bbox: Rect) {
   for filter in filters {
     match filter {
       ResolvedFilter::Blur(radius) => apply_gaussian_blur(pixmap, *radius * scale),
@@ -7884,7 +7884,7 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
         *color,
       ),
       ResolvedFilter::SvgFilter(filter) => {
-        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap);
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, bbox);
       }
     }
   }
@@ -7946,15 +7946,15 @@ fn apply_backdrop_filters(
     dst_slice.copy_from_slice(src_slice);
   }
 
-  apply_filters(&mut region, filters, scale);
+  let local_bbox = Rect::from_xywh(
+    bounds.x() - clamped_x as f32,
+    bounds.y() - clamped_y as f32,
+    bounds.width(),
+    bounds.height(),
+  );
+  apply_filters(&mut region, filters, scale, local_bbox);
   if !radii.is_zero() {
-    let local_rect = Rect::from_xywh(
-      bounds.x() - clamped_x as f32,
-      bounds.y() - clamped_y as f32,
-      bounds.width(),
-      bounds.height(),
-    );
-    apply_clip_mask_rect(&mut region, local_rect, radii);
+    apply_clip_mask_rect(&mut region, local_bbox, radii);
   }
 
   let mut paint = PixmapPaint::default();
