@@ -410,17 +410,15 @@ fn inject_table_headers_and_footers(
   fragment_index: usize,
   fragment_count: usize,
 ) {
-  let headers: Vec<FragmentNode> = original
+  let headers: Vec<_> = original
     .children
     .iter()
     .filter(|c| is_table_header_fragment(c))
-    .cloned()
     .collect();
-  let footers: Vec<FragmentNode> = original
+  let footers: Vec<_> = original
     .children
     .iter()
     .filter(|c| is_table_footer_fragment(c))
-    .cloned()
     .collect();
   if headers.is_empty() && footers.is_empty() {
     return;
@@ -432,60 +430,106 @@ fn inject_table_headers_and_footers(
   let mut max_y = clipped.bounds.height();
 
   if !headers.is_empty() && (!has_header || fragment_index > 0) {
-    let header_height: f32 = headers.iter().map(|h| h.bounds.height()).sum();
+    let mut regions = Vec::new();
+    for header in &headers {
+      regions.push((header.bounds.y(), header.bounds.max_y()));
+    }
+    let region_height: f32 = regions.iter().map(|(s, e)| e - s).sum();
     for child in &mut clipped.children {
-      child.bounds = child.bounds.translate(Point::new(0.0, header_height));
+      child.bounds = child.bounds.translate(Point::new(0.0, region_height));
     }
     let mut offset = 0.0;
     let mut clones = Vec::new();
-    for mut header in headers {
-      header.bounds = Rect::from_xywh(
-        header.bounds.x(),
-        offset,
-        header.bounds.width(),
-        header.bounds.height(),
-      );
-      offset += header.bounds.height();
-      propagate_fragment_metadata(&mut header, fragment_index, fragment_count);
-      clones.push(header);
+    for (start, end) in regions {
+      for candidate in &original.children {
+        let Some(style) = candidate.style.as_ref() else {
+          continue;
+        };
+        if !matches!(
+          style.display,
+          Display::TableHeaderGroup
+            | Display::TableFooterGroup
+            | Display::TableRowGroup
+            | Display::TableRow
+            | Display::TableCell
+        ) {
+          continue;
+        }
+        let c_start = candidate.bounds.y();
+        let c_end = candidate.bounds.max_y();
+        if c_start + 0.01 >= start && c_end <= end + 0.01 {
+          let mut clone = candidate.clone();
+          clone.bounds = clone.bounds.translate(Point::new(0.0, offset - start));
+          propagate_fragment_metadata(&mut clone, fragment_index, fragment_count);
+          clones.push(clone);
+        }
+      }
+      offset += end - start;
     }
     max_y = max_y.max(offset);
     clipped.children.splice(0..0, clones);
   }
 
   if !footers.is_empty() && (!has_footer || fragment_index + 1 < fragment_count) {
+    let mut regions = Vec::new();
+    for footer in &footers {
+      regions.push((footer.bounds.y(), footer.bounds.max_y()));
+    }
     let mut footer_offset = clipped
       .children
       .iter()
       .map(|c| c.bounds.max_y())
       .fold(0.0, f32::max);
     let mut clones = Vec::new();
-    for mut footer in footers {
-      footer.bounds = Rect::from_xywh(
-        footer.bounds.x(),
-        footer_offset,
-        footer.bounds.width(),
-        footer.bounds.height(),
-      );
-      footer_offset += footer.bounds.height();
-      propagate_fragment_metadata(&mut footer, fragment_index, fragment_count);
-      clones.push(footer);
+    for (start, end) in regions {
+      for candidate in &original.children {
+        let Some(style) = candidate.style.as_ref() else {
+          continue;
+        };
+        if !matches!(
+          style.display,
+          Display::TableHeaderGroup
+            | Display::TableFooterGroup
+            | Display::TableRowGroup
+            | Display::TableRow
+            | Display::TableCell
+        ) {
+          continue;
+        }
+        let c_start = candidate.bounds.y();
+        let c_end = candidate.bounds.max_y();
+        if c_start + 0.01 >= start && c_end <= end + 0.01 {
+          let mut clone = candidate.clone();
+          clone.bounds = clone
+            .bounds
+            .translate(Point::new(0.0, footer_offset - start));
+          footer_offset += clone.bounds.height();
+          propagate_fragment_metadata(&mut clone, fragment_index, fragment_count);
+          clones.push(clone);
+        }
+      }
     }
     max_y = max_y.max(footer_offset);
     clipped.children.extend(clones);
   }
 
+  let children_bottom = clipped
+    .children
+    .iter()
+    .map(|c| c.bounds.max_y())
+    .fold(0.0, f32::max);
+  let new_height = clipped.bounds.height().max(max_y).max(children_bottom);
   clipped.bounds = Rect::from_xywh(
     clipped.bounds.x(),
     clipped.bounds.y(),
     clipped.bounds.width(),
-    clipped.bounds.height().max(max_y),
+    new_height,
   );
   clipped.scroll_overflow = Rect::from_xywh(
     clipped.scroll_overflow.x(),
     clipped.scroll_overflow.y(),
     clipped.scroll_overflow.width().max(clipped.bounds.width()),
-    max_y.max(clipped.scroll_overflow.height()),
+    new_height.max(clipped.scroll_overflow.height()),
   );
 }
 
@@ -503,7 +547,16 @@ fn collect_break_opportunities(
     .as_ref()
     .map(|s| s.as_ref())
     .unwrap_or(default_style);
-  let inside_avoid = avoid_depth + usize::from(avoids_break_inside(style.break_inside, context));
+  let is_table_row_like = matches!(
+    style.display,
+    Display::TableRow
+      | Display::TableRowGroup
+      | Display::TableHeaderGroup
+      | Display::TableFooterGroup
+  );
+  let inside_avoid = avoid_depth
+    + usize::from(avoids_break_inside(style.break_inside, context))
+    + usize::from(is_table_row_like);
   let inside_inline = inline_depth
     + usize::from(matches!(
       node.content,

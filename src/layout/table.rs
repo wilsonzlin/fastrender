@@ -4913,6 +4913,20 @@ impl FormattingContext for TableFormattingContext {
       }
     }
 
+    // Add explicit row boundary markers to make fragmentation row-aware.
+    for (idx, offset) in row_offsets.iter().enumerate() {
+      let height = row_metrics.get(idx).map(|r| r.height).unwrap_or(0.0);
+      let mut marker_style = crate::style::ComputedStyle::default();
+      marker_style.display = Display::TableRow;
+      let rect = Rect::from_xywh(content_origin_x, *offset, content_width, height);
+      fragments.push(FragmentNode::new_with_style(
+        rect,
+        FragmentContent::Block { box_id: None },
+        Vec::new(),
+        Arc::new(marker_style),
+      ));
+    }
+
     // Position cell fragments with vertical alignment within their row block
     let row_metric_heights: Vec<f32> = row_metrics.iter().map(|r| r.height).collect();
     // Ensure baseline selection follows row/column order (CSS 2.1 row baseline rules).
