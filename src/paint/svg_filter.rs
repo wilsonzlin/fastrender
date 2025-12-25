@@ -1,3 +1,4 @@
+use crate::geometry::Rect;
 use crate::image_loader::ImageCache;
 use crate::paint::blur::apply_gaussian_blur;
 use crate::style::color;
@@ -19,12 +20,96 @@ fn filter_cache() -> &'static Mutex<HashMap<String, Arc<SvgFilter>>> {
 #[derive(Clone, Debug)]
 pub struct SvgFilter {
   pub steps: Vec<FilterStep>,
+  pub region: SvgFilterRegion,
 }
 
 #[derive(Clone, Debug)]
 pub struct FilterStep {
   pub result: Option<String>,
   pub primitive: FilterPrimitive,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SvgFilterUnits {
+  ObjectBoundingBox,
+  UserSpaceOnUse,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum SvgLength {
+  Px(f32),
+  Percent(f32),
+}
+
+impl SvgLength {
+  fn parse(raw: Option<&str>) -> Option<Self> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+      return None;
+    }
+
+    if let Some(value) = raw.strip_suffix('%') {
+      let number = value.trim().parse::<f32>().ok()? / 100.0;
+      Some(SvgLength::Percent(number))
+    } else {
+      raw.parse::<f32>().ok().map(SvgLength::Px)
+    }
+  }
+
+  fn resolve(&self, basis: f32) -> f32 {
+    match self {
+      SvgLength::Px(v) => *v,
+      SvgLength::Percent(p) => *p * basis,
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SvgFilterRegion {
+  pub x: SvgLength,
+  pub y: SvgLength,
+  pub width: SvgLength,
+  pub height: SvgLength,
+  pub units: SvgFilterUnits,
+}
+
+impl SvgFilterRegion {
+  fn default_for_units(units: SvgFilterUnits) -> Self {
+    Self {
+      x: SvgLength::Percent(-0.1),
+      y: SvgLength::Percent(-0.1),
+      width: SvgLength::Percent(1.2),
+      height: SvgLength::Percent(1.2),
+      units,
+    }
+  }
+
+  pub fn resolve(&self, bbox: Rect) -> Rect {
+    let width_basis = bbox.width();
+    let height_basis = bbox.height();
+    let resolve_x = |len: SvgLength| match self.units {
+      SvgFilterUnits::ObjectBoundingBox => bbox.min_x() + len.resolve(width_basis),
+      SvgFilterUnits::UserSpaceOnUse => bbox.min_x() + len.resolve(width_basis),
+    };
+    let resolve_y = |len: SvgLength| match self.units {
+      SvgFilterUnits::ObjectBoundingBox => bbox.min_y() + len.resolve(height_basis),
+      SvgFilterUnits::UserSpaceOnUse => bbox.min_y() + len.resolve(height_basis),
+    };
+    let resolve_width = |len: SvgLength| match self.units {
+      SvgFilterUnits::ObjectBoundingBox => len.resolve(width_basis),
+      SvgFilterUnits::UserSpaceOnUse => len.resolve(width_basis),
+    };
+    let resolve_height = |len: SvgLength| match self.units {
+      SvgFilterUnits::ObjectBoundingBox => len.resolve(height_basis),
+      SvgFilterUnits::UserSpaceOnUse => len.resolve(height_basis),
+    };
+
+    let width = resolve_width(self.width).max(0.0);
+    let height = resolve_height(self.height).max(0.0);
+    let x = resolve_x(self.x);
+    let y = resolve_y(self.y);
+    Rect::from_xywh(x, y, width, height)
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -265,6 +350,19 @@ fn parse_filter_definition(
         .unwrap_or(true)
   })?;
 
+  let units = match filter_node.attribute("filterUnits") {
+    Some(v) if v.eq_ignore_ascii_case("userspaceonuse") => SvgFilterUnits::UserSpaceOnUse,
+    _ => SvgFilterUnits::ObjectBoundingBox,
+  };
+  let default_region = SvgFilterRegion::default_for_units(units);
+  let region = SvgFilterRegion {
+    x: SvgLength::parse(filter_node.attribute("x")).unwrap_or(default_region.x),
+    y: SvgLength::parse(filter_node.attribute("y")).unwrap_or(default_region.y),
+    width: SvgLength::parse(filter_node.attribute("width")).unwrap_or(default_region.width),
+    height: SvgLength::parse(filter_node.attribute("height")).unwrap_or(default_region.height),
+    units,
+  };
+
   let mut steps = Vec::new();
   for child in filter_node.children().filter(|c| c.is_element()) {
     let result_name = child.attribute("result").map(|s| s.to_string());
@@ -299,7 +397,13 @@ fn parse_filter_definition(
     return None;
   }
 
-  Some(Arc::new(SvgFilter { steps }))
+  Some(Arc::new(SvgFilter { steps, region }))
+}
+
+impl SvgFilter {
+  pub fn resolve_region(&self, bbox: Rect) -> Rect {
+    self.region.resolve(bbox)
+  }
 }
 
 fn parse_input(attr: Option<&str>) -> FilterInput {
