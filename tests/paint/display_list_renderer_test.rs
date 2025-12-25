@@ -3,6 +3,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use fastrender::css::types::ColorStop;
 use fastrender::geometry::Rect;
+use fastrender::image_loader::ImageCache;
 use fastrender::paint::display_list::BlendMode;
 use fastrender::paint::display_list::BorderRadii;
 use fastrender::paint::display_list::ClipItem;
@@ -1961,6 +1962,70 @@ fn filter_blur_zero_has_no_effect() {
   // No blur: red stays confined to its rect and does not leak to neighbors.
   assert_eq!(pixel(&pixmap, 1, 0), (255, 0, 0, 255));
   assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+}
+
+#[test]
+fn svg_filter_lengths_scale_with_device_pixel_ratio() {
+  let svg = r#"<svg xmlns='http://www.w3.org/2000/svg'>
+    <filter id='f'>
+      <feGaussianBlur in='SourceAlpha' stdDeviation='3' result='blur'/>
+      <feOffset in='blur' dx='5' dy='0' result='offset'/>
+      <feFlood flood-color='rgb(0,0,255)' result='blue'/>
+      <feComposite in='blue' in2='offset' operator='in' result='shadow'/>
+      <feMerge>
+        <feMergeNode in='shadow'/>
+        <feMergeNode in='SourceGraphic'/>
+      </feMerge>
+    </filter>
+  </svg>"#;
+  let data_url = format!("data:image/svg+xml;base64,{}", STANDARD.encode(svg));
+  let cache = ImageCache::new();
+  let filter =
+    fastrender::paint::svg_filter::load_svg_filter(&data_url, &cache).expect("parsed svg filter");
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 80.0, 40.0),
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![ResolvedFilter::SvgFilter(filter.clone())],
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(25.0, 15.0, 20.0, 10.0),
+    color: Rgba::from_rgba8(0, 0, 255, 255),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let render = |scale: f32| -> Pixmap {
+    DisplayListRenderer::new_scaled(80, 40, Rgba::WHITE, FontContext::new(), scale)
+      .expect("renderer")
+      .render(&list)
+      .expect("render")
+  };
+
+  let bbox_for = |pixmap: &Pixmap| -> (u32, u32, u32, u32) {
+    bounding_box_for_color(pixmap, |(r, g, b, a)| a > 0 && b > r && b > g)
+      .expect("blue filter output")
+  };
+
+  let bbox1 = bbox_for(&render(1.0));
+  let bbox2 = bbox_for(&render(2.0));
+
+  let width_ratio = (bbox2.2 - bbox2.0 + 1) as f32 / (bbox1.2 - bbox1.0 + 1) as f32;
+  let height_ratio = (bbox2.3 - bbox2.1 + 1) as f32 / (bbox1.3 - bbox1.1 + 1) as f32;
+
+  assert!(
+    (width_ratio - 2.0).abs() < 0.2 && (height_ratio - 2.0).abs() < 0.2,
+    "expected svg filter footprint to scale with DPR (w_ratio={width_ratio}, h_ratio={height_ratio})"
+  );
 }
 
 #[test]
