@@ -304,15 +304,33 @@ pub(crate) fn clip_node(
     .as_ref()
     .map(|s| s.as_ref())
     .unwrap_or(default_style);
-  let has_line_children = node
-    .children
-    .iter()
-    .any(|child| matches!(child.content, FragmentContent::Line { .. }));
-  let avoid_inside = matches!(style.break_inside, BreakInside::Avoid)
-    || ((style.widows > 1 || style.orphans > 1) && has_line_children);
+  let avoid_inside = matches!(style.break_inside, BreakInside::Avoid);
+  let is_line = matches!(node.content, FragmentContent::Line { .. });
+  let fragment_size = fragment_end - fragment_start;
 
   // Honor break-inside/line constraints by keeping the fragment intact within a single fragmentainer.
-  if avoid_inside && (node_abs_start < fragment_start || node_abs_end > fragment_end) {
+  if is_line && (node_abs_start < fragment_start || node_abs_end > fragment_end) {
+    if node_abs_start >= fragment_start && node_abs_start < fragment_end {
+      let mut cloned = clone_without_children(node);
+      cloned.bounds = Rect::from_xywh(
+        node.bounds.x(),
+        node_abs_start - parent_clipped_abs_start,
+        node.bounds.width(),
+        node.bounds.height(),
+      );
+      cloned.fragment_index = fragment_index;
+      cloned.fragment_count = fragment_count.max(1);
+      cloned.fragmentainer_index = fragment_index;
+      cloned.children = node.children.clone();
+      return Some(cloned);
+    }
+    return None;
+  }
+
+  if avoid_inside
+    && (node_abs_start < fragment_start || node_abs_end > fragment_end)
+    && (node_abs_end - node_abs_start) <= fragment_size + 0.01
+  {
     if (fragment_start..fragment_end).contains(&node_abs_start) {
       let mut cloned = clone_without_children(node);
       cloned.fragment_index = fragment_index;
@@ -534,13 +552,18 @@ fn compute_boundaries(total_height: f32, fragmentainer: f32, plan: &BreakPlan) -
         pos
       } else if let Some(pos) = preferred_target {
         pos
+      } else if let Some(pos) = allowed
+        .iter()
+        .copied()
+        .find(|p| *p > target + EPSILON && !is_forbidden(*p, &plan.forbidden))
+      {
+        if pos - start > fragmentainer + EPSILON {
+          target.min(total_height)
+        } else {
+          pos
+        }
       } else {
-        // No candidate in range: fall back to the next allowed candidate even if it overflows.
-        allowed
-          .iter()
-          .copied()
-          .find(|p| *p > target + EPSILON && !is_forbidden(*p, &plan.forbidden))
-          .unwrap_or(target.min(total_height))
+        target.min(total_height)
       }
     };
 
