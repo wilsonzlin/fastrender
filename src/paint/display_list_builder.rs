@@ -4418,6 +4418,7 @@ mod tests {
   use crate::css::types::PropertyValue;
   use crate::css::types::Transform;
   use crate::image_loader::ImageCache;
+  use crate::paint::display_list::ResolvedMaskImage;
   use crate::paint::stacking::StackingContext;
   use crate::paint::stacking::StackingContextReason;
   use crate::style::color::Color;
