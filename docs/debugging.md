@@ -20,6 +20,7 @@ The canonical list lives in [env-vars.md](env-vars.md). This page highlights the
 - `FASTR_PAINT_STATS=1` – paint-stage timings
 - `FASTR_LOG_IMAGE_FAIL=1` – image decode/load failures (raster + SVG)
 - `FASTR_LOG_FRAG_BOUNDS=1` – fragment-tree bounds vs viewport
+- `FASTR_TRACE_FRAGMENTATION=1` – trace fragmentation break opportunities/boundary choices (`inspect_frag --trace-fragmentation` sets this for you)
 
 ## Text-oriented debugging
 

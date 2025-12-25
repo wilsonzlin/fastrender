@@ -26,6 +26,7 @@ These are emitted by the paint pipeline:
 - `FASTR_LOG_FRAG_BOUNDS=1` – log fragment-tree bounds vs the viewport.
 - `FASTR_DUMP_TEXT_FRAGMENTS=<N>` – sample text fragments (default 20 when enabled).
 - `FASTR_TRACE_TEXT=<substring>` – walk the fragment tree and print a containment trail for the first text fragment containing the substring.
+- `FASTR_TRACE_FRAGMENTATION=1` – trace fragmentation break opportunities/boundary choices (also available via `inspect_frag --trace-fragmentation`).
 
 ## Performance / profiling
 

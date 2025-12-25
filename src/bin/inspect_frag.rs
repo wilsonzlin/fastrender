@@ -67,6 +67,10 @@ struct Args {
   #[arg(long, default_value = "0.0")]
   scroll_y: f32,
 
+  /// Emit fragmentation decision traces (also available via FASTR_TRACE_FRAGMENTATION=1)
+  #[arg(long)]
+  trace_fragmentation: bool,
+
   #[command(flatten)]
   media_prefs: MediaPreferenceArgs,
 
@@ -102,6 +106,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let args = Args::parse();
   let media_prefs = MediaPreferences::from(&args.media_prefs);
+  if args.trace_fragmentation {
+    env::set_var("FASTR_TRACE_FRAGMENTATION", "1");
+  }
 
   let (viewport_w, viewport_h) = args.viewport;
 
