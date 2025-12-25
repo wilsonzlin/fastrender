@@ -43,7 +43,6 @@
 
 use crate::style::values::Length;
 use std::collections::HashMap;
-use std::env;
 use std::fmt;
 
 /// A single media query
@@ -1897,7 +1896,8 @@ impl MediaContext {
   /// - `FASTR_MONOCHROME_DEPTH` = integer bits for monochrome devices (e.g., 1)
   #[allow(clippy::cognitive_complexity)]
   pub fn with_env_overrides(mut self) -> Self {
-    let overrides = &crate::debug::runtime::runtime_toggles().config().media;
+    let runtime_toggles = crate::debug::runtime::runtime_toggles();
+    let overrides = &runtime_toggles.config().media;
     if let Some(mt) = overrides.media_type {
       self.media_type = mt;
     }

@@ -66,6 +66,7 @@ use crate::css::parser::{
   extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
+use crate::debug::runtime::{self, RuntimeToggles};
 use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
@@ -143,7 +144,6 @@ use std::io;
 use std::mem;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::OnceLock;
 
 const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 use std::time::Instant;
@@ -263,6 +263,9 @@ pub struct FastRender {
 
   /// Optional compatibility mode applied during DOM parsing
   dom_compat_mode: DomCompatibilityMode,
+
+  /// Runtime debug/configuration toggles in effect for this renderer instance.
+  runtime_toggles: Arc<RuntimeToggles>,
 }
 
 impl std::fmt::Debug for FastRender {
@@ -327,6 +330,9 @@ pub struct FastRenderConfig {
 
   /// Whether to honor `<meta name="viewport">` when computing the layout viewport.
   pub apply_meta_viewport: bool,
+
+  /// Runtime debug/configuration toggles used for this renderer.
+  pub runtime_toggles: Arc<RuntimeToggles>,
 }
 
 impl Default for FastRenderConfig {
@@ -343,6 +349,7 @@ impl Default for FastRenderConfig {
       compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
+      runtime_toggles: Arc::new(RuntimeToggles::from_env()),
     }
   }
 }
@@ -453,6 +460,12 @@ impl FastRenderBuilder {
   pub fn build(self) -> Result<FastRender> {
     FastRender::with_config_and_fetcher(self.config, self.fetcher)
   }
+
+  /// Overrides the runtime debug/configuration toggles used by the renderer.
+  pub fn runtime_toggles(mut self, toggles: RuntimeToggles) -> Self {
+    self.config.runtime_toggles = Arc::new(toggles);
+    self
+  }
 }
 
 impl Default for FastRenderBuilder {
@@ -478,6 +491,8 @@ pub struct RenderOptions {
   pub css_limit: Option<usize>,
   /// When true, document fetch failures will return a placeholder pixmap with diagnostics instead of an error.
   pub allow_partial: bool,
+  /// Optional runtime toggle override for this render.
+  pub runtime_toggles: Option<Arc<RuntimeToggles>>,
 }
 
 impl Default for RenderOptions {
@@ -490,6 +505,7 @@ impl Default for RenderOptions {
       scroll_y: 0.0,
       css_limit: None,
       allow_partial: false,
+      runtime_toggles: None,
     }
   }
 }
@@ -534,6 +550,12 @@ impl RenderOptions {
   /// Enable returning a placeholder pixmap when document fetch fails.
   pub fn allow_partial(mut self, allow: bool) -> Self {
     self.allow_partial = allow;
+    self
+  }
+
+  /// Override the runtime debug/configuration toggles for this render.
+  pub fn with_runtime_toggles(mut self, toggles: RuntimeToggles) -> Self {
+    self.runtime_toggles = Some(Arc::new(toggles));
     self
   }
 }
@@ -628,6 +650,12 @@ impl FastRenderConfig {
   /// ```
   pub fn with_default_background(mut self, color: Rgba) -> Self {
     self.background_color = color;
+    self
+  }
+
+  /// Sets the runtime debug/configuration toggles to use for this renderer.
+  pub fn with_runtime_toggles(mut self, toggles: RuntimeToggles) -> Self {
+    self.runtime_toggles = Arc::new(toggles);
     self
   }
 
@@ -893,7 +921,15 @@ impl FastRender {
       base_url: config.base_url.clone(),
       dom_compat_mode: config.dom_compat_mode,
       compat_profile: config.compat_profile,
+      runtime_toggles: config.runtime_toggles.clone(),
     })
+  }
+
+  fn resolve_runtime_toggles(&self, options: &RenderOptions) -> Arc<RuntimeToggles> {
+    options
+      .runtime_toggles
+      .clone()
+      .unwrap_or_else(|| self.runtime_toggles.clone())
   }
 
   /// Renders HTML/CSS to a pixmap
@@ -945,7 +981,18 @@ impl FastRender {
   /// - Painting fails
   /// - Invalid dimensions (width or height is 0)
   pub fn render_html(&mut self, html: &str, width: u32, height: u32) -> Result<Pixmap> {
-    self.render_html_internal(html, width, height, 0.0, 0.0, MediaType::Screen)
+    let toggles = self.runtime_toggles.clone();
+    runtime::with_runtime_toggles(toggles.clone(), || {
+      self.render_html_internal(
+        html,
+        width,
+        height,
+        0.0,
+        0.0,
+        MediaType::Screen,
+        toggles.as_ref(),
+      )
+    })
   }
 
   /// Renders HTML with scroll offsets applied to the viewport
@@ -957,33 +1004,48 @@ impl FastRender {
     scroll_x: f32,
     scroll_y: f32,
   ) -> Result<Pixmap> {
-    self.render_html_internal(html, width, height, scroll_x, scroll_y, MediaType::Screen)
+    let toggles = self.runtime_toggles.clone();
+    runtime::with_runtime_toggles(toggles.clone(), || {
+      self.render_html_internal(
+        html,
+        width,
+        height,
+        scroll_x,
+        scroll_y,
+        MediaType::Screen,
+        toggles.as_ref(),
+      )
+    })
   }
 
   /// Renders HTML with explicit per-request options.
   pub fn render_html_with_options(&mut self, html: &str, options: RenderOptions) -> Result<Pixmap> {
-    let (width, height) = options
-      .viewport
-      .unwrap_or((self.default_width, self.default_height));
-    let original_dpr = self.device_pixel_ratio;
-    if let Some(dpr) = options.device_pixel_ratio {
-      self.device_pixel_ratio = dpr;
-    }
+    let toggles = self.resolve_runtime_toggles(&options);
+    runtime::with_runtime_toggles(toggles.clone(), || {
+      let (width, height) = options
+        .viewport
+        .unwrap_or((self.default_width, self.default_height));
+      let original_dpr = self.device_pixel_ratio;
+      if let Some(dpr) = options.device_pixel_ratio {
+        self.device_pixel_ratio = dpr;
+      }
 
-    let result = self.render_html_internal(
-      html,
-      width,
-      height,
-      options.scroll_x,
-      options.scroll_y,
-      options.media_type,
-    );
+      let result = self.render_html_internal(
+        html,
+        width,
+        height,
+        options.scroll_x,
+        options.scroll_y,
+        options.media_type,
+        toggles.as_ref(),
+      );
 
-    if options.device_pixel_ratio.is_some() {
-      self.device_pixel_ratio = original_dpr;
-    }
+      if options.device_pixel_ratio.is_some() {
+        self.device_pixel_ratio = original_dpr;
+      }
 
-    result
+      result
+    })
   }
 
   fn render_html_internal(
@@ -994,6 +1056,7 @@ impl FastRender {
     scroll_x: f32,
     scroll_y: f32,
     media_type: MediaType,
+    toggles: &RuntimeToggles,
   ) -> Result<Pixmap> {
     // Validate dimensions
     if width == 0 || height == 0 {
@@ -1002,7 +1065,7 @@ impl FastRender {
       }));
     }
 
-    let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
+    let timings_enabled = toggles.truthy("FASTR_RENDER_TIMINGS");
     let mut stage_start = timings_enabled.then(Instant::now);
     let overall_start = stage_start.clone();
 
@@ -1038,10 +1101,7 @@ impl FastRender {
         self.layout_document_for_media(&dom, layout_width, layout_height, media_type)?;
       self.pending_device_size = None;
       let layout_viewport = fragment_tree.viewport_size();
-      if std::env::var("FASTR_LOG_FRAG_BOUNDS")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-      {
+      if toggles.truthy("FASTR_LOG_FRAG_BOUNDS") {
         let bbox = fragment_tree.content_size();
         eprintln!(
                 "[frag-bounds] viewport=({}x{}) bbox=({:.1},{:.1})→({:.1},{:.1}) size=({:.1}x{:.1}) fragments={}",
@@ -1057,41 +1117,38 @@ impl FastRender {
             );
       }
 
-      if let Ok(v) = std::env::var("FASTR_DUMP_TEXT_FRAGMENTS") {
-        if v != "0" && !v.eq_ignore_ascii_case("false") {
-          let limit: usize = v.parse().unwrap_or(20);
-          let mut total = 0usize;
-          let mut stack = vec![(&fragment_tree.root, crate::geometry::Point::ZERO)];
-          while let Some((frag, offset)) = stack.pop() {
-            let abs = crate::geometry::Rect::from_xywh(
-              frag.bounds.x() + offset.x,
-              frag.bounds.y() + offset.y,
-              frag.bounds.width(),
-              frag.bounds.height(),
-            );
-            if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &frag.content {
-              if total < limit {
-                eprintln!(
-                  "text frag {} @ ({:.1},{:.1},{:.1},{:.1}) {:?}",
-                  total,
-                  abs.x(),
-                  abs.y(),
-                  abs.width(),
-                  abs.height(),
-                  text.chars().take(80).collect::<String>()
-                );
-              }
-              total += 1;
+      if let Some(limit) = toggles.usize("FASTR_DUMP_TEXT_FRAGMENTS") {
+        let mut total = 0usize;
+        let mut stack = vec![(&fragment_tree.root, crate::geometry::Point::ZERO)];
+        while let Some((frag, offset)) = stack.pop() {
+          let abs = crate::geometry::Rect::from_xywh(
+            frag.bounds.x() + offset.x,
+            frag.bounds.y() + offset.y,
+            frag.bounds.width(),
+            frag.bounds.height(),
+          );
+          if let crate::tree::fragment_tree::FragmentContent::Text { text, .. } = &frag.content {
+            if total < limit {
+              eprintln!(
+                "text frag {} @ ({:.1},{:.1},{:.1},{:.1}) {:?}",
+                total,
+                abs.x(),
+                abs.y(),
+                abs.width(),
+                abs.height(),
+                text.chars().take(80).collect::<String>()
+              );
             }
-            for child in frag.children.iter().rev() {
-              stack.push((child, crate::geometry::Point::new(abs.x(), abs.y())));
-            }
+            total += 1;
           }
-          eprintln!("total text fragments: {}", total);
+          for child in frag.children.iter().rev() {
+            stack.push((child, crate::geometry::Point::new(abs.x(), abs.y())));
+          }
         }
+        eprintln!("total text fragments: {}", total);
       }
 
-      if let Ok(query) = std::env::var("FASTR_TRACE_TEXT") {
+      if let Some(query) = toggles.get("FASTR_TRACE_TEXT") {
         fn describe_node(node: &crate::tree::fragment_tree::FragmentNode) -> String {
           let display = node
             .style
@@ -1193,9 +1250,7 @@ impl FastRender {
         *start = now;
       }
 
-      let expand_full_page = std::env::var("FASTR_FULL_PAGE")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false);
+      let expand_full_page = toggles.truthy("FASTR_FULL_PAGE");
       let viewport_size = layout_viewport;
       let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
       let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
@@ -1643,7 +1698,8 @@ impl FastRender {
     height: u32,
     media_type: MediaType,
   ) -> Result<FragmentTree> {
-    let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
+    let toggles = runtime::runtime_toggles();
+    let timings_enabled = toggles.truthy("FASTR_RENDER_TIMINGS");
     let overall_start = timings_enabled.then(Instant::now);
 
     let mut dom_with_state = dom.clone();
@@ -1779,10 +1835,7 @@ impl FastRender {
       eprintln!("timing:box_count {}", box_count);
     }
 
-    if std::env::var("FASTR_DUMP_COUNTS")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-    {
+    if toggles.truthy("FASTR_DUMP_COUNTS") {
       fn count_box_kinds(node: &BoxNode, total: &mut usize, text: &mut usize) {
         *total += 1;
         if matches!(node.box_type, BoxType::Text(_)) {
@@ -1798,10 +1851,7 @@ impl FastRender {
       eprintln!("box counts total={} text={}", total, text);
     }
 
-    if std::env::var("FASTR_DUMP_TEXT")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-    {
+    if toggles.truthy("FASTR_DUMP_TEXT") {
       fn truncate(text: &str, limit: usize) -> String {
         let mut out = String::new();
         for (i, ch) in text.chars().enumerate() {
@@ -1893,14 +1943,11 @@ impl FastRender {
     // work during flex/grid measurement (Taffy) on real pages. The cache is run-scoped and
     // guarded by conservative eligibility rules.
     let mut config = LayoutConfig::for_viewport(layout_viewport);
-    let disable_cache = std::env::var("FASTR_DISABLE_LAYOUT_CACHE")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false);
-    config.enable_cache = !disable_cache;
+    config.enable_cache = !toggles.truthy("FASTR_DISABLE_LAYOUT_CACHE");
     self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
     intrinsic_cache_clear();
-    let report_intrinsic = std::env::var_os("FASTR_INTRINSIC_STATS").is_some();
-    let report_layout_cache = std::env::var_os("FASTR_LAYOUT_CACHE_STATS").is_some();
+    let report_intrinsic = toggles.truthy("FASTR_INTRINSIC_STATS");
+    let report_layout_cache = toggles.truthy("FASTR_LAYOUT_CACHE_STATS");
     if report_intrinsic {
       intrinsic_cache_reset_counters();
     }
@@ -1921,9 +1968,7 @@ impl FastRender {
         message: format!("Layout failed: {:?}", e),
       })
     })?;
-    let capture_container_fields = std::env::var("FASTR_LOG_CONTAINER_FIELDS")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false);
+    let capture_container_fields = toggles.truthy("FASTR_LOG_CONTAINER_FIELDS");
     let first_styled_snapshot = if has_container_queries && capture_container_fields {
       Some(styled_tree.clone())
     } else {
@@ -1931,18 +1976,8 @@ impl FastRender {
     };
 
     // Re-run cascade/layout when container queries are present and we have resolved container sizes.
-    static LOG_CONTAINER_PASS: OnceLock<bool> = OnceLock::new();
-    let log_container_pass = *LOG_CONTAINER_PASS.get_or_init(|| {
-      std::env::var("FASTR_LOG_CONTAINER_PASS")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
-    static LOG_CONTAINER_REUSE: OnceLock<bool> = OnceLock::new();
-    let log_reuse = *LOG_CONTAINER_REUSE.get_or_init(|| {
-      std::env::var("FASTR_LOG_CONTAINER_REUSE")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
+    let log_container_pass = toggles.truthy("FASTR_LOG_CONTAINER_PASS");
+    let log_reuse = toggles.truthy("FASTR_LOG_CONTAINER_REUSE");
 
     if has_container_queries {
       let first_styled_tree = styled_tree.clone();
@@ -1986,14 +2021,7 @@ impl FastRender {
             container_scope.len()
           );
         }
-        let log_container_ids: Option<Vec<usize>> = std::env::var("FASTR_LOG_CONTAINER_IDS")
-          .ok()
-          .map(|s| {
-            s.split(',')
-              .filter_map(|tok| tok.trim().parse::<usize>().ok())
-              .collect::<Vec<_>>()
-          })
-          .filter(|v| !v.is_empty());
+        let log_container_ids = toggles.usize_list("FASTR_LOG_CONTAINER_IDS");
 
         let styled_tree = apply_styles_with_media_target_and_imports(
           dom,
@@ -2066,13 +2094,7 @@ impl FastRender {
                             diff
                         );
             if diff > 0 {
-              static LOG_CONTAINER_DIFF: OnceLock<Option<usize>> = OnceLock::new();
-              let log_n = *LOG_CONTAINER_DIFF.get_or_init(|| {
-                std::env::var("FASTR_LOG_CONTAINER_DIFF")
-                  .ok()
-                  .and_then(|v| v.parse::<usize>().ok())
-              });
-              if let Some(n) = log_n {
+              if let Some(n) = toggles.usize("FASTR_LOG_CONTAINER_DIFF") {
                 let summaries = styled_summary_map(&styled_tree);
                 let second = styled_fingerprint_map(&styled_tree);
                 let mut lines = Vec::new();
@@ -2504,12 +2526,7 @@ impl FastRender {
   }
 
   fn replaced_intrinsic_profile_enabled() -> bool {
-    static FLAG: OnceLock<bool> = OnceLock::new();
-    *FLAG.get_or_init(|| {
-      std::env::var("FASTR_REPLACED_INTRINSIC_PROFILE")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    })
+    runtime::runtime_toggles().truthy("FASTR_REPLACED_INTRINSIC_PROFILE")
   }
 
   fn resolve_replaced_intrinsic_sizes_for_media(
@@ -2812,10 +2829,12 @@ impl FastRender {
         if needs_intrinsic || needs_ratio {
           if let Some(candidate) = poster.as_deref().filter(|s| !s.is_empty()) {
             let candidate_trimmed = candidate.trim_start();
-            let inline_svg = candidate_trimmed.starts_with("<svg")
-              || candidate_trimmed.starts_with("<?xml");
+            let inline_svg =
+              candidate_trimmed.starts_with("<svg") || candidate_trimmed.starts_with("<?xml");
             let meta = if inline_svg {
-              self.image_cache.probe_svg_content(candidate, "video-poster")
+              self
+                .image_cache
+                .probe_svg_content(candidate, "video-poster")
             } else {
               self
                 .image_cache
@@ -2868,10 +2887,12 @@ impl FastRender {
               .probe(content.svg.as_str())
               .map(|meta| (*meta).clone())
           } else {
-            Err(crate::error::Error::Image(crate::error::ImageError::LoadFailed {
-              url: "svg".to_string(),
-              reason: "empty content".to_string(),
-            }))
+            Err(crate::error::Error::Image(
+              crate::error::ImageError::LoadFailed {
+                url: "svg".to_string(),
+                reason: "empty content".to_string(),
+              },
+            ))
           };
 
           if let Ok(meta) = meta {
@@ -4421,7 +4442,7 @@ fn build_container_query_context(
       ContainerType::Size | ContainerType::InlineSize => {
         if let Some((inline, block)) = sizes.get(&box_id) {
           let (content_inline, content_block) = content_box_sizes(node, *inline, *block);
-          if std::env::var("FASTR_LOG_CONTAINER_QUERY").is_ok() {
+          if runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_QUERY") {
             eprintln!(
                             "[cq] box_id={} styled_id={} type={:?} inline={:.2} block={:.2} content_inline={:.2} content_block={:.2}",
                             box_id,
@@ -4681,9 +4702,21 @@ pub(crate) fn render_html_with_shared_resources(
     base_url,
     compat_profile: CompatProfile::default(),
     dom_compat_mode: DomCompatibilityMode::Standard,
+    runtime_toggles: runtime::runtime_toggles(),
   };
 
-  renderer.render_html_internal(html, width, height, 0.0, 0.0, MediaType::Screen)
+  let toggles = renderer.runtime_toggles.clone();
+  runtime::with_runtime_toggles(toggles.clone(), || {
+    renderer.render_html_internal(
+      html,
+      width,
+      height,
+      0.0,
+      0.0,
+      MediaType::Screen,
+      toggles.as_ref(),
+    )
+  })
 }
 
 #[cfg(test)]
