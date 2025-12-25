@@ -116,6 +116,7 @@ pub enum DomNodeType {
   Slot {
     namespace: String,
     attributes: Vec<(String, String)>,
+    assigned: bool,
   },
   Element {
     tag_name: String,
@@ -617,6 +618,7 @@ fn convert_handle_to_node(handle: &Handle) -> DomNode {
         DomNodeType::Slot {
           namespace,
           attributes,
+          assigned: false,
         }
       } else {
         DomNodeType::Element {
@@ -2561,6 +2563,49 @@ fn match_relative_selector<'a>(
   }
 
   match_relative_selector_siblings(selector, anchor, ancestors, context)
+}
+
+fn in_shadow_tree(ancestors: &[&DomNode]) -> bool {
+  ancestors
+    .iter()
+    .any(|node| matches!(node.node_type, DomNodeType::ShadowRoot { .. }))
+}
+
+fn for_each_assigned_slot_child<'a, F: FnMut(&'a DomNode)>(node: &'a DomNode, f: &mut F) {
+  for child in &node.children {
+    match &child.node_type {
+      DomNodeType::Slot { assigned: true, .. } => {
+        for assigned_child in child.children.iter().filter(|c| c.is_element()) {
+          f(assigned_child);
+        }
+      }
+      DomNodeType::ShadowRoot { .. } => {}
+      _ => for_each_assigned_slot_child(child, f),
+    }
+  }
+}
+
+fn for_each_selector_child<'a, F: FnMut(&'a DomNode)>(
+  anchor: &'a DomNode,
+  ancestors: &[&'a DomNode],
+  mut f: F,
+) {
+  let within_shadow_tree = in_shadow_tree(ancestors);
+  for child in &anchor.children {
+    match &child.node_type {
+      DomNodeType::ShadowRoot { .. } => {
+        if within_shadow_tree {
+          continue;
+        }
+        for_each_assigned_slot_child(child, &mut f);
+      }
+      _ => {
+        if child.is_element() {
+          f(child);
+        }
+      }
+    }
+  }
 }
 
 fn match_relative_selector_descendants<'a>(
