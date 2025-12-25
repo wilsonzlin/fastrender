@@ -524,20 +524,23 @@ fn push_key(keys: &mut Vec<SelectorKey>, key: SelectorKey) {
   }
 }
 
-fn push_attribute_key(keys: &mut Vec<SelectorKey>, name: &str) {
-  push_key(keys, SelectorKey::Attribute(name.to_ascii_lowercase()));
+#[derive(Clone, Copy)]
+enum SelectorKeyPolarity {
+  Matches,
+  DoesNotMatch,
 }
 
-fn merge_alternative_keys<'a, I>(
+fn merge_nested_keys<'a, I>(
   selectors: I,
-  base_keys: &[SelectorKey],
+  polarity: SelectorKeyPolarity,
+  allow_universal: bool,
   out: &mut Vec<SelectorKey>,
 ) where
   I: IntoIterator<Item = &'a Selector<crate::css::selectors::FastRenderSelectorImpl>>,
 {
   for selector in selectors {
-    let nested = selector_keys(selector);
-    if nested.len() == 1 && matches!(nested[0], SelectorKey::Universal) && !base_keys.is_empty() {
+    let nested = selector_keys_with_polarity(selector, polarity);
+    if nested.len() == 1 && matches!(nested[0], SelectorKey::Universal) && !allow_universal {
       // Avoid falling back to the universal bucket when the outer compound already
       // guarantees a more specific key (e.g., div:is(:not(.a))).
       continue;
@@ -548,36 +551,68 @@ fn merge_alternative_keys<'a, I>(
   }
 }
 
-fn selector_keys(
+fn selector_keys_with_polarity(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+  polarity: SelectorKeyPolarity,
 ) -> Vec<SelectorKey> {
   use selectors::parser::Component;
 
-  let mut base_keys: Vec<SelectorKey> = Vec::new();
+  let mut keys: Vec<SelectorKey> = Vec::new();
   let mut iter = selector.iter();
   loop {
     if let Some(component) = iter.next() {
       match component {
-        Component::ID(ident) => push_key(&mut base_keys, SelectorKey::Id(ident.0.clone())),
-        Component::Class(cls) => push_key(&mut base_keys, SelectorKey::Class(cls.0.clone())),
+        Component::ID(ident) => {
+          if matches!(polarity, SelectorKeyPolarity::Matches) {
+            push_key(&mut keys, SelectorKey::Id(ident.0.clone()));
+          }
+        }
+        Component::Class(cls) => {
+          if matches!(polarity, SelectorKeyPolarity::Matches) {
+            push_key(&mut keys, SelectorKey::Class(cls.0.clone()));
+          }
+        }
         Component::LocalName(local) => {
-          push_key(&mut base_keys, SelectorKey::Tag(local.lower_name.0.clone()))
+          if matches!(polarity, SelectorKeyPolarity::Matches) {
+            push_key(&mut keys, SelectorKey::Tag(local.lower_name.0.clone()));
+          }
         }
         Component::AttributeInNoNamespaceExists {
           local_name_lower, ..
         } => {
-          push_attribute_key(&mut base_keys, &local_name_lower.0);
-        }
-        Component::AttributeInNoNamespace { local_name, .. } => {
-          // This variant is already guaranteed lowercase.
-          push_attribute_key(&mut base_keys, &local_name.0);
-        }
-        Component::AttributeOther(other) => {
-          if other.namespace.is_none() {
-            push_attribute_key(&mut base_keys, &other.local_name_lower.0);
+          if matches!(polarity, SelectorKeyPolarity::Matches) {
+            push_key(
+              &mut keys,
+              SelectorKey::Attribute(local_name_lower.0.clone()),
+            );
           }
         }
-        Component::Is(..) | Component::Where(..) | Component::Negation(..) => {}
+        Component::AttributeInNoNamespace { local_name, .. } => {
+          if matches!(polarity, SelectorKeyPolarity::Matches) {
+            push_key(&mut keys, SelectorKey::Attribute(local_name.0.clone()));
+          }
+        }
+        Component::AttributeOther(other) => {
+          if matches!(polarity, SelectorKeyPolarity::Matches) && other.namespace.is_none() {
+            push_key(
+              &mut keys,
+              SelectorKey::Attribute(other.local_name_lower.0.clone()),
+            );
+          }
+        }
+        Component::Is(list) => {
+          merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
+        }
+        Component::Where(list) => {
+          merge_nested_keys(list.slice().iter(), polarity, keys.is_empty(), &mut keys)
+        }
+        Component::Negation(list) => {
+          let flipped = match polarity {
+            SelectorKeyPolarity::Matches => SelectorKeyPolarity::DoesNotMatch,
+            SelectorKeyPolarity::DoesNotMatch => SelectorKeyPolarity::Matches,
+          };
+          merge_nested_keys(list.slice().iter(), flipped, keys.is_empty(), &mut keys);
+        }
         _ => {}
       }
       continue;
@@ -587,35 +622,17 @@ fn selector_keys(
     break;
   }
 
-  let mut alt_keys: Vec<SelectorKey> = Vec::new();
-  let mut iter = selector.iter();
-  loop {
-    if let Some(component) = iter.next() {
-      match component {
-        Component::Is(list) => {
-          merge_alternative_keys(list.slice().iter(), &base_keys, &mut alt_keys)
-        }
-        Component::Where(list) => {
-          merge_alternative_keys(list.slice().iter(), &base_keys, &mut alt_keys)
-        }
-        _ => {}
-      }
-      continue;
-    }
-    let _ = iter.next_sequence();
-    break;
-  }
-
-  let mut keys = base_keys;
-  for key in alt_keys {
-    push_key(&mut keys, key);
-  }
-
-  if keys.is_empty() {
+  if keys.is_empty() && matches!(polarity, SelectorKeyPolarity::Matches) {
     keys.push(SelectorKey::Universal);
   }
 
   keys
+}
+
+fn selector_keys(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> Vec<SelectorKey> {
+  selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

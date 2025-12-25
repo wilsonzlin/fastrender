@@ -107,3 +107,52 @@ fn negation_does_not_hide_rules() {
   );
   assert_eq!(display(find_by_id(&styled, "skip").expect("skip")), "block");
 }
+
+#[test]
+fn double_negation_prunes_to_positive_keys() {
+  let html = r#"
+    <div id="target" class="match"></div>
+    <div id="other"></div>
+  "#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#":not(:not(.match)) { display: inline; }"#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    display(find_by_id(&styled, "target").expect("target")),
+    "inline"
+  );
+  assert_eq!(
+    display(find_by_id(&styled, "other").expect("other")),
+    "block"
+  );
+}
+
+#[test]
+fn layered_negations_keep_required_keys() {
+  let html = r#"
+    <div id="both" class="foo bar"></div>
+    <div id="only-foo" class="foo"></div>
+    <div id="only-bar" class="bar"></div>
+  "#;
+  let dom = dom::parse_html(html).unwrap();
+  let css = r#"
+    :not(:not(.foo), :not(.bar)) { display: inline; }
+  "#;
+  let stylesheet = parse_stylesheet(css).unwrap();
+  let styled = apply_styles_with_media(&dom, &stylesheet, &MediaContext::screen(800.0, 600.0));
+
+  assert_eq!(
+    display(find_by_id(&styled, "both").expect("both")),
+    "inline"
+  );
+  assert_eq!(
+    display(find_by_id(&styled, "only-foo").expect("only-foo")),
+    "block"
+  );
+  assert_eq!(
+    display(find_by_id(&styled, "only-bar").expect("only-bar")),
+    "block"
+  );
+}
