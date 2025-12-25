@@ -1,0 +1,7 @@
+@import url("../shared/shared.css");
+
+div.tile {
+  width: 24px;
+  height: 24px;
+  background: url('/resources/green.png') center center / cover no-repeat;
+}

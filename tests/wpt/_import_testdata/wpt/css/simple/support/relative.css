@@ -1,0 +1,4 @@
+.test-box {
+  color: green;
+  background: url("/resources/green.png") no-repeat left top;
+}

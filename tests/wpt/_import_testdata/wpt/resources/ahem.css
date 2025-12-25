@@ -1,0 +1,6 @@
+@font-face {
+  font-family: 'Ahem';
+  src: local('Ahem'), local('Ahem-Regular');
+}
+
+body { font-family: Ahem, sans-serif; }

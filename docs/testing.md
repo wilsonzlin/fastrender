@@ -53,6 +53,25 @@ There is a self-contained WPT-style runner under `tests/wpt/` for local “rende
 - The runner supports parallel execution and per-test timeouts (see `HarnessConfig`).
 - Comparisons use the shared image comparison module (same as fixtures/ref tests) with configurable tolerance, alpha handling, pixel difference thresholds, and perceptual distance thresholds to reduce platform noise.
 
+### WPT importer (offline)
+
+Use `import_wpt` to bring small slices of upstream WPT into `tests/wpt/tests/` without curating each support file by hand. The importer is entirely file-based and rewrites absolute URLs so tests work offline.
+
+- Example (against a local WPT checkout): `cargo run --bin import_wpt -- --wpt-root ~/code/wpt --suite css/css-text/white-space --out tests/wpt/tests`
+- Preview changes without writing: add `--dry-run`
+- Update existing files/manifest entries: add `--overwrite`
+- Control metadata: `--manifest <path>` overrides the default `tests/wpt/manifest.toml`; `--no-manifest` skips updates
+
+A tiny synthetic WPT-like tree lives under `tests/wpt/_import_testdata/` and is exercised in CI. You can sanity check the importer locally via:
+
+```
+cargo run --bin import_wpt -- \
+  --wpt-root tests/wpt/_import_testdata/wpt \
+  --suite css/simple \
+  --out /tmp/fastrender-wpt-import \
+  --manifest /tmp/fastrender-wpt-import/manifest.toml
+```
+
 ## Fuzzing (CSS parsing and selectors)
 
 Structured fuzzers live under `fuzz/` and target crash-prone areas in CSS parsing, selector matching, and custom property resolution.
