@@ -33,6 +33,10 @@ use std::time::Duration;
 use url::Url;
 
 mod data_url;
+#[cfg(feature = "disk_cache")]
+pub mod disk_cache;
+#[cfg(feature = "disk_cache")]
+pub use disk_cache::{DiskCacheConfig, DiskCachingFetcher};
 
 /// Normalize a page identifier (full URL or hostname) to a cache/output stem.
 ///
@@ -663,6 +667,16 @@ struct CachedSnapshot {
   last_modified: Option<String>,
 }
 
+impl CachedSnapshot {
+  #[cfg(feature = "disk_cache")]
+  pub(crate) fn as_resource(&self) -> Option<FetchedResource> {
+    match &self.value {
+      CacheValue::Resource(res) => Some(res.clone()),
+      CacheValue::Error(_) => None,
+    }
+  }
+}
+
 struct CacheState {
   lru: LruCache<String, CacheEntry>,
   current_bytes: usize,
@@ -829,6 +843,23 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
         etag: entry.etag,
         last_modified: entry.last_modified,
       })
+  }
+
+  #[cfg(feature = "disk_cache")]
+  pub(crate) fn cached_snapshot(&self, url: &str) -> Option<CachedSnapshot> {
+    self.cached_entry(url)
+  }
+
+  #[cfg(feature = "disk_cache")]
+  pub(crate) fn prime_cache_with_resource(&self, url: &str, resource: FetchedResource) {
+    self.insert_cache(
+      url,
+      CacheEntry {
+        etag: resource.etag.clone(),
+        last_modified: resource.last_modified.clone(),
+        value: CacheValue::Resource(resource),
+      },
+    );
   }
 
   fn join_inflight(&self, url: &str) -> (Arc<InFlight>, bool) {

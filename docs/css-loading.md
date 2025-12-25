@@ -21,3 +21,9 @@ When collecting and resolving stylesheet URLs, FastRender:
 - Preserves scheme-relative URLs (`//example.com/...`) by resolving them against the base scheme.
 
 See unit tests in `src/css/loader.rs` for edge-case coverage.
+
+## Caching and revalidation
+
+- Fetches performed by the CLI and library default to [`fastrender::resource::CachingFetcher`], an in-memory LRU with single-flight semantics to avoid duplicate concurrent requests.
+- When built with the optional `disk_cache` feature, subresource fetches can be wrapped in [`fastrender::resource::DiskCachingFetcher`], which persists bytes plus minimal metadata (content-type, validators, final URL) under `fetches/assets/`.
+- Cached HTTP responses are revalidated with `ETag`/`Last-Modified` when present; a `304 Not Modified` response refreshes the cached validators without dropping the stored bytes.

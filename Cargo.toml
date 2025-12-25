@@ -13,6 +13,7 @@ resolver = "2"
 [features]
 default = []
 box_generation_demo = []
+disk_cache = ["sha2"]
 
 [dependencies]
 base64 = "0.22"
@@ -59,6 +60,7 @@ urlencoding = "2.1"
 ureq = "3.1"
 webp = { version = "0.3.1", default-features = false }
 wuff = "0.2"
+sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
