@@ -524,6 +524,10 @@ fn push_key(keys: &mut Vec<SelectorKey>, key: SelectorKey) {
   }
 }
 
+fn push_attribute_key(keys: &mut Vec<SelectorKey>, name: &str) {
+  push_key(keys, SelectorKey::Attribute(name.to_ascii_lowercase()));
+}
+
 fn merge_alternative_keys<'a, I>(
   selectors: I,
   base_keys: &[SelectorKey],
@@ -562,20 +566,14 @@ fn selector_keys(
         Component::AttributeInNoNamespaceExists {
           local_name_lower, ..
         } => {
-          push_key(
-            &mut base_keys,
-            SelectorKey::Attribute(local_name_lower.0.clone()),
-          );
+          push_attribute_key(&mut base_keys, &local_name_lower.0);
         }
         Component::AttributeInNoNamespace { local_name, .. } => {
-          push_key(&mut base_keys, SelectorKey::Attribute(local_name.0.clone()));
+          push_attribute_key(&mut base_keys, &local_name.0);
         }
         Component::AttributeOther(other) => {
           if other.namespace.is_none() {
-            push_key(
-              &mut base_keys,
-              SelectorKey::Attribute(other.local_name_lower.0.clone()),
-            );
+            push_attribute_key(&mut base_keys, &other.local_name_lower.0);
           }
         }
         Component::Is(..) | Component::Where(..) | Component::Negation(..) => {}
@@ -764,6 +762,16 @@ impl<'a> RuleIndex<'a> {
             }
           }
         }
+        let tag_lower = tag.to_ascii_lowercase();
+        if tag_lower != tag {
+          if let Some(list) = self.by_tag.get(&tag_lower) {
+            for idx in list {
+              if seen.insert(*idx) {
+                out.push(*idx);
+              }
+            }
+          }
+        }
         if let Some(list) = self.by_tag.get("*") {
           for idx in list {
             if seen.insert(*idx) {
@@ -845,6 +853,16 @@ impl<'a> RuleIndex<'a> {
           for idx in list {
             if seen.insert(*idx) {
               out.push(*idx);
+            }
+          }
+        }
+        let tag_lower = tag.to_ascii_lowercase();
+        if tag_lower != tag {
+          if let Some(list) = bucket.by_tag.get(&tag_lower) {
+            for idx in list {
+              if seen.insert(*idx) {
+                out.push(*idx);
+              }
             }
           }
         }
