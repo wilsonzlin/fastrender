@@ -2234,6 +2234,7 @@ mod tests {
   use selectors::matching::NeedsSelectorFlags;
   use selectors::matching::QuirksMode;
   use selectors::matching::SelectorCaches;
+  use selectors::parser::ParseRelative;
   use selectors::parser::Selector;
   use selectors::parser::SelectorList;
 
@@ -2302,7 +2303,7 @@ mod tests {
   fn parse_selector(selector: &str) -> Selector<FastRenderSelectorImpl> {
     let mut input = ParserInput::new(selector);
     let mut parser = Parser::new(&mut input);
-    SelectorList::parse(&PseudoClassParser, &mut parser)
+    SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No)
       .expect("selector should parse")
       .slice()
       .first()

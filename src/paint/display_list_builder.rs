@@ -341,12 +341,12 @@ impl DisplayListBuilder {
 
   /// Recursively builds display items for a fragment
   fn build_fragment(&mut self, fragment: &FragmentNode, offset: Point) {
-    self.build_fragment_internal(fragment, offset, true);
+    self.build_fragment_internal(fragment, offset, true, false);
   }
 
   /// Builds display items for a fragment without descending into children.
   fn build_fragment_shallow(&mut self, fragment: &FragmentNode, offset: Point) {
-    self.build_fragment_internal(fragment, offset, false);
+    self.build_fragment_internal(fragment, offset, false, false);
   }
 
   fn build_fragment_internal(
@@ -354,6 +354,7 @@ impl DisplayListBuilder {
     fragment: &FragmentNode,
     offset: Point,
     recurse_children: bool,
+    suppress_opacity: bool,
   ) {
     if let Some(style) = fragment.style.as_deref() {
       if !matches!(
@@ -368,7 +369,7 @@ impl DisplayListBuilder {
     if opacity <= f32::EPSILON {
       return;
     }
-    let push_opacity = opacity < 1.0 - f32::EPSILON;
+    let push_opacity = !suppress_opacity && opacity < 1.0 - f32::EPSILON;
     if push_opacity {
       self.push_opacity(opacity);
     }
@@ -422,7 +423,7 @@ impl DisplayListBuilder {
     if recurse_children {
       let child_offset = absolute_rect.origin;
       for child in &fragment.children {
-        self.build_fragment_internal(child, child_offset, true);
+        self.build_fragment_internal(child, child_offset, true, false);
       }
     }
 
@@ -527,6 +528,11 @@ impl DisplayListBuilder {
 
     let root_fragment = context.fragments.first();
     let root_style = root_fragment.and_then(|f| f.style.as_deref());
+    let root_opacity = root_style.map(|s| s.opacity).unwrap_or(1.0);
+    if root_opacity <= f32::EPSILON {
+      return;
+    }
+    let apply_opacity = root_opacity < 1.0 - f32::EPSILON;
     let paint_contained = root_style.map(|s| s.containment.paint).unwrap_or(false);
     let mask_style = root_fragment
       .and_then(|f| f.style.clone())
@@ -732,12 +738,18 @@ impl DisplayListBuilder {
       || !radii.is_zero()
       || mask_style.is_some();
 
+    let mut pushed_opacity = false;
+    if apply_opacity {
+      self.push_opacity(root_opacity);
+      pushed_opacity = true;
+    }
+
     if is_root && !has_effects {
       for child in neg {
         self.build_stacking_context(child, descendant_offset, false);
       }
 
-      self.emit_fragment_list_shallow(&context.fragments, offset);
+      self.emit_fragment_list_shallow(&context.fragments, offset, apply_opacity);
       self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
       self.emit_fragment_list(&context.layer4_floats, descendant_offset);
       self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
@@ -749,6 +761,9 @@ impl DisplayListBuilder {
 
       for child in pos {
         self.build_stacking_context(child, descendant_offset, false);
+      }
+      if pushed_opacity {
+        self.pop_opacity();
       }
       return;
     }
@@ -793,7 +808,7 @@ impl DisplayListBuilder {
       self.build_stacking_context(child, descendant_offset, false);
     }
 
-    self.emit_fragment_list_shallow(&context.fragments, offset);
+    self.emit_fragment_list_shallow(&context.fragments, offset, apply_opacity);
     self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
     self.emit_fragment_list(&context.layer4_floats, descendant_offset);
     self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
@@ -813,6 +828,9 @@ impl DisplayListBuilder {
     self.list.push(DisplayItem::PopStackingContext);
     if has_paint_containment_clip {
       self.list.push(DisplayItem::PopClip);
+    }
+    if pushed_opacity {
+      self.pop_opacity();
     }
   }
 
@@ -2027,14 +2045,23 @@ impl DisplayListBuilder {
     }
   }
 
-  fn emit_fragment_list_shallow(&mut self, fragments: &[FragmentNode], offset: Point) {
+  fn emit_fragment_list_shallow(
+    &mut self,
+    fragments: &[FragmentNode],
+    offset: Point,
+    suppress_opacity: bool,
+  ) {
     if self.should_parallelize(fragments.len()) {
       let mut partials: Vec<(usize, DisplayList)> = fragments
         .par_iter()
         .enumerate()
         .map(|(idx, fragment)| {
           let mut builder = self.fork();
-          builder.build_fragment_shallow(fragment, offset);
+          if suppress_opacity {
+            builder.build_fragment_internal(fragment, offset, false, true);
+          } else {
+            builder.build_fragment_shallow(fragment, offset);
+          }
           (idx, builder.list)
         })
         .collect();
@@ -2046,7 +2073,11 @@ impl DisplayListBuilder {
     }
 
     for fragment in fragments {
-      self.build_fragment_shallow(fragment, offset);
+      if suppress_opacity {
+        self.build_fragment_internal(fragment, offset, false, true);
+      } else {
+        self.build_fragment_shallow(fragment, offset);
+      }
     }
   }
 
@@ -4825,6 +4856,60 @@ mod tests {
       .collect();
 
     assert_eq!(origins, vec![0.0, 20.0, 40.0]);
+  }
+
+  #[test]
+  fn stacking_context_opacity_wraps_entire_subtree() {
+    let mut style = ComputedStyle::default();
+    style.opacity = 0.5;
+    style.background_color = Rgba::RED;
+
+    let child = create_text_fragment(0.0, 0.0, 10.0, 10.0, "child");
+    let root = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 20.0, 20.0),
+      vec![child],
+      Arc::new(style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+    let items = list.items();
+
+    let push_opacity = items
+      .iter()
+      .position(|item| matches!(item, DisplayItem::PushOpacity(_)))
+      .expect("expected push opacity");
+    let pop_opacity = items
+      .iter()
+      .rposition(|item| matches!(item, DisplayItem::PopOpacity))
+      .expect("expected pop opacity");
+
+    let background = items
+      .iter()
+      .position(|item| matches!(item, DisplayItem::FillRect(_)))
+      .expect("expected root background");
+    let text = items
+      .iter()
+      .position(|item| matches!(item, DisplayItem::Text(_)))
+      .expect("expected child text");
+
+    assert_eq!(
+      items
+        .iter()
+        .filter(|item| matches!(item, DisplayItem::PushOpacity(_)))
+        .count(),
+      1
+    );
+    assert_eq!(
+      items
+        .iter()
+        .filter(|item| matches!(item, DisplayItem::PopOpacity))
+        .count(),
+      1
+    );
+    assert!(push_opacity < background && background < text && text < pop_opacity);
+    if let DisplayItem::PushOpacity(opacity) = &items[push_opacity] {
+      assert!((opacity.opacity - 0.5).abs() < f32::EPSILON);
+    }
   }
 
   #[test]

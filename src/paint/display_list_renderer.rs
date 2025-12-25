@@ -6604,6 +6604,36 @@ mod tests {
   }
 
   #[test]
+  fn stacking_context_opacity_affects_descendants() {
+    let mut root_style = ComputedStyle::default();
+    root_style.background_color = Rgba::RED;
+    root_style.opacity = 0.5;
+
+    let mut child_style = ComputedStyle::default();
+    child_style.background_color = Rgba::BLUE;
+
+    let child = FragmentNode::new_block_styled(
+      Rect::from_xywh(1.0, 1.0, 2.0, 2.0),
+      vec![],
+      Arc::new(child_style),
+    );
+    let root = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 4.0, 4.0),
+      vec![child],
+      Arc::new(root_style),
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+    let renderer = DisplayListRenderer::new(4, 4, Rgba::WHITE, FontContext::new()).unwrap();
+    let pixmap = renderer.render(&list).unwrap();
+
+    // Root background tinted by opacity.
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 128, 128, 255));
+    // Child content is affected by the same stacking context opacity.
+    assert_eq!(pixel(&pixmap, 1, 1), (128, 128, 255, 255));
+  }
+
+  #[test]
   fn opacity_groups_composite_as_layers() {
     let renderer = DisplayListRenderer::new(8, 8, Rgba::WHITE, FontContext::new()).unwrap();
     let mut list = DisplayList::new();
