@@ -120,6 +120,20 @@ fn fixture_compare_config() -> Result<CompareConfig, String> {
     config = config.with_max_different_percent(parsed);
   }
 
+  if std::env::var("FIXTURE_IGNORE_ALPHA").is_ok() {
+    config = config.with_compare_alpha(false);
+  }
+
+  if let Ok(distance) = std::env::var("FIXTURE_MAX_PERCEPTUAL_DISTANCE") {
+    let parsed = distance.parse::<f64>().map_err(|e| {
+      format!(
+        "Invalid FIXTURE_MAX_PERCEPTUAL_DISTANCE '{}': {}",
+        distance, e
+      )
+    })?;
+    config = config.with_max_perceptual_distance(Some(parsed));
+  }
+
   // Always generate diff images for fixture failures to aid debugging
   config.generate_diff_image = true;
 
