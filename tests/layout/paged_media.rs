@@ -1449,3 +1449,45 @@ fn floats_defer_to_next_page_and_clear_following_text() {
     "float should fit entirely within the second page"
   );
 }
+
+#[test]
+fn blank_page_inserted_for_forced_side() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+          }
+          @page :blank {
+            @top-center { content: "Blank"; }
+          }
+          body { margin: 0; }
+          .first { height: 150px; }
+          .second { break-before: right; height: 120px; }
+        </style>
+      </head>
+      <body>
+        <div class="first">First</div>
+        <div class="second">Second</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert_eq!(page_roots.len(), 3);
+
+  let blank_page = page_roots[1];
+  assert!(find_text(blank_page, "Blank").is_some());
+  assert!(find_text(blank_page, "First").is_none());
+  assert!(find_text(blank_page, "Second").is_none());
+
+  assert!(find_text(page_roots[2], "Second").is_some());
+  assert!(find_text(page_roots[0], "Blank").is_none());
+  assert!(find_text(page_roots[2], "Blank").is_none());
+}
