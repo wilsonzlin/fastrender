@@ -10,7 +10,8 @@ use crate::layout::formatting_context::{
   layout_style_fingerprint, set_fragmentainer_block_size_hint, LayoutError,
 };
 use crate::layout::fragmentation::{
-  clip_node, collect_forced_boundaries, normalize_fragment_margins, propagate_fragment_metadata,
+  clip_node, collect_atomic_ranges, collect_forced_boundaries, normalize_atomic_ranges,
+  normalize_fragment_margins, propagate_fragment_metadata, AtomicRange,
 };
 use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
 use crate::style::display::{Display, FormattingContextType};
@@ -54,6 +55,7 @@ struct CachedLayout {
   root: FragmentNode,
   total_height: f32,
   forced_boundaries: Vec<f32>,
+  atomic_ranges: Vec<AtomicRange>,
   page_name_spans: Vec<PageNameSpan>,
 }
 
@@ -68,6 +70,9 @@ impl CachedLayout {
     });
 
     let mut forced = collect_forced_boundaries(&root, 0.0);
+    let mut atomic_ranges = Vec::new();
+    collect_atomic_ranges(&root, 0.0, &mut atomic_ranges);
+    normalize_atomic_ranges(&mut atomic_ranges);
     let total_height = root
       .logical_bounding_box()
       .height()
@@ -80,6 +85,7 @@ impl CachedLayout {
       root,
       total_height,
       forced_boundaries: forced,
+      atomic_ranges,
       page_name_spans: spans,
     }
   }
@@ -243,13 +249,23 @@ pub fn paginate_fragment_tree(
       .iter()
       .copied()
       .find(|b| *b > start + EPSILON && *b < end - EPSILON)
-    {
-      end = boundary;
-    }
+	    {
+	      end = boundary;
+	    }
 
-    if end <= start + EPSILON {
-      end = (start + page_block).min(total_height);
-    }
+	    end = adjust_for_atomic_ranges(start, end, &layout.atomic_ranges).min(total_height);
+
+	    if end <= start + EPSILON {
+	      end = adjust_for_atomic_ranges(
+	        start,
+	        (start + page_block).min(total_height),
+	        &layout.atomic_ranges,
+	      )
+	      .min(total_height);
+	      if end <= start + EPSILON {
+	        break;
+	      }
+	    }
 
     let clipped = clip_node(&layout.root, start, end, 0.0, start, page_index, 0);
     let mut fixed_fragments = Vec::new();
@@ -356,6 +372,33 @@ pub fn paginate_fragment_tree_with_options(
   apply_page_stacking(&mut pages, root_style.writing_mode, options.stacking);
 
   Ok(pages)
+}
+
+fn adjust_for_atomic_ranges(start: f32, mut end: f32, ranges: &[AtomicRange]) -> f32 {
+  const EPSILON: f32 = 0.01;
+
+  if let Some(containing) = ranges.iter().copied().find(|range| {
+    start >= range.start - EPSILON && start < range.end - EPSILON && range.end > range.start
+  }) {
+    return containing.end;
+  }
+
+  if let Some(overlap) = ranges
+    .iter()
+    .copied()
+    .filter(|range| range.start < end - EPSILON && range.end > start + EPSILON)
+    .min_by(|a, b| {
+      a.start
+        .partial_cmp(&b.start)
+        .unwrap_or(std::cmp::Ordering::Equal)
+    })
+  {
+    if overlap.start > start + EPSILON {
+      end = end.min(overlap.start);
+    }
+  }
+
+  end
 }
 
 #[derive(Debug, Clone)]
