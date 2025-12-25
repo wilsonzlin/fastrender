@@ -27,7 +27,6 @@ use crate::css;
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
-use crate::css::types::Transform as CssTransform;
 use crate::debug::runtime;
 use crate::debug::trace::TraceHandle;
 use crate::error::Error;
@@ -63,6 +62,7 @@ use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
+use crate::paint::transform_resolver::{backface_is_hidden, resolve_transform3d};
 use crate::render_control::check_active;
 use crate::resource::origin_from_url;
 use crate::resource::ResourceFetcher;
@@ -245,62 +245,6 @@ struct TextCacheKey {
   style_ptr: usize,
   font_size_bits: u32,
   text: String,
-}
-
-fn is_backface_culled(style: &ComputedStyle) -> bool {
-  if !matches!(style.backface_visibility, BackfaceVisibility::Hidden) {
-    return false;
-  }
-  if style.transform.is_empty() {
-    return false;
-  }
-
-  let mut normal = [0.0_f32, 0.0_f32, 1.0_f32];
-  for t in &style.transform {
-    match t {
-      CssTransform::RotateX(deg) => {
-        let rad = deg.to_radians();
-        let cos = rad.cos();
-        let sin = rad.sin();
-        let ny = normal[1] * cos - normal[2] * sin;
-        let nz = normal[1] * sin + normal[2] * cos;
-        normal[1] = ny;
-        normal[2] = nz;
-      }
-      CssTransform::RotateY(deg) => {
-        let rad = deg.to_radians();
-        let cos = rad.cos();
-        let sin = rad.sin();
-        let nx = normal[0] * cos + normal[2] * sin;
-        let nz = -normal[0] * sin + normal[2] * cos;
-        normal[0] = nx;
-        normal[2] = nz;
-      }
-      CssTransform::Rotate3d(x, y, z, deg) => {
-        let len = (x * x + y * y + z * z).sqrt();
-        if len > f32::EPSILON {
-          let ax = *x / len;
-          let ay = *y / len;
-          let az = *z / len;
-          let rad = deg.to_radians();
-          let cos = rad.cos();
-          let sin = rad.sin();
-          let dot = ax * normal[0] + ay * normal[1] + az * normal[2];
-          let cross = [
-            ay * normal[2] - az * normal[1],
-            az * normal[0] - ax * normal[2],
-            ax * normal[1] - ay * normal[0],
-          ];
-          normal[0] = normal[0] * cos + cross[0] * sin + ax * dot * (1.0 - cos);
-          normal[1] = normal[1] * cos + cross[1] * sin + ay * dot * (1.0 - cos);
-          normal[2] = normal[2] * cos + cross[2] * sin + az * dot * (1.0 - cos);
-        }
-      }
-      _ => {}
-    }
-  }
-
-  normal[2] < 0.0
 }
 
 fn dump_stack_enabled() -> bool {
@@ -1414,9 +1358,6 @@ impl Painter {
       ) {
         return;
       }
-      if is_backface_culled(style) {
-        return;
-      }
     }
 
     let abs_bounds = Rect::from_xywh(
@@ -1425,6 +1366,19 @@ impl Painter {
       fragment.bounds.width(),
       fragment.bounds.height(),
     );
+    let viewport = (self.css_width, self.css_height);
+
+    if let Some(style) = fragment.style.as_deref() {
+      if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
+        && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
+      {
+        if let Some(transform) = resolve_transform3d(style, abs_bounds, Some(viewport)) {
+          if backface_is_hidden(&transform) {
+            return;
+          }
+        }
+      }
+    }
 
     if debug_fragments {
       eprintln!(
@@ -1699,7 +1653,6 @@ impl Painter {
       );
     }
 
-    let viewport = (self.css_width, self.css_height);
     // Wrap the stacking context if it applies an effect (opacity/transform); otherwise flatten
     let opacity = style_ref.map(|s| s.opacity).unwrap_or(1.0).clamp(0.0, 1.0);
     let transform_3d = build_transform_3d(style_ref, abs_bounds, Some(viewport));
@@ -13017,6 +12970,24 @@ mod tests {
       expected.width(),
       bounds.width()
     );
+  }
+
+  #[test]
+  fn backface_hidden_with_perspective_culls() {
+    let mut style = ComputedStyle::default();
+    style.backface_visibility = BackfaceVisibility::Hidden;
+    style.perspective = Some(Length::px(400.0));
+    style.transform.push(css::types::Transform::RotateX(190.0));
+    style.background_color = Rgba::RED;
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      vec![],
+      Arc::new(style),
+    );
+    let tree = FragmentTree::new(fragment);
+
+    let pixmap = paint_tree(&tree, 20, 20, Rgba::WHITE).expect("paint");
+    assert_eq!(color_at(&pixmap, 5, 5), (255, 255, 255, 255));
   }
 
   #[test]

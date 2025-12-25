@@ -735,7 +735,7 @@ impl DisplayListBuilder {
 
     if matches!(backface_visibility, BackfaceVisibility::Hidden) {
       if let Some(t) = transform.as_ref() {
-        if Self::backface_is_hidden(t) {
+        if backface_is_hidden(t) {
           return;
         }
       }
@@ -4516,6 +4516,41 @@ impl Default for DisplayListBuilder {
   fn default() -> Self {
     Self::new()
   }
+}
+
+/// Resolves the computed `transform`/`perspective`/motion path into a 3D matrix for painting.
+pub(crate) fn resolve_transform3d(
+  style: &ComputedStyle,
+  bounds: Rect,
+  viewport: Option<(f32, f32)>,
+) -> Option<Transform3D> {
+  DisplayListBuilder::build_transform(style, bounds, viewport)
+}
+
+/// Returns true if the local plane of the transform faces away from the viewer.
+pub(crate) fn backface_is_hidden(transform: &Transform3D) -> bool {
+  let project = |x: f32, y: f32, m: &Transform3D| -> [f32; 3] {
+    let (tx, ty, tz, tw) = m.transform_point(x, y, 0.0);
+    if tw.abs() < 1e-6 {
+      [tx, ty, tz]
+    } else {
+      [tx / tw, ty / tw, tz / tw]
+    }
+  };
+
+  let p0 = project(0.0, 0.0, transform);
+  let p1 = project(1.0, 0.0, transform);
+  let p2 = project(0.0, 1.0, transform);
+  let ux = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+  let uy = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+
+  let normal = [
+    ux[1] * uy[2] - ux[2] * uy[1],
+    ux[2] * uy[0] - ux[0] * uy[2],
+    ux[0] * uy[1] - ux[1] * uy[0],
+  ];
+
+  normal[2] < 0.0
 }
 
 // ============================================================================
