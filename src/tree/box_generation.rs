@@ -52,6 +52,7 @@ use cssparser::ParserInput;
 use cssparser::Token;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 #[cfg(any(test, feature = "box_generation_demo"))]
 pub use crate::tree::box_generation_demo::{
@@ -570,6 +571,24 @@ fn format_css_color(color: crate::style::color::Rgba) -> String {
   )
 }
 
+fn foreign_object_css_limit_bytes() -> usize {
+  const DEFAULT_LIMIT: usize = 256 * 1024;
+  static LIMIT: OnceLock<usize> = OnceLock::new();
+
+  *LIMIT.get_or_init(|| {
+    std::env::var("FASTR_MAX_FOREIGN_OBJECT_CSS_BYTES")
+      .ok()
+      .and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+          return None;
+        }
+        trimmed.parse::<usize>().ok()
+      })
+      .unwrap_or(DEFAULT_LIMIT)
+  })
+}
+
 fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent {
   const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
 
@@ -949,11 +968,19 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
     &mut foreign_objects,
   );
 
+  let shared_css = if !foreign_objects.is_empty()
+    && document_css.as_bytes().len() <= foreign_object_css_limit_bytes()
+  {
+    document_css.to_string()
+  } else {
+    String::new()
+  };
+
   SvgContent {
     svg: out,
     fallback_svg: fallback_out,
     foreign_objects,
-    shared_css: document_css.to_string(),
+    shared_css,
   }
 }
 

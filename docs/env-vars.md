@@ -11,6 +11,11 @@ FastRender has many internal debug/profiling toggles controlled via environment 
 - `FASTR_RENDER_TIMINGS=1` – print per-stage timings during rendering (parse/cascade/box/layout/paint).
 - `FASTR_FULL_PAGE=1` – expand output to the full document content size (instead of the viewport).
 
+## Resource limits
+
+- `FASTR_MAX_FOREIGN_OBJECT_CSS_BYTES=<N>` – cap the amount of document-level CSS injected into nested
+  `<foreignObject>` HTML renders (default 262_144 bytes).
+
 ## Debug dumps (paint / display list)
 
 These are emitted by the paint pipeline:

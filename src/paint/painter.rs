@@ -9590,11 +9590,51 @@ fn resolve_border_image_outset(
   }
 }
 
+fn escape_style_end_tags(css: &str) -> String {
+  const STYLE: [u8; 5] = *b"style";
+  let bytes = css.as_bytes();
+
+  let has_sequence = bytes.windows(7).any(|window| {
+    window[0] == b'<'
+      && window[1] == b'/'
+      && window[2..]
+        .iter()
+        .zip(STYLE.iter())
+        .all(|(b, expected)| b.to_ascii_lowercase() == *expected)
+  });
+
+  if !has_sequence {
+    return css.to_string();
+  }
+
+  let mut out = Vec::with_capacity(bytes.len());
+  let mut idx = 0;
+  while idx < bytes.len() {
+    if idx + 7 <= bytes.len() && bytes[idx] == b'<' && bytes[idx + 1] == b'/' {
+      if STYLE
+        .iter()
+        .enumerate()
+        .all(|(offset, expected)| bytes[idx + 2 + offset].to_ascii_lowercase() == *expected)
+      {
+        out.extend_from_slice(b"<\\/style");
+        idx += 7;
+        continue;
+      }
+    }
+
+    out.push(bytes[idx]);
+    idx += 1;
+  }
+
+  String::from_utf8(out).unwrap_or_default()
+}
+
 fn build_foreign_object_document(info: &ForeignObjectInfo, shared_css: &str) -> String {
   let mut html = String::from("<!DOCTYPE html><html><head><meta charset=\"utf-8\">");
   if !shared_css.trim().is_empty() {
+    let sanitized_css = escape_style_end_tags(shared_css);
     html.push_str("<style>");
-    html.push_str(shared_css);
+    html.push_str(&sanitized_css);
     html.push_str("</style>");
   }
   html.push_str("</head><body style=\"");
