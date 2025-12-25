@@ -1,5 +1,6 @@
 use fastrender::layout::constraints::LayoutConstraints;
 use fastrender::layout::contexts::block::BlockFormattingContext;
+use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::style::color::Rgba;
 use fastrender::style::display::FormattingContextType;
 use fastrender::style::types::BorderStyle;
@@ -31,10 +32,11 @@ fn find_fragment<'a>(fragment: &'a FragmentNode, id: usize) -> Option<&'a Fragme
 
 fn find_rule_fragment<'a>(fragment: &'a FragmentNode, color: Rgba) -> Option<&'a FragmentNode> {
   if matches!(fragment.content, FragmentContent::Block { box_id: None })
-    && fragment
-      .style
-      .as_ref()
-      .is_some_and(|s| s.background_color == color)
+    && fragment.style.as_ref().is_some_and(|s| {
+      s.border_left_color == color
+        && s.border_left_width.to_px() > 0.0
+        && !matches!(s.border_left_style, BorderStyle::None | BorderStyle::Hidden)
+    })
   {
     return Some(fragment);
   }
@@ -281,6 +283,53 @@ fn multicol_layout_balances_children_and_rules() {
   assert!((rule_frag.bounds.width() - 6.0).abs() < 0.1);
   assert!((rule_frag.bounds.height() - 80.0).abs() < 0.2);
   assert!((rule_frag.bounds.x() - 197.0).abs() < 0.5);
+}
+
+#[test]
+fn column_rule_emits_dashed_border_item() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(260.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(18.0);
+  parent_style.column_rule_style = BorderStyle::Dashed;
+  parent_style.column_rule_width = Length::px(8.0);
+  let rule_color = Rgba::new(0, 128, 0, 1.0);
+  parent_style.column_rule_color = Some(rule_color);
+  let parent_style = Arc::new(parent_style);
+
+  let child_style = |height: f32| -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
+    style.height = Some(Length::px(height));
+    Arc::new(style)
+  };
+
+  let first = BoxNode::new_block(child_style(40.0), FormattingContextType::Block, vec![]);
+  let second = BoxNode::new_block(child_style(40.0), FormattingContextType::Block, vec![]);
+
+  let root = BoxNode::new_block(
+    parent_style,
+    FormattingContextType::Block,
+    vec![first, second],
+  );
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&root, &LayoutConstraints::definite_width(260.0))
+    .expect("layout");
+
+  let display_list = DisplayListBuilder::new().build(&fragment);
+  let border = display_list.items().iter().find_map(|item| {
+    if let fastrender::DisplayItem::Border(border) = item {
+      Some(border)
+    } else {
+      None
+    }
+  });
+
+  let border = border.expect("column rule border item");
+  assert_eq!(border.left.style, BorderStyle::Dashed);
+  assert!((border.left.width - 8.0).abs() < 0.1);
+  assert_eq!(border.left.color, rule_color);
 }
 
 #[test]

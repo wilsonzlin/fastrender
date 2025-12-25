@@ -2201,11 +2201,14 @@ impl BlockFormattingContext {
       if rule_width > 0.0 {
         let color = parent.style.column_rule_color.unwrap_or(parent.style.color);
         let mut rule_style = ComputedStyle::default();
-        rule_style.background_color = color;
-        let rule_style = Arc::new(rule_style);
         if rule_width > column_gap {
           rule_width = column_gap;
         }
+        rule_style.display = Display::Block;
+        rule_style.border_left_width = Length::px(rule_width);
+        rule_style.border_left_style = parent.style.column_rule_style;
+        rule_style.border_left_color = color;
+        let rule_style = Arc::new(rule_style);
         for set in 0..set_count {
           let remaining = fragment_count.saturating_sub(set * column_count);
           let cols_in_set = remaining.min(column_count);
