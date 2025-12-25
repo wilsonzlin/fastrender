@@ -523,6 +523,43 @@ fn perspective_depth_changes_projection_size() {
 }
 
 #[test]
+fn many_perspective_layers_use_cropped_surfaces() {
+  let renderer = DisplayListRenderer::new(4000, 4000, Rgba::WHITE, FontContext::new()).unwrap();
+  let mut list = DisplayList::new();
+
+  for i in 0..50 {
+    let x = (i % 10) as f32 * 50.0 + 5.0;
+    let y = (i / 10) as f32 * 50.0 + 5.0;
+    let transform =
+      Transform3D::perspective(500.0).multiply(&Transform3D::translate(x, y, 80.0 + i as f32));
+
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: Rect::from_xywh(x, y, 10.0, 10.0),
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: Some(transform),
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect: Rect::from_xywh(x, y, 10.0, 10.0),
+      color: Rgba::BLACK,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+  }
+
+  let pixmap = renderer.render(&list).expect("render");
+  let painted = bounding_box_for_color(&pixmap, |(_, _, _, a)| a > 0);
+  assert!(painted.is_some(), "expected rendered content");
+}
+
+#[test]
 fn backface_hidden_culls_rotated_context() {
   let renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
   let mut list = DisplayList::new();

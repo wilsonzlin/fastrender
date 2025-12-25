@@ -2836,11 +2836,16 @@ impl DisplayListRenderer {
           || has_backdrop
           || mask.is_some()
           || projective_transform.is_some();
-        let layer_bounds = (needs_layer && projective_transform.is_none())
+        let layer_bounds = needs_layer
           .then(|| {
+            let bounds_transform = if projective_transform.is_some() {
+              parent_transform
+            } else {
+              combined_transform
+            };
             self.stacking_layer_bounds(
               bounds,
-              combined_transform,
+              bounds_transform,
               &scaled_filters,
               &scaled_backdrop,
             )
