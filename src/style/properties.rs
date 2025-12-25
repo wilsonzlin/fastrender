@@ -648,11 +648,15 @@ fn parse_cursor_keyword(kw: &str) -> Option<CursorKeyword> {
 }
 
 fn cursor_hotspot_value(value: &PropertyValue) -> Option<f32> {
-  match value {
-    PropertyValue::Number(n) => Some(*n),
-    PropertyValue::Length(l) => Some(l.to_px()),
-    _ => None,
+  let raw = match value {
+    PropertyValue::Number(n) => *n,
+    PropertyValue::Length(l) => l.to_px(),
+    _ => return None,
+  };
+  if !raw.is_finite() {
+    return None;
   }
+  Some(raw.max(0.0))
 }
 
 fn parse_cursor(value: &PropertyValue) -> Option<(Vec<CursorImage>, CursorKeyword)> {
@@ -16749,14 +16753,12 @@ mod tests {
   #[test]
   fn cursor_keyword_parses() {
     let mut style = ComputedStyle::default();
+    let value = parse_property_value("cursor", "pointer").expect("cursor keyword");
     apply_declaration(
       &mut style,
       &Declaration {
         property: "cursor".to_string(),
-        value: PropertyValue::Multiple(vec![
-          PropertyValue::Keyword("pointer".to_string()),
-          PropertyValue::Keyword(",".to_string()),
-        ]),
+        value,
         raw_value: String::new(),
         important: false,
       },
@@ -16771,17 +16773,13 @@ mod tests {
   #[test]
   fn cursor_allows_custom_image_and_hotspot_with_fallback() {
     let mut style = ComputedStyle::default();
+    let value =
+      parse_property_value("cursor", "url(cursor.cur) -5px 7px, move").expect("cursor value");
     apply_declaration(
       &mut style,
       &Declaration {
         property: "cursor".to_string(),
-        value: PropertyValue::Multiple(vec![
-          PropertyValue::Url("cursor.cur".to_string()),
-          PropertyValue::Number(5.0),
-          PropertyValue::Number(7.0),
-          PropertyValue::Keyword(",".to_string()),
-          PropertyValue::Keyword("move".to_string()),
-        ]),
+        value,
         raw_value: String::new(),
         important: false,
       },
@@ -16793,21 +16791,48 @@ mod tests {
     assert_eq!(style.cursor, CursorKeyword::Move);
     assert_eq!(style.cursor_images.len(), 1);
     assert_eq!(style.cursor_images[0].url, "cursor.cur");
-    assert_eq!(style.cursor_images[0].hotspot, Some((5.0, 7.0)));
+    assert_eq!(style.cursor_images[0].hotspot, Some((0.0, 7.0)));
+  }
+
+  #[test]
+  fn cursor_parses_multiple_image_candidates_with_keyword_fallback() {
+    let mut style = ComputedStyle::default();
+    let value = parse_property_value("cursor", "url(a.cur) 1 2, url(b.cur), pointer")
+      .expect("cursor list");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "cursor".to_string(),
+        value,
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(style.cursor, CursorKeyword::Pointer);
+    assert_eq!(style.cursor_images.len(), 2);
+    assert_eq!(style.cursor_images[0].url, "a.cur");
+    assert_eq!(style.cursor_images[0].hotspot, Some((1.0, 2.0)));
+    assert_eq!(style.cursor_images[1].url, "b.cur");
+    assert!(style.cursor_images[1].hotspot.is_none());
   }
 
   #[test]
   fn cursor_accepts_image_set_and_fallback_keyword() {
     let mut style = ComputedStyle::default();
+    let value = parse_property_value(
+      "cursor",
+      "image-set(url(\"c1.cur\") 1x, url(\"c2.cur\") 2x), crosshair",
+    )
+    .expect("cursor image-set");
     apply_declaration(
       &mut style,
       &Declaration {
         property: "cursor".to_string(),
-        value: PropertyValue::Multiple(vec![
-          PropertyValue::Keyword("image-set(url(\"c1.cur\") 1x, url(\"c2.cur\") 2x)".to_string()),
-          PropertyValue::Keyword(",".to_string()),
-          PropertyValue::Keyword("crosshair".to_string()),
-        ]),
+        value,
         raw_value: String::new(),
         important: false,
       },
@@ -16825,17 +16850,16 @@ mod tests {
   fn cursor_image_set_respects_device_pixel_ratio() {
     let mut style = ComputedStyle::default();
     with_image_set_dpr(2.0, || {
+      let value = parse_property_value(
+        "cursor",
+        "image-set(url(\"low.cur\") 1x, url(\"hi.cur\") 2x), crosshair",
+      )
+      .expect("cursor image-set");
       apply_declaration(
         &mut style,
         &Declaration {
           property: "cursor".to_string(),
-          value: PropertyValue::Multiple(vec![
-            PropertyValue::Keyword(
-              "image-set(url(\"low.cur\") 1x, url(\"hi.cur\") 2x)".to_string(),
-            ),
-            PropertyValue::Keyword(",".to_string()),
-            PropertyValue::Keyword("crosshair".to_string()),
-          ]),
+          value,
           raw_value: String::new(),
           important: false,
         },
