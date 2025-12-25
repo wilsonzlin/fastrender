@@ -143,3 +143,39 @@ fn margin_box_content_is_positioned_in_margins() {
   assert!(header.bounds.y() < content.bounds.y());
   assert!(footer.bounds.y() > content.bounds.y());
 }
+
+#[test]
+fn margin_box_text_is_shaped() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-center { content: "Header"; }
+          }
+        </style>
+      </head>
+      <body>
+        <div>Content</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+  let page = page_roots[0];
+
+  let header = find_text(page, "Header").expect("header margin box fragment");
+
+  assert!(matches!(
+    header.content,
+    FragmentContent::Text {
+      shaped: Some(ref runs),
+      ..
+    } if !runs.is_empty()
+  ));
+}
