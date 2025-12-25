@@ -2595,10 +2595,17 @@ impl Painter {
           .unwrap_or_else(Transform3D::identity)
           .multiply(&Transform3D::translate(offset.x, offset.y, 0.0));
         let affine_2d = combined_transform.to_2d();
-        let src_quad = rect_corners(device_root_rect);
+
+        let src_quad = [
+          Point::new(0.0, 0.0),
+          Point::new(layer_pixmap.width() as f32, 0.0),
+          Point::new(0.0, layer_pixmap.height() as f32),
+          Point::new(layer_pixmap.width() as f32, layer_pixmap.height() as f32),
+        ];
         let mut dest_quad_device = src_quad;
         let mut projected = true;
-        for (idx, corner) in rect_corners(root_rect).iter().enumerate() {
+        let layer_bounds_css = Rect::from_xywh(0.0, 0.0, bounds.width(), bounds.height());
+        for (idx, corner) in rect_corners(layer_bounds_css).iter().enumerate() {
           let (tx, ty, _tz, tw) = combined_transform.transform_point(corner.x, corner.y, 0.0);
           if !tx.is_finite() || !ty.is_finite() || tw.abs() < 1e-6 || !tw.is_finite() {
             projected = false;
