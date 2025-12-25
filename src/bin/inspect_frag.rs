@@ -3,6 +3,8 @@ mod common;
 use clap::Parser;
 use common::args::{parse_viewport, MediaPreferenceArgs};
 use common::media_prefs::MediaPreferences;
+use cssparser::Parser;
+use cssparser::ParserInput;
 use fastrender::api::FastRender;
 use fastrender::css::encoding::decode_css_bytes;
 use fastrender::css::loader::absolutize_css_urls;
@@ -12,14 +14,19 @@ use fastrender::css::loader::infer_base_url;
 use fastrender::css::loader::inject_css_into_html;
 use fastrender::css::loader::inline_imports;
 use fastrender::css::parser::extract_css;
+use fastrender::css::selectors::FastRenderSelectorImpl;
+use fastrender::css::selectors::PseudoClassParser;
 use fastrender::debug::inspect::InspectQuery;
+use fastrender::debug::tree_printer::{JsonExportConfig, TreeJsonExporter};
 use fastrender::dom::DomNodeType;
 use fastrender::dom::{self};
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::geometry::Size;
+use fastrender::image_output::encode_image;
 use fastrender::layout::engine::LayoutConfig;
 use fastrender::layout::engine::LayoutEngine;
+use fastrender::paint::canvas::Canvas;
 use fastrender::paint::display_list::Transform3D;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::stacking::creates_stacking_context;
@@ -29,19 +36,35 @@ use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::style::cascade::apply_styles_with_media_and_target;
 use fastrender::style::cascade::StyledNode;
+use fastrender::style::color::Rgba;
 use fastrender::style::computed::Visibility;
 use fastrender::style::display::Display;
 use fastrender::style::media::MediaType;
 use fastrender::style::position::Position;
+use fastrender::style::types::Overflow;
 use fastrender::style::ComputedStyle;
+use fastrender::text::font_loader::FontContext;
+use fastrender::text::pipeline::ShapingPipeline;
 use fastrender::tree::box_generation::generate_box_tree_with_anonymous_fixup;
 use fastrender::tree::box_tree::BoxNode;
+use fastrender::tree::box_tree::BoxTree;
 use fastrender::tree::fragment_tree::FragmentContent;
 use fastrender::tree::fragment_tree::FragmentNode;
+use fastrender::tree::fragment_tree::FragmentTree;
+use fastrender::OutputFormat;
+use selectors::matching::MatchingContext;
+use selectors::matching::MatchingForInvalidation;
+use selectors::matching::MatchingMode;
+use selectors::matching::NeedsSelectorFlags;
+use selectors::matching::QuirksMode;
+use selectors::matching::SelectorCaches;
+use selectors::parser::SelectorList;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::time::Duration;
 use url::Url;
 
@@ -71,6 +94,38 @@ struct Args {
   /// Emit fragmentation decision traces (also available via FASTR_TRACE_FRAGMENTATION=1)
   #[arg(long)]
   trace_fragmentation: bool,
+
+  /// Directory to write JSON dumps for each pipeline stage
+  #[arg(long, value_name = "DIR")]
+  dump_json: Option<String>,
+
+  /// Render the document with debug overlays to a PNG file
+  #[arg(long, value_name = "PNG")]
+  render_overlay: Option<String>,
+
+  /// CSS selector to filter dumps/overlays to the first matching element
+  #[arg(long, conflicts_with = "filter_id")]
+  filter_selector: Option<String>,
+
+  /// Element id to filter dumps/overlays to the first matching element
+  #[arg(long, conflicts_with = "filter_selector")]
+  filter_id: Option<String>,
+
+  /// Whether to draw fragment bounds when rendering overlays
+  #[arg(long, default_value_t = true)]
+  overlay_fragments: bool,
+
+  /// Whether to annotate box ids when rendering overlays
+  #[arg(long, default_value_t = true)]
+  overlay_box_ids: bool,
+
+  /// Whether to outline stacking contexts when rendering overlays
+  #[arg(long, default_value_t = true)]
+  overlay_stacking_contexts: bool,
+
+  /// Whether to highlight scroll containers when rendering overlays
+  #[arg(long, default_value_t = true)]
+  overlay_scroll_containers: bool,
 
   #[command(flatten)]
   media_prefs: MediaPreferenceArgs,
@@ -486,6 +541,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   );
   let fragment_tree = engine.layout_tree(&box_tree)?;
   let scroll_offset = Point::new(-args.scroll_x, -args.scroll_y);
+  let filter_path = resolve_filter_path(
+    &dom,
+    args.filter_id.as_deref(),
+    args.filter_selector.as_deref(),
+  );
+  let dump_targets = build_dump_targets(
+    &dom,
+    &styled,
+    &box_tree,
+    &fragment_tree,
+    filter_path.as_deref(),
+  );
+  if let Some(dir) = args.dump_json.as_deref() {
+    dump_json_outputs(
+      Path::new(dir),
+      &dump_targets,
+      scroll_offset,
+      &resource_base,
+      args.dpr,
+      renderer.font_context(),
+    )?;
+  }
   let mut box_debug: HashMap<usize, String> = HashMap::new();
   collect_box_debug(&box_tree.root, &mut box_debug);
   let mut box_styles: HashMap<usize, std::sync::Arc<ComputedStyle>> = HashMap::new();
@@ -1394,7 +1471,444 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
   }
 
+  if let Some(output) = args.render_overlay.as_deref() {
+    let overlay_tree = if filter_path.is_some() {
+      &dump_targets.fragment_tree
+    } else {
+      &fragment_tree
+    };
+    let options = OverlayOptions {
+      fragments: args.overlay_fragments,
+      box_ids: args.overlay_box_ids,
+      stacking_contexts: args.overlay_stacking_contexts,
+      scroll_containers: args.overlay_scroll_containers,
+    };
+    render_overlay_png(
+      &renderer,
+      &fragment_tree,
+      overlay_tree,
+      &box_debug,
+      scroll_offset,
+      (viewport_w, viewport_h),
+      Path::new(output),
+      &options,
+      renderer.font_context(),
+    )?;
+  }
+
   Ok(())
+}
+
+struct DumpTrees {
+  dom: dom::DomNode,
+  styled: StyledNode,
+  box_root: BoxNode,
+  fragment_tree: FragmentTree,
+}
+
+fn resolve_filter_path(
+  dom: &dom::DomNode,
+  filter_id: Option<&str>,
+  filter_selector: Option<&str>,
+) -> Option<Vec<usize>> {
+  if let Some(id) = filter_id {
+    return find_dom_path_by_id(dom, id);
+  }
+
+  let selector_list = if let Some(selector) = filter_selector {
+    let mut input = ParserInput::new(selector);
+    let mut parser = Parser::new(&mut input);
+    match SelectorList::parse(
+      &PseudoClassParser,
+      &mut parser,
+      selectors::parser::ParseRelative::No,
+    ) {
+      Ok(list) => Some(list),
+      Err(err) => {
+        eprintln!("warn: failed to parse filter selector {selector:?}: {err}");
+        None
+      }
+    }
+  } else {
+    None
+  };
+
+  if let Some(selectors) = selector_list.as_ref() {
+    return find_dom_path_by_selector(dom, selectors);
+  }
+
+  None
+}
+
+fn build_dump_targets(
+  dom: &dom::DomNode,
+  styled: &StyledNode,
+  box_tree: &BoxTree,
+  fragment_tree: &FragmentTree,
+  filter_path: Option<&[usize]>,
+) -> DumpTrees {
+  if let Some(path) = filter_path {
+    let dom_sub = dom_subtree_by_path(dom, path).unwrap_or_else(|| dom.clone());
+    let styled_sub = styled_subtree_by_path(styled, path).unwrap_or_else(|| styled.clone());
+
+    let mut styled_ids = HashSet::new();
+    collect_styled_ids(&styled_sub, &mut styled_ids);
+
+    let box_root = filter_box_tree_for_styled(&box_tree.root, &styled_ids)
+      .unwrap_or_else(|| box_tree.root.clone());
+
+    let mut box_ids = HashSet::new();
+    collect_box_ids_for_filter(&box_root, &mut box_ids);
+    let fragment_tree = filter_fragment_tree_for_boxes(fragment_tree, &box_ids)
+      .unwrap_or_else(|| fragment_tree.clone());
+
+    DumpTrees {
+      dom: dom_sub,
+      styled: styled_sub,
+      box_root,
+      fragment_tree,
+    }
+  } else {
+    DumpTrees {
+      dom: dom.clone(),
+      styled: styled.clone(),
+      box_root: box_tree.root.clone(),
+      fragment_tree: fragment_tree.clone(),
+    }
+  }
+}
+
+fn dump_json_outputs(
+  dir: &Path,
+  targets: &DumpTrees,
+  scroll_offset: Point,
+  base_url: &str,
+  dpr: f32,
+  font_ctx: &FontContext,
+) -> Result<(), Box<dyn std::error::Error>> {
+  fs::create_dir_all(dir)?;
+
+  let exporter = TreeJsonExporter::with_config(JsonExportConfig {
+    scroll_offset: Some(scroll_offset),
+  });
+
+  write_json_file(&dir.join("dom.json"), &exporter.export_dom(&targets.dom))?;
+  write_json_file(
+    &dir.join("styled.json"),
+    &exporter.export_styled_tree(&targets.styled),
+  )?;
+  write_json_file(
+    &dir.join("box_tree.json"),
+    &exporter.export_box_tree(&targets.box_root),
+  )?;
+  write_json_file(
+    &dir.join("fragment_tree.json"),
+    &exporter.export_fragment_tree(&targets.fragment_tree.root),
+  )?;
+
+  let display_list = DisplayListBuilder::new()
+    .with_font_context(font_ctx.clone())
+    .with_device_pixel_ratio(dpr)
+    .with_base_url(base_url.to_string())
+    .build_tree(&targets.fragment_tree);
+  write_json_file(
+    &dir.join("display_list.json"),
+    &exporter.export_display_list(&display_list),
+  )?;
+
+  Ok(())
+}
+
+fn write_json_file(path: &Path, value: &Value) -> Result<(), Box<dyn std::error::Error>> {
+  let json = serde_json::to_string_pretty(value)?;
+  fs::write(path, json)?;
+  Ok(())
+}
+
+fn dom_subtree_by_path(node: &dom::DomNode, path: &[usize]) -> Option<dom::DomNode> {
+  if path.is_empty() {
+    return Some(node.clone());
+  }
+  let (idx, rest) = path.split_first()?;
+  node
+    .children
+    .get(*idx)
+    .and_then(|child| dom_subtree_by_path(child, rest))
+}
+
+fn styled_subtree_by_path(node: &StyledNode, path: &[usize]) -> Option<StyledNode> {
+  if path.is_empty() {
+    return Some(node.clone());
+  }
+  let (idx, rest) = path.split_first()?;
+  node
+    .children
+    .get(*idx)
+    .and_then(|child| styled_subtree_by_path(child, rest))
+}
+
+fn collect_styled_ids(node: &StyledNode, out: &mut HashSet<usize>) {
+  out.insert(node.node_id);
+  for child in &node.children {
+    collect_styled_ids(child, out);
+  }
+}
+
+fn filter_box_tree_for_styled(node: &BoxNode, allowed: &HashSet<usize>) -> Option<BoxNode> {
+  let filtered_children: Vec<_> = node
+    .children
+    .iter()
+    .filter_map(|child| filter_box_tree_for_styled(child, allowed))
+    .collect();
+  let keep = node
+    .styled_node_id
+    .map(|id| allowed.contains(&id))
+    .unwrap_or(false)
+    || !filtered_children.is_empty();
+  if keep {
+    let mut clone = node.clone();
+    clone.children = filtered_children;
+    Some(clone)
+  } else {
+    None
+  }
+}
+
+fn collect_box_ids_for_filter(node: &BoxNode, out: &mut HashSet<usize>) {
+  out.insert(node.id);
+  for child in &node.children {
+    collect_box_ids_for_filter(child, out);
+  }
+}
+
+fn filter_fragment_tree_for_boxes(
+  tree: &FragmentTree,
+  allowed: &HashSet<usize>,
+) -> Option<FragmentTree> {
+  filter_fragment_node_for_boxes(&tree.root, allowed, Point::new(0.0, 0.0)).map(|root| {
+    let mut clone = tree.clone();
+    clone.root = root;
+    clone.additional_fragments.clear();
+    clone
+  })
+}
+
+fn filter_fragment_node_for_boxes(
+  node: &FragmentNode,
+  allowed: &HashSet<usize>,
+  offset: Point,
+) -> Option<FragmentNode> {
+  let filtered_children: Vec<_> = node
+    .children
+    .iter()
+    .filter_map(|child| {
+      filter_fragment_node_for_boxes(
+        child,
+        allowed,
+        Point::new(offset.x + node.bounds.x(), offset.y + node.bounds.y()),
+      )
+    })
+    .collect();
+  let keep = fragment_box_id(node)
+    .map(|id| allowed.contains(&id))
+    .unwrap_or(false)
+    || !filtered_children.is_empty();
+
+  if keep {
+    let mut clone = node.clone();
+    clone.children = filtered_children;
+    Some(clone)
+  } else {
+    None
+  }
+}
+
+fn find_dom_path_by_id(node: &dom::DomNode, target: &str) -> Option<Vec<usize>> {
+  let mut path = Vec::new();
+  fn walk(node: &dom::DomNode, target: &str, path: &mut Vec<usize>) -> Option<Vec<usize>> {
+    if node
+      .get_attribute_ref("id")
+      .map(|id| id == target)
+      .unwrap_or(false)
+    {
+      return Some(path.clone());
+    }
+    for (idx, child) in node.children.iter().enumerate() {
+      path.push(idx);
+      if let Some(found) = walk(child, target, path) {
+        return Some(found);
+      }
+      path.pop();
+    }
+    None
+  }
+
+  walk(node, target, &mut path)
+}
+
+fn find_dom_path_by_selector(
+  node: &dom::DomNode,
+  selectors: &SelectorList<FastRenderSelectorImpl>,
+) -> Option<Vec<usize>> {
+  let mut caches = SelectorCaches::default();
+  let mut context = MatchingContext::new(
+    MatchingMode::Normal,
+    None,
+    &mut caches,
+    QuirksMode::NoQuirks,
+    NeedsSelectorFlags::Yes,
+    MatchingForInvalidation::No,
+  );
+  let mut ancestors: Vec<&dom::DomNode> = Vec::new();
+  let mut path = Vec::new();
+
+  fn walk<'a>(
+    node: &'a dom::DomNode,
+    selectors: &SelectorList<FastRenderSelectorImpl>,
+    context: &mut MatchingContext<FastRenderSelectorImpl>,
+    ancestors: &mut Vec<&'a dom::DomNode>,
+    path: &mut Vec<usize>,
+  ) -> Option<Vec<usize>> {
+    if node.is_element() || matches!(node.node_type, DomNodeType::Slot { .. }) {
+      let element_ref = dom::ElementRef::with_ancestors(node, ancestors);
+      if selectors
+        .0
+        .iter()
+        .any(|sel| matches_selector(sel, 0, None, &element_ref, context))
+      {
+        return Some(path.clone());
+      }
+    }
+
+    ancestors.push(node);
+    for (idx, child) in node.children.iter().enumerate() {
+      path.push(idx);
+      if let Some(found) = walk(child, selectors, context, ancestors, path) {
+        return Some(found);
+      }
+      path.pop();
+    }
+    ancestors.pop();
+    None
+  }
+
+  walk(node, selectors, &mut context, &mut ancestors, &mut path)
+}
+
+struct OverlayOptions {
+  fragments: bool,
+  box_ids: bool,
+  stacking_contexts: bool,
+  scroll_containers: bool,
+}
+
+fn render_overlay_png(
+  renderer: &FastRender,
+  paint_tree: &FragmentTree,
+  overlay_tree: &FragmentTree,
+  box_debug: &HashMap<usize, String>,
+  scroll_offset: Point,
+  viewport: (u32, u32),
+  output: &Path,
+  options: &OverlayOptions,
+  font_ctx: &FontContext,
+) -> Result<(), Box<dyn std::error::Error>> {
+  let pixmap = renderer.paint_with_offset(paint_tree, viewport.0, viewport.1, scroll_offset)?;
+  let mut canvas = Canvas::from_pixmap(pixmap);
+  let mut fragments_abs = Vec::new();
+  collect_fragments_abs(&overlay_tree.root, scroll_offset, &mut fragments_abs);
+
+  if options.fragments {
+    for (rect, _) in &fragments_abs {
+      canvas.stroke_rect(*rect, Rgba::rgb(46, 204, 113), 1.0);
+    }
+  }
+
+  if options.stacking_contexts {
+    let mut stacks = Vec::new();
+    collect_stacking_contexts(&overlay_tree.root, scroll_offset, None, true, &mut stacks);
+    for ctx in &stacks {
+      canvas.stroke_rect(ctx.rect, Rgba::rgb(52, 152, 219), 1.2);
+    }
+  }
+
+  if options.scroll_containers {
+    for (rect, frag) in &fragments_abs {
+      if fragment_is_scroll_container(frag) {
+        canvas.stroke_rect(*rect, Rgba::rgb(231, 76, 60), 1.2);
+      }
+    }
+  }
+
+  if options.box_ids {
+    let mut by_box: HashMap<usize, Rect> = HashMap::new();
+    for (rect, frag) in &fragments_abs {
+      if let Some(id) = fragment_box_id(frag) {
+        by_box.entry(id).or_insert(*rect);
+      }
+    }
+
+    let mut shaper = ShapingPipeline::new();
+    let mut label_style = ComputedStyle::default();
+    label_style.font_size = 11.0;
+    label_style.color = Rgba::rgb(20, 20, 20);
+
+    for (id, rect) in by_box {
+      let label = box_debug
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| format!("box {id}"));
+      let origin = Point::new(rect.x() + 2.0, rect.y() + 12.0);
+      draw_overlay_label(
+        &mut canvas,
+        &label,
+        origin,
+        &mut shaper,
+        font_ctx,
+        &label_style,
+      );
+    }
+  }
+
+  let png = encode_image(&canvas.into_pixmap(), OutputFormat::Png)?;
+  fs::write(output, png)?;
+  Ok(())
+}
+
+fn fragment_is_scroll_container(fragment: &FragmentNode) -> bool {
+  fragment
+    .style
+    .as_deref()
+    .map(|style| {
+      matches!(style.overflow_x, Overflow::Auto | Overflow::Scroll)
+        || matches!(style.overflow_y, Overflow::Auto | Overflow::Scroll)
+    })
+    .unwrap_or(false)
+}
+
+fn draw_overlay_label(
+  canvas: &mut Canvas,
+  text: &str,
+  origin: Point,
+  shaper: &mut ShapingPipeline,
+  font_ctx: &FontContext,
+  style: &ComputedStyle,
+) {
+  if let Ok(runs) = shaper.shape(text, style, font_ctx) {
+    let mut cursor = origin;
+    for run in runs {
+      canvas.draw_text(
+        cursor,
+        &run.glyphs,
+        &run.font,
+        run.font_size,
+        style.color,
+        run.synthetic_bold,
+        run.synthetic_oblique,
+      );
+      cursor.x += run.advance;
+    }
+  }
 }
 
 fn collect_tag_ids(node: &BoxNode, tag: &str, out: &mut Vec<usize>) {

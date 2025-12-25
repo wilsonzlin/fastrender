@@ -42,6 +42,8 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Purpose: inspect fragment output (and related style/layout state) for a single input.
 - Entry: `src/bin/inspect_frag.rs`
 - Run: `cargo run --release --bin inspect_frag -- --help`
+- `--dump-json <dir>` writes deterministic snapshots of each pipeline stage (`dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, `display_list.json`). Pair with `--filter-selector` / `--filter-id` to focus on a subtree.
+- `--render-overlay <png>` renders the page with optional overlays for fragment bounds, box ids, stacking contexts, and scroll containers.
 
 ## `diff_renders`
 

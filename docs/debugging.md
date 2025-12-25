@@ -6,6 +6,11 @@ The canonical list lives in [env-vars.md](env-vars.md). This page highlights the
 
 `render_pages` writes per-page logs to `fetches/renders/<page>.log` and a summary to `fetches/renders/_summary.log`.
 
+## inspect_frag overlays and dumps
+
+- `inspect_frag --dump-json <dir> tests/fixtures/html/block_simple.html` writes `dom.json`, `styled.json`, `box_tree.json`, `fragment_tree.json`, and `display_list.json` for downstream tooling. Pair with `--filter-selector`/`--filter-id` to focus on a specific subtree.
+- `inspect_frag --render-overlay out.png <file>` renders the document with overlays for fragment bounds, box ids, stacking contexts, and scroll containers to quickly correlate geometry with the rendered pixels.
+
 ## Display-list dumps (paint pipeline)
 
 - `FASTR_DUMP_STACK=1` – dump the stacking context tree
