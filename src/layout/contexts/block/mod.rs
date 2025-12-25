@@ -2100,6 +2100,7 @@ impl BlockFormattingContext {
       fragment_starts.push(cursor);
       cursor += *h;
     }
+    }
 
     let mut set_heights = Vec::new();
     if !column_fragments.is_empty() {

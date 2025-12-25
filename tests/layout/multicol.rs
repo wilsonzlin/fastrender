@@ -3,6 +3,7 @@ use fastrender::layout::contexts::block::BlockFormattingContext;
 use fastrender::style::color::Rgba;
 use fastrender::style::display::FormattingContextType;
 use fastrender::style::types::BorderStyle;
+use fastrender::style::types::BreakBetween;
 use fastrender::style::types::ColumnFill;
 use fastrender::style::types::ColumnSpan;
 use fastrender::style::types::WhiteSpace;
@@ -348,4 +349,54 @@ fn nested_multicol_layouts_columns() {
   assert!(first_frag.bounds.x() < second_frag.bounds.x());
   assert!((second_frag.bounds.x() - first_frag.bounds.x()) > 60.0);
   assert!((first_frag.bounds.y() - second_frag.bounds.y()).abs() < 0.1);
+}
+
+#[test]
+fn break_before_column_advances_column() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(200.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(0.0);
+  let parent_style = Arc::new(parent_style);
+
+  let child_style = |break_before: Option<BreakBetween>, height: f32| -> Arc<ComputedStyle> {
+    let mut style = ComputedStyle::default();
+    style.height = Some(Length::px(height));
+    if let Some(b) = break_before {
+      style.break_before = b;
+    }
+    Arc::new(style)
+  };
+
+  let mut first = BoxNode::new_block(
+    child_style(None, 20.0),
+    FormattingContextType::Block,
+    vec![],
+  );
+  first.id = 50;
+  let mut second = BoxNode::new_block(
+    child_style(Some(BreakBetween::Column), 10.0),
+    FormattingContextType::Block,
+    vec![],
+  );
+  second.id = 51;
+
+  let mut parent = BoxNode::new_block(
+    parent_style,
+    FormattingContextType::Block,
+    vec![first.clone(), second.clone()],
+  );
+  parent.id = 52;
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&parent, &LayoutConstraints::definite_width(200.0))
+    .expect("layout");
+
+  let first_frag = find_fragment(&fragment, first.id).expect("first fragment");
+  let second_frag = find_fragment(&fragment, second.id).expect("second fragment");
+
+  assert!(first_frag.bounds.x() < 0.1);
+  assert!(second_frag.bounds.x() > 90.0);
+  assert!(second_frag.bounds.y() < 0.1);
 }
