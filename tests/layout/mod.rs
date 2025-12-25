@@ -7,6 +7,7 @@ mod flex_alignment_order_test;
 mod flex_box_sizing_test;
 mod float_shrink_to_min;
 mod fragmentation;
+mod fragmentation_widows_orphans;
 mod grid_box_sizing_test;
 mod inline_float_min_width;
 mod legend_shrink_to_fit;
