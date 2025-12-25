@@ -1,0 +1,35 @@
+<!doctype html>
+<style>
+  body {
+    margin: 0;
+    font-size: 18px;
+    font-family: "DejaVu Serif", serif;
+    color: rgb(18, 18, 18);
+    line-height: 1.4;
+  }
+  p {
+    margin: 8px;
+  }
+</style>
+<body>
+  <p>
+    Inline math should share the line box:
+    <math>
+      <msup><mi>x</mi><mn>2</mn></msup>
+      <mo>+</mo>
+      <msub><mi>y</mi><mi>i</mi></msub>
+    </math>
+    continues the sentence with
+    <math>
+      <mrow><mi>e</mi><mo>^</mo><mi>t</mi></mrow>
+    </math>
+    without shifting the baseline.
+  </p>
+  <p>Below is a display-style fraction for comparison:</p>
+  <math display="block">
+    <mfrac>
+      <mrow><mo stretchy="true">(</mo><mi>a</mi><mo>+</mo><mi>b</mi><mo stretchy="true">)</mo></mrow>
+      <mrow><msqrt><mi>c</mi><mo>+</mo><mn>1</mn></msqrt></mrow>
+    </mfrac>
+  </math>
+</body>

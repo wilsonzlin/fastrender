@@ -1,9 +1,14 @@
-use fastrender::math::{layout_mathml, MathNode};
+#[path = "../ref/mod.rs"]
+mod r#ref;
+
+use fastrender::math::{layout_mathml, MathNode, MathVariant};
 use fastrender::paint::display_list::DisplayItem;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::box_tree::ReplacedType;
 use fastrender::{FastRender, FragmentContent, FragmentNode};
+use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
+use std::path::PathBuf;
 use std::thread;
 
 fn find_math_fragment<'a>(fragment: &'a FragmentNode) -> Option<&'a ReplacedType> {
@@ -67,6 +72,68 @@ fn fraction_mathml_layouts_and_paints() {
 }
 
 #[test]
+fn math_constructs_match_golden() {
+  with_stack(|| {
+    let mut renderer = FastRender::new().expect("renderer");
+    let html =
+      std::fs::read_to_string(fixture_path("math_constructs")).expect("load math_constructs");
+    let png = renderer
+      .render_to_png(&html, 360, 220)
+      .expect("render math constructs");
+    compare_golden("math_constructs", &png, &CompareConfig::lenient());
+  });
+}
+
+#[test]
+fn math_table_alignment_matches_golden() {
+  with_stack(|| {
+    let mut renderer = FastRender::new().expect("renderer");
+    let html = std::fs::read_to_string(fixture_path("math_matrix")).expect("load math_matrix");
+    let png = renderer
+      .render_to_png(&html, 360, 220)
+      .expect("render math matrix");
+    compare_golden("math_matrix", &png, &CompareConfig::lenient());
+  });
+}
+
+#[test]
+fn inline_math_baseline_matches_golden() {
+  with_stack(|| {
+    let mut renderer = FastRender::new().expect("renderer");
+    let html = std::fs::read_to_string(fixture_path("math_inline")).expect("load math_inline");
+    let png = renderer
+      .render_to_png(&html, 420, 220)
+      .expect("render inline math");
+    compare_golden("math_inline", &png, &CompareConfig::lenient());
+  });
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/html/{}.html", name))
+}
+
+fn golden_path(name: &str) -> PathBuf {
+  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/golden/{}.png", name))
+}
+
+fn compare_golden(name: &str, rendered_png: &[u8], config: &CompareConfig) {
+  let golden = golden_path(name);
+  if std::env::var("UPDATE_GOLDEN").is_ok() {
+    std::fs::write(&golden, rendered_png).expect("write golden");
+  }
+  let expected = std::fs::read(&golden).expect("golden image");
+  let rendered_pixmap = load_png_from_bytes(rendered_png).expect("rendered png");
+  let expected_pixmap = load_png_from_bytes(&expected).expect("expected png");
+  let diff = compare_images(&rendered_pixmap, &expected_pixmap, config);
+  assert!(
+    diff.is_match(),
+    "golden {} mismatch: {}",
+    name,
+    diff.summary()
+  );
+}
+
+#[test]
 fn sqrt_and_scripts_produce_nonzero_layout() {
   with_stack(|| {
     let mut renderer = FastRender::new().expect("renderer");
@@ -93,13 +160,11 @@ fn math_layout_falls_back_without_fonts() {
   let node = MathNode::Fraction {
     numerator: Box::new(MathNode::Identifier {
       text: "x".into(),
-      italic: true,
-      bold: false,
+      variant: Some(MathVariant::Italic),
     }),
     denominator: Box::new(MathNode::Number {
       text: "2".into(),
-      italic: false,
-      bold: false,
+      variant: None,
     }),
   };
   let layout = layout_mathml(&node, &style, &FontContext::empty());

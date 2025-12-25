@@ -36,6 +36,7 @@ use crate::image_loader::ImageCache;
 use crate::layout::contexts::inline::baseline::compute_line_height_with_metrics_viewport;
 use crate::layout::contexts::inline::line_builder::TextItem as InlineTextItem;
 use crate::layout::utils::resolve_font_relative_length;
+use crate::math::{layout_mathml, MathFragment};
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::display_list::BlendMode;
 use crate::paint::display_list::BlendModeItem;
@@ -71,6 +72,7 @@ use crate::paint::display_list::RadialGradientItem;
 use crate::paint::display_list::ResolvedFilter;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::StrokeRectItem;
+use crate::paint::display_list::StrokeRoundedRectItem;
 use crate::paint::display_list::TextDecorationItem;
 use crate::paint::display_list::TextEmphasis;
 use crate::paint::display_list::TextItem;
@@ -2286,6 +2288,93 @@ impl DisplayListBuilder {
           }
         }
 
+        if let ReplacedType::Math(math) = replaced_type {
+          let fallback_style = ComputedStyle::default();
+          let style_ref = fragment.style.as_deref().unwrap_or(&fallback_style);
+          let layout_owned = math
+            .layout
+            .as_ref()
+            .map(|l| l.as_ref().clone())
+            .unwrap_or_else(|| layout_mathml(&math.root, style_ref, &self.font_ctx));
+          let color = style_ref.color;
+          let shadows = Self::text_shadows_from_style(Some(style_ref));
+          let layout_w = layout_owned.width.max(0.01);
+          let layout_h = layout_owned.height.max(0.01);
+          let scale_x = if layout_w > 0.0 {
+            rect.width() / layout_w
+          } else {
+            1.0
+          };
+          let scale_y = if layout_h > 0.0 {
+            rect.height() / layout_h
+          } else {
+            1.0
+          };
+          for frag in layout_owned.fragments {
+            match frag {
+              MathFragment::Glyph { origin, run } => {
+                let scaled_run = Self::scale_run(&run, scale_x, scale_y);
+                let baseline_y = rect.y() + origin.y * scale_y;
+                let start_x = rect.x() + origin.x * scale_x;
+                self.emit_shaped_runs(
+                  &[scaled_run],
+                  color,
+                  baseline_y,
+                  start_x,
+                  &shadows,
+                  Some(style_ref),
+                  false,
+                );
+              }
+              MathFragment::Rule(r) => {
+                let scaled_rect = Rect::from_xywh(
+                  rect.x() + r.x() * scale_x,
+                  rect.y() + r.y() * scale_y,
+                  r.width() * scale_x,
+                  r.height() * scale_y,
+                );
+                self.list.push(DisplayItem::FillRect(FillRectItem {
+                  rect: scaled_rect,
+                  color,
+                }));
+              }
+              MathFragment::StrokeRect {
+                rect: stroke_rect,
+                radius,
+                width,
+              } => {
+                let scaled_rect = Rect::from_xywh(
+                  rect.x() + stroke_rect.x() * scale_x,
+                  rect.y() + stroke_rect.y() * scale_y,
+                  stroke_rect.width() * scale_x,
+                  stroke_rect.height() * scale_y,
+                );
+                let uniform = ((scale_x + scale_y) * 0.5).max(0.0);
+                let stroke_width = width * uniform;
+                let scaled_radius = radius * uniform;
+                if scaled_radius > 0.0 {
+                  self
+                    .list
+                    .push(DisplayItem::StrokeRoundedRect(StrokeRoundedRectItem {
+                      rect: scaled_rect,
+                      color,
+                      width: stroke_width,
+                      radii: BorderRadii::uniform(scaled_radius),
+                    }));
+                } else {
+                  self.list.push(DisplayItem::StrokeRect(StrokeRectItem {
+                    rect: scaled_rect,
+                    color,
+                    width: stroke_width,
+                    blend_mode: BlendMode::Normal,
+                  }));
+                }
+              }
+            }
+          }
+          return;
+        }
+
         let media_ctx = self.viewport.map(|(w, h)| {
           crate::style::media::MediaContext::screen(w, h)
             .with_device_pixel_ratio(self.device_pixel_ratio)
@@ -3712,6 +3801,26 @@ impl DisplayListBuilder {
     }
 
     segments
+  }
+
+  fn scale_run(run: &ShapedRun, scale_x: f32, scale_y: f32) -> ShapedRun {
+    if (scale_x - 1.0).abs() < 0.001 && (scale_y - 1.0).abs() < 0.001 {
+      return run.clone();
+    }
+    let mut scaled = run.clone();
+    let uniform = ((scale_x + scale_y) * 0.5).max(0.0);
+    scaled.font_size *= uniform;
+    scaled.advance *= scale_x;
+    scaled.baseline_shift *= scale_y;
+    scaled.synthetic_bold *= uniform;
+    scaled.scale *= uniform.max(1e-3);
+    for glyph in &mut scaled.glyphs {
+      glyph.x_offset *= scale_x;
+      glyph.y_offset *= scale_y;
+      glyph.x_advance *= scale_x;
+      glyph.y_advance *= scale_y;
+    }
+    scaled
   }
 
   fn glyphs_from_run(&self, run: &ShapedRun, origin_x: f32, baseline_y: f32) -> Vec<GlyphInstance> {

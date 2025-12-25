@@ -15,6 +15,126 @@ use crate::text::pipeline::{Direction as TextDirection, ShapedRun, ShapingPipeli
 
 const SCRIPT_SCALE: f32 = 0.71;
 
+/// Math variant requested by MathML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathVariant {
+  Normal,
+  Bold,
+  Italic,
+  BoldItalic,
+  DoubleStruck,
+  Script,
+  BoldScript,
+  Fraktur,
+  BoldFraktur,
+  SansSerif,
+  SansSerifBold,
+  SansSerifItalic,
+  SansSerifBoldItalic,
+  Monospace,
+}
+
+impl MathVariant {
+  fn is_italic(self) -> bool {
+    matches!(
+      self,
+      MathVariant::Italic
+        | MathVariant::BoldItalic
+        | MathVariant::Script
+        | MathVariant::BoldScript
+        | MathVariant::Fraktur
+        | MathVariant::BoldFraktur
+        | MathVariant::SansSerifItalic
+        | MathVariant::SansSerifBoldItalic
+    )
+  }
+
+  fn is_bold(self) -> bool {
+    matches!(
+      self,
+      MathVariant::Bold
+        | MathVariant::BoldItalic
+        | MathVariant::BoldScript
+        | MathVariant::BoldFraktur
+        | MathVariant::SansSerifBold
+        | MathVariant::SansSerifBoldItalic
+    )
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MathLength {
+  Em(f32),
+  Ex(f32),
+  Px(f32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowAlign {
+  Axis,
+  Baseline,
+  Center,
+  Top,
+  Bottom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnAlign {
+  Left,
+  Center,
+  Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MencloseNotation {
+  Box,
+  RoundedBox,
+  Circle,
+  Top,
+  Bottom,
+  Left,
+  Right,
+  HorizontalStrike,
+  VerticalStrike,
+  UpDiagonalStrike,
+  DownDiagonalStrike,
+  LongDiv,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MathSize {
+  Scale(f32),
+  Absolute(f32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MathStyleOverrides {
+  pub display_style: Option<bool>,
+  pub math_size: Option<MathSize>,
+  pub math_variant: Option<MathVariant>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MathTableCell {
+  pub content: MathNode,
+  pub row_align: Option<RowAlign>,
+  pub column_align: Option<ColumnAlign>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MathTableRow {
+  pub cells: Vec<MathTableCell>,
+  pub row_align: Option<RowAlign>,
+  pub column_aligns: Vec<ColumnAlign>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MathTable {
+  pub rows: Vec<MathTableRow>,
+  pub column_aligns: Vec<ColumnAlign>,
+  pub row_aligns: Vec<RowAlign>,
+}
+
 /// Parsed MathML node
 #[derive(Debug, Clone, PartialEq)]
 pub enum MathNode {
@@ -25,24 +145,25 @@ pub enum MathNode {
   Row(Vec<MathNode>),
   Identifier {
     text: String,
-    italic: bool,
-    bold: bool,
+    variant: Option<MathVariant>,
   },
   Number {
     text: String,
-    italic: bool,
-    bold: bool,
+    variant: Option<MathVariant>,
   },
   Operator {
     text: String,
     stretchy: bool,
-    italic: bool,
-    bold: bool,
+    variant: Option<MathVariant>,
   },
   Text {
     text: String,
-    italic: bool,
-    bold: bool,
+    variant: Option<MathVariant>,
+  },
+  Space {
+    width: MathLength,
+    height: MathLength,
+    depth: MathLength,
   },
   Fraction {
     numerator: Box<MathNode>,
@@ -84,7 +205,15 @@ pub enum MathNode {
     prescripts: Vec<(Option<MathNode>, Option<MathNode>)>,
     postscripts: Vec<(Option<MathNode>, Option<MathNode>)>,
   },
-  Table(Vec<Vec<MathNode>>),
+  Style {
+    overrides: MathStyleOverrides,
+    children: Vec<MathNode>,
+  },
+  Enclose {
+    notation: Vec<MencloseNotation>,
+    child: Box<MathNode>,
+  },
+  Table(MathTable),
 }
 
 /// Renderable fragment produced by math layout.
@@ -92,6 +221,7 @@ pub enum MathNode {
 pub enum MathFragment {
   Glyph { origin: Point, run: ShapedRun },
   Rule(Rect),
+  StrokeRect { rect: Rect, radius: f32, width: f32 },
 }
 
 /// Final math layout with positioned fragments.
@@ -101,6 +231,27 @@ pub struct MathLayout {
   pub height: f32,
   pub baseline: f32,
   pub fragments: Vec<MathFragment>,
+}
+
+impl MathFragment {
+  fn translate(self, offset: Point) -> Self {
+    match self {
+      MathFragment::Glyph { origin, run } => MathFragment::Glyph {
+        origin: Point::new(origin.x + offset.x, origin.y + offset.y),
+        run,
+      },
+      MathFragment::Rule(rect) => MathFragment::Rule(rect.translate(offset)),
+      MathFragment::StrokeRect {
+        rect,
+        radius,
+        width,
+      } => MathFragment::StrokeRect {
+        rect: rect.translate(offset),
+        radius,
+        width,
+      },
+    }
+  }
 }
 
 impl MathLayout {
@@ -113,10 +264,19 @@ impl MathLayout {
 #[derive(Debug, Clone, Copy)]
 struct MathStyle {
   font_size: f32,
-  display: bool,
+  display_style: bool,
+  default_variant: Option<MathVariant>,
 }
 
 impl MathStyle {
+  fn from_computed(style: &ComputedStyle) -> Self {
+    Self {
+      font_size: style.font_size,
+      display_style: style.display.is_block_level(),
+      default_variant: None,
+    }
+  }
+
   fn script(&self) -> Self {
     let mut size = self.font_size * SCRIPT_SCALE;
     if size < 6.0 {
@@ -124,7 +284,8 @@ impl MathStyle {
     }
     Self {
       font_size: size,
-      display: false,
+      display_style: false,
+      default_variant: self.default_variant,
     }
   }
 }
@@ -162,27 +323,166 @@ fn collect_text(node: &DomNode, out: &mut String) {
   }
 }
 
-fn mathvariant_flags(node: &DomNode, default_italic: bool, default_bold: bool) -> (bool, bool) {
-  let Some(value) = node.get_attribute_ref("mathvariant") else {
-    return (default_italic, default_bold);
-  };
-
+fn parse_mathvariant(node: &DomNode) -> Option<MathVariant> {
+  let value = node.get_attribute_ref("mathvariant")?;
   match value.to_ascii_lowercase().as_str() {
-    "normal" | "upright" => (false, false),
-    "bold" => (false, true),
-    "italic" => (true, false),
-    "bold-italic" => (true, true),
-    "double-struck" => (false, true),
-    "script" => (true, default_bold),
-    "bold-script" => (true, true),
-    "fraktur" => (true, default_bold),
-    "bold-fraktur" => (true, true),
-    "sans-serif" => (false, default_bold),
-    "sans-serif-bold" | "bold-sans-serif" => (false, true),
-    "sans-serif-italic" | "sans-serif-oblique" => (true, default_bold),
-    "sans-serif-bold-italic" | "bold-sans-serif-italic" => (true, true),
-    "monospace" => (false, default_bold),
-    _ => (default_italic, default_bold),
+    "normal" | "upright" => Some(MathVariant::Normal),
+    "bold" => Some(MathVariant::Bold),
+    "italic" | "oblique" => Some(MathVariant::Italic),
+    "bold-italic" | "bold-oblique" => Some(MathVariant::BoldItalic),
+    "double-struck" | "doublestruck" => Some(MathVariant::DoubleStruck),
+    "script" => Some(MathVariant::Script),
+    "bold-script" | "boldscript" => Some(MathVariant::BoldScript),
+    "fraktur" => Some(MathVariant::Fraktur),
+    "bold-fraktur" | "boldfraktur" => Some(MathVariant::BoldFraktur),
+    "sans-serif" | "sansserif" => Some(MathVariant::SansSerif),
+    "sans-serif-bold" | "bold-sans-serif" | "boldsansserif" => Some(MathVariant::SansSerifBold),
+    "sans-serif-italic" | "sans-serif-oblique" | "sansserifitalic" | "sansserifoblique" => {
+      Some(MathVariant::SansSerifItalic)
+    }
+    "sans-serif-bold-italic"
+    | "bold-sans-serif-italic"
+    | "sans-serif-bold-oblique"
+    | "bold-sans-serif-oblique"
+    | "boldsansserifitalic" => Some(MathVariant::SansSerifBoldItalic),
+    "monospace" | "typewriter" => Some(MathVariant::Monospace),
+    _ => None,
+  }
+}
+
+fn parse_math_length(raw: Option<&str>) -> Option<MathLength> {
+  let value = raw?.trim();
+  if value.is_empty() {
+    return None;
+  }
+  if let Some(v) = value.strip_suffix("ex") {
+    return v.trim().parse::<f32>().ok().map(MathLength::Ex);
+  }
+  if let Some(v) = value.strip_suffix("em") {
+    return v.trim().parse::<f32>().ok().map(MathLength::Em);
+  }
+  if let Some(v) = value.strip_suffix("px") {
+    return v.trim().parse::<f32>().ok().map(MathLength::Px);
+  }
+  value.parse::<f32>().ok().map(MathLength::Em)
+}
+
+fn parse_math_size(raw: &str) -> Option<MathSize> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "small" => Some(MathSize::Scale(0.8)),
+    "normal" => Some(MathSize::Scale(1.0)),
+    "big" => Some(MathSize::Scale(1.2)),
+    other => {
+      if let Some(v) = other.strip_suffix('%') {
+        if let Ok(pct) = v.trim().parse::<f32>() {
+          return Some(MathSize::Scale(pct / 100.0));
+        }
+      }
+      if let Some(v) = other.strip_suffix("px") {
+        return v.trim().parse::<f32>().ok().map(MathSize::Absolute);
+      }
+      if let Some(v) = other.strip_suffix("em") {
+        return v.trim().parse::<f32>().ok().map(|v| MathSize::Scale(v));
+      }
+      if let Ok(val) = other.parse::<f32>() {
+        Some(MathSize::Scale(val))
+      } else {
+        None
+      }
+    }
+  }
+}
+
+fn parse_display_style(value: Option<&str>) -> Option<bool> {
+  let raw = value?.trim();
+  if raw.is_empty() {
+    return None;
+  }
+  if raw.eq_ignore_ascii_case("true") || raw == "1" {
+    Some(true)
+  } else if raw.eq_ignore_ascii_case("false") || raw == "0" {
+    Some(false)
+  } else {
+    None
+  }
+}
+
+fn parse_row_align_list(value: Option<&str>) -> Vec<RowAlign> {
+  value
+    .map(|v| {
+      v.split(|c| c == ' ' || c == ',')
+        .filter_map(|item| match item.trim().to_ascii_lowercase().as_str() {
+          "axis" => Some(RowAlign::Axis),
+          "top" => Some(RowAlign::Top),
+          "bottom" => Some(RowAlign::Bottom),
+          "center" | "centre" | "middle" => Some(RowAlign::Center),
+          "baseline" => Some(RowAlign::Baseline),
+          _ => None,
+        })
+        .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn parse_column_align_list(value: Option<&str>) -> Vec<ColumnAlign> {
+  value
+    .map(|v| {
+      v.split(|c| c == ' ' || c == ',')
+        .filter_map(|item| match item.trim().to_ascii_lowercase().as_str() {
+          "left" => Some(ColumnAlign::Left),
+          "center" | "centre" => Some(ColumnAlign::Center),
+          "right" => Some(ColumnAlign::Right),
+          _ => None,
+        })
+        .collect()
+    })
+    .unwrap_or_default()
+}
+
+fn parse_menclose_notation(value: Option<&str>) -> Vec<MencloseNotation> {
+  let Some(raw) = value else {
+    return vec![MencloseNotation::Box];
+  };
+  let parsed: Vec<MencloseNotation> = raw
+    .split(|c| c == ' ' || c == ',')
+    .filter_map(|item| match item.trim().to_ascii_lowercase().as_str() {
+      "box" => Some(MencloseNotation::Box),
+      "roundedbox" => Some(MencloseNotation::RoundedBox),
+      "circle" => Some(MencloseNotation::Circle),
+      "top" => Some(MencloseNotation::Top),
+      "bottom" => Some(MencloseNotation::Bottom),
+      "left" => Some(MencloseNotation::Left),
+      "right" => Some(MencloseNotation::Right),
+      "horizontalstrike" => Some(MencloseNotation::HorizontalStrike),
+      "verticalstrike" => Some(MencloseNotation::VerticalStrike),
+      "updiagonalstrike" => Some(MencloseNotation::UpDiagonalStrike),
+      "downdiagonalstrike" => Some(MencloseNotation::DownDiagonalStrike),
+      "longdiv" => Some(MencloseNotation::LongDiv),
+      _ => None,
+    })
+    .collect();
+  if parsed.is_empty() {
+    vec![MencloseNotation::Box]
+  } else {
+    parsed
+  }
+}
+
+fn parse_mstyle_overrides(node: &DomNode) -> MathStyleOverrides {
+  MathStyleOverrides {
+    display_style: parse_display_style(node.get_attribute_ref("displaystyle")),
+    math_size: node
+      .get_attribute_ref("mathsize")
+      .and_then(|v| parse_math_size(v)),
+    math_variant: parse_mathvariant(node),
+  }
+}
+
+fn repeating_value<T: Copy>(values: &[T], index: usize) -> Option<T> {
+  if values.is_empty() {
+    None
+  } else {
+    Some(*values.get(index).unwrap_or_else(|| values.last().unwrap()))
   }
 }
 
@@ -218,6 +518,13 @@ fn parse_scripts(children: &[DomNode]) -> Vec<(Option<MathNode>, Option<MathNode
   pairs
 }
 
+fn empty_text_node() -> MathNode {
+  MathNode::Text {
+    text: String::new(),
+    variant: None,
+  }
+}
+
 /// Parse a DomNode subtree into a MathNode tree.
 pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
   match &node.node_type {
@@ -228,8 +535,7 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
       } else {
         Some(MathNode::Text {
           text: trimmed.to_string(),
-          italic: false,
-          bold: false,
+          variant: None,
         })
       }
     }
@@ -253,43 +559,43 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
           Some(MathNode::Math { display, children })
         }
         "mrow" => Some(MathNode::Row(parse_children(node))),
-        "mi" => normalized_text(node, false).map(|text| {
-          let (italic, bold) = mathvariant_flags(node, true, false);
-          MathNode::Identifier { text, italic, bold }
+        "mi" => normalized_text(node, false).map(|text| MathNode::Identifier {
+          text,
+          variant: parse_mathvariant(node),
         }),
-        "mn" => normalized_text(node, false).map(|text| {
-          let (italic, bold) = mathvariant_flags(node, false, false);
-          MathNode::Number { text, italic, bold }
+        "mn" => normalized_text(node, false).map(|text| MathNode::Number {
+          text,
+          variant: parse_mathvariant(node),
         }),
         "mo" => normalized_text(node, false).map(|text| {
           let stretchy = node
             .get_attribute_ref("stretchy")
             .map(|v| !v.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
-          let (italic, bold) = mathvariant_flags(node, false, false);
           MathNode::Operator {
             text,
             stretchy,
-            italic,
-            bold,
+            variant: parse_mathvariant(node),
           }
         }),
-        "ms" | "mtext" => normalized_text(node, true).map(|text| {
-          let (italic, bold) = mathvariant_flags(node, false, false);
-          MathNode::Text { text, italic, bold }
+        "ms" | "mtext" => normalized_text(node, true).map(|text| MathNode::Text {
+          text,
+          variant: parse_mathvariant(node),
+        }),
+        "mspace" => Some(MathNode::Space {
+          width: parse_math_length(node.get_attribute_ref("width")).unwrap_or(MathLength::Em(0.0)),
+          height: parse_math_length(node.get_attribute_ref("height"))
+            .unwrap_or(MathLength::Em(0.0)),
+          depth: parse_math_length(node.get_attribute_ref("depth")).unwrap_or(MathLength::Em(0.0)),
+        }),
+        "mstyle" => Some(MathNode::Style {
+          overrides: parse_mstyle_overrides(node),
+          children: parse_children(node),
         }),
         "mfrac" => {
           let mut children = parse_children(node).into_iter();
-          let num = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let den = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
+          let num = children.next().unwrap_or_else(empty_text_node);
+          let den = children.next().unwrap_or_else(empty_text_node);
           Some(MathNode::Fraction {
             numerator: Box::new(num),
             denominator: Box::new(den),
@@ -298,11 +604,7 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         "msqrt" => {
           let mut children = parse_children(node);
           let child = match children.len() {
-            0 => MathNode::Text {
-              text: "".into(),
-              italic: false,
-              bold: false,
-            },
+            0 => empty_text_node(),
             1 => children.remove(0),
             _ => MathNode::Row(children),
           };
@@ -310,16 +612,8 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         }
         "mroot" => {
           let mut children = parse_children(node).into_iter();
-          let radicand = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let index = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
+          let radicand = children.next().unwrap_or_else(empty_text_node);
+          let index = children.next().unwrap_or_else(empty_text_node);
           Some(MathNode::Root {
             radicand: Box::new(radicand),
             index: Box::new(index),
@@ -327,16 +621,8 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         }
         "msup" => {
           let mut children = parse_children(node).into_iter();
-          let base = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let sup = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
+          let base = children.next().unwrap_or_else(empty_text_node);
+          let sup = children.next().unwrap_or_else(empty_text_node);
           Some(MathNode::Superscript {
             base: Box::new(base),
             superscript: Box::new(sup),
@@ -344,16 +630,8 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         }
         "msub" => {
           let mut children = parse_children(node).into_iter();
-          let base = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let sub = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
+          let base = children.next().unwrap_or_else(empty_text_node);
+          let sub = children.next().unwrap_or_else(empty_text_node);
           Some(MathNode::Subscript {
             base: Box::new(base),
             subscript: Box::new(sub),
@@ -361,21 +639,9 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         }
         "msubsup" => {
           let mut children = parse_children(node).into_iter();
-          let base = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let sub = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let sup = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
+          let base = children.next().unwrap_or_else(empty_text_node);
+          let sub = children.next().unwrap_or_else(empty_text_node);
+          let sup = children.next().unwrap_or_else(empty_text_node);
           Some(MathNode::SubSuperscript {
             base: Box::new(base),
             subscript: Box::new(sub),
@@ -384,16 +650,8 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         }
         "mover" => {
           let mut children = parse_children(node).into_iter();
-          let base = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let over = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
+          let base = children.next().unwrap_or_else(empty_text_node);
+          let over = children.next().unwrap_or_else(empty_text_node);
           Some(MathNode::Over {
             base: Box::new(base),
             over: Box::new(over),
@@ -401,16 +659,8 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         }
         "munder" => {
           let mut children = parse_children(node).into_iter();
-          let base = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let under = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
+          let base = children.next().unwrap_or_else(empty_text_node);
+          let under = children.next().unwrap_or_else(empty_text_node);
           Some(MathNode::Under {
             base: Box::new(base),
             under: Box::new(under),
@@ -418,21 +668,9 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
         }
         "munderover" => {
           let mut children = parse_children(node).into_iter();
-          let base = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let under = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
-          let over = children.next().unwrap_or_else(|| MathNode::Text {
-            text: "".into(),
-            italic: false,
-            bold: false,
-          });
+          let base = children.next().unwrap_or_else(empty_text_node);
+          let under = children.next().unwrap_or_else(empty_text_node);
+          let over = children.next().unwrap_or_else(empty_text_node);
           Some(MathNode::UnderOver {
             base: Box::new(base),
             under: Box::new(under),
@@ -444,11 +682,7 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
           let base = iter
             .next()
             .and_then(parse_mathml)
-            .unwrap_or_else(|| MathNode::Text {
-              text: "".into(),
-              italic: false,
-              bold: false,
-            });
+            .unwrap_or_else(empty_text_node);
           let mut pre = Vec::new();
           let mut post_nodes = Vec::new();
           let mut in_pre = false;
@@ -475,27 +709,119 @@ pub fn parse_mathml(node: &DomNode) -> Option<MathNode> {
             postscripts,
           })
         }
+        "mfenced" => {
+          let open = node
+            .get_attribute_ref("open")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "(".to_string());
+          let close = node
+            .get_attribute_ref("close")
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| ")".to_string());
+          let separators = node
+            .get_attribute_ref("separators")
+            .map(|s| {
+              s.chars()
+                .filter(|c| *c != ' ' && *c != '\t')
+                .collect::<Vec<char>>()
+            })
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| vec![',']);
+          let inner = parse_children(node);
+          if inner.is_empty() {
+            return None;
+          }
+          let mut row = Vec::new();
+          row.push(MathNode::Operator {
+            text: open,
+            stretchy: true,
+            variant: Some(MathVariant::Normal),
+          });
+          for (idx, child) in inner.into_iter().enumerate() {
+            if idx > 0 {
+              let sep = separators
+                .get(idx - 1)
+                .or_else(|| separators.last())
+                .copied()
+                .unwrap_or(',');
+              row.push(MathNode::Operator {
+                text: sep.to_string(),
+                stretchy: false,
+                variant: Some(MathVariant::Normal),
+              });
+            }
+            row.push(child);
+          }
+          row.push(MathNode::Operator {
+            text: close,
+            stretchy: true,
+            variant: Some(MathVariant::Normal),
+          });
+          Some(MathNode::Row(row))
+        }
+        "menclose" => {
+          let notation = parse_menclose_notation(node.get_attribute_ref("notation"));
+          let child = wrap_row_or_single(parse_children(node)).unwrap_or_else(empty_text_node);
+          Some(MathNode::Enclose {
+            notation,
+            child: Box::new(child),
+          })
+        }
         "mtr" => Some(MathNode::Row(
           node.children.iter().filter_map(parse_mathml).collect(),
         )),
         "mtd" => Some(MathNode::Row(parse_children(node))),
         "mtable" => {
-          let rows: Vec<Vec<MathNode>> = node
-            .children
-            .iter()
-            .filter_map(|c| {
-              if let Some(tag) = c.tag_name() {
-                if tag.eq_ignore_ascii_case("mtr") || tag.eq_ignore_ascii_case("mtd") {
-                  return parse_mathml(c).map(|n| match n {
-                    MathNode::Row(children) => children,
-                    other => vec![other],
-                  });
-                }
+          let table_row_aligns = parse_row_align_list(node.get_attribute_ref("rowalign"));
+          let table_col_aligns = parse_column_align_list(node.get_attribute_ref("columnalign"));
+          let mut rows = Vec::new();
+          for child in &node.children {
+            let Some(tag) = child.tag_name() else {
+              continue;
+            };
+            if tag.eq_ignore_ascii_case("mtr") || tag.eq_ignore_ascii_case("mtd") {
+              let row_aligns = parse_row_align_list(child.get_attribute_ref("rowalign"));
+              let row_col_aligns = parse_column_align_list(child.get_attribute_ref("columnalign"));
+              let mut cells = Vec::new();
+              let cell_nodes: Vec<&DomNode> = if tag.eq_ignore_ascii_case("mtd") {
+                vec![child]
+              } else {
+                child
+                  .children
+                  .iter()
+                  .filter(|n| {
+                    n.tag_name()
+                      .map(|t| t.eq_ignore_ascii_case("mtd") || t.eq_ignore_ascii_case("mth"))
+                      .unwrap_or(false)
+                  })
+                  .collect()
+              };
+              for cell_node in cell_nodes {
+                let cell_align = cell_node
+                  .get_attribute_ref("columnalign")
+                  .and_then(|v| parse_column_align_list(Some(v)).into_iter().next());
+                let row_align = cell_node
+                  .get_attribute_ref("rowalign")
+                  .and_then(|v| parse_row_align_list(Some(v)).into_iter().next());
+                let content = parse_mathml(cell_node).unwrap_or_else(empty_text_node);
+                cells.push(MathTableCell {
+                  content,
+                  row_align,
+                  column_align: cell_align,
+                });
               }
-              None
-            })
-            .collect();
-          Some(MathNode::Table(rows))
+              rows.push(MathTableRow {
+                cells,
+                row_align: row_aligns.get(0).cloned(),
+                column_aligns: row_col_aligns,
+              });
+            }
+          }
+          Some(MathNode::Table(MathTable {
+            rows,
+            column_aligns: table_col_aligns,
+            row_aligns: table_row_aligns,
+          }))
         }
         _ => Some(MathNode::Row(parse_children(node))),
       }
@@ -518,7 +844,12 @@ impl MathLayoutContext {
   }
 
   fn rule_thickness(style: &MathStyle) -> f32 {
-    (style.font_size * 0.06).clamp(1.0, style.font_size * 0.5)
+    let base = (style.font_size * 0.06).clamp(1.0, style.font_size * 0.5);
+    if style.display_style {
+      base * 1.1
+    } else {
+      base
+    }
   }
 
   fn axis_height(metrics: &ScaledMetrics, style: &MathStyle) -> f32 {
@@ -530,19 +861,53 @@ impl MathLayoutContext {
   }
 
   fn script_gap(style: &MathStyle) -> f32 {
-    style.font_size * 0.1
+    style.font_size * if style.display_style { 0.12 } else { 0.1 }
   }
 
   fn frac_gap(style: &MathStyle) -> f32 {
-    style.font_size * 0.2
+    style.font_size * if style.display_style { 0.25 } else { 0.18 }
   }
 
   fn sqrt_padding(style: &MathStyle) -> f32 {
-    style.font_size * 0.1
+    style.font_size * if style.display_style { 0.14 } else { 0.1 }
   }
 
   fn table_spacing(style: &MathStyle) -> (f32, f32) {
     (style.font_size * 0.5, style.font_size * 0.25)
+  }
+
+  fn resolve_variant(
+    &self,
+    explicit: Option<MathVariant>,
+    style: &MathStyle,
+    fallback: MathVariant,
+  ) -> MathVariant {
+    explicit.or(style.default_variant).unwrap_or(fallback)
+  }
+
+  fn resolve_length(&self, len: MathLength, style: &MathStyle, metrics: &ScaledMetrics) -> f32 {
+    match len {
+      MathLength::Em(v) => v * style.font_size,
+      MathLength::Ex(v) => v * metrics.x_height.unwrap_or(style.font_size * 0.5),
+      MathLength::Px(v) => v,
+    }
+  }
+
+  fn apply_style_overrides(&self, style: &MathStyle, overrides: &MathStyleOverrides) -> MathStyle {
+    let mut next = *style;
+    if let Some(display) = overrides.display_style {
+      next.display_style = display;
+    }
+    if let Some(size) = overrides.math_size {
+      next.font_size = match size {
+        MathSize::Scale(f) => (style.font_size * f).max(1.0),
+        MathSize::Absolute(px) => px.max(1.0),
+      };
+    }
+    if let Some(variant) = overrides.math_variant {
+      next.default_variant = Some(variant);
+    }
+    next
   }
 
   fn base_font_metrics(&self, style: &ComputedStyle, size: f32) -> ScaledMetrics {
@@ -593,21 +958,61 @@ impl MathLayoutContext {
     families
   }
 
+  fn variant_preferred_families(&self, variant: MathVariant) -> Vec<String> {
+    let mut families = Vec::new();
+    match variant {
+      MathVariant::SansSerif
+      | MathVariant::SansSerifBold
+      | MathVariant::SansSerifItalic
+      | MathVariant::SansSerifBoldItalic => families.push("sans-serif".to_string()),
+      MathVariant::Monospace => families.push("monospace".to_string()),
+      MathVariant::DoubleStruck => {
+        families.push("math-doublestruck".to_string());
+        families.push("double-struck".to_string());
+      }
+      MathVariant::Script | MathVariant::BoldScript => {
+        families.push("math-script".to_string());
+        families.push("script".to_string());
+      }
+      MathVariant::Fraktur | MathVariant::BoldFraktur => {
+        families.push("math-fraktur".to_string());
+        families.push("fraktur".to_string());
+      }
+      _ => {}
+    }
+    families
+  }
+
+  fn preferred_math_families_for_variant(
+    &self,
+    style: &ComputedStyle,
+    variant: MathVariant,
+  ) -> Vec<String> {
+    let mut families = self.variant_preferred_families(variant);
+    for fam in self.preferred_math_families(style) {
+      if !families.iter().any(|f| f.eq_ignore_ascii_case(&fam)) {
+        families.push(fam);
+      }
+    }
+    families
+  }
+
   fn shape_text(
     &mut self,
     text: &str,
     base_style: &ComputedStyle,
     math_style: &MathStyle,
-    italic: bool,
-    bold: bool,
+    variant: MathVariant,
   ) -> (Vec<ShapedRun>, ScaledMetrics) {
     let mut style = base_style.clone();
     style.font_size = math_style.font_size;
-    style.font_family = self.preferred_math_families(base_style);
-    if italic {
-      style.font_style = CssFontStyle::Italic;
-    }
-    if bold {
+    style.font_family = self.preferred_math_families_for_variant(base_style, variant);
+    style.font_style = if variant.is_italic() {
+      CssFontStyle::Italic
+    } else {
+      CssFontStyle::Normal
+    };
+    if variant.is_bold() {
       style.font_weight = CssFontWeight::Bold;
     }
 
@@ -637,10 +1042,9 @@ impl MathLayoutContext {
     text: &str,
     base_style: &ComputedStyle,
     math_style: &MathStyle,
-    italic: bool,
-    bold: bool,
+    variant: MathVariant,
   ) -> MathLayout {
-    let (runs, metrics) = self.shape_text(text, base_style, math_style, italic, bold);
+    let (runs, metrics) = self.shape_text(text, base_style, math_style, variant);
     if runs.is_empty() {
       let height = math_style.font_size;
       return MathLayout {
@@ -689,29 +1093,65 @@ impl MathLayoutContext {
       })
       .collect();
     if !stretchy_indices.is_empty() {
-      let mut max_ascent: f32 = 0.0;
-      let mut max_descent: f32 = 0.0;
-      for layout in &layouts {
-        max_ascent = max_ascent.max(layout.baseline);
-        max_descent = max_descent.max(layout.height - layout.baseline);
+      let mut stretchy_mask = vec![false; layouts.len()];
+      for idx in &stretchy_indices {
+        if let Some(slot) = stretchy_mask.get_mut(*idx) {
+          *slot = true;
+        }
       }
-      let target_height = max_ascent + max_descent;
+      let mut target_ascent: f32 = 0.0;
+      let mut target_descent: f32 = 0.0;
+      for (idx, layout) in layouts.iter().enumerate() {
+        if stretchy_mask.get(idx).copied().unwrap_or(false) {
+          continue;
+        }
+        target_ascent = target_ascent.max(layout.baseline);
+        target_descent = target_descent.max(layout.height - layout.baseline);
+      }
+      if target_ascent == 0.0 && target_descent == 0.0 {
+        for layout in &layouts {
+          target_ascent = target_ascent.max(layout.baseline);
+          target_descent = target_descent.max(layout.height - layout.baseline);
+        }
+      }
+      let pad = Self::rule_thickness(style) * 0.5;
+      target_ascent += pad;
+      target_descent += pad;
+      if target_ascent == 0.0 && target_descent == 0.0 {
+        target_ascent = style.font_size * 0.8;
+        target_descent = style.font_size * 0.2;
+      }
+
       for idx in stretchy_indices {
-        if let MathNode::Operator {
-          text, italic, bold, ..
-        } = &children[idx]
-        {
-          if target_height > layouts[idx].height * 1.05 && layouts[idx].height > 0.0 {
-            let factor = (target_height / layouts[idx].height).clamp(1.0, 4.0);
+        if let MathNode::Operator { text, variant, .. } = &children[idx] {
+          let current = &layouts[idx];
+          if current.height <= 0.0 {
+            continue;
+          }
+          let ascent_scale = if current.baseline > 0.0 {
+            target_ascent / current.baseline
+          } else {
+            1.0
+          };
+          let descent = (current.height - current.baseline).max(0.0);
+          let descent_scale = if descent > 0.0 {
+            target_descent / descent
+          } else {
+            1.0
+          };
+          let factor = ascent_scale.max(descent_scale).clamp(1.0, 8.0);
+          if factor > 1.01 {
             let mut stretch_style = *style;
             stretch_style.font_size *= factor;
-            layouts[idx] = self.layout_glyphs(text, base_style, &stretch_style, *italic, *bold);
+            let resolved_variant =
+              self.resolve_variant(*variant, &stretch_style, MathVariant::Normal);
+            layouts[idx] = self.layout_glyphs(text, base_style, &stretch_style, resolved_variant);
           }
         }
       }
     }
     if layouts.is_empty() {
-      return self.layout_glyphs("", base_style, style, false, false);
+      return self.layout_glyphs("", base_style, style, MathVariant::Normal);
     }
 
     let mut max_ascent: f32 = 0.0;
@@ -726,15 +1166,7 @@ impl MathLayoutContext {
     for layout in layouts {
       let y = baseline - layout.baseline;
       for frag in layout.fragments {
-        match frag {
-          MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-            origin: Point::new(origin.x + x, origin.y + y),
-            run,
-          }),
-          MathFragment::Rule(rect) => {
-            fragments.push(MathFragment::Rule(rect.translate(Point::new(x, y))))
-          }
-        }
+        fragments.push(frag.translate(Point::new(x, y)));
       }
       x += layout.width;
     }
@@ -743,6 +1175,32 @@ impl MathLayoutContext {
       height: baseline + max_descent,
       baseline,
       fragments,
+    }
+  }
+
+  fn layout_space(
+    &mut self,
+    width: MathLength,
+    height: MathLength,
+    depth: MathLength,
+    style: &MathStyle,
+    base_style: &ComputedStyle,
+  ) -> MathLayout {
+    let metrics = self.base_font_metrics(base_style, style.font_size);
+    let w = self.resolve_length(width, style, &metrics);
+    let h = self.resolve_length(height, style, &metrics);
+    let d = self.resolve_length(depth, style, &metrics);
+    let total_h = h + d;
+    let (height, baseline) = if total_h > 0.0 {
+      (total_h, h)
+    } else {
+      (metrics.line_height, metrics.ascent)
+    };
+    MathLayout {
+      width: w.max(0.0),
+      height: height.max(0.0),
+      baseline,
+      fragments: Vec::new(),
     }
   }
 
@@ -755,7 +1213,11 @@ impl MathLayoutContext {
   ) -> MathLayout {
     let metrics = self.base_font_metrics(base_style, style.font_size);
     let axis = Self::axis_height(&metrics, style);
-    let script_style = style.script();
+    let script_style = if style.display_style {
+      *style
+    } else {
+      style.script()
+    };
     let numerator = self.layout_node(num, &script_style, base_style);
     let denominator = self.layout_node(den, &script_style, base_style);
     let width = numerator.width.max(denominator.width);
@@ -769,26 +1231,10 @@ impl MathLayoutContext {
     let den_y = baseline + rule * 0.5 + gap - denominator.baseline;
 
     for frag in numerator.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x + num_x, origin.y + num_y),
-          run,
-        }),
-        MathFragment::Rule(rect) => {
-          fragments.push(MathFragment::Rule(rect.translate(Point::new(num_x, num_y))))
-        }
-      }
+      fragments.push(frag.translate(Point::new(num_x, num_y)));
     }
     for frag in denominator.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x + den_x, origin.y + den_y),
-          run,
-        }),
-        MathFragment::Rule(rect) => {
-          fragments.push(MathFragment::Rule(rect.translate(Point::new(den_x, den_y))))
-        }
-      }
+      fragments.push(frag.translate(Point::new(den_x, den_y)));
     }
 
     fragments.push(MathFragment::Rule(Rect::from_xywh(
@@ -821,7 +1267,14 @@ impl MathLayoutContext {
     let script_style = style.script();
     let sup_layout = sup.map(|n| self.layout_node(n, &script_style, base_style));
     let sub_layout = sub.map(|n| self.layout_node(n, &script_style, base_style));
-    let script_gap = Self::script_gap(style);
+    let base_metrics = self.base_font_metrics(base_style, style.font_size);
+    let x_height = base_metrics.x_height.unwrap_or(style.font_size * 0.5);
+    let sup_shift = (base_metrics.ascent * 0.6)
+      .max(x_height * 0.65)
+      .max(style.font_size * if style.display_style { 0.4 } else { 0.34 });
+    let sub_shift = (base_metrics.descent * 0.8 + x_height * 0.2).max(style.font_size * 0.24);
+    let min_gap =
+      (Self::script_gap(style) + Self::rule_thickness(style)).max(style.font_size * 0.06);
 
     let mut width = base_layout.width;
     let mut fragments = Vec::new();
@@ -836,48 +1289,43 @@ impl MathLayoutContext {
       script_width = script_width.max(layout.width);
     }
     if script_width > 0.0 {
-      width += script_gap + script_width;
+      width += Self::script_gap(style) + script_width;
     }
 
     // Base fragments
     for frag in base_layout.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph { origin, run }),
-        MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(rect)),
-      }
+      fragments.push(frag);
     }
 
-    let x = base_layout.width + if script_width > 0.0 { script_gap } else { 0.0 };
+    let x = base_layout.width
+      + if script_width > 0.0 {
+        Self::script_gap(style)
+      } else {
+        0.0
+      };
     let base_descent = base_layout.height - base_layout.baseline;
+    let mut sup_y = None;
     if let Some(layout) = sup_layout {
-      let y = base_layout.baseline - layout.baseline - style.font_size * 0.35;
+      let y = base_layout.baseline - sup_shift - layout.baseline;
       for frag in layout.fragments {
-        match frag {
-          MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-            origin: Point::new(origin.x + x, origin.y + y),
-            run,
-          }),
-          MathFragment::Rule(rect) => {
-            fragments.push(MathFragment::Rule(rect.translate(Point::new(x, y))))
-          }
-        }
+        fragments.push(frag.translate(Point::new(x, y)));
       }
       max_ascent = max_ascent.max(layout.baseline - y);
       max_descent = max_descent.max(layout.height - (layout.baseline - y));
+      sup_y = Some((y, layout.height));
     }
 
     if let Some(layout) = sub_layout {
-      let y = base_layout.baseline + base_descent + script_gap - layout.baseline;
-      for frag in layout.fragments {
-        match frag {
-          MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-            origin: Point::new(origin.x + x, origin.y + y),
-            run,
-          }),
-          MathFragment::Rule(rect) => {
-            fragments.push(MathFragment::Rule(rect.translate(Point::new(x, y))))
-          }
+      let mut y = base_layout.baseline + base_descent + sub_shift - layout.baseline;
+      if let Some((sup_y, sup_h)) = sup_y {
+        let sup_bottom = sup_y + sup_h;
+        let gap = y - sup_bottom;
+        if gap < min_gap {
+          y += min_gap - gap;
         }
+      }
+      for frag in layout.fragments {
+        fragments.push(frag.translate(Point::new(x, y)));
       }
       max_ascent = max_ascent.max(layout.baseline - y);
       max_descent = max_descent.max(layout.height - (layout.baseline - y));
@@ -900,7 +1348,11 @@ impl MathLayoutContext {
     base_style: &ComputedStyle,
   ) -> MathLayout {
     let base_layout = self.layout_node(base, style, base_style);
-    let script_style = style.script();
+    let script_style = if style.display_style {
+      *style
+    } else {
+      style.script()
+    };
     let under_layout = under.map(|n| self.layout_node(n, &script_style, base_style));
     let over_layout = over.map(|n| self.layout_node(n, &script_style, base_style));
     let gap = Self::frac_gap(style);
@@ -916,27 +1368,16 @@ impl MathLayoutContext {
     let mut fragments = Vec::new();
     // Base
     for frag in base_layout.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph { origin, run }),
-        MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(rect)),
-      }
+      fragments.push(frag);
     }
 
     let mut ascent = base_layout.baseline;
     let mut descent = base_layout.height - base_layout.baseline;
     if let Some(layout) = over_layout {
       let x = (width - layout.width) / 2.0;
-      let y = base_layout.baseline - gap - layout.height;
+      let y = -(layout.height + gap);
       for frag in layout.fragments {
-        match frag {
-          MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-            origin: Point::new(origin.x + x, origin.y + y),
-            run,
-          }),
-          MathFragment::Rule(rect) => {
-            fragments.push(MathFragment::Rule(rect.translate(Point::new(x, y))))
-          }
-        }
+        fragments.push(frag.translate(Point::new(x, y)));
       }
       ascent = ascent.max(base_layout.baseline - y);
     }
@@ -944,15 +1385,7 @@ impl MathLayoutContext {
       let x = (width - layout.width) / 2.0;
       let y = base_layout.baseline + gap;
       for frag in layout.fragments {
-        match frag {
-          MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-            origin: Point::new(origin.x + x, origin.y + y),
-            run,
-          }),
-          MathFragment::Rule(rect) => {
-            fragments.push(MathFragment::Rule(rect.translate(Point::new(x, y))))
-          }
-        }
+        fragments.push(frag.translate(Point::new(x, y)));
       }
       descent = descent.max(layout.height + gap);
     }
@@ -975,15 +1408,17 @@ impl MathLayoutContext {
     let padding = Self::sqrt_padding(style);
     let rule = Self::rule_thickness(style);
     let target_height = content.height + padding + rule;
-    let mut radical = self.layout_glyphs("√", base_style, style, false, false);
+    let radical_variant = self.resolve_variant(None, style, MathVariant::Normal);
+    let mut radical = self.layout_glyphs("√", base_style, style, radical_variant);
     if radical.height > 0.0 {
       let scale = (target_height / radical.height).clamp(0.8, 3.0);
       if (scale - 1.0).abs() > 0.05 {
         let scaled_style = MathStyle {
           font_size: style.font_size * scale,
-          display: style.display,
+          display_style: style.display_style,
+          default_variant: style.default_variant,
         };
-        radical = self.layout_glyphs("√", base_style, &scaled_style, false, false);
+        radical = self.layout_glyphs("√", base_style, &scaled_style, radical_variant);
       }
     }
 
@@ -993,28 +1428,12 @@ impl MathLayoutContext {
     let mut fragments = Vec::new();
     // Radical glyph
     for frag in radical.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x, origin.y + (baseline - radical.baseline)),
-          run,
-        }),
-        MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(
-          rect.translate(Point::new(0.0, baseline - radical.baseline)),
-        )),
-      }
+      fragments.push(frag.translate(Point::new(0.0, baseline - radical.baseline)));
     }
 
     // Content
     for frag in content.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x + offset_x, origin.y + content_y),
-          run,
-        }),
-        MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(
-          rect.translate(Point::new(offset_x, content_y)),
-        )),
-      }
+      fragments.push(frag.translate(Point::new(offset_x, content_y)));
     }
 
     fragments.push(MathFragment::Rule(Rect::from_xywh(
@@ -1050,27 +1469,11 @@ impl MathLayoutContext {
 
     let index_y = (sqrt_layout.baseline - sqrt_layout.height * 0.6) - index_layout.baseline;
     for frag in index_layout.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x, origin.y + index_y),
-          run,
-        }),
-        MathFragment::Rule(rect) => {
-          fragments.push(MathFragment::Rule(rect.translate(Point::new(0.0, index_y))))
-        }
-      }
+      fragments.push(frag.translate(Point::new(0.0, index_y)));
     }
 
     for frag in sqrt_layout.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x + offset_x, origin.y),
-          run,
-        }),
-        MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(
-          rect.translate(Point::new(offset_x, 0.0)),
-        )),
-      }
+      fragments.push(frag.translate(Point::new(offset_x, 0.0)));
     }
 
     MathLayout {
@@ -1081,38 +1484,151 @@ impl MathLayoutContext {
     }
   }
 
-  fn layout_table(
+  fn layout_enclose(
     &mut self,
-    rows: &[Vec<MathNode>],
+    notation: &[MencloseNotation],
+    body: &MathNode,
     style: &MathStyle,
     base_style: &ComputedStyle,
   ) -> MathLayout {
-    if rows.is_empty() {
-      return self.layout_glyphs("", base_style, style, false, false);
+    let content = self.layout_node(body, style, base_style);
+    let stroke = Self::rule_thickness(style);
+    let padding = Self::sqrt_padding(style) + stroke * 0.5;
+    let width = content.width + padding * 2.0 + stroke;
+    let height = content.height + padding * 2.0 + stroke;
+    let baseline = content.baseline + padding + stroke * 0.5;
+    let content_offset = Point::new(padding + stroke * 0.5, padding + stroke * 0.5);
+
+    let mut fragments: Vec<MathFragment> = content
+      .fragments
+      .into_iter()
+      .map(|f| f.translate(content_offset))
+      .collect();
+
+    let outer_rect = Rect::from_xywh(0.0, 0.0, width.max(0.0), height.max(0.0));
+    for note in notation {
+      match note {
+        MencloseNotation::Box => fragments.push(MathFragment::StrokeRect {
+          rect: outer_rect,
+          radius: 0.0,
+          width: stroke,
+        }),
+        MencloseNotation::RoundedBox => fragments.push(MathFragment::StrokeRect {
+          rect: outer_rect,
+          radius: padding,
+          width: stroke,
+        }),
+        MencloseNotation::Circle => {
+          let radius = (outer_rect.width().min(outer_rect.height()) / 2.0).max(0.0);
+          fragments.push(MathFragment::StrokeRect {
+            rect: outer_rect,
+            radius,
+            width: stroke,
+          });
+        }
+        MencloseNotation::Top => {
+          fragments.push(MathFragment::Rule(Rect::from_xywh(0.0, 0.0, width, stroke)))
+        }
+        MencloseNotation::Bottom => fragments.push(MathFragment::Rule(Rect::from_xywh(
+          0.0,
+          height - stroke,
+          width,
+          stroke,
+        ))),
+        MencloseNotation::Left => fragments.push(MathFragment::Rule(Rect::from_xywh(
+          0.0, 0.0, stroke, height,
+        ))),
+        MencloseNotation::Right => fragments.push(MathFragment::Rule(Rect::from_xywh(
+          width - stroke,
+          0.0,
+          stroke,
+          height,
+        ))),
+        MencloseNotation::HorizontalStrike => fragments.push(MathFragment::Rule(Rect::from_xywh(
+          0.0,
+          height / 2.0 - stroke * 0.5,
+          width,
+          stroke,
+        ))),
+        MencloseNotation::VerticalStrike => fragments.push(MathFragment::Rule(Rect::from_xywh(
+          width / 2.0 - stroke * 0.5,
+          0.0,
+          stroke,
+          height,
+        ))),
+        MencloseNotation::UpDiagonalStrike | MencloseNotation::DownDiagonalStrike => {
+          // Approximate diagonal strikes with intersecting horizontal/vertical marks.
+          fragments.push(MathFragment::Rule(Rect::from_xywh(
+            0.0,
+            height / 2.0 - stroke * 0.5,
+            width,
+            stroke,
+          )));
+          fragments.push(MathFragment::Rule(Rect::from_xywh(
+            width / 2.0 - stroke * 0.5,
+            0.0,
+            stroke,
+            height,
+          )));
+        }
+        MencloseNotation::LongDiv => {
+          fragments.push(MathFragment::Rule(Rect::from_xywh(0.0, 0.0, width, stroke)));
+          fragments.push(MathFragment::Rule(Rect::from_xywh(
+            0.0, 0.0, stroke, height,
+          )));
+        }
+      }
+    }
+
+    MathLayout {
+      width,
+      height,
+      baseline,
+      fragments,
+    }
+  }
+
+  fn layout_table(
+    &mut self,
+    table: &MathTable,
+    style: &MathStyle,
+    base_style: &ComputedStyle,
+  ) -> MathLayout {
+    if table.rows.is_empty() {
+      return self.layout_glyphs("", base_style, style, MathVariant::Normal);
     }
     let (col_spacing, row_spacing) = Self::table_spacing(style);
+    let metrics = self.base_font_metrics(base_style, style.font_size);
     let mut cell_layouts: Vec<Vec<MathLayout>> = Vec::new();
     let mut col_widths: Vec<f32> = Vec::new();
     let mut row_baselines: Vec<f32> = Vec::new();
-    let mut row_descents: Vec<f32> = Vec::new();
+    let mut row_heights: Vec<f32> = Vec::new();
 
-    for row in rows {
+    for row in &table.rows {
       let mut layouts = Vec::new();
       let mut baseline: f32 = 0.0;
-      let mut descent: f32 = 0.0;
-      for (col, cell) in row.iter().enumerate() {
-        let layout = self.layout_node(cell, style, base_style);
+      let mut max_descent: f32 = 0.0;
+      let mut max_height: f32 = 0.0;
+      for (col, cell) in row.cells.iter().enumerate() {
+        let layout = self.layout_node(&cell.content, style, base_style);
         if col >= col_widths.len() {
           col_widths.push(layout.width);
         } else {
           col_widths[col] = col_widths[col].max(layout.width);
         }
         baseline = baseline.max(layout.baseline);
-        descent = descent.max(layout.height - layout.baseline);
+        max_descent = max_descent.max(layout.height - layout.baseline);
+        max_height = max_height.max(layout.height);
         layouts.push(layout);
       }
+      if row.cells.is_empty() {
+        baseline = metrics.ascent;
+        max_height = metrics.line_height;
+      } else {
+        max_height = max_height.max(baseline + max_descent);
+      }
       row_baselines.push(baseline);
-      row_descents.push(descent);
+      row_heights.push(max_height);
       cell_layouts.push(layouts);
     }
 
@@ -1121,29 +1637,46 @@ impl MathLayoutContext {
     let mut y = 0.0;
     let mut fragments = Vec::new();
     let mut table_baseline = 0.0;
-    for (row_idx, layouts) in cell_layouts.into_iter().enumerate() {
-      let baseline = row_baselines[row_idx];
-      let descent = row_descents[row_idx];
-      let row_height = baseline + descent;
+    for (row_idx, (row, layouts)) in table.rows.iter().zip(cell_layouts.into_iter()).enumerate() {
+      let row_height = row_heights[row_idx];
+      let row_baseline = row_baselines[row_idx];
+      let row_align_pref = repeating_value(&table.row_aligns, row_idx).or(row.row_align);
       if row_idx == 0 {
-        table_baseline = baseline + y;
+        table_baseline = row_baseline + y;
       }
       let mut x = 0.0;
-      for (col_idx, layout) in layouts.into_iter().enumerate() {
-        let offset_y = y + (baseline - layout.baseline);
-        let offset_x = x;
+      for (col_idx, (cell, layout)) in row.cells.iter().zip(layouts.into_iter()).enumerate() {
+        let col_align_default =
+          repeating_value(&table.column_aligns, col_idx).unwrap_or(ColumnAlign::Center);
+        let col_align = cell
+          .column_align
+          .or_else(|| repeating_value(&row.column_aligns, col_idx))
+          .unwrap_or(col_align_default);
+        let cell_row_align = cell
+          .row_align
+          .or(row_align_pref)
+          .unwrap_or(RowAlign::Baseline);
+        let baseline_target = match cell_row_align {
+          RowAlign::Axis => Self::axis_height(&metrics, style) + style.font_size * 0.5,
+          _ => row_baseline,
+        };
+        let offset_y = match cell_row_align {
+          RowAlign::Baseline | RowAlign::Axis => y + (baseline_target - layout.baseline),
+          RowAlign::Top => y,
+          RowAlign::Bottom => y + (row_height - layout.height),
+          RowAlign::Center => y + (row_height - layout.height) / 2.0,
+        };
+        let width_available = col_widths.get(col_idx).copied().unwrap_or(layout.width);
+        let offset_x = x
+          + match col_align {
+            ColumnAlign::Left => 0.0,
+            ColumnAlign::Center => (width_available - layout.width) / 2.0,
+            ColumnAlign::Right => (width_available - layout.width).max(0.0),
+          };
         for frag in layout.fragments {
-          match frag {
-            MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-              origin: Point::new(origin.x + offset_x, origin.y + offset_y),
-              run,
-            }),
-            MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(
-              rect.translate(Point::new(offset_x, offset_y)),
-            )),
-          }
+          fragments.push(frag.translate(Point::new(offset_x, offset_y)));
         }
-        x += col_widths[col_idx] + col_spacing;
+        x += width_available + col_spacing;
       }
       y += row_height + row_spacing;
     }
@@ -1194,15 +1727,7 @@ impl MathLayoutContext {
           if let Some(layout) = sup_layout {
             let y = (base_layout.baseline - layout.baseline - Self::script_gap(style)).min(0.0);
             for frag in layout.fragments {
-              match frag {
-                MathFragment::Glyph { origin, run } => frags.push(MathFragment::Glyph {
-                  origin: Point::new(origin.x + x_start, origin.y + y),
-                  run,
-                }),
-                MathFragment::Rule(rect) => {
-                  frags.push(MathFragment::Rule(rect.translate(Point::new(x_start, y))))
-                }
-              }
+              frags.push(frag.translate(Point::new(x_start, y)));
             }
             block_ascent = block_ascent.max(layout.baseline - y);
             block_descent = block_descent.max(layout.height - (layout.baseline - y));
@@ -1210,15 +1735,7 @@ impl MathLayoutContext {
           if let Some(layout) = sub_layout {
             let y = base_layout.baseline + Self::script_gap(style) - layout.baseline;
             for frag in layout.fragments {
-              match frag {
-                MathFragment::Glyph { origin, run } => frags.push(MathFragment::Glyph {
-                  origin: Point::new(origin.x + x_start, origin.y + y),
-                  run,
-                }),
-                MathFragment::Rule(rect) => {
-                  frags.push(MathFragment::Rule(rect.translate(Point::new(x_start, y))))
-                }
-              }
+              frags.push(frag.translate(Point::new(x_start, y)));
             }
             block_ascent = block_ascent.max(layout.baseline - y);
             block_descent = block_descent.max(layout.height - (layout.baseline - y));
@@ -1237,35 +1754,13 @@ impl MathLayoutContext {
 
     // Position fragments
     for frag in pre_frags {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x, origin.y),
-          run,
-        }),
-        MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(rect)),
-      }
+      fragments.push(frag);
     }
     for frag in base_layout.fragments {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x + width_left, origin.y),
-          run,
-        }),
-        MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(
-          rect.translate(Point::new(width_left, 0.0)),
-        )),
-      }
+      fragments.push(frag.translate(Point::new(width_left, 0.0)));
     }
     for frag in post_frags {
-      match frag {
-        MathFragment::Glyph { origin, run } => fragments.push(MathFragment::Glyph {
-          origin: Point::new(origin.x + width_left + base_layout.width, origin.y),
-          run,
-        }),
-        MathFragment::Rule(rect) => fragments.push(MathFragment::Rule(
-          rect.translate(Point::new(width_left + base_layout.width, 0.0)),
-        )),
-      }
+      fragments.push(frag.translate(Point::new(width_left + base_layout.width, 0.0)));
     }
 
     MathLayout {
@@ -1285,28 +1780,36 @@ impl MathLayoutContext {
     match node {
       MathNode::Math { display, children } => {
         let mut style = *style;
-        style.display = *display;
+        style.display_style = style.display_style || *display;
         self.layout_row(children, &style, base_style)
       }
       MathNode::Row(children) => self.layout_row(children, style, base_style),
-      MathNode::Identifier { text, italic, bold } => {
-        self.layout_glyphs(text, base_style, style, *italic, *bold)
+      MathNode::Identifier { text, variant } => {
+        let resolved = self.resolve_variant(*variant, style, MathVariant::Italic);
+        self.layout_glyphs(text, base_style, style, resolved)
       }
-      MathNode::Number { text, italic, bold } => {
-        self.layout_glyphs(text, base_style, style, *italic, *bold)
+      MathNode::Number { text, variant } => {
+        let resolved = self.resolve_variant(*variant, style, MathVariant::Normal);
+        self.layout_glyphs(text, base_style, style, resolved)
       }
       MathNode::Operator {
         text,
         stretchy: _,
-        italic,
-        bold,
+        variant,
       } => {
+        let resolved = self.resolve_variant(*variant, style, MathVariant::Normal);
         // Stretching handled during row aggregation by scaling font size heuristically.
-        self.layout_glyphs(text, base_style, style, *italic, *bold)
+        self.layout_glyphs(text, base_style, style, resolved)
       }
-      MathNode::Text { text, italic, bold } => {
-        self.layout_glyphs(text, base_style, style, *italic, *bold)
+      MathNode::Text { text, variant } => {
+        let resolved = self.resolve_variant(*variant, style, MathVariant::Normal);
+        self.layout_glyphs(text, base_style, style, resolved)
       }
+      MathNode::Space {
+        width,
+        height,
+        depth,
+      } => self.layout_space(*width, *height, *depth, style, base_style),
       MathNode::Fraction {
         numerator,
         denominator,
@@ -1343,7 +1846,17 @@ impl MathLayoutContext {
         style,
         base_style,
       ),
-      MathNode::Table(rows) => self.layout_table(rows, style, base_style),
+      MathNode::Style {
+        overrides,
+        children,
+      } => {
+        let next_style = self.apply_style_overrides(style, overrides);
+        self.layout_row(children, &next_style, base_style)
+      }
+      MathNode::Enclose { notation, child } => {
+        self.layout_enclose(notation, child, style, base_style)
+      }
+      MathNode::Table(table) => self.layout_table(table, style, base_style),
       MathNode::Multiscripts {
         base,
         prescripts,
@@ -1354,10 +1867,7 @@ impl MathLayoutContext {
 
   /// Public entrypoint: layout a MathNode tree using the provided style.
   pub fn layout(&mut self, node: &MathNode, style: &ComputedStyle) -> MathLayout {
-    let math_style = MathStyle {
-      font_size: style.font_size,
-      display: false,
-    };
+    let math_style = MathStyle::from_computed(style);
     self.layout_node(node, &math_style, style)
   }
 }
@@ -1375,18 +1885,36 @@ mod tests {
   #[test]
   fn table_layout_completes() {
     let style = ComputedStyle::default();
-    let node = MathNode::Table(vec![
-      vec![MathNode::Identifier {
-        text: "a".into(),
-        italic: true,
-        bold: false,
-      }],
-      vec![MathNode::Identifier {
-        text: "b".into(),
-        italic: true,
-        bold: false,
-      }],
-    ]);
+    let node = MathNode::Table(MathTable {
+      rows: vec![
+        MathTableRow {
+          cells: vec![MathTableCell {
+            content: MathNode::Identifier {
+              text: "a".into(),
+              variant: None,
+            },
+            row_align: None,
+            column_align: None,
+          }],
+          row_align: None,
+          column_aligns: Vec::new(),
+        },
+        MathTableRow {
+          cells: vec![MathTableCell {
+            content: MathNode::Identifier {
+              text: "b".into(),
+              variant: None,
+            },
+            row_align: None,
+            column_align: None,
+          }],
+          row_align: None,
+          column_aligns: Vec::new(),
+        },
+      ],
+      column_aligns: Vec::new(),
+      row_aligns: Vec::new(),
+    });
     let layout = layout_mathml(&node, &style, &FontContext::empty());
     assert!(layout.width > 0.0);
     assert!(layout.height > 0.0);
@@ -1396,32 +1924,56 @@ mod tests {
   #[test]
   fn table_layout_with_font_db() {
     let style = ComputedStyle::default();
-    let node = MathNode::Table(vec![
-      vec![
-        MathNode::Number {
-          text: "1".into(),
-          italic: false,
-          bold: false,
+    let node = MathNode::Table(MathTable {
+      rows: vec![
+        MathTableRow {
+          cells: vec![
+            MathTableCell {
+              content: MathNode::Number {
+                text: "1".into(),
+                variant: None,
+              },
+              row_align: None,
+              column_align: None,
+            },
+            MathTableCell {
+              content: MathNode::Number {
+                text: "2".into(),
+                variant: None,
+              },
+              row_align: None,
+              column_align: None,
+            },
+          ],
+          row_align: None,
+          column_aligns: Vec::new(),
         },
-        MathNode::Number {
-          text: "2".into(),
-          italic: false,
-          bold: false,
+        MathTableRow {
+          cells: vec![
+            MathTableCell {
+              content: MathNode::Number {
+                text: "3".into(),
+                variant: None,
+              },
+              row_align: None,
+              column_align: None,
+            },
+            MathTableCell {
+              content: MathNode::Number {
+                text: "4".into(),
+                variant: None,
+              },
+              row_align: None,
+              column_align: None,
+            },
+          ],
+          row_align: None,
+          column_aligns: Vec::new(),
         },
       ],
-      vec![
-        MathNode::Number {
-          text: "3".into(),
-          italic: false,
-          bold: false,
-        },
-        MathNode::Number {
-          text: "4".into(),
-          italic: false,
-          bold: false,
-        },
-      ],
-    ]);
+      column_aligns: Vec::new(),
+      row_aligns: Vec::new(),
+    });
     let ctx = FontContext::new();
     let layout = layout_mathml(&node, &style, &ctx);
     assert!(layout.width > 0.0);
@@ -1447,11 +1999,10 @@ mod tests {
     let MathNode::Math { children, .. } = parsed else {
       panic!("expected math root");
     };
-    let MathNode::Identifier { italic, bold, text } = &children[0] else {
+    let MathNode::Identifier { variant, text } = &children[0] else {
       panic!("expected identifier child");
     };
     assert_eq!(text, "x");
-    assert!(!italic);
-    assert!(!bold);
+    assert!(matches!(variant, Some(MathVariant::Normal)));
   }
 }

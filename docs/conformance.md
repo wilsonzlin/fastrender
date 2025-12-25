@@ -55,6 +55,7 @@ Status legend: ✅ Supported, ⚠️ Partial/targeted, 🚫 Not supported.
 | Text | Shaping pipeline | ✅ | UAX #9 bidi, script itemization, RustyBuzz shaping with OpenType features/variations, emoji/color font fallback (`text/color_fonts.rs`). |
 | Text | Line breaking & hyphenation | ✅ | Unicode line breaking, word-break/line-break modes, soft hyphens + hyphenate-character, text-combine-upright for vertical text. |
 | Text | Justification & spacing | ⚠️ | Text-justify (inter-word) and letter/word spacing applied; advanced justification variants (inter-character/etc.) are TODO. |
+| Layout | MathML (presentation) | ⚠️ | Parser/layout for common Presentation MathML (fractions/roots/scripts/mtable with row/col alignment/mfenced/mspace/mstyle/menclose, mathvariant fonts), display/inline sizing, and stretchy operators sized to surrounding content, integrated with the text shaping pipeline. |
 
 ## Non-goals (reiterated)
 
