@@ -805,6 +805,36 @@ impl DomNode {
   }
 }
 
+/// Parse an `exportparts` attribute value into (internal, exported) name pairs.
+///
+/// Entries are comma-separated. A missing alias is treated as an identity mapping.
+pub(crate) fn parse_exportparts(value: &str) -> Vec<(String, String)> {
+  let mut mappings = Vec::new();
+  for entry in value.split(',') {
+    let entry = entry.trim();
+    if entry.is_empty() {
+      continue;
+    }
+
+    let mut parts = entry.splitn(2, ':');
+    let internal = parts.next().map(str::trim).unwrap_or_default();
+    let exported = parts.next().map(str::trim);
+    if internal.is_empty() {
+      continue;
+    }
+
+    match exported {
+      Some(alias) if !alias.is_empty() => {
+        mappings.push((internal.to_string(), alias.to_string()));
+      }
+      _ => {
+        mappings.push((internal.to_string(), internal.to_string()));
+      }
+    }
+  }
+  mappings
+}
+
 /// Wrapper for DomNode that implements Element trait for selector matching
 /// This wrapper carries context needed for matching (parent, siblings)
 #[derive(Debug, Clone, Copy)]
@@ -2281,7 +2311,8 @@ impl<'a> Element for ElementRef<'a> {
       | PseudoElement::FirstLetter
       | PseudoElement::Marker
       | PseudoElement::Backdrop => true,
-      PseudoElement::Slotted(_) | PseudoElement::Part(_) => false,
+      PseudoElement::Slotted(_) => false,
+      PseudoElement::Part(_) => true,
     }
   }
 
@@ -2326,7 +2357,18 @@ impl<'a> Element for ElementRef<'a> {
     }
   }
 
-  fn imported_part(&self, _name: &CssString) -> Option<CssString> {
+  fn imported_part(&self, name: &CssString) -> Option<CssString> {
+    let Some(attr) = self.node.get_attribute_ref("exportparts") else {
+      return None;
+    };
+
+    let target = name.as_str();
+    for (internal, exported) in parse_exportparts(attr) {
+      if exported == target {
+        return Some(CssString::from(internal));
+      }
+    }
+
     None
   }
 
@@ -2993,6 +3035,45 @@ mod tests {
     assert!(svg_ref.has_namespace(""));
     assert!(svg_ref.has_namespace(SVG_NAMESPACE));
     assert!(!svg_ref.has_namespace(HTML_NAMESPACE));
+  }
+
+  #[test]
+  fn is_part_checks_whitespace_tokens() {
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("part".to_string(), "header body\tfooter".to_string())],
+      },
+      children: vec![],
+    };
+    let element = ElementRef::new(&node);
+    assert!(element.is_part(&CssString::from("header")));
+    assert!(element.is_part(&CssString::from("footer")));
+    assert!(!element.is_part(&CssString::from("aside")));
+  }
+
+  #[test]
+  fn imported_part_handles_aliases_and_identity() {
+    let node = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("exportparts".to_string(), "label, inner:outer".to_string())],
+      },
+      children: vec![],
+    };
+    let element = ElementRef::new(&node);
+
+    assert_eq!(
+      element.imported_part(&CssString::from("label")),
+      Some(CssString::from("label"))
+    );
+    assert_eq!(
+      element.imported_part(&CssString::from("outer")),
+      Some(CssString::from("inner"))
+    );
+    assert_eq!(element.imported_part(&CssString::from("missing")), None);
   }
 
   fn collect_wbr_texts(node: &DomNode, out: &mut Vec<String>) {

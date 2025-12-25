@@ -14,6 +14,7 @@ use crate::css::selectors::PseudoElement;
 use crate::css::selectors::ShadowMatchData;
 use crate::css::selectors::TextDirection;
 use crate::css::types::ContainerCondition;
+use crate::css::types::CssString;
 use crate::css::types::CssImportLoader;
 use crate::css::types::Declaration;
 use crate::css::types::PropertyValue;
@@ -23,6 +24,7 @@ use crate::css::types::StyleSheet;
 use crate::debug::runtime;
 use crate::dom::compute_slot_assignment;
 use crate::dom::enumerate_dom_ids;
+use crate::dom::parse_exportparts;
 use crate::dom::resolve_first_strong_direction;
 use crate::dom::with_target_fragment;
 use crate::dom::DomNode;
@@ -2475,6 +2477,141 @@ fn scope_has_pseudo_content(
   false
 }
 
+fn part_names(node: &DomNode) -> Vec<CssString> {
+  let Some(attr) = node.get_attribute_ref("part") else {
+    return Vec::new();
+  };
+
+  let mut names = Vec::new();
+  let mut seen: HashSet<&str> = HashSet::new();
+  for token in attr.split_whitespace().filter(|t| !t.is_empty()) {
+    if seen.insert(token) {
+      names.push(CssString::from(token));
+    }
+  }
+
+  names
+}
+
+fn exported_part_names(host: &DomNode, names: &[CssString]) -> Vec<CssString> {
+  let Some(attr) = host.get_attribute_ref("exportparts") else {
+    return Vec::new();
+  };
+  let mappings = parse_exportparts(attr);
+
+  let mut exported = Vec::new();
+  let mut seen: HashSet<&str> = HashSet::new();
+  for name in names {
+    let target = name.as_str();
+    for (internal, alias) in mappings.iter() {
+      if internal == target && seen.insert(alias.as_str()) {
+        exported.push(CssString::from(alias.as_str()));
+      }
+    }
+  }
+
+  exported
+}
+
+fn match_part_rules<'a>(
+  node: &DomNode,
+  ancestors: &[&DomNode],
+  rules: &'a RuleIndex<'a>,
+  selector_caches: &mut SelectorCaches,
+  scratch: &mut CascadeScratch,
+) -> Vec<MatchedRule<'a>> {
+  if !ancestors
+    .iter()
+    .any(|ancestor| matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }))
+  {
+    return Vec::new();
+  }
+
+  if rules.pseudo_buckets.is_empty() {
+    return Vec::new();
+  }
+
+  let part_pseudos: Vec<&PseudoElement> = rules
+    .pseudo_buckets
+    .keys()
+    .filter(|pe| matches!(pe, PseudoElement::Part(_)))
+    .collect();
+  if part_pseudos.is_empty() {
+    return Vec::new();
+  }
+
+  let mut names = part_names(node);
+  if names.is_empty() {
+    return Vec::new();
+  }
+
+  let mut matched: Vec<MatchedRule<'a>> = Vec::new();
+  let mut matched_by_order: HashMap<usize, usize> = HashMap::new();
+
+  let mut idx = ancestors.len();
+  while idx > 0 {
+    idx -= 1;
+    if !matches!(ancestors[idx].node_type, DomNodeType::ShadowRoot { .. }) {
+      continue;
+    }
+    if idx == 0 {
+      break;
+    }
+
+    let host_idx = idx - 1;
+    let host = ancestors[host_idx];
+    let host_ancestors = &ancestors[..host_idx];
+
+    // Document stylesheets should only be matched against document-tree nodes.
+    // Shadow-scoped matching can still reach across boundaries via exportparts, but
+    // the selector prelude itself cannot pierce shadow roots.
+    let host_is_in_document_tree = !host_ancestors
+      .iter()
+      .any(|ancestor| matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }));
+
+    if host_is_in_document_tree {
+      let mut name_set: HashSet<&str> = HashSet::new();
+      for name in names.iter() {
+        name_set.insert(name.as_str());
+      }
+
+      for pseudo in part_pseudos.iter().copied() {
+        let PseudoElement::Part(required) = pseudo else {
+          continue;
+        };
+        if !required.iter().all(|req| name_set.contains(req.as_str())) {
+          continue;
+        }
+        let part_matches = find_pseudo_element_rules(
+          host,
+          rules,
+          selector_caches,
+          scratch,
+          host_ancestors,
+          pseudo,
+        );
+        for rule in part_matches {
+          if let Some(pos) = matched_by_order.get(&rule.order).copied() {
+            if rule.specificity > matched[pos].specificity {
+              matched[pos].specificity = rule.specificity;
+            }
+          } else {
+            matched_by_order.insert(rule.order, matched.len());
+            matched.push(rule);
+          }
+        }
+      }
+    }
+
+    names = exported_part_names(host, &names);
+    if names.is_empty() {
+      break;
+    }
+  }
+
+  matched
+}
+
 fn collect_matching_rules<'a>(
   node: &DomNode,
   scopes: &'a RuleScopes<'a>,
@@ -2572,6 +2709,14 @@ fn collect_matching_rules<'a>(
       }
     }
   }
+
+  matches.extend(match_part_rules(
+    node,
+    ancestors,
+    &scopes.document,
+    selector_caches,
+    scratch,
+  ));
 
   matches
 }
