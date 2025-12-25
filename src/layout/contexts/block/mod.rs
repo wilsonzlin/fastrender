@@ -29,6 +29,7 @@ pub mod width;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::error::{RenderError, RenderStage};
 use crate::layout::constraints::AvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::block::width::MarginValue;
@@ -48,6 +49,7 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
+use crate::render_control::check_active;
 use crate::layout::utils::border_size_from_box_sizing;
 use crate::layout::utils::compute_replaced_size;
 use crate::layout::utils::content_size_from_box_sizing;
@@ -2278,6 +2280,9 @@ impl FormattingContext for BlockFormattingContext {
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
     let _profile = layout_timer(LayoutKind::Block);
+    if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+      return Err(LayoutError::Timeout { elapsed });
+    }
     if let Some(cached) = layout_cache_lookup(
       box_node,
       FormattingContextType::Block,

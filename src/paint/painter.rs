@@ -27,7 +27,9 @@ use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
 use crate::css::types::Transform as CssTransform;
+use crate::error::Error;
 use crate::error::RenderError;
+use crate::error::RenderStage;
 use crate::error::Result;
 use crate::geometry::Point;
 use crate::geometry::Rect;
@@ -53,6 +55,7 @@ use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
 use crate::resource::ResourceFetcher;
+use crate::render_control::check_active;
 #[cfg(test)]
 use crate::style::color::Color;
 use crate::style::color::Rgba;
@@ -1112,6 +1115,7 @@ impl Painter {
       .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
       .unwrap_or(false);
     let mut stats = PaintStats::default();
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
 
     if dump_counts_enabled() {
       let (total, text, replaced, lines, inline) = fragment_tree_counts(tree);
@@ -1141,6 +1145,7 @@ impl Painter {
     for root in std::iter::once(&tree.root).chain(tree.additional_fragments.iter()) {
       self.collect_stacking_context(root, offset, None, true, root_paint, registry_ref, &mut items);
     }
+    check_active(RenderStage::Paint).map_err(Error::Render)?;
     if profiling {
       stats.collect_ms = collect_start.elapsed().as_secs_f64() * 1000.0;
     }
@@ -1315,6 +1320,9 @@ impl Painter {
     }
 
     for item in items {
+      if let Err(RenderError::Timeout { stage, elapsed }) = check_active(RenderStage::Paint) {
+        return Err(Error::Render(RenderError::Timeout { stage, elapsed }));
+      }
       if profiling {
         let exec_start = Instant::now();
         self.execute_command(item.clone())?;
@@ -1359,6 +1367,9 @@ impl Painter {
     svg_filter_registry: Option<&SvgFilterRegistry>,
     items: &mut Vec<DisplayCommand>,
   ) {
+    if check_active(RenderStage::Paint).is_err() {
+      return;
+    }
     let debug_fragments = dump_fragments_enabled();
     let is_root_fragment = is_root_context && parent_style.is_none();
     let root_background = if is_root_fragment && root_paint.use_root_background {

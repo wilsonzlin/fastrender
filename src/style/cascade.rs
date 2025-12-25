@@ -24,6 +24,7 @@ use crate::dom::DomNode;
 use crate::dom::DomNodeType;
 use crate::dom::ElementRef;
 use crate::geometry::Size;
+use crate::render_control::RenderDeadline;
 use crate::style::color::Rgba;
 use crate::style::defaults::get_default_styles_for_element;
 use crate::style::defaults::parse_color_attribute;
@@ -47,6 +48,7 @@ use crate::style::values::LengthUnit;
 use crate::style::ComputedStyle;
 use crate::style::Direction;
 use crate::style::TopLayerKind;
+use crate::{error::RenderError, error::RenderStage};
 use cssparser::ToCss;
 use selectors::context::IncludeStartingStyle;
 use selectors::context::QuirksMode;
@@ -1134,6 +1136,40 @@ pub fn apply_styles_with_media_target_and_imports_cached(
   reuse_map: Option<&HashMap<usize, *const StyledNode>>,
   mut media_cache: Option<&mut MediaQueryCache>,
 ) -> StyledNode {
+  apply_styles_with_media_target_and_imports_cached_with_deadline(
+    dom,
+    stylesheet,
+    media_ctx,
+    target_fragment,
+    import_loader,
+    base_url,
+    container_ctx,
+    container_scope,
+    reuse_map,
+    media_cache.as_deref_mut(),
+    None,
+  )
+  // A missing deadline means cancellation is disabled.
+  .expect("deadline-free cascade should not fail")
+}
+
+/// Apply styles with optional media-query caching to share media evaluation across passes.
+#[allow(clippy::needless_option_as_deref)]
+// Cached variant shares the same rationale: default hashers are fine for these usize keys/maps.
+#[allow(clippy::implicit_hasher)]
+pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
+  dom: &DomNode,
+  stylesheet: &StyleSheet,
+  media_ctx: &MediaContext,
+  target_fragment: Option<&str>,
+  import_loader: Option<&dyn CssImportLoader>,
+  base_url: Option<&str>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  mut media_cache: Option<&mut MediaQueryCache>,
+  deadline: Option<&RenderDeadline>,
+) -> Result<StyledNode, RenderError> {
   let profile_enabled = cascade_profile_enabled();
   let profile_start = profile_enabled.then(|| Instant::now());
   if profile_enabled {
@@ -1242,17 +1278,17 @@ pub fn apply_styles_with_media_target_and_imports_cached(
         Some(&mut reuse_counter)
       } else {
         None
-      };
-      let color_scheme_pref = media_ctx
-        .prefers_color_scheme
-        .unwrap_or(ColorScheme::NoPreference);
+    };
+    let color_scheme_pref = media_ctx
+      .prefers_color_scheme
+      .unwrap_or(ColorScheme::NoPreference);
       apply_styles_internal(
         dom,
         &rule_index,
         &mut selector_caches,
         &mut scratch,
         &base_styles,
-        &base_ua_styles,
+      &base_ua_styles,
         16.0,
         16.0,
         Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
@@ -1263,9 +1299,10 @@ pub fn apply_styles_with_media_target_and_imports_cached(
         container_scope,
         reuse_map,
         reuse_counter_opt,
-      )
-    })
-  });
+      deadline,
+    )
+  })
+  })?;
 
   if let (true, Some(start)) = (profile_enabled, profile_start) {
     log_cascade_profile(start.elapsed().as_secs_f64() * 1000.0);
@@ -1287,7 +1324,7 @@ pub fn apply_styles_with_media_target_and_imports_cached(
     );
   }
 
-  styled
+  Ok(styled)
 }
 
 fn append_presentational_hints<'a>(
@@ -1511,11 +1548,17 @@ fn apply_styles_internal(
   container_scope: Option<&HashSet<usize>>,
   reuse_map: Option<&HashMap<usize, *const StyledNode>>,
   reuse_counter: Option<&mut usize>,
-) -> StyledNode {
+  deadline: Option<&RenderDeadline>,
+) -> Result<StyledNode, RenderError> {
   record_node_visit(node);
   let mut ancestors: Vec<&DomNode> = Vec::new();
   let node_id = *node_counter;
   *node_counter += 1;
+  if let Some(deadline) = deadline {
+    if deadline.is_enabled() && node_id % 64 == 0 {
+      deadline.check(RenderStage::Cascade)?;
+    }
+  }
 
   if !node.is_element() {
     let mut ua_styles = get_default_styles_for_element(node);
@@ -1569,13 +1612,14 @@ fn apply_styles_internal(
         container_scope,
         reuse_map,
         child_reuse,
-      );
+        deadline,
+      )?;
       children.push(child_styled);
     }
     ancestors.pop();
     ancestor_ids.pop();
 
-    return StyledNode {
+    return Ok(StyledNode {
       node_id,
       node: node.clone(),
       styles,
@@ -1583,7 +1627,7 @@ fn apply_styles_internal(
       after_styles: None,
       marker_styles: None,
       children,
-    };
+    });
   }
 
   let mut ua_styles = get_default_styles_for_element(node);
@@ -1843,13 +1887,14 @@ fn apply_styles_internal(
       container_scope,
       reuse_map,
       child_reuse,
-    );
+      deadline,
+    )?;
     children.push(child_styled);
   }
   ancestors.pop();
   ancestor_ids.pop();
 
-  StyledNode {
+  Ok(StyledNode {
     node_id,
     node: node.clone(),
     styles,
@@ -1857,7 +1902,7 @@ fn apply_styles_internal(
     after_styles,
     marker_styles,
     children,
-  }
+  })
 }
 
 fn apply_styles_internal_with_ancestors<'a>(
@@ -1878,11 +1923,17 @@ fn apply_styles_internal_with_ancestors<'a>(
   container_scope: Option<&HashSet<usize>>,
   reuse_map: Option<&HashMap<usize, *const StyledNode>>,
   reuse_counter: Option<&mut usize>,
-) -> StyledNode {
+  deadline: Option<&RenderDeadline>,
+) -> Result<StyledNode, RenderError> {
   record_node_visit(node);
 
   let node_id = *node_counter;
   *node_counter += 1;
+  if let Some(deadline) = deadline {
+    if deadline.is_enabled() && node_id % 64 == 0 {
+      deadline.check(RenderStage::Cascade)?;
+    }
+  }
 
   // If this node lies outside any container scope during a container-query recascade,
   // reuse the prior styled subtree to avoid recomputing unaffected branches.
@@ -1961,13 +2012,14 @@ fn apply_styles_internal_with_ancestors<'a>(
         container_scope,
         reuse_map,
         child_reuse,
-      );
+        deadline,
+      )?;
       children.push(child_styled);
     }
     ancestors.pop();
     ancestor_ids.pop();
 
-    return StyledNode {
+    return Ok(StyledNode {
       node_id,
       node: node.clone(),
       styles,
@@ -1975,7 +2027,7 @@ fn apply_styles_internal_with_ancestors<'a>(
       after_styles: None,
       marker_styles: None,
       children,
-    };
+    });
   }
 
   let mut ua_styles = get_default_styles_for_element(node);
@@ -2197,13 +2249,14 @@ fn apply_styles_internal_with_ancestors<'a>(
       container_scope,
       reuse_map,
       child_reuse,
-    );
+      deadline,
+    )?;
     children.push(child_styled);
   }
   ancestors.pop();
   ancestor_ids.pop();
 
-  StyledNode {
+  Ok(StyledNode {
     node_id,
     node: node.clone(),
     styles,
@@ -2211,7 +2264,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     after_styles,
     marker_styles,
     children,
-  }
+  })
 }
 
 fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {

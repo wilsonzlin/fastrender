@@ -71,6 +71,7 @@ use crate::dom::DomNode;
 use crate::dom::{self, DomCompatibilityMode, DomParseOptions};
 use crate::error::Error;
 use crate::error::NavigationError;
+use crate::error::RenderStage;
 use crate::error::RenderError;
 use crate::error::ResourceError;
 use crate::error::Result;
@@ -101,10 +102,12 @@ use crate::layout::profile::reset_layout_profile;
 use crate::paint::display_list_builder::DisplayListBuilder;
 use crate::paint::painter::paint_tree_with_resources_scaled;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset;
+use crate::render_control::{CancelCallback, DeadlineGuard, RenderDeadline};
 use crate::resource::CachingFetcherConfig;
 use crate::resource::{CachingFetcher, HttpFetcher, ResourceFetcher, ResourcePolicy};
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
 use crate::style::cascade::apply_styles_with_media_target_and_imports_cached;
+use crate::style::cascade::apply_styles_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::ContainerQueryContext;
 use crate::style::cascade::ContainerQueryInfo;
 use crate::style::cascade::StyledNode;
@@ -150,7 +153,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use url::Url;
 
 const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 // Re-export Pixmap from tiny-skia for public use
 pub use crate::image_loader::ImageCacheConfig;
 pub use crate::layout::pagination::PageStacking;
@@ -486,7 +489,7 @@ impl Default for FastRenderBuilder {
 }
 
 /// Per-request rendering options for both HTML strings and URLs.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RenderOptions {
   /// Optional viewport override. Falls back to the renderer's default size.
   pub viewport: Option<(u32, u32)>,
@@ -504,6 +507,10 @@ pub struct RenderOptions {
   pub capture_accessibility: bool,
   /// When true, document fetch failures will return a placeholder pixmap with diagnostics instead of an error.
   pub allow_partial: bool,
+  /// Optional hard timeout for the render.
+  pub timeout: Option<Duration>,
+  /// Optional cooperative cancellation callback.
+  pub cancel_callback: Option<Arc<CancelCallback>>,
 }
 
 impl Default for RenderOptions {
@@ -517,7 +524,29 @@ impl Default for RenderOptions {
       css_limit: None,
       capture_accessibility: false,
       allow_partial: false,
+      timeout: None,
+      cancel_callback: None,
     }
+  }
+}
+
+impl std::fmt::Debug for RenderOptions {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("RenderOptions")
+      .field("viewport", &self.viewport)
+      .field("device_pixel_ratio", &self.device_pixel_ratio)
+      .field("media_type", &self.media_type)
+      .field("scroll_x", &self.scroll_x)
+      .field("scroll_y", &self.scroll_y)
+      .field("css_limit", &self.css_limit)
+      .field("capture_accessibility", &self.capture_accessibility)
+      .field("allow_partial", &self.allow_partial)
+      .field("timeout", &self.timeout)
+      .field(
+        "cancel_callback",
+        &self.cancel_callback.as_ref().map(|_| "<callback>"),
+      )
+      .finish()
   }
 }
 
@@ -569,6 +598,18 @@ impl RenderOptions {
     self.allow_partial = allow;
     self
   }
+
+  /// Set a timeout for the entire render pipeline.
+  pub fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
+    self.timeout = timeout;
+    self
+  }
+
+  /// Provide a cooperative cancellation callback that returns true when rendering should stop.
+  pub fn with_cancel_callback(mut self, callback: Option<Arc<CancelCallback>>) -> Self {
+    self.cancel_callback = callback;
+    self
+  }
 }
 
 /// Diagnostics collected during rendering.
@@ -578,6 +619,8 @@ pub struct RenderDiagnostics {
   pub fetch_errors: Vec<ResourceFetchError>,
   /// Document-level fetch failure message when a placeholder render is produced.
   pub document_error: Option<String>,
+  /// Stage at which rendering timed out, when allow_partial is used.
+  pub timeout_stage: Option<RenderStage>,
 }
 
 impl RenderDiagnostics {
@@ -1369,6 +1412,13 @@ fn sanitize_scale(value: Option<f32>) -> Option<f32> {
     .map(|v| v.clamp(MIN_EFFECTIVE_SCALE, MAX_EFFECTIVE_SCALE))
 }
 
+fn check_deadline(deadline: Option<&RenderDeadline>, stage: RenderStage) -> Result<()> {
+  if let Some(limit) = deadline {
+    limit.check(stage).map_err(Error::Render)?;
+  }
+  Ok(())
+}
+
 #[cfg(test)]
 mod viewport_resolution_tests {
   use super::*;
@@ -1976,6 +2026,22 @@ impl FastRender {
     options: RenderOptions,
     artifacts: Option<&mut RenderArtifacts>,
   ) -> Result<RenderOutputs> {
+    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+    self.render_html_with_options_internal_with_deadline(
+      html,
+      options,
+      artifacts,
+      Some(&deadline),
+    )
+  }
+
+  fn render_html_with_options_internal_with_deadline(
+    &mut self,
+    html: &str,
+    mut options: RenderOptions,
+    artifacts: Option<&mut RenderArtifacts>,
+    deadline: Option<&RenderDeadline>,
+  ) -> Result<RenderOutputs> {
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
@@ -1992,8 +2058,34 @@ impl FastRender {
       options.scroll_y,
       options.media_type,
       options.capture_accessibility,
+      deadline,
       artifacts,
     );
+    let result = match result {
+      Ok(outputs) => Ok(outputs),
+      Err(err) => {
+        if options.allow_partial {
+          let stage = match &err {
+            Error::Render(RenderError::Timeout { stage, .. }) => Some(*stage),
+            Error::Layout(crate::error::LayoutError::Timeout { .. }) => Some(RenderStage::Layout),
+            _ => None,
+          };
+          if let Some(stage) = stage {
+            if let Some(diag) = &self.diagnostics {
+              if let Ok(mut guard) = diag.lock() {
+                guard.timeout_stage = Some(stage);
+              }
+            }
+            let pixmap = self.render_error_overlay(width, height)?;
+            return Ok(RenderOutputs {
+              pixmap,
+              accessibility: None,
+            });
+          }
+        }
+        Err(err)
+      }
+    };
 
     if options.device_pixel_ratio.is_some() {
       self.device_pixel_ratio = original_dpr;
@@ -2016,6 +2108,7 @@ impl FastRender {
     scroll_y: f32,
     media_type: MediaType,
     capture_accessibility: bool,
+    deadline: Option<&RenderDeadline>,
     mut artifacts: Option<&mut RenderArtifacts>,
   ) -> Result<RenderOutputs> {
     // Validate dimensions
@@ -2024,6 +2117,8 @@ impl FastRender {
         message: format!("Invalid dimensions: width={}, height={}", width, height),
       }));
     }
+
+    let _deadline_guard = DeadlineGuard::install(deadline);
 
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
     let mut stage_start = timings_enabled.then(Instant::now);
@@ -2036,6 +2131,7 @@ impl FastRender {
         store.dom = Some(dom.clone());
       }
     }
+    check_deadline(deadline, RenderStage::DomParse)?;
 
     if let Some(start) = stage_start.as_mut() {
       let now = Instant::now();
@@ -2065,6 +2161,7 @@ impl FastRender {
         layout_height,
         media_type,
         LayoutDocumentOptions::default(),
+        deadline,
       )?;
       self.pending_device_size = None;
       let LayoutArtifacts {
@@ -2363,6 +2460,7 @@ impl FastRender {
         layout_height,
         options.media_type,
         LayoutDocumentOptions::default(),
+        None,
       )
     })();
 
@@ -2687,20 +2785,54 @@ impl FastRender {
     let html = decode_html_bytes(&resource.bytes, resource.content_type.as_deref());
     let base_url = infer_base_url(&html, hint).into_owned();
     self.set_base_url(base_url.clone());
+    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+    let (width, height) = options
+      .viewport
+      .unwrap_or((self.default_width, self.default_height));
 
     let html_with_css = {
       let mut guard = diagnostics.lock().unwrap();
-      self.inline_stylesheets(
+      match self.inline_stylesheets(
         &html,
         &base_url,
         options.media_type,
         options.css_limit,
         &mut guard,
-      )
+        Some(&deadline),
+      ) {
+        Ok(inlined) => inlined,
+        Err(err) => {
+          if options.allow_partial {
+            if let RenderError::Timeout { stage, .. } = &err {
+              guard.timeout_stage = Some(*stage);
+              let diagnostics = guard.clone();
+              if !had_sink {
+                self.set_diagnostics_sink(None);
+              }
+              let pixmap = self.render_error_overlay(width, height)?;
+              return Ok(RenderReport {
+                pixmap,
+                accessibility: None,
+                diagnostics,
+                artifacts: RenderArtifacts::new(artifacts),
+              });
+            }
+          }
+          drop(guard);
+          if !had_sink {
+            self.set_diagnostics_sink(None);
+          }
+          return Err(Error::Render(err));
+        }
+      }
     };
     let mut captured = RenderArtifacts::new(artifacts);
-    let outputs =
-      self.render_html_with_options_internal(&html_with_css, options, Some(&mut captured))?;
+    let outputs = self.render_html_with_options_internal_with_deadline(
+      &html_with_css,
+      options,
+      Some(&mut captured),
+      Some(&deadline),
+    )?;
     if !had_sink {
       self.set_diagnostics_sink(None);
     }
@@ -2744,20 +2876,54 @@ impl FastRender {
     };
     let base_url = infer_base_url(html, base_hint).into_owned();
     self.set_base_url(base_url.clone());
+    let deadline = RenderDeadline::new(options.timeout, options.cancel_callback.clone());
+    let (width, height) = options
+      .viewport
+      .unwrap_or((self.default_width, self.default_height));
 
     let html_with_css = {
       let mut guard = diagnostics.lock().unwrap();
-      self.inline_stylesheets(
+      match self.inline_stylesheets(
         html,
         &base_url,
         options.media_type,
         options.css_limit,
         &mut guard,
-      )
+        Some(&deadline),
+      ) {
+        Ok(inlined) => inlined,
+        Err(err) => {
+          if options.allow_partial {
+            if let RenderError::Timeout { stage, .. } = &err {
+              guard.timeout_stage = Some(*stage);
+              let diagnostics = guard.clone();
+              if !had_sink {
+                self.set_diagnostics_sink(None);
+              }
+              let pixmap = self.render_error_overlay(width, height)?;
+              return Ok(RenderReport {
+                pixmap,
+                accessibility: None,
+                diagnostics,
+                artifacts: RenderArtifacts::new(artifacts),
+              });
+            }
+          }
+          drop(guard);
+          if !had_sink {
+            self.set_diagnostics_sink(None);
+          }
+          return Err(Error::Render(err));
+        }
+      }
     };
     let mut captured = RenderArtifacts::new(artifacts);
-    let outputs =
-      self.render_html_with_options_internal(&html_with_css, options, Some(&mut captured))?;
+    let outputs = self.render_html_with_options_internal_with_deadline(
+      &html_with_css,
+      options,
+      Some(&mut captured),
+      Some(&deadline),
+    )?;
     if !had_sink {
       self.set_diagnostics_sink(None);
     }
@@ -2993,6 +3159,7 @@ impl FastRender {
     let mut media_query_cache = MediaQueryCache::default();
     let stylesheet =
       self.collect_document_stylesheet(&dom_with_state, &media_ctx, &mut media_query_cache);
+    check_deadline(deadline, RenderStage::Css)?;
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
     // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
     let result = std::thread::scope(|scope| {
@@ -3126,7 +3293,14 @@ impl FastRender {
     height: u32,
     options: LayoutDocumentOptions,
   ) -> Result<FragmentTree> {
-    self.layout_document_for_media_with_options(dom, width, height, MediaType::Screen, options)
+    self.layout_document_for_media_with_options(
+      dom,
+      width,
+      height,
+      MediaType::Screen,
+      options,
+      None,
+    )
   }
 
   pub fn layout_document_for_media(
@@ -3142,6 +3316,7 @@ impl FastRender {
       height,
       media_type,
       LayoutDocumentOptions::default(),
+      None,
     )
   }
 
@@ -3153,9 +3328,16 @@ impl FastRender {
     height: u32,
     media_type: MediaType,
     options: LayoutDocumentOptions,
+    deadline: Option<&RenderDeadline>,
   ) -> Result<FragmentTree> {
-    let artifacts =
-      self.layout_document_for_media_with_artifacts(dom, width, height, media_type, options)?;
+    let artifacts = self.layout_document_for_media_with_artifacts(
+      dom,
+      width,
+      height,
+      media_type,
+      options,
+      deadline,
+    )?;
     Ok(artifacts.fragment_tree)
   }
 
@@ -3167,7 +3349,9 @@ impl FastRender {
     height: u32,
     media_type: MediaType,
     options: LayoutDocumentOptions,
+    deadline: Option<&RenderDeadline>,
   ) -> Result<LayoutArtifacts> {
+    let _deadline_guard = DeadlineGuard::install(deadline);
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
     let overall_start = timings_enabled.then(Instant::now);
 
@@ -3220,7 +3404,7 @@ impl FastRender {
       eprintln!("timing:style_prepare {:?}", start.elapsed());
     }
     let style_apply_start = timings_enabled.then(Instant::now);
-    let styled_tree = apply_styles_with_media_target_and_imports_cached(
+    let styled_tree = apply_styles_with_media_target_and_imports_cached_with_deadline(
       &dom_with_state,
       &stylesheet,
       &media_ctx,
@@ -3231,7 +3415,9 @@ impl FastRender {
       None,
       None,
       Some(&mut media_query_cache),
-    );
+      deadline,
+    )?;
+    check_deadline(deadline, RenderStage::Cascade)?;
     if let Some(start) = style_apply_start {
       eprintln!("timing:style_apply {:?}", start.elapsed());
     }
@@ -3442,11 +3628,20 @@ impl FastRender {
     let mut layout_start = stage_start;
 
     // Perform initial layout
-    let mut fragment_tree = self.layout_engine.layout_tree(&box_tree).map_err(|e| {
-      Error::Render(RenderError::InvalidParameters {
-        message: format!("Layout failed: {:?}", e),
-      })
-    })?;
+    let mut fragment_tree = self
+      .layout_engine
+      .layout_tree_with_deadline(&box_tree, deadline)
+      .map_err(|e| match e {
+        crate::error::LayoutError::Timeout { elapsed } => {
+          Error::Render(RenderError::Timeout {
+            stage: RenderStage::Layout,
+            elapsed,
+          })
+        }
+        other => Error::Render(RenderError::InvalidParameters {
+          message: format!("Layout failed: {:?}", other),
+        }),
+      })?;
     let capture_container_fields = std::env::var("FASTR_LOG_CONTAINER_FIELDS")
       .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
       .unwrap_or(false);
@@ -3992,7 +4187,8 @@ impl FastRender {
     media_type: MediaType,
     css_limit: Option<usize>,
     diagnostics: &mut RenderDiagnostics,
-  ) -> String {
+    deadline: Option<&RenderDeadline>,
+  ) -> Result<String, RenderError> {
     Self::inline_stylesheets_for_html(
       self.fetcher.as_ref(),
       html,
@@ -4000,6 +4196,7 @@ impl FastRender {
       media_type,
       css_limit,
       diagnostics,
+      deadline,
     )
   }
 
@@ -4011,8 +4208,9 @@ impl FastRender {
     media_type: MediaType,
     css_limit: Option<usize>,
     diagnostics: &mut RenderDiagnostics,
-  ) -> String {
-    self.inline_stylesheets(html, base_url, media_type, css_limit, diagnostics)
+    deadline: Option<&RenderDeadline>,
+  ) -> Result<String, RenderError> {
+    self.inline_stylesheets(html, base_url, media_type, css_limit, diagnostics, deadline)
   }
 
   /// Fetch linked stylesheets using an arbitrary fetcher and inject them into the HTML.
@@ -4023,7 +4221,8 @@ impl FastRender {
     media_type: MediaType,
     css_limit: Option<usize>,
     diagnostics: &mut RenderDiagnostics,
-  ) -> String {
+    deadline: Option<&RenderDeadline>,
+  ) -> Result<String, RenderError> {
     let mut css_links = extract_css_links(html, base_url, media_type);
     if let Some(limit) = css_limit {
       if css_links.len() > limit {
@@ -4068,7 +4267,8 @@ impl FastRender {
               &mut import_fetch,
               &mut seen_imports,
               &mut import_diag,
-            )
+              deadline,
+            )?
           };
           for (url, reason) in import_diags.drain(..) {
             diagnostics.record_message(ResourceKind::Stylesheet, &url, &reason);
@@ -4080,11 +4280,11 @@ impl FastRender {
       }
     }
 
-    if combined_css.is_empty() {
+    Ok(if combined_css.is_empty() {
       html.to_string()
     } else {
       inject_css_into_html(html, &combined_css)
-    }
+    })
   }
 
   /// Populate intrinsic sizes for replaced elements (e.g., images) using the image cache.
@@ -6196,6 +6396,7 @@ pub(crate) fn render_html_with_shared_resources(
       0.0,
       MediaType::Screen,
       false,
+      None,
       None,
     )
     .map(|out| out.pixmap)

@@ -47,6 +47,8 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
+use crate::render_control::check_active;
+use crate::{error::RenderError, error::RenderStage};
 use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -272,6 +274,9 @@ impl FormattingContext for FlexFormattingContext {
       "FlexFormattingContext must only layout flex containers",
     );
     let _profile = layout_timer(LayoutKind::Flex);
+    if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+      return Err(LayoutError::Timeout { elapsed });
+    }
     let build_timer = flex_profile::timer();
     let mut constraints = *constraints;
     let container_inline_base = constraints

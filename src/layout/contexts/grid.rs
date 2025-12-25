@@ -30,6 +30,7 @@
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::error::{RenderError, RenderStage};
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::formatting_context::layout_cache_lookup;
@@ -39,6 +40,7 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
+use crate::render_control::check_active;
 use crate::layout::taffy_integration::{record_taffy_invocation, TaffyAdapterKind};
 use crate::layout::utils::resolve_length_with_percentage_metrics;
 use crate::layout::utils::resolve_scrollbar_width;
@@ -2020,6 +2022,9 @@ impl FormattingContext for GridFormattingContext {
       "GridFormattingContext must only layout grid containers",
     );
     let _profile = layout_timer(LayoutKind::Grid);
+    if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+      return Err(LayoutError::Timeout { elapsed });
+    }
     if let Some(cached) = layout_cache_lookup(
       box_node,
       FormattingContextType::Grid,

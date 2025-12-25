@@ -12,6 +12,8 @@
 
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Result type alias for FastRender operations
@@ -56,6 +58,39 @@ impl ErrorKind {
       ErrorKind::Resource => "resource",
       ErrorKind::Other => "other",
     }
+  }
+}
+
+/// Stages of the render pipeline that can be reported in timeout errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RenderStage {
+  /// HTML parsing
+  DomParse,
+  /// CSS fetch/parse/inlining
+  Css,
+  /// Cascade and computed style resolution
+  Cascade,
+  /// Layout computation
+  Layout,
+  /// Display list build and paint
+  Paint,
+}
+
+impl RenderStage {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      RenderStage::DomParse => "dom_parse",
+      RenderStage::Css => "css",
+      RenderStage::Cascade => "cascade",
+      RenderStage::Layout => "layout",
+      RenderStage::Paint => "paint",
+    }
+  }
+}
+
+impl std::fmt::Display for RenderStage {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(self.as_str())
   }
 }
 
@@ -310,6 +345,10 @@ pub enum StyleError {
 /// ```
 #[derive(Error, Debug, Clone)]
 pub enum LayoutError {
+  /// Layout aborted due to timeout or cancellation.
+  #[error("Layout timed out after {elapsed:?}")]
+  Timeout { elapsed: Duration },
+
   /// Invalid layout constraints
   #[error("Invalid layout constraints: {message}")]
   InvalidConstraints { message: String },
@@ -475,6 +514,10 @@ pub enum RenderError {
   /// Rasterization failed
   #[error("Rasterization failed: {reason}")]
   RasterizationFailed { reason: String },
+
+  /// Rendering exceeded the configured timeout or was cancelled.
+  #[error("Rendering timed out during {stage} after {elapsed:?}")]
+  Timeout { stage: RenderStage, elapsed: Duration },
 }
 
 #[cfg(test)]

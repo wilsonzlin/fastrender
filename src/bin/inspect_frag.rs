@@ -194,7 +194,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .fetch(u)
                 .map(|res| decode_css_bytes(&res.bytes, res.content_type.as_deref()))
             };
-            let inlined = inline_imports(&rewritten, &link, &mut import_fetch, &mut seen_imports);
+            let inlined = inline_imports(&rewritten, &link, &mut import_fetch, &mut seen_imports, None)
+              .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             combined_css.push_str(&inlined);
             combined_css.push('\n');
           }

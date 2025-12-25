@@ -126,7 +126,9 @@ fn inline_imports_resolves_urls_relative_to_imported_sheet() {
     &mut fetch,
     &mut seen,
     &mut diag,
-  );
+    None,
+  )
+  .unwrap();
 
   assert!(
     output.contains("url(\"https://example.com/styles/imports/img/bg.png\")"),
@@ -148,7 +150,9 @@ fn inline_imports_reports_cycles() {
     &mut |_url| -> fastrender::error::Result<String> { unreachable!("cycle should short-circuit") },
     &mut seen,
     &mut diag,
-  );
+    None,
+  )
+  .unwrap();
 
   assert!(out.trim().is_empty(), "cyclic imports should be skipped");
   assert!(

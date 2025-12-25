@@ -5,7 +5,8 @@
 //! fetched CSS into an HTML document. They are shared by the developer
 //! tooling binaries so cached pages can be rendered with their real styles.
 
-use crate::error::Result;
+use crate::error::{RenderError, RenderStage, Result};
+use crate::render_control::RenderDeadline;
 use cssparser::{Parser, ParserInput, Token};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -375,11 +376,19 @@ pub fn inline_imports<S: BuildHasher, F>(
   base_url: &str,
   fetch: &mut F,
   seen: &mut HashSet<String, S>,
-) -> String
+  deadline: Option<&RenderDeadline>,
+) -> Result<String, RenderError>
 where
   F: FnMut(&str) -> Result<String>,
 {
-  inline_imports_with_diagnostics(css, base_url, fetch, seen, &mut |_url, _reason| {})
+  inline_imports_with_diagnostics(
+    css,
+    base_url,
+    fetch,
+    seen,
+    &mut |_url, _reason| {},
+    deadline,
+  )
 }
 
 /// Inline `@import` rules with diagnostics about cycles and cutoffs.
@@ -391,7 +400,8 @@ pub fn inline_imports_with_diagnostics<S: BuildHasher, F, D>(
   fetch: &mut F,
   seen: &mut HashSet<String, S>,
   diagnostics: &mut D,
-) -> String
+  deadline: Option<&RenderDeadline>,
+) -> Result<String, RenderError>
 where
   F: FnMut(&str) -> Result<String>,
   D: FnMut(&str, &str),
@@ -411,6 +421,11 @@ where
   let mut last_emit = 0usize;
 
   while i < bytes.len() {
+    if let Some(limit) = deadline {
+      if i % 2048 == 0 {
+        limit.check(RenderStage::Css)?;
+      }
+    }
     match state {
       State::Normal => {
         if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
@@ -480,7 +495,7 @@ where
                 if seen.len() >= MAX_INLINE_IMPORTS {
                   diagnostics(&resolved, "import limit reached");
                   out.push_str(&css[last_emit..]);
-                  return out;
+                  return Ok(out);
                 }
                 out.push_str(&css[last_emit..i]);
                 if seen.insert(resolved.clone()) {
@@ -492,7 +507,8 @@ where
                       fetch,
                       seen,
                       diagnostics,
-                    );
+                      deadline,
+                    )?;
                     if media.is_empty() || media.eq_ignore_ascii_case("all") {
                       out.push_str(&inlined);
                     } else {
@@ -544,7 +560,7 @@ where
   }
 
   out.push_str(&css[last_emit..]);
-  out
+  Ok(out)
 }
 
 fn extract_attr_value(tag_source: &str, attr: &str) -> Option<String> {
@@ -1293,7 +1309,8 @@ mod tests {
         Ok(String::new())
       }
     };
-    let out = inline_imports(css, "https://example.com/main.css", &mut fetched, &mut seen);
+    let out =
+      inline_imports(css, "https://example.com/main.css", &mut fetched, &mut seen, None).unwrap();
     if !out.contains("p { margin: 0; }") {
       eprintln!("inline_imports output: {out}");
     }

@@ -42,6 +42,7 @@ pub mod line_builder;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::error::{RenderError, RenderStage};
 use crate::layout::absolute_positioning::resolve_positioned_style;
 use crate::layout::absolute_positioning::AbsoluteLayout;
 use crate::layout::absolute_positioning::AbsoluteLayoutInput;
@@ -62,6 +63,7 @@ use crate::layout::utils::border_size_from_box_sizing;
 use crate::layout::utils::compute_replaced_size;
 use crate::layout::utils::resolve_font_relative_length;
 use crate::layout::utils::resolve_length_with_percentage_metrics;
+use crate::render_control::check_active;
 use crate::style::display::Display;
 use crate::style::display::FormattingContextType;
 use crate::style::types::Direction;
@@ -6088,6 +6090,9 @@ impl FormattingContext for InlineFormattingContext {
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
+    if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+      return Err(LayoutError::Timeout { elapsed });
+    }
     self.layout_with_floats(box_node, constraints, None, 0.0)
   }
 

@@ -15,6 +15,7 @@
 //! This allows formatting contexts to focus purely on layout algorithms while
 //! the engine handles cross-cutting concerns.
 
+use crate::error::{RenderError, RenderStage};
 use crate::geometry::Size;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
@@ -25,6 +26,7 @@ use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation;
 use crate::layout::fragmentation::FragmentationOptions;
+use crate::render_control::{check_active, DeadlineGuard, RenderDeadline};
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxTree;
@@ -365,6 +367,19 @@ impl LayoutEngine {
     self.layout_tree_internal(box_tree, !self.config.enable_incremental)
   }
 
+  /// Performs layout on a box tree while observing an optional deadline.
+  pub fn layout_tree_with_deadline(
+    &self,
+    box_tree: &BoxTree,
+    deadline: Option<&RenderDeadline>,
+  ) -> Result<FragmentTree, LayoutError> {
+    let _guard = DeadlineGuard::install(deadline);
+    if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+      return Err(LayoutError::Timeout { elapsed });
+    }
+    self.layout_tree_internal(box_tree, !self.config.enable_incremental)
+  }
+
   /// Performs layout on a box tree, optionally reusing shared caches.
   ///
   /// When `reset_caches` is false, flex measurement/layout caches are preserved, allowing
@@ -379,6 +394,9 @@ impl LayoutEngine {
     box_tree: &BoxTree,
     reset_caches: bool,
   ) -> Result<FragmentTree, LayoutError> {
+    if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+      return Err(LayoutError::Timeout { elapsed });
+    }
     let use_cache = self.config.enable_cache;
     let reset_for_run = reset_caches || !use_cache;
 
@@ -474,6 +492,9 @@ impl LayoutEngine {
     box_node: &BoxNode,
     constraints: &LayoutConstraints,
   ) -> Result<FragmentNode, LayoutError> {
+    if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
+      return Err(LayoutError::Timeout { elapsed });
+    }
     // Future: Check cache first
     // if let Some(cached) = self.check_cache(box_node, constraints) {
     //     return Ok(cached);
