@@ -184,3 +184,56 @@ fn fixed_headers_repeat_per_page() {
     );
   }
 }
+
+#[test]
+fn page_break_before_forces_new_page() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 200px; margin: 0; }
+          body { margin: 0; }
+          .block { height: 80px; }
+          #forced { page-break-before: always; }
+        </style>
+      </head>
+      <body>
+        <div class="block">Before</div>
+        <div id="forced" class="block">Forced break</div>
+        <div class="block">After</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2, "expected pagination to create multiple pages");
+
+  let first = page_roots[0];
+  let second = page_roots[1];
+
+  assert!(
+    find_text(first, "Before").is_some(),
+    "first page should contain the preceding content"
+  );
+  assert!(
+    find_text(first, "Forced break").is_none(),
+    "forced break content must start a new page"
+  );
+  assert!(
+    find_text(first, "After").is_none(),
+    "content after the break should not remain on the first page"
+  );
+
+  assert!(
+    find_text(second, "Forced break").is_some(),
+    "forced break content should move to the next page"
+  );
+  assert!(
+    find_text(second, "After").is_some(),
+    "following content should flow after the forced page break"
+  );
+}
