@@ -120,10 +120,24 @@ pub enum MorphologyOp {
   Erode,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum TransferFn {
   Identity,
-  Linear { slope: f32, intercept: f32 },
+  Linear {
+    slope: f32,
+    intercept: f32,
+  },
+  Gamma {
+    amplitude: f32,
+    exponent: f32,
+    offset: f32,
+  },
+  Table {
+    values: Vec<f32>,
+  },
+  Discrete {
+    values: Vec<f32>,
+  },
 }
 
 /// Load and parse an SVG filter from a URL (including data URLs), caching the result.
@@ -354,17 +368,54 @@ fn parse_transfer_fn(node: &roxmltree::Node) -> Option<TransferFn> {
     .attribute("type")
     .unwrap_or("identity")
     .to_ascii_lowercase();
+  let parse_or_default = |name: &str, default: f32| -> Option<f32> {
+    match node.attribute(name) {
+      Some(raw) => raw.parse::<f32>().ok(),
+      None => Some(default),
+    }
+  };
+  let parse_table_values = || {
+    node
+      .attribute("tableValues")
+      .unwrap_or("")
+      .split(|c: char| c.is_ascii_whitespace() || c == ',')
+      .filter(|s| !s.is_empty())
+      .filter_map(|v| v.parse::<f32>().ok())
+      .collect::<Vec<f32>>()
+  };
   match ty.as_str() {
     "linear" => {
-      let slope = node
-        .attribute("slope")
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(1.0);
-      let intercept = node
-        .attribute("intercept")
-        .and_then(|v| v.parse::<f32>().ok())
-        .unwrap_or(0.0);
+      let slope = parse_or_default("slope", 1.0)?;
+      let intercept = parse_or_default("intercept", 0.0)?;
       Some(TransferFn::Linear { slope, intercept })
+    }
+    "gamma" => {
+      let exponent = node
+        .attribute("exponent")
+        .and_then(|v| v.parse::<f32>().ok())?;
+      let amplitude = parse_or_default("amplitude", 1.0)?;
+      let offset = parse_or_default("offset", 0.0)?;
+      Some(TransferFn::Gamma {
+        amplitude,
+        exponent,
+        offset,
+      })
+    }
+    "table" => {
+      let values = parse_table_values();
+      if values.is_empty() {
+        Some(TransferFn::Identity)
+      } else {
+        Some(TransferFn::Table { values })
+      }
+    }
+    "discrete" => {
+      let values = parse_table_values();
+      if values.is_empty() {
+        Some(TransferFn::Identity)
+      } else {
+        Some(TransferFn::Discrete { values })
+      }
     }
     _ => Some(TransferFn::Identity),
   }
@@ -529,7 +580,7 @@ fn apply_primitive(
     }
     FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
       resolve_input(input, source, results, current).map(|mut img| {
-        apply_component_transfer(&mut img, *r, *g, *b, *a);
+        apply_component_transfer(&mut img, r, g, b, a);
         img
       })
     }
@@ -732,35 +783,103 @@ fn apply_morphology(pixmap: &mut Pixmap, radius: f32, op: MorphologyOp) {
 
 fn apply_component_transfer(
   pixmap: &mut Pixmap,
-  r: TransferFn,
-  g: TransferFn,
-  b: TransferFn,
-  a: TransferFn,
+  r: &TransferFn,
+  g: &TransferFn,
+  b: &TransferFn,
+  a: &TransferFn,
 ) {
-  let apply = |v: f32, f: TransferFn| -> f32 {
-    match f {
-      TransferFn::Identity => v,
-      TransferFn::Linear { slope, intercept } => (slope * v + intercept).clamp(0.0, 1.0),
-    }
+  let r_lut = build_transfer_lut(r);
+  let g_lut = build_transfer_lut(g);
+  let b_lut = build_transfer_lut(b);
+  let a_lut = build_transfer_lut(a);
+  let sample = |lut: &[f32; 256], v: f32| -> f32 {
+    let idx = (clamp_unit(v) * 255.0).round() as usize;
+    lut[idx.min(255)]
   };
+  let to_byte = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
 
   for px in pixmap.pixels_mut() {
-    let rf = px.red() as f32 / 255.0;
-    let gf = px.green() as f32 / 255.0;
-    let bf = px.blue() as f32 / 255.0;
-    let af = px.alpha() as f32 / 255.0;
-    let ra = apply(rf, r);
-    let ga = apply(gf, g);
-    let ba = apply(bf, b);
-    let aa = apply(af, a);
+    let alpha = px.alpha() as f32 / 255.0;
+    let (r_in, g_in, b_in) = if alpha > 0.0 {
+      let inv_a = 1.0 / alpha;
+      (
+        clamp_unit(px.red() as f32 / 255.0 * inv_a),
+        clamp_unit(px.green() as f32 / 255.0 * inv_a),
+        clamp_unit(px.blue() as f32 / 255.0 * inv_a),
+      )
+    } else {
+      (0.0, 0.0, 0.0)
+    };
+    let a_out = sample(&a_lut, alpha);
+    let r_out = sample(&r_lut, r_in);
+    let g_out = sample(&g_lut, g_in);
+    let b_out = sample(&b_lut, b_in);
     *px = PremultipliedColorU8::from_rgba(
-      (ra * aa * 255.0).round().clamp(0.0, 255.0) as u8,
-      (ga * aa * 255.0).round().clamp(0.0, 255.0) as u8,
-      (ba * aa * 255.0).round().clamp(0.0, 255.0) as u8,
-      (aa * 255.0).round().clamp(0.0, 255.0) as u8,
+      to_byte(r_out * a_out),
+      to_byte(g_out * a_out),
+      to_byte(b_out * a_out),
+      to_byte(a_out),
     )
     .unwrap_or(PremultipliedColorU8::TRANSPARENT);
   }
+}
+
+fn clamp_unit(v: f32) -> f32 {
+  if v.is_finite() {
+    v.clamp(0.0, 1.0)
+  } else {
+    0.0
+  }
+}
+
+fn build_transfer_lut(func: &TransferFn) -> [f32; 256] {
+  let mut lut = [0.0f32; 256];
+  for (idx, out) in lut.iter_mut().enumerate() {
+    let input = idx as f32 / 255.0;
+    *out = evaluate_transfer_fn(func, input);
+  }
+  lut
+}
+
+fn evaluate_transfer_fn(func: &TransferFn, v: f32) -> f32 {
+  let result = match func {
+    TransferFn::Identity => v,
+    TransferFn::Linear { slope, intercept } => slope * v + intercept,
+    TransferFn::Gamma {
+      amplitude,
+      exponent,
+      offset,
+    } => amplitude * v.powf(*exponent) + offset,
+    TransferFn::Table { values } => {
+      if values.is_empty() {
+        v
+      } else if values.len() == 1 {
+        values[0]
+      } else {
+        let last = values.len() - 1;
+        let scaled = v * last as f32;
+        let idx = scaled.floor() as usize;
+        if idx >= last {
+          *values.last().unwrap_or(&v)
+        } else {
+          let start = values[idx];
+          let end = values[idx + 1];
+          let t = scaled - idx as f32;
+          start + t * (end - start)
+        }
+      }
+    }
+    TransferFn::Discrete { values } => {
+      if values.is_empty() {
+        v
+      } else {
+        let n = values.len();
+        let idx = (v * n as f32).floor() as usize;
+        values[idx.min(n - 1)]
+      }
+    }
+  };
+  clamp_unit(result)
 }
 
 fn apply_color_matrix(pixmap: &mut Pixmap, kind: &ColorMatrixKind) {
@@ -853,5 +972,97 @@ fn apply_color_matrix_values(pixmap: &mut Pixmap, matrix: &[f32; 20]) {
     let a_byte = (a_out * 255.0).round().clamp(0.0, 255.0) as u8;
     *px = PremultipliedColorU8::from_rgba(to_channel(r2), to_channel(g2), to_channel(b2), a_byte)
       .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tiny_skia::ColorU8;
+
+  fn pixmap_from_rgba(colors: &[(u8, u8, u8, u8)]) -> Pixmap {
+    let mut pixmap = Pixmap::new(colors.len() as u32, 1).unwrap();
+    for (idx, (r, g, b, a)) in colors.iter().copied().enumerate() {
+      pixmap.pixels_mut()[idx] = ColorU8::from_rgba(r, g, b, a).premultiply();
+    }
+    pixmap
+  }
+
+  fn pixels_to_vec(pixmap: &Pixmap) -> Vec<(u8, u8, u8, u8)> {
+    pixmap
+      .pixels()
+      .iter()
+      .map(|px| (px.red(), px.green(), px.blue(), px.alpha()))
+      .collect()
+  }
+
+  #[test]
+  fn component_transfer_linear_and_alpha() {
+    let mut pixmap = pixmap_from_rgba(&[(128, 64, 0, 128), (255, 128, 64, 255)]);
+    apply_component_transfer(
+      &mut pixmap,
+      &TransferFn::Linear {
+        slope: 0.5,
+        intercept: 0.25,
+      },
+      &TransferFn::Linear {
+        slope: 1.0,
+        intercept: 0.1,
+      },
+      &TransferFn::Identity,
+      &TransferFn::Linear {
+        slope: 0.5,
+        intercept: 0.25,
+      },
+    );
+
+    assert_eq!(
+      pixels_to_vec(&pixmap),
+      vec![(64, 45, 0, 128), (143, 115, 48, 191)]
+    );
+  }
+
+  #[test]
+  fn component_transfer_gamma() {
+    let mut pixmap = pixmap_from_rgba(&[(64, 0, 0, 255), (200, 0, 0, 255)]);
+    apply_component_transfer(
+      &mut pixmap,
+      &TransferFn::Gamma {
+        amplitude: 0.7,
+        exponent: 2.0,
+        offset: 0.1,
+      },
+      &TransferFn::Identity,
+      &TransferFn::Identity,
+      &TransferFn::Identity,
+    );
+
+    assert_eq!(
+      pixels_to_vec(&pixmap),
+      vec![(37, 0, 0, 255), (135, 0, 0, 255)]
+    );
+  }
+
+  #[test]
+  fn component_transfer_table_and_discrete() {
+    let mut pixmap = pixmap_from_rgba(&[(51, 102, 0, 128), (204, 153, 0, 255)]);
+    apply_component_transfer(
+      &mut pixmap,
+      &TransferFn::Table {
+        values: vec![0.0, 0.2, 1.0],
+      },
+      &TransferFn::Discrete {
+        values: vec![0.2, 0.6, 1.0],
+      },
+      &TransferFn::Identity,
+      &TransferFn::Discrete {
+        values: vec![0.25, 0.75],
+      },
+    );
+
+    assert_eq!(
+      pixels_to_vec(&pixmap),
+      vec![(15, 115, 0, 191), (130, 115, 0, 191)]
+    );
   }
 }
