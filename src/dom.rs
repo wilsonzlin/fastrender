@@ -853,6 +853,36 @@ impl<'a> ElementRef<'a> {
     })
   }
 
+  fn position_in_selector_list(
+    &self,
+    selectors: &selectors::parser::SelectorList<FastRenderSelectorImpl>,
+    context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
+  ) -> Option<(usize, usize)> {
+    let parent = self.parent?;
+    let mut index = None;
+    let mut len = 0usize;
+
+    for child in parent.children.iter() {
+      if !child.is_element() {
+        continue;
+      }
+      let child_ref = ElementRef::with_ancestors(child, self.all_ancestors);
+      let matches = selectors
+        .slice()
+        .iter()
+        .any(|selector| matches_selector(selector, 0, None, &child_ref, context));
+      if !matches {
+        continue;
+      }
+      if ptr::eq(child, self.node) {
+        index = Some(len);
+      }
+      len += 1;
+    }
+
+    index.map(|idx| (idx, len))
+  }
+
   /// Return the language of this element, inherited from ancestors if absent.
   fn language(&self) -> Option<String> {
     // Walk from self up through ancestors (closest first) for lang/xml:lang
@@ -1873,17 +1903,32 @@ impl<'a> Element for ElementRef<'a> {
         .element_index_and_len()
         .map(|(_, len)| len == 1)
         .unwrap_or(false),
-      PseudoClass::NthChild(a, b) => self
-        .element_index()
-        .map(|index| matches_an_plus_b(*a, *b, (index + 1) as i32))
-        .unwrap_or(false),
-      PseudoClass::NthLastChild(a, b) => self
-        .element_index_and_len()
-        .map(|(index, len)| {
-          let n = (len - index) as i32;
-          matches_an_plus_b(*a, *b, n)
-        })
-        .unwrap_or(false),
+      PseudoClass::NthChild(a, b, of) => match of {
+        Some(selectors) => self
+          .position_in_selector_list(selectors, _context)
+          .map(|(index, _)| matches_an_plus_b(*a, *b, (index + 1) as i32))
+          .unwrap_or(false),
+        None => self
+          .element_index()
+          .map(|index| matches_an_plus_b(*a, *b, (index + 1) as i32))
+          .unwrap_or(false),
+      },
+      PseudoClass::NthLastChild(a, b, of) => match of {
+        Some(selectors) => self
+          .position_in_selector_list(selectors, _context)
+          .map(|(index, len)| {
+            let n = (len - index) as i32;
+            matches_an_plus_b(*a, *b, n)
+          })
+          .unwrap_or(false),
+        None => self
+          .element_index_and_len()
+          .map(|(index, len)| {
+            let n = (len - index) as i32;
+            matches_an_plus_b(*a, *b, n)
+          })
+          .unwrap_or(false),
+      },
       PseudoClass::FirstOfType => self
         .position_in_type()
         .map(|(index, _)| index == 0)

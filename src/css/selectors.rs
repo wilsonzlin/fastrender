@@ -52,8 +52,8 @@ pub enum PseudoClass {
   Root,
   FirstChild,
   LastChild,
-  NthChild(i32, i32), // an + b
-  NthLastChild(i32, i32),
+  NthChild(i32, i32, Option<SelectorList<FastRenderSelectorImpl>>), // an + b
+  NthLastChild(i32, i32, Option<SelectorList<FastRenderSelectorImpl>>),
   OnlyChild,
   FirstOfType,
   LastOfType,
@@ -125,6 +125,21 @@ impl selectors::parser::NonTSPseudoClass for PseudoClass {
   }
 }
 
+fn write_nth_pseudo<W: fmt::Write>(
+  dest: &mut W,
+  name: &str,
+  a: i32,
+  b: i32,
+  of: &Option<SelectorList<FastRenderSelectorImpl>>,
+) -> fmt::Result {
+  write!(dest, "{}({}n+{}", name, a, b)?;
+  if let Some(selectors) = of {
+    dest.write_str(" of ")?;
+    selectors.to_css(dest)?;
+  }
+  dest.write_str(")")
+}
+
 impl ToCss for PseudoClass {
   fn to_css<W>(&self, dest: &mut W) -> fmt::Result
   where
@@ -146,8 +161,8 @@ impl ToCss for PseudoClass {
       PseudoClass::Root => dest.write_str(":root"),
       PseudoClass::FirstChild => dest.write_str(":first-child"),
       PseudoClass::LastChild => dest.write_str(":last-child"),
-      PseudoClass::NthChild(a, b) => write!(dest, ":nth-child({}n+{})", a, b),
-      PseudoClass::NthLastChild(a, b) => write!(dest, ":nth-last-child({}n+{})", a, b),
+      PseudoClass::NthChild(a, b, of) => write_nth_pseudo(dest, ":nth-child", *a, *b, of),
+      PseudoClass::NthLastChild(a, b, of) => write_nth_pseudo(dest, ":nth-last-child", *a, *b, of),
       PseudoClass::OnlyChild => dest.write_str(":only-child"),
       PseudoClass::FirstOfType => dest.write_str(":first-of-type"),
       PseudoClass::LastOfType => dest.write_str(":last-of-type"),
@@ -318,20 +333,12 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
         Ok(PseudoClass::Has(relative))
       }
       "nth-child" => {
-        let (a, b) = parse_nth(parser).map_err(|_| {
-          parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
-            name.clone(),
-          ))
-        })?;
-        Ok(PseudoClass::NthChild(a, b))
+        let (a, b, of) = parse_nth_with_of(&name, parser)?;
+        Ok(PseudoClass::NthChild(a, b, of))
       }
       "nth-last-child" => {
-        let (a, b) = parse_nth(parser).map_err(|_| {
-          parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
-            name.clone(),
-          ))
-        })?;
-        Ok(PseudoClass::NthLastChild(a, b))
+        let (a, b, of) = parse_nth_with_of(&name, parser)?;
+        Ok(PseudoClass::NthLastChild(a, b, of))
       }
       "nth-of-type" => {
         let (a, b) = parse_nth(parser).map_err(|_| {
@@ -460,6 +467,56 @@ fn build_relative_selectors(
 }
 
 /// Parse nth-child/nth-last-child expressions
+fn parse_nth_with_of<'i, 't>(
+  name: &cssparser::CowRcStr<'i>,
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<
+  (i32, i32, Option<SelectorList<FastRenderSelectorImpl>>),
+  ParseError<'i, SelectorParseErrorKind<'i>>,
+> {
+  let (a, b) = parse_nth(parser).map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+      name.clone(),
+    ))
+  })?;
+
+  let selector_list = if parser.is_exhausted() {
+    None
+  } else {
+    Some(parse_of_selector_list(name, parser)?)
+  };
+
+  Ok((a, b, selector_list))
+}
+
+fn parse_of_selector_list<'i, 't>(
+  name: &cssparser::CowRcStr<'i>,
+  parser: &mut Parser<'i, 't>,
+) -> std::result::Result<
+  SelectorList<FastRenderSelectorImpl>,
+  ParseError<'i, SelectorParseErrorKind<'i>>,
+> {
+  let ident = parser.expect_ident()?;
+  if !ident.eq_ignore_ascii_case("of") {
+    return Err(
+      parser.new_error(cssparser::BasicParseErrorKind::UnexpectedToken(
+        Token::Ident(ident),
+      )),
+    );
+  }
+
+  SelectorList::parse(
+    &PseudoClassParser,
+    parser,
+    selectors::parser::ParseRelative::No,
+  )
+  .map_err(|_| {
+    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
+      name.clone(),
+    ))
+  })
+}
+
 fn parse_nth<'i, 't>(
   parser: &mut Parser<'i, 't>,
 ) -> std::result::Result<(i32, i32), ParseError<'i, ()>> {
@@ -522,7 +579,7 @@ mod tests {
         false,
       )
       .expect("nth-child pseudo should parse");
-    assert!(matches!(nth, PseudoClass::NthChild(_, _)));
+    assert!(matches!(nth, PseudoClass::NthChild(_, _, _)));
   }
 
   #[test]
