@@ -64,6 +64,7 @@ use crate::style::types::Overflow;
 use crate::style::ComputedStyle;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
+use crate::tree::fragment_tree::FragmentTree;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -912,17 +913,27 @@ pub fn build_stacking_tree_with_styles<F>(root: &FragmentNode, get_style: F) -> 
 where
   F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>> + Clone,
 {
-  let root_style = get_style(root);
   let mut tree_order_counter = 0;
+  build_stacking_tree_with_styles_and_counter(root, &get_style, &mut tree_order_counter)
+}
 
+fn build_stacking_tree_with_styles_and_counter<F>(
+  root: &FragmentNode,
+  get_style: &F,
+  tree_order_counter: &mut usize,
+) -> StackingContext
+where
+  F: Fn(&FragmentNode) -> Option<Arc<ComputedStyle>> + Clone,
+{
+  let root_style = get_style(root);
   let mut context = build_stacking_tree_with_styles_internal(
     root,
     root_style.as_ref().map(|s| s.as_ref()),
     None,
     true,
-    &mut tree_order_counter,
+    tree_order_counter,
     Point::ZERO,
-    &get_style,
+    get_style,
   );
 
   context.sort_children();
@@ -933,6 +944,28 @@ where
 /// Builds a stacking context tree from a fragment tree using the fragment's embedded styles.
 pub fn build_stacking_tree_from_fragment_tree(root: &FragmentNode) -> StackingContext {
   build_stacking_tree_with_styles(root, |fragment| fragment.style.clone())
+}
+
+/// Builds stacking context trees for every root in a FragmentTree.
+///
+/// Returns contexts in fragmentainer/page order: the primary root first followed by
+/// `additional_fragments` in order.
+pub fn build_stacking_tree_from_tree(tree: &FragmentTree) -> Vec<StackingContext> {
+  let mut tree_order_counter = 0;
+  let mut contexts = Vec::with_capacity(1 + tree.additional_fragments.len());
+  contexts.push(build_stacking_tree_with_styles_and_counter(
+    &tree.root,
+    &|fragment| fragment.style.clone(),
+    &mut tree_order_counter,
+  ));
+  for fragment in &tree.additional_fragments {
+    contexts.push(build_stacking_tree_with_styles_and_counter(
+      fragment,
+      &|node| node.style.clone(),
+      &mut tree_order_counter,
+    ));
+  }
+  contexts
 }
 
 /// Internal recursive function to build stacking context tree with styles

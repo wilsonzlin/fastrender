@@ -23,7 +23,7 @@
 //! use fastrender::paint::{DisplayListBuilder, DisplayList};
 //!
 //! let builder = DisplayListBuilder::new();
-//! let display_list = builder.build(&fragment_tree.root);
+//! let display_list = builder.build_tree(&fragment_tree);
 //! ```
 
 use crate::css::types::ColorStop;
@@ -316,25 +316,28 @@ impl DisplayListBuilder {
     self.list
   }
 
-  /// Builds a stacking-context-aware display list from a FragmentTree.
+  /// Builds a stacking-context-aware display list from a `FragmentTree`.
   pub fn build_tree_with_stacking(mut self, tree: &FragmentTree) -> DisplayList {
     if self.viewport.is_none() {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
     }
-    let mut svg_roots: Vec<&FragmentNode> = Vec::with_capacity(1 + tree.additional_fragments.len());
-    svg_roots.push(&tree.root);
-    for root in &tree.additional_fragments {
-      svg_roots.push(root);
-    }
+
+    let svg_roots: Vec<&FragmentNode> = std::iter::once(&tree.root)
+      .chain(tree.additional_fragments.iter())
+      .collect();
     let image_cache = self.image_cache.clone();
-    let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(&tree.root);
     let defs = tree
       .svg_filter_defs
       .clone()
       .or_else(|| self.svg_filter_defs.clone());
     let mut svg_filters = SvgFilterResolver::new(defs, svg_roots, image_cache.as_ref());
-    self.build_stacking_context(&stacking, Point::ZERO, true, &mut svg_filters);
+
+    let contexts = crate::paint::stacking::build_stacking_tree_from_tree(tree);
+    for context in &contexts {
+      self.build_stacking_context(context, Point::ZERO, true, &mut svg_filters);
+    }
+
     self.list
   }
 
@@ -392,6 +395,29 @@ impl DisplayListBuilder {
     );
     self.build_stacking_context(&stacking, offset, true, &mut svg_filters);
     self.list
+  }
+
+  /// Builds a display list from multiple stacking context roots.
+  pub fn build_from_stacking_contexts(mut self, stackings: &[StackingContext]) -> DisplayList {
+    if self.viewport.is_none() {
+      if let Some(first) = stackings.first() {
+        self.viewport = Some((first.bounds.width(), first.bounds.height()));
+      }
+    }
+    for stacking in stackings {
+      self.build_stacking_context(stacking, Point::ZERO, true);
+    }
+    self.list
+  }
+
+  /// Builds a display list by first constructing stacking context trees from a fragment tree.
+  pub fn build_with_stacking_tree_from_tree(mut self, tree: &FragmentTree) -> DisplayList {
+    if self.viewport.is_none() {
+      let viewport = tree.viewport_size();
+      self.viewport = Some((viewport.width, viewport.height));
+    }
+    let stackings = crate::paint::stacking::build_stacking_tree_from_tree(tree);
+    self.build_from_stacking_contexts(&stackings)
   }
 
   /// Builds a display list with clipping support

@@ -68,17 +68,14 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use fastrender::paint::{DisplayListBuilder, DisplayList, build_stacking_tree};
+//! use fastrender::paint::DisplayListBuilder;
 //! use fastrender::paint::{DisplayListOptimizer, OptimizationConfig};
 //! use fastrender::paint::{Canvas, BorderRadii};
 //! use fastrender::Rgba;
+//! use fastrender::Rect;
 //!
-//! // Build stacking tree from fragment tree
-//! let stacking_tree = build_stacking_tree(&fragment_tree.root, None, true);
-//!
-//! // Build display list from stacking tree
-//! let builder = DisplayListBuilder::new();
-//! let display_list = builder.build(&stacking_tree);
+//! // Build display list from the fragment tree (including any paginated roots)
+//! let display_list = DisplayListBuilder::new().build_tree(&fragment_tree);
 //!
 //! // Optimize display list
 //! let optimizer = DisplayListOptimizer::new();
