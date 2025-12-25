@@ -2,6 +2,7 @@
 
 mod aria_label_noop_test;
 mod background_position_logical_test;
+mod border_image_properties_test;
 mod cascade_marker_test;
 mod content_generation_test;
 mod counter_style_rules_test;
