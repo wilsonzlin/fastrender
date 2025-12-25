@@ -439,6 +439,13 @@ fn tokenize_property_value(value_str: &str, allow_commas: bool) -> Vec<String> {
         tokens.push(",".to_string());
         current.clear();
       }
+      '/' if paren == 0 && bracket == 0 && brace == 0 => {
+        if !current.trim().is_empty() {
+          tokens.push(current.trim().to_string());
+        }
+        tokens.push("/".to_string());
+        current.clear();
+      }
       ch if ch.is_whitespace() && paren == 0 && bracket == 0 && brace == 0 => {
         if !current.trim().is_empty() {
           tokens.push(current.trim().to_string());

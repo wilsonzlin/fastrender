@@ -7554,8 +7554,10 @@ pub fn apply_declaration_with_base(
 
       let layers = split_layers(&tokens);
       let mut parsed_layers = Vec::new();
-      for layer_tokens in layers {
-        if let Some(parsed) = parse_background_shorthand(&layer_tokens, styles.color) {
+      let layer_count = layers.len();
+      for (idx, layer_tokens) in layers.into_iter().enumerate() {
+        let allow_color = idx + 1 == layer_count;
+        if let Some(parsed) = parse_background_shorthand(&layer_tokens, styles.color, allow_color) {
           parsed_layers.push(parsed);
         }
       }
@@ -17421,6 +17423,119 @@ mod tests {
   }
 
   #[test]
+  fn background_shorthand_parses_position_and_size_without_spaces() {
+    let mut style = ComputedStyle::default();
+    let value =
+      parse_property_value("background", "url(a) center/cover no-repeat").expect("valid shorthand");
+    let decl = Declaration {
+      property: "background".to_string(),
+      value,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+    assert_eq!(style.background_layers.len(), 1);
+    let layer = &style.background_layers[0];
+    assert!(matches!(
+        layer.image,
+        Some(BackgroundImage::Url(ref url)) if url == "a"
+    ));
+    let BackgroundPosition::Position { x, y } = layer.position;
+    assert!((x.alignment - 0.5).abs() < 0.01);
+    assert!(x.offset.is_zero());
+    assert!((y.alignment - 0.5).abs() < 0.01);
+    assert!(y.offset.is_zero());
+    assert_eq!(
+      layer.size,
+      BackgroundSize::Keyword(BackgroundSizeKeyword::Cover)
+    );
+    assert_eq!(layer.repeat, BackgroundRepeat::no_repeat());
+  }
+
+  #[test]
+  fn background_shorthand_parses_multiple_layers_with_positions_and_sizes() {
+    let mut style = ComputedStyle::default();
+    let value = parse_property_value(
+      "background",
+      "url(a) left/contain no-repeat, linear-gradient(red, blue) right/auto repeat",
+    )
+    .expect("valid layered shorthand");
+    let decl = Declaration {
+      property: "background".to_string(),
+      value,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+
+    assert_eq!(style.background_layers.len(), 2);
+    let first = &style.background_layers[0];
+    assert!(matches!(
+        first.image,
+        Some(BackgroundImage::Url(ref url)) if url == "a"
+    ));
+    let BackgroundPosition::Position { x: x0, y: y0 } = first.position;
+    assert!(x0.offset.is_zero() && (x0.alignment - 0.0).abs() < 0.01);
+    assert!(y0.offset.is_zero() && (y0.alignment - 0.5).abs() < 0.01);
+    assert_eq!(
+      first.size,
+      BackgroundSize::Keyword(BackgroundSizeKeyword::Contain)
+    );
+    assert_eq!(first.repeat, BackgroundRepeat::no_repeat());
+
+    let second = &style.background_layers[1];
+    assert!(matches!(
+      second.image,
+      Some(BackgroundImage::LinearGradient { .. })
+    ));
+    let BackgroundPosition::Position { x: x1, y: y1 } = second.position;
+    assert!(x1.offset.is_zero() && (x1.alignment - 1.0).abs() < 0.01);
+    assert!(y1.offset.is_zero() && (y1.alignment - 0.5).abs() < 0.01);
+    assert_eq!(
+      second.size,
+      BackgroundSize::Explicit(
+        BackgroundSizeComponent::Auto,
+        BackgroundSizeComponent::Auto
+      )
+    );
+    assert_eq!(second.repeat, BackgroundRepeat::repeat());
+  }
+
+  #[test]
+  fn background_color_comes_from_last_layer_only() {
+    let mut style = ComputedStyle::default();
+    let value =
+      parse_property_value("background", "blue url(a), url(b) repeat").expect("valid shorthand");
+    let decl = Declaration {
+      property: "background".to_string(),
+      value,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(&mut style, &decl, &ComputedStyle::default(), 16.0, 16.0);
+    assert_eq!(style.background_color, Rgba::TRANSPARENT);
+
+    let mut last_layer_color = ComputedStyle::default();
+    let value =
+      parse_property_value("background", "url(a) no-repeat, blue").expect("color on last layer");
+    let decl = Declaration {
+      property: "background".to_string(),
+      value,
+      raw_value: String::new(),
+      important: false,
+    };
+    apply_declaration(
+      &mut last_layer_color,
+      &decl,
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(last_layer_color.background_color, Rgba::BLUE);
+  }
+
+  #[test]
   fn background_blend_mode_repeats_and_truncates() {
     let mut style = ComputedStyle::default();
     apply_declaration(
@@ -19634,6 +19749,7 @@ struct BackgroundShorthand {
 fn parse_background_shorthand(
   tokens: &[PropertyValue],
   current_color: Rgba,
+  allow_color: bool,
 ) -> Option<BackgroundShorthand> {
   if tokens.is_empty() {
     return None;
@@ -19691,7 +19807,7 @@ fn parse_background_shorthand(
     let token = &tokens[idx];
 
     // Color
-    if shorthand.color.is_none() {
+    if allow_color && shorthand.color.is_none() {
       let parsed_color = match token {
         PropertyValue::Color(c) => Some(c.to_rgba(current_color)),
         PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => {
