@@ -224,6 +224,19 @@ impl Default for FragmentainerPath {
   }
 }
 
+/// Block-level metadata useful for fragmentation adjustments.
+///
+/// Margins are stored as resolved pixel values from layout. The clipped flags
+/// indicate whether the fragment was sliced at the top/bottom during
+/// fragmentation, in which case margins should not be re-applied.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BlockFragmentMetadata {
+  pub margin_top: f32,
+  pub margin_bottom: f32,
+  pub clipped_top: bool,
+  pub clipped_bottom: bool,
+}
+
 /// A single fragment in the fragment tree
 ///
 /// Represents a laid-out box with a definite position and size.
@@ -249,6 +262,8 @@ pub struct FragmentNode {
   /// This is the final computed position and size after layout.
   /// All coordinates are in the coordinate space of the containing fragment.
   pub bounds: Rect,
+  /// Optional block-level metadata used for fragmentation adjustments.
+  pub block_metadata: Option<BlockFragmentMetadata>,
 
   /// Optional logical bounds used for fragmentation decisions.
   ///
@@ -321,6 +336,7 @@ impl FragmentNode {
     let fragmentainer = FragmentainerPath::default();
     Self {
       bounds,
+      block_metadata: None,
       logical_override: None,
       content,
       baseline: None,
@@ -346,6 +362,7 @@ impl FragmentNode {
     let fragmentainer = FragmentainerPath::default();
     Self {
       bounds,
+      block_metadata: None,
       logical_override: None,
       content,
       baseline: None,
@@ -634,6 +651,7 @@ impl FragmentNode {
   pub fn translate(&self, offset: Point) -> Self {
     Self {
       bounds: self.bounds.translate(offset),
+      block_metadata: self.block_metadata.clone(),
       logical_override: self.logical_override.map(|r| r.translate(offset)),
       content: self.content.clone(),
       baseline: self.baseline,

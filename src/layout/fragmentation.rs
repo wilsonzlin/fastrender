@@ -220,6 +220,7 @@ pub fn fragment_tree(root: &FragmentNode, options: &FragmentationOptions) -> Vec
     }
 
     if let Some(mut clipped) = clip_node(root, start, end, 0.0, start, index, fragment_count) {
+      normalize_fragment_margins(&mut clipped, index == 0, index + 1 == fragment_count);
       propagate_fragment_metadata(&mut clipped, index, fragment_count);
 
       // Translate fragments to account for fragmentainer gaps so downstream consumers
@@ -318,6 +319,11 @@ pub(crate) fn clip_node(
   let new_y = clipped_abs_start - parent_clipped_abs_start;
 
   let mut cloned = clone_without_children(node);
+  const CLIP_EPSILON: f32 = 0.01;
+  if let Some(meta) = cloned.block_metadata.as_mut() {
+    meta.clipped_top = node_abs_start < fragment_start + CLIP_EPSILON;
+    meta.clipped_bottom = node_abs_end > fragment_end - CLIP_EPSILON;
+  }
   cloned.bounds = Rect::from_xywh(node.bounds.x(), new_y, node.bounds.width(), new_height);
   cloned.fragment_index = fragment_index;
   cloned.fragment_count = fragment_count.max(1);
@@ -376,6 +382,7 @@ pub(crate) fn clip_node(
 fn clone_without_children(node: &FragmentNode) -> FragmentNode {
   FragmentNode {
     bounds: node.bounds,
+    block_metadata: node.block_metadata.clone(),
     logical_override: node.logical_override,
     content: node.content.clone(),
     baseline: node.baseline,
@@ -531,6 +538,78 @@ fn inject_table_headers_and_footers(
     clipped.scroll_overflow.width().max(clipped.bounds.width()),
     new_height.max(clipped.scroll_overflow.height()),
   );
+}
+
+fn translate_fragment_in_parent_space(node: &mut FragmentNode, offset: Point) {
+  node.bounds = node.bounds.translate(offset);
+  if let Some(logical) = node.logical_override {
+    node.logical_override = Some(logical.translate(offset));
+  }
+}
+
+pub(crate) fn normalize_fragment_margins(
+  fragment: &mut FragmentNode,
+  is_first_fragment: bool,
+  is_last_fragment: bool,
+) {
+  const EPSILON: f32 = 0.01;
+
+  // Reset carried collapsed margin from previous fragmentainer by reapplying the fragment's own
+  // top margin to the first block that starts this slice.
+  if !is_first_fragment {
+    if let Some(min_y) = fragment
+      .children
+      .iter()
+      .map(|c| c.bounds.y())
+      .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    {
+      for child in fragment
+        .children
+        .iter_mut()
+        .filter(|c| (c.bounds.y() - min_y).abs() < EPSILON)
+      {
+        if let Some(meta) = child.block_metadata.as_ref() {
+          if meta.clipped_top {
+            continue;
+          }
+          let desired_top = meta.margin_top;
+          let delta = desired_top - child.bounds.y();
+          if delta.abs() > EPSILON {
+            translate_fragment_in_parent_space(child, Point::new(0.0, delta));
+          }
+        }
+      }
+    }
+  }
+
+  // Include the trailing margin of the last complete block when this slice is not the final one.
+  if !is_last_fragment {
+    if let Some((max_y, meta)) = fragment
+      .children
+      .iter()
+      .filter_map(|c| c.block_metadata.as_ref().map(|m| (c.bounds.max_y(), m)))
+      .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+    {
+      let target_height = if meta.clipped_bottom {
+        max_y
+      } else {
+        max_y + meta.margin_bottom
+      };
+      let new_height = fragment.bounds.height().max(target_height);
+      fragment.bounds = Rect::from_xywh(
+        fragment.bounds.x(),
+        fragment.bounds.y(),
+        fragment.bounds.width(),
+        new_height,
+      );
+      fragment.scroll_overflow = Rect::from_xywh(
+        fragment.scroll_overflow.x(),
+        fragment.scroll_overflow.y(),
+        fragment.scroll_overflow.width(),
+        fragment.scroll_overflow.height().max(new_height),
+      );
+    }
+  }
 }
 
 fn collect_break_opportunities(

@@ -10,7 +10,7 @@ use crate::layout::formatting_context::{
   layout_style_fingerprint, set_fragmentainer_block_size_hint, LayoutError,
 };
 use crate::layout::fragmentation::{
-  clip_node, collect_forced_boundaries, propagate_fragment_metadata,
+  clip_node, collect_forced_boundaries, normalize_fragment_margins, propagate_fragment_metadata,
 };
 use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
 use crate::style::display::{Display, FormattingContextType};
@@ -266,6 +266,7 @@ pub fn paginate_fragment_tree(
 
     if let Some(mut content) = clipped {
       strip_fixed_fragments(&mut content);
+      normalize_fragment_margins(&mut content, page_index == 0, end >= total_height - 0.01);
       content.bounds = Rect::from_xywh(
         content.bounds.x(),
         content.bounds.y(),

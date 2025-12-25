@@ -48,8 +48,8 @@ use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
 use crate::layout::fragmentation::{
-  clip_node, propagate_fragment_metadata, resolve_fragmentation_boundaries_with_context,
-  FragmentationContext,
+  clip_node, normalize_fragment_margins, propagate_fragment_metadata,
+  resolve_fragmentation_boundaries_with_context, FragmentationContext,
 };
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
@@ -80,6 +80,7 @@ use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::box_tree::BoxType;
 use crate::tree::box_tree::ReplacedBox;
+use crate::tree::fragment_tree::BlockFragmentMetadata;
 use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentationInfo;
@@ -855,6 +856,11 @@ impl BlockFormattingContext {
       child_fragments,
       child.style.clone(),
     );
+    fragment.block_metadata = Some(BlockFragmentMetadata {
+      margin_top,
+      margin_bottom,
+      ..BlockFragmentMetadata::default()
+    });
     if let Some(info) = column_info {
       fragment.fragmentation = Some(info.clone());
       fragment.logical_override = Some(Rect::from_xywh(
@@ -1017,7 +1023,7 @@ impl BlockFormattingContext {
     let box_height = border_top + padding_top + used_size.height + padding_bottom + border_bottom;
     let bounds = Rect::from_xywh(computed_width.margin_left, box_y, box_width, box_height);
 
-    let fragment = FragmentNode::new_with_style(
+    let mut fragment = FragmentNode::new_with_style(
       bounds,
       FragmentContent::Replaced {
         replaced_type: replaced_box.replaced_type.clone(),
@@ -1026,6 +1032,11 @@ impl BlockFormattingContext {
       vec![],
       child.style.clone(),
     );
+    fragment.block_metadata = Some(BlockFragmentMetadata {
+      margin_top,
+      margin_bottom,
+      ..BlockFragmentMetadata::default()
+    });
 
     margin_ctx.push_margin(margin_bottom);
     let next_y = box_y + box_height;
@@ -2096,6 +2107,7 @@ impl BlockFormattingContext {
       if let Some(mut clipped) =
         clip_node(&flow_root, start, end, 0.0, start, index, fragment_count)
       {
+        normalize_fragment_margins(&mut clipped, index == 0, index + 1 >= fragment_count);
         // `clip_node` preserves existing logical overrides from the unclipped flow tree.
         // For multi-column layout we translate fragments into column coordinates, so ensure
         // logical bounds stay in sync with the clipped fragment geometry.
