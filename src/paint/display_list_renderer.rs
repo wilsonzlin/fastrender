@@ -543,7 +543,11 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bb
   }
 }
 
-fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32) {
+fn filter_outset(
+  filters: &[ResolvedFilter],
+  scale: f32,
+  bbox: Option<&Rect>,
+) -> (f32, f32, f32, f32) {
   let mut left: f32 = 0.0;
   let mut top: f32 = 0.0;
   let mut right: f32 = 0.0;
@@ -579,6 +583,16 @@ fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32)
         top = top.max(shadow_top);
         bottom = bottom.max(shadow_bottom);
       }
+      ResolvedFilter::SvgFilter(filter) => {
+        if let Some(bbox) = bbox {
+          let (svg_left, svg_top, svg_right, svg_bottom) =
+            crate::paint::svg_filter::filter_region_outsets(filter.as_ref(), bbox);
+          left = left.max(svg_left * scale);
+          top = top.max(svg_top * scale);
+          right = right.max(svg_right * scale);
+          bottom = bottom.max(svg_bottom * scale);
+        }
+      }
       _ => {}
     }
   }
@@ -596,7 +610,17 @@ fn apply_backdrop_filters(
   if filters.is_empty() {
     return;
   }
-  let (out_l, out_t, out_r, out_b) = filter_outset(filters, scale);
+  let css_bounds = if scale.is_finite() && scale > 0.0 {
+    Rect::from_xywh(
+      bounds.x() / scale,
+      bounds.y() / scale,
+      bounds.width() / scale,
+      bounds.height() / scale,
+    )
+  } else {
+    *bounds
+  };
+  let (out_l, out_t, out_r, out_b) = filter_outset(filters, scale, Some(&css_bounds));
   let x = (bounds.min_x() - out_l).floor() as i32;
   let y = (bounds.min_y() - out_t).floor() as i32;
   let width = (bounds.width() + out_l + out_r).ceil() as u32;
@@ -2702,7 +2726,8 @@ impl DisplayListRenderer {
               );
             }
             if !record.radii.is_zero() || !record.filters.is_empty() {
-              let (out_l, out_t, out_r, out_b) = filter_outset(&record.filters, self.scale);
+              let (out_l, out_t, out_r, out_b) =
+                filter_outset(&record.filters, self.scale, Some(&record.css_bounds));
               let clip_rect = Rect::from_xywh(
                 record.mask_bounds.x() - out_l,
                 record.mask_bounds.y() - out_t,
@@ -2730,7 +2755,8 @@ impl DisplayListRenderer {
               );
             }
             if !record.radii.is_zero() || !record.filters.is_empty() {
-              let (out_l, out_t, out_r, out_b) = filter_outset(&record.filters, self.scale);
+              let (out_l, out_t, out_r, out_b) =
+                filter_outset(&record.filters, self.scale, Some(&record.css_bounds));
               let clip_rect = Rect::from_xywh(
                 record.mask_bounds.x() - out_l,
                 record.mask_bounds.y() - out_t,
@@ -5586,7 +5612,7 @@ mod tests {
       spread: -2.0,
       color: Rgba::BLACK,
     }];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0, None);
     let with_zero_spread = vec![ResolvedFilter::DropShadow {
       offset_x: 0.0,
       offset_y: 0.0,
@@ -5594,7 +5620,7 @@ mod tests {
       spread: 0.0,
       color: Rgba::BLACK,
     }];
-    let (l0, t0, r0, b0) = filter_outset(&with_zero_spread, 1.0);
+    let (l0, t0, r0, b0) = filter_outset(&with_zero_spread, 1.0, None);
     assert!(
       (l - 10.0).abs() < 0.01
         && (t - 10.0).abs() < 0.01
@@ -5662,7 +5688,7 @@ mod tests {
   #[test]
   fn filter_outset_accumulates_blurs() {
     let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::Blur(3.0)];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0, None);
     assert!(
       (l - 15.0).abs() < 0.01
         && (t - 15.0).abs() < 0.01
@@ -5684,7 +5710,7 @@ mod tests {
         color: Rgba::BLACK,
       },
     ];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0, None);
     assert!(
       (l - 13.0).abs() < 0.01
         && (t - 6.0).abs() < 0.01
@@ -5697,7 +5723,7 @@ mod tests {
   #[test]
   fn blur_filter_outset_scales_with_device_pixel_ratio() {
     let filters = vec![ResolvedFilter::Blur(4.0)];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0, None);
     // Blur outset is radius * 3 per side.
     assert!(
       (l - 12.0).abs() < 0.01
@@ -5707,7 +5733,7 @@ mod tests {
     );
 
     let filters = vec![ResolvedFilter::Blur(2.0)];
-    let (l, t, r, b) = filter_outset(&filters, 2.0);
+    let (l, t, r, b) = filter_outset(&filters, 2.0, None);
     // Device pixel ratio doubles the blur radius before computing outsets.
     assert!(
       (l - 12.0).abs() < 0.01
