@@ -19,9 +19,7 @@
 //! println!("Got {} bytes", resource.bytes.len());
 //! ```
 
-use crate::error::Error;
-use crate::error::ImageError;
-use crate::error::Result;
+use crate::error::{Error, ImageError, ResourceError, Result};
 use lru::LruCache;
 use std::collections::HashMap;
 use std::io;
@@ -455,9 +453,36 @@ impl HttpFetcher {
         request = request.header("Accept-Encoding", enc);
       }
 
-      let mut response = request
-        .call()
-        .map_err(|e| Error::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+      let mut response = match request.call() {
+        Ok(resp) => resp,
+        Err(ureq::Error::Status(status, response)) => {
+          let headers = response.headers();
+          let etag = headers
+            .get("etag")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+          let last_modified = headers
+            .get("last-modified")
+            .and_then(|h| h.to_str().ok())
+            .map(|s| s.to_string());
+          let final_url = response.get_url().to_string();
+          let message = response
+            .status_text()
+            .map(|text| format!("HTTP {status} {text}"))
+            .unwrap_or_else(|| format!("HTTP {status}"));
+          let err = ResourceError::new(current.clone(), message)
+            .with_status(status.into())
+            .with_final_url(final_url)
+            .with_validators(etag, last_modified);
+          return Err(Error::Resource(err));
+        }
+        Err(ureq::Error::Transport(err)) => {
+          let err = ResourceError::new(current.clone(), err.to_string())
+            .with_final_url(current.clone())
+            .with_source(err);
+          return Err(Error::Resource(err));
+        }
+      };
 
       let status = response.status();
       if (300..400).contains(&status.as_u16()) {
@@ -503,12 +528,13 @@ impl HttpFetcher {
       match body_result {
         Ok(bytes) => {
           if bytes.is_empty() && status.as_u16() != 304 {
-            return Err(Error::Io(io::Error::new(
-              io::ErrorKind::UnexpectedEof,
-              "Empty HTTP response body",
-            )));
+            let err = ResourceError::new(current.clone(), "empty HTTP response body")
+              .with_status(status.as_u16())
+              .with_final_url(response.get_url().to_string());
+            return Err(Error::Resource(err));
           }
-          let mut resource = FetchedResource::with_final_url(bytes, content_type, Some(current));
+          let final_url = response.get_url().to_string();
+          let mut resource = FetchedResource::with_final_url(bytes, content_type, Some(final_url));
           resource.status = Some(status.as_u16());
           resource.etag = etag;
           resource.last_modified = last_modified;
@@ -517,24 +543,30 @@ impl HttpFetcher {
         Err(err) if accept_encoding.is_none() && is_decompression_error(&err) => {
           return self.fetch_http_with_accept(&current, Some("identity"), validators);
         }
-        Err(err) => return Err(Error::Io(err)),
+        Err(err) => {
+          let err = ResourceError::new(current.clone(), err.to_string())
+            .with_status(status.as_u16())
+            .with_final_url(response.get_url().to_string())
+            .with_source(err);
+          return Err(Error::Resource(err));
+        }
       }
     }
 
-    Err(Error::Io(io::Error::new(
-      io::ErrorKind::Other,
-      "too many redirects",
-    )))
+    Err(Error::Resource(
+      ResourceError::new(url, "too many redirects").with_final_url(current),
+    ))
   }
 
   /// Fetch from a file:// URL
   fn fetch_file(&self, url: &str) -> Result<FetchedResource> {
     let path = url.strip_prefix("file://").unwrap_or(url);
     let bytes = std::fs::read(path).map_err(|e| {
-      Error::Image(ImageError::LoadFailed {
-        url: url.to_string(),
-        reason: e.to_string(),
-      })
+      Error::Resource(
+        ResourceError::new(url.to_string(), e.to_string())
+          .with_final_url(url.to_string())
+          .with_source(e),
+      )
     })?;
 
     let content_type = guess_content_type_from_path(path);
@@ -628,7 +660,7 @@ impl Default for CachingFetcherConfig {
 #[derive(Clone)]
 enum CacheValue {
   Resource(FetchedResource),
-  Error(String),
+  Error(Error),
 }
 
 impl CacheValue {
@@ -642,7 +674,7 @@ impl CacheValue {
   fn as_result(&self) -> Result<FetchedResource> {
     match self {
       Self::Resource(res) => Ok(res.clone()),
-      Self::Error(err) => Err(Error::Other(err.clone())),
+      Self::Error(err) => Err(err.clone()),
     }
   }
 }
@@ -694,14 +726,14 @@ impl CacheState {
 #[derive(Clone)]
 enum SharedResult {
   Success(FetchedResource),
-  Error(String),
+  Error(Error),
 }
 
 impl SharedResult {
   fn as_result(&self) -> Result<FetchedResource> {
     match self {
       Self::Success(res) => Ok(res.clone()),
-      Self::Error(err) => Err(Error::Other(err.clone())),
+      Self::Error(err) => Err(err.clone()),
     }
   }
 }
@@ -945,8 +977,9 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
               .map(|v| SharedResult::Success(v.clone()));
             value
           } else {
-            Err(Error::Other(
-              "Received 304 without cached entry".to_string(),
+            Err(Error::Resource(
+              ResourceError::new(url.to_string(), "received 304 without cached entry")
+                .with_final_url(url.to_string()),
             ))
           }
         } else {
@@ -972,13 +1005,13 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             self.insert_cache(
               url,
               CacheEntry {
-                value: CacheValue::Error(err.to_string()),
+                value: CacheValue::Error(err.clone()),
                 etag: None,
                 last_modified: None,
               },
             );
           }
-          shared = Some(SharedResult::Error(err.to_string()));
+          shared = Some(SharedResult::Error(err.clone()));
           Err(err)
         }
       }
@@ -987,7 +1020,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
     // Ensure waiters are released even if we returned cached content on error.
     let notify = shared.unwrap_or_else(|| match &result {
       Ok(res) => SharedResult::Success(res.clone()),
-      Err(err) => SharedResult::Error(err.to_string()),
+      Err(err) => SharedResult::Error(err.clone()),
     });
     self.finish_inflight(url, &flight, notify);
 

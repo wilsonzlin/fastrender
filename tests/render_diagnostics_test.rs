@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use fastrender::{
-  error::Error, FastRenderBuilder, FetchedResource, RenderOptions, ResourceFetcher, ResourceKind,
+  error::{Error, ResourceError},
+  FastRenderBuilder, FetchedResource, RenderDiagnostics, RenderOptions, ResourceFetcher,
+  ResourceKind,
 };
 
 #[derive(Clone, Default)]
@@ -88,6 +90,8 @@ fn partial_render_returns_placeholder_with_diagnostics_on_document_failure() {
   assert_eq!(entry.kind, ResourceKind::Document);
   assert_eq!(entry.url, url);
   assert!(entry.message.contains("network down"));
+  assert_eq!(entry.status, None);
+  assert_eq!(entry.final_url.as_deref(), Some(url));
 }
 
 #[test]
@@ -114,7 +118,44 @@ fn stylesheet_fetch_failure_is_recorded_without_stopping_render() {
     .find(|entry| entry.kind == ResourceKind::Stylesheet && entry.url == css_url)
     .expect("stylesheet error recorded");
   assert!(stylesheet_error.message.contains("css missing"));
+  assert_eq!(stylesheet_error.status, None);
+  assert_eq!(stylesheet_error.final_url.as_deref(), Some(css_url));
 
   assert!(result.pixmap.width() > 0);
   assert!(result.pixmap.height() > 0);
+}
+
+#[test]
+fn resource_error_metadata_is_captured() {
+  let mut diagnostics = RenderDiagnostics::new();
+  let err = Error::Resource(
+    ResourceError::new("https://example.test/style.css", "not found")
+      .with_status(404)
+      .with_final_url("https://example.test/style.css?v=1")
+      .with_validators(
+        Some("etag-123".to_string()),
+        Some("Tue, 20 Feb 2024 20:00:00 GMT".to_string()),
+      ),
+  );
+  diagnostics.record_error(
+    ResourceKind::Stylesheet,
+    "https://example.test/style.css",
+    &err,
+  );
+
+  let entry = diagnostics
+    .fetch_errors
+    .first()
+    .expect("recorded diagnostics entry");
+  assert_eq!(entry.status, Some(404));
+  assert_eq!(
+    entry.final_url.as_deref(),
+    Some("https://example.test/style.css?v=1")
+  );
+  assert_eq!(entry.etag.as_deref(), Some("etag-123"));
+  assert_eq!(
+    entry.last_modified.as_deref(),
+    Some("Tue, 20 Feb 2024 20:00:00 GMT")
+  );
+  assert!(entry.message.contains("not found"));
 }

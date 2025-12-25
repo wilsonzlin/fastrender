@@ -573,8 +573,21 @@ impl RenderDiagnostics {
     Self::default()
   }
 
-  /// Record a failed fetch.
-  pub fn record(&mut self, kind: ResourceKind, url: impl Into<String>, message: impl Into<String>) {
+  /// Record a failed fetch using structured error information.
+  pub fn record_error(&mut self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
+    let url = url.into();
+    self
+      .fetch_errors
+      .push(ResourceFetchError::from_error(kind, url, error));
+  }
+
+  /// Record a failed fetch with a plain message.
+  pub fn record_message(
+    &mut self,
+    kind: ResourceKind,
+    url: impl Into<String>,
+    message: impl Into<String>,
+  ) {
     self
       .fetch_errors
       .push(ResourceFetchError::new(kind, url, message));
@@ -590,6 +603,14 @@ pub struct ResourceFetchError {
   pub url: String,
   /// Human-readable error string.
   pub message: String,
+  /// HTTP status code when applicable.
+  pub status: Option<u16>,
+  /// Final URL after redirects, if known.
+  pub final_url: Option<String>,
+  /// HTTP ETag header.
+  pub etag: Option<String>,
+  /// HTTP Last-Modified header.
+  pub last_modified: Option<String>,
 }
 
 impl ResourceFetchError {
@@ -599,7 +620,44 @@ impl ResourceFetchError {
       kind,
       url: url.into(),
       message: message.into(),
+      status: None,
+      final_url: None,
+      etag: None,
+      last_modified: None,
     }
+  }
+
+  pub fn from_error(kind: ResourceKind, url: impl Into<String>, error: &Error) -> Self {
+    let message = match error {
+      Error::Resource(res) => res.message.clone(),
+      Error::Image(image) => image.to_string(),
+      Error::Navigation(nav) => nav.reason.clone(),
+      Error::Io(io) => io.to_string(),
+      _ => error.to_string(),
+    };
+    let mut entry = Self::new(kind, url, message);
+    match error {
+      Error::Resource(res) => {
+        entry.status = res.status;
+        entry.final_url = res.final_url.clone().or_else(|| Some(res.url.clone()));
+        entry.etag = res.etag.clone();
+        entry.last_modified = res.last_modified.clone();
+      }
+      Error::Navigation(nav) => entry.final_url = Some(nav.url.clone()),
+      Error::Image(image) => match image {
+        crate::error::ImageError::LoadFailed { url, .. }
+        | crate::error::ImageError::DecodeFailed { url, .. }
+        | crate::error::ImageError::InvalidFormat { url, .. }
+        | crate::error::ImageError::NetworkError { url, .. } => entry.final_url = Some(url.clone()),
+        _ => {}
+      },
+      _ => {}
+    }
+
+    if entry.final_url.is_none() {
+      entry.final_url = Some(entry.url.clone());
+    }
+    entry
   }
 }
 
@@ -2304,7 +2362,7 @@ impl FastRender {
       Ok(res) => res,
       Err(e) => {
         let mut diagnostics = RenderDiagnostics::default();
-        diagnostics.record(ResourceKind::Document, url, e.to_string());
+        diagnostics.record_error(ResourceKind::Document, url, &e);
         diagnostics.document_error = Some(e.to_string());
         if options.allow_partial {
           let pixmap = self.render_error_overlay(width, height)?;
@@ -2315,9 +2373,12 @@ impl FastRender {
             artifacts: RenderArtifacts::new(artifacts),
           });
         }
+        let reason = e.to_string();
+        let source = Arc::new(e);
         return Err(Error::Navigation(NavigationError::FetchFailed {
           url: url.to_string(),
-          reason: e.to_string(),
+          reason,
+          source: Some(source),
         }));
       }
     };
@@ -3666,7 +3727,7 @@ impl FastRender {
               match fetcher.fetch(u) {
                 Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
                 Err(err) => {
-                  diagnostics.record(ResourceKind::Stylesheet, u, err.to_string());
+                  diagnostics.record_error(ResourceKind::Stylesheet, u, &err);
                   Err(err)
                 }
               }
@@ -3690,7 +3751,7 @@ impl FastRender {
           combined_css.push_str(&inlined);
           combined_css.push('\n');
         }
-        Err(err) => diagnostics.record(ResourceKind::Stylesheet, &css_url, err.to_string()),
+        Err(err) => diagnostics.record_error(ResourceKind::Stylesheet, &css_url, &err),
       }
     }
 

@@ -201,8 +201,28 @@ pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str
       ResourceKind::Font => "font",
       ResourceKind::Other => "resource",
     };
+    let mut meta = Vec::new();
+    if let Some(status) = fetch_error.status {
+      meta.push(format!("status {}", status));
+    }
+    if let Some(final_url) = &fetch_error.final_url {
+      if final_url != &fetch_error.url {
+        meta.push(format!("final {final_url}"));
+      }
+    }
+    if let Some(etag) = &fetch_error.etag {
+      meta.push(format!("etag {etag}"));
+    }
+    if let Some(last_modified) = &fetch_error.last_modified {
+      meta.push(format!("last-modified {last_modified}"));
+    }
+    let meta = if meta.is_empty() {
+      String::new()
+    } else {
+      format!(" ({})", meta.join(", "))
+    };
     log(&format!(
-      "Warning: failed to fetch {kind} {}: {}",
+      "Warning: failed to fetch {kind} {}{meta}: {}",
       fetch_error.url, fetch_error.message
     ));
   }
@@ -221,6 +241,22 @@ pub fn log_diagnostics(diagnostics: &RenderDiagnostics, mut log: impl FnMut(&str
       font.plan_ms
     ));
   }
+}
+
+/// Format an error, optionally including its source chain.
+pub fn format_error_with_chain(err: &dyn std::error::Error, verbose: bool) -> String {
+  if !verbose {
+    return err.to_string();
+  }
+
+  let mut lines = vec![err.to_string()];
+  let mut current = err.source();
+  while let Some(source) = current {
+    lines.push(format!("caused by: {}", source));
+    current = source.source();
+  }
+
+  lines.join("\n")
 }
 
 /// Convenience for building a renderer with the provided config and fetcher.
