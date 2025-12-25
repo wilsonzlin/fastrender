@@ -233,24 +233,129 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
 
 impl<F: ResourceFetcher> ResourceFetcher for DiskCachingFetcher<F> {
   fn fetch(&self, url: &str) -> Result<FetchedResource> {
-    if let Some(snapshot) = self.read_disk_entry(url) {
-      self
-        .memory
-        .prime_cache_with_resource(url, snapshot.as_resource().unwrap());
+    let disk_snapshot = self.read_disk_entry(url);
+    if let Some(ref snapshot) = disk_snapshot {
+      if let Some(res) = snapshot.as_resource() {
+        self.memory.prime_cache_with_resource(url, res);
+      }
     }
 
-    let result = self.memory.fetch(url);
+    let cached = self.memory.cached_snapshot(url).or(disk_snapshot);
+    let needs_revalidate = cached
+      .as_ref()
+      .map(|c| self.memory.should_revalidate(url, c))
+      .unwrap_or(false);
 
-    if let Some(snapshot) = self.memory.cached_snapshot(url) {
-      self.persist_snapshot(url, &snapshot);
-    } else if let Ok(ref resource) = result {
-      self.persist_resource(
-        url,
-        resource,
-        resource.etag.as_deref(),
-        resource.last_modified.as_deref(),
-      );
+    if let Some(snapshot) = &cached {
+      if !needs_revalidate {
+        return snapshot.value.as_result();
+      }
     }
+
+    let (flight, is_owner) = self.memory.join_inflight(url);
+    if !is_owner {
+      return flight.wait();
+    }
+
+    let validators = if needs_revalidate {
+      Some((
+        cached.as_ref().and_then(|c| c.etag.as_deref()),
+        cached.as_ref().and_then(|c| c.last_modified.as_deref()),
+      ))
+    } else {
+      None
+    };
+
+    let fetch_result = match validators {
+      Some((etag, last_modified)) => {
+        self
+          .memory
+          .inner
+          .fetch_with_validation(url, etag, last_modified)
+      }
+      None => self.memory.inner.fetch(url),
+    };
+
+    let mut shared: Option<super::SharedResult> = None;
+
+    let result = match fetch_result {
+      Ok(res) => {
+        if res.is_not_modified() {
+          if let Some(snapshot) = cached.as_ref() {
+            let value = snapshot.value.as_result();
+            if let Ok(ref ok) = value {
+              let mut updated = snapshot.clone();
+              if res.etag.is_some() {
+                updated.etag = res.etag.clone();
+              }
+              if res.last_modified.is_some() {
+                updated.last_modified = res.last_modified.clone();
+              }
+              self.memory.insert_cache(
+                url,
+                super::CacheEntry {
+                  value: super::CacheValue::Resource(ok.clone()),
+                  etag: updated.etag.clone(),
+                  last_modified: updated.last_modified.clone(),
+                },
+              );
+              self.persist_snapshot(url, &updated);
+            }
+            shared = value
+              .as_ref()
+              .ok()
+              .map(|v| super::SharedResult::Success(v.clone()));
+            value
+          } else {
+            Err(Error::Other(
+              "Received 304 without cached entry".to_string(),
+            ))
+          }
+        } else {
+          let entry = super::CacheEntry {
+            etag: res.etag.clone(),
+            last_modified: res.last_modified.clone(),
+            value: super::CacheValue::Resource(res.clone()),
+          };
+          self.memory.insert_cache(url, entry);
+          if let Some(snapshot) = self.memory.cached_snapshot(url) {
+            self.persist_snapshot(url, &snapshot);
+          } else {
+            self.persist_resource(url, &res, res.etag.as_deref(), res.last_modified.as_deref());
+          }
+          shared = Some(super::SharedResult::Success(res.clone()));
+          Ok(res)
+        }
+      }
+      Err(err) => {
+        if let Some(snapshot) = cached.as_ref() {
+          let fallback = snapshot.value.as_result();
+          if let Ok(ok) = &fallback {
+            shared = Some(super::SharedResult::Success(ok.clone()));
+          }
+          fallback
+        } else {
+          if self.memory.config.cache_errors {
+            self.memory.insert_cache(
+              url,
+              super::CacheEntry {
+                value: super::CacheValue::Error(err.to_string()),
+                etag: None,
+                last_modified: None,
+              },
+            );
+          }
+          shared = Some(super::SharedResult::Error(err.to_string()));
+          Err(err)
+        }
+      }
+    };
+
+    let notify = shared.unwrap_or_else(|| match &result {
+      Ok(res) => super::SharedResult::Success(res.clone()),
+      Err(err) => super::SharedResult::Error(err.to_string()),
+    });
+    self.memory.finish_inflight(url, &flight, notify);
 
     result
   }
