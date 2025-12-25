@@ -83,6 +83,66 @@ fn page_rule_left_and_right_offsets_differ() {
   assert!((second.bounds.width() - 155.0).abs() < 0.1);
 }
 
+fn collect_line_widths(node: &FragmentNode, out: &mut Vec<f32>) {
+  if let FragmentContent::Line { .. } = node.content {
+    out.push(node.bounds.width());
+  }
+  for child in &node.children {
+    collect_line_widths(child, out);
+  }
+}
+
+#[test]
+fn line_wrapping_respects_page_side_widths() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 140px; margin: 10px; }
+          @page :right { margin-left: 10px; margin-right: 10px; }
+          @page :left { margin-left: 40px; margin-right: 10px; }
+          body { margin: 0; }
+          p { margin: 0; font-size: 16px; line-height: 16px; }
+        </style>
+      </head>
+      <body>
+        <p>
+          This is a very long line of text that should wrap across multiple lines and pages so that
+          we can verify pagination reflows content differently on right and left pages when margins
+          change between them. The content intentionally repeats to ensure it spans at least two
+          pages worth of text.
+        </p>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "expected at least two pages for wrapping test"
+  );
+
+  let mut first_lines = Vec::new();
+  collect_line_widths(page_roots[0], &mut first_lines);
+  let mut second_lines = Vec::new();
+  collect_line_widths(page_roots[1], &mut second_lines);
+
+  assert!(!first_lines.is_empty());
+  assert!(!second_lines.is_empty());
+
+  let first_max = first_lines.iter().cloned().fold(0.0, f32::max);
+  let second_max = second_lines.iter().cloned().fold(0.0, f32::max);
+
+  assert!(
+    first_max > second_max + 5.0,
+    "expected wider right page lines ({first_max}) than left page ({second_max})"
+  );
+}
+
 #[test]
 fn named_pages_change_page_size() {
   let html = r#"
