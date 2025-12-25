@@ -14,6 +14,31 @@ use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
 
+/// Controls how paginated pages are positioned in the fragment tree.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PageStacking {
+  /// Translate each page along the block axis so they don't overlap.
+  ///
+  /// The provided gap is inserted between successive pages (clamped to >= 0).
+  Stacked { gap: f32 },
+  /// Leave all pages at the origin so they can be painted independently.
+  Untranslated,
+}
+
+/// Options for pagination.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PaginateOptions {
+  pub stacking: PageStacking,
+}
+
+impl Default for PaginateOptions {
+  fn default() -> Self {
+    Self {
+      stacking: PageStacking::Stacked { gap: 0.0 },
+    }
+  }
+}
+
 #[derive(Clone)]
 struct FixedFragment {
   origin: Point,
@@ -28,6 +53,27 @@ pub fn paginate_fragment_tree(
   font_ctx: &FontContext,
   root_font_size: f32,
   initial_page_name: Option<String>,
+) -> Vec<FragmentNode> {
+  paginate_fragment_tree_with_options(
+    root,
+    rules,
+    fallback_page_size,
+    font_ctx,
+    root_font_size,
+    initial_page_name,
+    PaginateOptions::default(),
+  )
+}
+
+/// Split a laid out fragment tree into pages using the provided @page rules with options.
+pub fn paginate_fragment_tree_with_options(
+  root: &FragmentNode,
+  rules: &[CollectedPageRule<'_>],
+  fallback_page_size: Size,
+  font_ctx: &FontContext,
+  root_font_size: f32,
+  initial_page_name: Option<String>,
+  options: PaginateOptions,
 ) -> Vec<FragmentNode> {
   if rules.is_empty() {
     return vec![root.clone()];
@@ -56,7 +102,6 @@ pub fn paginate_fragment_tree(
   forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
   forced.dedup_by(|a, b| (*a - *b).abs() < 0.01);
 
-  let axis = fragmentation_axis(root);
   let fixed_fragments = collect_fixed_fragments(root, &axis, root_block_size);
 
   let mut pages = Vec::new();
@@ -150,6 +195,8 @@ pub fn paginate_fragment_tree(
   if pages.is_empty() {
     return vec![root.clone()];
   }
+
+  apply_page_stacking(&mut pages, &axis, options.stacking);
 
   let count = pages.len();
   for (idx, page) in pages.iter_mut().enumerate() {
@@ -286,6 +333,25 @@ fn strip_fixed_fragments(node: &mut FragmentNode) {
   node.children.retain(|child| !is_fixed_fragment(child));
   for child in &mut node.children {
     strip_fixed_fragments(child);
+  }
+}
+
+fn apply_page_stacking(pages: &mut [FragmentNode], axis: &BlockAxis, stacking: PageStacking) {
+  let PageStacking::Stacked { gap } = stacking else {
+    return;
+  };
+
+  let gap = gap.max(0.0);
+  let mut offset = 0.0;
+
+  for (idx, page) in pages.iter_mut().enumerate() {
+    if idx > 0 {
+      let previous_extent = axis.block_size(&pages[idx - 1].bounds);
+      offset += previous_extent + gap;
+    }
+
+    let delta = axis.translate_along_block(offset);
+    translate_fragment(page, delta.x, delta.y);
   }
 }
 

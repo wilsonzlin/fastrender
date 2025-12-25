@@ -92,7 +92,9 @@ use crate::layout::flex_profile::reset_flex_profile;
 use crate::layout::formatting_context::intrinsic_cache_clear;
 use crate::layout::formatting_context::intrinsic_cache_reset_counters;
 use crate::layout::formatting_context::intrinsic_cache_stats;
-use crate::layout::pagination::paginate_fragment_tree;
+use crate::layout::pagination::{
+  paginate_fragment_tree_with_options, PaginateOptions, PageStacking,
+};
 use crate::layout::profile::layout_profile_enabled;
 use crate::layout::profile::log_layout_profile;
 use crate::layout::profile::reset_layout_profile;
@@ -148,6 +150,7 @@ use std::sync::OnceLock;
 const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 use std::time::Instant;
 // Re-export Pixmap from tiny-skia for public use
+pub use crate::layout::pagination::PageStacking;
 pub use tiny_skia::Pixmap;
 use url::Url;
 
@@ -1046,6 +1049,33 @@ fn paint_fragment_tree_with_scroll(
   )
 }
 
+/// Options controlling `layout_document` pagination behavior.
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutDocumentOptions {
+  /// Whether paginated pages should be stacked along the block axis or left untranslated.
+  pub page_stacking: PageStacking,
+}
+
+impl Default for LayoutDocumentOptions {
+  fn default() -> Self {
+    Self {
+      page_stacking: PageStacking::Stacked { gap: 0.0 },
+    }
+  }
+}
+
+impl LayoutDocumentOptions {
+  /// Creates a new options struct with defaults.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Overrides how paginated pages are positioned in the returned fragment tree.
+  pub fn with_page_stacking(mut self, stacking: PageStacking) -> Self {
+    self.page_stacking = stacking;
+    self
+  }
+}
 impl FastRender {
   fn resolve_scaled_metrics(&self, style: &ComputedStyle) -> Option<ScaledMetrics> {
     let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
@@ -1901,7 +1931,18 @@ impl FastRender {
     width: u32,
     height: u32,
   ) -> Result<FragmentTree> {
-    self.layout_document_for_media(dom, width, height, MediaType::Screen)
+    self.layout_document_with_options(dom, width, height, LayoutDocumentOptions::default())
+  }
+
+  /// Lays out a document with explicit layout options.
+  pub fn layout_document_with_options(
+    &mut self,
+    dom: &DomNode,
+    width: u32,
+    height: u32,
+    options: LayoutDocumentOptions,
+  ) -> Result<FragmentTree> {
+    self.layout_document_for_media_with_options(dom, width, height, MediaType::Screen, options)
   }
 
   pub fn layout_document_for_media(
@@ -1911,8 +1952,26 @@ impl FastRender {
     height: u32,
     media_type: MediaType,
   ) -> Result<FragmentTree> {
+    self.layout_document_for_media_with_options(
+      dom,
+      width,
+      height,
+      media_type,
+      LayoutDocumentOptions::default(),
+    )
+  }
+
+  #[allow(clippy::cognitive_complexity)]
+  pub fn layout_document_for_media_with_options(
+    &mut self,
+    dom: &DomNode,
+    width: u32,
+    height: u32,
+    media_type: MediaType,
+    options: LayoutDocumentOptions,
+  ) -> Result<FragmentTree> {
     let artifacts =
-      self.layout_document_for_media_with_artifacts(dom, width, height, media_type)?;
+      self.layout_document_for_media_with_artifacts(dom, width, height, media_type, options)?;
     Ok(artifacts.fragment_tree)
   }
 
@@ -1923,6 +1982,7 @@ impl FastRender {
     width: u32,
     height: u32,
     media_type: MediaType,
+    options: LayoutDocumentOptions,
   ) -> Result<LayoutArtifacts> {
     let timings_enabled = std::env::var_os("FASTR_RENDER_TIMINGS").is_some();
     let overall_start = timings_enabled.then(Instant::now);
@@ -2454,13 +2514,16 @@ impl FastRender {
         .as_ref()
         .map(|s| s.total_size)
         .unwrap_or(layout_viewport);
-      let pages = paginate_fragment_tree(
+      let pages = paginate_fragment_tree_with_options(
         &fragment_tree.root,
         &page_rules,
         fallback_page_size,
         &self.font_context,
         styled_tree.styles.root_font_size,
         page_name_hint.clone(),
+        PaginateOptions {
+          stacking: options.page_stacking,
+        },
       );
       fragment_tree = FragmentTree::from_fragments(pages, viewport);
     }
