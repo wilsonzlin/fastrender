@@ -584,16 +584,7 @@ fn main() {
             diagnostics: diagnostics.clone(),
             summary: summary.clone(),
           };
-          if let Err(err) = serde_json::to_string_pretty(&diag_report)
-            .and_then(|s| fs::write(&diag_path, s).map_err(Into::into))
-          {
-            let _ = writeln!(
-              log,
-              "Failed to write diagnostics JSON {}: {}",
-              diag_path.display(),
-              err
-            );
-          }
+          write_stage_json(diag_path, &diag_report, &mut log);
         }
 
         if should_dump {
@@ -604,16 +595,7 @@ fn main() {
                 if let Some(summary) = summary.as_ref() {
                   let summary_path =
                     PathBuf::from(RENDER_DIR).join(format!("{}.intermediate.json", name));
-                  if let Err(err) = serde_json::to_string_pretty(summary)
-                    .and_then(|s| fs::write(&summary_path, s).map_err(Into::into))
-                  {
-                    let _ = writeln!(
-                      log,
-                      "Failed to write summary {}: {}",
-                      summary_path.display(),
-                      err
-                    );
-                  }
+                  write_stage_json(summary_path, summary, &mut log);
                 } else {
                   let _ = writeln!(log, "Summary requested but no artifacts captured");
                 }
@@ -622,16 +604,7 @@ fn main() {
                 if let Some(summary) = summary.as_ref() {
                   let summary_path =
                     PathBuf::from(RENDER_DIR).join(format!("{}.intermediate.json", name));
-                  if let Err(err) = serde_json::to_string_pretty(summary)
-                    .and_then(|s| fs::write(&summary_path, s).map_err(Into::into))
-                  {
-                    let _ = writeln!(
-                      log,
-                      "Failed to write summary {}: {}",
-                      summary_path.display(),
-                      err
-                    );
-                  }
+                  write_stage_json(summary_path, summary, &mut log);
                 }
                 write_full_artifacts(Path::new(RENDER_DIR), &name, artifacts, &mut log);
               }
@@ -896,10 +869,15 @@ fn count_text_fragments(node: &FragmentNode) -> usize {
 }
 
 fn write_stage_json(path: PathBuf, value: &impl Serialize, log: &mut String) {
-  if let Err(err) =
-    serde_json::to_string_pretty(value).and_then(|s| fs::write(&path, s).map_err(Into::into))
-  {
-    let _ = writeln!(log, "Failed to write {}: {}", path.display(), err);
+  match serde_json::to_string_pretty(value) {
+    Ok(s) => {
+      if let Err(err) = fs::write(&path, s) {
+        let _ = writeln!(log, "Failed to write {}: {}", path.display(), err);
+      }
+    }
+    Err(err) => {
+      let _ = writeln!(log, "Failed to serialize {}: {}", path.display(), err);
+    }
   }
 }
 

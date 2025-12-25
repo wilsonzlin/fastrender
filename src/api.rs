@@ -592,7 +592,7 @@ impl ResourceFetchError {
 }
 
 /// Classification of resource types for diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResourceKind {
   /// The root HTML document
   Document,
@@ -615,12 +615,14 @@ pub struct RenderResult {
   pub diagnostics: RenderDiagnostics,
 }
 
-struct LayoutArtifacts {
-  dom: DomNode,
-  stylesheet: StyleSheet,
-  styled_tree: StyledNode,
-  box_tree: BoxTree,
-  fragment_tree: FragmentTree,
+/// Intermediate artifacts produced during layout.
+#[derive(Debug, Clone)]
+pub struct LayoutArtifacts {
+  pub dom: DomNode,
+  pub stylesheet: StyleSheet,
+  pub styled_tree: StyledNode,
+  pub box_tree: BoxTree,
+  pub fragment_tree: FragmentTree,
 }
 
 /// A fully prepared document ready for repeated painting.
@@ -866,17 +868,6 @@ impl From<RenderReport> for RenderResult {
   fn from(report: RenderReport) -> Self {
     report.into_result()
   }
-}
-
-/// Intermediate artifacts produced during layout.
-#[derive(Debug, Clone)]
-pub struct LayoutArtifacts {
-  /// Styled DOM tree after cascade.
-  pub styled_tree: StyledNode,
-  /// Generated box tree.
-  pub box_tree: BoxTree,
-  /// Positioned fragment tree.
-  pub fragment_tree: FragmentTree,
 }
 
 impl FastRenderConfig {
