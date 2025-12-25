@@ -42,6 +42,7 @@ use lru::LruCache;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -53,6 +54,85 @@ use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const GLYPH_COVERAGE_CACHE_SIZE: usize = 128;
+const BUNDLED_FONTS: &[(&str, &[u8])] = &[(
+  "DejaVu Sans",
+  include_bytes!("../../tests/fixtures/fonts/DejaVuSans-subset.ttf"),
+)];
+
+fn env_flag(var: &str) -> Option<bool> {
+  std::env::var(var).ok().map(|v| {
+    !matches!(v.as_str(), "0" | "false" | "False" | "FALSE" | "") && !v.eq_ignore_ascii_case("off")
+  })
+}
+
+/// Configuration for font discovery and loading.
+#[derive(Debug, Clone)]
+pub struct FontConfig {
+  /// Whether to load system fonts discovered via fontdb/platform APIs.
+  pub use_system_fonts: bool,
+  /// Whether to always load the bundled fallback fonts shipped with FastRender.
+  pub use_bundled_fonts: bool,
+  /// Additional directories to scan for fonts.
+  pub font_dirs: Vec<PathBuf>,
+}
+
+impl Default for FontConfig {
+  fn default() -> Self {
+    let bundled = env_flag("FASTR_USE_BUNDLED_FONTS")
+      .or_else(|| env_flag("CI"))
+      .unwrap_or(false);
+    Self {
+      // In CI we prefer deterministic bundled fonts unless explicitly overridden.
+      use_system_fonts: !bundled,
+      use_bundled_fonts: bundled,
+      font_dirs: Vec::new(),
+    }
+  }
+}
+
+impl FontConfig {
+  /// Creates a new configuration with default values.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Enables or disables system font discovery.
+  pub fn with_system_fonts(mut self, enabled: bool) -> Self {
+    self.use_system_fonts = enabled;
+    self
+  }
+
+  /// Enables or disables bundled fallback fonts.
+  pub fn with_bundled_fonts(mut self, enabled: bool) -> Self {
+    self.use_bundled_fonts = enabled;
+    self
+  }
+
+  /// Adds a directory to search for fonts.
+  pub fn add_font_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+    self.font_dirs.push(dir.into());
+    self
+  }
+
+  /// Adds multiple directories to search for fonts.
+  pub fn with_font_dirs<I, P>(mut self, dirs: I) -> Self
+  where
+    I: IntoIterator<Item = P>,
+    P: Into<PathBuf>,
+  {
+    self.font_dirs.extend(dirs.into_iter().map(Into::into));
+    self
+  }
+
+  /// Convenience for using only bundled fonts (no system discovery).
+  pub fn bundled_only() -> Self {
+    Self {
+      use_system_fonts: false,
+      use_bundled_fonts: true,
+      font_dirs: Vec::new(),
+    }
+  }
+}
 
 /// Configuration for font caches.
 #[derive(Debug, Clone, Copy)]
@@ -672,7 +752,8 @@ impl std::str::FromStr for GenericFamily {
 /// Font database
 ///
 /// Wraps `fontdb` and provides font loading, caching, and querying.
-/// System fonts are loaded automatically on creation.
+/// System fonts are loaded automatically unless disabled via [`FontConfig`], and
+/// bundled fallback fonts are used when nothing else is available.
 ///
 /// # Thread Safety
 ///
@@ -724,16 +805,49 @@ impl FontDatabase {
   /// - macOS: /Library/Fonts, /System/Library/Fonts, ~/Library/Fonts
   /// - Linux: /usr/share/fonts, ~/.fonts, ~/.local/share/fonts
   ///
+  /// Defaults are driven by [`FontConfig::default()`], which honors
+  /// `FASTR_USE_BUNDLED_FONTS` (and `CI`) to disable system discovery when
+  /// deterministic renders are required.
+  ///
   /// # Example
   ///
   /// ```rust,ignore
   /// let db = FontDatabase::new();
   /// ```
   pub fn new() -> Self {
-    let mut db = FontDbDatabase::new();
-    db.load_system_fonts();
+    Self::with_config(&FontConfig::default())
+  }
 
-    Self::with_shared_db_and_cache(Arc::new(db), FontCacheConfig::default())
+  /// Creates a new font database using the provided configuration.
+  ///
+  /// Bundled fonts are always used as a final fallback to ensure text shaping
+  /// works in minimal environments where no system fonts are present.
+  pub fn with_config(config: &FontConfig) -> Self {
+    let mut this = Self {
+      db: FontDbDatabase::new(),
+      cache: RwLock::new(HashMap::new()),
+      math_fonts: RwLock::new(None),
+      glyph_coverage: GlyphCoverageCache::new(GLYPH_COVERAGE_CACHE_SIZE),
+    };
+
+    if config.use_system_fonts {
+      this.db.load_system_fonts();
+    }
+
+    for dir in &config.font_dirs {
+      this.load_fonts_dir(dir);
+    }
+
+    if config.use_bundled_fonts {
+      this.load_bundled_fonts();
+    }
+
+    if this.font_count() == 0 && !config.use_bundled_fonts {
+      this.load_bundled_fonts();
+    }
+
+    this.set_generic_fallbacks();
+    this
   }
 
   /// Creates an empty font database without loading system fonts
@@ -786,6 +900,28 @@ impl FontDatabase {
     Arc::make_mut(&mut self.db).load_fonts_dir(path);
     if let Ok(mut cached) = self.math_fonts.write() {
       *cached = None;
+    }
+  }
+
+  fn load_bundled_fonts(&mut self) {
+    for (name, data) in BUNDLED_FONTS {
+      if let Err(err) = self.load_font_data(data.to_vec()) {
+        eprintln!("failed to load bundled font {}: {:?}", name, err);
+      }
+    }
+  }
+
+  fn set_generic_fallbacks(&mut self) {
+    if let Some(primary) = self
+      .faces()
+      .next()
+      .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
+    {
+      self.db.set_serif_family(primary.clone());
+      self.db.set_sans_serif_family(primary.clone());
+      self.db.set_monospace_family(primary.clone());
+      self.db.set_cursive_family(primary.clone());
+      self.db.set_fantasy_family(primary);
     }
   }
 

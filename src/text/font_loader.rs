@@ -33,6 +33,7 @@ use crate::error::Error;
 use crate::error::Result;
 use crate::resource::ResourceFetcher;
 use crate::text::font_db::FontCacheConfig;
+use crate::text::font_db::FontConfig;
 use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
@@ -227,6 +228,10 @@ impl FontContext {
     db
   }
 
+  fn build_database(config: &FontConfig) -> Arc<FontDatabase> {
+    Arc::new(FontDatabase::with_config(config))
+  }
+
   /// Creates a new font context with system fonts loaded
   ///
   /// This will scan system font directories and load all available fonts.
@@ -239,16 +244,37 @@ impl FontContext {
   /// println!("Loaded {} fonts", ctx.font_count());
   /// ```
   pub fn new() -> Self {
+    Self::with_config(FontConfig::default())
+  }
+
+  /// Creates a new font context using a custom font configuration.
+  pub fn with_config(font_config: FontConfig) -> Self {
     Self::with_database_and_fetcher(
-      Arc::new(Self::build_default_database()),
+      Self::build_database(&font_config),
       Arc::new(DefaultFontFetcher),
     )
+  }
+
+  /// Creates a new font context using a custom font configuration and fetcher.
+  pub fn with_config_and_fetcher(font_config: FontConfig, fetcher: Arc<dyn FontFetcher>) -> Self {
+    Self::with_database_and_fetcher(Self::build_database(&font_config), fetcher)
   }
 
   /// Creates a new font context backed by a [`ResourceFetcher`] for remote fonts.
   pub fn with_resource_fetcher(fetcher: Arc<dyn ResourceFetcher>) -> Self {
     Self::with_database_and_fetcher(
-      Arc::new(Self::build_default_database()),
+      Self::build_database(&FontConfig::default()),
+      Arc::new(ResourceFontFetcher { fetcher }),
+    )
+  }
+
+  /// Creates a new font context backed by a [`ResourceFetcher`] and custom fonts.
+  pub fn with_resource_fetcher_and_config(
+    font_config: FontConfig,
+    fetcher: Arc<dyn ResourceFetcher>,
+  ) -> Self {
+    Self::with_database_and_fetcher(
+      Self::build_database(&font_config),
       Arc::new(ResourceFontFetcher { fetcher }),
     )
   }
@@ -307,7 +333,7 @@ impl FontContext {
 
   /// Creates a font context with the system database and a custom fetcher.
   pub fn with_fetcher(fetcher: Arc<dyn FontFetcher>) -> Self {
-    let db = FontDatabase::shared_system();
+    let db = FontDatabase::with_config(&FontConfig::default());
     Self::with_database_and_fetcher(Arc::new(db), fetcher)
   }
 

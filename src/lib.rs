@@ -329,8 +329,8 @@ pub use style::ComputedStyle;
 pub use style::TopLayerKind;
 // Text
 pub use text::font_db::{
-  FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb, GenericFamily,
-  LoadedFont,
+  FontConfig, FontDatabase, FontStretch, FontStyle as FontStyleDb, FontWeight as FontWeightDb,
+  GenericFamily, LoadedFont,
 };
 pub use text::font_fallback::FallbackChain;
 pub use text::font_fallback::FallbackChainBuilder;

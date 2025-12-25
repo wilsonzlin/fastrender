@@ -124,6 +124,7 @@ use crate::style::types::ContainerType;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::text::font_db::FontDatabase;
+use crate::text::font_db::FontConfig;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::ScaledMetrics;
@@ -347,6 +348,9 @@ pub struct FastRenderConfig {
 
   /// Whether to honor `<meta name="viewport">` when computing the layout viewport.
   pub apply_meta_viewport: bool,
+
+  /// Font discovery configuration (system vs bundled fonts, extra search paths).
+  pub font_config: FontConfig,
 }
 
 impl Default for FastRenderConfig {
@@ -364,6 +368,7 @@ impl Default for FastRenderConfig {
       compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
+      font_config: FontConfig::default(),
     }
   }
 }
@@ -429,6 +434,12 @@ impl FastRenderBuilder {
   /// Sets a base URL used to resolve relative resource references (images, linked CSS)
   pub fn base_url(mut self, url: impl Into<String>) -> Self {
     self.config.base_url = Some(url.into());
+    self
+  }
+
+  /// Overrides how fonts are discovered and which bundled set to use.
+  pub fn font_sources(mut self, font_config: FontConfig) -> Self {
+    self.config.font_config = font_config;
     self
   }
 
@@ -1332,6 +1343,12 @@ impl FastRenderConfig {
     self
   }
 
+  /// Configures font discovery and bundled font usage.
+  pub fn with_font_sources(mut self, font_config: FontConfig) -> Self {
+    self.font_config = font_config;
+    self
+  }
+
   /// Applies `<meta name="viewport">` directives when computing the layout viewport.
   ///
   /// `width`/`height` set the layout viewport. Zoom is driven by `initial-scale`
@@ -2170,8 +2187,10 @@ impl FastRender {
     config: FastRenderConfig,
     fetcher: Option<Arc<dyn ResourceFetcher>>,
   ) -> Result<Self> {
+    let font_config = config.font_config.clone();
     let fetcher = resolve_fetcher(&config, fetcher);
-    let font_context = FontContext::with_resource_fetcher(Arc::clone(&fetcher));
+    let font_context =
+      FontContext::with_resource_fetcher_and_config(font_config, Arc::clone(&fetcher));
     Self::from_parts(config, fetcher, font_context, ImageCacheConfig::default())
   }
 

@@ -8,10 +8,14 @@ FastRender’s test suite is primarily Rust unit/integration tests plus a small 
 
 ## Fonts
 
-Text shaping and many rendering/layout tests assume at least one system font is available.
+Text shaping and many rendering/layout tests assume at least one usable font is available.
+CI forces bundled, license-compatible fixtures (`tests/fixtures/fonts/`) so goldens stay
+deterministic across platforms. Set `FASTR_USE_BUNDLED_FONTS=1` locally to match CI output.
 
-- Linux containers: install a basic font package (e.g. `fonts-dejavu-core` on Ubuntu/Debian).
-- Desktop OSes typically have usable defaults preinstalled.
+- When relying on platform fonts, install a basic package (e.g. `fonts-dejavu-core` on
+  Ubuntu/Debian). Desktop OSes typically have usable defaults preinstalled.
+- The public API exposes `FastRenderConfig::with_font_sources(FontConfig::...)` to pin renders
+  to bundled fonts or add additional font directories when needed.
 
 ## Style regression harness
 
