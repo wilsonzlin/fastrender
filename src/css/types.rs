@@ -2,7 +2,6 @@
 //!
 //! Core types for representing CSS stylesheets, rules, and values.
 
-use super::properties::{parse_property_value_in_context, DeclarationContext};
 use super::selectors::FastRenderSelectorImpl;
 use super::selectors::PseudoClassParser;
 use super::supports;
@@ -976,165 +975,6 @@ impl SupportsCondition {
   }
 }
 
-<<<<<<< HEAD
-/// Determines whether a property/value pair is supported for @supports feature queries.
-///
-/// This follows the CSS Conditional Rules requirement that the declaration must be recognized
-/// (property known) *and* the value valid per the property's grammar. We allow a conservative
-/// subset of keywords for properties we parse as enums; other successfully parsed values pass.
-fn supports_value_is_valid(property: &str, value: &str) -> bool {
-  // Custom properties are always supported and accept any value per CSS Variables.
-  if property.starts_with("--") {
-    return true;
-  }
-
-  // Unknown properties are not supported.
-  let parsed = parse_property_value_in_context(DeclarationContext::Style, property, value);
-  let Some(parsed) = parsed else { return false };
-  let prop = property.to_ascii_lowercase();
-  let value_lower = value.trim().to_ascii_lowercase();
-
-  match prop.as_str() {
-    // Color properties: require a color parse to succeed.
-    "color"
-    | "background-color"
-    | "border-color"
-    | "border-top-color"
-    | "border-right-color"
-    | "border-bottom-color"
-    | "border-left-color" => return crate::style::color::Color::parse(value).is_ok(),
-
-    "display" => {
-      return matches!(
-        value_lower.as_str(),
-        "block"
-          | "inline"
-          | "inline-block"
-          | "flex"
-          | "inline-flex"
-          | "grid"
-          | "inline-grid"
-          | "flow-root"
-          | "contents"
-          | "list-item"
-          | "table"
-          | "table-row"
-          | "table-cell"
-          | "table-row-group"
-          | "table-header-group"
-          | "table-footer-group"
-          | "table-column"
-          | "table-column-group"
-          | "table-caption"
-          | "none"
-      );
-    }
-    "position" => {
-      return matches!(
-        value_lower.as_str(),
-        "static" | "relative" | "absolute" | "fixed" | "sticky"
-      );
-    }
-    "float" => {
-      return matches!(
-        value_lower.as_str(),
-        "left" | "right" | "none" | "inline-start" | "inline-end"
-      )
-    }
-    "clear" => {
-      return matches!(
-        value_lower.as_str(),
-        "left" | "right" | "both" | "none" | "inline-start" | "inline-end"
-      );
-    }
-    "overflow" | "overflow-x" | "overflow-y" => {
-      return matches!(
-        value_lower.as_str(),
-        "visible" | "hidden" | "scroll" | "auto" | "clip"
-      );
-    }
-    "text-orientation" => {
-      return matches!(
-        value_lower.as_str(),
-        "mixed" | "upright" | "sideways" | "sideways-right" | "sideways-left"
-      );
-    }
-    "text-combine-upright" => {
-      let parts: Vec<_> = value_lower.split_whitespace().collect();
-      if parts.is_empty() {
-        return false;
-      }
-      let parse_digits = |s: &str| -> bool {
-        let tail = s.trim_start_matches("digits");
-        if tail.is_empty() {
-          return true;
-        }
-        tail
-          .parse::<u8>()
-          .map(|n| (2..=4).contains(&n))
-          .unwrap_or(false)
-      };
-
-      return match parts.as_slice() {
-        ["none"] | ["all"] => true,
-        ["digits"] => true,
-        [single] if single.starts_with("digits") => parse_digits(single),
-        ["digits", n] => parse_digits(n),
-        _ => false,
-      };
-    }
-    "writing-mode" => {
-      return matches!(
-        value_lower.as_str(),
-        "horizontal-tb" | "vertical-rl" | "vertical-lr" | "sideways-rl" | "sideways-lr"
-      );
-    }
-    "direction" => return matches!(value_lower.as_str(), "ltr" | "rtl"),
-    "visibility" => return matches!(value_lower.as_str(), "visible" | "hidden" | "collapse"),
-    "flex-direction" => {
-      return matches!(
-        value_lower.as_str(),
-        "row" | "row-reverse" | "column" | "column-reverse"
-      );
-    }
-    "flex-wrap" => return matches!(value_lower.as_str(), "nowrap" | "wrap" | "wrap-reverse"),
-    "align-items" | "align-self" | "align-content" | "justify-items" | "justify-self"
-    | "justify-content" => {
-      return matches!(
-        value_lower.as_str(),
-        "flex-start"
-          | "flex-end"
-          | "center"
-          | "start"
-          | "end"
-          | "self-start"
-          | "self-end"
-          | "baseline"
-          | "stretch"
-          | "space-between"
-          | "space-around"
-          | "space-evenly"
-      );
-    }
-    "text-align" => {
-      return matches!(
-        value_lower.as_str(),
-        "left" | "right" | "center" | "justify" | "start" | "end" | "match-parent"
-      );
-    }
-    _ => {}
-  }
-
-  // For other properties, if we parsed successfully, consider it supported.
-  // This keeps behavior permissive while still rejecting unknown properties/values above.
-  match parsed {
-    super::types::PropertyValue::Keyword(_) => true,
-    _ => true,
-  }
-}
-
-=======
->>>>>>> 996b1ac (Improve @supports declaration validation)
 /// Determines whether a selector list is supported for @supports selector() queries.
 ///
 /// The selector is considered supported when it parses successfully with the engine's selector
@@ -1211,7 +1051,6 @@ mod tests {
   }
 
   #[test]
-<<<<<<< HEAD
   fn supports_rejects_page_only_properties() {
     let cond = SupportsCondition::Declaration {
       property: "size".into(),
@@ -1220,7 +1059,10 @@ mod tests {
     assert!(
       !cond.matches(),
       "page-only properties should be unsupported in style @supports"
-=======
+    );
+  }
+
+  #[test]
   fn supports_declaration_rejects_invalid_opacity() {
     let cond = SupportsCondition::Declaration {
       property: "opacity".into(),
@@ -1265,7 +1107,6 @@ mod tests {
     assert!(
       !cond.matches(),
       "unknown properties should not be considered supported"
->>>>>>> 996b1ac (Improve @supports declaration validation)
     );
   }
 }

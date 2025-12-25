@@ -18,7 +18,6 @@ use crate::style::position::Position;
 use crate::style::values::CalcLength;
 use crate::style::values::Length;
 use crate::style::values::LengthUnit;
-use crate::style::ComputedStyle;
 use cssparser::BasicParseErrorKind;
 use cssparser::Parser;
 use cssparser::ParserInput;
@@ -871,6 +870,56 @@ fn property_allowed_in_context(context: DeclarationContext, property: &str) -> b
   }
 }
 
+fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
+  if value_str.trim().eq_ignore_ascii_case("none") {
+    return Some(Vec::new());
+  }
+
+  let layers: Vec<&str> = value_str
+    .split(',')
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .collect();
+  if layers.is_empty() {
+    return None;
+  }
+
+  let mut shadows = Vec::new();
+  for layer in layers {
+    let mut lengths = Vec::new();
+    let mut color = None;
+    for token in layer.split_whitespace() {
+      if let Ok(parsed_color) = Color::parse(token) {
+        color = Some(parsed_color.to_rgba(Rgba::BLACK));
+        continue;
+      }
+      if let Some(len) = parse_length(token) {
+        lengths.push(len);
+        continue;
+      }
+      return None;
+    }
+
+    if lengths.len() < 2 || lengths.len() > 3 {
+      return None;
+    }
+
+    let blur = if lengths.len() == 3 {
+      lengths[2]
+    } else {
+      Length::px(0.0)
+    };
+    shadows.push(TextShadow {
+      offset_x: lengths[0],
+      offset_y: lengths[1],
+      blur_radius: blur,
+      color,
+    });
+  }
+
+  Some(shadows)
+}
+
 fn parse_known_property_value(property: &str, value_str: &str) -> Option<PropertyValue> {
   let value_str = value_str.trim();
   if value_str.is_empty() {
@@ -1088,33 +1137,6 @@ fn keyword_parse<T>(value: &PropertyValue, parse: impl Fn(&str) -> Option<T>) ->
   }
 }
 
-fn length_or_auto(value: &PropertyValue) -> bool {
-  match value {
-    PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("auto") => true,
-    _ => extract_length(value).is_some(),
-  }
-}
-
-fn background_shorthand_is_valid(value: &PropertyValue) -> bool {
-  let tokens: Vec<PropertyValue> = match value {
-    PropertyValue::Multiple(parts) => parts.clone(),
-    other => vec![other.clone()],
-  };
-  if tokens.is_empty() {
-    return false;
-  }
-
-  let layers = split_layers(&tokens);
-  if layers.is_empty() {
-    return false;
-  }
-
-  let current_color = ComputedStyle::default().color;
-  layers
-    .into_iter()
-    .all(|layer_tokens| parse_background_shorthand(&layer_tokens, current_color).is_some())
-}
-
 pub(crate) fn supports_parsed_declaration_is_valid(
   property: &str,
   raw_value: &str,
@@ -1126,7 +1148,6 @@ pub(crate) fn supports_parsed_declaration_is_valid(
 
   let prop = property.to_ascii_lowercase();
   match prop.as_str() {
-    // Color properties
     "color"
     | "background-color"
     | "border-color"
@@ -1139,8 +1160,6 @@ pub(crate) fn supports_parsed_declaration_is_valid(
     | "text-decoration-color"
     | "text-emphasis-color"
     | "column-rule-color" => return Color::parse(raw_value).is_ok(),
-
-    // Basic keywords
     "display" => return keyword_parse(parsed, |kw| Display::parse(kw).ok()),
     "position" => return keyword_parse(parsed, |kw| Position::parse(kw).ok()),
     "float" => return keyword_parse(parsed, |kw| Float::parse(kw).ok()),
@@ -1227,221 +1246,14 @@ pub(crate) fn supports_parsed_declaration_is_valid(
         ],
       )
     }
-
-    // Numeric types
     "opacity" => return matches!(parsed, PropertyValue::Number(_)),
     "z-index" => {
-      return matches!(parsed, PropertyValue::Number(_)) || keyword_in_list(parsed, &["auto"]);
+      return matches!(parsed, PropertyValue::Number(_)) || keyword_in_list(parsed, &["auto"])
     }
-
-    // Backgrounds and masks
-    "background" => return background_shorthand_is_valid(parsed),
-    "background-image" => return parse_background_image_list(parsed).is_some(),
-    "background-size" => return parse_layer_list(parsed, parse_background_size).is_some(),
-    "background-size-inline" => {
-      return parse_layer_list(parsed, parse_background_size_component).is_some()
-    }
-    "background-size-block" => {
-      return parse_layer_list(parsed, parse_background_size_component).is_some()
-    }
-    "background-position" => return parse_layer_list(parsed, parse_background_position).is_some(),
-    "background-position-x" | "background-position-y" => {
-      return parse_background_position(parsed).is_some()
-    }
-    "background-repeat" => return parse_layer_list(parsed, parse_background_repeat).is_some(),
-    "background-attachment" => {
-      return parse_layer_list(parsed, |v| {
-        keyword_in_list(v, &["scroll", "fixed", "local"])
-      })
-      .is_some()
-    }
-    "background-origin" | "background-clip" => {
-      return parse_layer_list(parsed, parse_background_box).is_some()
-    }
-    "background-blend-mode" => {
-      return parse_layer_list(parsed, |v| {
-        if let PropertyValue::Keyword(kw) = v {
-          parse_mix_blend_mode(kw).is_some()
-        } else {
-          false
-        }
-      })
-      .is_some()
-    }
-    "background-color" => return Color::parse(raw_value).is_ok(),
-    "mask" => return parse_background_image_list(parsed).is_some(),
-    "mask-image" => return parse_background_image_list(parsed).is_some(),
-    "mask-position" => return parse_layer_list(parsed, parse_background_position).is_some(),
-    "mask-size" => return parse_layer_list(parsed, parse_background_size).is_some(),
-    "mask-repeat" => return parse_layer_list(parsed, parse_background_repeat).is_some(),
-    "mask-mode" => return parse_layer_list(parsed, parse_mask_mode).is_some(),
-    "mask-origin" => return parse_layer_list(parsed, parse_mask_origin).is_some(),
-    "mask-clip" => return parse_layer_list(parsed, parse_mask_clip).is_some(),
-    "mask-composite" => return parse_layer_list(parsed, parse_mask_composite).is_some(),
-
-    // Border image
-    "border-image" => return parse_border_image_shorthand(parsed).is_some(),
-    "border-image-source" => return parse_border_image_source(parsed).is_some(),
-    "border-image-slice" => return parse_border_image_slice(parsed).is_some(),
-    "border-image-width" => return parse_border_image_width(parsed).is_some(),
-    "border-image-outset" => return parse_border_image_outset(parsed).is_some(),
-    "border-image-repeat" => return parse_border_image_repeat(parsed).is_some(),
-
-    // Box model basics
-    "margin"
-    | "margin-top"
-    | "margin-right"
-    | "margin-bottom"
-    | "margin-left"
-    | "margin-inline"
-    | "margin-inline-start"
-    | "margin-inline-end"
-    | "margin-block"
-    | "margin-block-start"
-    | "margin-block-end" => return extract_margin_values(parsed).is_some(),
-    "padding"
-    | "padding-top"
-    | "padding-right"
-    | "padding-bottom"
-    | "padding-left"
-    | "padding-inline"
-    | "padding-inline-start"
-    | "padding-inline-end"
-    | "padding-block"
-    | "padding-block-start"
-    | "padding-block-end" => return extract_box_values(parsed).is_some(),
-    "width" | "height" | "min-width" | "min-height" | "max-width" | "max-height"
-    | "inline-size" | "block-size" | "min-inline-size" | "min-block-size" | "max-inline-size"
-    | "max-block-size" => {
-      if let PropertyValue::Keyword(kw) = parsed {
-        let lower = kw.to_ascii_lowercase();
-        if lower == "max-content" || lower == "-webkit-max-content" || lower == "-moz-max-content" {
-          return true;
-        }
-      }
-      return length_or_auto(parsed);
-    }
-    "top" | "right" | "bottom" | "left" | "inset" | "inset-inline" | "inset-block"
-    | "inset-inline-start" | "inset-inline-end" | "inset-block-start" | "inset-block-end" => {
-      return extract_margin_values(parsed).is_some()
-    }
-
-    // Transform
-    "transform" => {
-      return matches!(parsed, PropertyValue::Transform(_))
-        || keyword_in_list(parsed, &["none"])
-        || keyword_parse(parsed, |kw| parse_transform_list(kw).map(|_| ()));
-    }
-    "filter" | "backdrop-filter" => {
-      return parse_filter_list(parsed).is_some();
-    }
-    "clip-path" => {
-      return parse_clip_path_value(parsed).is_some();
-    }
-    "clip" => {
-      return parse_clip_value(parsed).is_some();
-    }
-    "mix-blend-mode" => return keyword_parse(parsed, parse_mix_blend_mode),
-    "isolation" => return keyword_in_list(parsed, &["isolate", "auto"]),
-    "will-change" => return parse_will_change(parsed).is_some(),
-    "contain" => return parse_containment(parsed).is_some(),
-    "container-type" => return parse_container_type_value(parsed).is_some(),
-    "container-name" => return parse_container_names(parsed).is_some(),
-    "container" => return parse_container_shorthand(parsed).is_some(),
-    "transform-box" => return keyword_parse(parsed, parse_transform_box),
-    "transform-style" => return keyword_parse(parsed, parse_transform_style),
-    "backface-visibility" => return keyword_parse(parsed, parse_backface_visibility),
-
     _ => {}
   }
 
-  // For properties not explicitly handled above, fall back to accepting parsed values
-  // that produced concrete types. Keywords are rejected here because our generic parser
-  // often returns Keyword for unknown tokens, which would be too permissive for @supports.
-  match parsed {
-    PropertyValue::Keyword(_) => false,
-    _ => true,
-  }
-}
-
-fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
-  if value_str.eq_ignore_ascii_case("none") {
-    return Some(Vec::new());
-  }
-
-  let layers = split_shadow_layers(value_str)?;
-  let mut shadows = Vec::new();
-  for layer in layers {
-    let mut color: Option<Rgba> = None;
-    let mut lengths = Vec::new();
-    for token in layer {
-      if color.is_none() {
-        if let Some(parsed_color) = parse_shadow_color(&token) {
-          color = Some(parsed_color);
-          continue;
-        }
-      }
-
-      if let Some(len) = parse_length(&token) {
-        lengths.push(len);
-        continue;
-      }
-
-      return None;
-    }
-
-    if lengths.len() < 2 || lengths.len() > 3 {
-      return None;
-    }
-
-    let blur = if lengths.len() == 3 {
-      lengths[2]
-    } else {
-      Length::px(0.0)
-    };
-    shadows.push(TextShadow {
-      offset_x: lengths[0],
-      offset_y: lengths[1],
-      blur_radius: blur,
-      color,
-    });
-  }
-
-  Some(shadows)
-}
-
-fn split_shadow_layers(value_str: &str) -> Option<Vec<Vec<String>>> {
-  let tokens = tokenize_property_value(value_str, true);
-  if tokens.is_empty() {
-    return None;
-  }
-
-  let mut layers = Vec::new();
-  let mut current = Vec::new();
-  for token in tokens {
-    if token == "," {
-      if current.is_empty() {
-        return None;
-      }
-      layers.push(current);
-      current = Vec::new();
-    } else {
-      current.push(token);
-    }
-  }
-
-  if current.is_empty() {
-    return None;
-  }
-  layers.push(current);
-  Some(layers)
-}
-
-fn parse_shadow_color(token: &str) -> Option<Rgba> {
-  match Color::parse(token).ok()? {
-    Color::CurrentColor => None,
-    other => Some(other.to_rgba(Rgba::BLACK)),
-  }
+  true
 }
 
 fn parse_simple_value(value_str: &str) -> Option<PropertyValue> {
