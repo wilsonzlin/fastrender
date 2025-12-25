@@ -89,6 +89,15 @@ pub enum FilterPrimitive {
   },
   ConvolveMatrix {
     input: FilterInput,
+    order_x: usize,
+    order_y: usize,
+    kernel: Vec<f32>,
+    divisor: Option<f32>,
+    bias: f32,
+    target_x: i32,
+    target_y: i32,
+    edge_mode: EdgeMode,
+    preserve_alpha: bool,
   },
 }
 
@@ -118,6 +127,13 @@ pub enum CompositeOperator {
 pub enum MorphologyOp {
   Dilate,
   Erode,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum EdgeMode {
+  Duplicate,
+  Wrap,
+  None,
 }
 
 #[derive(Clone, Debug)]
@@ -238,6 +254,21 @@ fn parse_number(value: Option<&str>) -> f32 {
     .and_then(|v| v.split_whitespace().next())
     .and_then(|v| v.parse::<f32>().ok())
     .unwrap_or(0.0)
+}
+
+fn parse_number_list(value: Option<&str>) -> Vec<f32> {
+  value
+    .unwrap_or("")
+    .split(|c: char| c.is_whitespace() || c == ',')
+    .filter_map(|v| {
+      let trimmed = v.trim();
+      if trimmed.is_empty() {
+        None
+      } else {
+        trimmed.parse::<f32>().ok()
+      }
+    })
+    .collect()
 }
 
 fn parse_color(value: Option<&str>) -> Option<Rgba> {
@@ -499,7 +530,65 @@ fn parse_fe_displacement_map(node: &roxmltree::Node) -> Option<FilterPrimitive> 
 
 fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(node.attribute("in"));
-  Some(FilterPrimitive::ConvolveMatrix { input })
+  let order = parse_number_list(node.attribute("order"));
+  let order_x = order.get(0).copied().unwrap_or(3.0).floor().max(1.0) as usize;
+  let order_y = order
+    .get(1)
+    .copied()
+    .unwrap_or(order_x as f32)
+    .floor()
+    .max(1.0) as usize;
+  let kernel = parse_number_list(node.attribute("kernelMatrix"));
+  if kernel.len() != order_x * order_y {
+    return None;
+  }
+  let divisor = node
+    .attribute("divisor")
+    .and_then(|v| v.parse::<f32>().ok());
+  let bias = node
+    .attribute("bias")
+    .and_then(|v| v.parse::<f32>().ok())
+    .unwrap_or(0.0);
+  let target_x = node
+    .attribute("targetX")
+    .and_then(|v| v.parse::<i32>().ok())
+    .unwrap_or((order_x / 2) as i32)
+    .clamp(0, order_x.saturating_sub(1) as i32);
+  let target_y = node
+    .attribute("targetY")
+    .and_then(|v| v.parse::<i32>().ok())
+    .unwrap_or((order_y / 2) as i32)
+    .clamp(0, order_y.saturating_sub(1) as i32);
+  let edge_mode = match node
+    .attribute("edgeMode")
+    .unwrap_or("duplicate")
+    .to_ascii_lowercase()
+    .as_str()
+  {
+    "none" => EdgeMode::None,
+    "wrap" => EdgeMode::Wrap,
+    _ => EdgeMode::Duplicate,
+  };
+  let preserve_alpha = node
+    .attribute("preserveAlpha")
+    .map(|v| {
+      let lower = v.trim().to_ascii_lowercase();
+      lower == "true" || lower == "1"
+    })
+    .unwrap_or(false);
+
+  Some(FilterPrimitive::ConvolveMatrix {
+    input,
+    order_x,
+    order_y,
+    kernel,
+    divisor,
+    bias,
+    target_x,
+    target_y,
+    edge_mode,
+    preserve_alpha,
+  })
 }
 
 pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap) {
@@ -588,7 +677,31 @@ fn apply_primitive(
     FilterPrimitive::Tile { input } => resolve_input(input, source, results, current),
     FilterPrimitive::Turbulence => Some(source.clone()),
     FilterPrimitive::DisplacementMap { input } => resolve_input(input, source, results, current),
-    FilterPrimitive::ConvolveMatrix { input } => resolve_input(input, source, results, current),
+    FilterPrimitive::ConvolveMatrix {
+      input,
+      order_x,
+      order_y,
+      kernel,
+      divisor,
+      bias,
+      target_x,
+      target_y,
+      edge_mode,
+      preserve_alpha,
+    } => resolve_input(input, source, results, current).map(|img| {
+      apply_convolve_matrix(
+        img,
+        *order_x,
+        *order_y,
+        kernel,
+        *divisor,
+        *bias,
+        *target_x,
+        *target_y,
+        *edge_mode,
+        *preserve_alpha,
+      )
+    }),
   }
 }
 
@@ -733,6 +846,151 @@ fn mask_with(src: &Pixmap, mask: &Pixmap) -> Pixmap {
     *dst = PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
   }
   out
+}
+
+fn apply_convolve_matrix(
+  input: Pixmap,
+  order_x: usize,
+  order_y: usize,
+  kernel: &[f32],
+  divisor: Option<f32>,
+  bias: f32,
+  target_x: i32,
+  target_y: i32,
+  edge_mode: EdgeMode,
+  preserve_alpha: bool,
+) -> Pixmap {
+  if order_x == 0 || order_y == 0 || kernel.is_empty() || input.width() == 0 || input.height() == 0
+  {
+    return input;
+  }
+
+  let divisor = match divisor {
+    Some(d) if d.abs() > f32::EPSILON => d,
+    Some(_) => 1.0,
+    None => {
+      let sum: f32 = kernel.iter().sum();
+      if sum.abs() < f32::EPSILON {
+        1.0
+      } else {
+        sum
+      }
+    }
+  };
+
+  let kernel_rows: Vec<&[f32]> = kernel.chunks(order_x).collect();
+  let width = input.width() as usize;
+  let width_i32 = input.width() as i32;
+  let height_i32 = input.height() as i32;
+  let mut out = Pixmap::new(input.width(), input.height()).unwrap();
+  let src_pixels = input.pixels();
+  let dst_pixels = out.pixels_mut();
+
+  dst_pixels
+    .par_iter_mut()
+    .enumerate()
+    .for_each(|(idx, dst_px)| {
+      let y = (idx / width) as i32;
+      let x = (idx % width) as i32;
+      let preserved_alpha = if preserve_alpha {
+        src_pixels[idx].alpha() as f32 / 255.0
+      } else {
+        0.0
+      };
+
+      let mut sum_r = 0.0;
+      let mut sum_g = 0.0;
+      let mut sum_b = 0.0;
+      let mut sum_a = 0.0;
+
+      for (ky, row) in kernel_rows.iter().enumerate() {
+        let sy = y + ky as i32 - target_y;
+        for (kx, weight) in row.iter().enumerate() {
+          if *weight == 0.0 {
+            continue;
+          }
+          let sx = x + kx as i32 - target_x;
+          if let Some(px) = sample_pixel(src_pixels, sx, sy, width_i32, height_i32, edge_mode) {
+            let (r, g, b, a) = unpremultiply(px);
+            sum_r += r * weight;
+            sum_g += g * weight;
+            sum_b += b * weight;
+            sum_a += a * weight;
+          }
+        }
+      }
+
+      let r = sum_r / divisor + bias;
+      let g = sum_g / divisor + bias;
+      let b = sum_b / divisor + bias;
+      let a = sum_a / divisor + bias;
+      let clamp = |v: f32| v.clamp(0.0, 1.0);
+      let out_alpha = if preserve_alpha {
+        preserved_alpha
+      } else {
+        clamp(a)
+      };
+      let to_channel =
+        |v: f32, alpha: f32| (clamp(v) * alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+      let a_byte = (out_alpha * 255.0).round().clamp(0.0, 255.0) as u8;
+      *dst_px = PremultipliedColorU8::from_rgba(
+        to_channel(r, out_alpha),
+        to_channel(g, out_alpha),
+        to_channel(b, out_alpha),
+        a_byte,
+      )
+      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    });
+
+  out
+}
+
+fn sample_pixel(
+  pixels: &[PremultipliedColorU8],
+  x: i32,
+  y: i32,
+  width: i32,
+  height: i32,
+  edge_mode: EdgeMode,
+) -> Option<PremultipliedColorU8> {
+  if width == 0 || height == 0 {
+    return None;
+  }
+  let (sx, sy) = match edge_mode {
+    EdgeMode::Duplicate => (x.clamp(0, width - 1), y.clamp(0, height - 1)),
+    EdgeMode::Wrap => {
+      let wrap = |v: i32, max: i32| {
+        let mut v = v % max;
+        if v < 0 {
+          v += max;
+        }
+        v
+      };
+      (wrap(x, width), wrap(y, height))
+    }
+    EdgeMode::None => {
+      if x < 0 || y < 0 || x >= width || y >= height {
+        return None;
+      }
+      (x, y)
+    }
+  };
+  let idx = sy as usize * width as usize + sx as usize;
+  pixels.get(idx).copied()
+}
+
+fn unpremultiply(px: PremultipliedColorU8) -> (f32, f32, f32, f32) {
+  let a = px.alpha() as f32 / 255.0;
+  if a <= 0.0 {
+    (0.0, 0.0, 0.0, 0.0)
+  } else {
+    (
+      (px.red() as f32 / 255.0 / a).clamp(0.0, 1.0),
+      (px.green() as f32 / 255.0 / a).clamp(0.0, 1.0),
+      (px.blue() as f32 / 255.0 / a).clamp(0.0, 1.0),
+      a,
+    )
+  }
 }
 
 fn apply_morphology(pixmap: &mut Pixmap, radius: f32, op: MorphologyOp) {
@@ -978,6 +1236,7 @@ fn apply_color_matrix_values(pixmap: &mut Pixmap, matrix: &[f32; 20]) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::collections::HashMap;
   use tiny_skia::ColorU8;
 
   fn pixmap_from_rgba(colors: &[(u8, u8, u8, u8)]) -> Pixmap {
@@ -1064,5 +1323,100 @@ mod tests {
       pixels_to_vec(&pixmap),
       vec![(16, 115, 0, 191), (130, 115, 0, 191)]
     );
+  }
+
+  fn premul(r: u8, g: u8, b: u8, a: u8) -> PremultipliedColorU8 {
+    let alpha = a as f32 / 255.0;
+    let pm = |v: u8| ((v as f32) * alpha).round().clamp(0.0, 255.0) as u8;
+    PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
+  }
+
+  #[test]
+  fn convolve_identity_kernel_is_noop() {
+    let mut pixmap = Pixmap::new(2, 2).unwrap();
+    let pixels = [
+      premul(255, 0, 0, 255),
+      premul(0, 255, 0, 255),
+      premul(0, 0, 255, 255),
+      premul(255, 255, 0, 255),
+    ];
+    for (dst, src) in pixmap.pixels_mut().iter_mut().zip(pixels.iter()) {
+      *dst = *src;
+    }
+
+    let prim = FilterPrimitive::ConvolveMatrix {
+      input: FilterInput::SourceGraphic,
+      order_x: 3,
+      order_y: 3,
+      kernel: vec![0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+      divisor: None,
+      bias: 0.0,
+      target_x: 1,
+      target_y: 1,
+      edge_mode: EdgeMode::Duplicate,
+      preserve_alpha: false,
+    };
+    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    assert_eq!(pixmap.pixels(), out.pixels());
+  }
+
+  #[test]
+  fn convolve_blur_averages_neighbors() {
+    let mut pixmap = Pixmap::new(3, 3).unwrap();
+    for (idx, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+      let v = (idx as u8) * 10;
+      *px = premul(v, v, v, 255);
+    }
+
+    let prim = FilterPrimitive::ConvolveMatrix {
+      input: FilterInput::SourceGraphic,
+      order_x: 3,
+      order_y: 3,
+      kernel: vec![1.0; 9],
+      divisor: Some(9.0),
+      bias: 0.0,
+      target_x: 1,
+      target_y: 1,
+      edge_mode: EdgeMode::Duplicate,
+      preserve_alpha: false,
+    };
+
+    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    let center = out.pixels()[4];
+    assert_eq!(center.red(), 40);
+    assert_eq!(center.green(), 40);
+    assert_eq!(center.blue(), 40);
+    assert_eq!(center.alpha(), 255);
+  }
+
+  #[test]
+  fn convolve_edge_mode_none_darkens_edges() {
+    let mut pixmap = Pixmap::new(2, 2).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = premul(255, 255, 255, 255);
+    }
+
+    let base = FilterPrimitive::ConvolveMatrix {
+      input: FilterInput::SourceGraphic,
+      order_x: 3,
+      order_y: 3,
+      kernel: vec![1.0; 9],
+      divisor: Some(9.0),
+      bias: 0.0,
+      target_x: 1,
+      target_y: 1,
+      edge_mode: EdgeMode::Duplicate,
+      preserve_alpha: false,
+    };
+    let mut none_mode = base.clone();
+    none_mode.edge_mode = EdgeMode::None;
+
+    let dup = apply_primitive(&base, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    let none = apply_primitive(&none_mode, &pixmap, &HashMap::new(), &pixmap).unwrap();
+    let dup_corner = dup.pixels()[0];
+    let none_corner = none.pixels()[0];
+
+    assert!(none_corner.red() < dup_corner.red());
+    assert!(none_corner.alpha() < dup_corner.alpha());
   }
 }
