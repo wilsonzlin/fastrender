@@ -193,7 +193,9 @@ impl FilterOutsetExt for ResolvedFilter {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::paint::svg_filter::{SvgFilter, SvgFilterRegion, SvgFilterUnits, SvgLength};
+  use crate::paint::svg_filter::{
+    ColorInterpolationFilters, SvgFilter, SvgFilterRegion, SvgFilterUnits, SvgLength,
+  };
   use std::sync::Arc;
 
   #[test]
@@ -213,6 +215,7 @@ mod tests {
   #[test]
   fn svg_filter_region_expands_outset() {
     let filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
       steps: Vec::new(),
       region: SvgFilterRegion {
         x: SvgLength::Percent(-0.1),

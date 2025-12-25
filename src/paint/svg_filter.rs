@@ -19,6 +19,7 @@ fn filter_cache() -> &'static Mutex<HashMap<String, Arc<SvgFilter>>> {
 
 #[derive(Clone, Debug)]
 pub struct SvgFilter {
+  pub color_interpolation_filters: ColorInterpolationFilters,
   pub steps: Vec<FilterStep>,
   pub region: SvgFilterRegion,
 }
@@ -26,7 +27,14 @@ pub struct SvgFilter {
 #[derive(Clone, Debug)]
 pub struct FilterStep {
   pub result: Option<String>,
+  pub color_interpolation_filters: Option<ColorInterpolationFilters>,
   pub primitive: FilterPrimitive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorInterpolationFilters {
+  LinearRGB,
+  SRGB,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -350,6 +358,95 @@ fn to_premultiplied(color: UnpremultipliedColor) -> PremultipliedColorU8 {
   .unwrap_or(PremultipliedColorU8::TRANSPARENT)
 }
 
+const COLOR_LUT_SIZE: usize = 256;
+
+static SRGB_TO_LINEAR_LUT: OnceLock<[f32; COLOR_LUT_SIZE + 1]> = OnceLock::new();
+static LINEAR_TO_SRGB_LUT: OnceLock<[f32; COLOR_LUT_SIZE + 1]> = OnceLock::new();
+
+fn build_lut<F>(f: F) -> [f32; COLOR_LUT_SIZE + 1]
+where
+  F: Fn(f32) -> f32,
+{
+  let mut lut = [0.0; COLOR_LUT_SIZE + 1];
+  for (idx, slot) in lut.iter_mut().enumerate() {
+    let x = idx as f32 / COLOR_LUT_SIZE as f32;
+    *slot = f(x);
+  }
+  lut
+}
+
+fn sample_lut(value: f32, lut: &[f32; COLOR_LUT_SIZE + 1]) -> f32 {
+  let v = value.clamp(0.0, 1.0);
+  let scaled = v * COLOR_LUT_SIZE as f32;
+  let idx = scaled.floor() as usize;
+  let frac = scaled - idx as f32;
+  let next = (idx + 1).min(COLOR_LUT_SIZE);
+  let low = lut[idx];
+  let high = lut[next];
+  low + (high - low) * frac
+}
+
+fn srgb_to_linear(value: f32) -> f32 {
+  sample_lut(
+    value,
+    SRGB_TO_LINEAR_LUT.get_or_init(|| {
+      build_lut(|x| {
+        if x <= 0.04045 {
+          x / 12.92
+        } else {
+          ((x + 0.055) / 1.055).powf(2.4)
+        }
+      })
+    }),
+  )
+}
+
+fn linear_to_srgb(value: f32) -> f32 {
+  sample_lut(
+    value,
+    LINEAR_TO_SRGB_LUT.get_or_init(|| {
+      build_lut(|x| {
+        if x <= 0.0031308 {
+          12.92 * x
+        } else {
+          1.055 * x.powf(1.0 / 2.4) - 0.055
+        }
+      })
+    }),
+  )
+}
+
+fn unpack_color(
+  px: PremultipliedColorU8,
+  color_space: ColorInterpolationFilters,
+) -> UnpremultipliedColor {
+  let mut color = to_unpremultiplied(px);
+  if matches!(color_space, ColorInterpolationFilters::LinearRGB) {
+    color.r = srgb_to_linear(color.r);
+    color.g = srgb_to_linear(color.g);
+    color.b = srgb_to_linear(color.b);
+  }
+  color.a = color.a.clamp(0.0, 1.0);
+  color
+}
+
+fn pack_color(
+  color: UnpremultipliedColor,
+  color_space: ColorInterpolationFilters,
+) -> PremultipliedColorU8 {
+  let mut color = color;
+  color.a = clamp01(color.a);
+  match color_space {
+    ColorInterpolationFilters::LinearRGB => {
+      color.r = linear_to_srgb(color.r);
+      color.g = linear_to_srgb(color.g);
+      color.b = linear_to_srgb(color.b);
+    }
+    ColorInterpolationFilters::SRGB => {}
+  }
+  to_premultiplied(color)
+}
+
 /// Load and parse an SVG filter from a URL (including data URLs), caching the result.
 pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFilter>> {
   let resolved = image_cache.resolve_url(url);
@@ -420,6 +517,9 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     Some(v) if v.eq_ignore_ascii_case("userspaceonuse") => SvgFilterUnits::UserSpaceOnUse,
     _ => SvgFilterUnits::ObjectBoundingBox,
   };
+  let filter_color_interpolation_filters =
+    parse_color_interpolation_filters(node.attribute("color-interpolation-filters"))
+      .unwrap_or(ColorInterpolationFilters::LinearRGB);
   let default_region = SvgFilterRegion::default_for_units(units);
   let region = SvgFilterRegion {
     x: SvgLength::parse(node.attribute("x")).unwrap_or(default_region.x),
@@ -432,6 +532,8 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
   let mut steps = Vec::new();
   for child in node.children().filter(|c| c.is_element()) {
     let result_name = child.attribute("result").map(|s| s.to_string());
+    let color_interpolation_filters =
+      parse_color_interpolation_filters(child.attribute("color-interpolation-filters"));
     let tag = child.tag_name().name().to_ascii_lowercase();
     let primitive = match tag.as_str() {
       "feflood" => parse_fe_flood(&child),
@@ -454,6 +556,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     if let Some(prim) = primitive {
       steps.push(FilterStep {
         result: result_name,
+        color_interpolation_filters,
         primitive: prim,
       });
     }
@@ -463,7 +566,11 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     return None;
   }
 
-  Some(Arc::new(SvgFilter { steps, region }))
+  Some(Arc::new(SvgFilter {
+    color_interpolation_filters: filter_color_interpolation_filters,
+    steps,
+    region,
+  }))
 }
 
 impl SvgFilter {
@@ -537,6 +644,14 @@ fn parse_color(value: Option<&str>) -> Option<Rgba> {
     return Some(parsed.to_rgba(Rgba::BLACK));
   }
   None
+}
+
+fn parse_color_interpolation_filters(value: Option<&str>) -> Option<ColorInterpolationFilters> {
+  match value.map(|s| s.trim().to_ascii_lowercase()) {
+    Some(v) if v == "srgb" => Some(ColorInterpolationFilters::SRGB),
+    Some(v) if v == "linearrgb" => Some(ColorInterpolationFilters::LinearRGB),
+    _ => None,
+  }
 }
 
 fn parse_channel_selector(value: Option<&str>) -> ChannelSelector {
@@ -912,6 +1027,9 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
   let mut current = source.clone();
 
   for step in &def.steps {
+    let color_interpolation_filters = step
+      .color_interpolation_filters
+      .unwrap_or(def.color_interpolation_filters);
     if let Some(next) = apply_primitive(
       &step.primitive,
       &source,
@@ -919,6 +1037,7 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
       &current,
       scale,
       filter_region,
+      color_interpolation_filters,
     ) {
       if let Some(name) = &step.result {
         results.insert(name.clone(), next.clone());
@@ -978,6 +1097,7 @@ fn apply_primitive(
   current: &FilterResult,
   scale: f32,
   filter_region: Rect,
+  color_interpolation_filters: ColorInterpolationFilters,
 ) -> Option<FilterResult> {
   match primitive {
     FilterPrimitive::Flood { color, opacity } => flood(
@@ -1003,7 +1123,7 @@ fn apply_primitive(
     }
     FilterPrimitive::ColorMatrix { input, kind } => {
       let mut img = resolve_input(input, source, results, current, filter_region)?;
-      apply_color_matrix(&mut img.pixmap, kind);
+      apply_color_matrix(&mut img.pixmap, kind, color_interpolation_filters);
       Some(img)
     }
     FilterPrimitive::Composite {
@@ -1067,7 +1187,7 @@ fn apply_primitive(
     }
     FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
       resolve_input(input, source, results, current, filter_region).map(|mut img| {
-        apply_component_transfer(&mut img.pixmap, r, g, b, a);
+        apply_component_transfer(&mut img.pixmap, r, g, b, a, color_interpolation_filters);
         img
       })
     }
@@ -1744,6 +1864,7 @@ fn apply_component_transfer(
   g: &TransferFn,
   b: &TransferFn,
   a: &TransferFn,
+  color_interpolation_filters: ColorInterpolationFilters,
 ) {
   let r_lut = build_transfer_lut(r);
   let g_lut = build_transfer_lut(g);
@@ -1755,14 +1876,14 @@ fn apply_component_transfer(
   };
 
   for px in pixmap.pixels_mut() {
-    let input = to_unpremultiplied(*px);
+    let input = unpack_color(*px, color_interpolation_filters);
     let out = UnpremultipliedColor {
       r: sample(&r_lut, input.r),
       g: sample(&g_lut, input.g),
       b: sample(&b_lut, input.b),
       a: sample(&a_lut, input.a),
     };
-    *px = to_premultiplied(out);
+    *px = pack_color(out, color_interpolation_filters);
   }
 }
 
@@ -1824,20 +1945,29 @@ fn evaluate_transfer_fn(func: &TransferFn, v: f32) -> f32 {
   clamp_unit(result)
 }
 
-fn apply_color_matrix(pixmap: &mut Pixmap, kind: &ColorMatrixKind) {
+fn apply_color_matrix(
+  pixmap: &mut Pixmap,
+  kind: &ColorMatrixKind,
+  color_interpolation_filters: ColorInterpolationFilters,
+) {
   match kind {
-    ColorMatrixKind::Matrix(values) => apply_color_matrix_values(pixmap, values),
+    ColorMatrixKind::Matrix(values) => {
+      apply_color_matrix_values(pixmap, values, color_interpolation_filters)
+    }
     ColorMatrixKind::LuminanceToAlpha => {
       let pixels = pixmap.pixels_mut();
       for px in pixels.iter_mut() {
-        let color = to_unpremultiplied(*px);
+        let color = unpack_color(*px, color_interpolation_filters);
         let lum = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
-        *px = to_premultiplied(UnpremultipliedColor {
-          r: 0.0,
-          g: 0.0,
-          b: 0.0,
-          a: clamp01(lum),
-        });
+        *px = pack_color(
+          UnpremultipliedColor {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: clamp01(lum),
+          },
+          color_interpolation_filters,
+        );
       }
     }
     ColorMatrixKind::Saturate(amount) => {
@@ -1864,7 +1994,7 @@ fn apply_color_matrix(pixmap: &mut Pixmap, kind: &ColorMatrixKind) {
         1.0,
         0.0,
       ];
-      apply_color_matrix_values(pixmap, &matrix);
+      apply_color_matrix_values(pixmap, &matrix, color_interpolation_filters);
     }
     ColorMatrixKind::HueRotate(angle) => {
       let theta = angle.to_radians();
@@ -1892,15 +2022,19 @@ fn apply_color_matrix(pixmap: &mut Pixmap, kind: &ColorMatrixKind) {
         1.0,
         0.0,
       ];
-      apply_color_matrix_values(pixmap, &matrix);
+      apply_color_matrix_values(pixmap, &matrix, color_interpolation_filters);
     }
   }
 }
 
-fn apply_color_matrix_values(pixmap: &mut Pixmap, matrix: &[f32; 20]) {
+fn apply_color_matrix_values(
+  pixmap: &mut Pixmap,
+  matrix: &[f32; 20],
+  color_interpolation_filters: ColorInterpolationFilters,
+) {
   let pixels = pixmap.pixels_mut();
   for px in pixels.iter_mut() {
-    let input = to_unpremultiplied(*px);
+    let input = unpack_color(*px, color_interpolation_filters);
     let r2 = matrix[0] * input.r
       + matrix[1] * input.g
       + matrix[2] * input.b
@@ -1921,12 +2055,15 @@ fn apply_color_matrix_values(pixmap: &mut Pixmap, matrix: &[f32; 20]) {
       + matrix[17] * input.b
       + matrix[18] * input.a
       + matrix[19];
-    *px = to_premultiplied(UnpremultipliedColor {
-      r: clamp01(r2),
-      g: clamp01(g2),
-      b: clamp01(b2),
-      a: clamp01(a2),
-    });
+    *px = pack_color(
+      UnpremultipliedColor {
+        r: clamp01(r2),
+        g: clamp01(g2),
+        b: clamp01(b2),
+        a: clamp01(a2),
+      },
+      color_interpolation_filters,
+    );
   }
 }
 
@@ -1958,6 +2095,21 @@ mod tests {
     PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
   }
 
+  fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
+    let region = filter_region_for_pixmap(pixmap);
+    let src = FilterResult::full_region(pixmap.clone(), region);
+    apply_primitive(
+      prim,
+      &src,
+      &HashMap::new(),
+      &src,
+      1.0,
+      region,
+      ColorInterpolationFilters::LinearRGB,
+    )
+    .unwrap()
+  }
+
   #[test]
   fn color_matrix_uses_unpremultiplied_channels() {
     let mut pixmap = Pixmap::new(1, 1).unwrap();
@@ -1971,7 +2123,7 @@ mod tests {
       0.0, 0.0, 0.0, 1.0, 0.0, //
     ];
 
-    apply_color_matrix_values(&mut pixmap, &matrix);
+    apply_color_matrix_values(&mut pixmap, &matrix, ColorInterpolationFilters::LinearRGB);
 
     let px = pixmap.pixels()[0];
     assert_eq!(px.red(), 0);
@@ -1995,6 +2147,7 @@ mod tests {
       &TransferFn::Identity,
       &TransferFn::Identity,
       &TransferFn::Identity,
+      ColorInterpolationFilters::LinearRGB,
     );
 
     let px = pixmap.pixels()[0];
@@ -2010,7 +2163,11 @@ mod tests {
     pixmap.pixels_mut()[0] =
       PremultipliedColorU8::from_rgba(128, 64, 0, 128).unwrap_or(PremultipliedColorU8::TRANSPARENT);
 
-    apply_color_matrix(&mut pixmap, &ColorMatrixKind::LuminanceToAlpha);
+    apply_color_matrix(
+      &mut pixmap,
+      &ColorMatrixKind::LuminanceToAlpha,
+      ColorInterpolationFilters::LinearRGB,
+    );
 
     let px = pixmap.pixels()[0];
     assert_eq!(px.red(), 0);
@@ -2041,6 +2198,7 @@ mod tests {
         slope: 0.5,
         intercept: 0.25,
       },
+      ColorInterpolationFilters::LinearRGB,
     );
 
     assert_eq!(
@@ -2062,6 +2220,7 @@ mod tests {
       &TransferFn::Identity,
       &TransferFn::Identity,
       &TransferFn::Identity,
+      ColorInterpolationFilters::LinearRGB,
     );
 
     assert_eq!(
@@ -2085,6 +2244,7 @@ mod tests {
       &TransferFn::Discrete {
         values: vec![0.25, 0.75],
       },
+      ColorInterpolationFilters::LinearRGB,
     );
 
     assert_eq!(
@@ -2119,8 +2279,8 @@ mod tests {
       preserve_alpha: false,
       subregion: None,
     };
-    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
-    assert_eq!(pixmap.pixels(), out.pixels());
+    let out = apply_for_test(&prim, &pixmap);
+    assert_eq!(pixmap.pixels(), out.pixmap.pixels());
   }
 
   #[test]
@@ -2145,8 +2305,8 @@ mod tests {
       subregion: None,
     };
 
-    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
-    let center = out.pixels()[4];
+    let out = apply_for_test(&prim, &pixmap);
+    let center = out.pixmap.pixels()[4];
     assert_eq!(center.red(), 40);
     assert_eq!(center.green(), 40);
     assert_eq!(center.blue(), 40);
@@ -2187,10 +2347,10 @@ mod tests {
       subregion: None,
     };
 
-    let dup = apply_primitive(&base, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
-    let none = apply_primitive(&none_mode, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
-    let dup_corner = dup.pixels()[0];
-    let none_corner = none.pixels()[0];
+    let dup = apply_for_test(&base, &pixmap);
+    let none = apply_for_test(&none_mode, &pixmap);
+    let dup_corner = dup.pixmap.pixels()[0];
+    let none_corner = none.pixmap.pixels()[0];
 
     assert!(none_corner.red() < dup_corner.red());
     assert!(none_corner.alpha() < dup_corner.alpha());
@@ -2222,8 +2382,8 @@ mod tests {
       preserve_alpha: false,
       subregion: Some((0.0, 0.0, 1.0, 1.0)),
     };
-    let out = apply_primitive(&prim, &pixmap, &HashMap::new(), &pixmap, 1.0).unwrap();
-    let out_pixels = out.pixels();
+    let out = apply_for_test(&prim, &pixmap);
+    let out_pixels = out.pixmap.pixels();
     assert_eq!(out_pixels[0], pixels[0]); // inside subregion
     assert_eq!(out_pixels[1], PremultipliedColorU8::TRANSPARENT);
     assert_eq!(out_pixels[2], PremultipliedColorU8::TRANSPARENT);
