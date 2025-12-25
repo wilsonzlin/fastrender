@@ -35,6 +35,7 @@ use crate::paint::display_list::ResolvedFilter;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
+use crate::paint::filter_outset::compute_filter_outset;
 
 // ============================================================================
 // Optimization Configuration
@@ -333,8 +334,8 @@ impl DisplayListOptimizer {
               transform_state.unsupported_depth += 1;
             }
           }
-          let (l, t, r, b) = Self::filter_outset(&sc.filters);
-          let (bl, bt, br, bb) = Self::filter_outset(&sc.backdrop_filters);
+          let (l, t, r, b) = compute_filter_outset(&sc.filters, sc.bounds, 1.0);
+          let (bl, bt, br, bb) = compute_filter_outset(&sc.backdrop_filters, sc.bounds, 1.0);
           let max_outset = l.max(t).max(r).max(b).max(bl).max(bt).max(br).max(bb);
           let scale = Self::transform_scale_factor(&transform_state.current);
           let world_outset = if transform_state.culling_disabled() {
@@ -654,8 +655,8 @@ impl DisplayListOptimizer {
     transform: Option<Transform2D>,
   ) -> Option<Rect> {
     if let Some(bounds) = children {
-      let (l, t, r, b) = Self::filter_outset(&item.filters);
-      let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
+      let (l, t, r, b) = compute_filter_outset(&item.filters, bounds, 1.0);
+      let (bl, bt, br, bb) = compute_filter_outset(&item.backdrop_filters, bounds, 1.0);
       let expand_left = l.max(bl);
       let expand_top = t.max(bt);
       let expand_right = r.max(br);
@@ -678,8 +679,8 @@ impl DisplayListOptimizer {
       return Some(expanded);
     }
 
-    let (l, t, r, b) = Self::filter_outset(&item.filters);
-    let (bl, bt, br, bb) = Self::filter_outset(&item.backdrop_filters);
+    let (l, t, r, b) = compute_filter_outset(&item.filters, item.bounds, 1.0);
+    let (bl, bt, br, bb) = compute_filter_outset(&item.backdrop_filters, item.bounds, 1.0);
     let expand_left = l.max(bl);
     let expand_top = t.max(bt);
     let expand_right = r.max(br);
@@ -698,41 +699,6 @@ impl DisplayListOptimizer {
       Some(transform) => Some(transform.transform_rect(bounds)),
       None => Some(bounds),
     }
-  }
-
-  fn filter_outset(filters: &[ResolvedFilter]) -> (f32, f32, f32, f32) {
-    let mut left: f32 = 0.0;
-    let mut top: f32 = 0.0;
-    let mut right: f32 = 0.0;
-    let mut bottom: f32 = 0.0;
-
-    for filter in filters {
-      match filter {
-        ResolvedFilter::Blur(radius) => {
-          let delta = radius.abs() * 3.0;
-          left = left.max(delta);
-          right = right.max(delta);
-          top = top.max(delta);
-          bottom = bottom.max(delta);
-        }
-        ResolvedFilter::DropShadow {
-          offset_x,
-          offset_y,
-          blur_radius,
-          spread,
-          ..
-        } => {
-          let delta = blur_radius.abs() * 3.0 + spread.max(0.0);
-          left = left.max(delta - offset_x.min(0.0));
-          right = right.max(delta + offset_x.max(0.0));
-          top = top.max(delta - offset_y.min(0.0));
-          bottom = bottom.max(delta + offset_y.max(0.0));
-        }
-        _ => {}
-      }
-    }
-
-    (left, top, right, bottom)
   }
 
   /// Try to merge two fill rects

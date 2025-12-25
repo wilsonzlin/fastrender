@@ -42,6 +42,7 @@ use crate::paint::blur::apply_gaussian_blur;
 use crate::paint::clip_path::resolve_clip_path;
 use crate::paint::clip_path::ResolvedClipPath;
 use crate::paint::display_list::BorderRadii;
+use crate::paint::filter_outset::compute_filter_outset;
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::rasterize::fill_rounded_rect;
@@ -2179,8 +2180,9 @@ impl Painter {
 
         // Constrain the stacking layer to the visible viewport (expanded by filter outsets).
         // If a context is entirely outside the viewport, skip it.
-        let (filter_l, filter_t, filter_r, filter_b) = filter_outset(&filters, self.scale);
-        let (back_l, back_t, back_r, back_b) = filter_outset(&backdrop_filters, self.scale);
+        let (filter_l, filter_t, filter_r, filter_b) = compute_filter_outset(&filters, bounds, 1.0);
+        let (back_l, back_t, back_r, back_b) =
+          compute_filter_outset(&backdrop_filters, bounds, 1.0);
         let expand_l = filter_l.max(back_l);
         let expand_t = filter_t.max(back_t);
         let expand_r = filter_r.max(back_r);
@@ -2463,11 +2465,8 @@ impl Painter {
 
         let device_radii = self.device_radii(radii);
         if !radii.is_zero() || !filters.is_empty() {
-          let (out_l, out_t, out_r, out_b) = filter_outset(&filters, self.scale);
-          let device_out_l = self.device_length(out_l);
-          let device_out_t = self.device_length(out_t);
-          let device_out_r = self.device_length(out_r);
-          let device_out_b = self.device_length(out_b);
+          let (device_out_l, device_out_t, device_out_r, device_out_b) =
+            compute_filter_outset(&filters, root_rect, self.scale);
           let clip_rect = Rect::from_xywh(
             device_root_rect.x() - device_out_l,
             device_root_rect.y() - device_out_t,
@@ -2498,6 +2497,7 @@ impl Painter {
             &backdrop_filters,
             device_radii,
             self.scale,
+            root_rect,
           );
           if let Some(start) = backdrop_start {
             backdrop_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -7541,8 +7541,8 @@ fn stacking_context_bounds(
   if let Some(outline_bounds) = outline_bounds {
     base = base.union(outline_bounds);
   }
-  let (l, t, r, b) = filter_outset(filters, 1.0);
-  let (bl, bt, br, bb) = filter_outset(backdrop_filters, 1.0);
+  let (l, t, r, b) = compute_filter_outset(filters, base, 1.0);
+  let (bl, bt, br, bb) = compute_filter_outset(backdrop_filters, base, 1.0);
   let total_l = l.max(bl);
   let total_t = t.max(bt);
   let total_r = r.max(br);
@@ -7801,49 +7801,6 @@ fn resolve_filter_length(
   }
 }
 
-fn filter_outset(filters: &[ResolvedFilter], scale: f32) -> (f32, f32, f32, f32) {
-  let mut left: f32 = 0.0;
-  let mut top: f32 = 0.0;
-  let mut right: f32 = 0.0;
-  let mut bottom: f32 = 0.0;
-
-  for filter in filters {
-    match *filter {
-      ResolvedFilter::Blur(radius) => {
-        let delta = (radius * scale).abs() * 3.0;
-        left += delta;
-        right += delta;
-        top += delta;
-        bottom += delta;
-      }
-      ResolvedFilter::DropShadow {
-        offset_x,
-        offset_y,
-        blur_radius,
-        spread,
-        ..
-      } => {
-        let dx = offset_x * scale;
-        let dy = offset_y * scale;
-        let blur = blur_radius * scale;
-        let spread = spread * scale;
-        let delta = (blur.abs() * 3.0 + spread).max(0.0);
-        let shadow_left = left + delta - dx;
-        let shadow_right = right + delta + dx;
-        let shadow_top = top + delta - dy;
-        let shadow_bottom = bottom + delta + dy;
-        left = left.max(shadow_left);
-        right = right.max(shadow_right);
-        top = top.max(shadow_top);
-        bottom = bottom.max(shadow_bottom);
-      }
-      _ => {}
-    }
-  }
-
-  (left.max(0.0), top.max(0.0), right.max(0.0), bottom.max(0.0))
-}
-
 fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32) {
   for filter in filters {
     match *filter {
@@ -7888,15 +7845,12 @@ fn apply_backdrop_filters(
   filters: &[ResolvedFilter],
   radii: BorderRadii,
   scale: f32,
+  filter_bounds: Rect,
 ) {
   if filters.is_empty() {
     return;
   }
-  let (out_l, out_t, out_r, out_b) = filter_outset(filters, 1.0);
-  let out_l = out_l * scale;
-  let out_t = out_t * scale;
-  let out_r = out_r * scale;
-  let out_b = out_b * scale;
+  let (out_l, out_t, out_r, out_b) = compute_filter_outset(filters, filter_bounds, scale);
 
   let x = (bounds.min_x() - out_l).floor() as i32;
   let y = (bounds.min_y() - out_t).floor() as i32;
@@ -10332,7 +10286,8 @@ mod tests {
       spread: -2.0,
       color: Rgba::BLACK,
     }];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+    let (l, t, r, b) = compute_filter_outset(&filters, bbox, 1.0);
     let with_zero_spread = vec![ResolvedFilter::DropShadow {
       offset_x: 0.0,
       offset_y: 0.0,
@@ -10340,7 +10295,7 @@ mod tests {
       spread: 0.0,
       color: Rgba::BLACK,
     }];
-    let (l0, t0, r0, b0) = filter_outset(&with_zero_spread, 1.0);
+    let (l0, t0, r0, b0) = compute_filter_outset(&with_zero_spread, bbox, 1.0);
     assert!(
       (l - 10.0).abs() < 0.01
         && (t - 10.0).abs() < 0.01
@@ -10357,7 +10312,8 @@ mod tests {
   #[test]
   fn filter_outset_accumulates_blurs() {
     let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::Blur(3.0)];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+    let (l, t, r, b) = compute_filter_outset(&filters, bbox, 1.0);
     assert!(
       (l - 15.0).abs() < 0.01
         && (t - 15.0).abs() < 0.01
@@ -10379,7 +10335,8 @@ mod tests {
         color: Rgba::BLACK,
       },
     ];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+    let (l, t, r, b) = compute_filter_outset(&filters, bbox, 1.0);
     // Blur contributes 6px first; drop shadow adds another 3px blur and shifts left/up by offsets.
     assert!(
       (l - 13.0).abs() < 0.01
@@ -10393,7 +10350,8 @@ mod tests {
   #[test]
   fn blur_filter_outset_scales_with_device_pixel_ratio() {
     let filters = vec![ResolvedFilter::Blur(4.0)];
-    let (l, t, r, b) = filter_outset(&filters, 1.0);
+    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+    let (l, t, r, b) = compute_filter_outset(&filters, bbox, 1.0);
     // Blur outset is radius * 3 per side.
     assert!(
       (l - 12.0).abs() < 0.01
@@ -10403,7 +10361,7 @@ mod tests {
     );
 
     let filters = vec![ResolvedFilter::Blur(2.0)];
-    let (l, t, r, b) = filter_outset(&filters, 2.0);
+    let (l, t, r, b) = compute_filter_outset(&filters, bbox, 2.0);
     // Device pixel ratio doubles the blur radius before computing outsets.
     assert!(
       (l - 12.0).abs() < 0.01
@@ -12452,7 +12410,14 @@ mod tests {
 
     let bounds = Rect::from_xywh(2.0, 3.0, 4.0, 2.0);
     let filters = vec![ResolvedFilter::Invert(1.0)];
-    apply_backdrop_filters(&mut pixmap, &bounds, &filters, BorderRadii::ZERO, 1.0);
+    apply_backdrop_filters(
+      &mut pixmap,
+      &bounds,
+      &filters,
+      BorderRadii::ZERO,
+      1.0,
+      bounds,
+    );
 
     let mut inverted = Vec::new();
     for y in 0..pixmap.height() {
