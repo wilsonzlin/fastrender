@@ -313,3 +313,52 @@ fn layout_engine_pagination_splits_pages() {
   assert!((fragments.additional_fragments[0].bounds.y() - 70.0).abs() < 0.1);
   assert!((fragments.additional_fragments[1].bounds.y() - 140.0).abs() < 0.1);
 }
+
+#[test]
+fn pagination_preserves_column_metadata() {
+  fn fixed_height_block(height: f32) -> BoxNode {
+    let mut style = ComputedStyle::default();
+    style.height = Some(Length::px(height));
+    BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![])
+  }
+
+  let mut column_style = ComputedStyle::default();
+  column_style.column_count = Some(2);
+  let column_container = BoxNode::new_block(
+    Arc::new(column_style),
+    FormattingContextType::Block,
+    vec![
+      fixed_height_block(80.0),
+      fixed_height_block(80.0),
+      fixed_height_block(80.0),
+    ],
+  );
+
+  let root = BoxNode::new_block(
+    Arc::new(ComputedStyle::default()),
+    FormattingContextType::Block,
+    vec![column_container],
+  );
+  let box_tree = BoxTree::new(root);
+
+  let config = LayoutConfig::for_pagination(Size::new(200.0, 120.0), 0.0);
+  let engine = LayoutEngine::new(config);
+  let fragments = engine
+    .layout_tree(&box_tree)
+    .expect("layout with pagination");
+
+  assert!(
+    !fragments.additional_fragments.is_empty(),
+    "pagination should produce multiple pages"
+  );
+  let second_page = &fragments.additional_fragments[0];
+  assert!(second_page
+    .iter_fragments()
+    .all(|fragment| fragment.fragmentainer.page_index == 1));
+  assert!(
+    second_page
+      .iter_fragments()
+      .any(|fragment| fragment.fragmentainer.column_index.is_some()),
+    "column fragments should carry column indices on paginated pages"
+  );
+}
