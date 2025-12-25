@@ -1,5 +1,6 @@
 use fastrender::api::FastRender;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
+use fastrender::Rgba;
 
 fn pages<'a>(tree: &'a FragmentTree) -> Vec<&'a FragmentNode> {
   let mut roots = vec![&tree.root];
@@ -142,4 +143,36 @@ fn margin_box_content_is_positioned_in_margins() {
 
   assert!(header.bounds.y() < content.bounds.y());
   assert!(footer.bounds.y() > content.bounds.y());
+}
+
+#[test]
+fn margin_box_inherits_body_color_and_font_size() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          body { color: rgb(200, 0, 0); font-size: 30px; }
+          @page {
+            size: 200px 120px;
+            margin: 10px;
+            @top-center { content: "X"; }
+          }
+        </style>
+      </head>
+      <body></body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 300, 200).unwrap();
+  let page = pages(&tree)
+    .into_iter()
+    .next()
+    .expect("first page fragment");
+  let header = find_text(page, "X").expect("margin box text");
+  let style = header.get_style().expect("margin text style");
+
+  assert_eq!(style.color, Rgba::rgb(200, 0, 0));
+  assert!((style.font_size - 30.0).abs() < 0.1);
 }
