@@ -3,7 +3,6 @@ use crate::geometry::Rect;
 use crate::paint::display_list::BorderRadii;
 use crate::style::types::BackgroundPosition;
 use crate::style::types::BasicShape;
-use crate::style::types::BorderCornerRadius;
 use crate::style::types::ClipPath;
 use crate::style::types::ClipRadii;
 use crate::style::types::FillRule;
