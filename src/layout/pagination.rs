@@ -4,13 +4,16 @@ use std::sync::Arc;
 
 use crate::css::types::CollectedPageRule;
 use crate::geometry::{Rect, Size};
+use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::layout::fragmentation::{
   clip_node, collect_forced_boundaries, propagate_fragment_metadata,
 };
-use crate::style::content::{ContentContext, ContentGenerator};
+use crate::style::content::{ContentContext, ContentItem, ContentValue, CounterStyle};
+use crate::style::display::FormattingContextType;
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
 use crate::style::ComputedStyle;
 use crate::text::font_loader::FontContext;
+use crate::tree::box_tree::{BoxNode, BoxTree, ReplacedType};
 use crate::tree::fragment_tree::FragmentNode;
 
 /// Split a laid out fragment tree into pages using the provided @page rules.
@@ -41,6 +44,7 @@ pub fn paginate_fragment_tree(
   forced.dedup_by(|a, b| (*a - *b).abs() < 0.01);
 
   let mut pages = Vec::new();
+  let mut page_styles = Vec::new();
   let mut pos = 0.0;
   let mut page_index = 0;
 
@@ -92,10 +96,7 @@ pub fn paginate_fragment_tree(
       page_root.children.push(content);
     }
 
-    page_root
-      .children
-      .extend(build_margin_box_fragments(&style, font_ctx));
-
+    page_styles.push(style.clone());
     pages.push(page_root);
     pos = end;
     page_index += 1;
@@ -106,7 +107,10 @@ pub fn paginate_fragment_tree(
   }
 
   let count = pages.len();
-  for (idx, page) in pages.iter_mut().enumerate() {
+  for (idx, (page, style)) in pages.iter_mut().zip(page_styles.iter()).enumerate() {
+    page
+      .children
+      .extend(build_margin_box_fragments(style, font_ctx, idx, count));
     propagate_fragment_metadata(page, idx, count);
   }
 
@@ -173,11 +177,11 @@ fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
 
 fn build_margin_box_fragments(
   style: &ResolvedPageStyle,
-  _font_ctx: &FontContext,
+  font_ctx: &FontContext,
+  page_index: usize,
+  page_count: usize,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
-  let generator = ContentGenerator::new();
-  let mut context = ContentContext::new();
 
   for (area, box_style) in &style.margin_boxes {
     if let Some(bounds) = margin_box_bounds(*area, style) {
@@ -185,31 +189,121 @@ fn build_margin_box_fragments(
         continue;
       }
 
-      let text = generator.generate(&box_style.content_value, &mut context);
-      let mut children = Vec::new();
-      if !text.is_empty() {
-        let (text_w, text_h, baseline) = measure_text(&text, box_style);
-        let text_x = bounds.x() + (bounds.width() - text_w).max(0.0) / 2.0;
-        let text_y = bounds.y() + (bounds.height() - text_h).max(0.0) / 2.0;
-        let text_bounds = Rect::from_xywh(text_x, text_y, text_w, text_h);
-        children.push(FragmentNode::new_text_shaped(
-          text_bounds,
-          text,
-          baseline,
-          Vec::new(),
-          Arc::new(box_style.clone()),
-        ));
-      }
+      let style_arc = Arc::new(box_style.clone());
+      let children = build_margin_box_children(box_style, page_index, page_count, &style_arc);
+      let root = BoxNode::new_block(style_arc.clone(), FormattingContextType::Block, children);
+      let box_tree = BoxTree::new(root);
 
-      fragments.push(FragmentNode::new_block_styled(
-        bounds,
-        children,
-        Arc::new(box_style.clone()),
-      ));
+      let config = LayoutConfig::new(Size::new(bounds.width(), bounds.height()));
+      let engine = LayoutEngine::with_font_context(config, font_ctx.clone());
+      if let Ok(mut tree) = engine.layout_tree(&box_tree) {
+        translate_fragment(&mut tree.root, bounds.x(), bounds.y());
+        fragments.push(tree.root);
+      }
     }
   }
 
   fragments
+}
+
+fn build_margin_box_children(
+  box_style: &ComputedStyle,
+  page_index: usize,
+  page_count: usize,
+  style: &Arc<ComputedStyle>,
+) -> Vec<BoxNode> {
+  let mut children: Vec<BoxNode> = Vec::new();
+  let mut context = ContentContext::new();
+  context.set_quotes(box_style.quotes.clone());
+  context.set_counter(
+    "page",
+    page_index.saturating_add(1).min(i32::MAX as usize) as i32,
+  );
+  context.set_counter("pages", page_count.min(i32::MAX as usize) as i32);
+
+  let mut text_buf = String::new();
+  let flush_text = |buf: &mut String, out: &mut Vec<BoxNode>, style: &Arc<ComputedStyle>| {
+    if !buf.is_empty() {
+      out.push(BoxNode::new_text(style.clone(), buf.clone()));
+      buf.clear();
+    }
+  };
+
+  match &box_style.content_value {
+    ContentValue::Items(items) => {
+      for item in items {
+        match item {
+          ContentItem::String(s) => text_buf.push_str(s),
+          ContentItem::Attr { name, fallback, .. } => {
+            if let Some(val) = context.get_attribute(name) {
+              text_buf.push_str(&val);
+            } else if let Some(fb) = fallback {
+              text_buf.push_str(fb);
+            }
+          }
+          ContentItem::Counter { name, style } => {
+            let value = context.get_counter(name);
+            let formatted = box_style
+              .counter_styles
+              .format_value(value, style.clone().unwrap_or(CounterStyle::Decimal.into()));
+            text_buf.push_str(&formatted);
+          }
+          ContentItem::Counters {
+            name,
+            separator,
+            style,
+          } => {
+            let values = context.get_counters(name);
+            let style_name = style.clone().unwrap_or(CounterStyle::Decimal.into());
+            if values.is_empty() {
+              text_buf.push_str(&box_style.counter_styles.format_value(0, style_name));
+            } else {
+              let formatted: Vec<String> = values
+                .iter()
+                .map(|v| {
+                  box_style
+                    .counter_styles
+                    .format_value(*v, style_name.clone())
+                })
+                .collect();
+              text_buf.push_str(&formatted.join(separator));
+            }
+          }
+          ContentItem::OpenQuote => {
+            text_buf.push_str(context.open_quote());
+            context.push_quote();
+          }
+          ContentItem::CloseQuote => {
+            text_buf.push_str(context.close_quote());
+            context.pop_quote();
+          }
+          ContentItem::NoOpenQuote => context.push_quote(),
+          ContentItem::NoCloseQuote => context.pop_quote(),
+          ContentItem::Url(url) => {
+            flush_text(&mut text_buf, &mut children, style);
+            let replaced = BoxNode::new_replaced(
+              style.clone(),
+              ReplacedType::Image {
+                src: url.clone(),
+                alt: None,
+                sizes: None,
+                srcset: Vec::new(),
+                picture_sources: Vec::new(),
+              },
+              None,
+              None,
+            );
+            children.push(replaced);
+          }
+        }
+      }
+    }
+    ContentValue::None | ContentValue::Normal => {}
+  }
+
+  flush_text(&mut text_buf, &mut children, style);
+
+  children
 }
 
 fn margin_box_bounds(
@@ -259,12 +353,4 @@ fn margin_box_bounds(
       style.margin_bottom,
     )),
   }
-}
-
-fn measure_text(text: &str, style: &ComputedStyle) -> (f32, f32, f32) {
-  let font_size = style.font_size.max(1.0);
-  let width = text.chars().count() as f32 * font_size * 0.6;
-  let height = font_size * 1.2;
-  let baseline = font_size * 0.9;
-  (width, height, baseline)
 }
