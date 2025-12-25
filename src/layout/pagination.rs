@@ -201,11 +201,8 @@ pub fn paginate_fragment_tree(
     }
 
     let mut start = ((consumed_base / base_total_height) * total_height).min(total_height);
-    let actual_page_name = page_name_for_position(
-      &layout.page_name_spans,
-      start,
-      initial_page_name.as_deref(),
-    );
+    let actual_page_name =
+      page_name_for_position(&layout.page_name_spans, start, initial_page_name.as_deref());
     if actual_page_name != page_name {
       page_name = actual_page_name;
       page_style = resolve_page_style(
@@ -249,7 +246,16 @@ pub fn paginate_fragment_tree(
       end = (start + page_block).min(total_height);
     }
 
-    let clipped = clip_node(&layout.root, start, end, 0.0, start, page_index, 0, page_block);
+    let clipped = clip_node(
+      &layout.root,
+      start,
+      end,
+      0.0,
+      start,
+      page_index,
+      0,
+      page_block,
+    );
     let mut page_root = FragmentNode::new_block(
       Rect::from_xywh(
         0.0,

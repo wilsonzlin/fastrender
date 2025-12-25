@@ -60,7 +60,7 @@ use crate::compat::CompatProfile;
 use crate::css::encoding::decode_css_bytes;
 use crate::css::loader::{
   absolutize_css_urls, extract_css_links, extract_embedded_css_urls, infer_base_url,
-  inject_css_into_html, inline_imports, inline_imports_with_diagnostics, resolve_href_with_base,
+  inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base,
 };
 use crate::css::parser::{
   extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, StylesheetSource,
@@ -146,13 +146,14 @@ use std::io;
 use std::mem;
 use std::sync::Arc;
 use std::sync::OnceLock;
+#[cfg(test)]
+use url::Url;
 
 const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 use std::time::Instant;
 // Re-export Pixmap from tiny-skia for public use
 pub use crate::layout::pagination::PageStacking;
 pub use tiny_skia::Pixmap;
-use url::Url;
 
 #[derive(Default, Debug, Clone)]
 struct ReplacedIntrinsicProfileState {
@@ -3064,7 +3065,8 @@ impl FastRender {
     let disable_cache = std::env::var("FASTR_DISABLE_LAYOUT_CACHE")
       .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
       .unwrap_or(false);
-    config.enable_cache = !disable_cache;
+    let enable_layout_cache = !disable_cache;
+    config.enable_cache = enable_layout_cache;
     self.layout_engine = LayoutEngine::with_font_context(config, self.font_context.clone());
     intrinsic_cache_clear();
     let report_intrinsic = std::env::var_os("FASTR_INTRINSIC_STATS").is_some();
@@ -3352,7 +3354,7 @@ impl FastRender {
         &box_tree.root.style,
         styled_tree.styles.root_font_size,
         page_name_hint.clone(),
-        config.enable_cache,
+        enable_layout_cache,
         PaginateOptions {
           stacking: options.page_stacking,
         },
@@ -3658,6 +3660,7 @@ impl FastRender {
         Ok(res) => {
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
           let rewritten = absolutize_css_urls(&css_text, &css_url);
+          let mut import_diags: Vec<(String, String)> = Vec::new();
           let inlined = {
             let mut import_fetch = |u: &str| -> Result<String> {
               match fetcher.fetch(u) {
@@ -3669,8 +3672,9 @@ impl FastRender {
               }
             };
 
-            let mut import_diag =
-              |url: &str, reason: &str| diagnostics.record(ResourceKind::Stylesheet, url, reason);
+            let mut import_diag = |url: &str, reason: &str| {
+              import_diags.push((url.to_string(), reason.to_string()));
+            };
 
             inline_imports_with_diagnostics(
               &rewritten,
@@ -3680,6 +3684,9 @@ impl FastRender {
               &mut import_diag,
             )
           };
+          for (url, reason) in import_diags.drain(..) {
+            diagnostics.record(ResourceKind::Stylesheet, &url, &reason);
+          }
           combined_css.push_str(&inlined);
           combined_css.push('\n');
         }
