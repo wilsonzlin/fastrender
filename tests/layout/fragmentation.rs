@@ -427,3 +427,98 @@ fn layout_engine_pagination_splits_pages() {
     "second column should restart margin collapsing at the column boundary"
   );
 }
+
+#[test]
+fn sticky_offsets_apply_to_additional_fragments() {
+  let html = r#"
+    <style>
+      body { margin: 0; }
+      .spacer { height: 150px; }
+      .sticky { position: sticky; top: 0; height: 20px; background: red; }
+      .tail { height: 40px; }
+    </style>
+    <div class="spacer"></div>
+    <div class="sticky"></div>
+    <div class="tail"></div>
+  "#;
+
+  let mut renderer = FastRender::new().expect("renderer");
+  let dom = renderer.parse_html(html).expect("dom");
+  let base_tree = renderer
+    .layout_document(&dom, 100, 100)
+    .expect("layout document");
+  let viewport = base_tree.viewport_size();
+
+  let fragments = fragment_tree(&base_tree.root, &FragmentationOptions::new(viewport.height));
+  assert!(
+    fragments.len() > 1,
+    "fragmentation should yield multiple roots"
+  );
+  let mut tree = FragmentTree::from_fragments(fragments, viewport);
+
+  let (before_pos, fragment_index, _sticky_fragment) =
+    sticky_abs_position(&tree).expect("sticky fragment present");
+  assert!(
+    fragment_index > 0,
+    "sticky element should live in an additional fragment"
+  );
+
+  renderer.apply_sticky_offsets_for_tree(&mut tree, Point::new(0.0, 180.0));
+
+  let (after_pos, after_fragment_index, after_fragment) =
+    sticky_abs_position(&tree).expect("sticky fragment after offsets");
+  assert_eq!(fragment_index, after_fragment_index);
+  assert!(
+    after_pos.y > before_pos.y,
+    "sticky fragment should move when clamped"
+  );
+
+  let container = if after_fragment_index == 0 {
+    &tree.root
+  } else {
+    &tree.additional_fragments[after_fragment_index - 1]
+  };
+  let expected_y = container.bounds.max_y() - after_fragment.bounds.height();
+  assert!(
+    (after_pos.y - expected_y).abs() < 0.1,
+    "sticky fragment should clamp to the viewport within its fragmentainer"
+  );
+}
+
+fn sticky_abs_position<'a>(tree: &'a FragmentTree) -> Option<(Point, usize, &'a FragmentNode)> {
+  let mut roots = Vec::new();
+  roots.push((&tree.root, 0usize));
+  for (idx, root) in tree.additional_fragments.iter().enumerate() {
+    roots.push((root, idx + 1));
+  }
+
+  for (root, idx) in roots {
+    let root_origin = Point::new(root.bounds.x(), root.bounds.y());
+    if let Some((pos, node)) = find_sticky(root, root_origin) {
+      return Some((pos, idx, node));
+    }
+  }
+
+  None
+}
+
+fn find_sticky<'a>(node: &'a FragmentNode, origin: Point) -> Option<(Point, &'a FragmentNode)> {
+  let is_sticky = node
+    .style
+    .as_ref()
+    .map(|s| s.position.is_sticky())
+    .unwrap_or(false);
+
+  let abs_pos = Point::new(origin.x + node.bounds.x(), origin.y + node.bounds.y());
+  if is_sticky {
+    return Some((abs_pos, node));
+  }
+
+  for child in &node.children {
+    if let Some(found) = find_sticky(child, abs_pos) {
+      return Some(found);
+    }
+  }
+
+  None
+}
