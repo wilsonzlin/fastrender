@@ -2121,6 +2121,53 @@ mod tests {
   }
 
   #[test]
+  fn tokenizes_background_slashes_without_whitespace() {
+    let parsed =
+      parse_property_value("background", "url(a) center/cover no-repeat").expect("background");
+    let PropertyValue::Multiple(parts) = parsed else {
+      panic!("expected layered background tokens");
+    };
+    assert_eq!(parts.len(), 5);
+    assert!(matches!(parts[0], PropertyValue::Url(ref u) if u == "a"));
+    assert!(matches!(parts[1], PropertyValue::Keyword(ref k) if k == "center"));
+    assert!(matches!(parts[2], PropertyValue::Keyword(ref k) if k == "/"));
+    assert!(matches!(parts[3], PropertyValue::Keyword(ref k) if k == "cover"));
+    assert!(
+      matches!(parts[4], PropertyValue::Keyword(ref k) if k.eq_ignore_ascii_case("no-repeat"))
+    );
+  }
+
+  #[test]
+  fn tokenizes_border_image_slash_segments() {
+    let parsed =
+      parse_property_value("border-image", "url(a) 30/10px/0 stretch").expect("border-image");
+    let PropertyValue::Multiple(parts) = parsed else {
+      panic!("expected multiple tokens");
+    };
+    assert_eq!(parts.len(), 7);
+    assert!(matches!(parts[0], PropertyValue::Url(ref u) if u == "a"));
+    assert!(matches!(parts[1], PropertyValue::Number(n) if (*n - 30.0).abs() < 1e-6));
+    assert!(matches!(parts[2], PropertyValue::Keyword(ref k) if k == "/"));
+    assert!(
+      matches!(parts[3], PropertyValue::Length(len) if (len.value - 10.0).abs() < 0.01 && len.unit == LengthUnit::Px)
+    );
+    assert!(matches!(parts[4], PropertyValue::Keyword(ref k) if k == "/"));
+    assert!(
+      matches!(parts[5], PropertyValue::Length(len) if len.value == 0.0 && len.unit == LengthUnit::Px)
+    );
+    assert!(matches!(parts[6], PropertyValue::Keyword(ref k) if k == "stretch"));
+  }
+
+  #[test]
+  fn does_not_split_slash_inside_functions() {
+    let tokens = tokenize_property_value("url(data:image/svg+xml;base64,abc/def==)", true);
+    assert_eq!(
+      tokens,
+      vec!["url(data:image/svg+xml;base64,abc/def==)".to_string()]
+    );
+  }
+
+  #[test]
   fn parses_lengths_with_all_units_and_case_insensitivity() {
     let cases = [
       ("10px", 10.0, LengthUnit::Px),
