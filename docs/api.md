@@ -202,3 +202,31 @@ The builder helper `FastRenderBuilder::dom_compatibility_mode` is equivalent.
 - `FastRender::render_to_jpeg(html, width, height, quality)`
 - `FastRender::render_to_webp(html, width, height, quality)` (quality is clamped to
   0–100; a value of 100 produces lossless WebP output)
+
+## Inspecting computed styles and layout
+
+Use `FastRender::inspect` to query a document by CSS selector, id, or styled node id and
+retrieve deterministic JSON-friendly snapshots of the matching nodes:
+
+```rust,ignore
+use fastrender::{FastRender, InspectQuery};
+
+let mut renderer = FastRender::new()?;
+let dom = renderer.parse_html("<div id='target'>Hello</div>")?;
+
+let snapshots = renderer.inspect(&dom, 800, 600, InspectQuery::Id("target".into()))?;
+println!("{}", serde_json::to_string_pretty(&snapshots)?);
+```
+
+Each snapshot includes:
+
+- `node`: tag/attributes/ancestry for the matched DOM node
+- `style`: a computed-style subset (display/position/float/overflow/box model, colors, font/line height)
+- `boxes`: box tree metadata (box id, type, formatting context, debug selector)
+- `fragments`: layout fragments with bounds/baseline indices and scroll container metadata
+
+The `inspect_frag` CLI also supports this workflow:
+
+```
+cargo run --bin inspect_frag -- file.html --query "#main .item:nth-child(2)"
+```

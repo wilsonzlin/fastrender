@@ -12,6 +12,7 @@ use fastrender::css::loader::infer_base_url;
 use fastrender::css::loader::inject_css_into_html;
 use fastrender::css::loader::inline_imports;
 use fastrender::css::parser::extract_css;
+use fastrender::debug::inspect::InspectQuery;
 use fastrender::dom::DomNodeType;
 use fastrender::dom::{self};
 use fastrender::geometry::Point;
@@ -85,6 +86,18 @@ struct Args {
   /// Abort after this many seconds
   #[arg(long)]
   timeout: Option<u64>,
+
+  /// Dump inspection JSON for a CSS selector (bypasses other output).
+  #[arg(long)]
+  query: Option<String>,
+
+  /// Dump inspection JSON for an element with this id.
+  #[arg(long)]
+  query_id: Option<String>,
+
+  /// Dump inspection JSON for a styled node id.
+  #[arg(long)]
+  query_node: Option<usize>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -215,6 +228,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   let dom = dom::parse_html(&html)?;
+
+  let query = args
+    .query_node
+    .map(InspectQuery::NodeId)
+    .or_else(|| args.query_id.clone().map(InspectQuery::Id))
+    .or_else(|| args.query.clone().map(InspectQuery::Selector));
+  if let Some(query) = query {
+    let inspections = renderer.inspect(&dom, viewport_w, viewport_h, query)?;
+    println!("{}", serde_json::to_string_pretty(&inspections)?);
+    return Ok(());
+  }
 
   let media_ctx = media_prefs.media_context_with_overrides((viewport_w, viewport_h), args.dpr);
   let stylesheet = extract_css(&dom)?;
