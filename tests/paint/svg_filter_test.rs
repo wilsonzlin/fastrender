@@ -66,6 +66,7 @@ fn displacement_map_shifts_pixels_right() {
   apply_svg_filter(
     &filter,
     &mut pixmap,
+    1.0,
     Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32),
   );
 
@@ -83,6 +84,7 @@ fn displacement_map_scale_zero_is_identity() {
   apply_svg_filter(
     &filter,
     &mut pixmap,
+    1.0,
     Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32),
   );
 

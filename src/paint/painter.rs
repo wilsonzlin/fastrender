@@ -7884,7 +7884,7 @@ fn apply_filters(pixmap: &mut Pixmap, filters: &[ResolvedFilter], scale: f32, bb
         *color,
       ),
       ResolvedFilter::SvgFilter(filter) => {
-        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, bbox);
+        crate::paint::svg_filter::apply_svg_filter(filter.as_ref(), pixmap, scale, bbox);
       }
     }
   }

@@ -815,13 +815,22 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   })
 }
 
-pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, bbox: Rect) {
+/// Applies an SVG filter definition to the given pixmap.
+///
+/// `scale` should be the device pixel ratio so that numeric parameters expressed in CSS pixels
+/// (e.g. stdDeviation, dx/dy, radius) are interpreted in device pixels.
+pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: Rect) {
+  let scale = if scale.is_finite() && scale > 0.0 {
+    scale
+  } else {
+    1.0
+  };
   let source = pixmap.clone();
   let mut results: HashMap<String, Pixmap> = HashMap::new();
   let mut current = source.clone();
 
   for step in &def.steps {
-    if let Some(next) = apply_primitive(&step.primitive, &source, &results, &current) {
+    if let Some(next) = apply_primitive(&step.primitive, &source, &results, &current, scale) {
       if let Some(name) = &step.result {
         results.insert(name.clone(), next.clone());
       }
@@ -831,7 +840,19 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, bbox: Rect) {
 
   *pixmap = current;
 
-  let region = def.resolve_region(bbox);
+  let css_bbox = Rect::from_xywh(
+    bbox.x() / scale,
+    bbox.y() / scale,
+    bbox.width() / scale,
+    bbox.height() / scale,
+  );
+  let region = def.resolve_region(css_bbox);
+  let region = Rect::from_xywh(
+    region.x() * scale,
+    region.y() * scale,
+    region.width() * scale,
+    region.height() * scale,
+  );
   clip_to_region(pixmap, region);
 }
 
@@ -880,6 +901,7 @@ fn apply_primitive(
   source: &Pixmap,
   results: &HashMap<String, Pixmap>,
   current: &Pixmap,
+  scale: f32,
 ) -> Option<Pixmap> {
   match primitive {
     FilterPrimitive::Flood { color, opacity } => {
@@ -887,14 +909,14 @@ fn apply_primitive(
     }
     FilterPrimitive::GaussianBlur { input, std_dev } => {
       let mut img = resolve_input(input, source, results, current)?;
-      if *std_dev > 0.0 {
-        apply_gaussian_blur(&mut img, *std_dev);
+      let radius = *std_dev * scale;
+      if radius > 0.0 {
+        apply_gaussian_blur(&mut img, radius);
       }
       Some(img)
     }
-    FilterPrimitive::Offset { input, dx, dy } => {
-      resolve_input(input, source, results, current).map(|img| offset_pixmap(img, *dx, *dy))
-    }
+    FilterPrimitive::Offset { input, dx, dy } => resolve_input(input, source, results, current)
+      .map(|img| offset_pixmap(img, *dx * scale, *dy * scale)),
     FilterPrimitive::ColorMatrix { input, kind } => {
       let mut img = resolve_input(input, source, results, current)?;
       apply_color_matrix(&mut img, kind);
@@ -917,8 +939,16 @@ fn apply_primitive(
       std_dev,
       color,
       opacity,
-    } => resolve_input(input, source, results, current)
-      .map(|img| drop_shadow_pixmap(img, *dx, *dy, *std_dev, color, *opacity)),
+    } => resolve_input(input, source, results, current).map(|img| {
+      drop_shadow_pixmap(
+        img,
+        *dx * scale,
+        *dy * scale,
+        *std_dev * scale,
+        color,
+        *opacity,
+      )
+    }),
     FilterPrimitive::Blend {
       input1,
       input2,
@@ -930,7 +960,7 @@ fn apply_primitive(
     ),
     FilterPrimitive::Morphology { input, radius, op } => {
       resolve_input(input, source, results, current).map(|mut img| {
-        apply_morphology(&mut img, *radius, *op);
+        apply_morphology(&mut img, *radius * scale, *op);
         img
       })
     }
