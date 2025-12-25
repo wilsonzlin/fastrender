@@ -8245,7 +8245,6 @@ fn resolve_scopes<'a>(
     ancestors: ancestors_for_root,
   })
 }
-
 fn find_matching_rules<'a>(
   node: &DomNode,
   rules: &'a RuleIndex<'a>,
