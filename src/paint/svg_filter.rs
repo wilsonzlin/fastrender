@@ -574,7 +574,7 @@ fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> Pixmap {
   let mut out = Pixmap::new(input.width(), input.height()).unwrap();
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-  paint.quality = tiny_skia::FilterQuality::Bilinear;
+  paint.quality = FilterQuality::Bilinear;
   // Offsets are already expressed in the filter primitive coordinate system (primitiveUnits).
   out.draw_pixmap(
     0,
@@ -657,7 +657,7 @@ fn drop_shadow_pixmap(
   let mut out = Pixmap::new(input.width(), input.height()).unwrap();
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-  paint.quality = tiny_skia::FilterQuality::Bilinear;
+  paint.quality = FilterQuality::Bilinear;
   // dx/dy are resolved before this step; apply them as a fractional translation.
   out.draw_pixmap(
     0,
