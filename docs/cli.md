@@ -52,6 +52,12 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Tuning: `--tolerance` and `--max-diff-percent` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_FUZZY` env vars are honored when flags are omitted).
 - Supports deterministic sharding with `--shard <index>/<total>` to split large sets across workers.
 
+## `dump_a11y`
+
+- Purpose: emit the computed accessibility tree for a document as JSON (without painting).
+- Entry: `src/bin/dump_a11y.rs`
+- Run: `cargo run --release --bin dump_a11y -- --help`
+
 ## Offline / cached captures
 
 - There is no dedicated "bundle" format. Offline captures are the on-disk caches produced by the existing tools:
@@ -63,5 +69,6 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 ## Diagnostics
 
 - `render_pages` emits per-page logs in `fetches/renders/<page>.log` plus a summary in `_summary.log`. CSS fetch failures show up there and correspond to `ResourceKind::Stylesheet` entries in the library diagnostics model.
-- The library API exposes structured diagnostics via `render_url_with_options` returning `RenderResult { pixmap, diagnostics }`. Set `RenderOptions::allow_partial(true)` to receive a placeholder image and a `document_error` string when the root fetch fails; subresource fetch errors are collected in `diagnostics.fetch_errors`.
+- The library API exposes structured diagnostics via `render_url_with_options` returning `RenderResult { pixmap, accessibility, diagnostics }`. Set `RenderOptions::allow_partial(true)` to receive a placeholder image and a `document_error` string when the root fetch fails; subresource fetch errors are collected in `diagnostics.fetch_errors`.
 - `render_pages` can emit structured reports via `--diagnostics-json` (per-page) plus `--dump-intermediate` for summaries or full intermediate dumps.
+- The shipped binaries do not currently print `RenderDiagnostics`; prefer a small custom harness when you need the structured output, or rely on the per-page logs above for quick investigation.
