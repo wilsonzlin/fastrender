@@ -148,6 +148,9 @@ pub fn inspect(
   fragments: &FragmentTree,
   query: InspectQuery,
 ) -> Result<Vec<InspectionSnapshot>, Error> {
+  let mut styled_index = Vec::new();
+  index_styled_nodes(styled_root, &mut styled_index);
+
   let mut styled_boxes: HashMap<usize, Vec<&BoxNode>> = HashMap::new();
   collect_styled_boxes(box_root, &mut styled_boxes);
 
@@ -162,39 +165,69 @@ pub fn inspect(
     .map(scroll_containers_by_box)
     .unwrap_or_default();
 
-  let matches = match query {
-    InspectQuery::NodeId(id) => collect_matches(styled_root, &mut Vec::new(), &mut |node, _| {
-      node.node_id == id
-    }),
-    InspectQuery::Id(id) => collect_matches(styled_root, &mut Vec::new(), &mut |node, _| {
-      node
-        .node
-        .get_attribute_ref("id")
-        .is_some_and(|value| value == id)
-    }),
-    InspectQuery::Selector(selector) => {
-      let selectors = parse_selectors(&selector)?;
-      let mut caches = SelectorCaches::default();
-      collect_matches(styled_root, &mut Vec::new(), &mut |node, ancestors| {
-        node_matches_selector(node, ancestors, &selectors, &mut caches)
-      })
-    }
+  let selectors = match &query {
+    InspectQuery::Selector(selector) => Some(parse_selectors(selector)?),
+    _ => None,
   };
+  let mut selector_caches = SelectorCaches::default();
 
-  Ok(
-    matches
-      .into_iter()
-      .map(|(ancestors, node)| {
-        build_snapshot(
-          node,
-          &ancestors,
-          &styled_boxes,
-          &fragments_by_box,
-          &scroll_map,
-        )
-      })
-      .collect(),
-  )
+  let mut results = Vec::new();
+  let mut ancestors: Vec<&DomNode> = Vec::new();
+  let mut stack: Vec<(&DomNode, bool)> = vec![(&styled_root.node, false)];
+  let mut next_id = 1usize;
+
+  while let Some((node, exiting)) = stack.pop() {
+    if exiting {
+      ancestors.pop();
+      continue;
+    }
+
+    let node_id = next_id;
+    next_id += 1;
+
+    let matched = match &query {
+      InspectQuery::NodeId(id) => node_id == *id,
+      InspectQuery::Id(id) => node
+        .get_attribute_ref("id")
+        .is_some_and(|value| value == id),
+      InspectQuery::Selector(_) => {
+        if !node.is_element() {
+          false
+        } else {
+          let selectors = selectors.as_ref().expect("selector query parsed above");
+          node_matches_selector(node, &ancestors, selectors, &mut selector_caches)
+        }
+      }
+    };
+
+    if matched {
+      let styled = styled_index
+        .get(node_id)
+        .and_then(|entry| *entry)
+        .ok_or_else(|| {
+          Error::Render(RenderError::InvalidParameters {
+            message: format!("Inspection failed: missing styled node for id={node_id}"),
+          })
+        })?;
+      results.push(build_snapshot(
+        node_id,
+        node,
+        &ancestors,
+        &styled.styles,
+        &styled_boxes,
+        &fragments_by_box,
+        &scroll_map,
+      ));
+    }
+
+    stack.push((node, true));
+    ancestors.push(node);
+    for child in node.children.iter().rev() {
+      stack.push((child, false));
+    }
+  }
+
+  Ok(results)
 }
 
 fn parse_selectors(selector: &str) -> Result<SelectorList<FastRenderSelectorImpl>, Error> {
@@ -203,59 +236,26 @@ fn parse_selectors(selector: &str) -> Result<SelectorList<FastRenderSelectorImpl
   SelectorList::parse(
     &PseudoClassParser,
     &mut parser,
-    selectors::parser::ParseRelative::Normal,
+    selectors::parser::ParseRelative::No,
   )
   .map_err(|e| {
     Error::Render(RenderError::InvalidParameters {
-      message: format!("Invalid selector {selector:?}: {e}"),
+      message: format!("Invalid selector {selector:?}: {e:?}"),
     })
   })
 }
 
-fn collect_matches<'a, F>(
-  node: &'a StyledNode,
-  ancestors: &mut Vec<&'a StyledNode>,
-  predicate: &mut F,
-) -> Vec<(Vec<&'a StyledNode>, &'a StyledNode)>
-where
-  F: FnMut(&'a StyledNode, &[&'a StyledNode]) -> bool,
-{
-  let mut out = Vec::new();
-  walk_matches(node, ancestors, predicate, &mut out);
-  out
-}
-
-fn walk_matches<'a, F>(
-  node: &'a StyledNode,
-  ancestors: &mut Vec<&'a StyledNode>,
-  predicate: &mut F,
-  out: &mut Vec<(Vec<&'a StyledNode>, &'a StyledNode)>,
-) where
-  F: FnMut(&'a StyledNode, &[&'a StyledNode]) -> bool,
-{
-  if predicate(node, ancestors) {
-    out.push((ancestors.clone(), node));
-  }
-
-  ancestors.push(node);
-  for child in &node.children {
-    walk_matches(child, ancestors, predicate, out);
-  }
-  ancestors.pop();
-}
-
 fn node_matches_selector(
-  node: &StyledNode,
-  ancestors: &[&StyledNode],
+  node: &DomNode,
+  ancestors: &[&DomNode],
   selectors: &SelectorList<FastRenderSelectorImpl>,
   caches: &mut SelectorCaches,
 ) -> bool {
-  if !node.node.is_element() {
+  if !node.is_element() {
     return false;
   }
 
-  let dom_ancestors: Vec<&DomNode> = ancestors.iter().map(|a| &a.node).collect();
-  let element_ref = ElementRef::with_ancestors(&node.node, &dom_ancestors);
+  let element_ref = ElementRef::with_ancestors(node, ancestors);
   let mut context = MatchingContext::new(
     MatchingMode::Normal,
     None,
@@ -270,24 +270,43 @@ fn node_matches_selector(
     .any(|sel| matches_selector(sel, 0, None, &element_ref, &mut context))
 }
 
-fn collect_styled_boxes<'a>(node: &'a BoxNode, out: &mut HashMap<usize, Vec<&'a BoxNode>>) {
-  if let Some(id) = node.styled_node_id {
-    out.entry(id).or_default().push(node);
+fn index_styled_nodes<'a>(root: &'a StyledNode, out: &mut Vec<Option<&'a StyledNode>>) {
+  let mut stack = vec![root];
+  while let Some(node) = stack.pop() {
+    if out.len() <= node.node_id {
+      out.resize(node.node_id + 1, None);
+    }
+    out[node.node_id] = Some(node);
+    for child in node.children.iter().rev() {
+      stack.push(child);
+    }
   }
-  for child in &node.children {
-    collect_styled_boxes(child, out);
+}
+
+fn collect_styled_boxes<'a>(root: &'a BoxNode, out: &mut HashMap<usize, Vec<&'a BoxNode>>) {
+  let mut stack = vec![root];
+  while let Some(node) = stack.pop() {
+    if let Some(id) = node.styled_node_id {
+      out.entry(id).or_default().push(node);
+    }
+    for child in node.children.iter().rev() {
+      stack.push(child);
+    }
   }
 }
 
 fn collect_fragments_for_box<'a>(
-  fragment: &'a FragmentNode,
+  root: &'a FragmentNode,
   out: &mut HashMap<usize, Vec<&'a FragmentNode>>,
 ) {
-  if let Some(box_id) = fragment_box_id(fragment) {
-    out.entry(box_id).or_default().push(fragment);
-  }
-  for child in &fragment.children {
-    collect_fragments_for_box(child, out);
+  let mut stack = vec![root];
+  while let Some(fragment) = stack.pop() {
+    if let Some(box_id) = fragment_box_id(fragment) {
+      out.entry(box_id).or_default().push(fragment);
+    }
+    for child in fragment.children.iter().rev() {
+      stack.push(child);
+    }
   }
 }
 
@@ -312,13 +331,15 @@ fn scroll_containers_by_box(
 }
 
 fn build_snapshot(
-  node: &StyledNode,
-  ancestors: &[&StyledNode],
+  node_id: usize,
+  node: &DomNode,
+  ancestors: &[&DomNode],
+  style: &ComputedStyle,
   styled_boxes: &HashMap<usize, Vec<&BoxNode>>,
   fragments: &HashMap<usize, Vec<&FragmentNode>>,
   scroll: &HashMap<Option<usize>, &ScrollSnapContainer>,
 ) -> InspectionSnapshot {
-  let boxes = styled_boxes.get(&node.node_id).cloned().unwrap_or_default();
+  let boxes = styled_boxes.get(&node_id).cloned().unwrap_or_default();
 
   let box_snapshots: Vec<BoxSnapshot> = boxes.iter().map(|b| box_snapshot(b)).collect();
 
@@ -334,15 +355,14 @@ fn build_snapshot(
   }
 
   InspectionSnapshot {
-    node: node_snapshot(node, ancestors),
-    style: style_snapshot(&node.styles),
+    node: node_snapshot(node_id, node, ancestors),
+    style: style_snapshot(style),
     boxes: box_snapshots,
     fragments: fragment_snaps,
   }
 }
 
-fn node_snapshot(node: &StyledNode, ancestors: &[&StyledNode]) -> NodeSnapshot {
-  let dom = &node.node;
+fn node_snapshot(node_id: usize, dom: &DomNode, ancestors: &[&DomNode]) -> NodeSnapshot {
   let attributes = match &dom.node_type {
     DomNodeType::Element { attributes, .. } | DomNodeType::Slot { attributes, .. } => {
       attributes.clone()
@@ -360,11 +380,11 @@ fn node_snapshot(node: &StyledNode, ancestors: &[&StyledNode]) -> NodeSnapshot {
     .unwrap_or_default();
   let ancestry = ancestors
     .iter()
-    .map(|ancestor| dom_selector(&ancestor.node))
+    .map(|ancestor| dom_selector(ancestor))
     .collect();
 
   NodeSnapshot {
-    node_id: node.node_id,
+    node_id,
     tag_name: dom.tag_name().map(str::to_string),
     id: dom.get_attribute_ref("id").map(str::to_string),
     classes,
@@ -425,7 +445,7 @@ fn style_snapshot(style: &ComputedStyle) -> ComputedStyleSnapshot {
     color: color_snapshot(style.color),
     background_color: color_snapshot(style.background_color),
     font_size: style.font_size,
-    line_height: resolve_line_height(style.line_height, style.font_size),
+    line_height: resolve_line_height(style.line_height.clone(), style.font_size),
   }
 }
 

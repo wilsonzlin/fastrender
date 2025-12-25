@@ -1,7 +1,7 @@
 use fastrender::geometry::Rect;
 use fastrender::paint::svg_filter::{
   apply_svg_filter, ChannelSelector, ColorInterpolationFilters, FilterInput, FilterPrimitive,
-  FilterStep, SvgFilter, SvgFilterRegion, SvgFilterUnits, SvgLength,
+  FilterStep, ImagePrimitive, SvgFilter, SvgFilterRegion, SvgFilterUnits, SvgLength,
 };
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
@@ -37,7 +37,7 @@ fn displacement_filter(scale: f32) -> SvgFilter {
       FilterStep {
         result: Some("map".to_string()),
         color_interpolation_filters: None,
-        primitive: FilterPrimitive::Image(map),
+        primitive: FilterPrimitive::Image(ImagePrimitive::from_pixmap(map)),
         region: None,
       },
       FilterStep {

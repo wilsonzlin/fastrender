@@ -817,13 +817,13 @@ impl WptRunner {
       ..
     } = handle.data
     {
-      if name.local.eq_ignore_ascii_case("link") {
+      if name.local.as_ref().eq_ignore_ascii_case("link") {
         let mut rel_value = None;
         let mut href_value = None;
         for attr in attrs.borrow().iter() {
-          if attr.name.local.eq_ignore_ascii_case("rel") {
+          if attr.name.local.as_ref().eq_ignore_ascii_case("rel") {
             rel_value = Some(attr.value.to_string());
-          } else if attr.name.local.eq_ignore_ascii_case("href") {
+          } else if attr.name.local.as_ref().eq_ignore_ascii_case("href") {
             href_value = Some(attr.value.to_string());
           }
         }

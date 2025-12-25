@@ -72,10 +72,10 @@ fn primitive_region_userspace_respects_scale() {
       opacity: 1.0,
     },
     region: Some(SvgFilterRegion {
-      x: SvgLength::Px(0.0),
-      y: SvgLength::Px(0.0),
-      width: SvgLength::Px(1.0),
-      height: SvgLength::Px(1.0),
+      x: SvgLength::Number(0.0),
+      y: SvgLength::Number(0.0),
+      width: SvgLength::Number(1.0),
+      height: SvgLength::Number(1.0),
       units: SvgFilterUnits::UserSpaceOnUse,
     }),
   }];

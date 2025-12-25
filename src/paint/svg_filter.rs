@@ -259,6 +259,20 @@ pub struct ImagePrimitive {
   units: SvgCoordinateUnits,
 }
 
+impl ImagePrimitive {
+  pub fn from_pixmap(pixmap: Pixmap) -> Self {
+    Self {
+      pixmap,
+      x: SvgLength::Percent(0.0),
+      y: SvgLength::Percent(0.0),
+      width: SvgLength::Percent(1.0),
+      height: SvgLength::Percent(1.0),
+      preserve_aspect_ratio: PreserveAspectRatio::XMidYMidMeet,
+      units: SvgCoordinateUnits::ObjectBoundingBox,
+    }
+  }
+}
+
 #[derive(Clone, Debug)]
 struct FilterResult {
   pixmap: Pixmap,
@@ -2669,19 +2683,20 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod fe_image_tests {
   use super::*;
   use base64::engine::general_purpose::STANDARD;
   use base64::Engine;
   use image::codecs::png::PngEncoder;
   use image::ColorType;
+  use image::ImageEncoder;
 
   fn test_image_data_url() -> String {
     let mut buffer = Vec::new();
     let pixels = [255, 0, 0, 255, 0, 0, 255, 255];
-    let mut encoder = PngEncoder::new(&mut buffer);
+    let encoder = PngEncoder::new(&mut buffer);
     encoder
-      .encode(&pixels, 2, 1, ColorType::Rgba8)
+      .write_image(&pixels, 2, 1, ColorType::Rgba8.into())
       .expect("encode png");
     format!("data:image/png;base64,{}", STANDARD.encode(buffer))
   }
@@ -2703,7 +2718,8 @@ mod tests {
     let cache = ImageCache::new();
     let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
     let mut canvas = Pixmap::new(5, 5).unwrap();
-    apply_svg_filter(filter.as_ref(), &mut canvas);
+    let bbox = Rect::from_xywh(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
+    apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox);
 
     assert_eq!(pixel_rgba(&canvas, 1, 2), (255, 0, 0, 255));
     assert_eq!(pixel_rgba(&canvas, 2, 2), (0, 0, 255, 255));
@@ -2721,7 +2737,8 @@ mod tests {
     let cache = ImageCache::new();
     let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
     let mut canvas = Pixmap::new(5, 5).unwrap();
-    apply_svg_filter(filter.as_ref(), &mut canvas);
+    let bbox = Rect::from_xywh(0.0, 0.0, canvas.width() as f32, canvas.height() as f32);
+    apply_svg_filter(filter.as_ref(), &mut canvas, 1.0, bbox);
 
     for y in 1..=3 {
       assert_eq!(pixel_rgba(&canvas, 1, y), (255, 0, 0, 255));

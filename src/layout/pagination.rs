@@ -246,16 +246,7 @@ pub fn paginate_fragment_tree(
       end = (start + page_block).min(total_height);
     }
 
-    let clipped = clip_node(
-      &layout.root,
-      start,
-      end,
-      0.0,
-      start,
-      page_index,
-      0,
-      page_block,
-    );
+    let clipped = clip_node(&layout.root, start, end, 0.0, start, page_index, 0);
     let mut page_root = FragmentNode::new_block(
       Rect::from_xywh(
         0.0,

@@ -222,8 +222,8 @@ pub use api::RenderResult;
 pub use api::ResourceFetchError;
 pub use api::ResourceKind;
 pub use compat::CompatProfile;
-pub use render_control::CancelCallback;
 pub use debug::inspect::{InspectQuery, InspectionSnapshot};
+pub use render_control::CancelCallback;
 // CSS
 pub use css::parser::parse_stylesheet_with_errors;
 pub use css::types::CssParseError;

@@ -117,13 +117,16 @@ fn nested_imports_resolve_against_base_and_stylesheet_urls() {
   renderer.set_base_url(base_url.clone());
 
   let mut diagnostics = RenderDiagnostics::default();
-  let html_with_css = renderer.inline_stylesheets_for_document(
-    &html,
-    &base_url,
-    MediaType::Screen,
-    None,
-    &mut diagnostics,
-  );
+  let html_with_css = renderer
+    .inline_stylesheets_for_document(
+      &html,
+      &base_url,
+      MediaType::Screen,
+      None,
+      &mut diagnostics,
+      None,
+    )
+    .expect("inline stylesheets");
   assert!(
     diagnostics.fetch_errors.is_empty(),
     "expected stylesheet fetches to succeed: {:?}",

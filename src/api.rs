@@ -3398,7 +3398,7 @@ impl FastRender {
       eprintln!("timing:style_prepare {:?}", start.elapsed());
     }
     let style_apply_start = timings_enabled.then(Instant::now);
-    let styled_tree = apply_styles_with_media_target_and_imports_cached_with_deadline(
+    let mut styled_tree = apply_styles_with_media_target_and_imports_cached_with_deadline(
       &dom_with_state,
       &stylesheet,
       &media_ctx,

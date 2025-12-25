@@ -51,7 +51,7 @@ impl RenderDeadline {
   /// Check for timeout or cancellation at the given stage.
   pub fn check(&self, stage: RenderStage) -> Result<(), RenderError> {
     #[cfg(test)]
-    if let Ok(delay) = std::env::var("FASTR_TEST_RENDER_DELAY_MS")
+    if let Some(delay) = std::env::var("FASTR_TEST_RENDER_DELAY_MS")
       .ok()
       .and_then(|v| v.parse::<u64>().ok())
     {

@@ -284,6 +284,7 @@ pub(crate) fn clip_node(
 fn clone_without_children(node: &FragmentNode) -> FragmentNode {
   FragmentNode {
     bounds: node.bounds,
+    logical_override: node.logical_override,
     content: node.content.clone(),
     baseline: node.baseline,
     children: Vec::new(),
@@ -291,7 +292,9 @@ fn clone_without_children(node: &FragmentNode) -> FragmentNode {
     fragment_index: node.fragment_index,
     fragment_count: node.fragment_count,
     fragmentainer_index: node.fragmentainer_index,
+    fragmentainer: node.fragmentainer,
     scroll_overflow: node.scroll_overflow,
+    fragmentation: node.fragmentation.clone(),
   }
 }
 
