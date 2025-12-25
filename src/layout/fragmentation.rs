@@ -309,42 +309,29 @@ fn collect_break_opportunities(
     .unwrap_or(default_style);
   let inside_avoid = avoid_depth + usize::from(matches!(style.break_inside, BreakInside::Avoid));
 
-  let line_children: Vec<_> = node
-    .children
-    .iter()
-    .enumerate()
-    .filter(|(_, child)| matches!(child.content, FragmentContent::Line { .. }))
-    .collect();
-  if !line_children.is_empty() {
-    let container_id = collection.line_containers.len();
-    let widows = style.widows.max(1);
-    let orphans = style.orphans.max(1);
-    let mut line_ends = Vec::with_capacity(line_children.len());
-    for (idx, line) in line_children {
-      let line_start = abs_start + line.bounds.y();
-      let line_end = line_start + line.bounds.height();
+  let mut line_positions: Vec<Option<(usize, f32)>> = vec![None; node.children.len()];
+  let mut line_ends = Vec::new();
+  for (idx, child) in node.children.iter().enumerate() {
+    if matches!(child.content, FragmentContent::Line { .. }) {
+      let line_start = abs_start + child.bounds.y();
+      let line_end = line_start + child.bounds.height();
       line_ends.push(line_end);
-
-      let mut strength = BreakStrength::Auto;
-      if inside_avoid > 0 {
-        strength = BreakStrength::Avoid;
-      }
-      collection.opportunities.push(BreakOpportunity {
-        pos: line_end,
-        strength,
-        kind: BreakKind::LineBoundary {
-          container_id,
-          line_index_end: idx + 1,
-        },
-      });
+      line_positions[idx] = Some((line_ends.len(), line_end));
     }
+  }
+
+  let line_container_id = if !line_ends.is_empty() {
+    let container_id = collection.line_containers.len();
     collection.line_containers.push(LineContainer {
       id: container_id,
-      line_ends,
-      widows,
-      orphans,
+      line_ends: line_ends.clone(),
+      widows: style.widows.max(1),
+      orphans: style.orphans.max(1),
     });
-  }
+    Some(container_id)
+  } else {
+    None
+  };
 
   for (idx, child) in node.children.iter().enumerate() {
     let child_abs_start = abs_start + child.bounds.y();
@@ -360,6 +347,23 @@ fn collect_break_opportunities(
       .and_then(|c| c.style.as_ref())
       .map(|s| s.as_ref())
       .unwrap_or(default_style);
+
+    if let (Some(container_id), Some((line_index_end, line_end))) =
+      (line_container_id, line_positions[idx])
+    {
+      let mut strength = BreakStrength::Auto;
+      if inside_avoid > 0 {
+        strength = BreakStrength::Avoid;
+      }
+      collection.opportunities.push(BreakOpportunity {
+        pos: line_end,
+        strength,
+        kind: BreakKind::LineBoundary {
+          container_id,
+          line_index_end,
+        },
+      });
+    }
 
     if idx == 0 && !matches!(child_style.break_before, BreakBetween::Auto) {
       let mut strength = combine_breaks(BreakBetween::Auto, child_style.break_before);
