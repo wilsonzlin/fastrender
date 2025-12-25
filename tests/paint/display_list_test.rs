@@ -10,6 +10,7 @@ use fastrender::css::types::PropertyValue;
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
 use fastrender::paint::display_list::ClipShape;
+use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::properties::apply_declaration;
 use fastrender::style::properties::with_image_set_dpr;
@@ -44,6 +45,7 @@ use fastrender::Color;
 use fastrender::ComputedStyle;
 use fastrender::DisplayItem;
 use fastrender::DisplayList;
+use fastrender::FastRender;
 use fastrender::FillRectItem;
 use fastrender::FillRoundedRectItem;
 use fastrender::FontContext;
@@ -1884,6 +1886,45 @@ fn test_display_list_clear() {
 
   assert!(list.is_empty());
   assert_eq!(list.len(), 0);
+}
+
+#[test]
+fn svg_filter_url_fragment_applies_in_display_list() {
+  let mut renderer = FastRender::new().expect("renderer");
+  let html = r#"
+    <html>
+      <head>
+        <style>body { margin: 0; padding: 0; }</style>
+      </head>
+      <body>
+        <svg width="0" height="0">
+          <filter id="tint">
+            <feFlood flood-color="rgb(255, 0, 0)" flood-opacity="1" result="f"/>
+            <feComposite in="f" in2="SourceAlpha" operator="in"/>
+          </filter>
+        </svg>
+        <div style="width: 2px; height: 2px; background: rgb(0, 0, 255); filter: url(#tint);"></div>
+      </body>
+    </html>
+  "#;
+  let dom = renderer.parse_html(html).expect("parse html");
+  let fragments = renderer
+    .layout_document(&dom, 2, 2)
+    .expect("layout document with svg filter");
+
+  let list = DisplayListBuilder::new().build_with_stacking_tree(&fragments.root);
+  let pixmap = DisplayListRenderer::new(2, 2, Rgba::WHITE, FontContext::new())
+    .unwrap()
+    .render(&list)
+    .unwrap();
+
+  let center = pixmap.pixel(1, 1).expect("pixel within viewport");
+  assert!(
+    center.red() > center.blue(),
+    "svg filter should tint output toward red (got {:?})",
+    center
+  );
+  assert_eq!(center.alpha(), 255);
 }
 
 // ============================================================================
