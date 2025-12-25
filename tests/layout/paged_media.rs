@@ -240,3 +240,63 @@ fn page_break_before_forces_new_page() {
     "following content should flow after the forced page break"
   );
 }
+
+#[test]
+fn break_before_page_forces_new_page() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 100px 100px; margin: 0; }
+          div { height: 40px; }
+          .page-break { break-before: page; }
+        </style>
+      </head>
+      <body>
+        <div>A</div>
+        <div class="page-break">B</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(find_text(page_roots[0], "A").is_some());
+  assert!(find_text(page_roots[0], "B").is_none());
+  assert!(page_roots
+    .iter()
+    .skip(1)
+    .any(|page| find_text(page, "B").is_some()));
+}
+
+#[test]
+fn break_before_column_does_not_force_page_without_columns() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 100px 100px; margin: 0; }
+          div { height: 40px; }
+          .column-break { break-before: column; }
+        </style>
+      </head>
+      <body>
+        <div>A</div>
+        <div class="column-break">B</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+  let page_roots = pages(&tree);
+
+  assert_eq!(page_roots.len(), 1);
+  let page = page_roots[0];
+  assert!(find_text(page, "A").is_some());
+  assert!(find_text(page, "B").is_some());
+}
