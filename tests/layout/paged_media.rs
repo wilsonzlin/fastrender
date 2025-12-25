@@ -144,6 +144,21 @@ fn margin_box_content_is_positioned_in_margins() {
   assert!(footer.bounds.y() > content.bounds.y());
 }
 
+fn find_text_position(node: &FragmentNode, needle: &str, origin: (f32, f32)) -> Option<(f32, f32)> {
+  let current = (origin.0 + node.bounds.x(), origin.1 + node.bounds.y());
+  if let FragmentContent::Text { text, .. } = &node.content {
+    if text.contains(needle) {
+      return Some(current);
+    }
+  }
+  for child in &node.children {
+    if let Some(pos) = find_text_position(child, needle, current) {
+      return Some(pos);
+    }
+  }
+  None
+}
+
 #[test]
 fn fixed_headers_repeat_per_page() {
   let html = r#"
@@ -183,6 +198,57 @@ fn fixed_headers_repeat_per_page() {
       "header should be consistently positioned across pages"
     );
   }
+}
+
+#[test]
+fn multicol_columns_continue_across_pages() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 200px; margin: 0; }
+          body { margin: 0; }
+          .multi { column-count: 2; column-gap: 0; }
+          .section { height: 150px; }
+        </style>
+      </head>
+      <body>
+        <div class="multi">
+          <div class="section">One</div>
+          <div class="section">Two</div>
+          <div class="section">Three</div>
+        </div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  let first = page_roots[0];
+  let second = page_roots[1];
+
+  let pos_one = find_text_position(first, "One", (0.0, 0.0)).expect("first column");
+  let pos_two = find_text_position(first, "Two", (0.0, 0.0)).expect("second column");
+  assert!(find_text_position(first, "Three", (0.0, 0.0)).is_none());
+
+  assert!(
+    pos_two.0 > pos_one.0,
+    "second column should be to the right"
+  );
+  assert!(
+    pos_one.1 < 200.0 && pos_two.1 < 200.0,
+    "page 1 content fits height"
+  );
+
+  let pos_three = find_text_position(second, "Three", (0.0, 0.0)).expect("continued content");
+  assert!(
+    pos_three.1 < 20.0,
+    "next column set starts at top of next page"
+  );
+  assert!(find_text_position(second, "One", (0.0, 0.0)).is_none());
 }
 
 #[test]
