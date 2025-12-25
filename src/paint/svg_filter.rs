@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use tiny_skia::{BlendMode, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
+use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
 
 static FILTER_CACHE: OnceLock<Mutex<HashMap<String, Arc<SvgFilter>>>> = OnceLock::new();
 
@@ -174,7 +174,7 @@ pub enum FilterPrimitive {
     b: TransferFn,
     a: TransferFn,
   },
-  Image(Pixmap),
+  Image(ImagePrimitive),
   Tile {
     input: FilterInput,
   },
@@ -216,6 +216,84 @@ pub enum FilterInput {
   StrokePaint,
   Reference(String),
   Previous,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SvgCoordinateUnits {
+  ObjectBoundingBox,
+  UserSpaceOnUse,
+}
+
+impl SvgCoordinateUnits {
+  fn parse(attr: Option<&str>, default: SvgCoordinateUnits) -> SvgCoordinateUnits {
+    match attr.map(|v| v.trim().to_ascii_lowercase()) {
+      Some(v) if v == "objectboundingbox" => SvgCoordinateUnits::ObjectBoundingBox,
+      Some(v) if v == "userspaceonuse" => SvgCoordinateUnits::UserSpaceOnUse,
+      _ => default,
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SvgLength {
+  Number(f32),
+  Percent(f32),
+}
+
+impl SvgLength {
+  fn parse(attr: Option<&str>, default: SvgLength) -> SvgLength {
+    let raw = match attr {
+      Some(v) => v.trim(),
+      None => return default,
+    };
+    if raw.is_empty() {
+      return default;
+    }
+    if let Some(stripped) = raw.strip_suffix('%') {
+      if let Ok(v) = stripped.trim().parse::<f32>() {
+        return SvgLength::Percent(v / 100.0);
+      }
+    }
+    raw.parse::<f32>().map(SvgLength::Number).unwrap_or(default)
+  }
+
+  fn resolve(self, units: SvgCoordinateUnits, reference: f32) -> f32 {
+    match self {
+      SvgLength::Percent(frac) => frac * reference,
+      SvgLength::Number(v) => match units {
+        SvgCoordinateUnits::UserSpaceOnUse => v,
+        SvgCoordinateUnits::ObjectBoundingBox => v * reference,
+      },
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PreserveAspectRatio {
+  None,
+  XMidYMidMeet,
+}
+
+impl PreserveAspectRatio {
+  fn parse(attr: Option<&str>) -> PreserveAspectRatio {
+    let raw = attr.unwrap_or("").trim();
+    if raw.eq_ignore_ascii_case("none") {
+      PreserveAspectRatio::None
+    } else {
+      PreserveAspectRatio::XMidYMidMeet
+    }
+  }
+}
+
+#[derive(Clone, Debug)]
+pub struct ImagePrimitive {
+  pixmap: Pixmap,
+  x: SvgLength,
+  y: SvgLength,
+  width: SvgLength,
+  height: SvgLength,
+  preserve_aspect_ratio: PreserveAspectRatio,
+  units: SvgCoordinateUnits,
 }
 
 #[derive(Clone, Debug)]
@@ -580,7 +658,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
       "feblend" => parse_fe_blend(&child),
       "femorphology" => parse_fe_morphology(&child),
       "fecomponenttransfer" => parse_fe_component_transfer(&child),
-      "feimage" => parse_fe_image(&child, image_cache),
+      "feimage" => parse_fe_image(&child, image_cache, primitive_units),
       "fetile" => parse_fe_tile(&child),
       "feturbulence" => parse_fe_turbulence(&child),
       "fedisplacementmap" => parse_fe_displacement_map(&child),
@@ -926,7 +1004,11 @@ fn parse_fe_drop_shadow(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   })
 }
 
-fn parse_fe_image(node: &roxmltree::Node, cache: &ImageCache) -> Option<FilterPrimitive> {
+fn parse_fe_image(
+  node: &roxmltree::Node,
+  cache: &ImageCache,
+  units: SvgCoordinateUnits,
+) -> Option<FilterPrimitive> {
   let href = node
     .attribute("href")
     .or_else(|| node.attribute("xlink:href"))?;
@@ -936,7 +1018,20 @@ fn parse_fe_image(node: &roxmltree::Node, cache: &ImageCache) -> Option<FilterPr
   let (w, h) = rgba.dimensions();
   let size = tiny_skia::IntSize::from_wh(w, h)?;
   let pixmap = Pixmap::from_vec(rgba.into_raw(), size)?;
-  Some(FilterPrimitive::Image(pixmap))
+  let x = SvgLength::parse(node.attribute("x"), SvgLength::Percent(0.0));
+  let y = SvgLength::parse(node.attribute("y"), SvgLength::Percent(0.0));
+  let width = SvgLength::parse(node.attribute("width"), SvgLength::Percent(1.0));
+  let height = SvgLength::parse(node.attribute("height"), SvgLength::Percent(1.0));
+  let preserve_aspect_ratio = PreserveAspectRatio::parse(node.attribute("preserveAspectRatio"));
+  Some(FilterPrimitive::Image(ImagePrimitive {
+    pixmap,
+    x,
+    y,
+    width,
+    height,
+    preserve_aspect_ratio,
+    units,
+  }))
 }
 
 fn parse_fe_tile(node: &roxmltree::Node) -> Option<FilterPrimitive> {
@@ -1279,11 +1374,7 @@ fn apply_primitive(
         img
       })
     }
-    FilterPrimitive::Image(pix) => Some(FilterResult::new(
-      pix.clone(),
-      Rect::from_xywh(0.0, 0.0, pix.width() as f32, pix.height() as f32),
-      filter_region,
-    )),
+    FilterPrimitive::Image(prim) => render_fe_image(prim, filter_region),
     FilterPrimitive::Tile { input } => {
       resolve_input(input, source, results, current, filter_region)
         .and_then(|img| tile_pixmap(img, filter_region))
@@ -1351,6 +1442,13 @@ fn apply_primitive(
       );
       FilterResult::new(output, img.region, filter_region)
     }),
+=======
+    FilterPrimitive::Image(prim) => render_fe_image(prim, source.width(), source.height()),
+    FilterPrimitive::Tile { input } => resolve_input(input, source, results, current),
+    FilterPrimitive::Turbulence => Some(source.clone()),
+    FilterPrimitive::DisplacementMap { input } => resolve_input(input, source, results, current),
+    FilterPrimitive::ConvolveMatrix { input } => resolve_input(input, source, results, current),
+>>>>>>> 5870d0a (Render feImage into filter coordinate space)
   }
 }
 
@@ -1386,6 +1484,58 @@ fn resolve_input(
       .or_else(|| transparent_result(filter_region)),
     FilterInput::Previous => Some(current.clone()),
   }
+}
+
+fn render_fe_image(prim: &ImagePrimitive, filter_region: Rect) -> Option<FilterResult> {
+  let canvas_width = filter_region.width().max(0.0).round() as u32;
+  let canvas_height = filter_region.height().max(0.0).round() as u32;
+  let mut out = Pixmap::new(canvas_width.max(1), canvas_height.max(1))?;
+  let src_w = prim.pixmap.width() as f32;
+  let src_h = prim.pixmap.height() as f32;
+  if src_w == 0.0 || src_h == 0.0 {
+    return Some(FilterResult::full_region(out, filter_region));
+  }
+
+  let dest_w = prim.width.resolve(prim.units, canvas_width as f32);
+  let dest_h = prim.height.resolve(prim.units, canvas_height as f32);
+  if dest_w <= 0.0 || dest_h <= 0.0 || !dest_w.is_finite() || !dest_h.is_finite() {
+    return Some(FilterResult::full_region(out, filter_region));
+  }
+
+  let dest_x = prim.x.resolve(prim.units, canvas_width as f32);
+  let dest_y = prim.y.resolve(prim.units, canvas_height as f32);
+
+  let mut paint = PixmapPaint::default();
+  paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+  paint.quality = FilterQuality::Nearest;
+
+  let dest_region = Rect::from_xywh(dest_x, dest_y, dest_w, dest_h);
+
+  match prim.preserve_aspect_ratio {
+    PreserveAspectRatio::None => {
+      let scale_x = dest_w / src_w;
+      let scale_y = dest_h / src_h;
+      if !scale_x.is_finite() || !scale_y.is_finite() {
+        return Some(FilterResult::full_region(out, filter_region));
+      }
+      let transform = Transform::from_row(scale_x, 0.0, 0.0, scale_y, dest_x, dest_y);
+      out.draw_pixmap(0, 0, prim.pixmap.as_ref(), &paint, transform, None);
+    }
+    PreserveAspectRatio::XMidYMidMeet => {
+      let scale = (dest_w / src_w).min(dest_h / src_h);
+      if !scale.is_finite() || scale <= 0.0 {
+        return Some(FilterResult::full_region(out, filter_region));
+      }
+      let scaled_w = src_w * scale;
+      let scaled_h = src_h * scale;
+      let offset_x = dest_x + (dest_w - scaled_w) * 0.5;
+      let offset_y = dest_y + (dest_h - scaled_h) * 0.5;
+      let transform = Transform::from_row(scale, 0.0, 0.0, scale, offset_x, offset_y);
+      out.draw_pixmap(0, 0, prim.pixmap.as_ref(), &paint, transform, None);
+    }
+  }
+
+  Some(FilterResult::new(out, dest_region, filter_region))
 }
 
 fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> {
@@ -2555,5 +2705,69 @@ mod tests {
     assert_eq!(out_pixels[1], PremultipliedColorU8::TRANSPARENT);
     assert_eq!(out_pixels[2], PremultipliedColorU8::TRANSPARENT);
     assert_eq!(out_pixels[3], PremultipliedColorU8::TRANSPARENT);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use base64::engine::general_purpose::STANDARD;
+  use base64::Engine;
+  use image::codecs::png::PngEncoder;
+  use image::ColorType;
+
+  fn test_image_data_url() -> String {
+    let mut buffer = Vec::new();
+    let pixels = [255, 0, 0, 255, 0, 0, 255, 255];
+    let mut encoder = PngEncoder::new(&mut buffer);
+    encoder
+      .encode(&pixels, 2, 1, ColorType::Rgba8)
+      .expect("encode png");
+    format!("data:image/png;base64,{}", STANDARD.encode(buffer))
+  }
+
+  fn pixel_rgba(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+    let width = pixmap.width() as usize;
+    let idx = y as usize * width + x as usize;
+    let px = pixmap.pixels()[idx];
+    (px.red(), px.green(), px.blue(), px.alpha())
+  }
+
+  #[test]
+  fn fe_image_defaults_keep_aspect_ratio_and_center() {
+    let data_url = test_image_data_url();
+    let svg = format!(
+      r#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="f" primitiveUnits="objectBoundingBox"><feImage href="{url}" x="0.2" y="0.2" width="0.4" height="0.6"/></filter></svg>"#,
+      url = data_url
+    );
+    let cache = ImageCache::new();
+    let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
+    let mut canvas = Pixmap::new(5, 5).unwrap();
+    apply_svg_filter(filter.as_ref(), &mut canvas);
+
+    assert_eq!(pixel_rgba(&canvas, 1, 2), (255, 0, 0, 255));
+    assert_eq!(pixel_rgba(&canvas, 2, 2), (0, 0, 255, 255));
+    assert_eq!(pixel_rgba(&canvas, 1, 1), (0, 0, 0, 0));
+    assert_eq!(pixel_rgba(&canvas, 1, 3), (0, 0, 0, 0));
+  }
+
+  #[test]
+  fn fe_image_preserve_aspect_ratio_none_stretches() {
+    let data_url = test_image_data_url();
+    let svg = format!(
+      r#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="f"><feImage href="{url}" x="20%" y="20%" width="40%" height="60%" preserveAspectRatio="none"/></filter></svg>"#,
+      url = data_url
+    );
+    let cache = ImageCache::new();
+    let filter = parse_filter_definition(&svg, Some("f"), &cache).expect("filter");
+    let mut canvas = Pixmap::new(5, 5).unwrap();
+    apply_svg_filter(filter.as_ref(), &mut canvas);
+
+    for y in 1..=3 {
+      assert_eq!(pixel_rgba(&canvas, 1, y), (255, 0, 0, 255));
+      assert_eq!(pixel_rgba(&canvas, 2, y), (0, 0, 255, 255));
+    }
+    assert_eq!(pixel_rgba(&canvas, 0, 0), (0, 0, 0, 0));
+    assert_eq!(pixel_rgba(&canvas, 4, 4), (0, 0, 0, 0));
   }
 }
