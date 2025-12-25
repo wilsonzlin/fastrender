@@ -36,7 +36,7 @@ use fastrender::style::types::BorderImageSliceValue;
 use fastrender::style::types::BorderImageSource;
 use fastrender::style::types::BorderStyle;
 use fastrender::style::types::ClipPath;
-use fastrender::style::types::FillRule;
+use fastrender::style::types::FillRule as StyleFillRule;
 use fastrender::style::types::ImageRendering;
 use fastrender::style::types::MixBlendMode;
 use fastrender::style::types::ShapeRadius;
@@ -52,6 +52,7 @@ use image::ExtendedColorType;
 use image::ImageEncoder;
 use image::RgbaImage;
 use std::sync::Arc;
+use tiny_skia::FillRule as SkFillRule;
 use tiny_skia::Pixmap;
 
 fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
@@ -592,7 +593,7 @@ fn builder_clip_path_polygon_masks_rendered_output() {
   style.background_color = Rgba::RED;
   style.clip_path = ClipPath::BasicShape(
     Box::new(BasicShape::Polygon {
-      fill: FillRule::NonZero,
+      fill: StyleFillRule::NonZero,
       points: vec![
         (Length::px(0.0), Length::px(0.0)),
         (Length::px(0.0), Length::px(10.0)),
@@ -1360,7 +1361,7 @@ fn backdrop_filter_respects_clip_path_mask() {
       fastrender::geometry::Point::new(5.0, 1.0),
       fastrender::geometry::Point::new(1.0, 5.0),
     ],
-    fill_rule: FillRule::Winding,
+    fill_rule: SkFillRule::Winding,
   };
   list.push(DisplayItem::PushStackingContext(StackingContextItem {
     z_index: 0,
