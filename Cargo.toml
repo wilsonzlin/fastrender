@@ -70,6 +70,10 @@ tempfile = "3"
 name = "perf_regressions"
 harness = false
 
+[[bin]]
+name = "bench_compare"
+path = "tools/bench_compare.rs"
+
 [profile.release]
 opt-level = 3
 lto = true
