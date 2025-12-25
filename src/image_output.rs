@@ -1,6 +1,7 @@
 use crate::error::Error;
 use crate::error::RenderError;
 use crate::error::Result;
+use crate::image_compare::{self, CompareConfig};
 use image::ImageFormat;
 use image::Rgba;
 use image::RgbaImage;
@@ -123,82 +124,29 @@ pub fn encode_image(pixmap: &Pixmap, format: OutputFormat) -> Result<Vec<u8>> {
 ///
 /// Returns the diff metrics along with a PNG highlighting differing pixels.
 pub fn diff_png(rendered: &[u8], expected: &[u8], tolerance: u8) -> Result<(DiffMetrics, Vec<u8>)> {
-  let rendered_img = image::load_from_memory(rendered).map_err(|e| {
-    Error::Render(RenderError::InvalidParameters {
-      message: format!("Failed to decode rendered PNG: {e}"),
-    })
-  })?;
-  let expected_img = image::load_from_memory(expected).map_err(|e| {
-    Error::Render(RenderError::InvalidParameters {
-      message: format!("Failed to decode expected PNG: {e}"),
-    })
-  })?;
+  let mut config = CompareConfig::strict().with_channel_tolerance(tolerance);
+  config.max_different_percent = 100.0;
 
-  let rendered_img = rendered_img.to_rgba8();
-  let expected_img = expected_img.to_rgba8();
-
-  if rendered_img.dimensions() != expected_img.dimensions() {
+  let diff = image_compare::compare_png(rendered, expected, &config)?;
+  if !diff.dimensions_match {
     return Err(Error::Render(RenderError::InvalidParameters {
       message: format!(
         "Image dimensions differ: rendered {}x{}, expected {}x{}",
-        rendered_img.width(),
-        rendered_img.height(),
-        expected_img.width(),
-        expected_img.height()
+        diff.actual_dimensions.0,
+        diff.actual_dimensions.1,
+        diff.expected_dimensions.0,
+        diff.expected_dimensions.1
       ),
     }));
   }
 
-  let (width, height) = rendered_img.dimensions();
-  let mut diff_image = RgbaImage::new(width, height);
-  let mut diff_pixels = 0u64;
-
-  for ((dst, rendered_px), expected_px) in diff_image
-    .pixels_mut()
-    .zip(rendered_img.pixels())
-    .zip(expected_img.pixels())
-  {
-    let channel_diffs = [
-      rendered_px[0].abs_diff(expected_px[0]),
-      rendered_px[1].abs_diff(expected_px[1]),
-      rendered_px[2].abs_diff(expected_px[2]),
-      rendered_px[3].abs_diff(expected_px[3]),
-    ];
-
-    let max_channel = *channel_diffs.iter().max().unwrap_or(&0);
-
-    if max_channel > tolerance {
-      diff_pixels += 1;
-      // Encode the difference magnitude into the alpha channel so thin diffs still show up.
-      let intensity = max_channel.saturating_mul(2).min(255);
-      *dst = Rgba([255, 0, 0, intensity]);
-    } else {
-      *dst = Rgba([0, 0, 0, 0]);
-    }
-  }
-
-  let total_pixels = (width * height) as u64;
-  let diff_percentage = if total_pixels == 0 {
-    0.0
-  } else {
-    (diff_pixels as f64 / total_pixels as f64) * 100.0
-  };
+  let diff_png = diff.diff_png()?.unwrap_or_default();
 
   let metrics = DiffMetrics {
-    pixel_diff: diff_pixels,
-    total_pixels,
-    diff_percentage,
+    pixel_diff: diff.statistics.different_pixels,
+    total_pixels: diff.statistics.total_pixels,
+    diff_percentage: diff.statistics.different_percent,
   };
 
-  let mut buffer = Vec::new();
-  diff_image
-    .write_to(&mut Cursor::new(&mut buffer), ImageFormat::Png)
-    .map_err(|e| {
-      Error::Render(RenderError::EncodeFailed {
-        format: "PNG".to_string(),
-        reason: e.to_string(),
-      })
-    })?;
-
-  Ok((metrics, buffer))
+  Ok((metrics, diff_png))
 }

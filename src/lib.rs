@@ -191,6 +191,7 @@ pub mod css;
 pub mod debug;
 pub mod dom;
 pub mod html;
+pub mod image_compare;
 pub mod image_loader;
 pub mod image_output;
 pub mod resource;
