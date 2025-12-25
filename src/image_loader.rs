@@ -229,6 +229,33 @@ fn map_svg_aspect_ratio(
   )
 }
 
+fn svg_view_box_root_transform(
+  svg_content: &str,
+  source_width: f32,
+  source_height: f32,
+  dest_width: f32,
+  dest_height: f32,
+) -> Option<tiny_skia::Transform> {
+  let doc = Document::parse(svg_content).ok()?;
+  let root = doc.root_element();
+  if !root.tag_name().name().eq_ignore_ascii_case("svg") {
+    return None;
+  }
+
+  let view_box = root.attribute("viewBox").and_then(parse_svg_view_box)?;
+  let preserve = SvgPreserveAspectRatio::parse(root.attribute("preserveAspectRatio"));
+  let source = map_svg_aspect_ratio(view_box, preserve, source_width, source_height);
+  let dest = map_svg_aspect_ratio(view_box, preserve, dest_width, dest_height);
+
+  Some(
+    dest.pre_concat(
+      source
+        .invert()
+        .unwrap_or_else(tiny_skia::Transform::identity),
+    ),
+  )
+}
+
 fn svg_parse_fill_color(value: &str) -> Option<Rgba> {
   let trimmed = value.trim();
   if trimmed.is_empty() {
@@ -1458,9 +1485,20 @@ impl ImageCache {
       }));
     };
 
-    let scale_x = render_width as f32 / source_width;
-    let scale_y = render_height as f32 / source_height;
-    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+    let transform = match svg_view_box_root_transform(
+      svg_content,
+      source_width,
+      source_height,
+      render_width as f32,
+      render_height as f32,
+    ) {
+      Some(transform) => transform,
+      None => {
+        let scale_x = render_width as f32 / source_width;
+        let scale_y = render_height as f32 / source_height;
+        tiny_skia::Transform::from_scale(scale_x, scale_y)
+      }
+    };
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     let pixmap = Arc::new(pixmap);
@@ -2067,9 +2105,20 @@ impl ImageCache {
       },
     ))?;
 
-    let scale_x = target_width / source_width;
-    let scale_y = target_height / source_height;
-    let transform = tiny_skia::Transform::from_scale(scale_x, scale_y);
+    let transform = match svg_view_box_root_transform(
+      svg_content,
+      source_width,
+      source_height,
+      target_width,
+      target_height,
+    ) {
+      Some(transform) => transform,
+      None => {
+        let scale_x = target_width / source_width;
+        let scale_y = target_height / source_height;
+        tiny_skia::Transform::from_scale(scale_x, scale_y)
+      }
+    };
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     // Convert pixmap to image
@@ -2242,6 +2291,71 @@ mod tests {
   use image::RgbaImage;
   use std::path::PathBuf;
   use std::time::SystemTime;
+
+  #[test]
+  fn svg_viewbox_renders_with_default_letterboxing() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='red'/></svg>";
+
+    let pixmap = cache
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg")
+      .expect("render svg");
+
+    let left = pixmap.pixel(10, 50).expect("left padding");
+    assert_eq!(left.alpha(), 0, "letterboxed area should be transparent");
+
+    let center = pixmap.pixel(100, 50).expect("center pixel");
+    assert_eq!(
+      (center.red(), center.green(), center.blue(), center.alpha()),
+      (255, 0, 0, 255)
+    );
+  }
+
+  #[test]
+  fn svg_viewbox_none_stretches_to_viewport() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'><rect width='100' height='100' fill='red'/></svg>";
+
+    let pixmap = cache
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg")
+      .expect("render svg");
+
+    let left = pixmap.pixel(10, 50).expect("left pixel");
+    assert_eq!(
+      (left.red(), left.green(), left.blue(), left.alpha()),
+      (255, 0, 0, 255)
+    );
+  }
+
+  #[test]
+  fn svg_viewbox_aligns_min_min_meet() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='xMinYMin meet'><rect width='100' height='100' fill='red'/></svg>";
+
+    let pixmap = cache
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg")
+      .expect("render svg");
+
+    let left = pixmap.pixel(10, 50).expect("left pixel");
+    assert_eq!(left.alpha(), 255);
+
+    let right = pixmap.pixel(190, 50).expect("right padding");
+    assert_eq!(right.alpha(), 0);
+  }
+
+  #[test]
+  fn svg_viewbox_slice_fills_viewport() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='xMidYMid slice'><circle cx='50' cy='50' r='50' fill='red'/></svg>";
+
+    let pixmap = cache
+      .render_svg_pixmap_at_size(svg, 200, 100, "test://svg")
+      .expect("render svg");
+
+    let left = pixmap.pixel(10, 50).expect("left pixel");
+    assert_eq!(left.alpha(), 255);
+    assert_eq!(left.red(), 255);
+  }
 
   #[test]
   fn svg_width_height_set_intrinsic_size_and_ratio() {
