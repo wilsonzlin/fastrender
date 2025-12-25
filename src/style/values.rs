@@ -480,6 +480,9 @@ mod tests {
 
     let vmax = Length::new(10.0, LengthUnit::Vmax);
     assert_eq!(vmax.resolve_with_viewport(800.0, 600.0), Some(80.0)); // 10% of 800
+
+    assert_eq!(Length::percent(50.0).resolve_with_viewport(800.0, 600.0), None);
+    assert_eq!(Length::em(2.0).resolve_with_viewport(800.0, 600.0), None);
   }
 
   #[test]
@@ -923,7 +926,10 @@ impl Length {
     }
   }
 
-  /// Resolves this length using viewport dimensions
+  /// Resolves this length using viewport dimensions.
+  ///
+  /// Returns `None` for units that cannot be resolved with viewport information alone
+  /// (percentages, font-relative units, etc.).
   ///
   /// # Examples
   ///
@@ -957,7 +963,7 @@ impl Length {
       LengthUnit::Dvmin => Some((self.value / 100.0) * viewport_width.min(viewport_height)),
       LengthUnit::Dvmax => Some((self.value / 100.0) * viewport_width.max(viewport_height)),
       _ if self.unit.is_absolute() => Some(self.to_px()),
-      _ => Some(self.value),
+      _ => None,
     }
   }
 
