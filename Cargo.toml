@@ -84,6 +84,10 @@ harness = false
 name = "text_shaping"
 harness = false
 
+[[bench]]
+name = "selector_bloom_bench"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true
