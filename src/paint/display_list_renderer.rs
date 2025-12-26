@@ -2809,7 +2809,7 @@ impl DisplayListRenderer {
           let backdrop_bounds = transform_rect(bounds, &combined_transform);
           Some(PendingBackdrop {
             bounds: backdrop_bounds,
-            filters: scaled_backdrop,
+            filters: scaled_backdrop.clone(),
             radii,
             filter_bounds: css_bounds,
           })
