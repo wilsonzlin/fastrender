@@ -46,7 +46,7 @@ use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::TransformItem;
-use crate::paint::filter_outset::filter_outset_with_bounds;
+use crate::paint::filter_outset::{filter_outset, filter_outset_with_bounds};
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
@@ -4902,7 +4902,6 @@ mod tests {
   use crate::paint::display_list::TextShadowItem;
   use crate::paint::display_list::Transform3D;
   use crate::paint::display_list_builder::DisplayListBuilder;
-  use crate::paint::filter_outset::compute_filter_outset;
   use crate::style::color::{Color, Rgba};
   use crate::style::types::BackgroundImage;
   use crate::style::types::BackgroundRepeat;
@@ -5605,8 +5604,7 @@ mod tests {
       spread: -2.0,
       color: Rgba::BLACK,
     }];
-    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
-    let (l, t, r, b) = compute_filter_outset(&filters, bbox, 1.0);
+    let (l, t, r, b) = filter_outset(&filters, 1.0).as_tuple();
     let with_zero_spread = vec![ResolvedFilter::DropShadow {
       offset_x: 0.0,
       offset_y: 0.0,
@@ -5614,7 +5612,7 @@ mod tests {
       spread: 0.0,
       color: Rgba::BLACK,
     }];
-    let (l0, t0, r0, b0) = compute_filter_outset(&with_zero_spread, bbox, 1.0);
+    let (l0, t0, r0, b0) = filter_outset(&with_zero_spread, 1.0).as_tuple();
     assert!(
       (l - 10.0).abs() < 0.01
         && (t - 10.0).abs() < 0.01
@@ -5772,8 +5770,7 @@ mod tests {
   #[test]
   fn filter_outset_accumulates_blurs() {
     let filters = vec![ResolvedFilter::Blur(2.0), ResolvedFilter::Blur(3.0)];
-    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
-    let (l, t, r, b) = filter_outset_with_bounds(&filters, 1.0, Some(bbox)).as_tuple();
+    let (l, t, r, b) = filter_outset(&filters, 1.0).as_tuple();
     assert!(
       (l - 15.0).abs() < 0.01
         && (t - 15.0).abs() < 0.01
@@ -5795,8 +5792,7 @@ mod tests {
         color: Rgba::BLACK,
       },
     ];
-    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
-    let (l, t, r, b) = filter_outset_with_bounds(&filters, 1.0, Some(bbox)).as_tuple();
+    let (l, t, r, b) = filter_outset(&filters, 1.0).as_tuple();
     assert!(
       (l - 13.0).abs() < 0.01
         && (t - 6.0).abs() < 0.01
@@ -5809,8 +5805,7 @@ mod tests {
   #[test]
   fn blur_filter_outset_scales_with_device_pixel_ratio() {
     let filters = vec![ResolvedFilter::Blur(4.0)];
-    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
-    let (l, t, r, b) = filter_outset_with_bounds(&filters, 1.0, Some(bbox)).as_tuple();
+    let (l, t, r, b) = filter_outset(&filters, 1.0).as_tuple();
     // Blur outset is radius * 3 per side.
     assert!(
       (l - 12.0).abs() < 0.01
@@ -5820,7 +5815,7 @@ mod tests {
     );
 
     let filters = vec![ResolvedFilter::Blur(2.0)];
-    let (l, t, r, b) = filter_outset_with_bounds(&filters, 2.0, Some(bbox)).as_tuple();
+    let (l, t, r, b) = filter_outset(&filters, 2.0).as_tuple();
     // Device pixel ratio doubles the blur radius before computing outsets.
     assert!(
       (l - 12.0).abs() < 0.01
