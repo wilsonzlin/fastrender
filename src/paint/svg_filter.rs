@@ -3573,7 +3573,7 @@ mod tests_composite {
 }
 
 #[cfg(test)]
-mod tests {
+mod filter_cache_tests {
   use super::*;
   use crate::image_loader::ImageCache;
   use crate::resource::{FetchedResource, ResourceFetcher};
