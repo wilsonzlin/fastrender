@@ -920,28 +920,30 @@ impl<'a> ElementRef<'a> {
     context: &mut selectors::matching::MatchingContext<FastRenderSelectorImpl>,
   ) -> Option<(usize, usize)> {
     let parent = self.parent?;
-    let mut index = None;
-    let mut len = 0usize;
+    context.nest(|context| {
+      let mut index = None;
+      let mut len = 0usize;
 
-    for child in parent.children.iter() {
-      if !child.is_element() {
-        continue;
+      for child in parent.children.iter() {
+        if !child.is_element() {
+          continue;
+        }
+        let child_ref = ElementRef::with_ancestors(child, self.all_ancestors);
+        let matches = selectors
+          .slice()
+          .iter()
+          .any(|selector| matches_selector(selector, 0, None, &child_ref, context));
+        if !matches {
+          continue;
+        }
+        if ptr::eq(child, self.node) {
+          index = Some(len);
+        }
+        len += 1;
       }
-      let child_ref = ElementRef::with_ancestors(child, self.all_ancestors);
-      let matches = selectors
-        .slice()
-        .iter()
-        .any(|selector| matches_selector(selector, 0, None, &child_ref, context));
-      if !matches {
-        continue;
-      }
-      if ptr::eq(child, self.node) {
-        index = Some(len);
-      }
-      len += 1;
-    }
 
-    index.map(|idx| (idx, len))
+      index.map(|idx| (idx, len))
+    })
   }
 
   /// Return the language of this element, inherited from ancestors if absent.

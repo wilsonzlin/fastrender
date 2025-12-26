@@ -5,6 +5,7 @@
 use super::types::CssString;
 use cssparser::ParseError;
 use cssparser::Parser;
+use cssparser::Token;
 use cssparser::ToCss;
 use selectors::parser::SelectorImpl;
 use selectors::parser::SelectorList;
@@ -279,6 +280,10 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
   type Error = SelectorParseErrorKind<'i>;
   type Impl = FastRenderSelectorImpl;
 
+  fn parse_nth_child_of(&self) -> bool {
+    true
+  }
+
   fn parse_non_ts_pseudo_class(
     &self,
     _location: cssparser::SourceLocation,
@@ -517,7 +522,7 @@ fn parse_of_selector_list<'i, 't>(
   SelectorList<FastRenderSelectorImpl>,
   ParseError<'i, SelectorParseErrorKind<'i>>,
 > {
-  let ident = parser.expect_ident()?;
+  let ident = parser.expect_ident()?.clone();
   if !ident.eq_ignore_ascii_case("of") {
     return Err(
       parser.new_error(cssparser::BasicParseErrorKind::UnexpectedToken(
