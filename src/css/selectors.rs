@@ -122,6 +122,17 @@ impl selectors::parser::NonTSPseudoClass for PseudoClass {
         | PseudoClass::FocusVisible
     )
   }
+
+  fn specificity(&self) -> u32 {
+    match self {
+      PseudoClass::Has(relative) => relative
+        .iter()
+        .map(|selector| selector.selector.specificity())
+        .max()
+        .unwrap_or(0),
+      _ => 1 << 10, // Pseudo-classes have class-level specificity by default.
+    }
+  }
 }
 
 impl ToCss for PseudoClass {
