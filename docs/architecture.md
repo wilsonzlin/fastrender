@@ -14,6 +14,8 @@ The main orchestration code lives in `src/api.rs` (`FastRender`).
 6. Build paint commands / stacking contexts (`src/paint/`)
 7. Paint to a `tiny-skia` pixmap and encode (`src/image_output.rs`)
 
+After layout, scroll snapping and scroll/view timeline-driven animations are resolved before building the final display list (`scroll.rs`, `animation::apply_scroll_driven_animations`).
+
 ## Key intermediate structures
 
 - DOM: `crate::dom::DomNode`
@@ -29,3 +31,7 @@ For the most accurate view of the current flow, follow `FastRender::render_html_
 ## Compatibility toggles
 
 HTML parsing runs in a spec-only mode by default; FastRender does not inject JS-era bootstrap classes or other mutations. When a static render needs those compatibility shims, set `FastRenderConfig::with_dom_compat_mode(DomCompatibilityMode::Compatibility)` (or `DomParseOptions::compatibility()` for lower-level parsing). The current compatibility mode mirrors common JS-driven class flips like turning `no-js` into `js-enabled` and adding `jsl10n-visible` on `html/body`—see `docs/notes/dom-compatibility.md` for details.
+
+## Accessibility output
+
+`FastRender::accessibility_tree` / `accessibility_tree_json` expose a static accessibility tree derived from the styled DOM (`src/accessibility.rs`), covering HTML/ARIA roles, names, descriptions, and core state flags.
