@@ -218,6 +218,8 @@ impl ToCss for PseudoClass {
 pub enum PseudoElement {
   Before,
   After,
+  FirstLine,
+  FirstLetter,
   Marker,
   Backdrop,
 }
@@ -234,6 +236,8 @@ impl ToCss for PseudoElement {
     match self {
       PseudoElement::Before => dest.write_str("::before"),
       PseudoElement::After => dest.write_str("::after"),
+      PseudoElement::FirstLine => dest.write_str("::first-line"),
+      PseudoElement::FirstLetter => dest.write_str("::first-letter"),
       PseudoElement::Marker => dest.write_str("::marker"),
       PseudoElement::Backdrop => dest.write_str("::backdrop"),
     }
@@ -412,6 +416,8 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
     match lowered.as_str() {
       "before" => Ok(PseudoElement::Before),
       "after" => Ok(PseudoElement::After),
+      "first-line" => Ok(PseudoElement::FirstLine),
+      "first-letter" => Ok(PseudoElement::FirstLetter),
       "marker" => Ok(PseudoElement::Marker),
       "backdrop" => Ok(PseudoElement::Backdrop),
       _ => Err(ParseError {
@@ -544,6 +550,18 @@ mod tests {
         .parse_pseudo_element(loc, cssparser::CowRcStr::from("BeFoRe"))
         .expect("before pseudo"),
       PseudoElement::Before
+    );
+    assert_eq!(
+      parser
+        .parse_pseudo_element(loc, cssparser::CowRcStr::from("FIRST-LINE"))
+        .expect("first-line pseudo"),
+      PseudoElement::FirstLine
+    );
+    assert_eq!(
+      parser
+        .parse_pseudo_element(loc, cssparser::CowRcStr::from("First-Letter"))
+        .expect("first-letter pseudo"),
+      PseudoElement::FirstLetter
     );
     assert_eq!(
       parser

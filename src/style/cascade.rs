@@ -982,6 +982,10 @@ pub struct StyledNode {
   pub after_styles: Option<Box<ComputedStyle>>,
   /// Styles for ::marker pseudo-element (list items only)
   pub marker_styles: Option<Box<ComputedStyle>>,
+  /// Styles for ::first-line pseudo-element (text overrides only)
+  pub first_line_styles: Option<Box<ComputedStyle>>,
+  /// Styles for ::first-letter pseudo-element (text overrides only)
+  pub first_letter_styles: Option<Box<ComputedStyle>>,
   pub children: Vec<StyledNode>,
 }
 
@@ -1848,10 +1852,12 @@ fn compute_pseudo_styles(
   Option<Box<ComputedStyle>>,
   Option<Box<ComputedStyle>>,
   Option<Box<ComputedStyle>>,
+  Option<Box<ComputedStyle>>,
+  Option<Box<ComputedStyle>>,
 ) {
   if !node.is_element() {
     styles.backdrop = None;
-    return (None, None, None);
+    return (None, None, None, None, None);
   }
 
   let mut backdrop_styles = None;
@@ -1877,6 +1883,38 @@ fn compute_pseudo_styles(
 
   let prof = cascade_profile_enabled();
   let pseudo_start = prof.then(|| Instant::now());
+  let mut first_line_ua_styles = None;
+  let first_line_styles = compute_first_line_styles(
+    node,
+    rules,
+    selector_caches,
+    scratch,
+    ancestors,
+    styles,
+    ua_styles,
+    root_font_size,
+    ua_root_font_size,
+    viewport,
+  )
+  .map(|(line, ua)| {
+    first_line_ua_styles = Some(ua);
+    Box::new(line)
+  });
+  let base_first_letter_styles = first_line_styles.as_deref().unwrap_or(styles);
+  let base_first_letter_ua_styles = first_line_ua_styles.as_ref().unwrap_or(ua_styles);
+  let first_letter_styles = compute_first_letter_styles(
+    node,
+    rules,
+    selector_caches,
+    scratch,
+    ancestors,
+    base_first_letter_styles,
+    base_first_letter_ua_styles,
+    root_font_size,
+    ua_root_font_size,
+    viewport,
+  )
+  .map(Box::new);
   let before_styles = if rules.has_pseudo_content(&PseudoElement::Before) {
     compute_pseudo_element_styles(
       node,
@@ -1932,7 +1970,13 @@ fn compute_pseudo_styles(
 
   styles.backdrop = backdrop_styles;
 
-  (before_styles, after_styles, marker_styles)
+  (
+    before_styles,
+    after_styles,
+    marker_styles,
+    first_line_styles,
+    first_letter_styles,
+  )
 }
 
 #[inline(never)]
@@ -2053,18 +2097,19 @@ fn apply_styles_internal_with_ancestors<'a>(
   ancestors.pop();
   ancestor_ids.pop();
 
-  let (before_styles, after_styles, marker_styles) = compute_pseudo_styles(
-    node,
-    rules,
-    selector_caches,
-    scratch,
-    ancestors.as_slice(),
+  let (before_styles, after_styles, marker_styles, first_line_styles, first_letter_styles) =
+    compute_pseudo_styles(
+      node,
+      rules,
+      selector_caches,
+      scratch,
+      ancestors.as_slice(),
     &mut base.styles,
     &base.ua_styles,
     base.current_root_font_size,
-    base.current_ua_root_font_size,
-    viewport,
-  );
+      base.current_ua_root_font_size,
+      viewport,
+    );
 
   let NodeBaseStyles {
     styles,
@@ -2080,6 +2125,8 @@ fn apply_styles_internal_with_ancestors<'a>(
     before_styles,
     after_styles,
     marker_styles,
+    first_line_styles,
+    first_letter_styles,
     children,
   }))
 }
@@ -7903,6 +7950,215 @@ fn compute_pseudo_element_styles(
   ) {
     return None;
   }
+
+  Some(styles)
+}
+
+fn first_line_allows_property(property: &str) -> bool {
+  let p = property.to_ascii_lowercase();
+  if p == "font" || p.starts_with("font-") {
+    return true;
+  }
+  if matches!(
+    p.as_str(),
+    "color" | "text-transform" | "letter-spacing" | "word-spacing" | "line-height"
+  ) {
+    return true;
+  }
+  if p == "background-color" {
+    return true;
+  }
+  if p.starts_with("text-decoration")
+    || matches!(
+      p.as_str(),
+      "text-underline-offset"
+        | "text-underline-position"
+        | "text-shadow"
+        | "text-emphasis"
+        | "text-emphasis-style"
+        | "text-emphasis-color"
+        | "text-emphasis-position"
+    )
+  {
+    return true;
+  }
+  false
+}
+
+fn first_letter_allows_property(property: &str) -> bool {
+  let p = property.to_ascii_lowercase();
+  if first_line_allows_property(&p) {
+    return true;
+  }
+  if p == "background-color" {
+    return true;
+  }
+  if p == "float" {
+    return true;
+  }
+  if p == "margin" || p.starts_with("margin-") || p == "padding" || p.starts_with("padding-") {
+    return true;
+  }
+  if p.starts_with("border-") {
+    return true;
+  }
+  false
+}
+
+fn compute_first_line_styles(
+  node: &DomNode,
+  rules: &RuleIndex<'_>,
+  selector_caches: &mut SelectorCaches,
+  scratch: &mut CascadeScratch,
+  ancestors: &[&DomNode],
+  base_styles: &ComputedStyle,
+  base_ua_styles: &ComputedStyle,
+  root_font_size: f32,
+  ua_root_font_size: f32,
+  viewport: Size,
+) -> Option<(ComputedStyle, ComputedStyle)> {
+  if !rules.has_pseudo_rules(&PseudoElement::FirstLine) {
+    return None;
+  }
+
+  let matching_rules = find_pseudo_element_rules(
+    node,
+    rules,
+    selector_caches,
+    scratch,
+    ancestors,
+    &PseudoElement::FirstLine,
+  );
+  if matching_rules.is_empty() {
+    return None;
+  }
+  let ua_matches: Vec<_> = matching_rules
+    .iter()
+    .filter(|r| r.origin == StyleOrigin::UserAgent)
+    .cloned()
+    .collect();
+
+  let mut ua_styles = base_ua_styles.clone();
+  ua_styles.display = Display::Inline;
+  apply_cascaded_declarations(
+    &mut ua_styles,
+    ua_matches,
+    None,
+    base_ua_styles,
+    base_ua_styles.font_size,
+    ua_root_font_size,
+    viewport,
+    &ComputedStyle::default(),
+    |decl| first_line_allows_property(&decl.property),
+  );
+  resolve_match_parent_text_align_last(&mut ua_styles, base_ua_styles, false);
+  resolve_match_parent_text_align(&mut ua_styles, base_ua_styles, false);
+  resolve_relative_font_weight(&mut ua_styles, base_ua_styles);
+  propagate_text_decorations(&mut ua_styles, base_ua_styles);
+  ua_styles.root_font_size = ua_root_font_size;
+  resolve_line_height_length(&mut ua_styles, viewport);
+  resolve_absolute_lengths(&mut ua_styles, ua_root_font_size, viewport);
+
+  let mut styles = base_styles.clone();
+  styles.display = Display::Inline;
+  apply_cascaded_declarations(
+    &mut styles,
+    matching_rules,
+    None,
+    base_styles,
+    base_styles.font_size,
+    root_font_size,
+    viewport,
+    &ua_styles,
+    |decl| first_line_allows_property(&decl.property),
+  );
+  resolve_match_parent_text_align(&mut styles, base_styles, false);
+  resolve_match_parent_text_align_last(&mut styles, base_styles, false);
+  resolve_relative_font_weight(&mut styles, base_styles);
+  propagate_text_decorations(&mut styles, base_styles);
+  styles.root_font_size = root_font_size;
+  resolve_line_height_length(&mut styles, viewport);
+  resolve_absolute_lengths(&mut styles, root_font_size, viewport);
+
+  Some((styles, ua_styles))
+}
+
+fn compute_first_letter_styles(
+  node: &DomNode,
+  rules: &RuleIndex<'_>,
+  selector_caches: &mut SelectorCaches,
+  scratch: &mut CascadeScratch,
+  ancestors: &[&DomNode],
+  base_styles: &ComputedStyle,
+  base_ua_styles: &ComputedStyle,
+  root_font_size: f32,
+  ua_root_font_size: f32,
+  viewport: Size,
+) -> Option<ComputedStyle> {
+  if !rules.has_pseudo_rules(&PseudoElement::FirstLetter) {
+    return None;
+  }
+
+  let matching_rules = find_pseudo_element_rules(
+    node,
+    rules,
+    selector_caches,
+    scratch,
+    ancestors,
+    &PseudoElement::FirstLetter,
+  );
+  if matching_rules.is_empty() {
+    return None;
+  }
+
+  let ua_matches: Vec<_> = matching_rules
+    .iter()
+    .filter(|r| r.origin == StyleOrigin::UserAgent)
+    .cloned()
+    .collect();
+
+  let mut ua_styles = base_ua_styles.clone();
+  ua_styles.display = Display::Inline;
+  apply_cascaded_declarations(
+    &mut ua_styles,
+    ua_matches,
+    None,
+    base_ua_styles,
+    base_ua_styles.font_size,
+    ua_root_font_size,
+    viewport,
+    &ComputedStyle::default(),
+    |decl| first_letter_allows_property(&decl.property),
+  );
+  resolve_match_parent_text_align_last(&mut ua_styles, base_ua_styles, false);
+  resolve_match_parent_text_align(&mut ua_styles, base_ua_styles, false);
+  resolve_relative_font_weight(&mut ua_styles, base_ua_styles);
+  propagate_text_decorations(&mut ua_styles, base_ua_styles);
+  ua_styles.root_font_size = ua_root_font_size;
+  resolve_line_height_length(&mut ua_styles, viewport);
+  resolve_absolute_lengths(&mut ua_styles, ua_root_font_size, viewport);
+
+  let mut styles = base_styles.clone();
+  styles.display = Display::Inline;
+  apply_cascaded_declarations(
+    &mut styles,
+    matching_rules,
+    None,
+    base_styles,
+    base_styles.font_size,
+    root_font_size,
+    viewport,
+    &ua_styles,
+    |decl| first_letter_allows_property(&decl.property),
+  );
+  resolve_match_parent_text_align(&mut styles, base_styles, false);
+  resolve_match_parent_text_align_last(&mut styles, base_styles, false);
+  resolve_relative_font_weight(&mut styles, base_styles);
+  propagate_text_decorations(&mut styles, base_styles);
+  styles.root_font_size = root_font_size;
+  resolve_line_height_length(&mut styles, viewport);
+  resolve_absolute_lengths(&mut styles, root_font_size, viewport);
+  styles.display = Display::Inline;
 
   Some(styles)
 }

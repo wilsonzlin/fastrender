@@ -3,6 +3,7 @@
 mod absolute_position_body;
 mod aria_hidden_has_no_effect;
 mod aria_hidden_layout;
+mod first_line_first_letter_integration_test;
 mod flex_alignment_order_test;
 mod flex_box_sizing_test;
 mod float_shrink_to_min;

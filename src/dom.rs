@@ -2034,6 +2034,8 @@ impl<'a> Element for ElementRef<'a> {
       // based on box generation happens later in the pipeline.
       PseudoElement::Before
       | PseudoElement::After
+      | PseudoElement::FirstLine
+      | PseudoElement::FirstLetter
       | PseudoElement::Marker
       | PseudoElement::Backdrop => true,
     }

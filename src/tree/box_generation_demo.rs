@@ -633,6 +633,8 @@ impl BoxGenerator {
       before_styles: None,
       after_styles: None,
       marker_styles: None,
+      first_line_styles: None,
+      first_letter_styles: None,
       children: vec![],
     };
     let marker_content = marker_content_from_style(&dummy_styled, &style, counters);
