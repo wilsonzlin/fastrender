@@ -1001,6 +1001,14 @@ impl HttpFetcher {
     if let Ok(meta) = std::fs::metadata(path) {
       if let Ok(len) = usize::try_from(meta.len()) {
         if len > limit {
+          if let Some(remaining) = self.policy.remaining_budget() {
+            if len > remaining {
+              return Err(policy_error(format!(
+                "total bytes budget exceeded ({} > {} bytes remaining)",
+                len, remaining
+              )));
+            }
+          }
           return Err(policy_error(format!(
             "response too large ({} > {} bytes)",
             len, limit
@@ -1019,6 +1027,15 @@ impl HttpFetcher {
     })?;
 
     if bytes.len() > limit {
+      if let Some(remaining) = self.policy.remaining_budget() {
+        if bytes.len() > remaining {
+          return Err(policy_error(format!(
+            "total bytes budget exceeded ({} > {} bytes remaining)",
+            bytes.len(),
+            remaining
+          )));
+        }
+      }
       return Err(policy_error(format!(
         "response too large ({} > {} bytes)",
         bytes.len(),
@@ -1039,14 +1056,23 @@ impl HttpFetcher {
   fn fetch_data(&self, url: &str) -> Result<FetchedResource> {
     let limit = self.policy.allowed_response_limit()?;
     let resource = data_url::decode_data_url(url)?;
-    if resource.bytes.len() > limit {
+    let len = resource.bytes.len();
+    if len > limit {
+      if let Some(remaining) = self.policy.remaining_budget() {
+        if len > remaining {
+          return Err(policy_error(format!(
+            "total bytes budget exceeded ({} > {} bytes remaining)",
+            len, remaining
+          )));
+        }
+      }
       return Err(policy_error(format!(
         "response too large ({} > {} bytes)",
-        resource.bytes.len(),
+        len,
         limit
       )));
     }
-    self.policy.reserve_budget(resource.bytes.len())?;
+    self.policy.reserve_budget(len)?;
     Ok(resource)
   }
 }

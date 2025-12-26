@@ -115,7 +115,7 @@ fn parse_rule_list_collecting<'i, 't>(
       break;
     }
 
-    match parse_rule(parser, parent_selectors, css_source) {
+    match parse_rule(parser, errors, parent_selectors, css_source) {
       Ok(Some(rule)) => {
         rules.push(rule);
       }
@@ -178,6 +178,7 @@ fn recover_from_error<'i, 't>(parser: &mut Parser<'i, 't>) {
 /// Parse a single CSS rule (style rule or @-rule)
 fn parse_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<CssRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -216,7 +217,7 @@ fn parse_rule<'i, 't>(
   }
 
   // Parse style rule
-  parse_style_rule(parser, parent_selectors, css_source).map(|opt| opt.map(CssRule::Style))
+  parse_style_rule(parser, errors, parent_selectors, css_source).map(|opt| opt.map(CssRule::Style))
 }
 
 /// Parse an @import rule
@@ -2282,6 +2283,7 @@ fn parse_nested_at_rule<'i, 't>(
 
 fn parse_style_block<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: &SelectorList<FastRenderSelectorImpl>,
   css_source: &str,
 ) -> std::result::Result<(Vec<Declaration>, Vec<CssRule>), ParseError<'i, SelectorParseErrorKind<'i>>>
@@ -2303,13 +2305,15 @@ fn parse_style_block<'i, 't>(
     }
 
     if let Ok(Some(rule)) =
-      parser.try_parse(|p| parse_style_rule(p, Some(parent_selectors), css_source))
+      parser.try_parse(|p| parse_style_rule(p, errors, Some(parent_selectors), css_source))
     {
       nested_rules.push(CssRule::Style(rule));
       continue;
     }
 
-    if let Some(decl) = parse_declaration(parser, DeclarationContext::Style) {
+    if let Some(decl) =
+      parse_declaration_collecting_errors(parser, errors, DeclarationContext::Style, css_source)
+    {
       declarations.push(decl);
     }
   }
@@ -2320,6 +2324,7 @@ fn parse_style_block<'i, 't>(
 /// Parse a style rule (selectors + declarations)
 fn parse_style_rule<'i, 't>(
   parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
   parent_selectors: Option<&SelectorList<FastRenderSelectorImpl>>,
   css_source: &str,
 ) -> std::result::Result<Option<StyleRule>, ParseError<'i, SelectorParseErrorKind<'i>>> {
@@ -2387,7 +2392,7 @@ fn parse_style_rule<'i, 't>(
   })?;
 
   let (declarations, nested_rules) = parser.parse_nested_block(|parser| {
-    parse_style_block(parser, &selectors, css_source).map_err(|_| {
+    parse_style_block(parser, errors, &selectors, css_source).map_err(|_| {
       parser.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
         "declaration".into(),
       ))
@@ -2438,7 +2443,8 @@ fn parse_nest_rule<'i, 't>(
   })?;
 
   let (declarations, nested_rules) = parser.parse_nested_block(|nested| {
-    parse_style_block(nested, &selectors, css_source).map_err(|_| {
+    let mut nested_errors = Vec::new();
+    parse_style_block(nested, &mut nested_errors, &selectors, css_source).map_err(|_| {
       nested.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(
         "declaration".into(),
       ))
@@ -2509,6 +2515,90 @@ fn parse_declaration<'i, 't>(
   };
 
   parse_property_value_in_context(context, &property, value).map(|parsed_value| Declaration {
+    property,
+    value: parsed_value,
+    raw_value: value.to_string(),
+    important,
+  })
+}
+
+fn parse_declaration_collecting_errors<'i, 't>(
+  parser: &mut Parser<'i, 't>,
+  errors: &mut Vec<CssParseError>,
+  context: DeclarationContext,
+  css_source: &str,
+) -> Option<Declaration> {
+  let decl_location = parser.current_source_location();
+  let property = match parser.expect_ident() {
+    Ok(ident) => ident.to_string(),
+    Err(_) => {
+      skip_to_semicolon(parser);
+      return None;
+    }
+  };
+
+  if parser.expect_colon().is_err() {
+    errors.push(CssParseError::with_snippet(
+      format!("expected ':' after `{property}`"),
+      decl_location.line + 1,
+      decl_location.column + 1,
+      css_source,
+    ));
+    skip_to_semicolon(parser);
+    return None;
+  }
+
+  let value_location = parser.current_source_location();
+  let value_start = parser.position();
+  let mut important = false;
+
+  loop {
+    match parser.next() {
+      Ok(Token::Semicolon) | Err(_) => break,
+      Ok(Token::Delim('!')) => {
+        if parser
+          .try_parse(|p| p.expect_ident_matching("important"))
+          .is_ok()
+        {
+          important = true;
+        }
+        break;
+      }
+      Ok(Token::Function(_)) => {
+        let _ = parser.parse_nested_block(|p| {
+          while !p.is_exhausted() {
+            let _ = p.next();
+          }
+          Ok::<_, ParseError<()>>(())
+        });
+      }
+      Ok(_) => {}
+    }
+  }
+
+  let full_slice_raw = parser.slice_from(value_start);
+  let value = if important {
+    let without_important = if let Some((before, _)) = full_slice_raw.rsplit_once("!important") {
+      before
+    } else {
+      full_slice_raw
+    };
+    without_important.trim_end_matches(';').trim_end()
+  } else {
+    full_slice_raw.trim_end_matches(';').trim_end()
+  };
+
+  let Some(parsed_value) = parse_property_value_in_context(context, &property, value) else {
+    errors.push(CssParseError::with_snippet(
+      format!("invalid value for `{property}`"),
+      value_location.line + 1,
+      value_location.column + 1,
+      css_source,
+    ));
+    return None;
+  };
+
+  Some(Declaration {
     property,
     value: parsed_value,
     raw_value: value.to_string(),
@@ -2690,7 +2780,8 @@ mod tests {
     let mut input = ParserInput::new(css);
     let mut parser = Parser::new(&mut input);
     assert!(!parser.is_exhausted(), "parser should see input tokens");
-    let rule = parse_rule(&mut parser, None, css).expect("parse_rule");
+    let mut errors = Vec::new();
+    let rule = parse_rule(&mut parser, &mut errors, None, css).expect("parse_rule");
     assert!(
       matches!(rule, Some(CssRule::Style(_))),
       "expected a style rule, got {:?}",

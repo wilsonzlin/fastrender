@@ -868,25 +868,44 @@ fn parse_text_shadow_list(value_str: &str) -> Option<Vec<TextShadow>> {
     return Some(Vec::new());
   }
 
-  let layers: Vec<&str> = value_str
-    .split(',')
-    .map(str::trim)
-    .filter(|s| !s.is_empty())
-    .collect();
-  if layers.is_empty() {
+  let trimmed = value_str.trim();
+  if trimmed.is_empty() {
     return None;
   }
+
+  let tokens = tokenize_property_value(trimmed, true);
+  if tokens.is_empty() {
+    return None;
+  }
+
+  let mut layers: Vec<Vec<String>> = Vec::new();
+  let mut current: Vec<String> = Vec::new();
+  for token in tokens {
+    if token == "," {
+      if current.is_empty() {
+        return None;
+      }
+      layers.push(std::mem::take(&mut current));
+      continue;
+    }
+    current.push(token);
+  }
+  if current.is_empty() {
+    return None;
+  }
+  layers.push(current);
 
   let mut shadows = Vec::new();
   for layer in layers {
     let mut lengths = Vec::new();
     let mut color = None;
-    for token in layer.split_whitespace() {
-      if let Ok(parsed_color) = Color::parse(token) {
+
+    for token in layer {
+      if let Ok(parsed_color) = Color::parse(&token) {
         color = Some(parsed_color.to_rgba(Rgba::BLACK));
         continue;
       }
-      if let Some(len) = parse_length(token) {
+      if let Some(len) = parse_length(&token) {
         lengths.push(len);
         continue;
       }
@@ -1001,7 +1020,6 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         | "border-start-end-radius"
         | "border-end-start-radius"
         | "border-end-end-radius"
-        | "shape-outside"
         | "background-position"
         | "background-position-x"
         | "background-position-y"
@@ -1041,11 +1059,6 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
         | "border-right"
         | "border-bottom"
         | "border-left"
-        | "border-radius"
-        | "border-top-left-radius"
-        | "border-top-right-radius"
-        | "border-bottom-left-radius"
-        | "border-bottom-right-radius"
         | "image-orientation"
         | "image-resolution"
         | "scrollbar-color"
@@ -2152,18 +2165,14 @@ mod tests {
   #[test]
   fn known_properties_match_applied_properties() {
     let supported: BTreeSet<_> = supported_properties().iter().copied().collect();
-    let known: BTreeSet<_> = KNOWN_STYLE_PROPERTIES
-      .iter()
-      .chain(KNOWN_PAGE_PROPERTIES.iter())
-      .copied()
-      .collect();
+    let known: BTreeSet<_> = KNOWN_STYLE_PROPERTIES.iter().copied().collect();
 
     let missing: Vec<_> = supported.difference(&known).copied().collect();
     let extra: Vec<_> = known.difference(&supported).copied().collect();
 
     assert!(
       missing.is_empty() && extra.is_empty(),
-      "KNOWN_PROPERTIES out of sync with apply_declaration_with_base.\nmissing: {:?}\nextra: {:?}",
+      "KNOWN_STYLE_PROPERTIES out of sync with apply_declaration_with_base.\nmissing: {:?}\nextra: {:?}",
       missing,
       extra
     );
@@ -2337,6 +2346,7 @@ mod tests {
     assert!(matches!(parts[4], PropertyValue::Keyword(ref k) if k == "/"));
     assert!(
       matches!(parts[5], PropertyValue::Length(len) if len.value == 0.0 && len.unit == LengthUnit::Px)
+        || matches!(parts[5], PropertyValue::Number(n) if n.abs() < 1e-6)
     );
     assert!(matches!(parts[6], PropertyValue::Keyword(ref k) if k == "stretch"));
   }

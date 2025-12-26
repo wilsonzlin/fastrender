@@ -387,16 +387,13 @@ impl StackingContext {
       Some(existing) => *existing = existing.union(rect),
       None => *current = Some(rect),
     };
+    let translate = |rect: Rect| rect.translate(self.offset_from_parent_context);
 
     // Union all fragment bounds from all layers in the parent stacking context's
     // coordinate space.
     for frag in &self.fragments {
-      accumulate(
-        Rect::new(self.offset_from_parent_context, frag.bounds.size),
-        &mut bounds,
-      );
+      accumulate(translate(frag.bounds), &mut bounds);
     }
-    let translate = |rect: Rect| rect.translate(self.offset_from_parent_context);
     for frag in &self.layer3_blocks {
       accumulate(translate(frag.bounds), &mut bounds);
     }

@@ -207,6 +207,16 @@ pub fn set_runtime_toggles(toggles: Arc<RuntimeToggles>) -> RuntimeTogglesGuard 
   RuntimeTogglesGuard { previous }
 }
 
+/// Replace the currently active runtime toggles.
+///
+/// Unlike [`set_runtime_toggles`], this does not return a guard to restore the previous value.
+pub(crate) fn update_runtime_toggles(toggles: Arc<RuntimeToggles>) {
+  let lock = ACTIVE_TOGGLES.get_or_init(|| RwLock::new(default_toggles()));
+  if let Ok(mut guard) = lock.write() {
+    *guard = toggles;
+  }
+}
+
 /// Convenience helper to run a closure with a temporary toggles override.
 pub fn with_runtime_toggles<T>(toggles: Arc<RuntimeToggles>, f: impl FnOnce() -> T) -> T {
   let guard = set_runtime_toggles(toggles);

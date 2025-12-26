@@ -3289,12 +3289,13 @@ mod tests {
   use super::*;
   use crate::style::values::CalcLength;
   use crate::LengthUnit;
+  use std::cell::RefCell;
   use std::env;
+  use std::sync::Arc;
 
   struct EnvGuard {
     key: &'static str,
     old: Option<String>,
-    _lock: Option<std::sync::MutexGuard<'static, ()>>,
   }
 
   fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -3309,26 +3310,37 @@ mod tests {
   impl EnvGuard {
     fn new(key: &'static str, value: Option<&str>) -> Self {
       thread_local! {
-          static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static ENV_LOCK: RefCell<Option<std::sync::MutexGuard<'static, ()>>> = const { RefCell::new(None) };
+        static BASE_TOGGLES: RefCell<Option<Arc<crate::debug::runtime::RuntimeToggles>>> = const { RefCell::new(None) };
       }
 
-      let mut lock = None;
-      DEPTH.with(|depth| {
-        if depth.get() == 0 {
-          lock = Some(env_lock());
-        }
+      let outermost = DEPTH.with(|depth| {
+        let outermost = depth.get() == 0;
         depth.set(depth.get().saturating_add(1));
+        outermost
       });
+
+      if outermost {
+        ENV_LOCK.with(|cell| {
+          *cell.borrow_mut() = Some(env_lock());
+        });
+        BASE_TOGGLES.with(|cell| {
+          *cell.borrow_mut() = Some(crate::debug::runtime::runtime_toggles());
+        });
+      }
 
       let old = env::var(key).ok();
       match value {
         Some(v) => env::set_var(key, v),
         None => env::remove_var(key),
       }
+      crate::debug::runtime::update_runtime_toggles(Arc::new(
+        crate::debug::runtime::RuntimeToggles::from_env(),
+      ));
       EnvGuard {
         key,
         old,
-        _lock: lock,
       }
     }
   }
@@ -3336,18 +3348,36 @@ mod tests {
   impl Drop for EnvGuard {
     fn drop(&mut self) {
       thread_local! {
-          static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static ENV_LOCK: RefCell<Option<std::sync::MutexGuard<'static, ()>>> = const { RefCell::new(None) };
+        static BASE_TOGGLES: RefCell<Option<Arc<crate::debug::runtime::RuntimeToggles>>> = const { RefCell::new(None) };
       }
-
-      DEPTH.with(|depth| {
-        let current = depth.get();
-        depth.set(current.saturating_sub(1));
-      });
 
       if let Some(ref val) = self.old {
         env::set_var(self.key, val);
       } else {
         env::remove_var(self.key);
+      }
+
+      let last = DEPTH.with(|depth| {
+        let current = depth.get();
+        let next = current.saturating_sub(1);
+        depth.set(next);
+        next == 0
+      });
+
+      if last {
+        let base = BASE_TOGGLES.with(|cell| cell.borrow_mut().take());
+        if let Some(base) = base {
+          crate::debug::runtime::update_runtime_toggles(base);
+        }
+        ENV_LOCK.with(|cell| {
+          cell.borrow_mut().take();
+        });
+      } else {
+        crate::debug::runtime::update_runtime_toggles(Arc::new(
+          crate::debug::runtime::RuntimeToggles::from_env(),
+        ));
       }
     }
   }
