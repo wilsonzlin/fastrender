@@ -149,3 +149,11 @@ fn percent_decode(input: &str) -> Result<Vec<u8>> {
 
   Ok(out)
 }
+
+pub(crate) fn encode_base64_data_url(media_type: &str, data: &[u8]) -> String {
+  let mut url = String::from("data:");
+  url.push_str(media_type);
+  url.push_str(";base64,");
+  url.push_str(&base64::engine::general_purpose::STANDARD.encode(data));
+  url
+}
