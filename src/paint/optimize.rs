@@ -437,9 +437,13 @@ impl DisplayListOptimizer {
                 record.bounds,
                 record.transform_for_bounds,
               );
-              let keep = ctx_bounds
-                .map(|bounds| viewport.intersects(bounds))
-                .unwrap_or(true);
+              let keep = if record.item.mask.is_some() {
+                true
+              } else {
+                ctx_bounds
+                  .map(|bounds| viewport.intersects(bounds))
+                  .unwrap_or(true)
+              };
               if keep {
                 if let Some(parent) = context_stack.last_mut() {
                   if !parent.culling_disabled && clip_stack.iter().all(|c| !c.can_cull) {
@@ -894,18 +898,19 @@ pub fn optimize_with_stats(list: DisplayList, viewport: Rect) -> (DisplayList, O
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::paint::display_list::BorderRadii;
-  use crate::paint::display_list::ClipItem;
-  use crate::paint::display_list::ClipShape;
-  use crate::paint::display_list::OpacityItem;
-  use crate::paint::display_list::ResolvedFilter;
-  use crate::paint::display_list::StackingContextItem;
-  use crate::paint::display_list::Transform3D;
-  use crate::paint::display_list::TransformItem;
+  use crate::paint::display_list::{
+    BorderRadii, ClipItem, ClipShape, ImageData, MaskReferenceRects, OpacityItem, ResolvedFilter,
+    ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer, StackingContextItem, Transform3D,
+    TransformItem,
+  };
   use crate::paint::filter_outset::filter_outset;
   use crate::style::color::Rgba;
-  use crate::style::types::BackfaceVisibility;
-  use crate::style::types::TransformStyle;
+  use crate::style::types::{
+    BackfaceVisibility, BackgroundPosition, BackgroundPositionComponent, BackgroundRepeat,
+    BackgroundSize, BackgroundSizeComponent, MaskClip, MaskComposite, MaskMode, MaskOrigin,
+    TransformStyle,
+  };
+  use crate::style::values::Length;
   use std::f32::consts::FRAC_PI_4;
 
   fn make_fill_rect(x: f32, y: f32, w: f32, h: f32, color: Rgba) -> DisplayItem {
@@ -1153,6 +1158,63 @@ mod tests {
 
     let viewport = Rect::from_xywh(0.0, 0.0, 200.0, 200.0);
     let (optimized, _) = optimize_with_stats(list, viewport);
+
+    assert_eq!(optimized.len(), 2);
+  }
+
+  #[test]
+  fn stacking_context_with_mask_not_culled() {
+    let bounds = Rect::from_xywh(500.0, 500.0, 10.0, 10.0);
+    let layer = ResolvedMaskLayer {
+      image: ResolvedMaskImage::Raster(ImageData::new_pixels(1, 1, vec![255, 255, 255, 255])),
+      repeat: BackgroundRepeat::no_repeat(),
+      position: BackgroundPosition::Position {
+        x: BackgroundPositionComponent {
+          alignment: 0.0,
+          offset: Length::percent(0.0),
+        },
+        y: BackgroundPositionComponent {
+          alignment: 0.0,
+          offset: Length::percent(0.0),
+        },
+      },
+      size: BackgroundSize::Explicit(BackgroundSizeComponent::Auto, BackgroundSizeComponent::Auto),
+      origin: MaskOrigin::BorderBox,
+      clip: MaskClip::BorderBox,
+      mode: MaskMode::Alpha,
+      composite: MaskComposite::Add,
+    };
+    let mask = ResolvedMask {
+      layers: vec![layer],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects: MaskReferenceRects {
+        border: bounds,
+        padding: bounds,
+        content: bounds,
+      },
+    };
+
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds,
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters: Vec::new(),
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: Some(mask),
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    let viewport = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
+    let (optimized, _stats) = optimize_with_stats(list, viewport);
 
     assert_eq!(optimized.len(), 2);
   }

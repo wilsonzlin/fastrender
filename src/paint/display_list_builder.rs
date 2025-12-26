@@ -67,10 +67,14 @@ use crate::paint::display_list::ImageFilterQuality;
 use crate::paint::display_list::ImageItem;
 use crate::paint::display_list::LinearGradientItem;
 use crate::paint::display_list::ListMarkerItem;
+use crate::paint::display_list::MaskReferenceRects;
 use crate::paint::display_list::OpacityItem;
 use crate::paint::display_list::OutlineItem;
 use crate::paint::display_list::RadialGradientItem;
 use crate::paint::display_list::ResolvedFilter;
+use crate::paint::display_list::ResolvedMask;
+use crate::paint::display_list::ResolvedMaskImage;
+use crate::paint::display_list::ResolvedMaskLayer;
 use crate::paint::display_list::StackingContextItem;
 use crate::paint::display_list::StrokeRectItem;
 use crate::paint::display_list::StrokeRoundedRectItem;
@@ -103,6 +107,10 @@ use crate::style::types::BorderImageSource;
 use crate::style::types::ImageOrientation;
 use crate::style::types::ImageRendering;
 use crate::style::types::Isolation;
+use crate::style::types::MaskClip;
+use crate::style::types::MaskComposite;
+use crate::style::types::MaskMode;
+use crate::style::types::MaskOrigin;
 use crate::style::types::MixBlendMode;
 use crate::style::types::ObjectFit;
 use crate::style::types::ResolvedTextDecoration;
@@ -611,9 +619,7 @@ impl DisplayListBuilder {
     }
     let apply_opacity = root_opacity < 1.0 - f32::EPSILON;
     let paint_contained = root_style.map(|s| s.containment.paint).unwrap_or(false);
-    let mask_style = root_fragment
-      .and_then(|f| f.style.clone())
-      .filter(|s| s.mask_layers.iter().any(|layer| layer.image.is_some()));
+    let context_bounds = context.bounds.translate(offset);
     let root_fragment_offset = root_fragment
       .map(|fragment| {
         Point::new(
@@ -623,7 +629,7 @@ impl DisplayListBuilder {
       })
       .unwrap_or(offset);
     let layer6_items = context.layer6_items();
-    let context_bounds = context.bounds.translate(offset);
+    let mask = root_style.and_then(|style| self.resolve_mask(style, context_bounds));
 
     let mix_blend_mode = root_style
       .map(|s| Self::convert_blend_mode(s.mix_blend_mode))
@@ -726,7 +732,7 @@ impl DisplayListBuilder {
       || overflow_clip.is_some()
       || paint_contained
       || !radii.is_zero()
-      || mask_style.is_some();
+      || mask.is_some();
 
     let mut pushed_opacity = false;
     if apply_opacity {
@@ -781,7 +787,7 @@ impl DisplayListBuilder {
         filters,
         backdrop_filters,
         radii,
-        mask: mask_style,
+        mask,
       }));
 
     let mut pushed_clips = 0;
@@ -1064,6 +1070,64 @@ impl DisplayListBuilder {
       padding: padding_rect,
       content: content_rect,
     }
+  }
+
+  fn resolve_mask(&self, style: &ComputedStyle, context_bounds: Rect) -> Option<ResolvedMask> {
+    if !style.mask_layers.iter().any(|layer| layer.image.is_some()) {
+      return None;
+    }
+
+    let rects = Self::background_rects(context_bounds, style, self.viewport);
+    let rects = MaskReferenceRects {
+      border: rects.border,
+      padding: rects.padding,
+      content: rects.content,
+    };
+
+    let mut layers = Vec::new();
+    for layer in &style.mask_layers {
+      let Some(image) = &layer.image else { continue };
+      let resolved_image = match image {
+        BackgroundImage::LinearGradient { .. }
+        | BackgroundImage::RepeatingLinearGradient { .. }
+        | BackgroundImage::RadialGradient { .. }
+        | BackgroundImage::RepeatingRadialGradient { .. }
+        | BackgroundImage::ConicGradient { .. }
+        | BackgroundImage::RepeatingConicGradient { .. } => {
+          ResolvedMaskImage::Generated(Box::new(image.clone()))
+        }
+        BackgroundImage::Url(src) => {
+          let Some(image) = self.decode_image(src, Some(style), true) else {
+            continue;
+          };
+          ResolvedMaskImage::Raster(image)
+        }
+        BackgroundImage::None => continue,
+      };
+
+      layers.push(ResolvedMaskLayer {
+        image: resolved_image,
+        repeat: layer.repeat,
+        position: layer.position.clone(),
+        size: layer.size.clone(),
+        origin: layer.origin,
+        clip: layer.clip,
+        mode: layer.mode,
+        composite: layer.composite,
+      });
+    }
+
+    if layers.is_empty() {
+      return None;
+    }
+
+    Some(ResolvedMask {
+      layers,
+      color: style.color,
+      font_size: style.font_size,
+      root_font_size: style.root_font_size,
+      rects,
+    })
   }
 
   fn transform_reference_box(
@@ -4672,6 +4736,7 @@ mod tests {
   use crate::css::types::PropertyValue;
   use crate::css::types::Transform;
   use crate::image_loader::ImageCache;
+  use crate::paint::display_list::ResolvedMaskImage;
   use crate::paint::stacking::StackingContext;
   use crate::paint::stacking::StackingContextReason;
   use crate::style::color::Color;
@@ -5060,6 +5125,41 @@ mod tests {
       .collect();
 
     assert_eq!(origins, vec![0.0, 20.0, 40.0]);
+  }
+
+  #[test]
+  fn stacking_context_resolves_mask_images() {
+    let mut style = ComputedStyle::default();
+    let mut layer = crate::style::types::MaskLayer::default();
+    layer.image = Some(BackgroundImage::Url(data_url_for_color([0, 0, 0, 0])));
+    layer.repeat = BackgroundRepeat::no_repeat();
+    style.set_mask_layers(vec![layer]);
+
+    let fragment = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      vec![],
+      Arc::new(style),
+    );
+    let list =
+      DisplayListBuilder::with_image_cache(ImageCache::new()).build_with_stacking_tree(&fragment);
+
+    let push = list
+      .items()
+      .iter()
+      .find_map(|item| match item {
+        DisplayItem::PushStackingContext(ctx) => Some(ctx),
+        _ => None,
+      })
+      .expect("stacking context emitted");
+    let mask = push.mask.as_ref().expect("mask resolved");
+    assert_eq!(mask.layers.len(), 1);
+    match &mask.layers[0].image {
+      ResolvedMaskImage::Raster(image) => {
+        assert_eq!(image.width, 1);
+        assert_eq!(image.height, 1);
+      }
+      other => panic!("expected raster mask image, got {other:?}"),
+    }
   }
 
   #[test]
