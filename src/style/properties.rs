@@ -3841,11 +3841,14 @@ pub fn apply_declaration_with_base(
       };
       let prev_direction = styles.direction;
       let prev_unicode_bidi = styles.unicode_bidi;
+      // Custom properties are excluded from `all` per the cascade spec.
+      let prev_custom_properties = styles.custom_properties.clone();
       let next_order = styles.logical.next_order_value();
 
       *styles = source.clone();
       styles.direction = prev_direction;
       styles.unicode_bidi = prev_unicode_bidi;
+      styles.custom_properties = prev_custom_properties;
       styles.logical.reset();
       set_all_logical_orders(&mut styles.logical, order, next_order);
       return;
@@ -12413,6 +12416,90 @@ mod tests {
       16.0,
     );
     assert_eq!(style.text_wrap, TextWrap::Auto);
+  }
+
+  #[test]
+  fn custom_properties_survive_all_resets() {
+    let mut styles = ComputedStyle::default();
+
+    apply_declaration(
+      &mut styles,
+      &Declaration {
+        property: "--x".to_string(),
+        value: PropertyValue::Custom("10px".to_string()),
+        raw_value: "10px".to_string(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    apply_declaration(
+      &mut styles,
+      &Declaration {
+        property: "color".to_string(),
+        value: PropertyValue::Color(Color::Rgba(Rgba::RED)),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(styles.color, Rgba::RED);
+
+    apply_declaration(
+      &mut styles,
+      &Declaration {
+        property: "all".to_string(),
+        value: PropertyValue::Keyword("initial".to_string()),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(
+      styles.custom_properties.get("--x").map(String::as_str),
+      Some("10px")
+    );
+    assert_eq!(styles.color, Rgba::BLACK);
+
+    apply_declaration(
+      &mut styles,
+      &Declaration {
+        property: "color".to_string(),
+        value: PropertyValue::Color(Color::Rgba(Rgba::GREEN)),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+    assert_eq!(styles.color, Rgba::GREEN);
+
+    apply_declaration(
+      &mut styles,
+      &Declaration {
+        property: "all".to_string(),
+        value: PropertyValue::Keyword("unset".to_string()),
+        raw_value: String::new(),
+        important: false,
+      },
+      &ComputedStyle::default(),
+      16.0,
+      16.0,
+    );
+
+    assert_eq!(
+      styles.custom_properties.get("--x").map(String::as_str),
+      Some("10px")
+    );
+    assert_eq!(styles.color, Rgba::BLACK);
   }
 
   #[test]
