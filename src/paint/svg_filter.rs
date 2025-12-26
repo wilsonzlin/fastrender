@@ -72,8 +72,26 @@ impl SvgFilterRegion {
       SvgFilterUnits::ObjectBoundingBox => SvgCoordinateUnits::ObjectBoundingBox,
       SvgFilterUnits::UserSpaceOnUse => SvgCoordinateUnits::UserSpaceOnUse,
     };
-    let resolve_x = |len: SvgLength| bbox.min_x() + len.resolve(units, width_basis);
-    let resolve_y = |len: SvgLength| bbox.min_y() + len.resolve(units, height_basis);
+    let resolve_x = |len: SvgLength| {
+      let offset = match self.units {
+        SvgFilterUnits::ObjectBoundingBox => bbox.min_x(),
+        SvgFilterUnits::UserSpaceOnUse => match len {
+          SvgLength::Percent(_) => bbox.min_x(),
+          SvgLength::Number(_) => 0.0,
+        },
+      };
+      offset + len.resolve(units, width_basis)
+    };
+    let resolve_y = |len: SvgLength| {
+      let offset = match self.units {
+        SvgFilterUnits::ObjectBoundingBox => bbox.min_y(),
+        SvgFilterUnits::UserSpaceOnUse => match len {
+          SvgLength::Percent(_) => bbox.min_y(),
+          SvgLength::Number(_) => 0.0,
+        },
+      };
+      offset + len.resolve(units, height_basis)
+    };
     let resolve_width = |len: SvgLength| len.resolve(units, width_basis);
     let resolve_height = |len: SvgLength| len.resolve(units, height_basis);
 
