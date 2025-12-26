@@ -5344,9 +5344,17 @@ mod tests {
     style.overflow_y = Overflow::Hidden;
     style.background_color = Rgba::GREEN;
 
+    let mut child_style = ComputedStyle::default();
+    child_style.background_color = Rgba::RED;
+    let child = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 40.0, 40.0),
+      vec![],
+      Arc::new(child_style),
+    );
+
     let fragment = FragmentNode::new_block_styled(
       Rect::from_xywh(0.0, 0.0, 30.0, 30.0),
-      vec![],
+      vec![child],
       Arc::new(style),
     );
 
