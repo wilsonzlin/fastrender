@@ -825,11 +825,15 @@ fn snapshot_display_item(item_id: usize, item: &DisplayItem) -> DisplayItemSnaps
 }
 
 fn snapshot_radii(radii: crate::paint::display_list::BorderRadii) -> serde_json::Value {
+  fn snapshot_radius(radius: crate::paint::display_list::BorderRadius) -> serde_json::Value {
+    serde_json::json!({ "x": radius.x, "y": radius.y })
+  }
+
   serde_json::json!({
-    "top_left": radii.top_left,
-    "top_right": radii.top_right,
-    "bottom_right": radii.bottom_right,
-    "bottom_left": radii.bottom_left,
+    "top_left": snapshot_radius(radii.top_left),
+    "top_right": snapshot_radius(radii.top_right),
+    "bottom_right": snapshot_radius(radii.bottom_right),
+    "bottom_left": snapshot_radius(radii.bottom_left),
   })
 }
 
