@@ -1,4 +1,5 @@
 use fastrender::api::{FastRender, LayoutDocumentOptions, PageStacking};
+use fastrender::Rgba;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 
 fn pages<'a>(tree: &'a FragmentTree) -> Vec<&'a FragmentNode> {
@@ -19,6 +20,52 @@ fn find_text<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNod
     }
   }
   None
+}
+
+fn find_fragment_by_background<'a>(node: &'a FragmentNode, color: Rgba) -> Option<&'a FragmentNode> {
+  if node.content.is_block()
+    && node
+      .style
+      .as_ref()
+      .is_some_and(|style| style.background_color == color)
+  {
+    return Some(node);
+  }
+  for child in &node.children {
+    if let Some(found) = find_fragment_by_background(child, color) {
+      return Some(found);
+    }
+  }
+  None
+}
+
+fn assert_bounds_close(bounds: &fastrender::geometry::Rect, expected: (f32, f32, f32, f32)) {
+  let (x, y, width, height) = expected;
+  let epsilon = 0.01;
+  assert!(
+    (bounds.x() - x).abs() < epsilon,
+    "x mismatch: actual {}, expected {}",
+    bounds.x(),
+    x
+  );
+  assert!(
+    (bounds.y() - y).abs() < epsilon,
+    "y mismatch: actual {}, expected {}",
+    bounds.y(),
+    y
+  );
+  assert!(
+    (bounds.width() - width).abs() < epsilon,
+    "width mismatch: actual {}, expected {}",
+    bounds.width(),
+    width
+  );
+  assert!(
+    (bounds.height() - height).abs() < epsilon,
+    "height mismatch: actual {}, expected {}",
+    bounds.height(),
+    height
+  );
 }
 
 #[test]
@@ -210,6 +257,69 @@ fn margin_box_content_is_positioned_in_margins() {
 
   assert!(header.bounds.y() < content.bounds.y());
   assert!(footer.bounds.y() > content.bounds.y());
+}
+
+#[test]
+fn margin_box_bounds_cover_all_areas() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 10px;
+            @top-left-corner { background: rgb(255, 0, 0); }
+            @top-left { background: rgb(255, 32, 0); }
+            @top-center { background: rgb(255, 64, 0); }
+            @top-right { background: rgb(255, 96, 0); }
+            @top-right-corner { background: rgb(255, 128, 0); }
+            @right-top { background: rgb(255, 160, 0); }
+            @right-middle { background: rgb(255, 192, 0); }
+            @right-bottom { background: rgb(255, 224, 0); }
+            @bottom-right-corner { background: rgb(0, 255, 0); }
+            @bottom-right { background: rgb(0, 255, 32); }
+            @bottom-center { background: rgb(0, 255, 64); }
+            @bottom-left { background: rgb(0, 255, 96); }
+            @bottom-left-corner { background: rgb(0, 255, 128); }
+            @left-bottom { background: rgb(0, 0, 255); }
+            @left-middle { background: rgb(32, 0, 255); }
+            @left-top { background: rgb(64, 0, 255); }
+          }
+        </style>
+      </head>
+      <body></body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page = *pages(&tree).first().expect("at least one page");
+
+  let expectations = vec![
+    (Rgba::rgb(255, 0, 0), (0.0, 0.0, 10.0, 10.0)),
+    (Rgba::rgb(255, 32, 0), (10.0, 0.0, 60.0, 10.0)),
+    (Rgba::rgb(255, 64, 0), (70.0, 0.0, 60.0, 10.0)),
+    (Rgba::rgb(255, 96, 0), (130.0, 0.0, 60.0, 10.0)),
+    (Rgba::rgb(255, 128, 0), (190.0, 0.0, 10.0, 10.0)),
+    (Rgba::rgb(255, 160, 0), (190.0, 10.0, 10.0, 60.0)),
+    (Rgba::rgb(255, 192, 0), (190.0, 70.0, 10.0, 60.0)),
+    (Rgba::rgb(255, 224, 0), (190.0, 130.0, 10.0, 60.0)),
+    (Rgba::rgb(0, 255, 0), (190.0, 190.0, 10.0, 10.0)),
+    (Rgba::rgb(0, 255, 32), (130.0, 190.0, 60.0, 10.0)),
+    (Rgba::rgb(0, 255, 64), (70.0, 190.0, 60.0, 10.0)),
+    (Rgba::rgb(0, 255, 96), (10.0, 190.0, 60.0, 10.0)),
+    (Rgba::rgb(0, 255, 128), (0.0, 190.0, 10.0, 10.0)),
+    (Rgba::rgb(0, 0, 255), (0.0, 130.0, 10.0, 60.0)),
+    (Rgba::rgb(32, 0, 255), (0.0, 70.0, 10.0, 60.0)),
+    (Rgba::rgb(64, 0, 255), (0.0, 10.0, 10.0, 60.0)),
+  ];
+
+  for (color, expected_bounds) in expectations {
+    let fragment = find_fragment_by_background(page, color)
+      .unwrap_or_else(|| panic!("missing margin box for color {:?}", color));
+    assert_bounds_close(&fragment.bounds, expected_bounds);
+  }
 }
 
 #[test]

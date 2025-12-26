@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::css::types::CollectedPageRule;
+use crate::css::types::{CollectedPageRule, PageMarginArea};
 use crate::geometry::{Point, Rect, Size};
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
 use crate::layout::formatting_context::{
@@ -532,52 +532,99 @@ fn layout_for_style<'a>(
   Ok(cache.get(&key).expect("layout cache just populated"))
 }
 
-fn margin_box_bounds(
-  area: crate::css::types::PageMarginArea,
-  style: &ResolvedPageStyle,
-) -> Option<Rect> {
+fn margin_box_bounds(area: PageMarginArea, style: &ResolvedPageStyle) -> Option<Rect> {
   let trimmed_width = style.page_size.width - 2.0 * style.trim;
   let trimmed_height = style.page_size.height - 2.0 * style.trim;
   let origin_x = style.bleed + style.trim;
   let origin_y = style.bleed + style.trim;
+  let ml = style.margin_left;
+  let mr = style.margin_right;
+  let mt = style.margin_top;
+  let mb = style.margin_bottom;
+
+  let top_width = trimmed_width - ml - mr;
+  let side_height = trimmed_height - mt - mb;
+
+  let rect = |x: f32, y: f32, w: f32, h: f32| -> Option<Rect> {
+    if w <= 0.0 || h <= 0.0 {
+      None
+    } else {
+      Some(Rect::from_xywh(x, y, w, h))
+    }
+  };
 
   match area {
-    crate::css::types::PageMarginArea::TopLeft => Some(Rect::from_xywh(
+    PageMarginArea::TopLeftCorner => rect(origin_x, origin_y, ml, mt),
+    PageMarginArea::TopLeft => rect(origin_x + ml, origin_y, top_width / 3.0, mt),
+    PageMarginArea::TopCenter => rect(
+      origin_x + ml + top_width / 3.0,
+      origin_y,
+      top_width / 3.0,
+      mt,
+    ),
+    PageMarginArea::TopRight => rect(
+      origin_x + ml + 2.0 * top_width / 3.0,
+      origin_y,
+      top_width / 3.0,
+      mt,
+    ),
+    PageMarginArea::TopRightCorner => rect(origin_x + trimmed_width - mr, origin_y, mr, mt),
+    PageMarginArea::RightTop => rect(
+      origin_x + trimmed_width - mr,
+      origin_y + mt,
+      mr,
+      side_height / 3.0,
+    ),
+    PageMarginArea::RightMiddle => rect(
+      origin_x + trimmed_width - mr,
+      origin_y + mt + side_height / 3.0,
+      mr,
+      side_height / 3.0,
+    ),
+    PageMarginArea::RightBottom => rect(
+      origin_x + trimmed_width - mr,
+      origin_y + mt + 2.0 * side_height / 3.0,
+      mr,
+      side_height / 3.0,
+    ),
+    PageMarginArea::BottomRightCorner => rect(
+      origin_x + trimmed_width - mr,
+      origin_y + trimmed_height - mb,
+      mr,
+      mb,
+    ),
+    PageMarginArea::BottomRight => rect(
+      origin_x + ml + 2.0 * top_width / 3.0,
+      origin_y + trimmed_height - mb,
+      top_width / 3.0,
+      mb,
+    ),
+    PageMarginArea::BottomCenter => rect(
+      origin_x + ml + top_width / 3.0,
+      origin_y + trimmed_height - mb,
+      top_width / 3.0,
+      mb,
+    ),
+    PageMarginArea::BottomLeft => rect(
+      origin_x + ml,
+      origin_y + trimmed_height - mb,
+      top_width / 3.0,
+      mb,
+    ),
+    PageMarginArea::BottomLeftCorner => rect(origin_x, origin_y + trimmed_height - mb, ml, mb),
+    PageMarginArea::LeftBottom => rect(
       origin_x,
-      origin_y,
-      style.margin_left,
-      style.margin_top,
-    )),
-    crate::css::types::PageMarginArea::TopCenter => Some(Rect::from_xywh(
-      origin_x + style.margin_left,
-      origin_y,
-      trimmed_width - style.margin_left - style.margin_right,
-      style.margin_top,
-    )),
-    crate::css::types::PageMarginArea::TopRight => Some(Rect::from_xywh(
-      origin_x + trimmed_width - style.margin_right,
-      origin_y,
-      style.margin_right,
-      style.margin_top,
-    )),
-    crate::css::types::PageMarginArea::BottomLeft => Some(Rect::from_xywh(
+      origin_y + mt + 2.0 * side_height / 3.0,
+      ml,
+      side_height / 3.0,
+    ),
+    PageMarginArea::LeftMiddle => rect(
       origin_x,
-      origin_y + trimmed_height - style.margin_bottom,
-      style.margin_left,
-      style.margin_bottom,
-    )),
-    crate::css::types::PageMarginArea::BottomCenter => Some(Rect::from_xywh(
-      origin_x + style.margin_left,
-      origin_y + trimmed_height - style.margin_bottom,
-      trimmed_width - style.margin_left - style.margin_right,
-      style.margin_bottom,
-    )),
-    crate::css::types::PageMarginArea::BottomRight => Some(Rect::from_xywh(
-      origin_x + trimmed_width - style.margin_right,
-      origin_y + trimmed_height - style.margin_bottom,
-      style.margin_right,
-      style.margin_bottom,
-    )),
+      origin_y + mt + side_height / 3.0,
+      ml,
+      side_height / 3.0,
+    ),
+    PageMarginArea::LeftTop => rect(origin_x, origin_y + mt, ml, side_height / 3.0),
   }
 }
 

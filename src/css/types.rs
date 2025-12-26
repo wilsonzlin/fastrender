@@ -249,12 +249,22 @@ pub enum PagePseudoClass {
 /// Margin-box positions inside a page rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PageMarginArea {
+  TopLeftCorner,
   TopLeft,
   TopCenter,
   TopRight,
-  BottomLeft,
-  BottomCenter,
+  TopRightCorner,
+  RightTop,
+  RightMiddle,
+  RightBottom,
+  BottomRightCorner,
   BottomRight,
+  BottomCenter,
+  BottomLeft,
+  BottomLeftCorner,
+  LeftBottom,
+  LeftMiddle,
+  LeftTop,
 }
 
 /// Nested @top-*/@bottom-* declarations inside @page.
