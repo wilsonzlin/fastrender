@@ -71,7 +71,7 @@ pub fn parse_stylesheet(css: &str) -> Result<StyleSheet> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
 /// use fastrender::css::parser::parse_stylesheet_with_errors;
 ///
 /// let css = "p { color: red; } .invalid {{ } span { color: blue; }";

@@ -11,12 +11,15 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use fastrender::resource::{ResourceFetcher, HttpFetcher};
+//! ```rust,no_run
+//! # use fastrender::resource::{ResourceFetcher, HttpFetcher};
+//! # fn main() -> fastrender::Result<()> {
 //!
 //! let fetcher = HttpFetcher::new();
 //! let resource = fetcher.fetch("https://example.com/image.png")?;
 //! println!("Got {} bytes", resource.bytes.len());
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::error::{Error, ImageError, ResourceError, Result};
@@ -796,7 +799,7 @@ impl<T: ResourceFetcher + ?Sized> ResourceFetcher for Arc<T> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
 /// use fastrender::resource::HttpFetcher;
 /// use std::time::Duration;
 ///

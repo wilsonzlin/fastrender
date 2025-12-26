@@ -19,11 +19,11 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use fastrender::text::pipeline::{ShapingPipeline, Direction};
-//! use fastrender::text::FontContext;
-//! use fastrender::ComputedStyle;
-//!
+//! ```rust,no_run
+//! # use fastrender::text::pipeline::{Direction, ShapingPipeline};
+//! # use fastrender::text::FontContext;
+//! # use fastrender::ComputedStyle;
+//! # fn main() -> fastrender::Result<()> {
 //! let mut pipeline = ShapingPipeline::new();
 //! let font_context = FontContext::new();
 //! let style = ComputedStyle::default();
@@ -32,6 +32,8 @@
 //! for run in shaped_runs {
 //!     println!("Run: {} glyphs, {}px advance", run.glyphs.len(), run.advance);
 //! }
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Unicode Compliance

@@ -118,9 +118,9 @@
 //!
 //! # Quick Start
 //!
-//! ```rust,ignore
-//! use fastrender::FastRender;
-//!
+//! ```rust,no_run
+//! # use fastrender::FastRender;
+//! # fn main() -> fastrender::Result<()> {
 //! let html = r#"
 //!     <!DOCTYPE html>
 //!     <html>
@@ -139,6 +139,8 @@
 //! let mut renderer = FastRender::new()?;
 //! let pixmap = renderer.render_html(html, 800, 600)?;
 //! pixmap.save_png("output.png")?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Architecture

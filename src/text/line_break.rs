@@ -521,8 +521,9 @@ impl Default for Line {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use fastrender::text::{break_lines_greedy, GlyphPosition, BreakOpportunity};
+/// ```rust,no_run
+/// # use fastrender::text::{break_lines_greedy, BreakOpportunity, GlyphPosition};
+/// # fn main() -> fastrender::Result<()> {
 ///
 /// let glyphs = vec![
 ///     GlyphPosition {
@@ -549,6 +550,9 @@ impl Default for Line {
 /// ];
 ///
 /// let lines = break_lines_greedy(&glyphs, 100.0, &opportunities);
+/// assert_eq!(lines.len(), 1);
+/// # Ok(())
+/// # }
 /// ```
 pub fn break_lines_greedy(
   glyphs: &[GlyphPosition],

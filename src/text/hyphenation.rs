@@ -27,9 +27,9 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use fastrender::text::Hyphenator;
-//!
+//! ```rust,no_run
+//! # use fastrender::text::Hyphenator;
+//! # fn main() -> fastrender::Result<()> {
 //! // Create hyphenator for English
 //! let hyphenator = Hyphenator::new("en-us").unwrap();
 //!
@@ -37,6 +37,9 @@
 //! let points = hyphenator.hyphenate("hyphenation");
 //! // Returns positions where hyphens can be inserted: [2, 6, 8]
 //! // "hy-phen-a-tion"
+//! # assert_eq!(points, vec![2, 6, 8]);
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # CSS Properties

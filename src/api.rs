@@ -5,9 +5,9 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use fastrender::api::FastRender;
-//!
+//! ```rust,no_run
+//! # use fastrender::api::FastRender;
+//! # fn main() -> fastrender::Result<()> {
 //! // Create a new renderer
 //! let mut renderer = FastRender::new()?;
 //!
@@ -31,6 +31,8 @@
 //!
 //! // Save to PNG
 //! pixmap.save_png("output.png")?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Architecture
@@ -207,29 +209,38 @@ thread_local! {
 ///
 /// ## Basic rendering
 ///
-/// ```rust,ignore
-/// use fastrender::api::FastRender;
+/// ```rust,no_run
+/// # use fastrender::api::FastRender;
+/// # fn main() -> fastrender::Result<()> {
 ///
 /// let mut renderer = FastRender::new()?;
 /// let pixmap = renderer.render_html("<h1>Hello!</h1>", 800, 600)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// ## With builder pattern
 ///
-/// ```rust,ignore
-/// use fastrender::api::{FastRender, FastRenderConfig};
+/// ```rust,no_run
+/// # use fastrender::api::{FastRender, FastRenderConfig};
+/// # use fastrender::Rgba;
+/// # fn main() -> fastrender::Result<()> {
 ///
 /// let config = FastRenderConfig::new()
 ///     .with_default_background(Rgba::WHITE);
 ///
 /// let mut renderer = FastRender::with_config(config)?;
+/// let html = "<h1>Hello!</h1>";
 /// let pixmap = renderer.render_html(html, 1024, 768)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// ## Access to intermediate structures
 ///
-/// ```rust,ignore
-/// use fastrender::api::FastRender;
+/// ```rust,no_run
+/// # use fastrender::api::FastRender;
+/// # fn main() -> fastrender::Result<()> {
 ///
 /// let mut renderer = FastRender::new()?;
 ///
@@ -241,6 +252,8 @@ thread_local! {
 ///
 /// // Paint to pixmap
 /// let pixmap = renderer.paint(&fragment_tree, 800, 600)?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct FastRender {
   /// Font context for text shaping and measurement
@@ -322,7 +335,7 @@ impl std::fmt::Debug for FastRender {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust,no_run
 /// use fastrender::api::FastRenderConfig;
 /// use fastrender::Rgba;
 ///
@@ -410,13 +423,17 @@ impl FastRenderConfig {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
-/// use fastrender::FastRender;
+/// ```rust,no_run
+/// # use fastrender::{FastRender, Rgba};
+/// # fn main() -> fastrender::Result<()> {
 ///
 /// let mut renderer = FastRender::builder()
 ///     .viewport_size(1024, 768)
 ///     .background_color(Rgba::WHITE)
 ///     .build()?;
+/// let _ = renderer.render_html("<p>Example</p>", 640, 480)?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct FastRenderBuilder {
   config: FastRenderConfig,
@@ -1455,7 +1472,7 @@ impl FastRenderConfig {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
+  /// ```rust,no_run
   /// use fastrender::api::FastRenderConfig;
   /// use fastrender::Rgba;
   ///
@@ -1477,7 +1494,7 @@ impl FastRenderConfig {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
+  /// ```rust,no_run
   /// let config = FastRenderConfig::new()
   ///     .with_default_viewport(1920, 1080);
   /// ```
@@ -2305,10 +2322,13 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::api::FastRender;
+  /// ```rust,no_run
+  /// # use fastrender::api::FastRender;
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let mut renderer = FastRender::new()?;
+  /// # Ok(())
+  /// # }
   /// ```
   ///
   /// # Errors
@@ -2324,13 +2344,16 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::FastRender;
+  /// ```rust,no_run
+  /// # use fastrender::{FastRender, Rgba};
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let mut renderer = FastRender::builder()
   ///     .viewport_size(1024, 768)
   ///     .background_color(Rgba::WHITE)
   ///     .build()?;
+  /// # Ok(())
+  /// # }
   /// ```
   pub fn builder() -> FastRenderBuilder {
     FastRenderBuilder::new()
@@ -2348,15 +2371,18 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::api::{FastRender, FastRenderConfig};
-  /// use fastrender::Rgba;
+  /// ```rust,no_run
+  /// # use fastrender::api::{FastRender, FastRenderConfig};
+  /// # use fastrender::Rgba;
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let config = FastRenderConfig::new()
   ///     .with_default_background(Rgba::rgb(240, 240, 240))
   ///     .with_default_viewport(1024, 768);
   ///
   /// let mut renderer = FastRender::with_config(config)?;
+  /// # Ok(())
+  /// # }
   /// ```
   pub fn with_config(config: FastRenderConfig) -> Result<Self> {
     Self::with_config_and_fetcher(config, None)
@@ -2403,8 +2429,9 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::api::FastRender;
+  /// ```rust,no_run
+  /// # use fastrender::api::FastRender;
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let mut renderer = FastRender::new()?;
   ///
@@ -2424,6 +2451,8 @@ impl FastRender {
   ///
   /// let pixmap = renderer.render_html(html, 800, 600)?;
   /// pixmap.save_png("output.png")?;
+  /// # Ok(())
+  /// # }
   /// ```
   ///
   /// # Errors
@@ -3284,9 +3313,10 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::api::FastRender;
-  /// use fastrender::Rgba;
+  /// ```rust,no_run
+  /// # use fastrender::api::FastRender;
+  /// # use fastrender::Rgba;
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let mut renderer = FastRender::new()?;
   /// let pixmap = renderer.render_html_with_background(
@@ -3295,6 +3325,8 @@ impl FastRender {
   ///     600,
   ///     Rgba::rgb(240, 240, 240),
   /// )?;
+  /// # Ok(())
+  /// # }
   /// ```
   pub fn render_html_with_background(
     &mut self,
@@ -3839,14 +3871,17 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::api::FastRender;
+  /// ```rust,no_run
+  /// # use fastrender::api::FastRender;
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let renderer = FastRender::new()?;
   /// let dom = renderer.parse_html("<div>Hello</div>")?;
   ///
   /// // Inspect the DOM structure
   /// assert!(dom.children.len() > 0);
+  /// # Ok(())
+  /// # }
   /// ```
   pub fn parse_html(&self, html: &str) -> Result<DomNode> {
     dom::parse_html_with_options(
@@ -4166,8 +4201,9 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::api::FastRender;
+  /// ```rust,no_run
+  /// # use fastrender::api::FastRender;
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let mut renderer = FastRender::new()?;
   /// let dom = renderer.parse_html("<div>Content</div>")?;
@@ -4176,6 +4212,8 @@ impl FastRender {
   /// // Inspect layout results
   /// println!("Fragment count: {}", fragment_tree.fragment_count());
   /// println!("Viewport: {:?}", fragment_tree.viewport_size());
+  /// # Ok(())
+  /// # }
   /// ```
   ///
   /// When debugging, use [`inspect`](#method.inspect) to retrieve the styled and
@@ -4925,13 +4963,16 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::api::FastRender;
+  /// ```rust,no_run
+  /// # use fastrender::api::FastRender;
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let mut renderer = FastRender::new()?;
   /// let dom = renderer.parse_html("<div>Content</div>")?;
   /// let fragment_tree = renderer.layout_document(&dom, 800, 600)?;
   /// let pixmap = renderer.paint(&fragment_tree, 800, 600)?;
+  /// # Ok(())
+  /// # }
   /// ```
   pub fn paint(&self, fragment_tree: &FragmentTree, width: u32, height: u32) -> Result<Pixmap> {
     paint_tree_with_resources_scaled(
@@ -5881,13 +5922,16 @@ impl FastRender {
   ///
   /// # Examples
   ///
-  /// ```rust,ignore
-  /// use fastrender::FastRender;
-  /// use std::fs;
+  /// ```rust,no_run
+  /// # use fastrender::FastRender;
+  /// # use std::fs;
+  /// # fn main() -> fastrender::Result<()> {
   ///
   /// let mut renderer = FastRender::new()?;
   /// let png_bytes = renderer.render_to_png("<h1>Hello!</h1>", 800, 600)?;
   /// fs::write("output.png", &png_bytes)?;
+  /// # Ok(())
+  /// # }
   /// ```
   pub fn render_to_png(&mut self, html: &str, width: u32, height: u32) -> Result<Vec<u8>> {
     let pixmap = self.render_html(html, width, height)?;

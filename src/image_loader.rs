@@ -1094,14 +1094,17 @@ impl ProbeInFlight {
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// use fastrender::image_loader::ImageCache;
-/// use fastrender::resource::HttpFetcher;
-/// use std::sync::Arc;
+/// ```rust,no_run
+/// # use fastrender::image_loader::ImageCache;
+/// # use fastrender::resource::HttpFetcher;
+/// # use std::sync::Arc;
+/// # fn main() -> fastrender::Result<()> {
 ///
 /// let fetcher = Arc::new(HttpFetcher::new());
 /// let cache = ImageCache::with_fetcher(fetcher);
 /// let image = cache.load("https://example.com/image.png")?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct ImageCache {
   /// In-memory cache of decoded images (keyed by resolved URL)

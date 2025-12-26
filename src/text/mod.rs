@@ -36,9 +36,9 @@
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use fastrender::text::{FontContext, FallbackChain, GenericFamily};
-//!
+//! ```rust,no_run
+//! # use fastrender::text::{FallbackChain, FontContext, FontDatabase, GenericFamily};
+//! # fn main() -> fastrender::Result<()> {
 //! // Create font context (loads system fonts)
 //! let ctx = FontContext::new();
 //!
@@ -57,6 +57,8 @@
 //! if let Some(font_id) = chain.resolve('A', &db) {
 //!     println!("Found font for 'A'");
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 // ============================================================================
