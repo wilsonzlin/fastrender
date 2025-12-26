@@ -77,6 +77,10 @@ harness = false
 name = "bench_compare"
 path = "tools/bench_compare.rs"
 
+[[bench]]
+name = "selector_bloom_bench"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true

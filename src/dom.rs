@@ -25,6 +25,9 @@ use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ptr;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 use std::thread_local;
 use unicode_bidi::bidi_class;
 
@@ -122,6 +125,26 @@ pub(crate) fn with_target_fragment<R, F: FnOnce() -> R>(target: Option<&str>, f:
 
 fn current_target_fragment() -> Option<String> {
   TARGET_FRAGMENT.with(|slot| slot.borrow().clone())
+}
+
+static SELECTOR_BLOOM_ENV_INITIALIZED: OnceLock<()> = OnceLock::new();
+static SELECTOR_BLOOM_ENABLED: AtomicBool = AtomicBool::new(true);
+
+fn selector_bloom_enabled() -> bool {
+  SELECTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| {
+    if let Ok(value) = std::env::var("FASTR_SELECTOR_BLOOM") {
+      if value.trim() == "0" {
+        SELECTOR_BLOOM_ENABLED.store(false, Ordering::Relaxed);
+      }
+    }
+  });
+  SELECTOR_BLOOM_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Toggle selector bloom-filter insertion for benchmarking/testing.
+pub fn set_selector_bloom_enabled(enabled: bool) {
+  SELECTOR_BLOOM_ENV_INITIALIZED.get_or_init(|| ());
+  SELECTOR_BLOOM_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 /// Resolve the first-strong direction within this subtree, skipping script/style contents.
@@ -2114,9 +2137,58 @@ impl<'a> Element for ElementRef<'a> {
 
   fn add_element_unique_hashes(
     &self,
-    _filter: &mut selectors::bloom::CountingBloomFilter<selectors::bloom::BloomStorageU8>,
+    filter: &mut selectors::bloom::CountingBloomFilter<selectors::bloom::BloomStorageU8>,
   ) -> bool {
-    // We don't use bloom filters for optimization
+    use selectors::bloom;
+
+    if !selector_bloom_enabled() {
+      return true;
+    }
+
+    let mut insert = |value: &str| {
+      use std::collections::hash_map::DefaultHasher;
+      use std::hash::{Hash, Hasher};
+
+      let mut hasher = DefaultHasher::new();
+      value.hash(&mut hasher);
+      let hash = (hasher.finish() as u32) & bloom::BLOOM_HASH_MASK;
+      filter.insert_hash(hash);
+    };
+
+    if let Some(tag) = self.node.tag_name() {
+      let is_html = self.is_html_element();
+      let tag_key = if is_html {
+        tag.to_ascii_lowercase()
+      } else {
+        tag.to_string()
+      };
+      insert(&tag_key);
+      if is_html && tag != tag_key {
+        insert(tag);
+      }
+    }
+
+    if let Some(id) = self.node.get_attribute_ref("id") {
+      insert(id);
+    }
+
+    if let Some(class_attr) = self.node.get_attribute_ref("class") {
+      for class in class_attr.split_whitespace() {
+        if !class.is_empty() {
+          insert(class);
+        }
+      }
+    }
+
+    // Attribute presence hashes to allow pruning on [attr] selectors.
+    for (name, _) in self.node.attributes_iter() {
+      insert(name);
+      let lower = name.to_ascii_lowercase();
+      if lower != name {
+        insert(&lower);
+      }
+    }
+
     true
   }
 }

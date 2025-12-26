@@ -46,6 +46,7 @@ These are emitted by the paint pipeline:
 - `FASTR_TRACE_OUT=/path/to/trace.json` – emit Chrome trace events for parse/style/layout/paint.
 - `FASTR_DISABLE_LAYOUT_CACHE=1` / `FASTR_DISABLE_FLEX_CACHE=1` – disable layout/flex caches.
 - `FASTR_IMAGE_PROFILE_MS=<ms>` / `FASTR_STACK_PROFILE_MS=<ms>` / `FASTR_TEXT_PROFILE_MS=<ms>` / `FASTR_CMD_PROFILE_MS=<ms>` – emit timing when operations exceed the threshold.
+- `FASTR_SELECTOR_BLOOM=0` – disable selector bloom-filter hashing (useful for perf A/B checks).
 
 ## Parallelism tuning
 
