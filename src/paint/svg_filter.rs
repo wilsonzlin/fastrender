@@ -1983,11 +1983,18 @@ fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> 
 
 fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> Pixmap {
   let mut out = Pixmap::new(input.width(), input.height()).unwrap();
-  let x = dx.round() as i32;
-  let y = dy.round() as i32;
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-  out.draw_pixmap(x, y, input.as_ref(), &paint, Transform::identity(), None);
+  paint.quality = FilterQuality::Bilinear;
+  // Offsets are already expressed in the filter primitive coordinate system (primitiveUnits).
+  out.draw_pixmap(
+    0,
+    0,
+    input.as_ref(),
+    &paint,
+    Transform::from_translate(dx, dy),
+    None,
+  );
   out
 }
 
@@ -2141,12 +2148,14 @@ fn drop_shadow_pixmap(
   let mut out = Pixmap::new(input.pixmap.width(), input.pixmap.height()).unwrap();
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
+  paint.quality = FilterQuality::Bilinear;
+  // dx/dy are resolved before this step; apply them as a fractional translation.
   out.draw_pixmap(
-    dx.round() as i32,
-    dy.round() as i32,
+    0,
+    0,
     shadow.as_ref(),
     &paint,
-    Transform::identity(),
+    Transform::from_translate(dx, dy),
     None,
   );
   out.draw_pixmap(
