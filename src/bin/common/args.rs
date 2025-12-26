@@ -1,4 +1,48 @@
-use clap::Args;
+use clap::{Args, ValueEnum};
+use fastrender::image_output::OutputFormat;
+use fastrender::style::media::MediaType;
+
+#[derive(Debug, Clone, Args)]
+pub struct ViewportArgs {
+  /// Viewport size as WxH (e.g., 1200x800)
+  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
+  pub viewport: (u32, u32),
+
+  /// Device pixel ratio for media queries/srcset
+  #[arg(long, default_value = "1.0")]
+  pub dpr: f32,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum MediaTypeArg {
+  Screen,
+  Print,
+}
+
+impl MediaTypeArg {
+  pub fn as_media_type(self) -> MediaType {
+    match self {
+      MediaTypeArg::Screen => MediaType::Screen,
+      MediaTypeArg::Print => MediaType::Print,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct MediaArgs {
+  /// Media type for evaluating media queries
+  #[arg(long, value_enum, default_value_t = MediaTypeArg::Screen)]
+  pub media: MediaTypeArg,
+
+  #[command(flatten)]
+  pub prefs: MediaPreferenceArgs,
+}
+
+impl MediaArgs {
+  pub fn media_type(&self) -> MediaType {
+    self.media.as_media_type()
+  }
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct MediaPreferenceArgs {
@@ -21,6 +65,74 @@ pub struct MediaPreferenceArgs {
   /// Color scheme preference (light|dark|no-preference)
   #[arg(long, value_parser = parse_color_scheme)]
   pub prefers_color_scheme: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum OutputFormatArg {
+  Png,
+  Jpeg,
+  Webp,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OutputFormatArgs {
+  /// Output format for encoded images
+  #[arg(long, value_enum, default_value_t = OutputFormatArg::Png)]
+  pub format: OutputFormatArg,
+
+  /// Encoding quality for JPEG/WebP (0-100)
+  #[arg(long, default_value = "90", value_parser = parse_quality)]
+  pub quality: u8,
+}
+
+impl OutputFormatArgs {
+  pub fn output_format(&self) -> OutputFormat {
+    match self.format {
+      OutputFormatArg::Png => OutputFormat::Png,
+      OutputFormatArg::Jpeg => OutputFormat::Jpeg(self.quality),
+      OutputFormatArg::Webp => OutputFormat::WebP(self.quality),
+    }
+  }
+
+  pub fn extension(&self) -> &'static str {
+    match self.format {
+      OutputFormatArg::Png => "png",
+      OutputFormatArg::Jpeg => "jpeg",
+      OutputFormatArg::Webp => "webp",
+    }
+  }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BaseUrlArgs {
+  /// Override the base URL used to resolve relative links
+  #[arg(long)]
+  pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AllowPartialArgs {
+  /// Return placeholder output when the document fetch fails
+  #[arg(long)]
+  pub allow_partial: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct TimeoutArgs {
+  /// Timeout in seconds (0 = no timeout)
+  #[arg(long)]
+  pub timeout: Option<u64>,
+}
+
+impl TimeoutArgs {
+  pub fn seconds(&self, default: Option<u64>) -> Option<u64> {
+    let value = self.timeout.or(default)?;
+    if value == 0 {
+      None
+    } else {
+      Some(value)
+    }
+  }
 }
 
 pub fn parse_viewport(s: &str) -> Result<(u32, u32), String> {
@@ -89,6 +201,17 @@ pub fn parse_shard(s: &str) -> Result<(usize, usize), String> {
   Ok((index, total))
 }
 
+fn parse_quality(s: &str) -> Result<u8, String> {
+  let value: u8 = s
+    .trim()
+    .parse()
+    .map_err(|_| "quality must be an integer 0-100".to_string())?;
+  if value > 100 {
+    return Err("quality must be between 0 and 100".to_string());
+  }
+  Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -136,5 +259,36 @@ mod tests {
     assert!(parse_shard("4/4").is_err());
     assert!(parse_shard("1/x").is_err());
     assert!(parse_shard("1").is_err());
+  }
+
+  #[test]
+  fn parse_quality_values() {
+    assert_eq!(parse_quality("0"), Ok(0));
+    assert_eq!(parse_quality("80"), Ok(80));
+    assert!(parse_quality("101").is_err());
+  }
+
+  #[test]
+  fn output_format_args_maps_to_format() {
+    let png = OutputFormatArgs {
+      format: OutputFormatArg::Png,
+      quality: 0,
+    };
+    assert_eq!(png.extension(), "png");
+    assert_eq!(png.output_format(), OutputFormat::Png);
+
+    let jpeg = OutputFormatArgs {
+      format: OutputFormatArg::Jpeg,
+      quality: 75,
+    };
+    assert_eq!(jpeg.extension(), "jpeg");
+    assert_eq!(jpeg.output_format(), OutputFormat::Jpeg(75));
+
+    let webp = OutputFormatArgs {
+      format: OutputFormatArg::Webp,
+      quality: 50,
+    };
+    assert_eq!(webp.extension(), "webp");
+    assert_eq!(webp.output_format(), OutputFormat::WebP(50));
   }
 }

@@ -16,8 +16,8 @@ fn help_mentions_default_output_and_dirs() {
     String::from_utf8_lossy(&output.stderr)
   };
   assert!(
-    help.contains("<url>.png"),
-    "help should mention default output naming (derived from URL); got:\n{}",
+    help.contains("<url>.<format>"),
+    "help should mention default output naming (derived from URL and format); got:\n{}",
     help
   );
   assert!(

@@ -10,7 +10,7 @@ use clap::{Parser, ValueEnum};
 use common::render_pipeline::{
   build_render_configs, build_renderer_with_fetcher, follow_client_redirects,
   format_error_with_chain, log_diagnostics, read_cached_document, render_document_with_artifacts,
-  RenderConfigBundle,
+  RenderConfigBundle, RenderSurface,
 };
 use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::debug::runtime::RuntimeToggles;
@@ -27,6 +27,7 @@ use fastrender::resource::ResourceFetcher;
 use fastrender::resource::DEFAULT_ACCEPT_LANGUAGE;
 use fastrender::resource::DEFAULT_USER_AGENT;
 use fastrender::style::cascade::StyledNode;
+use fastrender::style::media::MediaType;
 use fastrender::tree::box_tree::{BoxNode, BoxType};
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode};
 use fastrender::OutputFormat;
@@ -374,17 +375,20 @@ fn main() {
   ));
 
   let (viewport_w, viewport_h) = args.viewport;
-  let RenderConfigBundle { config, options } = build_render_configs(
-    args.viewport,
-    args.scroll_x,
-    args.scroll_y,
-    args.dpr,
-    args.css_limit,
-    true,
-    args.allow_file_from_http,
-    args.block_mixed_content,
-    None,
-  );
+  let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
+    viewport: args.viewport,
+    scroll_x: args.scroll_x,
+    scroll_y: args.scroll_y,
+    dpr: args.dpr,
+    media_type: MediaType::Screen,
+    css_limit: args.css_limit,
+    allow_partial: false,
+    apply_meta_viewport: true,
+    base_url: None,
+    allow_file_from_http: args.allow_file_from_http,
+    block_mixed_content: args.block_mixed_content,
+    trace_output: None,
+  });
 
   println!(
     "Rendering {} pages ({} parallel)...",

@@ -5,7 +5,7 @@
 mod common;
 
 use clap::Parser;
-use common::args::parse_shard;
+use common::args::{parse_shard, TimeoutArgs};
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::extract_js_location_redirect;
 use fastrender::html::meta_refresh::extract_meta_refresh_url;
@@ -42,9 +42,8 @@ struct Args {
   #[arg(long, short, default_value_t = num_cpus::get())]
   jobs: usize,
 
-  /// Per-request timeout in seconds
-  #[arg(long, default_value = "30")]
-  timeout: u64,
+  #[command(flatten)]
+  timeout: TimeoutArgs,
 
   /// Fetch only listed pages (comma-separated URLs or stems)
   #[arg(long, value_delimiter = ',')]
@@ -397,13 +396,14 @@ fn main() {
     }
   }
 
-  let timeout = Duration::from_secs(args.timeout);
+  let timeout_secs = args.timeout.seconds(Some(30)).unwrap_or(0);
+  let timeout = Duration::from_secs(timeout_secs);
 
   println!(
     "Fetching {} pages ({} parallel, {}s timeout)...",
     selected.len(),
     args.jobs,
-    args.timeout
+    timeout_secs
   );
   println!("User-Agent: {}", args.user_agent);
   println!("Accept-Language: {}", args.accept_language);

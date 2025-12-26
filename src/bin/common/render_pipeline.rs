@@ -8,6 +8,7 @@ use fastrender::css::loader::{infer_base_url, resolve_href};
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
 use fastrender::resource::{parse_cached_html_meta, FetchedResource, HttpFetcher, ResourceFetcher};
+use fastrender::style::media::MediaType;
 use fastrender::{Error, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,31 +21,43 @@ pub struct RenderConfigBundle {
   pub options: RenderOptions,
 }
 
+/// Shared render surface options parsed from CLI flags.
+#[derive(Debug, Clone)]
+pub struct RenderSurface {
+  pub viewport: (u32, u32),
+  pub scroll_x: f32,
+  pub scroll_y: f32,
+  pub dpr: f32,
+  pub media_type: MediaType,
+  pub css_limit: Option<usize>,
+  pub allow_partial: bool,
+  pub apply_meta_viewport: bool,
+  pub base_url: Option<String>,
+  pub allow_file_from_http: bool,
+  pub block_mixed_content: bool,
+  pub trace_output: Option<PathBuf>,
+}
+
 /// Construct render configuration objects from CLI settings.
-pub fn build_render_configs(
-  viewport: (u32, u32),
-  scroll_x: f32,
-  scroll_y: f32,
-  dpr: f32,
-  css_limit: Option<usize>,
-  apply_meta_viewport: bool,
-  allow_file_from_http: bool,
-  block_mixed_content: bool,
-  trace_output: Option<PathBuf>,
-) -> RenderConfigBundle {
-  let config = FastRenderConfig::new()
-    .with_default_viewport(viewport.0, viewport.1)
-    .with_device_pixel_ratio(dpr)
-    .with_meta_viewport(apply_meta_viewport)
-    .with_allow_file_from_http(allow_file_from_http)
-    .with_block_mixed_content(block_mixed_content);
+pub fn build_render_configs(surface: &RenderSurface) -> RenderConfigBundle {
+  let mut config = FastRenderConfig::new()
+    .with_default_viewport(surface.viewport.0, surface.viewport.1)
+    .with_device_pixel_ratio(surface.dpr)
+    .with_meta_viewport(surface.apply_meta_viewport)
+    .with_allow_file_from_http(surface.allow_file_from_http)
+    .with_block_mixed_content(surface.block_mixed_content);
+  if let Some(base_url) = &surface.base_url {
+    config = config.with_base_url(base_url.clone());
+  }
 
   let mut options = RenderOptions::new()
-    .with_viewport(viewport.0, viewport.1)
-    .with_device_pixel_ratio(dpr)
-    .with_scroll(scroll_x, scroll_y)
-    .with_stylesheet_limit(css_limit);
-  options.trace_output = trace_output;
+    .with_viewport(surface.viewport.0, surface.viewport.1)
+    .with_device_pixel_ratio(surface.dpr)
+    .with_media_type(surface.media_type)
+    .with_scroll(surface.scroll_x, surface.scroll_y)
+    .with_stylesheet_limit(surface.css_limit)
+    .allow_partial(surface.allow_partial);
+  options.trace_output = surface.trace_output.clone();
 
   RenderConfigBundle { config, options }
 }
@@ -80,6 +93,14 @@ impl PreparedDocument {
       base_hint,
       base_url,
     }
+  }
+
+  pub fn with_base_override(mut self, base_url: Option<&str>) -> Self {
+    if let Some(base_url) = base_url {
+      self.base_hint = base_url.to_string();
+      self.base_url = infer_base_url(&self.html, &self.base_hint).into_owned();
+    }
+    self
   }
 }
 

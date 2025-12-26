@@ -57,3 +57,27 @@ fn output_parent_directories_are_created() {
   );
   assert!(nested.exists(), "nested output file should be created");
 }
+
+#[test]
+fn format_flag_changes_default_extension() {
+  let tmp = tempfile::TempDir::new().expect("tempdir");
+  let (url, _) = write_simple_html(&tmp);
+  let expected_output = tmp.path().join(format!("{}.webp", url_to_filename(&url)));
+
+  let status = Command::new(env!("CARGO_BIN_EXE_fetch_and_render"))
+    .arg("--format")
+    .arg("webp")
+    .arg(&url)
+    .current_dir(tmp.path())
+    .status()
+    .expect("run fetch_and_render");
+
+  assert!(
+    status.success(),
+    "fetch_and_render should succeed when overriding format"
+  );
+  assert!(
+    expected_output.exists(),
+    "default output should follow requested format extension"
+  );
+}

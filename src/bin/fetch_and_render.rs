@@ -11,10 +11,14 @@
 mod common;
 
 use clap::Parser;
+use common::args::{
+  AllowPartialArgs, BaseUrlArgs, MediaArgs, OutputFormatArgs, TimeoutArgs, ViewportArgs,
+};
+use common::media_prefs::MediaPreferences;
 use common::render_pipeline::{
   build_http_fetcher, build_render_configs, build_renderer_with_fetcher, decode_html_resource,
   follow_client_redirects, format_error_with_chain, log_diagnostics, read_cached_document,
-  render_document, RenderConfigBundle,
+  render_document, RenderConfigBundle, RenderSurface,
 };
 use fastrender::image_output::encode_image;
 use fastrender::resource::normalize_user_agent_for_log;
@@ -47,7 +51,7 @@ struct Args {
   /// URL to fetch and render
   url: String,
 
-  /// Output file path (defaults to <url>.png); parent directories are created automatically
+  /// Output file path (defaults to <url>.<format>); parent directories are created automatically
   output: Option<String>,
 
   /// Viewport width (deprecated, use --viewport)
@@ -66,13 +70,11 @@ struct Args {
   #[arg(hide = true)]
   scroll_y_pos: Option<u32>,
 
-  /// Per-page timeout in seconds (0 = no timeout)
-  #[arg(long, default_value = "0")]
-  timeout: u64,
+  #[command(flatten)]
+  timeout: TimeoutArgs,
 
-  /// Viewport size as WxH (e.g., 1200x800)
-  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
-  viewport: (u32, u32),
+  #[command(flatten)]
+  surface: ViewportArgs,
 
   /// Horizontal scroll offset in CSS px
   #[arg(long, default_value = "0")]
@@ -82,29 +84,17 @@ struct Args {
   #[arg(long, default_value = "0")]
   scroll_y: u32,
 
-  /// Device pixel ratio for media queries/srcset
-  #[arg(long, default_value = "1.0")]
-  dpr: f32,
+  #[command(flatten)]
+  media: MediaArgs,
 
-  /// Reduced transparency preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_transparency: Option<bool>,
+  #[command(flatten)]
+  output_format: OutputFormatArgs,
 
-  /// Reduced motion preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_motion: Option<bool>,
+  #[command(flatten)]
+  base_url: BaseUrlArgs,
 
-  /// Reduced data preference (reduce|no-preference)
-  #[arg(long, value_parser = parse_bool_preference)]
-  prefers_reduced_data: Option<bool>,
-
-  /// Contrast preference (more|high|less|low|custom|forced|no-preference)
-  #[arg(long, value_parser = parse_contrast)]
-  prefers_contrast: Option<String>,
-
-  /// Color scheme preference (light|dark|no-preference)
-  #[arg(long, value_parser = parse_color_scheme)]
-  prefers_color_scheme: Option<String>,
+  #[command(flatten)]
+  allow_partial: AllowPartialArgs,
 
   /// Expand render target to full content size
   #[arg(long)]
@@ -143,90 +133,6 @@ struct Args {
   verbose: bool,
 }
 
-fn parse_viewport(s: &str) -> std::result::Result<(u32, u32), String> {
-  let parts: Vec<&str> = s.split('x').collect();
-  if parts.len() != 2 {
-    return Err("viewport must be WxH (e.g., 1200x800)".to_string());
-  }
-  let w = parts[0].parse::<u32>().map_err(|_| "invalid width")?;
-  let h = parts[1].parse::<u32>().map_err(|_| "invalid height")?;
-  if w == 0 || h == 0 {
-    return Err("width and height must be > 0".to_string());
-  }
-  Ok((w, h))
-}
-
-fn parse_bool_preference(s: &str) -> std::result::Result<bool, String> {
-  let v = s.trim().to_ascii_lowercase();
-  if matches!(
-    v.as_str(),
-    "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-  ) {
-    return Ok(true);
-  }
-  if matches!(
-    v.as_str(),
-    "0" | "false" | "no" | "off" | "none" | "no-preference"
-  ) {
-    return Ok(false);
-  }
-  Err(format!("invalid value: {s}"))
-}
-
-fn parse_contrast(s: &str) -> std::result::Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "more" | "high" | "less" | "low" | "custom" | "forced" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid contrast value: {s}")),
-  }
-}
-
-fn parse_color_scheme(s: &str) -> std::result::Result<String, String> {
-  let v = s.trim().to_ascii_lowercase();
-  match v.as_str() {
-    "light" | "dark" | "no-preference" => Ok(v),
-    _ => Err(format!("invalid color scheme: {s}")),
-  }
-}
-fn set_media_environment(args: &Args) {
-  if let Some(reduce) = args.prefers_reduced_transparency {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_TRANSPARENCY",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(reduce) = args.prefers_reduced_motion {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_MOTION",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(reduce) = args.prefers_reduced_data {
-    std::env::set_var(
-      "FASTR_PREFERS_REDUCED_DATA",
-      if reduce { "reduce" } else { "no-preference" },
-    );
-  }
-
-  if let Some(contrast) = args.prefers_contrast.clone() {
-    std::env::set_var("FASTR_PREFERS_CONTRAST", contrast);
-  }
-
-  if let Some(color_scheme) = args.prefers_color_scheme.clone() {
-    std::env::set_var("FASTR_PREFERS_COLOR_SCHEME", color_scheme);
-  }
-
-  if args.full_page {
-    std::env::set_var("FASTR_FULL_PAGE", "1");
-  }
-
-  if args.timings {
-    std::env::set_var("FASTR_RENDER_TIMINGS", "1");
-  }
-}
-
 fn render_page(
   url: &str,
   output: &Path,
@@ -234,6 +140,8 @@ fn render_page(
   bundle: RenderConfigBundle,
   user_agent: &str,
   accept_language: &str,
+  output_format: OutputFormat,
+  base_url_override: Option<String>,
 ) -> Result<()> {
   let http = build_http_fetcher(user_agent, accept_language, timeout_secs);
   #[cfg(feature = "disk_cache")]
@@ -255,31 +163,41 @@ fn render_page(
     let doc = decode_html_resource(&resource, &base_hint);
     follow_client_redirects(fetcher.as_ref(), doc, &mut log)
   };
+  let prepared = prepared.with_base_override(base_url_override.as_deref());
 
   let render_result = render_document(&mut renderer, prepared, &bundle.options)?;
   log_diagnostics(&render_result.diagnostics, &mut log);
 
-  let png_data = encode_image(&render_result.pixmap, OutputFormat::Png)?;
-  std::fs::write(output, &png_data)?;
+  let image_data = encode_image(&render_result.pixmap, output_format)?;
+  std::fs::write(output, &image_data)?;
 
   println!("✓ Successfully rendered {url} to {}", output.display());
-  println!("  Image size: {} bytes", png_data.len());
+  println!("  Image size: {} bytes", image_data.len());
   Ok(())
 }
 
 fn try_main(args: Args) -> Result<()> {
-  set_media_environment(&args);
+  let media_prefs = MediaPreferences::from(&args.media.prefs);
+  media_prefs.apply_env();
+  if args.full_page {
+    std::env::set_var("FASTR_FULL_PAGE", "1");
+  }
+  if args.timings {
+    std::env::set_var("FASTR_RENDER_TIMINGS", "1");
+  }
 
   // Resolve dimensions from viewport or deprecated positional args
-  let (viewport_w, viewport_h) = args.viewport;
+  let (viewport_w, viewport_h) = args.surface.viewport;
   let width = args.width.unwrap_or(viewport_w);
   let height = args.height.unwrap_or(viewport_h);
   let scroll_x = args.scroll_x_pos.unwrap_or(args.scroll_x) as f32;
   let scroll_y = args.scroll_y_pos.unwrap_or(args.scroll_y) as f32;
 
+  let output_ext = args.output_format.extension();
+  let output_format = args.output_format.output_format();
   let output = args
     .output
-    .unwrap_or_else(|| format!("{}.png", url_to_filename(&args.url)));
+    .unwrap_or_else(|| format!("{}.{}", url_to_filename(&args.url), output_ext));
 
   let output_path = Path::new(&output);
   if let Some(parent) = output_path.parent() {
@@ -288,41 +206,43 @@ fn try_main(args: Args) -> Result<()> {
     }
   }
 
-  let timeout_secs = if args.timeout == 0 {
-    None
-  } else {
-    Some(args.timeout)
-  };
+  let timeout_secs = args.timeout.seconds(Some(0));
 
   eprintln!(
-    "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {}",
+    "User-Agent: {}\nAccept-Language: {}\nViewport: {}x{} @{}x, scroll ({}, {})\nOutput: {} ({})",
     normalize_user_agent_for_log(&args.user_agent),
     args.accept_language,
     width,
     height,
-    args.dpr,
+    args.surface.dpr,
     scroll_x,
     scroll_y,
-    output
+    output,
+    output_ext
   );
 
-  let RenderConfigBundle { config, options } = build_render_configs(
-    (width, height),
+  let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
+    viewport: (width, height),
     scroll_x,
     scroll_y,
-    args.dpr,
-    args.css_limit,
-    true,
-    args.allow_file_from_http,
-    args.block_mixed_content,
-    args.trace_out.clone(),
-  );
+    dpr: args.surface.dpr,
+    media_type: args.media.media_type(),
+    css_limit: args.css_limit,
+    allow_partial: args.allow_partial.allow_partial,
+    apply_meta_viewport: true,
+    base_url: args.base_url.base_url.clone(),
+    allow_file_from_http: args.allow_file_from_http,
+    block_mixed_content: args.block_mixed_content,
+    trace_output: args.trace_out.clone(),
+  });
 
   let (tx, rx) = channel();
   let url_clone = args.url.clone();
   let output_path = output_path.to_path_buf();
   let user_agent = args.user_agent.clone();
   let accept_language = args.accept_language.clone();
+  let base_url_override = args.base_url.base_url.clone();
+  let output_format = output_format;
 
   thread::Builder::new()
     .name("fetch_and_render-worker".to_string())
@@ -335,6 +255,8 @@ fn try_main(args: Args) -> Result<()> {
         RenderConfigBundle { config, options },
         &user_agent,
         &accept_language,
+        output_format,
+        base_url_override,
       );
       let _ = tx.send(res);
     })

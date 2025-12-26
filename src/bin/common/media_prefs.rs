@@ -1,5 +1,5 @@
 use super::args::MediaPreferenceArgs;
-use fastrender::style::media::{ColorScheme, ContrastPreference, MediaContext};
+use fastrender::style::media::{ColorScheme, ContrastPreference, MediaContext, MediaType};
 
 #[derive(Debug, Clone, Default)]
 pub struct MediaPreferences {
@@ -54,10 +54,18 @@ impl MediaPreferences {
     }
   }
 
-  pub fn media_context_with_overrides(&self, viewport: (u32, u32), dpr: f32) -> MediaContext {
-    let ctx = MediaContext::screen(viewport.0 as f32, viewport.1 as f32)
-      .with_device_pixel_ratio(dpr)
-      .with_env_overrides();
+  pub fn media_context_with_overrides(
+    &self,
+    viewport: (u32, u32),
+    dpr: f32,
+    media_type: MediaType,
+  ) -> MediaContext {
+    let ctx = match media_type {
+      MediaType::Print => MediaContext::print(viewport.0 as f32, viewport.1 as f32),
+      _ => MediaContext::screen(viewport.0 as f32, viewport.1 as f32),
+    }
+    .with_device_pixel_ratio(dpr)
+    .with_env_overrides();
     self.apply_to_media_context(ctx)
   }
 

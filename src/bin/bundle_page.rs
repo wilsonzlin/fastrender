@@ -6,7 +6,7 @@ mod common;
 use clap::{ArgAction, Args, Parser, Subcommand};
 use common::render_pipeline::{
   build_http_fetcher, build_render_configs, build_renderer_with_fetcher, decode_html_resource,
-  render_document, RenderConfigBundle,
+  render_document, RenderConfigBundle, RenderSurface,
 };
 use fastrender::css::loader::resolve_href;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
@@ -18,6 +18,7 @@ use fastrender::resource::bundle::{
 use fastrender::resource::{
   url_to_filename, FetchedResource, ResourceFetcher, DEFAULT_ACCEPT_LANGUAGE, DEFAULT_USER_AGENT,
 };
+use fastrender::style::media::MediaType;
 use fastrender::{OutputFormat, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -218,17 +219,20 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
   let recording = RecordingFetcher::new(http);
   let (prepared, document_resource) = fetch_document(&recording, &args.url)?;
 
-  let RenderConfigBundle { config, options } = build_render_configs(
-    render.viewport,
-    render.scroll_x,
-    render.scroll_y,
-    render.device_pixel_ratio,
-    None,
-    true,
-    false,
-    false,
-    None,
-  );
+  let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
+    viewport: render.viewport,
+    scroll_x: render.scroll_x,
+    scroll_y: render.scroll_y,
+    dpr: render.device_pixel_ratio,
+    media_type: MediaType::Screen,
+    css_limit: None,
+    allow_partial: false,
+    apply_meta_viewport: true,
+    base_url: None,
+    allow_file_from_http: false,
+    block_mixed_content: false,
+    trace_output: None,
+  });
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(recording.clone());
   let mut renderer = build_renderer_with_fetcher(config, fetcher)?;
 
@@ -279,17 +283,20 @@ fn render_bundle(args: RenderArgs) -> Result<()> {
   }
   apply_full_page_env(render.full_page);
 
-  let RenderConfigBundle { config, options } = build_render_configs(
-    render.viewport,
-    render.scroll_x,
-    render.scroll_y,
-    render.device_pixel_ratio,
-    None,
-    true,
-    false,
-    false,
-    None,
-  );
+  let RenderConfigBundle { config, options } = build_render_configs(&RenderSurface {
+    viewport: render.viewport,
+    scroll_x: render.scroll_x,
+    scroll_y: render.scroll_y,
+    dpr: render.device_pixel_ratio,
+    media_type: MediaType::Screen,
+    css_limit: None,
+    allow_partial: false,
+    apply_meta_viewport: true,
+    base_url: None,
+    allow_file_from_http: false,
+    block_mixed_content: false,
+    trace_output: None,
+  });
 
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(BundledFetcher::new(bundle));
   let mut renderer = build_renderer_with_fetcher(config, fetcher)?;

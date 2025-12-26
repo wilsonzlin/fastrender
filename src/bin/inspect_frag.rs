@@ -1,7 +1,7 @@
 mod common;
 
 use clap::Parser;
-use common::args::{parse_viewport, MediaPreferenceArgs};
+use common::args::{BaseUrlArgs, MediaArgs, TimeoutArgs, ViewportArgs};
 use common::media_prefs::MediaPreferences;
 use cssparser::Parser as CssParser;
 use cssparser::ParserInput;
@@ -40,7 +40,6 @@ use fastrender::style::cascade::StyledNode;
 use fastrender::style::color::Rgba;
 use fastrender::style::computed::Visibility;
 use fastrender::style::display::Display;
-use fastrender::style::media::MediaType;
 use fastrender::style::position::Position;
 use fastrender::style::types::Overflow;
 use fastrender::style::ComputedStyle;
@@ -78,13 +77,8 @@ struct Args {
   /// HTML file or file:// URL to inspect
   file: String,
 
-  /// Viewport size as WxH (e.g., 1200x800)
-  #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]
-  viewport: (u32, u32),
-
-  /// Device pixel ratio for media queries/srcset
-  #[arg(long, default_value = "1.0")]
-  dpr: f32,
+  #[command(flatten)]
+  surface: ViewportArgs,
 
   /// Horizontal scroll offset in CSS px
   #[arg(long, default_value = "0.0")]
@@ -131,7 +125,7 @@ struct Args {
   overlay_scroll_containers: bool,
 
   #[command(flatten)]
-  media_prefs: MediaPreferenceArgs,
+  media: MediaArgs,
 
   /// Override the User-Agent header
   #[arg(long, default_value = DEFAULT_USER_AGENT)]
@@ -142,8 +136,11 @@ struct Args {
   accept_language: String,
 
   /// Abort after this many seconds
-  #[arg(long)]
-  timeout: Option<u64>,
+  #[command(flatten)]
+  timeout: TimeoutArgs,
+
+  #[command(flatten)]
+  base_url: BaseUrlArgs,
 
   /// Dump a combined pipeline snapshot as JSON to stdout and exit.
   #[arg(
@@ -193,14 +190,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let args = Args::parse();
   let runtime_toggles = Arc::new(RuntimeToggles::from_env());
   let _toggle_guard = set_runtime_toggles(runtime_toggles.clone());
-  let media_prefs = MediaPreferences::from(&args.media_prefs);
+  let media_prefs = MediaPreferences::from(&args.media.prefs);
   if args.trace_fragmentation {
     std::env::set_var("FASTR_TRACE_FRAGMENTATION", "1");
   }
 
-  let (viewport_w, viewport_h) = args.viewport;
+  let (viewport_w, viewport_h) = args.surface.viewport;
 
-  if let Some(sec) = args.timeout {
+  if let Some(sec) = args.timeout.seconds(None) {
     std::thread::spawn(move || {
       std::thread::sleep(Duration::from_secs(sec));
       eprintln!("inspect_frag: timed out after {}s", sec);
@@ -231,7 +228,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   let mut html = fs::read_to_string(&path)?;
-  let resource_base = infer_base_url(&html, &input_url).into_owned();
+  let inferred_base = infer_base_url(&html, &input_url).into_owned();
+  let resource_base = args
+    .base_url
+    .base_url
+    .as_ref()
+    .map(|base| infer_base_url(&html, base).into_owned())
+    .unwrap_or(inferred_base);
 
   media_prefs.apply_env();
 
@@ -243,7 +246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   let mut renderer = FastRender::builder()
-    .device_pixel_ratio(args.dpr)
+    .device_pixel_ratio(args.surface.dpr)
     .runtime_toggles((*runtime_toggles).clone())
     .build()?;
   renderer.set_base_url(resource_base.clone());
@@ -256,7 +259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   // Optionally fetch and inline external CSS links to mirror the render_pages pipeline.
   let fetch_css = runtime_toggles.truthy_with_default("FASTR_FETCH_LINK_CSS", true);
   if fetch_css {
-    let mut css_links = extract_css_links(&html, &resource_base, MediaType::Screen);
+    let mut css_links = extract_css_links(&html, &resource_base, args.media.media_type());
     let mut seen_links: HashSet<String> = css_links.iter().cloned().collect();
     for extra in extract_embedded_css_urls(&html, &resource_base) {
       if seen_links.insert(extra.clone()) {
@@ -314,7 +317,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     return Ok(());
   }
 
-  let media_ctx = media_prefs.media_context_with_overrides((viewport_w, viewport_h), args.dpr);
+  let media_ctx = media_prefs.media_context_with_overrides(
+    (viewport_w, viewport_h),
+    args.surface.dpr,
+    args.media.media_type(),
+  );
   let stylesheet = extract_css(&dom)?;
   let styled = apply_styles_with_media_and_target(&dom, &stylesheet, &media_ctx, None);
 
@@ -597,7 +604,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       &dump_targets,
       scroll_offset,
       &resource_base,
-      args.dpr,
+      args.surface.dpr,
       renderer.font_context(),
     )?;
   }

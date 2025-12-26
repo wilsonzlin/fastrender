@@ -1,6 +1,6 @@
 # CLI tools
 
-FastRender ships a few small binaries/examples intended for internal debugging and regression work. Prefer `--help` output for the source of truth.
+FastRender ships a few small binaries/examples intended for internal debugging and regression work. Prefer `--help` output for the source of truth. Shared flag schemas for viewport/DPR, media type and preferences, output formats, timeouts, and base URL overrides live in [`src/bin/common/args.rs`](../src/bin/common/args.rs).
 
 ## `cargo xtask`
 
