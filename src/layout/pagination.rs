@@ -18,6 +18,7 @@ use crate::style::position::Position;
 use crate::style::types::WritingMode;
 use crate::style::{block_axis_is_horizontal, ComputedStyle};
 use crate::text::font_loader::FontContext;
+use crate::text::pipeline::ShapingPipeline;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::fragment_tree::FragmentNode;
 
@@ -473,12 +474,13 @@ fn collect_fixed_fragments(node: &FragmentNode, origin: Point, out: &mut Vec<Fra
 
 fn build_margin_box_fragments(
   style: &ResolvedPageStyle,
-  _font_ctx: &FontContext,
+  font_ctx: &FontContext,
   page_index: usize,
   page_count: usize,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
   let generator = ContentGenerator::new();
+  let shaper = ShapingPipeline::new();
   let mut context = ContentContext::new();
   context.set_counter("page", (page_index + 1) as i32);
   context.set_counter("pages", page_count as i32);
@@ -492,7 +494,11 @@ fn build_margin_box_fragments(
       let text = generator.generate(&box_style.content_value, &mut context);
       let mut children = Vec::new();
       if !text.is_empty() {
-        let (text_w, text_h, baseline) = measure_text(&text, box_style);
+        let runs = shaper.shape(&text, box_style, font_ctx).unwrap_or_default();
+        let text_w = runs.iter().map(|run| run.advance).sum::<f32>().max(0.0);
+        let font_size = box_style.font_size.max(1.0);
+        let text_h = font_size * 1.2;
+        let baseline = font_size * 0.9;
         let text_x = bounds.x() + (bounds.width() - text_w).max(0.0) / 2.0;
         let text_y = bounds.y() + (bounds.height() - text_h).max(0.0) / 2.0;
         let text_bounds = Rect::from_xywh(text_x, text_y, text_w, text_h);
@@ -500,7 +506,7 @@ fn build_margin_box_fragments(
           text_bounds,
           text,
           baseline,
-          Vec::new(),
+          runs,
           Arc::new(box_style.clone()),
         ));
       }
@@ -631,12 +637,4 @@ fn margin_box_bounds(area: PageMarginArea, style: &ResolvedPageStyle) -> Option<
     ),
     PageMarginArea::LeftTop => rect(origin_x, origin_y + mt, ml, side_height / 3.0),
   }
-}
-
-fn measure_text(text: &str, style: &ComputedStyle) -> (f32, f32, f32) {
-  let font_size = style.font_size.max(1.0);
-  let width = text.chars().count() as f32 * font_size * 0.6;
-  let height = font_size * 1.2;
-  let baseline = font_size * 0.9;
-  (width, height, baseline)
 }
