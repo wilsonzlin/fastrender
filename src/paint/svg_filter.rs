@@ -2649,7 +2649,15 @@ mod tests {
   fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
     let region = filter_region_for_pixmap(pixmap);
     let src = FilterResult::full_region(pixmap.clone(), region);
+    let filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+      steps: Vec::new(),
+      region: SvgFilterRegion::default_for_units(SvgFilterUnits::UserSpaceOnUse),
+      primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    };
     apply_primitive(
+      &filter,
+      &region,
       prim,
       &src,
       &HashMap::new(),
@@ -3092,7 +3100,7 @@ mod fe_image_tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_composite {
   use super::*;
 
   fn premul_rgba(r: u8, g: u8, b: u8, a: u8) -> PremultipliedColorU8 {
@@ -3117,6 +3125,30 @@ mod tests {
   fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
     let px = pixmap.pixel(x, y).unwrap();
     (px.red(), px.green(), px.blue(), px.alpha())
+  }
+
+  fn composite_pixmaps(
+    input1: Option<Pixmap>,
+    input2: Option<Pixmap>,
+    op: CompositeOperator,
+  ) -> Option<Pixmap> {
+    let a = input1?;
+    let b = input2.unwrap_or_else(|| a.clone());
+    if a.width() != b.width() || a.height() != b.height() {
+      return None;
+    }
+    match op {
+      CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
+        arithmetic_composite(&a, &b, k1, k2, k3, k4)
+      }
+      CompositeOperator::Over => composite_porter_duff(&a, &b, |a_a, _| (1.0, 1.0 - a_a)),
+      CompositeOperator::In => composite_porter_duff(&a, &b, |_, b_a| (b_a, 0.0)),
+      CompositeOperator::Out => composite_porter_duff(&a, &b, |_, b_a| (1.0 - b_a, 0.0)),
+      CompositeOperator::Atop => composite_porter_duff(&a, &b, |a_a, b_a| (b_a, 1.0 - a_a)),
+      CompositeOperator::Xor => {
+        composite_porter_duff(&a, &b, |a_a, b_a| (1.0 - b_a, 1.0 - a_a))
+      }
+    }
   }
 
   #[test]

@@ -573,9 +573,13 @@ mod tests {
 
   #[test]
   fn parses_single_colon_before_as_pseudo_element() {
-    let parser = PseudoClassParser;
-    let selector_list =
-      SelectorsParser::new(parser, None, None, None).parse_author_origin_no_namespace("div:before");
+    let mut input = ParserInput::new("div:before");
+    let mut css_parser = Parser::new(&mut input);
+    let selector_list = SelectorList::parse(
+      &PseudoClassParser,
+      &mut css_parser,
+      selectors::parser::ParseRelative::No,
+    );
 
     let list = selector_list.expect("should parse selector list");
     let selector = list.slice().first().expect("one selector");
