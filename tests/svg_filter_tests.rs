@@ -103,6 +103,7 @@ fn turbulence_is_deterministic() {
       base_frequency: (0.5, 0.5),
       seed: 2,
       octaves: 1,
+      stitch_tiles: false,
       kind: TurbulenceType::Turbulence,
     },
     region: None,

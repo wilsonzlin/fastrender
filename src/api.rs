@@ -289,6 +289,9 @@ pub struct FastRender {
   /// layout viewport for screen media.
   apply_meta_viewport: bool,
 
+  /// When true, expand the paint canvas to cover the laid-out content bounds.
+  fit_canvas_to_content: bool,
+
   /// Temporary override for device size during media query evaluation.
   pending_device_size: Option<Size>,
 
@@ -322,6 +325,7 @@ impl std::fmt::Debug for FastRender {
       .field("default_height", &self.default_height)
       .field("device_pixel_ratio", &self.device_pixel_ratio)
       .field("apply_meta_viewport", &self.apply_meta_viewport)
+      .field("fit_canvas_to_content", &self.fit_canvas_to_content)
       .field("base_url", &self.base_url)
       .field("compat_profile", &self.compat_profile)
       .field("dom_compat_mode", &self.dom_compat_mode)
@@ -385,6 +389,9 @@ pub struct FastRenderConfig {
   /// Whether to honor `<meta name="viewport">` when computing the layout viewport.
   pub apply_meta_viewport: bool,
 
+  /// When true, expand the paint canvas to fit the laid-out content bounds.
+  pub fit_canvas_to_content: bool,
+
   /// Font discovery configuration (system vs bundled fonts, extra search paths).
   pub font_config: FontConfig,
 
@@ -408,6 +415,7 @@ impl Default for FastRenderConfig {
       compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
+      fit_canvas_to_content: false,
       font_config: FontConfig::default(),
       runtime_toggles: Arc::new(RuntimeToggles::from_env()),
     }
@@ -511,6 +519,12 @@ impl FastRenderBuilder {
     self
   }
 
+  /// Expands the paint canvas to fit the laid-out content bounds.
+  pub fn fit_canvas_to_content(mut self, enabled: bool) -> Self {
+    self.config.fit_canvas_to_content = enabled;
+    self
+  }
+
   /// Sets the DOM compatibility mode applied during parsing.
   pub fn dom_compatibility_mode(mut self, mode: DomCompatibilityMode) -> Self {
     self.config.dom_compat_mode = mode;
@@ -588,6 +602,8 @@ pub struct RenderOptions {
   pub capture_accessibility: bool,
   /// When true, document fetch failures will return a placeholder pixmap with diagnostics instead of an error.
   pub allow_partial: bool,
+  /// When Some(true), expand the paint canvas to fit the laid-out content bounds for this render.
+  pub fit_canvas_to_content: Option<bool>,
   /// Optional hard timeout for the render.
   pub timeout: Option<Duration>,
   /// Optional cooperative cancellation callback.
@@ -610,6 +626,7 @@ impl Default for RenderOptions {
       css_limit: None,
       capture_accessibility: false,
       allow_partial: false,
+      fit_canvas_to_content: None,
       timeout: None,
       cancel_callback: None,
       trace_output: None,
@@ -630,6 +647,7 @@ impl std::fmt::Debug for RenderOptions {
       .field("css_limit", &self.css_limit)
       .field("capture_accessibility", &self.capture_accessibility)
       .field("allow_partial", &self.allow_partial)
+      .field("fit_canvas_to_content", &self.fit_canvas_to_content)
       .field("timeout", &self.timeout)
       .field(
         "cancel_callback",
@@ -696,6 +714,12 @@ impl RenderOptions {
   /// Enable returning a placeholder pixmap when document fetch fails.
   pub fn allow_partial(mut self, allow: bool) -> Self {
     self.allow_partial = allow;
+    self
+  }
+
+  /// Expand the paint canvas to the laid-out content bounds for this render.
+  pub fn with_fit_canvas_to_content(mut self, enabled: bool) -> Self {
+    self.fit_canvas_to_content = Some(enabled);
     self
   }
 
@@ -1553,6 +1577,12 @@ impl FastRenderConfig {
     self
   }
 
+  /// Expands the paint canvas to fit the laid-out content bounds.
+  pub fn with_fit_canvas_to_content(mut self, enabled: bool) -> Self {
+    self.fit_canvas_to_content = enabled;
+    self
+  }
+
   /// Sets the DOM compatibility mode applied during parsing.
   pub fn with_dom_compat_mode(mut self, mode: DomCompatibilityMode) -> Self {
     self.dom_compat_mode = mode;
@@ -2298,6 +2328,7 @@ impl FastRender {
       default_height: config.default_height,
       device_pixel_ratio: config.device_pixel_ratio,
       apply_meta_viewport: config.apply_meta_viewport,
+      fit_canvas_to_content: config.fit_canvas_to_content,
       pending_device_size: None,
       base_url: config.base_url.clone(),
       dom_compat_mode: config.dom_compat_mode,
@@ -2645,6 +2676,9 @@ impl FastRender {
     if let Some(dpr) = options.device_pixel_ratio {
       self.device_pixel_ratio = dpr;
     }
+    let fit_canvas_to_content = options
+      .fit_canvas_to_content
+      .unwrap_or(self.fit_canvas_to_content);
 
     let shared_diagnostics = self
       .diagnostics
@@ -2661,6 +2695,7 @@ impl FastRender {
       options.scroll_x,
       options.scroll_y,
       options.media_type,
+      fit_canvas_to_content,
       options.capture_accessibility,
       deadline,
       artifacts,
@@ -2714,6 +2749,7 @@ impl FastRender {
     scroll_x: f32,
     scroll_y: f32,
     media_type: MediaType,
+    fit_canvas_to_content: bool,
     capture_accessibility: bool,
     deadline: Option<&RenderDeadline>,
     mut artifacts: Option<&mut RenderArtifacts>,
@@ -2981,7 +3017,8 @@ impl FastRender {
         *start = now;
       }
 
-      let expand_full_page = toggles.truthy("FASTR_FULL_PAGE");
+      let env_fit_canvas = toggles.truthy("FASTR_FULL_PAGE");
+      let fit_canvas = fit_canvas_to_content || env_fit_canvas;
       let viewport_size = layout_viewport;
       let scroll_state = crate::scroll::ScrollState::with_viewport(Point::new(scroll_x, scroll_y));
       let scroll_result = crate::scroll::apply_scroll_snap(&mut fragment_tree, &scroll_state);
@@ -2999,14 +3036,12 @@ impl FastRender {
       let viewport_width_px = viewport_size.width.max(1.0).ceil() as u32;
       let viewport_height_px = viewport_size.height.max(1.0).ceil() as u32;
 
-      let (target_width, target_height) = if expand_full_page {
-        let content_bounds = fragment_tree.content_size();
-        let w = viewport_width_px.max(content_bounds.max_x().ceil().max(1.0) as u32);
-        let h = viewport_height_px.max(content_bounds.max_y().ceil().max(1.0) as u32);
-        (w, h)
-      } else {
-        (viewport_width_px, viewport_height_px)
-      };
+      let (target_width, target_height) = self.resolve_canvas_size(
+        &fragment_tree,
+        viewport_width_px,
+        viewport_height_px,
+        fit_canvas,
+      );
 
       if let Some(store) = artifacts.as_deref_mut() {
         if store.request().fragment_tree {
@@ -3299,7 +3334,28 @@ impl FastRender {
     })
   }
 
-  /// Renders HTML with a custom background color
+  fn resolve_canvas_size(
+    &self,
+    fragment_tree: &FragmentTree,
+    base_width: u32,
+    base_height: u32,
+    fit_canvas: bool,
+  ) -> (u32, u32) {
+    if !fit_canvas {
+      return (base_width.max(1), base_height.max(1));
+    }
+
+    let bounds = fragment_tree.content_size();
+    let width = base_width.max(bounds.max_x().ceil().max(1.0) as u32);
+    let height = base_height.max(bounds.max_y().ceil().max(1.0) as u32);
+    (width, height)
+  }
+
+  fn fit_canvas_env_enabled() -> bool {
+    std::env::var("FASTR_FULL_PAGE")
+      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+      .unwrap_or(false)
+  }
 
   /// Renders HTML with a custom background color
   ///
@@ -4998,10 +5054,14 @@ impl FastRender {
   /// # }
   /// ```
   pub fn paint(&self, fragment_tree: &FragmentTree, width: u32, height: u32) -> Result<Pixmap> {
+    let fit_canvas = self.fit_canvas_to_content || Self::fit_canvas_env_enabled();
+    let (target_width, target_height) =
+      self.resolve_canvas_size(fragment_tree, width, height, fit_canvas);
+
     paint_tree_with_resources_scaled(
       fragment_tree,
-      width,
-      height,
+      target_width,
+      target_height,
       self.background_color,
       self.font_context.clone(),
       self.image_cache.clone(),
@@ -5018,7 +5078,10 @@ impl FastRender {
     offset: Point,
   ) -> Result<Pixmap> {
     let trace = TraceHandle::disabled();
-    self.paint_with_offset_traced(fragment_tree, width, height, offset, &trace)
+    let fit_canvas = self.fit_canvas_to_content || Self::fit_canvas_env_enabled();
+    let (target_width, target_height) =
+      self.resolve_canvas_size(fragment_tree, width, height, fit_canvas);
+    self.paint_with_offset_traced(fragment_tree, target_width, target_height, offset, &trace)
   }
 
   fn paint_with_offset_traced(
@@ -7546,6 +7609,7 @@ pub(crate) fn render_html_with_shared_resources(
     default_height: height,
     device_pixel_ratio,
     apply_meta_viewport: false,
+    fit_canvas_to_content: false,
     pending_device_size: None,
     base_url,
     compat_profile: CompatProfile::default(),
@@ -7571,6 +7635,7 @@ pub(crate) fn render_html_with_shared_resources(
       0.0,
       0.0,
       MediaType::Screen,
+      false,
       false,
       None,
       None,

@@ -301,6 +301,12 @@ pub fn paginate_fragment_tree(
     return Ok(vec![base_root]);
   }
 
+  let mut offset_y = 0.0;
+  for (page, _) in &mut pages {
+    translate_fragment(page, 0.0, offset_y);
+    offset_y += page.bounds.height();
+  }
+
   let count = pages.len();
   let mut page_roots = Vec::with_capacity(count);
   for (idx, (mut page, style)) in pages.into_iter().enumerate() {
