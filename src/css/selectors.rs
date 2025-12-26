@@ -13,7 +13,6 @@ use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
 use selectors::parser::{Combinator, RelativeSelector, RelativeSelectorMatchHint};
 use std::fmt;
-use std::hash::{Hash, Hasher};
 
 /// Direction keyword for :dir()
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -635,15 +634,20 @@ fn parse_part_pseudo_element<'i, 't>(
   name: &cssparser::CowRcStr<'i>,
 ) -> std::result::Result<PseudoElement, ParseError<'i, SelectorParseErrorKind<'i>>> {
   let mut names = Vec::new();
-  let first = parser.expect_ident().map_err(|_| {
-    parser.new_custom_error(SelectorParseErrorKind::UnsupportedPseudoClassOrElement(
-      name.clone(),
-    ))
-  })?;
-  names.push(CssString::from(first.as_ref()));
+  let first = match parser.expect_ident() {
+    Ok(first) => CssString::from(first.as_ref()),
+    Err(_) => {
+      return Err(parser.new_custom_error(
+        SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name.clone()),
+      ))
+    }
+  };
+  names.push(first);
 
-  while let Ok(next) = parser.try_parse(|p| p.expect_ident()) {
-    names.push(CssString::from(next.as_ref()));
+  while let Ok(next) =
+    parser.try_parse(|p| p.expect_ident().map(|ident| CssString::from(ident.as_ref())))
+  {
+    names.push(next);
   }
 
   parser.skip_whitespace();
@@ -659,7 +663,7 @@ fn parse_part_pseudo_element<'i, 't>(
 }
 
 fn selector_has_combinators(selector: &Selector<FastRenderSelectorImpl>) -> bool {
-  let mut iter = selector.iter_skip_relative_selector_anchor();
+  let mut iter = selector.iter();
   loop {
     while iter.next().is_some() {}
     match iter.next_sequence() {
@@ -732,6 +736,7 @@ mod tests {
   use cssparser::ParserInput;
   use cssparser::SourceLocation;
   use cssparser::ToCss;
+  use selectors::parser::Parser as SelectorParser;
   use selectors::parser::ParseRelative;
 
   fn parse(expr: &str) -> (i32, i32) {
