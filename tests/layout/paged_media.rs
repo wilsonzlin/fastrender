@@ -303,6 +303,42 @@ fn margin_box_uses_custom_counter_style() {
 }
 
 #[test]
+fn margin_boxes_follow_page_pseudos() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 100px; margin: 10px; }
+          @page :first { @top-center { content: "FIRST"; } }
+          @page :right { @bottom-center { content: "RIGHT"; } }
+          @page :left { @bottom-center { content: "LEFT"; } }
+          body { margin: 0; }
+        </style>
+      </head>
+      <body>
+        <div style="height: 300px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 3);
+
+  let first = page_roots[0];
+  let second = page_roots[1];
+  let third = page_roots[2];
+
+  assert!(find_text(first, "FIRST").is_some());
+  assert!(find_text(first, "RIGHT").is_some());
+  assert!(find_text(second, "LEFT").is_some());
+  assert!(find_text(third, "RIGHT").is_some());
+}
+
+#[test]
 fn margin_box_inherits_body_color_and_font_size() {
   let html = r#"
     <html>
