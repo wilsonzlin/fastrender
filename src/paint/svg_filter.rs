@@ -5,9 +5,11 @@ use crate::style::color;
 use crate::tree::box_tree::ReplacedType;
 use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use crate::Rgba;
+use lru::LruCache;
 use rayon::prelude::*;
 use roxmltree::Document;
 use std::collections::HashMap;
+use std::env;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -15,13 +17,108 @@ use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, PremultipliedColo
 
 mod turbulence;
 
-static FILTER_CACHE: OnceLock<Mutex<HashMap<String, Arc<SvgFilter>>>> = OnceLock::new();
+const DEFAULT_FILTER_CACHE_ITEMS: usize = 256;
+const DEFAULT_FILTER_CACHE_BYTES: usize = 4 * 1024 * 1024;
+const ENV_FILTER_CACHE_ITEMS: &str = "FASTR_SVG_FILTER_CACHE_ITEMS";
+const ENV_FILTER_CACHE_BYTES: &str = "FASTR_SVG_FILTER_CACHE_BYTES";
 
 const MAX_FILTER_RES: u32 = 4096;
 const MAX_TURBULENCE_OCTAVES: u32 = 8;
 
-fn filter_cache() -> &'static Mutex<HashMap<String, Arc<SvgFilter>>> {
-  FILTER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+static FILTER_CACHE: OnceLock<Mutex<FilterCache>> = OnceLock::new();
+
+fn filter_cache() -> &'static Mutex<FilterCache> {
+  FILTER_CACHE.get_or_init(|| Mutex::new(FilterCache::new(FilterCacheConfig::from_env())))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FilterCacheConfig {
+  max_items: usize,
+  max_bytes: usize,
+}
+
+impl FilterCacheConfig {
+  fn from_env() -> Self {
+    Self {
+      max_items: env_usize(ENV_FILTER_CACHE_ITEMS).unwrap_or(DEFAULT_FILTER_CACHE_ITEMS),
+      max_bytes: env_usize(ENV_FILTER_CACHE_BYTES).unwrap_or(DEFAULT_FILTER_CACHE_BYTES),
+    }
+  }
+}
+
+fn env_usize(name: &str) -> Option<usize> {
+  env::var(name).ok()?.parse::<usize>().ok()
+}
+
+struct CachedFilter {
+  filter: Arc<SvgFilter>,
+  weight: usize,
+}
+
+struct FilterCache {
+  lru: LruCache<String, CachedFilter>,
+  current_bytes: usize,
+  config: FilterCacheConfig,
+}
+
+impl FilterCache {
+  fn new(config: FilterCacheConfig) -> Self {
+    Self {
+      lru: LruCache::unbounded(),
+      current_bytes: 0,
+      config,
+    }
+  }
+
+  fn get(&mut self, key: &str) -> Option<Arc<SvgFilter>> {
+    self.lru.get(key).map(|entry| Arc::clone(&entry.filter))
+  }
+
+  fn insert(&mut self, key: String, filter: Arc<SvgFilter>, weight: usize) {
+    if self.config.max_items == 0 {
+      return;
+    }
+    if self.config.max_bytes > 0 && weight > self.config.max_bytes {
+      return;
+    }
+
+    if let Some(existing) = self.lru.peek(&key) {
+      self.current_bytes = self.current_bytes.saturating_sub(existing.weight);
+    }
+
+    self.current_bytes = self.current_bytes.saturating_add(weight);
+    self.lru.put(key, CachedFilter { filter, weight });
+    self.evict();
+  }
+
+  fn evict(&mut self) {
+    while (self.config.max_items > 0 && self.lru.len() > self.config.max_items)
+      || (self.config.max_bytes > 0 && self.current_bytes > self.config.max_bytes)
+    {
+      if let Some((_key, entry)) = self.lru.pop_lru() {
+        self.current_bytes = self.current_bytes.saturating_sub(entry.weight);
+      } else {
+        break;
+      }
+    }
+  }
+
+  #[cfg(test)]
+  fn len(&self) -> usize {
+    self.lru.len()
+  }
+}
+
+#[cfg(test)]
+fn reset_filter_cache_for_tests(config: FilterCacheConfig) {
+  if let Ok(mut cache) = filter_cache().lock() {
+    *cache = FilterCache::new(config);
+  }
+}
+
+#[cfg(test)]
+fn filter_cache_len() -> usize {
+  filter_cache().lock().unwrap().len()
 }
 
 #[derive(Clone, Debug)]
@@ -572,20 +669,21 @@ pub fn load_svg_filter(url: &str, image_cache: &ImageCache) -> Option<Arc<SvgFil
   }
 
   let cache_key = format!("{}#{}", resource_url, fragment.as_deref().unwrap_or(""));
-  if let Ok(guard) = filter_cache().lock() {
+  if let Ok(mut guard) = filter_cache().lock() {
     if let Some(existing) = guard.get(&cache_key) {
-      return Some(existing.clone());
+      return Some(existing);
     }
   }
 
   let resource = image_cache.fetcher().fetch(&resource_url).ok()?;
-  let text = String::from_utf8(resource.bytes.clone()).ok()?;
+  let resource_size = resource.bytes.len();
+  let text = String::from_utf8(resource.bytes).ok()?;
   let mut scoped_cache = image_cache.clone();
   scoped_cache.set_base_url(resource_url.clone());
   let filter = parse_filter_definition(&text, fragment.as_deref(), &scoped_cache)?;
 
   if let Ok(mut guard) = filter_cache().lock() {
-    guard.insert(cache_key, filter.clone());
+    guard.insert(cache_key, filter.clone(), resource_size);
   }
 
   Some(filter)
@@ -3471,5 +3569,120 @@ mod tests_composite {
     )
     .unwrap();
     assert_eq!(pixel(&result, 0, 0), (8, 14, 3, 54));
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::image_loader::ImageCache;
+  use crate::resource::{FetchedResource, ResourceFetcher};
+  use std::collections::HashMap;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::sync::Arc;
+
+  #[derive(Clone)]
+  struct TestFilterFetcher {
+    responses: HashMap<String, String>,
+    fetch_count: Arc<AtomicUsize>,
+  }
+
+  impl TestFilterFetcher {
+    fn new(responses: impl IntoIterator<Item = (String, String)>) -> Self {
+      Self {
+        responses: responses.into_iter().collect(),
+        fetch_count: Arc::new(AtomicUsize::new(0)),
+      }
+    }
+
+    fn fetches(&self) -> usize {
+      self.fetch_count.load(Ordering::SeqCst)
+    }
+  }
+
+  impl ResourceFetcher for TestFilterFetcher {
+    fn fetch(&self, url: &str) -> crate::Result<FetchedResource> {
+      self.fetch_count.fetch_add(1, Ordering::SeqCst);
+      let svg = self
+        .responses
+        .get(url)
+        .unwrap_or_else(|| panic!("missing test response for {url}"))
+        .clone();
+
+      Ok(FetchedResource::new(
+        svg.into_bytes(),
+        Some("image/svg+xml".to_string()),
+      ))
+    }
+  }
+
+  fn svg_with_filter(id: &str) -> String {
+    format!(
+      r#"<svg xmlns="http://www.w3.org/2000/svg"><filter id="{id}"><feGaussianBlur stdDeviation="2"/></filter></svg>"#
+    )
+  }
+
+  #[test]
+  fn evicts_least_recently_used_filter_when_over_capacity() {
+    reset_filter_cache_for_tests(FilterCacheConfig {
+      max_items: 2,
+      max_bytes: 1024 * 1024,
+    });
+
+    let fetcher = Arc::new(TestFilterFetcher::new([
+      ("test://filters/one.svg".to_string(), svg_with_filter("one")),
+      ("test://filters/two.svg".to_string(), svg_with_filter("two")),
+      (
+        "test://filters/three.svg".to_string(),
+        svg_with_filter("three"),
+      ),
+    ]));
+    let cache = ImageCache::with_fetcher(Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>);
+
+    let first = load_svg_filter("test://filters/one.svg#one", &cache).expect("load first filter");
+    let second = load_svg_filter("test://filters/two.svg#two", &cache).expect("load second filter");
+    let third =
+      load_svg_filter("test://filters/three.svg#three", &cache).expect("load third filter");
+
+    assert_eq!(filter_cache_len(), 2, "cache should evict to capacity");
+    assert_eq!(fetcher.fetches(), 3);
+
+    let first_again =
+      load_svg_filter("test://filters/one.svg#one", &cache).expect("reload first filter");
+    assert_eq!(fetcher.fetches(), 4, "evicted filters should be refetched");
+    assert!(!Arc::ptr_eq(&first, &first_again));
+    assert_eq!(filter_cache_len(), 2);
+    // Keep variables used
+    let _ = (second, third);
+  }
+
+  #[test]
+  fn reuses_cache_for_resolved_urls() {
+    reset_filter_cache_for_tests(FilterCacheConfig {
+      max_items: 4,
+      max_bytes: 1024 * 1024,
+    });
+
+    let base_url = "https://example.com/assets/".to_string();
+    let fetcher = Arc::new(TestFilterFetcher::new([(
+      "https://example.com/assets/filter.svg".to_string(),
+      svg_with_filter("shared"),
+    )]));
+    let cache = ImageCache::with_base_url_and_fetcher(
+      base_url,
+      Arc::clone(&fetcher) as Arc<dyn ResourceFetcher>,
+    );
+
+    let relative = load_svg_filter("./filter.svg#shared", &cache).expect("load relative filter");
+    let absolute = load_svg_filter("https://example.com/assets/filter.svg#shared", &cache)
+      .expect("load absolute filter");
+
+    assert!(Arc::ptr_eq(&relative, &absolute));
+    assert_eq!(
+      fetcher.fetches(),
+      1,
+      "cache should be keyed by resolved URL"
+    );
+    assert_eq!(filter_cache_len(), 1);
   }
 }
