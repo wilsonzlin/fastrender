@@ -1124,6 +1124,11 @@ pub(crate) fn compound_matches_featureless_host<Impl: SelectorImpl>(
             Component::Scope | Component::ImplicitScope if scope_matches_featureless_host => {},
             // :host only matches featureless elements.
             Component::Host(..) => {},
+            Component::NonTSPseudoClass(ref pc) => match pc.matches_featureless_host() {
+                MatchesFeaturelessHost::Never => return MatchesFeaturelessHost::Never,
+                MatchesFeaturelessHost::Yes => matches = MatchesFeaturelessHost::Yes,
+                MatchesFeaturelessHost::Only => {},
+            },
             // Pseudo-elements are allowed to match as well.
             Component::PseudoElement(..) => {},
             // We allow logical pseudo-classes, but we'll fail matching of the inner selectors if

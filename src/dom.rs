@@ -872,6 +872,17 @@ impl<'a> ElementRef<'a> {
     )
   }
 
+  fn is_shadow_host(&self) -> bool {
+    matches!(
+      self.node.node_type,
+      DomNodeType::Element { .. } | DomNodeType::Slot { .. }
+    ) && self
+      .node
+      .children
+      .iter()
+      .any(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+  }
+
   /// Position (index, total) among siblings filtered by a predicate.
   fn position_in_siblings<F>(&self, predicate: F) -> Option<(usize, usize)>
   where
@@ -1950,6 +1961,49 @@ impl<'a> Element for ElementRef<'a> {
           return false;
         }
         matches_has_relative(self, relative, _context)
+      }
+      PseudoClass::Host(selectors) => {
+        if !self.is_shadow_host() {
+          return false;
+        }
+        let Some(selectors) = selectors else {
+          return true;
+        };
+        _context.with_featureless(false, |context| {
+          selectors
+            .slice()
+            .iter()
+            .any(|selector| matches_selector(selector, 0, None, self, context))
+        })
+      }
+      PseudoClass::HostContext(selectors) => {
+        if !self.is_shadow_host() {
+          return false;
+        }
+        _context.with_featureless(false, |context| {
+          if selectors
+            .slice()
+            .iter()
+            .any(|selector| matches_selector(selector, 0, None, self, context))
+          {
+            return true;
+          }
+
+          for (idx, ancestor) in self.all_ancestors.iter().enumerate() {
+            if !ancestor.is_element() {
+              continue;
+            }
+            let ancestor_ref = ElementRef::with_ancestors(*ancestor, &self.all_ancestors[..idx]);
+            if selectors
+              .slice()
+              .iter()
+              .any(|selector| matches_selector(selector, 0, None, &ancestor_ref, context))
+            {
+              return true;
+            }
+          }
+          false
+        })
       }
       PseudoClass::Root => {
         matches!(self.node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)

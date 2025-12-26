@@ -7030,6 +7030,7 @@ fn find_matching_rules<'a>(
 
   // Build ElementRef chain with proper parent links
   let element_ref = build_element_ref_chain(node, ancestors);
+  let shadow_host = shadow_host_ref(node, ancestors);
 
   // Create selector caches and matching context
   let mut context = MatchingContext::new_for_visited(
@@ -7073,14 +7074,26 @@ fn find_matching_rules<'a>(
     };
 
     let selector = indexed.selector;
-    let selector_matches = if let Some(scope_root) = &scope_for_rule {
+    let mut selector_matches = if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-        matches_selector(selector, 0, None, &element_ref, ctx)
+      with_shadow_host(&mut context, shadow_host, |ctx| {
+        ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+          matches_selector(selector, 0, None, &element_ref, ctx)
+        })
       })
     } else {
-      matches_selector(selector, 0, None, &element_ref, &mut context)
+      with_shadow_host(&mut context, shadow_host, |ctx| {
+        matches_selector(selector, 0, None, &element_ref, ctx)
+      })
     };
+
+    if !selector_matches && selector_contains_host_context(selector) {
+      selector_matches = with_shadow_host(&mut context, shadow_host, |ctx| {
+        ctx.with_featureless(false, |ctx| {
+          matches_selector(selector, 0, None, &element_ref, ctx)
+        })
+      });
+    }
 
     if selector_matches {
       let spec = indexed.specificity;
@@ -7159,6 +7172,7 @@ fn find_pseudo_element_rules<'a>(
 
   // Build ElementRef chain with proper parent links
   let element_ref = build_element_ref_chain(node, ancestors);
+  let shadow_host = shadow_host_ref(node, ancestors);
 
   // Create selector caches and matching context
   let mut context = MatchingContext::new(
@@ -7200,14 +7214,26 @@ fn find_pseudo_element_rules<'a>(
     };
 
     let selector = indexed.selector;
-    let selector_matches = if let Some(scope_root) = &scope_for_rule {
+    let mut selector_matches = if let Some(scope_root) = &scope_for_rule {
       let scope_ref = ElementRef::with_ancestors(scope_root.root, &scope_root.ancestors);
-      context.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
-        matches_selector(selector, 0, None, &element_ref, ctx)
+      with_shadow_host(&mut context, shadow_host, |ctx| {
+        ctx.nest_for_scope(Some(scope_ref.opaque()), |ctx| {
+          matches_selector(selector, 0, None, &element_ref, ctx)
+        })
       })
     } else {
-      matches_selector(selector, 0, None, &element_ref, &mut context)
+      with_shadow_host(&mut context, shadow_host, |ctx| {
+        matches_selector(selector, 0, None, &element_ref, ctx)
+      })
     };
+
+    if !selector_matches && selector_contains_host_context(selector) {
+      selector_matches = with_shadow_host(&mut context, shadow_host, |ctx| {
+        ctx.with_featureless(false, |ctx| {
+          matches_selector(selector, 0, None, &element_ref, ctx)
+        })
+      });
+    }
 
     if selector_matches {
       let spec = indexed.specificity;
@@ -7904,6 +7930,73 @@ fn build_element_ref_chain<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) 
 
   // Create ElementRef with all ancestors
   ElementRef::with_ancestors(node, ancestors)
+}
+
+fn is_shadow_host_node(node: &DomNode) -> bool {
+  matches!(
+    node.node_type,
+    DomNodeType::Element { .. } | DomNodeType::Slot { .. }
+  ) && node
+    .children
+    .iter()
+    .any(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
+}
+
+fn shadow_host_ref<'a>(node: &'a DomNode, ancestors: &'a [&'a DomNode]) -> Option<ElementRef<'a>> {
+  if is_shadow_host_node(node) {
+    return Some(ElementRef::with_ancestors(node, ancestors));
+  }
+
+  for (idx, ancestor) in ancestors.iter().enumerate().rev() {
+    if matches!(ancestor.node_type, DomNodeType::ShadowRoot { .. }) {
+      if idx == 0 {
+        return None;
+      }
+      let host = ancestors[idx - 1];
+      if is_shadow_host_node(host) {
+        return Some(ElementRef::with_ancestors(host, &ancestors[..idx - 1]));
+      }
+    }
+  }
+
+  None
+}
+
+fn with_shadow_host<'a, F, R>(
+  context: &mut MatchingContext<FastRenderSelectorImpl>,
+  shadow_host: Option<ElementRef<'a>>,
+  f: F,
+) -> R
+where
+  F: FnOnce(&mut MatchingContext<FastRenderSelectorImpl>) -> R,
+{
+  if let Some(host) = shadow_host {
+    context.with_shadow_host(Some(host), f)
+  } else {
+    f(context)
+  }
+}
+
+fn selector_contains_host_context(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> bool {
+  use selectors::parser::Component;
+
+  let mut iter = selector.iter();
+  loop {
+    while let Some(component) = iter.next() {
+      if let Component::NonTSPseudoClass(pseudo) = component {
+        if matches!(pseudo, crate::css::selectors::PseudoClass::HostContext(..)) {
+          return true;
+        }
+      }
+    }
+    if iter.next_sequence().is_none() {
+      break;
+    }
+  }
+
+  false
 }
 
 /// Compute styles for a pseudo-element (::before or ::after)

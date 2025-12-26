@@ -99,6 +99,14 @@ pub trait NonTSPseudoClass: Sized + ToCss {
         1 << 10
     }
 
+    /// Whether this pseudo-class may match a featureless shadow host.
+    ///
+    /// The default is `Never`, which preserves the behavior of treating most
+    /// pseudo-classes as not matching featureless hosts.
+    fn matches_featureless_host(&self) -> MatchesFeaturelessHost {
+        MatchesFeaturelessHost::Never
+    }
+
     fn visit<V>(&self, _visitor: &mut V) -> bool
     where
         V: SelectorVisitor<Impl = Self::Impl>,
@@ -999,7 +1007,18 @@ impl<Impl: SelectorImpl> Selector<Impl> {
     ) -> MatchesFeaturelessHost {
         let flags = self.flags();
         if !flags.intersects(SelectorFlags::HAS_HOST | SelectorFlags::HAS_SCOPE) {
-            return MatchesFeaturelessHost::Never;
+            // Non-tree-structural pseudo-classes might also be able to match a
+            // featureless host. This is needed for custom pseudo-classes like
+            // `:host-context()` implemented outside of `selectors`.
+            let has_matching_non_ts_pseudo = self.iter_raw_match_order().any(|c| {
+                matches!(
+                    *c,
+                    Component::NonTSPseudoClass(ref pc) if pc.matches_featureless_host().may_match()
+                )
+            });
+            if !has_matching_non_ts_pseudo {
+                return MatchesFeaturelessHost::Never;
+            }
         }
 
         let mut iter = self.iter();
