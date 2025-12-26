@@ -817,9 +817,9 @@ impl<'a> RuleIndex<'a> {
             }
           }
         }
-        let tag_lower = tag.to_ascii_lowercase();
-        if tag_lower != tag {
-          if let Some(list) = self.by_tag.get(&tag_lower) {
+        let lower_tag = tag.to_ascii_lowercase();
+        if lower_tag != tag {
+          if let Some(list) = self.by_tag.get(&lower_tag) {
             for idx in list {
               if seen.insert(*idx) {
                 out.push(*idx);
@@ -911,13 +911,20 @@ impl<'a> RuleIndex<'a> {
             }
           }
         }
-        let tag_lower = tag.to_ascii_lowercase();
-        if tag_lower != tag {
-          if let Some(list) = bucket.by_tag.get(&tag_lower) {
+        let lower_tag = tag.to_ascii_lowercase();
+        if lower_tag != tag {
+          if let Some(list) = bucket.by_tag.get(&lower_tag) {
             for idx in list {
               if seen.insert(*idx) {
                 out.push(*idx);
               }
+            }
+          }
+        }
+        if let Some(list) = bucket.by_tag.get("*") {
+          for idx in list {
+            if seen.insert(*idx) {
+              out.push(*idx);
             }
           }
         }

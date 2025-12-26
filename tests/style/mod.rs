@@ -29,6 +29,7 @@ mod rule_index_normalization_test;
 mod scope_pseudo_root_test;
 mod scope_rule_test;
 mod selector_indexing_test;
+mod svg_tag_selector_indexing_test;
 mod supports_rule_test;
 mod supports_selector_test;
 mod supports_writing_mode_test;
