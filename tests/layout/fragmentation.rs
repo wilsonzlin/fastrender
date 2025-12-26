@@ -10,11 +10,7 @@ use fastrender::{
 };
 
 fn line(y: f32, height: f32) -> FragmentNode {
-  FragmentNode::new_line(
-    Rect::from_xywh(0.0, y, 80.0, height),
-    height * 0.8,
-    vec![],
-  )
+  FragmentNode::new_line(Rect::from_xywh(0.0, y, 80.0, height), height * 0.8, vec![])
 }
 
 fn count_lines(node: &FragmentNode) -> usize {
@@ -224,8 +220,7 @@ fn break_inside_avoid_prefers_unbroken_but_splits_when_needed() {
     tall_lines.clone(),
     avoid_style,
   );
-  let tall_root =
-    FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 72.0), vec![tall_block]);
+  let tall_root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 120.0, 72.0), vec![tall_block]);
 
   let tall_fragments = fragment_tree(&tall_root, &FragmentationOptions::new(40.0));
   let tall_counts: Vec<_> = tall_fragments.iter().map(count_lines).collect();

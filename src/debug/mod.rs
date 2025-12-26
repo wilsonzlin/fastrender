@@ -22,7 +22,7 @@
 //! println!("{}", printer.print_box_tree(&root));
 //! ```
 pub mod inspect;
-pub(crate) mod trace;
-pub mod snapshot;
 pub mod runtime;
+pub mod snapshot;
+pub(crate) mod trace;
 pub mod tree_printer;

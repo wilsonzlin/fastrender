@@ -919,9 +919,15 @@ fn display_item_value(item: &DisplayItem) -> Value {
         Value::String(format!("{:?}", it.mix_blend_mode)),
       ),
       ("is_isolated", Value::from(it.is_isolated)),
-      ("creates_stacking_context", Value::from(it.creates_stacking_context)),
+      (
+        "creates_stacking_context",
+        Value::from(it.creates_stacking_context),
+      ),
       ("filters", Value::from(it.filters.len() as u64)),
-      ("backdrop_filters", Value::from(it.backdrop_filters.len() as u64)),
+      (
+        "backdrop_filters",
+        Value::from(it.backdrop_filters.len() as u64),
+      ),
       ("has_transform", Value::from(it.transform.is_some())),
       ("has_mask", Value::from(it.mask.is_some())),
     ]),

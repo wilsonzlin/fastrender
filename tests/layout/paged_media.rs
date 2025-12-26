@@ -111,6 +111,14 @@ fn line_wrapping_respects_page_side_widths() {
           we can verify pagination reflows content differently on right and left pages when margins
           change between them. The content intentionally repeats to ensure it spans at least two
           pages worth of text.
+          This is a very long line of text that should wrap across multiple lines and pages so that
+          we can verify pagination reflows content differently on right and left pages when margins
+          change between them. The content intentionally repeats to ensure it spans at least two
+          pages worth of text.
+          This is a very long line of text that should wrap across multiple lines and pages so that
+          we can verify pagination reflows content differently on right and left pages when margins
+          change between them. The content intentionally repeats to ensure it spans at least two
+          pages worth of text.
         </p>
       </body>
     </html>
@@ -227,8 +235,7 @@ fn paginated_pages_are_stacked_vertically() {
   assert!(page_roots.len() >= 2);
   assert!(page_roots[1].bounds.y() > page_roots[0].bounds.y());
   assert!(
-    page_roots[1].bounds.y() - page_roots[0].bounds.y()
-      >= page_roots[0].bounds.height() - 0.1
+    page_roots[1].bounds.y() - page_roots[0].bounds.y() >= page_roots[0].bounds.height() - 0.1
   );
 }
 
@@ -339,7 +346,10 @@ fn multicol_columns_continue_across_pages() {
 
   let mut renderer = FastRender::new().unwrap();
   let dom = renderer.parse_html(html).unwrap();
-  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let options = LayoutDocumentOptions::new().with_page_stacking(PageStacking::Untranslated);
+  let tree = renderer
+    .layout_document_with_options(&dom, 400, 400, options)
+    .unwrap();
   let page_roots = pages(&tree);
 
   let first = page_roots[0];

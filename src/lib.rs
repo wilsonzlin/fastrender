@@ -205,6 +205,8 @@ pub mod svg;
 // ============================================================================
 
 // Main entry point
+pub use api::CascadeDiagnostics;
+pub use api::DiagnosticsLevel;
 pub use api::FastRender;
 pub use api::FastRenderBuilder;
 pub use api::FastRenderConfig;
@@ -213,12 +215,10 @@ pub use api::FastRenderPoolConfig;
 pub use api::FontCacheConfig;
 pub use api::ImageCacheConfig;
 pub use api::LayoutArtifacts;
-pub use api::Pixmap;
-pub use api::PreparedDocument;
-pub use api::CascadeDiagnostics;
-pub use api::DiagnosticsLevel;
 pub use api::LayoutDiagnostics;
 pub use api::PaintDiagnostics;
+pub use api::Pixmap;
+pub use api::PreparedDocument;
 pub use api::RenderArtifactRequest;
 pub use api::RenderArtifacts;
 pub use api::RenderCounts;

@@ -519,7 +519,7 @@ impl DisplayListBuilder {
     });
 
     let (neg, non_neg): (Vec<_>, Vec<_>) = children.into_iter().partition(|c| c.z_index < 0);
-    let ( _zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
+    let (_zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
 
     // Descendants are positioned relative to the stacking context's origin (the first fragment).
     let descendant_offset = Point::new(
@@ -5039,8 +5039,11 @@ mod tests {
 
   #[test]
   fn stacking_context_offsets_include_non_context_ancestors() {
-    let text =
-      FragmentNode::new_text(Rect::from_xywh(3.0, 4.0, 10.0, 10.0), "hello".to_string(), 0.0);
+    let text = FragmentNode::new_text(
+      Rect::from_xywh(3.0, 4.0, 10.0, 10.0),
+      "hello".to_string(),
+      0.0,
+    );
 
     let mut stacking_style = ComputedStyle::default();
     stacking_style.opacity = 0.5;
@@ -5050,13 +5053,10 @@ mod tests {
       Arc::new(stacking_style),
     );
 
-    let intermediate = FragmentNode::new_block(
-      Rect::from_xywh(10.0, 20.0, 50.0, 50.0),
-      vec![stacking],
-    );
+    let intermediate =
+      FragmentNode::new_block(Rect::from_xywh(10.0, 20.0, 50.0, 50.0), vec![stacking]);
 
-    let root =
-      FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![intermediate]);
+    let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![intermediate]);
 
     let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
     let text_item = list.items().iter().find_map(|item| match item {
@@ -5071,8 +5071,11 @@ mod tests {
 
   #[test]
   fn zero_z_contexts_interleave_with_positioned_descendants() {
-    let stacking_text =
-      FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), "stack".to_string(), 12.0);
+    let stacking_text = FragmentNode::new_text(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      "stack".to_string(),
+      12.0,
+    );
     let mut stacking_style = ComputedStyle::default();
     stacking_style.opacity = 0.5;
     let stacking_context = FragmentNode::new_block_styled(
@@ -5081,8 +5084,11 @@ mod tests {
       Arc::new(stacking_style),
     );
 
-    let positioned_text =
-      FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), "pos".to_string(), 12.0);
+    let positioned_text = FragmentNode::new_text(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      "pos".to_string(),
+      12.0,
+    );
     let mut positioned_style = ComputedStyle::default();
     positioned_style.position = Position::Relative;
     let positioned = FragmentNode::new_block_styled(

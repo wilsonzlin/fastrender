@@ -21,8 +21,8 @@ fn conformance_doc_is_present_and_non_empty() {
 #[test]
 fn conformance_doc_links_to_real_code_and_tests() {
   let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-  let content = std::fs::read_to_string(root.join("docs/conformance.md"))
-    .expect("read docs/conformance.md");
+  let content =
+    std::fs::read_to_string(root.join("docs/conformance.md")).expect("read docs/conformance.md");
 
   // Keep links in docs/conformance.md grounded in real modules and tests for each feature area.
   let required_paths = [

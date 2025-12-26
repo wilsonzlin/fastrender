@@ -12,8 +12,8 @@ use common::render_pipeline::{
   format_error_with_chain, log_diagnostics, read_cached_document, render_document_with_artifacts,
   RenderConfigBundle, RenderSurface,
 };
-use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::debug::runtime::RuntimeToggles;
+use fastrender::dom::{DomNode, DomNodeType};
 use fastrender::image_output::encode_image;
 use fastrender::paint::display_list::DisplayItem;
 use fastrender::resource::normalize_page_name;

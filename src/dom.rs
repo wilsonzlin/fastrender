@@ -2139,9 +2139,7 @@ impl<'a> RelativeSelectorAncestorStack<'a> {
 
   fn ensure_materialized(&mut self) {
     if self.nodes.is_empty() {
-      self
-        .nodes
-        .reserve(self.baseline_len.saturating_add(8));
+      self.nodes.reserve(self.baseline_len.saturating_add(8));
       self.nodes.extend_from_slice(self.baseline);
     }
   }

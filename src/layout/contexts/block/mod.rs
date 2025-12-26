@@ -47,6 +47,9 @@ use crate::layout::formatting_context::layout_cache_store;
 use crate::layout::formatting_context::FormattingContext;
 use crate::layout::formatting_context::IntrinsicSizingMode;
 use crate::layout::formatting_context::LayoutError;
+use crate::layout::fragmentation::{
+  clip_node, propagate_fragment_metadata, resolve_fragmentation_boundaries,
+};
 use crate::layout::profile::layout_timer;
 use crate::layout::profile::LayoutKind;
 use crate::layout::utils::border_size_from_box_sizing;
@@ -1973,52 +1976,146 @@ impl BlockFormattingContext {
       })
       .collect();
 
+    let mut flow_root = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, column_width, flow_height),
+      flow_fragments,
+    );
+    flow_root.style = Some(parent.style.clone());
+    let flow_height = flow_height.max(flow_root.logical_bounding_box().height());
+    if flow_height.is_finite() && flow_height > 0.0 {
+      flow_root.bounds = Rect::from_xywh(0.0, 0.0, column_width, flow_height);
+    }
+
     let balanced_height = if column_count > 0 {
       (flow_height / column_count as f32).ceil()
     } else {
       flow_height
     };
+    let fragmentainer_hint = crate::layout::formatting_context::fragmentainer_block_size_hint()
+      .filter(|h| h.is_finite() && *h > 0.0);
     let mut column_height = match parent.style.column_fill {
       ColumnFill::Auto => match available_height {
-        AvailableSpace::Definite(h) => h.max(balanced_height),
+        AvailableSpace::Definite(h) => h,
         _ => balanced_height,
       },
       ColumnFill::Balance => balanced_height,
     };
+    if matches!(available_height, AvailableSpace::Indefinite) {
+      if let Some(hint) = fragmentainer_hint {
+        column_height = hint;
+      }
+    }
+    if matches!(parent.style.column_fill, ColumnFill::Balance)
+      && matches!(available_height, AvailableSpace::Indefinite)
+      && fragmentainer_hint.is_none()
+      && column_height.is_finite()
+      && column_height > 0.0
+      && flow_height.is_finite()
+      && flow_height > column_height
+      && column_count > 1
+    {
+      let mut low = column_height;
+      let mut high = flow_height;
+      let count_at_low = resolve_fragmentation_boundaries(&flow_root, low)
+        .len()
+        .saturating_sub(1);
+      if count_at_low > column_count {
+        let count_at_high = resolve_fragmentation_boundaries(&flow_root, high)
+          .len()
+          .saturating_sub(1);
+        if count_at_high <= column_count {
+          for _ in 0..12 {
+            let mid = (low + high) / 2.0;
+            let count_at_mid = resolve_fragmentation_boundaries(&flow_root, mid)
+              .len()
+              .saturating_sub(1);
+            if count_at_mid <= column_count {
+              high = mid;
+            } else {
+              low = mid;
+            }
+          }
+          column_height = high.ceil();
+        }
+      }
+    }
+    if let AvailableSpace::Definite(h) = available_height {
+      if h.is_finite() && h > 0.0 {
+        column_height = column_height.min(h);
+      }
+    }
     if !column_height.is_finite() || column_height <= 0.0 {
       column_height = flow_height.max(0.0);
     }
+    if column_height <= 0.0 {
+      return Ok((
+        flow_root.children,
+        flow_height,
+        flow_positioned,
+        flow_height,
+      ));
+    }
+
+    let boundaries = resolve_fragmentation_boundaries(&flow_root, column_height);
+    let fragment_count = boundaries.len().saturating_sub(1);
+    if fragment_count == 0 {
+      return Ok((
+        flow_root.children,
+        flow_height,
+        flow_positioned,
+        flow_height,
+      ));
+    }
 
     let mut fragments = Vec::new();
-    let mut column_heights = vec![0.0f32; column_count.max(1)];
-    let mut prev_flow_y = 0.0;
-    let mut col_idx: usize = 0;
-    let mut col_height = 0.0;
-
-    for mut fragment in flow_fragments {
-      let delta = fragment.bounds.y() - prev_flow_y;
-      let height = fragment.bounds.height();
-      if col_height + delta + height > column_height && col_idx + 1 < column_count {
-        col_idx += 1;
-        col_height = 0.0;
+    let mut fragment_heights = vec![0.0f32; fragment_count];
+    for (index, window) in boundaries.windows(2).enumerate() {
+      let start = window[0];
+      let end = window[1];
+      if end <= start {
+        continue;
       }
-      let new_y = col_height + delta;
-      let new_x = col_idx as f32 * (column_width + column_gap) + fragment.bounds.x();
-      fragment.bounds = Rect::from_xywh(new_x, new_y, fragment.bounds.width(), height);
-      col_height = new_y + height;
-      column_heights[col_idx] = column_heights[col_idx].max(col_height);
-      prev_flow_y += delta + height;
-      fragments.push(fragment);
+
+      if let Some(mut clipped) =
+        clip_node(&flow_root, start, end, 0.0, start, index, fragment_count)
+      {
+        // `clip_node` preserves existing logical overrides from the unclipped flow tree.
+        // For multi-column layout we translate fragments into column coordinates, so ensure
+        // logical bounds stay in sync with the clipped fragment geometry.
+        Self::set_logical_from_bounds(&mut clipped);
+        propagate_fragment_metadata(&mut clipped, index, fragment_count);
+        let col = index % column_count;
+        let set = index / column_count;
+        let offset = Point::new(
+          col as f32 * (column_width + column_gap),
+          set as f32 * column_height,
+        );
+        fragment_heights[index] = clipped.bounds.height();
+        let mut children = clipped.children;
+        for child in &mut children {
+          child.bounds = child.bounds.translate(offset);
+          if let Some(logical) = child.logical_override {
+            child.logical_override = Some(logical.translate(offset));
+          }
+        }
+        fragments.extend(children);
+      }
     }
 
     let mut positioned_children = Vec::new();
     for mut positioned in flow_positioned {
       if let Some(pos) = positioned.static_position {
-        if column_height > 0.0 {
-          let col = ((pos.y / column_height).floor() as usize).min(column_count - 1);
+        if fragment_count > 0 && !boundaries.is_empty() {
+          let frag_index = boundaries
+            .windows(2)
+            .position(|w| pos.y >= w[0] - 0.01 && pos.y < w[1] + 0.01)
+            .unwrap_or(fragment_count - 1);
+          let start = boundaries[frag_index];
+          let col = frag_index % column_count;
+          let set = frag_index / column_count;
           let translated = Point::new(
             pos.x + col as f32 * (column_width + column_gap),
-            pos.y - column_height * col as f32,
+            pos.y - start + set as f32 * column_height,
           );
           positioned.static_position = Some(translated);
         }
@@ -2026,7 +2123,32 @@ impl BlockFormattingContext {
       positioned_children.push(positioned);
     }
 
-    let mut segment_height = column_heights.iter().copied().fold(0.0, f32::max);
+    let set_count = if column_count > 0 {
+      (fragment_count + column_count - 1) / column_count
+    } else {
+      0
+    };
+    let mut set_heights = vec![0.0f32; set_count];
+    for (idx, height) in fragment_heights.iter().copied().enumerate() {
+      let set = idx / column_count;
+      if set < set_heights.len() {
+        set_heights[set] = set_heights[set].max(height);
+      }
+    }
+
+    let last_set_bottom = if set_count > 0 {
+      let last_set = set_count - 1;
+      let mut bottom = 0.0f32;
+      for (idx, height) in fragment_heights.iter().copied().enumerate() {
+        if idx / column_count == last_set {
+          bottom = bottom.max(last_set as f32 * column_height + height);
+        }
+      }
+      bottom
+    } else {
+      0.0
+    };
+    let mut segment_height = (set_count as f32 * column_height).max(last_set_bottom);
     if segment_height == 0.0 {
       segment_height = flow_height;
     }
@@ -2055,14 +2177,24 @@ impl BlockFormattingContext {
         if rule_width > column_gap {
           rule_width = column_gap;
         }
-        for i in 1..column_count {
-          let gap_start = column_width * i as f32 + column_gap * (i as f32 - 1.0);
-          let x = gap_start + (column_gap - rule_width) / 2.0;
-          let bounds = Rect::from_xywh(x.max(0.0), 0.0, rule_width, segment_height);
-          let mut rule_fragment =
-            FragmentNode::new_block_styled(bounds, Vec::new(), rule_style.clone());
-          Self::set_logical_from_bounds(&mut rule_fragment);
-          fragments.push(rule_fragment);
+        for set in 0..set_count {
+          let remaining = fragment_count.saturating_sub(set * column_count);
+          let cols_in_set = remaining.min(column_count);
+          if cols_in_set < 2 {
+            continue;
+          }
+
+          let rule_height = column_height.max(set_heights.get(set).copied().unwrap_or(0.0));
+          for i in 1..cols_in_set {
+            let gap_start = column_width * i as f32 + column_gap * (i as f32 - 1.0);
+            let x = gap_start + (column_gap - rule_width) / 2.0;
+            let y = set as f32 * column_height;
+            let bounds = Rect::from_xywh(x.max(0.0), y, rule_width, rule_height);
+            let mut rule_fragment =
+              FragmentNode::new_block_styled(bounds, Vec::new(), rule_style.clone());
+            Self::set_logical_from_bounds(&mut rule_fragment);
+            fragments.push(rule_fragment);
+          }
         }
       }
     }

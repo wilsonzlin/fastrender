@@ -4,14 +4,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::css::types::CollectedPageRule;
-use crate::geometry::{Rect, Size};
+use crate::geometry::{Point, Rect, Size};
 use crate::layout::engine::{LayoutConfig, LayoutEngine};
-use crate::layout::formatting_context::{layout_style_fingerprint, LayoutError};
+use crate::layout::formatting_context::{
+  layout_style_fingerprint, set_fragmentainer_block_size_hint, LayoutError,
+};
 use crate::layout::fragmentation::{
   clip_node, collect_forced_boundaries, propagate_fragment_metadata,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
+use crate::style::position::Position;
 use crate::style::types::WritingMode;
 use crate::style::{block_axis_is_horizontal, ComputedStyle};
 use crate::text::font_loader::FontContext;
@@ -54,7 +57,7 @@ struct CachedLayout {
 }
 
 impl CachedLayout {
-  fn from_root(root: FragmentNode, style: &ResolvedPageStyle, fallback_page_size: Size) -> Self {
+  fn from_root(root: FragmentNode, style: &ResolvedPageStyle) -> Self {
     let mut spans = Vec::new();
     collect_page_name_spans(&root, 0.0, &mut spans);
     spans.sort_by(|a, b| {
@@ -67,8 +70,7 @@ impl CachedLayout {
     let total_height = root
       .logical_bounding_box()
       .height()
-      .max(style.content_size.height)
-      .max(fallback_page_size.height);
+      .max(style.content_size.height);
     forced.push(total_height);
     forced.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     forced.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
@@ -138,7 +140,7 @@ pub fn paginate_fragment_tree(
     let key = PageLayoutKey::new(style, style_hash, font_generation);
     layouts
       .entry(key)
-      .or_insert_with(|| CachedLayout::from_root(root.clone(), style, fallback_page_size));
+      .or_insert_with(|| CachedLayout::from_root(root.clone(), style));
   }
 
   let base_style = resolve_page_style(
@@ -157,7 +159,6 @@ pub fn paginate_fragment_tree(
     box_tree,
     font_ctx,
     enable_layout_cache,
-    fallback_page_size,
   )?;
   let base_total_height = base_layout.total_height.max(EPSILON);
   let base_spans = base_layout.page_name_spans.clone();
@@ -193,7 +194,6 @@ pub fn paginate_fragment_tree(
       box_tree,
       font_ctx,
       enable_layout_cache,
-      fallback_page_size,
     )?;
 
     let mut total_height = layout.total_height;
@@ -222,7 +222,6 @@ pub fn paginate_fragment_tree(
         box_tree,
         font_ctx,
         enable_layout_cache,
-        fallback_page_size,
       )?;
       total_height = layout.total_height;
       start = ((consumed_base / base_total_height) * total_height).min(total_height);
@@ -248,6 +247,8 @@ pub fn paginate_fragment_tree(
     }
 
     let clipped = clip_node(&layout.root, start, end, 0.0, start, page_index, 0);
+    let mut fixed_fragments = Vec::new();
+    collect_fixed_fragments(&layout.root, Point::ZERO, &mut fixed_fragments);
     let mut page_root = FragmentNode::new_block(
       Rect::from_xywh(
         0.0,
@@ -259,6 +260,7 @@ pub fn paginate_fragment_tree(
     );
 
     if let Some(mut content) = clipped {
+      strip_fixed_fragments(&mut content);
       content.bounds = Rect::from_xywh(
         content.bounds.x(),
         content.bounds.y(),
@@ -271,6 +273,15 @@ pub fn paginate_fragment_tree(
         page_style.content_origin.y,
       );
       page_root.children.push(content);
+    }
+
+    for mut fixed in fixed_fragments {
+      translate_fragment(
+        &mut fixed,
+        page_style.content_origin.x,
+        page_style.content_origin.y,
+      );
+      page_root.children.push(fixed);
     }
 
     page_root
@@ -376,7 +387,11 @@ fn page_name_for_position(
   fallback.map(|s| s.to_string())
 }
 
-fn apply_page_stacking(pages: &mut [FragmentNode], writing_mode: WritingMode, stacking: PageStacking) {
+fn apply_page_stacking(
+  pages: &mut [FragmentNode],
+  writing_mode: WritingMode,
+  stacking: PageStacking,
+) {
   let PageStacking::Stacked { gap } = stacking else {
     return;
   };
@@ -420,8 +435,38 @@ fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {
       logical.height(),
     ));
   }
-  for child in &mut node.children {
-    translate_fragment(child, dx, dy);
+}
+
+fn is_fixed_fragment(fragment: &FragmentNode) -> bool {
+  fragment
+    .style
+    .as_deref()
+    .is_some_and(|style| style.position == Position::Fixed)
+}
+
+fn strip_fixed_fragments(node: &mut FragmentNode) {
+  let mut kept = Vec::with_capacity(node.children.len());
+  for mut child in node.children.drain(..) {
+    if is_fixed_fragment(&child) {
+      continue;
+    }
+    strip_fixed_fragments(&mut child);
+    kept.push(child);
+  }
+  node.children = kept;
+}
+
+fn collect_fixed_fragments(node: &FragmentNode, origin: Point, out: &mut Vec<FragmentNode>) {
+  if is_fixed_fragment(node) {
+    let mut cloned = node.clone();
+    translate_fragment(&mut cloned, origin.x, origin.y);
+    out.push(cloned);
+    return;
+  }
+
+  let next_origin = Point::new(origin.x + node.bounds.x(), origin.y + node.bounds.y());
+  for child in &node.children {
+    collect_fixed_fragments(child, next_origin, out);
   }
 }
 
@@ -473,14 +518,14 @@ fn layout_for_style<'a>(
   box_tree: &BoxTree,
   font_ctx: &FontContext,
   enable_layout_cache: bool,
-  fallback_page_size: Size,
 ) -> Result<&'a CachedLayout, LayoutError> {
   if !cache.contains_key(&key) {
     let mut config = LayoutConfig::for_viewport(style.content_size);
     config.enable_cache = enable_layout_cache;
     let engine = LayoutEngine::with_font_context(config, font_ctx.clone());
+    let _hint = set_fragmentainer_block_size_hint(Some(style.content_size.height));
     let layout_tree = engine.layout_tree(box_tree)?;
-    let layout = CachedLayout::from_root(layout_tree.root, style, fallback_page_size);
+    let layout = CachedLayout::from_root(layout_tree.root, style);
     cache.insert(key, layout);
   }
 

@@ -2748,8 +2748,8 @@ mod tests {
     let mut pixmap = Pixmap::new(4, 4).unwrap();
     let width = pixmap.width() as usize;
     let set = |pixmap: &mut Pixmap, x: usize, y: usize, rgba: (u8, u8, u8, u8)| {
-      pixmap.pixels_mut()[y * width + x] = ColorU8::from_rgba(rgba.0, rgba.1, rgba.2, rgba.3)
-        .premultiply();
+      pixmap.pixels_mut()[y * width + x] =
+        ColorU8::from_rgba(rgba.0, rgba.1, rgba.2, rgba.3).premultiply();
     };
 
     set(&mut pixmap, 1, 0, (255, 0, 0, 255)); // red

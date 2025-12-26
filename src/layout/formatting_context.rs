@@ -41,6 +41,7 @@ use crate::style::values::Length;
 use crate::style::ComputedStyle;
 use crate::tree::box_tree::BoxNode;
 use crate::tree::fragment_tree::FragmentNode;
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -92,6 +93,10 @@ pub enum IntrinsicSizingMode {
 thread_local! {
     static INTRINSIC_INLINE_CACHE: RefCell<HashMap<(usize, usize, IntrinsicSizingMode), (usize, f32)>> =
         RefCell::new(HashMap::new());
+}
+
+thread_local! {
+  static FRAGMENTAINER_BLOCK_SIZE_HINT: Cell<Option<f32>> = Cell::new(None);
 }
 
 static CACHE_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
@@ -521,6 +526,33 @@ pub(crate) fn layout_cache_stats() -> (usize, usize, usize, usize) {
     LAYOUT_CACHE_STORES.load(Ordering::Relaxed),
     LAYOUT_CACHE_EVICTIONS.load(Ordering::Relaxed),
   )
+}
+
+pub(crate) struct FragmentainerBlockSizeHintGuard {
+  previous: Option<f32>,
+}
+
+impl Drop for FragmentainerBlockSizeHintGuard {
+  fn drop(&mut self) {
+    FRAGMENTAINER_BLOCK_SIZE_HINT.with(|hint| {
+      hint.set(self.previous);
+    });
+  }
+}
+
+pub(crate) fn fragmentainer_block_size_hint() -> Option<f32> {
+  FRAGMENTAINER_BLOCK_SIZE_HINT.with(|hint| hint.get())
+}
+
+pub(crate) fn set_fragmentainer_block_size_hint(
+  hint: Option<f32>,
+) -> FragmentainerBlockSizeHintGuard {
+  let previous = FRAGMENTAINER_BLOCK_SIZE_HINT.with(|cell| {
+    let previous = cell.get();
+    cell.set(hint);
+    previous
+  });
+  FragmentainerBlockSizeHintGuard { previous }
 }
 
 /// Common trait for all formatting contexts

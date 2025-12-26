@@ -108,7 +108,10 @@ pub struct OrderedFragment {
 
 impl OrderedFragment {
   pub fn new(fragment: FragmentNode, tree_order: usize) -> Self {
-    Self { fragment, tree_order }
+    Self {
+      fragment,
+      tree_order,
+    }
   }
 }
 
@@ -288,7 +291,9 @@ impl StackingContext {
       // Determine which layer this fragment belongs to
       if is_positioned(style) && !creates_stacking_context(style, None, false) {
         // Layer 6: Positioned with z-index 0 or auto
-        self.layer6_positioned.push(OrderedFragment::new(fragment, tree_order));
+        self
+          .layer6_positioned
+          .push(OrderedFragment::new(fragment, tree_order));
       } else if is_float(style) {
         // Layer 4: Floats
         self.layer4_floats.push(fragment);
@@ -818,8 +823,12 @@ fn build_stacking_tree_internal(
         base_offset.y + child.bounds.origin.y,
       );
       let child_context = build_stacking_tree_internal(
-        child, None, // We don't have style for children without external mapping
-        style, false, tree_order, child_offset,
+        child,
+        None, // We don't have style for children without external mapping
+        style,
+        false,
+        tree_order,
+        child_offset,
       );
 
       let child_creates_context =
@@ -1009,7 +1018,11 @@ where
         if !child_context.children.is_empty() {
           context.children.extend(child_context.children);
         }
-        context.add_fragment_to_layer(child.clone(), child_style.as_deref(), child_context.tree_order);
+        context.add_fragment_to_layer(
+          child.clone(),
+          child_style.as_deref(),
+          child_context.tree_order,
+        );
       }
     }
 
@@ -1065,7 +1078,11 @@ where
         if !child_context.children.is_empty() {
           context.children.extend(child_context.children);
         }
-        context.add_fragment_to_layer(child.clone(), child_style.as_deref(), child_context.tree_order);
+        context.add_fragment_to_layer(
+          child.clone(),
+          child_style.as_deref(),
+          child_context.tree_order,
+        );
       }
     }
 
@@ -1203,7 +1220,9 @@ impl<'a> Iterator for PaintOrderIterator<'a> {
         }
         PaintOrderItem::Layer6(items, idx) => {
           if idx < items.len() {
-            self.stack.push(PaintOrderItem::Layer6(items.clone(), idx + 1));
+            self
+              .stack
+              .push(PaintOrderItem::Layer6(items.clone(), idx + 1));
             match &items[idx] {
               Layer6Item::Positioned(frag) => return Some(&frag.fragment),
               Layer6Item::ZeroContext(ctx) => {
@@ -1706,8 +1725,7 @@ mod tests {
       .fragments
       .push(create_block_fragment(0.0, 0.0, 10.0, 10.0));
 
-    let mut zero_child =
-      StackingContext::with_reason(0, StackingContextReason::Opacity, 1);
+    let mut zero_child = StackingContext::with_reason(0, StackingContextReason::Opacity, 1);
     zero_child
       .fragments
       .push(create_block_fragment(10.0, 0.0, 10.0, 10.0));

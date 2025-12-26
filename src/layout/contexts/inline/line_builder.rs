@@ -967,7 +967,10 @@ impl TextItem {
     for run in &self.runs {
       if split_offset <= run.start {
         // Entire run goes to the after side
-        after_runs.push(run.clone());
+        let mut shifted = run.clone();
+        shifted.start = shifted.start.saturating_sub(split_offset);
+        shifted.end = shifted.end.saturating_sub(split_offset);
+        after_runs.push(shifted);
         continue;
       }
       if split_offset >= run.end {
@@ -1018,7 +1021,8 @@ impl TextItem {
       if !right_glyphs.is_empty() {
         let mut right_run = run.clone();
         right_run.text = right_text.to_string();
-        right_run.start = split_offset;
+        right_run.start = 0;
+        right_run.end = right_run.text.len();
         right_run.glyphs = right_glyphs;
         right_run.advance = right_run.glyphs.iter().map(|g| g.x_advance).sum();
         after_runs.push(right_run);

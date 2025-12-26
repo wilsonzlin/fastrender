@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use base64::{engine::general_purpose, Engine as _};
 use fastrender::{
   error::{Error, ResourceError},
-  DiagnosticsLevel, FastRender, FastRenderBuilder, FetchedResource, OutputFormat, RenderDiagnostics,
-  RenderOptions, ResourceFetcher, ResourceKind,
+  DiagnosticsLevel, FastRender, FastRenderBuilder, FetchedResource, OutputFormat,
+  RenderDiagnostics, RenderOptions, ResourceFetcher, ResourceKind,
 };
 
 fn run_with_large_stack(f: impl FnOnce() + Send + 'static) {
@@ -184,8 +184,7 @@ fn diagnostics_report_includes_stage_stats() {
   run_with_large_stack(|| {
     let url = "https://example.test/diag";
     let html = "<!doctype html><html><head><style>p { margin: 0; }</style></head><body><p>Hi</p></body></html>";
-    let fetcher =
-      Arc::new(MockFetcher::default().with_html(url, html)) as Arc<dyn ResourceFetcher>;
+    let fetcher = Arc::new(MockFetcher::default().with_html(url, html)) as Arc<dyn ResourceFetcher>;
 
     let mut renderer = FastRenderBuilder::new().fetcher(fetcher).build().unwrap();
     let options = RenderOptions::new()

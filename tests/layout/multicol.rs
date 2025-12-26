@@ -46,12 +46,44 @@ fn find_rule_fragment<'a>(fragment: &'a FragmentNode, color: Rgba) -> Option<&'a
   None
 }
 
-fn collect_line_positions(fragment: &FragmentNode, out: &mut Vec<(f32, f32)>) {
+fn fragments_with_id<'a>(fragment: &'a FragmentNode, id: usize) -> Vec<&'a FragmentNode> {
+  fn walk<'a>(fragment: &'a FragmentNode, id: usize, out: &mut Vec<&'a FragmentNode>) {
+    if let FragmentContent::Block { box_id: Some(b) } = fragment.content {
+      if b == id {
+        out.push(fragment);
+      }
+    }
+    for child in &fragment.children {
+      walk(child, id, out);
+    }
+  }
+
+  let mut out = Vec::new();
+  walk(fragment, id, &mut out);
+  out
+}
+
+fn count_lines(fragment: &FragmentNode) -> usize {
+  let mut count = 0;
   if matches!(fragment.content, FragmentContent::Line { .. }) {
-    out.push((fragment.bounds.x(), fragment.bounds.y()));
+    count += 1;
   }
   for child in &fragment.children {
-    collect_line_positions(child, out);
+    count += count_lines(child);
+  }
+  count
+}
+
+fn collect_line_positions(fragment: &FragmentNode, origin: (f32, f32), out: &mut Vec<(f32, f32)>) {
+  let current = (
+    origin.0 + fragment.bounds.x(),
+    origin.1 + fragment.bounds.y(),
+  );
+  if matches!(fragment.content, FragmentContent::Line { .. }) {
+    out.push(current);
+  }
+  for child in &fragment.children {
+    collect_line_positions(child, current, out);
   }
 }
 
@@ -84,7 +116,7 @@ fn long_paragraph_splits_across_columns() {
     .expect("layout");
 
   let mut lines = Vec::new();
-  collect_line_positions(&fragment, &mut lines);
+  collect_line_positions(&fragment, (0.0, 0.0), &mut lines);
 
   assert!(
     lines.iter().any(|(x, _)| *x >= 150.0),
@@ -119,7 +151,7 @@ fn balanced_fill_spreads_lines_evenly() {
     .expect("layout");
 
   let mut lines = Vec::new();
-  collect_line_positions(&fragment, &mut lines);
+  collect_line_positions(&fragment, (0.0, 0.0), &mut lines);
 
   let column_width = (360.0 - 10.0 * 2.0) / 3.0;
   let stride = column_width + 10.0;
@@ -399,4 +431,92 @@ fn break_before_column_advances_column() {
   assert!(first_frag.bounds.x() < 0.1);
   assert!(second_frag.bounds.x() > 90.0);
   assert!(second_frag.bounds.y() < 0.1);
+}
+
+#[test]
+fn multicol_fragments_paragraph_lines_with_widows_orphans() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(200.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(0.0);
+  let parent_style = Arc::new(parent_style);
+
+  let mut para_style = ComputedStyle::default();
+  para_style.white_space = WhiteSpace::Pre;
+  para_style.widows = 2;
+  para_style.orphans = 2;
+  let para_style = Arc::new(para_style);
+
+  let text = "one\ntwo\nthree\nfour\nfive\nsix".to_string();
+  let text_node = BoxNode::new_text(para_style.clone(), text);
+  let mut para = BoxNode::new_block(
+    para_style.clone(),
+    FormattingContextType::Block,
+    vec![text_node],
+  );
+  para.id = 40;
+
+  let mut parent = BoxNode::new_block(
+    parent_style,
+    FormattingContextType::Block,
+    vec![para.clone()],
+  );
+  parent.id = 41;
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&parent, &LayoutConstraints::definite_width(200.0))
+    .expect("layout");
+
+  let para_frags = fragments_with_id(&fragment, para.id);
+  assert_eq!(para_frags.len(), 2, "paragraph should split across columns");
+
+  let first = para_frags
+    .iter()
+    .find(|f| f.fragment_index == 0)
+    .expect("first column fragment");
+  let second = para_frags
+    .iter()
+    .find(|f| f.fragment_index == 1)
+    .expect("second column fragment");
+
+  assert_eq!(count_lines(first), 3);
+  assert_eq!(count_lines(second), 3);
+  assert!(first.bounds.x() < second.bounds.x());
+}
+
+#[test]
+fn overflow_creates_additional_column_set() {
+  let mut parent_style = ComputedStyle::default();
+  parent_style.width = Some(Length::px(200.0));
+  parent_style.column_count = Some(2);
+  parent_style.column_gap = Length::px(0.0);
+  let parent_style = Arc::new(parent_style);
+
+  let mut children = Vec::new();
+  for i in 0..4 {
+    let mut style = ComputedStyle::default();
+    style.height = Some(Length::px(30.0));
+    if i < 3 {
+      style.break_after = BreakBetween::Column;
+    }
+    let mut child = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
+    child.id = 60 + i;
+    children.push(child);
+  }
+  let third_id = children[2].id;
+
+  let mut parent = BoxNode::new_block(parent_style, FormattingContextType::Block, children);
+  parent.id = 65;
+
+  let fc = BlockFormattingContext::new();
+  let fragment = fc
+    .layout(&parent, &LayoutConstraints::definite_width(200.0))
+    .expect("layout");
+
+  let third_frag = find_fragment(&fragment, third_id).expect("third fragment");
+  assert!(
+    third_frag.bounds.y() >= 59.0,
+    "third fragment should appear in a second column set"
+  );
 }

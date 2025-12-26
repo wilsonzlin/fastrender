@@ -5,9 +5,9 @@ use fastrender::layout::contexts::inline::InlineFormattingContext;
 use fastrender::style::cascade::apply_styles;
 use fastrender::tree::box_generation::generate_box_tree;
 use fastrender::tree::box_tree::BoxNode;
+use fastrender::FormattingContext;
 use fastrender::FragmentContent;
 use fastrender::FragmentNode;
-use fastrender::FormattingContext;
 use fastrender::Rgba;
 
 fn find_first<'a>(node: &'a BoxNode, tag: &str) -> Option<&'a BoxNode> {
@@ -25,7 +25,10 @@ fn find_first<'a>(node: &'a BoxNode, tag: &str) -> Option<&'a BoxNode> {
 }
 
 fn collect_texts<'a>(fragment: &'a FragmentNode, out: &mut Vec<(&'a str, Rgba)>) {
-  if let FragmentContent::Text { text, is_marker, .. } = &fragment.content {
+  if let FragmentContent::Text {
+    text, is_marker, ..
+  } = &fragment.content
+  {
     if !is_marker {
       let color = fragment
         .style

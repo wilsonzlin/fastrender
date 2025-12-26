@@ -101,6 +101,7 @@ use crate::layout::flex_profile::reset_flex_profile;
 use crate::layout::formatting_context::intrinsic_cache_clear;
 use crate::layout::formatting_context::intrinsic_cache_reset_counters;
 use crate::layout::formatting_context::intrinsic_cache_stats;
+use crate::layout::formatting_context::set_fragmentainer_block_size_hint;
 use crate::layout::formatting_context::LayoutError as FormattingLayoutError;
 use crate::layout::pagination::{paginate_fragment_tree_with_options, PaginateOptions};
 use crate::layout::profile::layout_profile_enabled;
@@ -130,8 +131,8 @@ use crate::style::page::PageSide;
 use crate::style::types::ContainerType;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
-use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontConfig;
+use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle as DbFontStyle;
 use crate::text::font_db::ScaledMetrics;
@@ -161,7 +162,8 @@ use std::hash::{Hash, Hasher};
 use std::io;
 use std::mem;
 use std::path::PathBuf;
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex};
+#[cfg(test)]
 use url::Url;
 
 use std::time::{Duration, Instant};
@@ -2523,12 +2525,8 @@ impl FastRender {
     let diagnostics = Arc::new(Mutex::new(RenderDiagnostics::default()));
     let previous_sink = self.diagnostics.take();
     self.set_diagnostics_sink(Some(Arc::clone(&diagnostics)));
-    let outputs = self.render_html_with_options_internal(
-      html,
-      options,
-      None,
-      stats_recorder.as_mut(),
-    );
+    let outputs =
+      self.render_html_with_options_internal(html, options, None, stats_recorder.as_mut());
     self.set_diagnostics_sink(previous_sink);
     let outputs = match outputs {
       Ok(outputs) => outputs,
@@ -3030,8 +3028,13 @@ impl FastRender {
 
       // Paint to pixmap
       let offset = Point::new(-scroll.x, -scroll.y);
-      let pixmap =
-        self.paint_with_offset_traced(&fragment_tree, target_width, target_height, offset, trace)?;
+      let pixmap = self.paint_with_offset_traced(
+        &fragment_tree,
+        target_width,
+        target_height,
+        offset,
+        trace,
+      )?;
       if let Some(rec) = stats.as_deref_mut() {
         if let Some(diag) = crate::paint::painter::take_paint_diagnostics() {
           rec.stats.timings.paint_build_ms = Some(diag.build_ms);
@@ -3406,36 +3409,36 @@ impl FastRender {
       let resource = {
         let _span = trace_handle.span("html_fetch", "network");
         match self.fetcher.fetch(url) {
-        Ok(res) => res,
-        Err(e) => {
-          if let Ok(mut guard) = diagnostics.lock() {
-            guard.record_error(ResourceKind::Document, url, &e);
-            guard.document_error = Some(e.to_string());
-            if let Some(recorder) = stats_recorder.take() {
-              let mut stats = recorder.finish();
-              merge_image_cache_diagnostics(&mut stats);
-              let _ = crate::paint::painter::take_paint_diagnostics();
-              guard.stats = Some(stats);
+          Ok(res) => res,
+          Err(e) => {
+            if let Ok(mut guard) = diagnostics.lock() {
+              guard.record_error(ResourceKind::Document, url, &e);
+              guard.document_error = Some(e.to_string());
+              if let Some(recorder) = stats_recorder.take() {
+                let mut stats = recorder.finish();
+                merge_image_cache_diagnostics(&mut stats);
+                let _ = crate::paint::painter::take_paint_diagnostics();
+                guard.stats = Some(stats);
+              }
             }
+            if options.allow_partial {
+              let pixmap = self.render_error_overlay(width, height)?;
+              let diagnostics = diagnostics.lock().unwrap().clone();
+              return Ok(RenderReport {
+                pixmap,
+                accessibility: None,
+                diagnostics,
+                artifacts: RenderArtifacts::new(artifacts),
+              });
+            }
+            let reason = e.to_string();
+            let source = Arc::new(e);
+            return Err(Error::Navigation(NavigationError::FetchFailed {
+              url: url.to_string(),
+              reason,
+              source: Some(source),
+            }));
           }
-          if options.allow_partial {
-            let pixmap = self.render_error_overlay(width, height)?;
-            let diagnostics = diagnostics.lock().unwrap().clone();
-            return Ok(RenderReport {
-              pixmap,
-              accessibility: None,
-              diagnostics,
-              artifacts: RenderArtifacts::new(artifacts),
-            });
-          }
-          let reason = e.to_string();
-          let source = Arc::new(e);
-          return Err(Error::Navigation(NavigationError::FetchFailed {
-            url: url.to_string(),
-            reason,
-            source: Some(source),
-          }));
-        }
         }
       };
 
@@ -4307,13 +4310,7 @@ impl FastRender {
   ) -> Result<FragmentTree> {
     let trace = TraceHandle::disabled();
     let artifacts = self.layout_document_for_media_with_artifacts(
-      dom,
-      width,
-      height,
-      media_type,
-      options,
-      deadline,
-      &trace,
+      dom, width, height, media_type, options, deadline, &trace,
     )?;
     Ok(artifacts.fragment_tree)
   }
@@ -4451,7 +4448,11 @@ impl FastRender {
     let intrinsic_start = timings_enabled.then(Instant::now);
     {
       let _span = trace.span("replaced_intrinsic", "layout");
-      self.resolve_replaced_intrinsic_sizes_for_media(&mut box_tree.root, layout_viewport, media_type);
+      self.resolve_replaced_intrinsic_sizes_for_media(
+        &mut box_tree.root,
+        layout_viewport,
+        media_type,
+      );
     }
     if let Some(start) = intrinsic_start {
       eprintln!("timing:intrinsic_sizes {:?}", start.elapsed());
@@ -4604,6 +4605,13 @@ impl FastRender {
     let mut layout_start = stage_start;
 
     // Perform initial layout
+    let _fragmentainer_hint = if page_rules.is_empty() {
+      None
+    } else {
+      Some(set_fragmentainer_block_size_hint(Some(
+        layout_viewport.height,
+      )))
+    };
     let mut fragment_tree = self
       .layout_engine
       .layout_tree_with_trace(&box_tree, trace)
@@ -4811,6 +4819,14 @@ impl FastRender {
           if flex_profile {
             reset_flex_profile();
           }
+
+          let _fragmentainer_hint = if page_rules.is_empty() {
+            None
+          } else {
+            Some(set_fragmentainer_block_size_hint(Some(
+              layout_viewport.height,
+            )))
+          };
 
           layout_start = timings_enabled.then(Instant::now);
           fragment_tree = self
@@ -5370,7 +5386,10 @@ impl FastRender {
               if let Some(ctx) = resource_context {
                 if let Err(err) = ctx.policy.allows(u) {
                   diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
-                  return Err(Error::Resource(ResourceError::new(u.to_string(), err.reason)));
+                  return Err(Error::Resource(ResourceError::new(
+                    u.to_string(),
+                    err.reason,
+                  )));
                 }
               }
               match fetcher.fetch(u) {

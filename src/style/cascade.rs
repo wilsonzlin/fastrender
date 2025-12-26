@@ -1695,7 +1695,12 @@ fn compute_base_styles<'a>(
   inherit_styles(&mut styles, parent_styles);
 
   // Apply matching CSS rules and inline styles with full cascade ordering
-  append_presentational_hints(node, ancestors, parent_styles.direction, &mut matching_rules);
+  append_presentational_hints(
+    node,
+    ancestors,
+    parent_styles.direction,
+    &mut matching_rules,
+  );
   let inline_decls = node
     .get_attribute("style")
     .as_deref()
@@ -2104,9 +2109,9 @@ fn apply_styles_internal_with_ancestors<'a>(
       selector_caches,
       scratch,
       ancestors.as_slice(),
-    &mut base.styles,
-    &base.ua_styles,
-    base.current_root_font_size,
+      &mut base.styles,
+      &base.ua_styles,
+      base.current_root_font_size,
       base.current_ua_root_font_size,
       viewport,
     );

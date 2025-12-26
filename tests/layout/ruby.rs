@@ -161,10 +161,15 @@ fn ruby_inter_character_mode_still_renders_annotations() {
       .expect("layout ruby");
 
     let base = baseline_for_text(&tree.root, "文").expect("base span");
-    let annotation = baseline_for_text(&tree.root, "ぶん").expect("annotation span");
+    let annotation = baseline_for_text(&tree.root, "ぶ").expect("annotation span");
 
     let base_span = span_for_text_x(&tree.root, "文").expect("base bounds");
-    let annotation_span = span_for_text_x(&tree.root, "ぶん").expect("annotation bounds");
+    let annotation_span_bu = span_for_text_x(&tree.root, "ぶ").expect("annotation bounds");
+    let annotation_span_n = span_for_text_x(&tree.root, "ん").unwrap_or(annotation_span_bu);
+    let annotation_span = (
+      annotation_span_bu.0.min(annotation_span_n.0),
+      annotation_span_bu.1.max(annotation_span_n.1),
+    );
 
     assert!(
       annotation < base,

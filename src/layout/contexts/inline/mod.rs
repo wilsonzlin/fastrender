@@ -11408,6 +11408,67 @@ mod tests {
   }
 
   #[test]
+  fn pre_emits_breaks_for_each_newline() {
+    let mut style = ComputedStyle::default();
+    style.white_space = WhiteSpace::Pre;
+    let normalized = normalize_text_for_white_space(
+      "one\ntwo\nthree\nfour\nfive\nsix",
+      style.white_space,
+      style.text_wrap,
+    );
+    assert_eq!(normalized.text, "onetwothreefourfivesix");
+    assert_eq!(
+      normalized
+        .forced_breaks
+        .iter()
+        .map(|b| b.byte_offset)
+        .collect::<Vec<_>>(),
+      vec![3, 6, 11, 15, 19]
+    );
+  }
+
+  #[test]
+  fn white_space_pre_creates_line_per_newline() {
+    fn collect_line_texts(fragment: &FragmentNode, out: &mut Vec<String>) {
+      fn collect_text(fragment: &FragmentNode, out: &mut String) {
+        if let FragmentContent::Text { text, .. } = &fragment.content {
+          out.push_str(text);
+        }
+        for child in &fragment.children {
+          collect_text(child, out);
+        }
+      }
+
+      if matches!(fragment.content, FragmentContent::Line { .. }) {
+        let mut text = String::new();
+        collect_text(fragment, &mut text);
+        out.push(text);
+      }
+      for child in &fragment.children {
+        collect_line_texts(child, out);
+      }
+    }
+
+    let ifc = InlineFormattingContext::new();
+    let mut style = ComputedStyle::default();
+    style.white_space = WhiteSpace::Pre;
+    style.font_size = 16.0;
+    let style = Arc::new(style);
+
+    let text = BoxNode::new_text(
+      style.clone(),
+      "one\ntwo\nthree\nfour\nfive\nsix".to_string(),
+    );
+    let root = BoxNode::new_block(style, FormattingContextType::Block, vec![text]);
+    let constraints = LayoutConstraints::definite_width(200.0);
+
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+    let mut lines = Vec::new();
+    collect_line_texts(&fragment, &mut lines);
+    assert_eq!(lines, vec!["one", "two", "three", "four", "five", "six"]);
+  }
+
+  #[test]
   fn collapsible_space_survives_across_text_nodes() {
     let mut style = ComputedStyle::default();
     style.white_space = WhiteSpace::Normal;
