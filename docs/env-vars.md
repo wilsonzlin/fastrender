@@ -15,6 +15,11 @@ The rendering pipeline parses the environment once into a typed [`RuntimeToggles
 - `FASTR_USE_BUNDLED_FONTS=1` – disable system font discovery and use the bundled fixtures (default in CI).
 - `FASTR_FETCH_LINK_CSS=0` – skip fetching linked stylesheets (defaults to on).
 
+## Resource limits
+
+- `FASTR_MAX_FOREIGN_OBJECT_CSS_BYTES=<N>` – cap the amount of document-level CSS injected into nested
+  `<foreignObject>` HTML renders (default 262_144 bytes).
+
 ## Debug dumps (paint / display list)
 
 These are emitted by the paint pipeline:
