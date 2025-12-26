@@ -260,6 +260,49 @@ fn margin_box_content_is_positioned_in_margins() {
 }
 
 #[test]
+fn margin_box_uses_custom_counter_style() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @counter-style alpha2 { system: fixed 1; symbols: "A" "B" "C"; }
+          @page {
+            size: 200px 100px;
+            margin: 10px;
+            @bottom-center { content: counter(page, alpha2); }
+          }
+        </style>
+      </head>
+      <body>
+        <div style="height: 120px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "expected at least two pages for page counter test"
+  );
+
+  let first = page_roots[0];
+  let second = page_roots[1];
+
+  assert!(
+    find_text(first, "A").is_some(),
+    "page 1 should render counter(page) with the first symbol"
+  );
+  assert!(
+    find_text(second, "B").is_some(),
+    "page 2 should render counter(page) with the second symbol"
+  );
+}
+
+#[test]
 fn margin_box_text_is_shaped() {
   let html = r#"
     <html>

@@ -135,6 +135,7 @@ pub fn paginate_fragment_tree(
 
   let style_hash = layout_style_fingerprint(root_style);
   let font_generation = font_ctx.font_generation();
+  let counter_styles = root_style.counter_styles.clone();
   let mut layouts: HashMap<PageLayoutKey, CachedLayout> = HashMap::new();
 
   if let Some((style, root)) = initial_layout {
@@ -304,7 +305,13 @@ pub fn paginate_fragment_tree(
   for (idx, (mut page, style)) in pages.into_iter().enumerate() {
     page
       .children
-      .extend(build_margin_box_fragments(&style, font_ctx, idx, count));
+      .extend(build_margin_box_fragments(
+        &style,
+        font_ctx,
+        counter_styles.clone(),
+        idx,
+        count,
+      ));
     propagate_fragment_metadata(&mut page, idx, count);
     page_roots.push(page);
   }
@@ -475,11 +482,12 @@ fn collect_fixed_fragments(node: &FragmentNode, origin: Point, out: &mut Vec<Fra
 fn build_margin_box_fragments(
   style: &ResolvedPageStyle,
   font_ctx: &FontContext,
+  counter_styles: Arc<CounterStyleRegistry>,
   page_index: usize,
   page_count: usize,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
-  let generator = ContentGenerator::new();
+  let generator = ContentGenerator::with_counter_styles(counter_styles);
   let shaper = ShapingPipeline::new();
   let mut context = ContentContext::new();
   context.set_counter("page", (page_index + 1) as i32);
