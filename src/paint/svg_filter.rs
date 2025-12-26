@@ -3030,6 +3030,47 @@ mod tests {
     apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
     assert!(pixmap.pixels().iter().all(|px| px.alpha() == 0));
   }
+
+  #[test]
+  fn morphology_dilate_only_expands_horizontally_when_vertical_radius_zero() {
+    let mut pixmap = Pixmap::new(5, 3).unwrap();
+    let idx = 1 * 5 + 2;
+    pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+
+    apply_morphology(&mut pixmap, (1.0, 0.0), MorphologyOp::Dilate);
+
+    let pixels = pixmap.pixels();
+    for y in 0..3 {
+      for x in 0..5 {
+        let idx = (y * 5 + x) as usize;
+        let alpha = pixels[idx].alpha();
+        if y == 1 && (1..=3).contains(&x) {
+          assert!(alpha > 0, "expected dilation at ({x},{y})");
+        } else {
+          assert_eq!(alpha, 0, "unexpected pixel affected at ({x},{y})");
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn turbulence_base_frequency_parses_pair() {
+    let doc =
+      roxmltree::Document::parse("<filter><feTurbulence baseFrequency=\"0.1 0.2\"/></filter>")
+        .unwrap();
+    let node = doc
+      .descendants()
+      .find(|n| n.has_tag_name("feTurbulence"))
+      .unwrap();
+    let primitive = parse_fe_turbulence(&node).expect("should parse turbulence");
+    match primitive {
+      FilterPrimitive::Turbulence { base_frequency, .. } => {
+        assert!((base_frequency.0 - 0.1).abs() < 1e-6);
+        assert!((base_frequency.1 - 0.2).abs() < 1e-6);
+      }
+      _ => panic!("expected turbulence primitive"),
+    }
+  }
 }
 
 #[cfg(test)]

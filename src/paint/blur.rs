@@ -500,3 +500,35 @@ pub(crate) fn apply_gaussian_blur_anisotropic(pixmap: &mut Pixmap, sigma_x: f32,
       .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tiny_skia::PremultipliedColorU8;
+
+  #[test]
+  fn blur_with_zero_sigma_x_only_blurs_vertically() {
+    let mut pixmap = Pixmap::new(3, 5).unwrap();
+    let idx = 2 * 3 + 1;
+    pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+
+    apply_gaussian_blur_anisotropic(&mut pixmap, 0.0, 2.0);
+
+    let pixels = pixmap.pixels();
+    let mut center_non_zero = 0;
+    for (i, px) in pixels.iter().enumerate() {
+      let x = i % 3;
+      if x == 1 {
+        if px.alpha() > 0 {
+          center_non_zero += 1;
+        }
+      } else {
+        assert_eq!(px.alpha(), 0, "blur spread horizontally to column {}", x);
+      }
+    }
+    assert!(
+      center_non_zero > 1,
+      "expected vertical spread in center column"
+    );
+  }
+}
