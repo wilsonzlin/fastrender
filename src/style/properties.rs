@@ -7542,10 +7542,55 @@ pub fn apply_declaration_with_base(
       }
     }
     "mask" => {
-      if let Some(images) = parse_background_image_list(&resolved_value) {
-        styles.mask_images = images;
-        styles.rebuild_mask_layers();
+      let tokens: Vec<PropertyValue> = match resolved_value {
+        PropertyValue::Multiple(ref parts) => parts.clone(),
+        _ => vec![resolved_value.clone()],
+      };
+
+      if tokens.is_empty() {
+        return;
       }
+
+      let layers = split_layers(&tokens);
+      let mut parsed_layers = Vec::new();
+      for layer_tokens in layers {
+        if let Some(parsed) = parse_mask_shorthand(&layer_tokens) {
+          parsed_layers.push(parsed);
+        }
+      }
+      if parsed_layers.is_empty() {
+        return;
+      }
+
+      let mut layers = Vec::new();
+      for parsed in parsed_layers {
+        let mut layer = MaskLayer::default();
+        layer.image = parsed.image;
+        if let Some(pos) = parsed.position {
+          layer.position = pos;
+        }
+        if let Some(size) = parsed.size {
+          layer.size = size;
+        }
+        if let Some(rep) = parsed.repeat {
+          layer.repeat = rep;
+        }
+        if let Some(mode) = parsed.mode {
+          layer.mode = mode;
+        }
+        if let Some(origin) = parsed.origin {
+          layer.origin = origin;
+        }
+        if let Some(clip) = parsed.clip {
+          layer.clip = clip;
+        }
+        if let Some(composite) = parsed.composite {
+          layer.composite = composite;
+        }
+        layers.push(layer);
+      }
+      styles.set_mask_layers(layers);
+      styles.rebuild_mask_layers();
     }
 
     // Shorthand: background
@@ -19758,6 +19803,169 @@ mod tests {
     );
   }
 }
+
+#[derive(Default)]
+struct MaskShorthand {
+  image: Option<BackgroundImage>,
+  position: Option<BackgroundPosition>,
+  size: Option<BackgroundSize>,
+  repeat: Option<BackgroundRepeat>,
+  mode: Option<MaskMode>,
+  origin: Option<MaskOrigin>,
+  clip: Option<MaskClip>,
+  composite: Option<MaskComposite>,
+}
+
+fn mask_clip_to_origin(clip: MaskClip) -> Option<MaskOrigin> {
+  match clip {
+    MaskClip::BorderBox => Some(MaskOrigin::BorderBox),
+    MaskClip::PaddingBox => Some(MaskOrigin::PaddingBox),
+    MaskClip::ContentBox => Some(MaskOrigin::ContentBox),
+    _ => None,
+  }
+}
+
+fn parse_mask_shorthand(tokens: &[PropertyValue]) -> Option<MaskShorthand> {
+  if tokens.is_empty() {
+    return None;
+  }
+
+  let mut shorthand = MaskShorthand::default();
+
+  // Split position/size by `/` if present
+  let mut slash_idx = None;
+  let mut size_end = tokens.len();
+  if let Some(idx) = tokens
+    .iter()
+    .position(|t| matches!(t, PropertyValue::Keyword(k) if k == "/"))
+  {
+    slash_idx = Some(idx);
+    let mut size_tokens: Vec<PropertyValue> = Vec::new();
+    let mut cursor = idx + 1;
+    while cursor < tokens.len() {
+      let t = &tokens[cursor];
+      let is_size_token = match t {
+        PropertyValue::Length(_) | PropertyValue::Percentage(_) => true,
+        PropertyValue::Number(n) if *n == 0.0 => true,
+        PropertyValue::Keyword(k) if k == "auto" || k == "cover" || k == "contain" => true,
+        _ => false,
+      };
+      if is_size_token {
+        size_tokens.push(t.clone());
+        cursor += 1;
+      } else {
+        break;
+      }
+    }
+    size_end = cursor;
+    let pos_tokens = &tokens[..idx];
+    if !pos_tokens.is_empty() {
+      if let Some(pos) = parse_background_position(&PropertyValue::Multiple(pos_tokens.to_vec())) {
+        shorthand.position = Some(pos);
+      }
+    }
+    if !size_tokens.is_empty() {
+      if let Some(size) = parse_background_size(&PropertyValue::Multiple(size_tokens.clone())) {
+        shorthand.size = Some(size);
+      }
+    }
+  }
+
+  let mut boxes: Vec<MaskClip> = Vec::new();
+  let mut idx = 0;
+  while idx < tokens.len() {
+    if slash_idx == Some(idx) {
+      idx = size_end;
+      continue;
+    }
+
+    let token = &tokens[idx];
+
+    if shorthand.image.is_none() {
+      if let Some(img) = parse_background_image_value(token) {
+        shorthand.image = match img {
+          BackgroundImage::None => None,
+          other => Some(other),
+        };
+        idx += 1;
+        continue;
+      }
+    }
+
+    if shorthand.repeat.is_none() {
+      if let Some(rep) = parse_background_repeat(token) {
+        shorthand.repeat = Some(rep);
+        idx += 1;
+        continue;
+      }
+      if idx + 1 < tokens.len() {
+        if let PropertyValue::Keyword(_) = token {
+          if let PropertyValue::Keyword(_) = tokens[idx + 1] {
+            let pair = PropertyValue::Multiple(vec![token.clone(), tokens[idx + 1].clone()]);
+            if let Some(rep) = parse_background_repeat(&pair) {
+              shorthand.repeat = Some(rep);
+              idx += 2;
+              continue;
+            }
+          }
+        }
+      }
+    }
+
+    if shorthand.mode.is_none() {
+      if let Some(mode) = parse_mask_mode(token) {
+        shorthand.mode = Some(mode);
+        idx += 1;
+        continue;
+      }
+    }
+
+    if shorthand.composite.is_none() {
+      if let Some(comp) = parse_mask_composite(token) {
+        shorthand.composite = Some(comp);
+        idx += 1;
+        continue;
+      }
+    }
+
+    if let Some(clip) = parse_mask_clip(token) {
+      boxes.push(clip);
+      idx += 1;
+      continue;
+    }
+
+    if shorthand.position.is_none() {
+      if let Some(pos) = parse_background_position(token) {
+        shorthand.position = Some(pos);
+        idx += 1;
+        continue;
+      }
+    }
+
+    idx += 1;
+  }
+
+  if shorthand.origin.is_none() || shorthand.clip.is_none() {
+    if boxes.len() == 1 {
+      if shorthand.origin.is_none() {
+        shorthand.origin = mask_clip_to_origin(boxes[0]);
+      }
+      if shorthand.clip.is_none() {
+        shorthand.clip = Some(boxes[0]);
+      }
+    } else if boxes.len() >= 2 {
+      if shorthand.origin.is_none() {
+        shorthand.origin = mask_clip_to_origin(boxes[0]);
+      }
+      if shorthand.clip.is_none() {
+        shorthand.clip = Some(boxes[1]);
+      }
+    }
+  }
+
+  Some(shorthand)
+}
+
 #[derive(Default)]
 struct BackgroundShorthand {
   color: Option<Rgba>,
