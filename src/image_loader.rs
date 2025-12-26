@@ -1673,7 +1673,16 @@ impl ImageCache {
       return Ok(pixmap);
     }
 
-    let options = usvg::Options::default();
+    let mut options = usvg::Options::default();
+    if let Ok(parsed) = Url::parse(url) {
+      if parsed.scheme() == "file" {
+        if let Ok(path) = parsed.to_file_path() {
+          if let Some(dir) = path.parent() {
+            options.resources_dir = std::fs::canonicalize(dir).ok().or_else(|| Some(dir.to_path_buf()));
+          }
+        }
+      }
+    }
     let tree = usvg::Tree::from_str(svg_content, &options).map_err(|e| {
       Error::Image(ImageError::DecodeFailed {
         url: url.to_string(),
@@ -2272,7 +2281,16 @@ impl ImageCache {
       svg_intrinsic_metadata(svg_content).unwrap_or((None, None, None, false));
 
     // Parse SVG
-    let options = usvg::Options::default();
+    let mut options = usvg::Options::default();
+    if let Ok(parsed) = Url::parse(url) {
+      if parsed.scheme() == "file" {
+        if let Ok(path) = parsed.to_file_path() {
+          if let Some(dir) = path.parent() {
+            options.resources_dir = std::fs::canonicalize(dir).ok().or_else(|| Some(dir.to_path_buf()));
+          }
+        }
+      }
+    }
     let tree = usvg::Tree::from_str(svg_content, &options).map_err(|e| {
       Error::Image(ImageError::DecodeFailed {
         url: url.to_string(),
