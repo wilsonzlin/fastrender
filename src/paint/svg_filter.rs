@@ -1186,6 +1186,18 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
     css_region.width() * scale,
     css_region.height() * scale,
   );
+  if !filter_region.x().is_finite()
+    || !filter_region.y().is_finite()
+    || !filter_region.width().is_finite()
+    || !filter_region.height().is_finite()
+    || filter_region.width() <= 0.0
+    || filter_region.height() <= 0.0
+  {
+    for px in pixmap.pixels_mut() {
+      *px = PremultipliedColorU8::TRANSPARENT;
+    }
+    return;
+  }
   let default_primitive_region = SvgFilterRegion {
     x: def.region.x,
     y: def.region.y,
@@ -1212,7 +1224,30 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
       css_prim_region.height() * scale,
     );
     primitive_region = clip_region(primitive_region, filter_region);
-    if let Some(next) = apply_primitive(
+    let primitive_region_valid = primitive_region.x().is_finite()
+      && primitive_region.y().is_finite()
+      && primitive_region.width().is_finite()
+      && primitive_region.height().is_finite()
+      && primitive_region.width() > 0.0
+      && primitive_region.height() > 0.0;
+    if !primitive_region_valid {
+      let mut out = match Pixmap::new(source.pixmap.width(), source.pixmap.height()) {
+        Some(p) => p,
+        None => continue,
+      };
+      clip_to_region(&mut out, Rect::ZERO);
+      let next = FilterResult {
+        pixmap: out,
+        region: Rect::ZERO,
+      };
+      if let Some(name) = &step.result {
+        results.insert(name.clone(), next.clone());
+      }
+      current = next;
+      continue;
+    }
+
+    if let Some(mut next) = apply_primitive(
       &step.primitive,
       &source,
       &results,
@@ -1221,6 +1256,8 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
       primitive_region,
       color_interpolation_filters,
     ) {
+      next.region = clip_region(next.region, primitive_region);
+      clip_to_region(&mut next.pixmap, primitive_region);
       if let Some(name) = &step.result {
         results.insert(name.clone(), next.clone());
       }
@@ -1752,47 +1789,54 @@ fn tile_pixmap(input: FilterResult, filter_region: Rect) -> Option<FilterResult>
   let width = input.pixmap.width();
   let height = input.pixmap.height();
   let mut out = Pixmap::new(width, height)?;
-  let clipped_region = clip_region(input.region, filter_region);
   let Some((start_x, start_y, tile_width, tile_height)) =
-    region_to_int_bounds(clipped_region, width, height)
+    region_to_int_bounds(input.region, width, height)
   else {
     return Some(FilterResult {
       pixmap: out,
       region: Rect::ZERO,
     });
   };
-  let mut tile = Pixmap::new(tile_width, tile_height)?;
-  {
-    let src_pixels = input.pixmap.pixels();
-    let dst_pixels = tile.pixels_mut();
-    let src_stride = width as usize;
-    let dst_stride = tile_width as usize;
-    for row in 0..(tile_height as usize) {
-      let src_start = (start_y as usize + row) * src_stride + start_x as usize;
-      let src_end = src_start + dst_stride;
-      let dst_start = row * dst_stride;
-      let dst_end = dst_start + dst_stride;
-      dst_pixels[dst_start..dst_end].copy_from_slice(&src_pixels[src_start..src_end]);
+  let Some((target_x, target_y, target_w, target_h)) =
+    region_to_int_bounds(filter_region, width, height)
+  else {
+    return Some(FilterResult {
+      pixmap: out,
+      region: Rect::ZERO,
+    });
+  };
+
+  let wrap = |value: i32, origin: i32, size: i32| -> i32 {
+    if size == 0 {
+      return origin;
+    }
+    let offset = value - origin;
+    origin + ((offset % size + size) % size)
+  };
+
+  let tile_w = tile_width as i32;
+  let tile_h = tile_height as i32;
+  let src_stride = width as usize;
+  let dst_stride = width as usize;
+  let src_pixels = input.pixmap.pixels();
+  let dst_pixels = out.pixels_mut();
+
+  for y in (target_y as i32)..(target_y as i32 + target_h as i32) {
+    let src_y = wrap(y, start_y as i32, tile_h);
+    let src_row = src_y as usize * src_stride;
+    let dst_row = y as usize * dst_stride;
+    for x in (target_x as i32)..(target_x as i32 + target_w as i32) {
+      let src_x = wrap(x, start_x as i32, tile_w);
+      let dst_idx = dst_row + x as usize;
+      let src_idx = src_row + src_x as usize;
+      dst_pixels[dst_idx] = src_pixels[src_idx];
     }
   }
 
-  let mut paint = PixmapPaint::default();
-  paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-  let tile_width_i32 = tile_width as i32;
-  let tile_height_i32 = tile_height as i32;
-  let mut y = 0;
-  while y < height as i32 {
-    let mut x = 0;
-    while x < width as i32 {
-      out.draw_pixmap(x, y, tile.as_ref(), &paint, Transform::identity(), None);
-      x += tile_width_i32;
-    }
-    y += tile_height_i32;
-  }
-
+  let output_region = clip_region(filter_region, filter_region_for_pixmap(&out));
   Some(FilterResult {
     pixmap: out,
-    region: filter_region,
+    region: output_region,
   })
 }
 
@@ -2697,6 +2741,88 @@ mod tests {
     assert_eq!(out_pixels[1], PremultipliedColorU8::TRANSPARENT);
     assert_eq!(out_pixels[2], PremultipliedColorU8::TRANSPARENT);
     assert_eq!(out_pixels[3], PremultipliedColorU8::TRANSPARENT);
+  }
+
+  #[test]
+  fn tile_aligns_to_input_region_origin() {
+    let mut pixmap = Pixmap::new(4, 4).unwrap();
+    let width = pixmap.width() as usize;
+    let set = |pixmap: &mut Pixmap, x: usize, y: usize, rgba: (u8, u8, u8, u8)| {
+      pixmap.pixels_mut()[y * width + x] = ColorU8::from_rgba(rgba.0, rgba.1, rgba.2, rgba.3)
+        .premultiply();
+    };
+
+    set(&mut pixmap, 1, 0, (255, 0, 0, 255)); // red
+    set(&mut pixmap, 2, 0, (0, 255, 0, 255)); // green
+    set(&mut pixmap, 1, 1, (0, 0, 255, 255)); // blue
+    set(&mut pixmap, 2, 1, (255, 255, 255, 255)); // white
+
+    let input = FilterResult {
+      pixmap,
+      region: Rect::from_xywh(1.0, 0.0, 2.0, 2.0),
+    };
+    let out = tile_pixmap(input, Rect::from_xywh(0.0, 0.0, 4.0, 4.0)).unwrap();
+
+    let px = |pixmap: &Pixmap, x: usize, y: usize| {
+      let p = pixmap.pixels()[y * 4 + x];
+      (p.red(), p.green(), p.blue(), p.alpha())
+    };
+
+    assert_eq!(px(&out.pixmap, 0, 0), (0, 255, 0, 255)); // green
+    assert_eq!(px(&out.pixmap, 1, 0), (255, 0, 0, 255)); // red
+    assert_eq!(px(&out.pixmap, 0, 1), (255, 255, 255, 255)); // white
+    assert_eq!(px(&out.pixmap, 1, 1), (0, 0, 255, 255)); // blue
+  }
+
+  #[test]
+  fn empty_primitive_region_produces_transparent_output() {
+    let mut pixmap = Pixmap::new(4, 4).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = premul(10, 20, 30, 255);
+    }
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
+    let filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+      steps: vec![
+        FilterStep {
+          result: None,
+          color_interpolation_filters: None,
+          primitive: FilterPrimitive::Flood {
+            color: Rgba::new(255, 0, 0, 1.0),
+            opacity: 1.0,
+          },
+          region: None,
+        },
+        FilterStep {
+          result: None,
+          color_interpolation_filters: None,
+          primitive: FilterPrimitive::Offset {
+            input: FilterInput::Previous,
+            dx: 0.0,
+            dy: 0.0,
+          },
+          region: Some(SvgFilterRegion {
+            x: SvgLength::Number(0.0),
+            y: SvgLength::Number(0.0),
+            width: SvgLength::Number(0.0),
+            height: SvgLength::Number(0.0),
+            units: SvgFilterUnits::UserSpaceOnUse,
+          }),
+        },
+      ],
+      region: SvgFilterRegion {
+        x: SvgLength::Number(0.0),
+        y: SvgLength::Number(0.0),
+        width: SvgLength::Number(4.0),
+        height: SvgLength::Number(4.0),
+        units: SvgFilterUnits::UserSpaceOnUse,
+      },
+      primitive_units: SvgFilterUnits::UserSpaceOnUse,
+    };
+
+    apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
+    assert!(pixmap.pixels().iter().all(|px| px.alpha() == 0));
   }
 }
 
