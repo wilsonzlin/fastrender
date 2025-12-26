@@ -6,7 +6,6 @@ use super::types::CssString;
 use cssparser::ParseError;
 use cssparser::Parser;
 use cssparser::ToCss;
-use cssparser::Token;
 use selectors::parser::SelectorImpl;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
@@ -287,9 +286,9 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
       "target-within" => Ok(PseudoClass::TargetWithin),
       "scope" => Ok(PseudoClass::Scope),
       _ => Err(ParseError {
-        kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(
-          Token::Ident(name),
-        )),
+        kind: cssparser::ParseErrorKind::Custom(
+          SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name),
+        ),
         location: _location,
       }),
     }
@@ -405,9 +404,9 @@ impl<'i> selectors::parser::Parser<'i> for PseudoClassParser {
       "marker" => Ok(PseudoElement::Marker),
       "backdrop" => Ok(PseudoElement::Backdrop),
       _ => Err(ParseError {
-        kind: cssparser::ParseErrorKind::Basic(cssparser::BasicParseErrorKind::UnexpectedToken(
-          Token::Ident(name),
-        )),
+        kind: cssparser::ParseErrorKind::Custom(
+          SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name),
+        ),
         location: _location,
       }),
     }

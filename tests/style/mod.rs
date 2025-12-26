@@ -13,6 +13,7 @@ mod css_numeric_functions;
 mod defaults_test;
 mod extract_print;
 mod flex_property_test;
+mod forgiving_selector_list_test;
 mod grid_property_test;
 mod has_selector_test;
 mod layer_important_test;
