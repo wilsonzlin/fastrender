@@ -811,6 +811,9 @@ pub struct FragmentTree {
   /// Collected @keyframes rules active for this tree.
   pub keyframes: HashMap<String, KeyframesRule>,
 
+  /// SVG filter definitions serialized from the DOM (document-level registry).
+  pub svg_filter_defs: Option<Arc<HashMap<String, String>>>,
+
   /// The viewport size (may differ from root fragment bounds)
   viewport: Option<Size>,
 
@@ -824,6 +827,7 @@ impl FragmentTree {
     Self {
       root,
       additional_fragments: Vec::new(),
+      svg_filter_defs: None,
       viewport: None,
       keyframes: HashMap::new(),
       scroll_metadata: None,
@@ -838,6 +842,7 @@ impl FragmentTree {
     Self {
       root,
       additional_fragments: Vec::new(),
+      svg_filter_defs: None,
       viewport: Some(viewport),
       keyframes: HashMap::new(),
       scroll_metadata: None,
@@ -856,6 +861,7 @@ impl FragmentTree {
     Self {
       root,
       additional_fragments: roots,
+      svg_filter_defs: None,
       viewport: Some(viewport),
       keyframes: HashMap::new(),
       scroll_metadata: None,

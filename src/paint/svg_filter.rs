@@ -2,6 +2,8 @@ use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
 use crate::paint::blur::apply_gaussian_blur_anisotropic;
 use crate::style::color;
+use crate::tree::box_tree::ReplacedType;
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
 use crate::Rgba;
 use rayon::prelude::*;
 use roxmltree::Document;
@@ -764,6 +766,81 @@ pub(crate) fn collect_svg_filters(
   }
 
   registry
+}
+
+/// Resolves SVG filter references against a document-level registry and fragment tree.
+///
+/// This resolver prioritizes serialized definitions collected from the DOM (which include display-
+/// none SVGs) before falling back to scanning laid-out fragments for inline SVG content. Results
+/// are cached per-instance to avoid reparsing filters referenced multiple times.
+pub struct SvgFilterResolver<'a> {
+  svg_defs: Option<Arc<HashMap<String, String>>>,
+  fragment_roots: Vec<&'a FragmentNode>,
+  image_cache: Option<&'a ImageCache>,
+  cache: HashMap<String, Arc<SvgFilter>>,
+}
+
+impl<'a> SvgFilterResolver<'a> {
+  /// Creates a new resolver.
+  pub fn new(
+    svg_defs: Option<Arc<HashMap<String, String>>>,
+    fragment_roots: Vec<&'a FragmentNode>,
+    image_cache: Option<&'a ImageCache>,
+  ) -> Self {
+    Self {
+      svg_defs,
+      fragment_roots,
+      image_cache,
+      cache: HashMap::new(),
+    }
+  }
+
+  /// Resolves the given URL into a parsed SVG filter, caching the result.
+  pub fn resolve(&mut self, url: &str) -> Option<Arc<SvgFilter>> {
+    if let Some(existing) = self.cache.get(url) {
+      return Some(existing.clone());
+    }
+
+    let resolved = self.resolve_uncached(url);
+    if let Some(filter) = resolved.as_ref() {
+      self.cache.insert(url.to_string(), filter.clone());
+    }
+    resolved
+  }
+
+  fn resolve_uncached(&self, url: &str) -> Option<Arc<SvgFilter>> {
+    let cache = self.image_cache?;
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+      return None;
+    }
+
+    if let Some(id) = trimmed.strip_prefix('#') {
+      if let Some(defs) = &self.svg_defs {
+        if let Some(serialized) = defs.get(id) {
+          if let Some(filter) = parse_filter_definition(serialized, Some(id), cache) {
+            return Some(filter);
+          }
+        }
+      }
+
+      for root in &self.fragment_roots {
+        for fragment in root.iter_fragments() {
+          if let FragmentContent::Replaced { replaced_type, .. } = &fragment.content {
+            if let ReplacedType::Svg { content } = replaced_type {
+              if let Some(filter) = parse_filter_definition(&content.svg, Some(id), cache) {
+                return Some(filter);
+              }
+            }
+          }
+        }
+      }
+
+      None
+    } else {
+      load_svg_filter(trimmed, cache)
+    }
+  }
 }
 
 fn parse_input(attr: Option<&str>) -> FilterInput {

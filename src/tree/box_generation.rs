@@ -544,6 +544,162 @@ fn serialize_dom_subtree(node: &crate::dom::DomNode) -> String {
   }
 }
 
+fn serialize_node_with_namespaces(
+  styled: &StyledNode,
+  inherited_xmlns: &[(String, String)],
+  out: &mut String,
+) {
+  match &styled.node.node_type {
+    crate::dom::DomNodeType::Document | crate::dom::DomNodeType::ShadowRoot { .. } => {
+      for child in &styled.children {
+        serialize_node_with_namespaces(child, inherited_xmlns, out);
+      }
+    }
+    crate::dom::DomNodeType::Slot {
+      namespace,
+      attributes,
+    } => {
+      let mut attrs = attributes.clone();
+      let mut namespaces: Vec<(String, String)> = inherited_xmlns.to_vec();
+      for (name, value) in &attrs {
+        if name.starts_with("xmlns")
+          && !namespaces.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))
+        {
+          namespaces.push((name.clone(), value.clone()));
+        }
+      }
+      if !namespace.is_empty()
+        && !attrs.iter().any(|(n, _)| n.eq_ignore_ascii_case("xmlns"))
+        && !namespaces
+          .iter()
+          .any(|(n, _)| n.eq_ignore_ascii_case("xmlns"))
+      {
+        namespaces.push(("xmlns".to_string(), namespace.clone()));
+      }
+      for (name, value) in &namespaces {
+        if !attrs.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
+          attrs.push((name.clone(), value.clone()));
+        }
+      }
+
+      out.push_str("<slot");
+      for (name, value) in &attrs {
+        out.push(' ');
+        out.push_str(name);
+        out.push('=');
+        out.push('"');
+        out.push_str(&escape_attr(value));
+        out.push('"');
+      }
+      out.push('>');
+      for child in &styled.children {
+        serialize_node_with_namespaces(child, &namespaces, out);
+      }
+      out.push_str("</slot>");
+    }
+    crate::dom::DomNodeType::Text { content } => out.push_str(&escape_text(content)),
+    crate::dom::DomNodeType::Element {
+      tag_name,
+      namespace,
+      attributes,
+    } => {
+      let mut attrs = attributes.clone();
+      let mut namespaces: Vec<(String, String)> = inherited_xmlns.to_vec();
+      for (name, value) in &attrs {
+        if name.starts_with("xmlns")
+          && !namespaces.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))
+        {
+          namespaces.push((name.clone(), value.clone()));
+        }
+      }
+      if !namespace.is_empty()
+        && !attrs.iter().any(|(n, _)| n.eq_ignore_ascii_case("xmlns"))
+        && !namespaces
+          .iter()
+          .any(|(n, _)| n.eq_ignore_ascii_case("xmlns"))
+      {
+        namespaces.push(("xmlns".to_string(), namespace.clone()));
+      }
+      for (name, value) in &namespaces {
+        if !attrs.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
+          attrs.push((name.clone(), value.clone()));
+        }
+      }
+
+      out.push('<');
+      out.push_str(tag_name);
+      for (name, value) in &attrs {
+        out.push(' ');
+        out.push_str(name);
+        out.push('=');
+        out.push('"');
+        out.push_str(&escape_attr(value));
+        out.push('"');
+      }
+      out.push('>');
+      for child in &styled.children {
+        serialize_node_with_namespaces(child, &namespaces, out);
+      }
+      out.push_str("</");
+      out.push_str(tag_name);
+      out.push('>');
+    }
+  }
+}
+
+/// Serializes a styled DOM subtree without injecting document CSS or foreignObject placeholders.
+///
+/// This is intended for defs-only serialization such as collecting SVG filter definitions.
+pub fn serialize_styled_subtree_plain(styled: &StyledNode) -> String {
+  let mut out = String::new();
+  serialize_node_with_namespaces(styled, &[], &mut out);
+  out
+}
+
+/// Collect all SVG `<filter>` definitions with an `id` attribute from a styled DOM tree.
+///
+/// The returned map contains serialized filter elements keyed by their id.
+/// Namespace declarations from ancestor elements are preserved to keep prefixed attributes valid.
+pub fn collect_svg_filter_defs(styled: &StyledNode) -> HashMap<String, String> {
+  fn walk(
+    styled: &StyledNode,
+    inherited_xmlns: &[(String, String)],
+    filters: &mut HashMap<String, String>,
+  ) {
+    let mut namespaces: Vec<(String, String)> = inherited_xmlns.to_vec();
+    if let crate::dom::DomNodeType::Element {
+      tag_name,
+      attributes,
+      ..
+    } = &styled.node.node_type
+    {
+      for (name, value) in attributes.iter().filter(|(n, _)| n.starts_with("xmlns")) {
+        if !namespaces.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)) {
+          namespaces.push((name.clone(), value.clone()));
+        }
+      }
+
+      if tag_name.eq_ignore_ascii_case("filter") {
+        if let Some(id) = styled.node.get_attribute_ref("id") {
+          if !id.is_empty() && !filters.contains_key(id) {
+            let mut serialized = String::new();
+            serialize_node_with_namespaces(styled, &namespaces, &mut serialized);
+            filters.insert(id.to_string(), serialized);
+          }
+        }
+      }
+    }
+
+    for child in &styled.children {
+      walk(child, &namespaces, filters);
+    }
+  }
+
+  let mut filters = HashMap::new();
+  walk(styled, &[], &mut filters);
+  filters
+}
+
 fn format_css_color(color: crate::style::color::Rgba) -> String {
   format!(
     "rgba({},{},{},{:.3})",

@@ -9680,6 +9680,18 @@ fn parse_will_change_from_str(text: &str) -> Option<WillChange> {
 }
 
 fn parse_filter_list(value: &PropertyValue) -> Option<Vec<FilterFunction>> {
+  match value {
+    PropertyValue::Url(url) => {
+      return Some(vec![FilterFunction::Url(url.clone())]);
+    }
+    PropertyValue::Multiple(values) if values.len() == 1 => {
+      if let PropertyValue::Url(url) = &values[0] {
+        return Some(vec![FilterFunction::Url(url.clone())]);
+      }
+    }
+    _ => {}
+  }
+
   let text = match value {
     PropertyValue::Keyword(kw) => kw.as_str(),
     PropertyValue::String(s) => s.as_str(),
@@ -9776,6 +9788,19 @@ fn parse_filter_function<'i, 't>(
         .try_parse(|p| p.expect_url().map(|u| u.as_ref().to_string()))
         .or_else(|_| input.try_parse(|p| p.expect_string().map(|s| s.as_ref().to_string())))
         .or_else(|_| input.try_parse(|p| p.expect_ident_cloned().map(|s| s.to_string())))
+        .or_else(|_| {
+          input.try_parse(|p| -> Result<String, cssparser::ParseError<'_, ()>> {
+            let hash = match p.next()? {
+              Token::IDHash(value) | Token::Hash(value) => value.as_ref().to_string(),
+              _ => return Err(p.new_custom_error(())),
+            };
+            p.skip_whitespace();
+            if !p.is_exhausted() {
+              return Err(p.new_custom_error(()));
+            }
+            Ok(format!("#{}", hash))
+          })
+        })
         .map_err(|_| input.new_custom_error(()))?;
       input.skip_whitespace();
       if !input.is_exhausted() {
@@ -18048,6 +18073,22 @@ mod tests {
     .expect("filters");
     assert_eq!(filters.len(), 1);
     assert!(matches!(filters.first(), Some(FilterFunction::Url(url)) if url == "filters.svg#blur"));
+  }
+
+  #[test]
+  fn parses_fragment_only_svg_url_filter() {
+    let filters =
+      parse_filter_list(&PropertyValue::Keyword("url(#recolor)".to_string())).expect("filters");
+    assert_eq!(filters.len(), 1);
+    assert!(matches!(filters.first(), Some(FilterFunction::Url(url)) if url == "#recolor"));
+  }
+
+  #[test]
+  fn parses_filter_value_url_variant() {
+    let filters =
+      parse_filter_list(&PropertyValue::Url("#recolor".to_string())).expect("filters parsed");
+    assert_eq!(filters.len(), 1);
+    assert!(matches!(filters.first(), Some(FilterFunction::Url(url)) if url == "#recolor"));
   }
 
   #[test]

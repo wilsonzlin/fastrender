@@ -18,6 +18,7 @@ mod picture_source_selection;
 mod rasterize_test;
 mod stacking_test;
 mod svg_filter_color_interpolation;
+mod svg_filter_display_none_defs_test;
 mod svg_filter_test;
 mod svg_inline_css_cdata_test;
 mod svg_inline_test;

@@ -84,7 +84,7 @@ use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
 use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
-use crate::paint::svg_filter_registry::SvgFilterRegistry;
+use crate::paint::svg_filter::SvgFilterResolver;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::AccentColor;
@@ -132,7 +132,7 @@ use crate::tree::fragment_tree::FragmentContent;
 use crate::tree::fragment_tree::FragmentNode;
 use crate::tree::fragment_tree::FragmentTree;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Builder that converts a fragment tree to a display list
@@ -143,7 +143,8 @@ pub struct DisplayListBuilder {
   /// The display list being built
   list: DisplayList,
   image_cache: Option<ImageCache>,
-  svg_filter_registry: Option<SvgFilterRegistry>,
+  /// Serialized SVG filter definitions collected from the document DOM.
+  svg_filter_defs: Option<Arc<HashMap<String, String>>>,
   viewport: Option<(f32, f32)>,
   font_ctx: FontContext,
   shaper: ShapingPipeline,
@@ -201,7 +202,7 @@ impl DisplayListBuilder {
     Self {
       list: DisplayList::new(),
       image_cache: Some(ImageCache::new()),
-      svg_filter_registry: None,
+      svg_filter_defs: None,
       viewport: None,
       font_ctx: FontContext::new(),
       shaper: ShapingPipeline::new(),
@@ -217,7 +218,7 @@ impl DisplayListBuilder {
     Self {
       list: DisplayList::new(),
       image_cache: Some(image_cache),
-      svg_filter_registry: None,
+      svg_filter_defs: None,
       viewport: None,
       font_ctx: FontContext::new(),
       shaper: ShapingPipeline::new(),
@@ -242,6 +243,17 @@ impl DisplayListBuilder {
     if let Some(cache) = self.image_cache.as_mut() {
       cache.set_base_url(base_url);
     }
+  }
+
+  /// Sets serialized SVG filter definitions to use when resolving `url(#...)` filters.
+  pub fn with_svg_filter_defs(mut self, defs: Option<Arc<HashMap<String, String>>>) -> Self {
+    self.svg_filter_defs = defs;
+    self
+  }
+
+  /// Updates the SVG filter registry used for `url(#...)` filters.
+  pub fn set_svg_filter_defs(&mut self, defs: Option<Arc<HashMap<String, String>>>) {
+    self.svg_filter_defs = defs;
   }
 
   /// Sets the font context for shaping text into the display list.
@@ -275,22 +287,11 @@ impl DisplayListBuilder {
     self
   }
 
-  fn rebuild_svg_filter_registry_from_tree(&mut self, tree: &FragmentTree) {
-    let registry = SvgFilterRegistry::from_fragment_tree(tree);
-    self.svg_filter_registry = (!registry.is_empty()).then_some(registry);
-  }
-
-  fn rebuild_svg_filter_registry_from_root(&mut self, root: &FragmentNode) {
-    let registry = SvgFilterRegistry::from_fragment_root(root);
-    self.svg_filter_registry = (!registry.is_empty()).then_some(registry);
-  }
-
   /// Builds a display list from a fragment tree root
   pub fn build(mut self, root: &FragmentNode) -> DisplayList {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
-    self.rebuild_svg_filter_registry_from_root(root);
     self.build_fragment(root, Point::ZERO);
     self.list
   }
@@ -301,10 +302,31 @@ impl DisplayListBuilder {
       let viewport = tree.viewport_size();
       self.viewport = Some((viewport.width, viewport.height));
     }
-    self.rebuild_svg_filter_registry_from_tree(tree);
     for root in std::iter::once(&tree.root).chain(tree.additional_fragments.iter()) {
       self.build_fragment(root, Point::ZERO);
     }
+    self.list
+  }
+
+  /// Builds a stacking-context-aware display list from a FragmentTree.
+  pub fn build_tree_with_stacking(mut self, tree: &FragmentTree) -> DisplayList {
+    if self.viewport.is_none() {
+      let viewport = tree.viewport_size();
+      self.viewport = Some((viewport.width, viewport.height));
+    }
+    let mut svg_roots: Vec<&FragmentNode> = Vec::with_capacity(1 + tree.additional_fragments.len());
+    svg_roots.push(&tree.root);
+    for root in &tree.additional_fragments {
+      svg_roots.push(root);
+    }
+    let image_cache = self.image_cache.clone();
+    let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(&tree.root);
+    let defs = tree
+      .svg_filter_defs
+      .clone()
+      .or_else(|| self.svg_filter_defs.clone());
+    let mut svg_filters = SvgFilterResolver::new(defs, svg_roots, image_cache.as_ref());
+    self.build_stacking_context(&stacking, Point::ZERO, true, &mut svg_filters);
     self.list
   }
 
@@ -313,8 +335,15 @@ impl DisplayListBuilder {
     if self.viewport.is_none() {
       self.viewport = Some((stacking.bounds.width(), stacking.bounds.height()));
     }
-    self.svg_filter_registry = None;
-    self.build_stacking_context(stacking, Point::ZERO, true);
+    let mut svg_roots = Vec::new();
+    Self::collect_stacking_fragments(stacking, &mut svg_roots);
+    let image_cache = self.image_cache.clone();
+    let mut svg_filters = SvgFilterResolver::new(
+      self.svg_filter_defs.clone(),
+      svg_roots,
+      image_cache.as_ref(),
+    );
+    self.build_stacking_context(stacking, Point::ZERO, true, &mut svg_filters);
     self.list
   }
 
@@ -323,9 +352,14 @@ impl DisplayListBuilder {
     if self.viewport.is_none() {
       self.viewport = Some((root.bounds.width(), root.bounds.height()));
     }
-    self.rebuild_svg_filter_registry_from_root(root);
     let stacking = crate::paint::stacking::build_stacking_tree_from_fragment_tree(root);
-    self.build_stacking_context(&stacking, Point::ZERO, true);
+    let image_cache = self.image_cache.clone();
+    let mut svg_filters = SvgFilterResolver::new(
+      self.svg_filter_defs.clone(),
+      vec![root],
+      image_cache.as_ref(),
+    );
+    self.build_stacking_context(&stacking, Point::ZERO, true, &mut svg_filters);
     self.list
   }
 
@@ -337,9 +371,19 @@ impl DisplayListBuilder {
     root: &FragmentNode,
     clips: &HashSet<Option<usize>>,
   ) -> DisplayList {
-    self.rebuild_svg_filter_registry_from_root(root);
     self.build_fragment_with_clips(root, Point::ZERO, clips);
     self.list
+  }
+
+  fn collect_stacking_fragments<'a>(context: &'a StackingContext, out: &mut Vec<&'a FragmentNode>) {
+    out.extend(context.fragments.iter());
+    out.extend(context.layer3_blocks.iter());
+    out.extend(context.layer4_floats.iter());
+    out.extend(context.layer5_inlines.iter());
+    out.extend(context.layer6_positioned.iter().map(|ordered| &ordered.fragment));
+    for child in &context.children {
+      Self::collect_stacking_fragments(child, out);
+    }
   }
 
   /// Recursively builds display items for a fragment
@@ -510,7 +554,13 @@ impl DisplayListBuilder {
     }
   }
 
-  fn build_stacking_context(&mut self, context: &StackingContext, offset: Point, is_root: bool) {
+  fn build_stacking_context(
+    &mut self,
+    context: &StackingContext,
+    offset: Point,
+    is_root: bool,
+    svg_filters: &mut SvgFilterResolver,
+  ) {
     let mut children: Vec<&StackingContext> = context.children.iter().collect();
     children.sort_by(|a, b| {
       a.z_index
@@ -558,21 +608,19 @@ impl DisplayListBuilder {
     let (filters, backdrop_filters, radii) = root_style
       .map(|style| {
         (
-          self.resolve_filters(
+          Self::resolve_filters(
             &style.filter,
             style,
             self.viewport,
             &self.font_ctx,
-            self.image_cache.as_ref(),
-            self.svg_filter_registry.as_ref(),
+            svg_filters,
           ),
-          self.resolve_filters(
+          Self::resolve_filters(
             &style.backdrop_filter,
             style,
             self.viewport,
             &self.font_ctx,
-            self.image_cache.as_ref(),
-            self.svg_filter_registry.as_ref(),
+            svg_filters,
           ),
           Self::resolve_border_radii(Some(style), context.bounds),
         )
@@ -751,7 +799,7 @@ impl DisplayListBuilder {
 
     if is_root && !has_effects {
       for child in neg {
-        self.build_stacking_context(child, descendant_offset, false);
+        self.build_stacking_context(child, descendant_offset, false, svg_filters);
       }
 
       self.emit_fragment_list_shallow(&context.fragments, root_fragment_offset, apply_opacity);
@@ -764,13 +812,13 @@ impl DisplayListBuilder {
             self.build_fragment(&fragment.fragment, descendant_offset)
           }
           Layer6Item::ZeroContext(child) => {
-            self.build_stacking_context(child, descendant_offset, false)
+            self.build_stacking_context(child, descendant_offset, false, svg_filters)
           }
         }
       }
 
       for child in pos {
-        self.build_stacking_context(child, descendant_offset, false);
+        self.build_stacking_context(child, descendant_offset, false, svg_filters);
       }
       if pushed_opacity {
         self.pop_opacity();
@@ -822,7 +870,7 @@ impl DisplayListBuilder {
     }
 
     for child in neg {
-      self.build_stacking_context(child, descendant_offset, false);
+      self.build_stacking_context(child, descendant_offset, false, svg_filters);
     }
     self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
     self.emit_fragment_list(&context.layer4_floats, descendant_offset);
@@ -833,13 +881,13 @@ impl DisplayListBuilder {
           self.build_fragment(&fragment.fragment, descendant_offset)
         }
         Layer6Item::ZeroContext(child) => {
-          self.build_stacking_context(child, descendant_offset, false)
+          self.build_stacking_context(child, descendant_offset, false, svg_filters)
         }
       }
     }
 
     for child in pos {
-      self.build_stacking_context(child, descendant_offset, false);
+      self.build_stacking_context(child, descendant_offset, false, svg_filters);
     }
 
     if overflow_clip_pushed {
@@ -1414,13 +1462,11 @@ impl DisplayListBuilder {
   }
 
   fn resolve_filters(
-    &self,
     filters: &[crate::style::types::FilterFunction],
     style: &ComputedStyle,
     viewport: Option<(f32, f32)>,
     font_ctx: &FontContext,
-    image_cache: Option<&ImageCache>,
-    svg_filters: Option<&SvgFilterRegistry>,
+    svg_filters: &mut SvgFilterResolver,
   ) -> Vec<ResolvedFilter> {
     let viewport = viewport.unwrap_or((0.0, 0.0));
     filters
@@ -1476,19 +1522,7 @@ impl DisplayListBuilder {
           })
         }
         crate::style::types::FilterFunction::Url(url) => {
-          let trimmed = url.trim();
-          if trimmed.is_empty() {
-            return None;
-          }
-          if let Some(fragment) = trimmed.strip_prefix('#') {
-            svg_filters
-              .and_then(|registry| image_cache.and_then(|cache| registry.lookup(fragment, cache)))
-              .map(ResolvedFilter::SvgFilter)
-          } else {
-            image_cache
-              .and_then(|cache| crate::paint::svg_filter::load_svg_filter(trimmed, cache))
-              .map(ResolvedFilter::SvgFilter)
-          }
+          svg_filters.resolve(url).map(ResolvedFilter::SvgFilter)
         }
       })
       .collect()
@@ -2113,7 +2147,7 @@ impl DisplayListBuilder {
     DisplayListBuilder {
       list: DisplayList::new(),
       image_cache: self.image_cache.clone(),
-      svg_filter_registry: self.svg_filter_registry.clone(),
+      svg_filter_defs: self.svg_filter_defs.clone(),
       viewport: self.viewport,
       font_ctx: self.font_ctx.clone(),
       shaper: self.shaper.clone(),
@@ -6027,14 +6061,13 @@ mod tests {
       LengthUnit::Ex,
     ))];
 
-    let builder = DisplayListBuilder::new();
-    let filters = builder.resolve_filters(
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = DisplayListBuilder::resolve_filters(
       &style.filter,
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
-      None,
-      None,
+      &mut resolver,
     );
 
     match filters.first() {
@@ -6064,14 +6097,13 @@ mod tests {
       crate::style::types::FilterFunction::Opacity(1.8),
     ];
 
-    let builder = DisplayListBuilder::new();
-    let filters = builder.resolve_filters(
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = DisplayListBuilder::resolve_filters(
       &style.filter,
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
-      None,
-      None,
+      &mut resolver,
     );
     assert_eq!(filters.len(), 4);
     assert!(filters.iter().all(|f| match f {
@@ -6091,14 +6123,13 @@ mod tests {
       crate::style::types::FilterFunction::Saturate(3.75),
     ];
 
-    let builder = DisplayListBuilder::new();
-    let filters = builder.resolve_filters(
+    let mut resolver = SvgFilterResolver::new(None, Vec::new(), None);
+    let filters = DisplayListBuilder::resolve_filters(
       &style.filter,
       &style,
       Some((200.0, 100.0)),
       &FontContext::new(),
-      None,
-      None,
+      &mut resolver,
     );
     assert_eq!(filters.len(), 3);
     assert!(filters
