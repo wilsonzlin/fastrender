@@ -370,6 +370,10 @@ pub enum ColorMatrixKind {
 pub enum CompositeOperator {
   Over,
   In,
+  Out,
+  Atop,
+  Xor,
+  Arithmetic { k1: f32, k2: f32, k3: f32, k4: f32 },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1089,13 +1093,21 @@ fn parse_transfer_fn(node: &roxmltree::Node) -> Option<TransferFn> {
 fn parse_fe_composite(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input1 = parse_input(node.attribute("in"));
   let input2 = parse_input(node.attribute("in2"));
-  let operator = match node
+  let operator_attr = node
     .attribute("operator")
     .unwrap_or("over")
-    .to_ascii_lowercase()
-    .as_str()
-  {
+    .to_ascii_lowercase();
+  let operator = match operator_attr.as_str() {
     "in" => CompositeOperator::In,
+    "out" => CompositeOperator::Out,
+    "atop" => CompositeOperator::Atop,
+    "xor" => CompositeOperator::Xor,
+    "arithmetic" => CompositeOperator::Arithmetic {
+      k1: parse_number(node.attribute("k1")),
+      k2: parse_number(node.attribute("k2")),
+      k3: parse_number(node.attribute("k3")),
+      k4: parse_number(node.attribute("k4")),
+    },
     _ => CompositeOperator::Over,
   };
   Some(FilterPrimitive::Composite {
@@ -1750,16 +1762,36 @@ fn composite_pixmaps(
 ) -> Option<FilterResult> {
   let a = input1?;
   let b = input2.unwrap_or_else(|| a.clone());
+  if a.pixmap.width() != b.pixmap.width() || a.pixmap.height() != b.pixmap.height() {
+    return None;
+  }
+
   let pixmap = match op {
-    CompositeOperator::In => mask_with(&a.pixmap, &b.pixmap),
-    CompositeOperator::Over => draw_over(&b.pixmap, &a.pixmap),
+    CompositeOperator::Arithmetic { k1, k2, k3, k4 } => {
+      arithmetic_composite(&a.pixmap, &b.pixmap, k1, k2, k3, k4)?
+    }
+    CompositeOperator::Over => {
+      composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, _| (1.0, 1.0 - a_a))?
+    }
+    CompositeOperator::In => composite_porter_duff(&a.pixmap, &b.pixmap, |_, b_a| (b_a, 0.0))?,
+    CompositeOperator::Out => {
+      composite_porter_duff(&a.pixmap, &b.pixmap, |_, b_a| (1.0 - b_a, 0.0))?
+    }
+    CompositeOperator::Atop => {
+      composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| (b_a, 1.0 - a_a))?
+    }
+    CompositeOperator::Xor => composite_porter_duff(&a.pixmap, &b.pixmap, |a_a, b_a| {
+      (1.0 - b_a, 1.0 - a_a)
+    })?,
   };
+
   let region = match op {
     CompositeOperator::In => clip_region(
       a.region.intersection(b.region).unwrap_or(Rect::ZERO),
       filter_region,
     ),
-    CompositeOperator::Over => clip_region(a.region.union(b.region), filter_region),
+    CompositeOperator::Out => clip_region(a.region, filter_region),
+    _ => clip_region(a.region.union(b.region), filter_region),
   };
   Some(FilterResult { pixmap, region })
 }
@@ -1906,18 +1938,97 @@ fn draw_over(bottom: &Pixmap, top: &Pixmap) -> Pixmap {
   out
 }
 
-fn mask_with(src: &Pixmap, mask: &Pixmap) -> Pixmap {
-  let mut out = src.clone();
-  let mask_pixels = mask.pixels();
-  for (dst, m) in out.pixels_mut().iter_mut().zip(mask_pixels.iter()) {
-    let factor = m.alpha() as f32 / 255.0;
-    let r = (dst.red() as f32 * factor).round().clamp(0.0, 255.0) as u8;
-    let g = (dst.green() as f32 * factor).round().clamp(0.0, 255.0) as u8;
-    let b = (dst.blue() as f32 * factor).round().clamp(0.0, 255.0) as u8;
-    let a = (dst.alpha() as f32 * factor).round().clamp(0.0, 255.0) as u8;
-    *dst = PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+fn composite_porter_duff<F>(a: &Pixmap, b: &Pixmap, factors: F) -> Option<Pixmap>
+where
+  F: Fn(f32, f32) -> (f32, f32),
+{
+  let mut out = Pixmap::new(a.width(), a.height())?;
+  let a_pixels = a.pixels();
+  let b_pixels = b.pixels();
+  for ((dst, pa), pb) in out
+    .pixels_mut()
+    .iter_mut()
+    .zip(a_pixels.iter())
+    .zip(b_pixels.iter())
+  {
+    let (ar, ag, ab, aa) = premultiplied_components(pa);
+    let (br, bg, bb, ba) = premultiplied_components(pb);
+    let (mut fa, mut fb) = factors(aa, ba);
+    fa = fa.clamp(0.0, 1.0);
+    fb = fb.clamp(0.0, 1.0);
+    let out_a = aa * fa + ba * fb;
+    let out_r = ar * fa + br * fb;
+    let out_g = ag * fa + bg * fb;
+    let out_b = ab * fa + bb * fb;
+    *dst = premul_from_components(out_r, out_g, out_b, out_a);
   }
-  out
+  Some(out)
+}
+
+fn arithmetic_composite(
+  a: &Pixmap,
+  b: &Pixmap,
+  k1: f32,
+  k2: f32,
+  k3: f32,
+  k4: f32,
+) -> Option<Pixmap> {
+  let mut out = Pixmap::new(a.width(), a.height())?;
+  for ((dst, pa), pb) in out
+    .pixels_mut()
+    .iter_mut()
+    .zip(a.pixels().iter())
+    .zip(b.pixels().iter())
+  {
+    let (a_r, a_g, a_b, a_a) = unpremultiply_components(pa);
+    let (b_r, b_g, b_b, b_a) = unpremultiply_components(pb);
+    let apply =
+      |i1: f32, i2: f32| -> f32 { (k1 * i1 * i2 + k2 * i1 + k3 * i2 + k4).clamp(0.0, 1.0) };
+    let out_a = apply(a_a, b_a);
+    let out_r = apply(a_r, b_r);
+    let out_g = apply(a_g, b_g);
+    let out_b = apply(a_b, b_b);
+    *dst = premul_from_components(out_r * out_a, out_g * out_a, out_b * out_a, out_a);
+  }
+  Some(out)
+}
+
+fn premultiplied_components(px: &PremultipliedColorU8) -> (f32, f32, f32, f32) {
+  let norm = |v: u8| v as f32 / 255.0;
+  (
+    norm(px.red()),
+    norm(px.green()),
+    norm(px.blue()),
+    norm(px.alpha()),
+  )
+}
+
+fn unpremultiply_components(px: &PremultipliedColorU8) -> (f32, f32, f32, f32) {
+  let a = px.alpha() as f32 / 255.0;
+  if a <= 0.0 {
+    (0.0, 0.0, 0.0, 0.0)
+  } else {
+    let inv_a = 1.0 / a;
+    (
+      (px.red() as f32 / 255.0 * inv_a).clamp(0.0, 1.0),
+      (px.green() as f32 / 255.0 * inv_a).clamp(0.0, 1.0),
+      (px.blue() as f32 / 255.0 * inv_a).clamp(0.0, 1.0),
+      a,
+    )
+  }
+}
+
+fn premul_from_components(r: f32, g: f32, b: f32, a: f32) -> PremultipliedColorU8 {
+  let a_clamped = a.clamp(0.0, 1.0);
+  let clamp_to_alpha = |v: f32| (v.clamp(0.0, a_clamped) * 255.0).round().clamp(0.0, 255.0) as u8;
+  let a_byte = (a_clamped * 255.0).round().clamp(0.0, 255.0) as u8;
+  PremultipliedColorU8::from_rgba(
+    clamp_to_alpha(r),
+    clamp_to_alpha(g),
+    clamp_to_alpha(b),
+    a_byte,
+  )
+  .unwrap_or(PremultipliedColorU8::TRANSPARENT)
 }
 
 fn region_to_int_bounds(
@@ -2977,5 +3088,94 @@ mod fe_image_tests {
     }
     assert_eq!(pixel_rgba(&canvas, 0, 0), (0, 0, 0, 0));
     assert_eq!(pixel_rgba(&canvas, 4, 4), (0, 0, 0, 0));
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn premul_rgba(r: u8, g: u8, b: u8, a: u8) -> PremultipliedColorU8 {
+    let alpha = a as f32 / 255.0;
+    let premul = |v: u8| {
+      ((v as f32 / 255.0) * alpha * 255.0)
+        .round()
+        .clamp(0.0, 255.0) as u8
+    };
+    PremultipliedColorU8::from_rgba(premul(r), premul(g), premul(b), a).unwrap()
+  }
+
+  fn pixmap_from_colors(width: u32, height: u32, colors: &[(u8, u8, u8, u8)]) -> Pixmap {
+    assert_eq!((width * height) as usize, colors.len());
+    let mut pixmap = Pixmap::new(width, height).unwrap();
+    for (dst, &(r, g, b, a)) in pixmap.pixels_mut().iter_mut().zip(colors.iter()) {
+      *dst = premul_rgba(r, g, b, a);
+    }
+    pixmap
+  }
+
+  fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+    let px = pixmap.pixel(x, y).unwrap();
+    (px.red(), px.green(), px.blue(), px.alpha())
+  }
+
+  #[test]
+  fn composite_over_blends_in_premultiplied_space() {
+    let top = pixmap_from_colors(1, 1, &[(255, 0, 0, 128)]);
+    let bottom = pixmap_from_colors(1, 1, &[(0, 0, 255, 255)]);
+    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Over).unwrap();
+    assert_eq!(pixel(&result, 0, 0), (128, 0, 127, 255));
+  }
+
+  #[test]
+  fn composite_in_uses_second_alpha() {
+    let top = pixmap_from_colors(1, 1, &[(255, 0, 0, 128)]);
+    let mask = pixmap_from_colors(1, 1, &[(0, 0, 0, 64)]);
+    let result = composite_pixmaps(Some(top), Some(mask), CompositeOperator::In).unwrap();
+    assert_eq!(pixel(&result, 0, 0), (32, 0, 0, 32));
+  }
+
+  #[test]
+  fn composite_out_excludes_overlap() {
+    let top = pixmap_from_colors(1, 1, &[(0, 255, 0, 128)]);
+    let mask = pixmap_from_colors(1, 1, &[(0, 0, 0, 128)]);
+    let result = composite_pixmaps(Some(top), Some(mask), CompositeOperator::Out).unwrap();
+    assert_eq!(pixel(&result, 0, 0), (0, 64, 0, 64));
+  }
+
+  #[test]
+  fn composite_atop_preserves_destination_shape() {
+    let top = pixmap_from_colors(2, 1, &[(255, 0, 0, 255), (255, 0, 0, 128)]);
+    let bottom = pixmap_from_colors(2, 1, &[(0, 0, 255, 255), (0, 0, 255, 255)]);
+    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Atop).unwrap();
+    assert_eq!(pixel(&result, 0, 0), (255, 0, 0, 255));
+    assert_eq!(pixel(&result, 1, 0), (128, 0, 127, 255));
+  }
+
+  #[test]
+  fn composite_xor_combines_non_overlapping_regions() {
+    let top = pixmap_from_colors(2, 1, &[(255, 0, 0, 255), (0, 0, 0, 0)]);
+    let bottom = pixmap_from_colors(2, 1, &[(0, 0, 255, 255), (0, 0, 255, 255)]);
+    let result = composite_pixmaps(Some(top), Some(bottom), CompositeOperator::Xor).unwrap();
+    assert_eq!(pixel(&result, 0, 0), (0, 0, 0, 0));
+    assert_eq!(pixel(&result, 1, 0), (0, 0, 255, 255));
+  }
+
+  #[test]
+  fn composite_arithmetic_matches_svg_formula() {
+    let input1 = pixmap_from_colors(1, 1, &[(255, 0, 0, 128)]);
+    let input2 = pixmap_from_colors(1, 1, &[(0, 255, 0, 64)]);
+    let result = composite_pixmaps(
+      Some(input1),
+      Some(input2),
+      CompositeOperator::Arithmetic {
+        k1: 0.5,
+        k2: 0.1,
+        k3: 0.2,
+        k4: 0.05,
+      },
+    )
+    .unwrap();
+    assert_eq!(pixel(&result, 0, 0), (8, 14, 3, 54));
   }
 }
