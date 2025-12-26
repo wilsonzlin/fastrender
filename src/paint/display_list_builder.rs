@@ -403,7 +403,8 @@ impl DisplayListBuilder {
     recurse_children: bool,
     suppress_opacity: bool,
   ) {
-    if let Some(style) = fragment.style.as_deref() {
+    let style_opt = fragment.style.as_deref();
+    if let Some(style) = style_opt {
       if !matches!(
         style.visibility,
         crate::style::computed::Visibility::Visible
@@ -412,7 +413,7 @@ impl DisplayListBuilder {
       }
     }
 
-    let opacity = fragment.style.as_deref().map(|s| s.opacity).unwrap_or(1.0);
+    let opacity = style_opt.map(|s| s.opacity).unwrap_or(1.0);
     if opacity <= f32::EPSILON {
       return;
     }
@@ -429,7 +430,7 @@ impl DisplayListBuilder {
       fragment.bounds.size,
     );
 
-    let backface_culled = if let Some(style) = fragment.style.as_deref() {
+    let backface_culled = if let Some(style) = style_opt {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
         && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
       {
@@ -452,7 +453,16 @@ impl DisplayListBuilder {
       return;
     }
 
-    if let Some(style) = fragment.style.as_deref() {
+    let (overflow_clip, clip_rect) = if let Some(style) = style_opt {
+      (
+        Self::overflow_clip_from_style(style, absolute_rect, self.viewport),
+        Self::clip_rect_from_style(style, absolute_rect, self.viewport),
+      )
+    } else {
+      (None, None)
+    };
+
+    if let Some(style) = style_opt {
       self.emit_box_shadows_from_style(absolute_rect, style, false);
       self.emit_background_from_style(absolute_rect, style);
       self.emit_box_shadows_from_style(absolute_rect, style, true);
@@ -465,6 +475,18 @@ impl DisplayListBuilder {
     // 3. Content (text, images)
     // 4. Children
 
+    // Clip descendant/content painting but leave outer effects (e.g., box shadows, outlines)
+    // unaffected.
+    let mut pushed_clips = 0;
+    if let Some(clip) = overflow_clip {
+      self.list.push(DisplayItem::PushClip(clip));
+      pushed_clips += 1;
+    }
+    if let Some(clip) = clip_rect {
+      self.list.push(DisplayItem::PushClip(clip));
+      pushed_clips += 1;
+    }
+
     self.emit_content(fragment, absolute_rect);
 
     if recurse_children {
@@ -474,7 +496,11 @@ impl DisplayListBuilder {
       }
     }
 
-    if let Some(style) = fragment.style.as_deref() {
+    for _ in 0..pushed_clips {
+      self.list.push(DisplayItem::PopClip);
+    }
+
+    if let Some(style) = style_opt {
       self.emit_outline(absolute_rect, style);
     }
 
@@ -652,99 +678,10 @@ impl DisplayListBuilder {
       .unwrap_or_else(|| (context_bounds.width(), context_bounds.height()));
     let clip_path = root_style
       .and_then(|style| resolve_clip_path(style, context_bounds, viewport, &self.font_ctx));
-    let clip_rect = root_style.and_then(|style| {
-      let clip = style.clip.as_ref()?;
-      let width = context_bounds.width();
-      let height = context_bounds.height();
-      let resolve = |component: &crate::style::types::ClipComponent, base: f32| -> f32 {
-        match component {
-          crate::style::types::ClipComponent::Auto => base,
-          crate::style::types::ClipComponent::Length(len) => len
-            .resolve_with_context(
-              Some(base),
-              viewport.0,
-              viewport.1,
-              style.font_size,
-              style.root_font_size,
-            )
-            .unwrap_or_else(|| len.to_px()),
-        }
-      };
-
-      let left = match &clip.left {
-        crate::style::types::ClipComponent::Auto => context_bounds.x(),
-        crate::style::types::ClipComponent::Length(len) => {
-          context_bounds.x()
-            + len
-              .resolve_with_context(
-                Some(width),
-                viewport.0,
-                viewport.1,
-                style.font_size,
-                style.root_font_size,
-              )
-              .unwrap_or_else(|| len.to_px())
-        }
-      };
-      let top = match &clip.top {
-        crate::style::types::ClipComponent::Auto => context_bounds.y(),
-        crate::style::types::ClipComponent::Length(len) => {
-          context_bounds.y()
-            + len
-              .resolve_with_context(
-                Some(height),
-                viewport.0,
-                viewport.1,
-                style.font_size,
-                style.root_font_size,
-              )
-              .unwrap_or_else(|| len.to_px())
-        }
-      };
-      let right = resolve(&clip.right, context_bounds.x() + width);
-      let bottom = resolve(&clip.bottom, context_bounds.y() + height);
-
-      let rect = Rect::from_xywh(left, top, right - left, bottom - top);
-      if rect.width() <= 0.0 || rect.height() <= 0.0 {
-        None
-      } else {
-        Some(ClipItem {
-          shape: ClipShape::Rect { rect, radii: None },
-        })
-      }
-    });
-    let overflow_clip = root_style.and_then(|style| {
-      let clip_x = matches!(
-        style.overflow_x,
-        crate::style::types::Overflow::Hidden
-          | crate::style::types::Overflow::Scroll
-          | crate::style::types::Overflow::Auto
-          | crate::style::types::Overflow::Clip
-      );
-      let clip_y = matches!(
-        style.overflow_y,
-        crate::style::types::Overflow::Hidden
-          | crate::style::types::Overflow::Scroll
-          | crate::style::types::Overflow::Auto
-          | crate::style::types::Overflow::Clip
-      );
-      if !clip_x && !clip_y {
-        return None;
-      }
-
-      let rects = Self::background_rects(context_bounds, style, self.viewport);
-      let clip_rect = rects.padding;
-      if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
-        return None;
-      }
-      let radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, self.viewport);
-      Some(ClipItem {
-        shape: ClipShape::Rect {
-          rect: clip_rect,
-          radii: if radii.is_zero() { None } else { Some(radii) },
-        },
-      })
-    });
+    let clip_rect = root_style
+      .and_then(|style| Self::clip_rect_from_style(style, context_bounds, Some(viewport)));
+    let overflow_clip = root_style
+      .and_then(|style| Self::overflow_clip_from_style(style, context_bounds, self.viewport));
     let paint_containment_clip = if paint_contained {
       root_fragment
         .and_then(|fragment| {
@@ -902,6 +839,110 @@ impl DisplayListBuilder {
     }
     if pushed_opacity {
       self.pop_opacity();
+    }
+  }
+
+  fn overflow_clip_from_style(
+    style: &ComputedStyle,
+    bounds: Rect,
+    viewport: Option<(f32, f32)>,
+  ) -> Option<ClipItem> {
+    let clip_x = matches!(
+      style.overflow_x,
+      crate::style::types::Overflow::Hidden
+        | crate::style::types::Overflow::Scroll
+        | crate::style::types::Overflow::Auto
+        | crate::style::types::Overflow::Clip
+    );
+    let clip_y = matches!(
+      style.overflow_y,
+      crate::style::types::Overflow::Hidden
+        | crate::style::types::Overflow::Scroll
+        | crate::style::types::Overflow::Auto
+        | crate::style::types::Overflow::Clip
+    );
+    if !clip_x && !clip_y {
+      return None;
+    }
+
+    let rects = Self::background_rects(bounds, style, viewport);
+    let clip_rect = rects.padding;
+    if clip_rect.width() <= 0.0 || clip_rect.height() <= 0.0 {
+      return None;
+    }
+    let radii = Self::resolve_clip_radii(style, &rects, BackgroundBox::PaddingBox, viewport);
+    Some(ClipItem {
+      shape: ClipShape::Rect {
+        rect: clip_rect,
+        radii: if radii.is_zero() { None } else { Some(radii) },
+      },
+    })
+  }
+
+  fn clip_rect_from_style(
+    style: &ComputedStyle,
+    bounds: Rect,
+    viewport: Option<(f32, f32)>,
+  ) -> Option<ClipItem> {
+    let clip = style.clip.as_ref()?;
+    let viewport = viewport.unwrap_or_else(|| (bounds.width(), bounds.height()));
+    let width = bounds.width();
+    let height = bounds.height();
+    let resolve = |component: &crate::style::types::ClipComponent, base: f32| -> f32 {
+      match component {
+        crate::style::types::ClipComponent::Auto => base,
+        crate::style::types::ClipComponent::Length(len) => len
+          .resolve_with_context(
+            Some(base),
+            viewport.0,
+            viewport.1,
+            style.font_size,
+            style.root_font_size,
+          )
+          .unwrap_or_else(|| len.to_px()),
+      }
+    };
+
+    let left = match &clip.left {
+      crate::style::types::ClipComponent::Auto => bounds.x(),
+      crate::style::types::ClipComponent::Length(len) => {
+        bounds.x()
+          + len
+            .resolve_with_context(
+              Some(width),
+              viewport.0,
+              viewport.1,
+              style.font_size,
+              style.root_font_size,
+            )
+            .unwrap_or_else(|| len.to_px())
+      }
+    };
+    let top = match &clip.top {
+      crate::style::types::ClipComponent::Auto => bounds.y(),
+      crate::style::types::ClipComponent::Length(len) => {
+        bounds.y()
+          + len
+            .resolve_with_context(
+              Some(height),
+              viewport.0,
+              viewport.1,
+              style.font_size,
+              style.root_font_size,
+            )
+            .unwrap_or_else(|| len.to_px())
+      }
+    };
+    let right = resolve(&clip.right, bounds.x() + width);
+    let bottom = resolve(&clip.bottom, bounds.y() + height);
+
+    let rect = Rect::from_xywh(left, top, right - left, bottom - top);
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+      None
+    } else {
+      Some(ClipItem {
+        shape: ClipShape::Rect { rect, radii: None },
+      })
     }
   }
 

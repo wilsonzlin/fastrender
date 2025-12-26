@@ -15,6 +15,7 @@ mod fit_canvas_to_content;
 mod math_render;
 mod optimize_test;
 mod paged_media_margin_boxes;
+mod overflow_clip_test;
 mod picture_source_selection;
 mod rasterize_test;
 mod stacking_test;
