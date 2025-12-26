@@ -1,6 +1,6 @@
 use crate::geometry::{Point, Rect};
 use crate::image_loader::ImageCache;
-use crate::paint::blur::apply_gaussian_blur;
+use crate::paint::blur::apply_gaussian_blur_anisotropic;
 use crate::style::color;
 use crate::Rgba;
 use rayon::prelude::*;
@@ -115,7 +115,7 @@ pub enum FilterPrimitive {
   },
   GaussianBlur {
     input: FilterInput,
-    std_dev: f32,
+    std_dev: (f32, f32),
   },
   Offset {
     input: FilterInput,
@@ -138,7 +138,7 @@ pub enum FilterPrimitive {
     input: FilterInput,
     dx: f32,
     dy: f32,
-    std_dev: f32,
+    std_dev: (f32, f32),
     color: Rgba,
     opacity: f32,
   },
@@ -149,7 +149,7 @@ pub enum FilterPrimitive {
   },
   Morphology {
     input: FilterInput,
-    radius: f32,
+    radius: (f32, f32),
     op: MorphologyOp,
   },
   ComponentTransfer {
@@ -324,6 +324,15 @@ fn clip_region(region: Rect, filter_region: Rect) -> Rect {
       0.0,
       0.0,
     ))
+}
+
+fn inflate_rect_xy(region: Rect, dx: f32, dy: f32) -> Rect {
+  Rect::from_xywh(
+    region.x() - dx,
+    region.y() - dy,
+    (region.width() + dx * 2.0).max(0.0),
+    (region.height() + dy * 2.0).max(0.0),
+  )
 }
 
 fn filter_region_for_pixmap(pixmap: &Pixmap) -> Rect {
@@ -609,6 +618,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     _ => SvgFilterUnits::ObjectBoundingBox,
   };
   let primitive_units = match node.attribute("primitiveUnits") {
+    Some(v) if v.eq_ignore_ascii_case("objectboundingbox") => SvgFilterUnits::ObjectBoundingBox,
     Some(v) if v.eq_ignore_ascii_case("userspaceonuse") => SvgFilterUnits::UserSpaceOnUse,
     _ => SvgFilterUnits::UserSpaceOnUse,
   };
@@ -695,6 +705,41 @@ impl SvgFilter {
   pub fn resolve_region(&self, bbox: Rect) -> Rect {
     self.region.resolve(bbox)
   }
+
+  fn resolve_primitive_x(&self, value: f32, bbox: &Rect) -> f32 {
+    match self.primitive_units {
+      SvgFilterUnits::UserSpaceOnUse => value,
+      SvgFilterUnits::ObjectBoundingBox => value * bbox.width().abs(),
+    }
+  }
+
+  fn resolve_primitive_y(&self, value: f32, bbox: &Rect) -> f32 {
+    match self.primitive_units {
+      SvgFilterUnits::UserSpaceOnUse => value,
+      SvgFilterUnits::ObjectBoundingBox => value * bbox.height().abs(),
+    }
+  }
+
+  fn resolve_primitive_scalar(&self, value: f32, bbox: &Rect) -> f32 {
+    match self.primitive_units {
+      SvgFilterUnits::UserSpaceOnUse => value,
+      SvgFilterUnits::ObjectBoundingBox => value * (bbox.width().abs() + bbox.height().abs()) * 0.5,
+    }
+  }
+
+  fn resolve_primitive_pair(&self, values: (f32, f32), bbox: &Rect) -> (f32, f32) {
+    if (values.0 - values.1).abs() < f32::EPSILON {
+      let scalar = self.resolve_primitive_scalar(values.0, bbox);
+      return (scalar, scalar);
+    }
+    match self.primitive_units {
+      SvgFilterUnits::UserSpaceOnUse => values,
+      SvgFilterUnits::ObjectBoundingBox => (
+        self.resolve_primitive_x(values.0, bbox),
+        self.resolve_primitive_y(values.1, bbox),
+      ),
+    }
+  }
 }
 
 pub(crate) fn collect_svg_filters(
@@ -756,6 +801,13 @@ fn parse_number_list(value: Option<&str>) -> Vec<f32> {
     .collect()
 }
 
+fn parse_number_pair(value: Option<&str>) -> (f32, f32) {
+  let mut iter = parse_number_list(value).into_iter();
+  let first = iter.next().unwrap_or(0.0);
+  let second = iter.next().unwrap_or(first);
+  (first, second)
+}
+
 fn parse_color(value: Option<&str>) -> Option<Rgba> {
   let raw = value?.trim();
   if let Ok(parsed) = color::Color::parse(raw) {
@@ -794,7 +846,8 @@ fn parse_fe_flood(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 
 fn parse_fe_gaussian_blur(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(node.attribute("in"));
-  let std_dev = parse_number(node.attribute("stdDeviation")).abs();
+  let (sx, sy) = parse_number_pair(node.attribute("stdDeviation"));
+  let std_dev = (sx.abs(), sy.abs());
   Some(FilterPrimitive::GaussianBlur { input, std_dev })
 }
 
@@ -871,7 +924,8 @@ fn parse_fe_morphology(node: &roxmltree::Node) -> Option<FilterPrimitive> {
     true => MorphologyOp::Dilate,
     false => MorphologyOp::Erode,
   };
-  let radius = parse_number(node.attribute("radius")).abs();
+  let (rx, ry) = parse_number_pair(node.attribute("radius"));
+  let radius = (rx.abs(), ry.abs());
   Some(FilterPrimitive::Morphology { input, radius, op })
 }
 
@@ -991,7 +1045,8 @@ fn parse_fe_drop_shadow(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input = parse_input(node.attribute("in"));
   let dx = parse_number(node.attribute("dx"));
   let dy = parse_number(node.attribute("dy"));
-  let std_dev = parse_number(node.attribute("stdDeviation")).abs();
+  let (sx, sy) = parse_number_pair(node.attribute("stdDeviation"));
+  let std_dev = (sx.abs(), sy.abs());
   let color = parse_color(node.attribute("flood-color")).unwrap_or(Rgba::BLACK);
   let opacity = node
     .attribute("flood-opacity")
@@ -1258,6 +1313,8 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
     }
 
     if let Some(mut next) = apply_primitive(
+      def,
+      &css_bbox,
       &step.primitive,
       &source,
       &results,
@@ -1320,6 +1377,8 @@ fn clip_to_region(pixmap: &mut Pixmap, region: Rect) {
 }
 
 fn apply_primitive(
+  filter: &SvgFilter,
+  css_bbox: &Rect,
   primitive: &FilterPrimitive,
   source: &FilterResult,
   results: &HashMap<String, FilterResult>,
@@ -1338,17 +1397,21 @@ fn apply_primitive(
     .map(|pixmap| FilterResult::full_region(pixmap, filter_region)),
     FilterPrimitive::GaussianBlur { input, std_dev } => {
       let mut img = resolve_input(input, source, results, current, filter_region)?;
-      let radius = *std_dev * scale;
-      if radius > 0.0 {
-        apply_gaussian_blur(&mut img.pixmap, radius);
-        let expanded = img.region.inflate(radius * 3.0);
+      let (sx, sy) = filter.resolve_primitive_pair(*std_dev, css_bbox);
+      let sigma_x = sx * scale;
+      let sigma_y = sy * scale;
+      if sigma_x != 0.0 || sigma_y != 0.0 {
+        apply_gaussian_blur_anisotropic(&mut img.pixmap, sigma_x, sigma_y);
+        let expanded = inflate_rect_xy(img.region, sigma_x.abs() * 3.0, sigma_y.abs() * 3.0);
         img.region = clip_region(expanded, filter_region);
       }
       Some(img)
     }
     FilterPrimitive::Offset { input, dx, dy } => {
+      let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale;
+      let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale;
       resolve_input(input, source, results, current, filter_region)
-        .map(|img| offset_result(img, *dx * scale, *dy * scale, filter_region))
+        .map(|img| offset_result(img, dx, dy, filter_region))
     }
     FilterPrimitive::ColorMatrix { input, kind } => {
       let mut img = resolve_input(input, source, results, current, filter_region)?;
@@ -1380,15 +1443,11 @@ fn apply_primitive(
       color,
       opacity,
     } => resolve_input(input, source, results, current, filter_region).map(|img| {
-      drop_shadow_pixmap(
-        img,
-        *dx * scale,
-        *dy * scale,
-        *std_dev * scale,
-        color,
-        *opacity,
-        filter_region,
-      )
+      let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale;
+      let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale;
+      let std_dev = filter.resolve_primitive_pair(*std_dev, css_bbox);
+      let std_dev = (std_dev.0 * scale, std_dev.1 * scale);
+      drop_shadow_pixmap(img, dx, dy, std_dev, color, *opacity, filter_region)
     }),
     FilterPrimitive::Blend {
       input1,
@@ -1402,12 +1461,13 @@ fn apply_primitive(
     ),
     FilterPrimitive::Morphology { input, radius, op } => {
       resolve_input(input, source, results, current, filter_region).map(|mut img| {
-        let r = *radius * scale;
-        apply_morphology(&mut img.pixmap, r, *op);
+        let radius = filter.resolve_primitive_pair(*radius, css_bbox);
+        let radius = (radius.0 * scale, radius.1 * scale);
+        apply_morphology(&mut img.pixmap, radius, *op);
         img.region = clip_region(
           match op {
-            MorphologyOp::Dilate => img.region.inflate(r),
-            MorphologyOp::Erode => img.region.inflate(-r),
+            MorphologyOp::Dilate => inflate_rect_xy(img.region, radius.0, radius.1),
+            MorphologyOp::Erode => inflate_rect_xy(img.region, -radius.0, -radius.1),
           },
           filter_region,
         );
@@ -1456,7 +1516,7 @@ fn apply_primitive(
       let output = apply_displacement_map(
         &primary.pixmap,
         &map.pixmap,
-        *disp_scale * scale,
+        filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale,
         *x_channel,
         *y_channel,
       )?;
@@ -1698,7 +1758,7 @@ fn drop_shadow_pixmap(
   input: FilterResult,
   dx: f32,
   dy: f32,
-  stddev: f32,
+  stddev: (f32, f32),
   color: &Rgba,
   opacity: f32,
   filter_region: Rect,
@@ -1721,8 +1781,8 @@ fn drop_shadow_pixmap(
   }
 
   let mut shadow = tinted.clone();
-  if stddev > 0.0 {
-    apply_gaussian_blur(&mut shadow, stddev);
+  if stddev.0 != 0.0 || stddev.1 != 0.0 {
+    apply_gaussian_blur_anisotropic(&mut shadow, stddev.0, stddev.1);
   }
 
   let mut out = Pixmap::new(input.pixmap.width(), input.pixmap.height()).unwrap();
@@ -1746,10 +1806,10 @@ fn drop_shadow_pixmap(
   );
 
   let base_region = input.region;
-  let blur_spread = (stddev * 3.0).max(0.0);
+  let blur_spread_x = (stddev.0.abs() * 3.0).max(0.0);
+  let blur_spread_y = (stddev.1.abs() * 3.0).max(0.0);
   let shadow_region = clip_region(
-    base_region
-      .inflate(blur_spread)
+    inflate_rect_xy(base_region, blur_spread_x, blur_spread_y)
       .translate(Point::new(dx.round(), dy.round())),
     filter_region,
   );
@@ -2114,9 +2174,10 @@ fn unpremultiply(px: PremultipliedColorU8) -> (f32, f32, f32, f32) {
   }
 }
 
-fn apply_morphology(pixmap: &mut Pixmap, radius: f32, op: MorphologyOp) {
-  let radius = radius.abs().ceil() as i32;
-  if radius <= 0 {
+fn apply_morphology(pixmap: &mut Pixmap, radius: (f32, f32), op: MorphologyOp) {
+  let rx = radius.0.abs().ceil() as i32;
+  let ry = radius.1.abs().ceil() as i32;
+  if rx <= 0 && ry <= 0 {
     return;
   }
   let width = pixmap.width() as i32;
@@ -2133,8 +2194,8 @@ fn apply_morphology(pixmap: &mut Pixmap, radius: f32, op: MorphologyOp) {
       MorphologyOp::Dilate => [0u8; 4],
       MorphologyOp::Erode => [255u8; 4],
     };
-    for dy in -radius..=radius {
-      for dx in -radius..=radius {
+    for dy in -ry..=ry {
+      for dx in -rx..=rx {
         let ny = (y + dy).clamp(0, height - 1);
         let nx = (x + dx).clamp(0, width - 1);
         let sample_idx = (ny as usize) * row_len + nx as usize;

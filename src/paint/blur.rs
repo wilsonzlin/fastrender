@@ -394,3 +394,109 @@ pub(crate) fn apply_gaussian_blur(pixmap: &mut Pixmap, sigma: f32) {
       .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
   }
 }
+
+pub(crate) fn apply_gaussian_blur_anisotropic(pixmap: &mut Pixmap, sigma_x: f32, sigma_y: f32) {
+  let sigma_x = sigma_x.abs();
+  let sigma_y = sigma_y.abs();
+  if sigma_x == sigma_y {
+    apply_gaussian_blur(pixmap, sigma_x);
+    return;
+  }
+
+  if sigma_x == 0.0 && sigma_y == 0.0 {
+    return;
+  }
+
+  let width = pixmap.width() as usize;
+  let height = pixmap.height() as usize;
+  if width == 0 || height == 0 {
+    return;
+  }
+
+  let (kernel_x, radius_x) = gaussian_kernel(sigma_x);
+  let (kernel_y, radius_y) = gaussian_kernel(sigma_y);
+  if (radius_x == 0 || kernel_x.is_empty()) && (radius_y == 0 || kernel_y.is_empty()) {
+    return;
+  }
+
+  let src: Vec<[f32; 4]> = pixmap
+    .pixels()
+    .iter()
+    .map(|p| {
+      [
+        p.red() as f32 / 255.0,
+        p.green() as f32 / 255.0,
+        p.blue() as f32 / 255.0,
+        p.alpha() as f32 / 255.0,
+      ]
+    })
+    .collect();
+
+  let mut temp = vec![[0.0; 4]; src.len()];
+  let mut dst = vec![[0.0; 4]; src.len()];
+
+  if radius_x == 0 || kernel_x.is_empty() {
+    temp.copy_from_slice(&src);
+  } else {
+    for y in 0..height {
+      for x in 0..width {
+        let mut accum = [0.0; 4];
+        let mut weight_sum = 0.0;
+        for (i, weight) in kernel_x.iter().enumerate() {
+          let offset = i as isize - radius_x as isize;
+          let cx = (x as isize + offset).clamp(0, width as isize - 1) as usize;
+          let sample = src[y * width + cx];
+          accum[0] += sample[0] * weight;
+          accum[1] += sample[1] * weight;
+          accum[2] += sample[2] * weight;
+          accum[3] += sample[3] * weight;
+          weight_sum += weight;
+        }
+        let idx = y * width + x;
+        temp[idx] = [
+          accum[0] / weight_sum,
+          accum[1] / weight_sum,
+          accum[2] / weight_sum,
+          accum[3] / weight_sum,
+        ];
+      }
+    }
+  }
+
+  if radius_y == 0 || kernel_y.is_empty() {
+    dst.copy_from_slice(&temp);
+  } else {
+    for y in 0..height {
+      for x in 0..width {
+        let mut accum = [0.0; 4];
+        let mut weight_sum = 0.0;
+        for (i, weight) in kernel_y.iter().enumerate() {
+          let offset = i as isize - radius_y as isize;
+          let cy = (y as isize + offset).clamp(0, height as isize - 1) as usize;
+          let sample = temp[cy * width + x];
+          accum[0] += sample[0] * weight;
+          accum[1] += sample[1] * weight;
+          accum[2] += sample[2] * weight;
+          accum[3] += sample[3] * weight;
+          weight_sum += weight;
+        }
+        let idx = y * width + x;
+        dst[idx] = [
+          accum[0] / weight_sum,
+          accum[1] / weight_sum,
+          accum[2] / weight_sum,
+          accum[3] / weight_sum,
+        ];
+      }
+    }
+  }
+
+  for (src_px, vals) in pixmap.pixels_mut().iter_mut().zip(dst.iter()) {
+    let r = (vals[0] * 255.0).round().clamp(0.0, 255.0) as u8;
+    let g = (vals[1] * 255.0).round().clamp(0.0, 255.0) as u8;
+    let b = (vals[2] * 255.0).round().clamp(0.0, 255.0) as u8;
+    let a = (vals[3] * 255.0).round().clamp(0.0, 255.0) as u8;
+    *src_px = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a)
+      .unwrap_or(tiny_skia::PremultipliedColorU8::TRANSPARENT);
+  }
+}
