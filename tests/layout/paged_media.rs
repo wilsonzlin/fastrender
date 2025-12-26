@@ -1,5 +1,6 @@
 use fastrender::api::{FastRender, LayoutDocumentOptions, PageStacking};
 use fastrender::Rgba;
+use fastrender::tree::box_tree::ReplacedType;
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 
 fn pages<'a>(tree: &'a FragmentTree) -> Vec<&'a FragmentNode> {
@@ -19,6 +20,22 @@ fn find_text<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNod
       return Some(found);
     }
   }
+  None
+}
+
+fn find_replaced_image<'a>(node: &'a FragmentNode) -> Option<&'a FragmentNode> {
+  if let FragmentContent::Replaced { replaced_type, .. } = &node.content {
+    if matches!(replaced_type, ReplacedType::Image { .. }) {
+      return Some(node);
+    }
+  }
+
+  for child in &node.children {
+    if let Some(found) = find_replaced_image(child) {
+      return Some(found);
+    }
+  }
+
   None
 }
 
@@ -257,6 +274,36 @@ fn margin_box_content_is_positioned_in_margins() {
 
   assert!(header.bounds.y() < content.bounds.y());
   assert!(footer.bounds.y() > content.bounds.y());
+}
+
+#[test]
+fn margin_box_url_content_creates_replaced_fragment() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 120px;
+            margin: 10px;
+            @top-center { content: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/6XWcJAAAAAASUVORK5CYII="); }
+          }
+        </style>
+      </head>
+      <body>
+        <div>content</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let first_page = pages(&tree)[0];
+
+  assert!(
+    find_replaced_image(first_page).is_some(),
+    "expected a replaced image fragment in margin boxes"
+  );
 }
 
 #[test]
