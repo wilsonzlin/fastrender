@@ -1,6 +1,7 @@
 use super::util::bounding_box_for_color;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use fastrender::css::types::BoxShadow;
 use fastrender::css::types::ColorStop;
 use fastrender::geometry::Rect;
 use fastrender::image_loader::ImageCache;
@@ -40,6 +41,7 @@ use fastrender::style::types::ClipPath;
 use fastrender::style::types::FillRule as StyleFillRule;
 use fastrender::style::types::ImageRendering;
 use fastrender::style::types::MixBlendMode;
+use fastrender::style::types::Overflow;
 use fastrender::style::types::ShapeRadius;
 use fastrender::style::types::TextDecorationStyle;
 use fastrender::style::types::TransformStyle;
@@ -2290,5 +2292,95 @@ fn outline_ignores_clip_path() {
   assert!(
     found,
     "outline stroke should be visible outside the clip path"
+  );
+}
+
+#[test]
+fn overflow_hidden_preserves_outer_box_shadow() {
+  let mut style = ComputedStyle::default();
+  style.background_color = Rgba::from_rgba8(0, 255, 0, 255);
+  style.position = fastrender::style::position::Position::Relative;
+  style.z_index = Some(0);
+  style.overflow_x = Overflow::Hidden;
+  style.overflow_y = Overflow::Hidden;
+  style.box_shadow = vec![BoxShadow {
+    offset_x: Length::px(0.0),
+    offset_y: Length::px(0.0),
+    blur_radius: Length::px(0.0),
+    spread_radius: Length::px(4.0),
+    color: Rgba::from_rgba8(255, 0, 0, 255),
+    inset: false,
+  }];
+
+  let element = FragmentNode::new_block_styled(
+    Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+    vec![],
+    Arc::new(style),
+  );
+
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 40.0, 40.0), vec![element]);
+
+  let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+  let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
+  let pixmap = renderer.render(&list).expect("render");
+
+  assert_eq!(
+    pixel(&pixmap, 8, 20),
+    (255, 0, 0, 255),
+    "outer box shadow should remain visible outside overflow clipping"
+  );
+  assert_eq!(
+    pixel(&pixmap, 20, 20),
+    (0, 255, 0, 255),
+    "element interior should still render"
+  );
+}
+
+#[test]
+fn clip_path_clips_outer_box_shadow() {
+  let mut style = ComputedStyle::default();
+  style.background_color = Rgba::from_rgba8(0, 255, 0, 255);
+  style.position = fastrender::style::position::Position::Relative;
+  style.z_index = Some(0);
+  style.box_shadow = vec![BoxShadow {
+    offset_x: Length::px(0.0),
+    offset_y: Length::px(0.0),
+    blur_radius: Length::px(0.0),
+    spread_radius: Length::px(4.0),
+    color: Rgba::from_rgba8(255, 0, 0, 255),
+    inset: false,
+  }];
+  style.clip_path = ClipPath::BasicShape(
+    Box::new(BasicShape::Inset {
+      top: Length::px(0.0),
+      right: Length::px(0.0),
+      bottom: Length::px(0.0),
+      left: Length::px(0.0),
+      border_radius: Box::new(None),
+    }),
+    None,
+  );
+
+  let element = FragmentNode::new_block_styled(
+    Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+    vec![],
+    Arc::new(style),
+  );
+
+  let root = FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 40.0, 40.0), vec![element]);
+
+  let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+  let renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
+  let pixmap = renderer.render(&list).expect("render");
+
+  assert_eq!(
+    pixel(&pixmap, 8, 20),
+    (255, 255, 255, 255),
+    "clip-path should clip box shadows painted outside the element"
+  );
+  assert_eq!(
+    pixel(&pixmap, 20, 20),
+    (0, 255, 0, 255),
+    "clip-path should still allow the element to paint inside the clip"
   );
 }

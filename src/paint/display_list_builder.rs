@@ -806,19 +806,24 @@ impl DisplayListBuilder {
       }));
       pushed_clips += 1;
     }
-    if let Some(clip) = overflow_clip {
-      self.list.push(DisplayItem::PushClip(clip));
-      pushed_clips += 1;
-    }
     if let Some(clip) = clip_rect {
       self.list.push(DisplayItem::PushClip(clip));
       pushed_clips += 1;
     }
+
+    // Paint the stacking context root (backgrounds, borders, shadows) before applying overflow
+    // clipping so outer effects remain visible.
+    self.emit_fragment_list_shallow(&context.fragments, root_fragment_offset, apply_opacity);
+
+    let mut overflow_clip_pushed = false;
+    if let Some(clip) = overflow_clip {
+      self.list.push(DisplayItem::PushClip(clip));
+      overflow_clip_pushed = true;
+    }
+
     for child in neg {
       self.build_stacking_context(child, descendant_offset, false);
     }
-
-    self.emit_fragment_list_shallow(&context.fragments, root_fragment_offset, apply_opacity);
     self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
     self.emit_fragment_list(&context.layer4_floats, descendant_offset);
     self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
@@ -837,6 +842,9 @@ impl DisplayListBuilder {
       self.build_stacking_context(child, descendant_offset, false);
     }
 
+    if overflow_clip_pushed {
+      self.list.push(DisplayItem::PopClip);
+    }
     for _ in 0..pushed_clips {
       self.list.push(DisplayItem::PopClip);
     }
