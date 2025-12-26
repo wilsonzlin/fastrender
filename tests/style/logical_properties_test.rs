@@ -5,6 +5,7 @@ use fastrender::style::color::Color;
 use fastrender::style::color::Rgba;
 use fastrender::style::properties::apply_declaration;
 use fastrender::style::properties::resolve_pending_logical_properties;
+use fastrender::style::types::BorderCornerRadius;
 use fastrender::style::types::Direction;
 use fastrender::style::types::WritingMode;
 use fastrender::style::values::Length;
@@ -408,9 +409,15 @@ fn logical_border_radius_maps_corners() {
   );
   resolve_pending_logical_properties(&mut style);
   // RTL inline-start maps to right, block-start maps to top.
-  assert_eq!(style.border_top_right_radius, Length::px(9.0));
+  assert_eq!(
+    style.border_top_right_radius,
+    BorderCornerRadius::uniform(Length::px(9.0))
+  );
   // block-end with rtl inline-end -> bottom-left
-  assert_eq!(style.border_bottom_left_radius, Length::px(4.0));
+  assert_eq!(
+    style.border_bottom_left_radius,
+    BorderCornerRadius::uniform(Length::px(4.0))
+  );
 
   // Vertical writing: inline axis vertical, block axis horizontal.
   let mut vertical = ComputedStyle::default();
@@ -427,5 +434,8 @@ fn logical_border_radius_maps_corners() {
   );
   resolve_pending_logical_properties(&mut vertical);
   // block-start -> right, inline-end -> bottom in vertical-rl
-  assert_eq!(vertical.border_bottom_right_radius, Length::px(3.0));
+  assert_eq!(
+    vertical.border_bottom_right_radius,
+    BorderCornerRadius::uniform(Length::px(3.0))
+  );
 }

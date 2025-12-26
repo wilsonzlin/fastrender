@@ -51,6 +51,7 @@ use types::BackgroundPosition;
 use types::BackgroundRepeat;
 use types::BackgroundSize;
 use types::BorderCollapse;
+use types::BorderCornerRadius;
 use types::BorderImage;
 use types::BorderStyle;
 use types::BoxSizing;
@@ -325,7 +326,7 @@ pub enum LogicalProperty {
   BorderCorner {
     block_start: bool,
     inline_start: bool,
-    value: Option<Length>,
+    value: Option<BorderCornerRadius>,
   },
 }
 
@@ -512,10 +513,10 @@ pub struct ComputedStyle {
   pub border_bottom_style: BorderStyle,
   pub border_left_style: BorderStyle,
 
-  pub border_top_left_radius: Length,
-  pub border_top_right_radius: Length,
-  pub border_bottom_left_radius: Length,
-  pub border_bottom_right_radius: Length,
+  pub border_top_left_radius: BorderCornerRadius,
+  pub border_top_right_radius: BorderCornerRadius,
+  pub border_bottom_left_radius: BorderCornerRadius,
+  pub border_bottom_right_radius: BorderCornerRadius,
   /// Tracks cascade ordering and deferred logical box properties
   pub(crate) logical: LogicalState,
 
@@ -838,10 +839,10 @@ impl Default for ComputedStyle {
       border_bottom_style: BorderStyle::None,
       border_left_style: BorderStyle::None,
 
-      border_top_left_radius: Length::px(0.0),
-      border_top_right_radius: Length::px(0.0),
-      border_bottom_left_radius: Length::px(0.0),
-      border_bottom_right_radius: Length::px(0.0),
+      border_top_left_radius: BorderCornerRadius::default(),
+      border_top_right_radius: BorderCornerRadius::default(),
+      border_bottom_left_radius: BorderCornerRadius::default(),
+      border_bottom_right_radius: BorderCornerRadius::default(),
       logical: LogicalState::default(),
 
       flex_direction: FlexDirection::Row,

@@ -15,6 +15,7 @@ use fastrender::paint::rasterize::stroke_rounded_rect;
 use fastrender::paint::rasterize::BorderColors;
 use fastrender::paint::rasterize::BorderWidths;
 use fastrender::paint::rasterize::BoxShadow;
+use fastrender::paint::display_list::BorderRadius;
 use fastrender::BorderRadii;
 use fastrender::Rgba;
 use tiny_skia::Pixmap;
@@ -69,14 +70,16 @@ fn count_colored_pixels(pixmap: &Pixmap) -> usize {
 
 mod border_radii {
   use super::*;
+  use fastrender::paint::display_list::BorderRadius;
 
   #[test]
   fn test_uniform_radii() {
     let radii = BorderRadii::uniform(10.0);
-    assert_eq!(radii.top_left, 10.0);
-    assert_eq!(radii.top_right, 10.0);
-    assert_eq!(radii.bottom_right, 10.0);
-    assert_eq!(radii.bottom_left, 10.0);
+    assert_eq!(radii.top_left.x, 10.0);
+    assert_eq!(radii.top_left.y, 10.0);
+    assert_eq!(radii.top_right.x, 10.0);
+    assert_eq!(radii.bottom_right.x, 10.0);
+    assert_eq!(radii.bottom_left.x, 10.0);
   }
 
   #[test]
@@ -88,11 +91,16 @@ mod border_radii {
 
   #[test]
   fn test_individual_radii() {
-    let radii = BorderRadii::new(5.0, 10.0, 15.0, 20.0);
-    assert_eq!(radii.top_left, 5.0);
-    assert_eq!(radii.top_right, 10.0);
-    assert_eq!(radii.bottom_right, 15.0);
-    assert_eq!(radii.bottom_left, 20.0);
+    let radii = BorderRadii::new(
+      BorderRadius::uniform(5.0),
+      BorderRadius::uniform(10.0),
+      BorderRadius::uniform(15.0),
+      BorderRadius::uniform(20.0),
+    );
+    assert_eq!(radii.top_left.x, 5.0);
+    assert_eq!(radii.top_right.x, 10.0);
+    assert_eq!(radii.bottom_right.x, 15.0);
+    assert_eq!(radii.bottom_left.x, 20.0);
     assert!(radii.has_radius());
   }
 
@@ -101,7 +109,8 @@ mod border_radii {
     let radii = BorderRadii::uniform(10.0);
     let clamped = radii.clamped(100.0, 100.0);
     // Should not change when there's plenty of room
-    assert_eq!(clamped.top_left, 10.0);
+    assert_eq!(clamped.top_left.x, 10.0);
+    assert_eq!(clamped.top_left.y, 10.0);
   }
 
   #[test]
@@ -110,8 +119,8 @@ mod border_radii {
     let radii = BorderRadii::uniform(100.0);
     let clamped = radii.clamped(100.0, 100.0);
     // Should be scaled down to 50
-    assert!(clamped.top_left <= 50.0);
-    assert!(clamped.top_left + clamped.top_right <= 100.0);
+    assert!(clamped.top_left.x <= 50.0);
+    assert!(clamped.top_left.x + clamped.top_right.x <= 100.0);
   }
 
   #[test]
@@ -125,20 +134,26 @@ mod border_radii {
   fn test_shrink_radii() {
     let radii = BorderRadii::uniform(10.0);
     let shrunk = radii.shrink(3.0);
-    assert_eq!(shrunk.top_left, 7.0);
+    assert_eq!(shrunk.top_left.x, 7.0);
+    assert_eq!(shrunk.top_left.y, 7.0);
   }
 
   #[test]
   fn test_shrink_radii_cannot_go_negative() {
     let radii = BorderRadii::uniform(10.0);
     let shrunk = radii.shrink(15.0);
-    assert_eq!(shrunk.top_left, 0.0);
+    assert_eq!(shrunk.top_left.x, 0.0);
     assert!(shrunk.is_zero());
   }
 
   #[test]
   fn test_partial_radius() {
-    let radii = BorderRadii::new(10.0, 0.0, 0.0, 0.0);
+    let radii = BorderRadii::new(
+      BorderRadius::uniform(10.0),
+      BorderRadius::ZERO,
+      BorderRadius::ZERO,
+      BorderRadius::ZERO,
+    );
     assert!(radii.has_radius());
     assert!(!radii.is_zero());
   }
@@ -358,7 +373,12 @@ mod rounded_rect_tests {
   #[test]
   fn test_fill_rounded_rect_different_radii() {
     let mut pixmap = create_pixmap(100, 100);
-    let radii = BorderRadii::new(5.0, 10.0, 15.0, 20.0);
+    let radii = BorderRadii::new(
+      BorderRadius::uniform(5.0),
+      BorderRadius::uniform(10.0),
+      BorderRadius::uniform(15.0),
+      BorderRadius::uniform(20.0),
+    );
     let result = fill_rounded_rect(
       &mut pixmap,
       10.0,

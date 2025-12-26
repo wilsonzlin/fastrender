@@ -5,6 +5,7 @@
 
 use fastrender::geometry::Point;
 use fastrender::geometry::Rect;
+use fastrender::paint::display_list::BorderRadius;
 use fastrender::BlendMode;
 use fastrender::BorderRadii;
 use fastrender::Canvas;
@@ -141,7 +142,12 @@ fn test_draw_rounded_rect_different_radii() {
   let mut canvas = Canvas::new(100, 100, Rgba::WHITE).unwrap();
 
   let rect = Rect::from_xywh(10.0, 10.0, 80.0, 60.0);
-  let radii = BorderRadii::new(5.0, 10.0, 15.0, 20.0);
+  let radii = BorderRadii::new(
+    BorderRadius::uniform(5.0),
+    BorderRadius::uniform(10.0),
+    BorderRadius::uniform(15.0),
+    BorderRadius::uniform(20.0),
+  );
   canvas.draw_rounded_rect(rect, radii, Rgba::rgb(200, 100, 50));
 
   let _ = canvas.into_pixmap();
@@ -403,14 +409,24 @@ fn test_border_radii_constructors() {
   assert!(uniform.has_radius());
   assert!(uniform.is_uniform());
 
-  let different = BorderRadii::new(1.0, 2.0, 3.0, 4.0);
+  let different = BorderRadii::new(
+    BorderRadius::uniform(1.0),
+    BorderRadius::uniform(2.0),
+    BorderRadius::uniform(3.0),
+    BorderRadius::uniform(4.0),
+  );
   assert!(different.has_radius());
   assert!(!different.is_uniform());
 }
 
 #[test]
 fn test_border_radii_max_radius() {
-  let radii = BorderRadii::new(5.0, 10.0, 15.0, 20.0);
+  let radii = BorderRadii::new(
+    BorderRadius::uniform(5.0),
+    BorderRadius::uniform(10.0),
+    BorderRadius::uniform(15.0),
+    BorderRadius::uniform(20.0),
+  );
   assert_eq!(radii.max_radius(), 20.0);
 }
 
@@ -620,7 +636,12 @@ fn test_complex_scene() {
   canvas.draw_rect(Rect::from_xywh(10.0, 10.0, 180.0, 180.0), Rgba::WHITE);
 
   // Rounded header
-  let radii = BorderRadii::new(5.0, 5.0, 0.0, 0.0);
+  let radii = BorderRadii::new(
+    BorderRadius::uniform(5.0),
+    BorderRadius::uniform(5.0),
+    BorderRadius::ZERO,
+    BorderRadius::ZERO,
+  );
   canvas.draw_rounded_rect(
     Rect::from_xywh(10.0, 10.0, 180.0, 40.0),
     radii,

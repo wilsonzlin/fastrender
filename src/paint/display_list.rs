@@ -300,27 +300,113 @@ pub struct StrokeRoundedRectItem {
 /// Represents the corner radii for CSS border-radius property.
 /// Each corner can have a different radius.
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BorderRadius {
+  /// Horizontal radius
+  pub x: f32,
+  /// Vertical radius
+  pub y: f32,
+}
+
+impl BorderRadius {
+  pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
+
+  pub fn uniform(radius: f32) -> Self {
+    Self {
+      x: radius,
+      y: radius,
+    }
+  }
+
+  pub fn is_zero(&self) -> bool {
+    self.x == 0.0 && self.y == 0.0
+  }
+
+  pub fn max_component(&self) -> f32 {
+    self.x.max(self.y)
+  }
+
+  pub fn scale(&self, factor: f32) -> Self {
+    Self {
+      x: (self.x * factor).max(0.0),
+      y: (self.y * factor).max(0.0),
+    }
+  }
+
+  pub fn shrink(&self, dx: f32, dy: f32) -> Self {
+    Self {
+      x: (self.x - dx).max(0.0),
+      y: (self.y - dy).max(0.0),
+    }
+  }
+}
+
+impl std::ops::Add<f32> for BorderRadius {
+  type Output = Self;
+
+  fn add(self, rhs: f32) -> Self::Output {
+    Self {
+      x: self.x + rhs,
+      y: self.y + rhs,
+    }
+  }
+}
+
+impl std::ops::Add for BorderRadius {
+  type Output = Self;
+
+  fn add(self, rhs: Self) -> Self::Output {
+    Self {
+      x: self.x + rhs.x,
+      y: self.y + rhs.y,
+    }
+  }
+}
+
+impl std::ops::Sub for BorderRadius {
+  type Output = Self;
+
+  fn sub(self, rhs: Self) -> Self::Output {
+    Self {
+      x: self.x - rhs.x,
+      y: self.y - rhs.y,
+    }
+  }
+}
+
+impl std::ops::Mul<f32> for BorderRadius {
+  type Output = Self;
+
+  fn mul(self, rhs: f32) -> Self::Output {
+    Self {
+      x: self.x * rhs,
+      y: self.y * rhs,
+    }
+  }
+}
+
+/// Border radii for rounded rectangles (per-corner).
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BorderRadii {
   /// Top-left corner radius
-  pub top_left: f32,
+  pub top_left: BorderRadius,
 
   /// Top-right corner radius
-  pub top_right: f32,
+  pub top_right: BorderRadius,
 
   /// Bottom-right corner radius
-  pub bottom_right: f32,
+  pub bottom_right: BorderRadius,
 
   /// Bottom-left corner radius
-  pub bottom_left: f32,
+  pub bottom_left: BorderRadius,
 }
 
 impl BorderRadii {
   /// Zero radii (no rounding)
   pub const ZERO: Self = Self {
-    top_left: 0.0,
-    top_right: 0.0,
-    bottom_right: 0.0,
-    bottom_left: 0.0,
+    top_left: BorderRadius::ZERO,
+    top_right: BorderRadius::ZERO,
+    bottom_right: BorderRadius::ZERO,
+    bottom_left: BorderRadius::ZERO,
   };
 
   /// Create uniform border radius (same for all corners)
@@ -329,20 +415,25 @@ impl BorderRadii {
   ///
   /// ```rust,ignore
   /// let radii = BorderRadii::uniform(10.0);
-  /// assert_eq!(radii.top_left, 10.0);
-  /// assert_eq!(radii.bottom_right, 10.0);
+  /// assert_eq!(radii.top_left.x, 10.0);
+  /// assert_eq!(radii.bottom_right.y, 10.0);
   /// ```
   pub fn uniform(radius: f32) -> Self {
     Self {
-      top_left: radius,
-      top_right: radius,
-      bottom_right: radius,
-      bottom_left: radius,
+      top_left: BorderRadius::uniform(radius),
+      top_right: BorderRadius::uniform(radius),
+      bottom_right: BorderRadius::uniform(radius),
+      bottom_left: BorderRadius::uniform(radius),
     }
   }
 
   /// Create border radii with individual values for each corner
-  pub fn new(top_left: f32, top_right: f32, bottom_right: f32, bottom_left: f32) -> Self {
+  pub fn new(
+    top_left: BorderRadius,
+    top_right: BorderRadius,
+    bottom_right: BorderRadius,
+    bottom_left: BorderRadius,
+  ) -> Self {
     Self {
       top_left,
       top_right,
@@ -355,7 +446,10 @@ impl BorderRadii {
   ///
   /// Returns true if at least one corner has a radius > 0.
   pub fn has_radius(&self) -> bool {
-    self.top_left > 0.0 || self.top_right > 0.0 || self.bottom_right > 0.0 || self.bottom_left > 0.0
+    !self.top_left.is_zero()
+      || !self.top_right.is_zero()
+      || !self.bottom_right.is_zero()
+      || !self.bottom_left.is_zero()
   }
 
   /// Check if all radii are the same
@@ -369,9 +463,10 @@ impl BorderRadii {
   pub fn max_radius(&self) -> f32 {
     self
       .top_left
-      .max(self.top_right)
-      .max(self.bottom_right)
-      .max(self.bottom_left)
+      .max_component()
+      .max(self.top_right.max_component())
+      .max(self.bottom_right.max_component())
+      .max(self.bottom_left.max_component())
   }
 
   /// Check if all radii are zero
@@ -393,20 +488,48 @@ impl BorderRadii {
       return Self::ZERO;
     }
 
-    // Calculate scaling factors to prevent overlap
-    let top_scale = width / (self.top_left + self.top_right).max(width);
-    let right_scale = height / (self.top_right + self.bottom_right).max(height);
-    let bottom_scale = width / (self.bottom_left + self.bottom_right).max(width);
-    let left_scale = height / (self.top_left + self.bottom_left).max(height);
+    let top_sum = self.top_left.x + self.top_right.x;
+    let bottom_sum = self.bottom_left.x + self.bottom_right.x;
+    let left_sum = self.top_left.y + self.bottom_left.y;
+    let right_sum = self.top_right.y + self.bottom_right.y;
 
-    // Use the minimum scale factor
-    let scale = top_scale.min(right_scale).min(bottom_scale).min(left_scale);
+    let mut scale_x: f32 = 1.0;
+    if top_sum > 0.0 {
+      scale_x = scale_x.min(width / top_sum);
+    }
+    if bottom_sum > 0.0 {
+      scale_x = scale_x.min(width / bottom_sum);
+    }
+
+    let mut scale_y: f32 = 1.0;
+    if left_sum > 0.0 {
+      scale_y = scale_y.min(height / left_sum);
+    }
+    if right_sum > 0.0 {
+      scale_y = scale_y.min(height / right_sum);
+    }
+
+    if scale_x >= 1.0 && scale_y >= 1.0 {
+      return self;
+    }
 
     Self {
-      top_left: (self.top_left * scale).max(0.0),
-      top_right: (self.top_right * scale).max(0.0),
-      bottom_right: (self.bottom_right * scale).max(0.0),
-      bottom_left: (self.bottom_left * scale).max(0.0),
+      top_left: BorderRadius {
+        x: self.top_left.x * scale_x,
+        y: self.top_left.y * scale_y,
+      },
+      top_right: BorderRadius {
+        x: self.top_right.x * scale_x,
+        y: self.top_right.y * scale_y,
+      },
+      bottom_right: BorderRadius {
+        x: self.bottom_right.x * scale_x,
+        y: self.bottom_right.y * scale_y,
+      },
+      bottom_left: BorderRadius {
+        x: self.bottom_left.x * scale_x,
+        y: self.bottom_left.y * scale_y,
+      },
     }
   }
 
@@ -415,10 +538,10 @@ impl BorderRadii {
   /// Used when calculating inner radii for borders.
   pub fn shrink(self, amount: f32) -> Self {
     Self {
-      top_left: (self.top_left - amount).max(0.0),
-      top_right: (self.top_right - amount).max(0.0),
-      bottom_right: (self.bottom_right - amount).max(0.0),
-      bottom_left: (self.bottom_left - amount).max(0.0),
+      top_left: self.top_left.shrink(amount, amount),
+      top_right: self.top_right.shrink(amount, amount),
+      bottom_right: self.bottom_right.shrink(amount, amount),
+      bottom_left: self.bottom_left.shrink(amount, amount),
     }
   }
 }
@@ -1792,34 +1915,53 @@ mod tests {
   #[test]
   fn test_border_radii_zero() {
     let radii = BorderRadii::ZERO;
-    assert_eq!(radii.top_left, 0.0);
-    assert_eq!(radii.top_right, 0.0);
-    assert_eq!(radii.bottom_right, 0.0);
-    assert_eq!(radii.bottom_left, 0.0);
+    assert_eq!(radii.top_left, BorderRadius::ZERO);
+    assert_eq!(radii.top_right, BorderRadius::ZERO);
+    assert_eq!(radii.bottom_right, BorderRadius::ZERO);
+    assert_eq!(radii.bottom_left, BorderRadius::ZERO);
     assert!(!radii.has_radius());
   }
 
   #[test]
   fn test_border_radii_uniform() {
     let radii = BorderRadii::uniform(10.0);
-    assert_eq!(radii.top_left, 10.0);
-    assert_eq!(radii.top_right, 10.0);
-    assert_eq!(radii.bottom_right, 10.0);
-    assert_eq!(radii.bottom_left, 10.0);
+    assert_eq!(radii.top_left, BorderRadius::uniform(10.0));
+    assert_eq!(radii.top_right, BorderRadius::uniform(10.0));
+    assert_eq!(radii.bottom_right, BorderRadius::uniform(10.0));
+    assert_eq!(radii.bottom_left, BorderRadius::uniform(10.0));
     assert!(radii.has_radius());
     assert!(radii.is_uniform());
   }
 
   #[test]
   fn test_border_radii_individual() {
-    let radii = BorderRadii::new(1.0, 2.0, 3.0, 4.0);
-    assert_eq!(radii.top_left, 1.0);
-    assert_eq!(radii.top_right, 2.0);
-    assert_eq!(radii.bottom_right, 3.0);
-    assert_eq!(radii.bottom_left, 4.0);
+    let radii = BorderRadii::new(
+      BorderRadius::uniform(1.0),
+      BorderRadius::uniform(2.0),
+      BorderRadius::uniform(3.0),
+      BorderRadius::uniform(4.0),
+    );
+    assert_eq!(radii.top_left, BorderRadius::uniform(1.0));
+    assert_eq!(radii.top_right, BorderRadius::uniform(2.0));
+    assert_eq!(radii.bottom_right, BorderRadius::uniform(3.0));
+    assert_eq!(radii.bottom_left, BorderRadius::uniform(4.0));
     assert!(radii.has_radius());
     assert!(!radii.is_uniform());
     assert_eq!(radii.max_radius(), 4.0);
+  }
+
+  #[test]
+  fn clamped_radii_scale_axes_independently() {
+    let radii = BorderRadii::new(
+      BorderRadius { x: 60.0, y: 10.0 },
+      BorderRadius { x: 60.0, y: 10.0 },
+      BorderRadius { x: 60.0, y: 10.0 },
+      BorderRadius { x: 60.0, y: 10.0 },
+    );
+    // Width forces horizontal radii to shrink; height is ample so vertical radii remain.
+    let clamped = radii.clamped(100.0, 200.0);
+    assert!(clamped.top_left.x < 60.0);
+    assert!((clamped.top_left.y - 10.0).abs() < 1e-6);
   }
 
   // ========================================================================
