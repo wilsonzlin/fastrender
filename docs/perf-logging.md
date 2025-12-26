@@ -60,3 +60,7 @@ cargo run --bin bench_compare \
 ```
 
 `--metric` accepts `mean` or `median`; `--regression-threshold` is a relative delta (e.g., 0.05 = 5%). A non-zero exit status indicates regressions suitable for CI gating.
+
+## Microbenchmarks
+
+- Run `cargo bench --bench cascade_bench -- ":has"` to focus on the `:has()` traversal microbench alongside the existing cascade benchmark. The full suite is available via `cargo bench --bench cascade_bench`.

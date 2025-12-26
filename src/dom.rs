@@ -2119,6 +2119,86 @@ impl<'a> Element for ElementRef<'a> {
   }
 }
 
+struct RelativeSelectorAncestorStack<'a> {
+  baseline: &'a [&'a DomNode],
+  nodes: Vec<&'a DomNode>,
+  baseline_len: usize,
+}
+
+impl<'a> RelativeSelectorAncestorStack<'a> {
+  fn new(baseline: &'a [&'a DomNode]) -> Self {
+    let baseline_len = baseline.len();
+    Self {
+      baseline,
+      nodes: Vec::new(),
+      baseline_len,
+    }
+  }
+
+  fn ensure_materialized(&mut self) {
+    if self.nodes.is_empty() {
+      self
+        .nodes
+        .reserve(self.baseline_len.saturating_add(8));
+      self.nodes.extend_from_slice(self.baseline);
+    }
+  }
+
+  fn as_slice(&self) -> &[&'a DomNode] {
+    if self.nodes.is_empty() {
+      self.baseline
+    } else {
+      &self.nodes
+    }
+  }
+
+  fn parent(&self) -> Option<&'a DomNode> {
+    if self.nodes.is_empty() {
+      self.baseline.last().copied()
+    } else {
+      self.nodes.last().copied()
+    }
+  }
+
+  fn push(&mut self, node: &'a DomNode) {
+    self.ensure_materialized();
+    self.nodes.push(node);
+  }
+
+  fn pop(&mut self) -> Option<&'a DomNode> {
+    self.nodes.pop()
+  }
+
+  fn reset(&mut self) {
+    if !self.nodes.is_empty() {
+      self.nodes.truncate(self.baseline_len);
+    }
+  }
+
+  fn len(&self) -> usize {
+    if self.nodes.is_empty() {
+      self.baseline_len
+    } else {
+      self.nodes.len()
+    }
+  }
+
+  fn baseline_len(&self) -> usize {
+    self.baseline_len
+  }
+
+  fn with_pushed<F, R>(&mut self, node: &'a DomNode, f: F) -> R
+  where
+    F: FnOnce(&mut Self) -> R,
+  {
+    self.push(node);
+    let res = f(self);
+    let popped = self.pop();
+    debug_assert!(popped.is_some());
+    res
+  }
+}
+
 fn matches_has_relative(
   anchor: &ElementRef,
   selectors: &[RelativeSelector<FastRenderSelectorImpl>],
@@ -2129,6 +2209,8 @@ fn matches_has_relative(
   }
 
   context.nest_for_relative_selector(anchor.opaque(), |ctx| {
+    let mut ancestors = RelativeSelectorAncestorStack::new(anchor.all_ancestors);
+
     for selector in selectors.iter() {
       if let Some(cached) = ctx
         .selector_caches
@@ -2141,8 +2223,9 @@ fn matches_has_relative(
         continue;
       }
 
-      let mut ancestors: Vec<&DomNode> = anchor.all_ancestors.to_vec();
       let matched = match_relative_selector(selector, anchor.node, &mut ancestors, ctx);
+      debug_assert_eq!(ancestors.len(), ancestors.baseline_len());
+      ancestors.reset();
 
       ctx.selector_caches.relative_selector.add(
         anchor.opaque(),
@@ -2162,10 +2245,16 @@ fn matches_has_relative(
   })
 }
 
+// RelativeSelectorMatchHint guides traversal here:
+// - is_descendant_direction() => combinators keep moving downward (descendant or child),
+//   otherwise we only need to consider following siblings.
+// - is_subtree() => a match may occur inside the candidate's subtree, so we recurse;
+//   when false we only try the candidate itself.
+// - is_next_sibling() => only the immediate following sibling can match.
 fn match_relative_selector<'a>(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
   anchor: &'a DomNode,
-  ancestors: &mut Vec<&'a DomNode>,
+  ancestors: &mut RelativeSelectorAncestorStack<'a>,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
 ) -> bool {
   if !anchor.is_element() {
@@ -2182,32 +2271,31 @@ fn match_relative_selector<'a>(
 fn match_relative_selector_descendants<'a>(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
   anchor: &'a DomNode,
-  ancestors: &mut Vec<&'a DomNode>,
+  ancestors: &mut RelativeSelectorAncestorStack<'a>,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
 ) -> bool {
-  ancestors.push(anchor);
-  for child in anchor.children.iter().filter(|c| c.is_element()) {
-    let child_ref = ElementRef::with_ancestors(child, ancestors);
-    let mut matched = matches_selector(&selector.selector, 0, None, &child_ref, context);
-    if !matched && selector.match_hint.is_subtree() {
-      matched = match_relative_selector_subtree(selector, child, ancestors, context);
+  ancestors.with_pushed(anchor, |ancestors| {
+    for child in anchor.children.iter().filter(|c| c.is_element()) {
+      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice());
+      let mut matched = matches_selector(&selector.selector, 0, None, &child_ref, context);
+      if !matched && selector.match_hint.is_subtree() {
+        matched = match_relative_selector_subtree(selector, child, ancestors, context);
+      }
+      if matched {
+        return true;
+      }
     }
-    if matched {
-      ancestors.pop();
-      return true;
-    }
-  }
-  ancestors.pop();
-  false
+    false
+  })
 }
 
 fn match_relative_selector_siblings<'a>(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
   anchor: &'a DomNode,
-  ancestors: &mut Vec<&'a DomNode>,
+  ancestors: &mut RelativeSelectorAncestorStack<'a>,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
 ) -> bool {
-  let parent = match ancestors.last().copied() {
+  let parent = match ancestors.parent() {
     Some(p) => p,
     None => return false,
   };
@@ -2222,7 +2310,7 @@ fn match_relative_selector_siblings<'a>(
       continue;
     }
 
-    let sibling_ref = ElementRef::with_ancestors(sibling, ancestors);
+    let sibling_ref = ElementRef::with_ancestors(sibling, ancestors.as_slice());
     let matched = if selector.match_hint.is_subtree() {
       match_relative_selector_subtree(selector, sibling, ancestors, context)
     } else {
@@ -2244,23 +2332,23 @@ fn match_relative_selector_siblings<'a>(
 fn match_relative_selector_subtree<'a>(
   selector: &RelativeSelector<FastRenderSelectorImpl>,
   node: &'a DomNode,
-  ancestors: &mut Vec<&'a DomNode>,
+  ancestors: &mut RelativeSelectorAncestorStack<'a>,
   context: &mut MatchingContext<FastRenderSelectorImpl>,
 ) -> bool {
-  ancestors.push(node);
-  for child in node.children.iter().filter(|c| c.is_element()) {
-    let child_ref = ElementRef::with_ancestors(child, ancestors);
-    if matches_selector(&selector.selector, 0, None, &child_ref, context) {
-      ancestors.pop();
-      return true;
+  debug_assert!(selector.match_hint.is_subtree());
+
+  ancestors.with_pushed(node, |ancestors| {
+    for child in node.children.iter().filter(|c| c.is_element()) {
+      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice());
+      if matches_selector(&selector.selector, 0, None, &child_ref, context) {
+        return true;
+      }
+      if match_relative_selector_subtree(selector, child, ancestors, context) {
+        return true;
+      }
     }
-    if match_relative_selector_subtree(selector, child, ancestors, context) {
-      ancestors.pop();
-      return true;
-    }
-  }
-  ancestors.pop();
-  false
+    false
+  })
 }
 
 #[cfg(test)]

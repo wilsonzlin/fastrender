@@ -153,5 +153,73 @@ fn cascade_not_benchmark(c: &mut Criterion) {
   });
 }
 
-criterion_group!(benches, cascade_benchmark, cascade_not_benchmark);
+fn generate_has_bench_html(depth: usize, fan_out: usize) -> String {
+  fn build_branch(
+    level: usize,
+    depth: usize,
+    fan_out: usize,
+    place_target: bool,
+    html: &mut String,
+  ) {
+    html.push_str(&format!("<div class=\"branch level{}\">", level));
+    if level + 1 == depth {
+      if place_target {
+        html.push_str("<span class=\"target\"></span>");
+      }
+    } else {
+      for i in 0..fan_out {
+        build_branch(
+          level + 1,
+          depth,
+          fan_out,
+          place_target && i == fan_out - 1,
+          html,
+        );
+      }
+    }
+    html.push_str("</div>");
+  }
+
+  let mut html = String::from("<div class=\"has-bench\">");
+  for i in 0..fan_out {
+    build_branch(0, depth, fan_out, i == fan_out - 1, &mut html);
+  }
+  html.push_str("</div>");
+  html
+}
+
+fn has_selector_css() -> &'static str {
+  r#"
+      .has-bench:has(.target) { outline: 1px solid #ccc; }
+      .branch:has(.target) { color: #111; }
+      .branch:has(> .branch .target) { border-left: 1px solid #ddd; }
+      .branch:has(+ .branch .target) { background: #fafafa; }
+      .branch:has(.missing) { padding-left: 2px; }
+  "#
+}
+
+fn has_selector_benchmark(c: &mut Criterion) {
+  let depth = 6;
+  let fan_out = 3;
+  let html = generate_has_bench_html(depth, fan_out);
+  let css = has_selector_css();
+
+  let dom = parse_html(&html).expect("parse html");
+  let stylesheet = parse_stylesheet(css).expect("parse stylesheet");
+  let media = MediaContext::screen(1280.0, 720.0);
+
+  c.bench_function("cascade apply_styles :has depth6 fanout3", |b| {
+    b.iter(|| {
+      let styled = apply_styles_with_media(black_box(&dom), black_box(&stylesheet), &media);
+      black_box(styled);
+    });
+  });
+}
+
+criterion_group!(
+  benches,
+  cascade_benchmark,
+  cascade_not_benchmark,
+  has_selector_benchmark
+);
 criterion_main!(benches);
