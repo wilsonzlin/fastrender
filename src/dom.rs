@@ -1762,17 +1762,13 @@ impl<'a> Element for ElementRef<'a> {
       return None;
     }
 
-    // Create ElementRef for parent with its ancestors
-    if self.all_ancestors.len() > 1 {
+    Some(if self.all_ancestors.len() > 1 {
       // If we have multiple ancestors, the parent's ancestors are all but the last
-      Some(ElementRef::with_ancestors(
-        parent,
-        &self.all_ancestors[..self.all_ancestors.len() - 1],
-      ))
+      ElementRef::with_ancestors(parent, &self.all_ancestors[..self.all_ancestors.len() - 1])
     } else {
       // Parent is the root
-      Some(ElementRef::new(parent))
-    }
+      ElementRef::new(parent)
+    })
   }
 
   fn parent_node_is_shadow_root(&self) -> bool {
@@ -2474,8 +2470,7 @@ fn match_relative_selector_subtree<'a>(
 mod tests {
   use super::*;
   use crate::css::selectors::PseudoClassParser;
-  use cssparser::Parser;
-  use cssparser::ParserInput;
+  use cssparser::{Parser, ParserInput};
   use selectors::matching::MatchingContext;
   use selectors::matching::MatchingForInvalidation;
   use selectors::matching::MatchingMode;
@@ -2601,6 +2596,88 @@ mod tests {
 
     let html_child_body = parse_selector("html > body");
     assert!(selector_matches(&body_ref, &html_child_body));
+  }
+
+  #[test]
+  fn parent_element_skips_shadow_roots() {
+    let shadow_child = element("span", vec![]);
+    let shadow_root = DomNode {
+      node_type: DomNodeType::ShadowRoot {
+        mode: ShadowRootMode::Open,
+      },
+      children: vec![shadow_child],
+    };
+    let host = element("div", vec![shadow_root]);
+
+    let shadow_root_ref = &host.children[0];
+    let shadow_child_ref = &shadow_root_ref.children[0];
+    let shadow_ancestors: Vec<&DomNode> = vec![&host, shadow_root_ref];
+    let shadow_element_ref = ElementRef::with_ancestors(shadow_child_ref, &shadow_ancestors);
+
+    assert!(shadow_element_ref.parent_node_is_shadow_root());
+    assert!(shadow_element_ref.parent_element().is_none());
+
+    let normal_child = element("p", vec![]);
+    let parent = element("section", vec![normal_child]);
+    let normal_child_ref = &parent.children[0];
+    let normal_ancestors: Vec<&DomNode> = vec![&parent];
+    let normal_element_ref = ElementRef::with_ancestors(normal_child_ref, &normal_ancestors);
+
+    let normal_parent = normal_element_ref
+      .parent_element()
+      .expect("normal elements should report element parents");
+    assert_eq!(normal_parent.node.tag_name(), Some("section"));
+    assert!(!normal_element_ref.parent_node_is_shadow_root());
+  }
+
+  #[test]
+  fn descendant_selector_does_not_cross_shadow_root() {
+    let shadow_child = element("span", vec![]);
+    let shadow_root = DomNode {
+      node_type: DomNodeType::ShadowRoot {
+        mode: ShadowRootMode::Open,
+      },
+      children: vec![shadow_child],
+    };
+    let host = element("div", vec![shadow_root]);
+    let body = element("body", vec![host]);
+    let html = element("html", vec![body]);
+    let document = DomNode {
+      node_type: DomNodeType::Document,
+      children: vec![html],
+    };
+
+    let mut input = ParserInput::new("body span");
+    let mut parser = Parser::new(&mut input);
+    let selector_list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::No).expect("parse");
+    let selector = selector_list
+      .slice()
+      .first()
+      .expect("expected a selector");
+
+    let mut caches = SelectorCaches::default();
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+
+    let html = &document.children[0];
+    let body = &html.children[0];
+    let host = &body.children[0];
+    let shadow_root = &host.children[0];
+    let shadow_child = &shadow_root.children[0];
+    let ancestors: Vec<&DomNode> = vec![&document, html, body, host, shadow_root];
+    let element_ref = ElementRef::with_ancestors(shadow_child, &ancestors);
+
+    assert!(
+      !matches_selector(selector, 0, None, &element_ref, &mut context),
+      "elements in shadow trees should not match selectors that rely on light DOM ancestors"
+    );
   }
 
   #[test]
