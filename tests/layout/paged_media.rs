@@ -323,6 +323,39 @@ fn margin_box_bounds_cover_all_areas() {
 }
 
 #[test]
+fn margin_box_page_counters_page_and_pages() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 100px;
+            margin: 10px;
+            @bottom-center { content: "Page " counter(page) " / " counter(pages); }
+          }
+        </style>
+      </head>
+      <body>
+        <div style="height: 150px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+  assert!(page_roots.len() >= 2);
+
+  let page_count = page_roots.len();
+  for (idx, page) in page_roots.iter().enumerate() {
+    let expected = format!("Page {} / {}", idx + 1, page_count);
+    find_text(page, &expected)
+      .unwrap_or_else(|| panic!("missing page counter text on page {}", idx + 1));
+  }
+}
+
+#[test]
 fn paginated_pages_are_stacked_vertically() {
   let html = r#"
     <html>
