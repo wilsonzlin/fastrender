@@ -1,5 +1,8 @@
-use fastrender::paint::svg_filter::{apply_svg_filter, FilterInput, FilterPrimitive, FilterStep, SvgFilter};
-use fastrender::Rgba;
+use fastrender::paint::svg_filter::{
+  apply_svg_filter, ColorInterpolationFilters, FilterInput, FilterPrimitive, FilterStep, SvgFilter,
+  SvgFilterRegion, SvgFilterUnits, SvgLength,
+};
+use fastrender::{Rect, Rgba};
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 fn vertical_line_pixmap() -> Pixmap {
@@ -16,36 +19,62 @@ fn vertical_line_pixmap() -> Pixmap {
 
 fn render_offset(dx: f32) -> Pixmap {
   let mut pixmap = vertical_line_pixmap();
+  let bbox = Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
   let filter = SvgFilter {
+    color_interpolation_filters: ColorInterpolationFilters::SRGB,
     steps: vec![FilterStep {
       result: None,
+      color_interpolation_filters: None,
       primitive: FilterPrimitive::Offset {
         input: FilterInput::SourceGraphic,
         dx,
         dy: 0.0,
       },
+      region: None,
     }],
+    region: SvgFilterRegion {
+      x: SvgLength::Number(0.0),
+      y: SvgLength::Number(0.0),
+      width: SvgLength::Number(bbox.width()),
+      height: SvgLength::Number(bbox.height()),
+      units: SvgFilterUnits::UserSpaceOnUse,
+    },
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
   };
-  apply_svg_filter(&filter, &mut pixmap);
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
   pixmap
 }
 
 fn render_drop_shadow(dx: f32) -> Pixmap {
   let mut pixmap = vertical_line_pixmap();
+  let bbox = Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32);
   let filter = SvgFilter {
+    color_interpolation_filters: ColorInterpolationFilters::SRGB,
     steps: vec![FilterStep {
       result: None,
+      color_interpolation_filters: None,
       primitive: FilterPrimitive::DropShadow {
         input: FilterInput::SourceGraphic,
         dx,
         dy: 0.0,
-        std_dev: 0.0,
+        std_dev: (0.0, 0.0),
         color: Rgba::new(0, 0, 0, 1.0),
         opacity: 1.0,
       },
+      region: None,
     }],
+    region: SvgFilterRegion {
+      x: SvgLength::Number(0.0),
+      y: SvgLength::Number(0.0),
+      width: SvgLength::Number(bbox.width()),
+      height: SvgLength::Number(bbox.height()),
+      units: SvgFilterUnits::UserSpaceOnUse,
+    },
+    filter_res: None,
+    primitive_units: SvgFilterUnits::UserSpaceOnUse,
   };
-  apply_svg_filter(&filter, &mut pixmap);
+  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
   pixmap
 }
 

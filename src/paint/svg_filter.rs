@@ -1982,25 +1982,78 @@ fn flood(width: u32, height: u32, color: &Rgba, opacity: f32) -> Option<Pixmap> 
 }
 
 fn offset_pixmap(input: Pixmap, dx: f32, dy: f32) -> Pixmap {
-  let mut out = Pixmap::new(input.width(), input.height()).unwrap();
-  let mut paint = PixmapPaint::default();
-  paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-  paint.quality = FilterQuality::Bilinear;
-  // Offsets are already expressed in the filter primitive coordinate system (primitiveUnits).
-  out.draw_pixmap(
-    0,
-    0,
-    input.as_ref(),
-    &paint,
-    Transform::from_translate(dx, dy),
-    None,
-  );
+  let dx = if dx.is_finite() { dx } else { 0.0 };
+  let dy = if dy.is_finite() { dy } else { 0.0 };
+  if dx == 0.0 && dy == 0.0 {
+    return input;
+  }
+
+  let width = input.width();
+  let height = input.height();
+  let w = width as i32;
+  let h = height as i32;
+  let pixels = input.pixels();
+  let mut out = Pixmap::new(width, height).unwrap();
+  let out_pixels = out.pixels_mut();
+
+  let sample = |x: i32, y: i32| -> PremultipliedColorU8 {
+    if x >= 0 && x < w && y >= 0 && y < h {
+      pixels[(y as u32 * width + x as u32) as usize]
+    } else {
+      PremultipliedColorU8::TRANSPARENT
+    }
+  };
+
+  for y in 0..h {
+    for x in 0..w {
+      let out_idx = (y as u32 * width + x as u32) as usize;
+      let src_x = x as f32 - dx;
+      let src_y = y as f32 - dy;
+      if !src_x.is_finite() || !src_y.is_finite() {
+        out_pixels[out_idx] = PremultipliedColorU8::TRANSPARENT;
+        continue;
+      }
+      if src_x < -1.0 || src_y < -1.0 || src_x > w as f32 || src_y > h as f32 {
+        out_pixels[out_idx] = PremultipliedColorU8::TRANSPARENT;
+        continue;
+      }
+
+      let x0 = src_x.floor() as i32;
+      let y0 = src_y.floor() as i32;
+      let tx = src_x - x0 as f32;
+      let ty = src_y - y0 as f32;
+      let w00 = (1.0 - tx) * (1.0 - ty);
+      let w10 = tx * (1.0 - ty);
+      let w01 = (1.0 - tx) * ty;
+      let w11 = tx * ty;
+
+      let p00 = sample(x0, y0);
+      let p10 = sample(x0 + 1, y0);
+      let p01 = sample(x0, y0 + 1);
+      let p11 = sample(x0 + 1, y0 + 1);
+
+      let mix = |c00: u8, c10: u8, c01: u8, c11: u8| -> u8 {
+        (c00 as f32 * w00 + c10 as f32 * w10 + c01 as f32 * w01 + c11 as f32 * w11)
+          .round()
+          .clamp(0.0, 255.0) as u8
+      };
+
+      let a = mix(p00.alpha(), p10.alpha(), p01.alpha(), p11.alpha());
+      let r = mix(p00.red(), p10.red(), p01.red(), p11.red()).min(a);
+      let g = mix(p00.green(), p10.green(), p01.green(), p11.green()).min(a);
+      let b = mix(p00.blue(), p10.blue(), p01.blue(), p11.blue()).min(a);
+
+      out_pixels[out_idx] =
+        PremultipliedColorU8::from_rgba(r, g, b, a).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+  }
+
   out
 }
 
 fn offset_result(input: FilterResult, dx: f32, dy: f32, filter_region: Rect) -> FilterResult {
   let pixmap = offset_pixmap(input.pixmap, dx, dy);
-  let offset = Point::new(dx.round(), dy.round());
+  let offset = Point::new(dx, dy);
   let region = clip_region(input.region.translate(offset), filter_region);
   FilterResult { pixmap, region }
 }
@@ -2145,19 +2198,10 @@ fn drop_shadow_pixmap(
     apply_gaussian_blur_anisotropic(&mut shadow, stddev.0, stddev.1);
   }
 
-  let mut out = Pixmap::new(input.pixmap.width(), input.pixmap.height()).unwrap();
+  let mut out = offset_pixmap(shadow, dx, dy);
+
   let mut paint = PixmapPaint::default();
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
-  paint.quality = FilterQuality::Bilinear;
-  // dx/dy are resolved before this step; apply them as a fractional translation.
-  out.draw_pixmap(
-    0,
-    0,
-    shadow.as_ref(),
-    &paint,
-    Transform::from_translate(dx, dy),
-    None,
-  );
   out.draw_pixmap(
     0,
     0,
@@ -2172,7 +2216,7 @@ fn drop_shadow_pixmap(
   let blur_spread_y = (stddev.1.abs() * 3.0).max(0.0);
   let shadow_region = clip_region(
     inflate_rect_xy(base_region, blur_spread_x, blur_spread_y)
-      .translate(Point::new(dx.round(), dy.round())),
+      .translate(Point::new(dx, dy)),
     filter_region,
   );
   let region = clip_region(base_region.union(shadow_region), filter_region);
@@ -3713,7 +3757,7 @@ mod filter_cache_tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod blend_pixmaps_tests {
   use super::*;
 
   const BACKDROP: (u8, u8, u8, u8) = (64, 160, 220, 255);
@@ -3721,57 +3765,70 @@ mod tests {
 
   #[test]
   fn blend_multiply_matches_expected() {
+    let backdrop = solid_pixmap(BACKDROP);
+    let filter_region = backdrop.region;
     let blended = blend_pixmaps(
-      Some(solid_pixmap(BACKDROP)),
+      Some(backdrop),
       Some(solid_pixmap(SOURCE)),
       BlendMode::Multiply,
+      filter_region,
     )
     .unwrap();
-    let pixel = blended.pixel(0, 0).unwrap();
+    let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (50, 50, 86, 255));
   }
 
   #[test]
   fn blend_screen_matches_expected() {
+    let backdrop = solid_pixmap(BACKDROP);
+    let filter_region = backdrop.region;
     let blended = blend_pixmaps(
-      Some(solid_pixmap(BACKDROP)),
+      Some(backdrop),
       Some(solid_pixmap(SOURCE)),
       BlendMode::Screen,
+      filter_region,
     )
     .unwrap();
-    let pixel = blended.pixel(0, 0).unwrap();
+    let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (214, 190, 234, 255));
   }
 
   #[test]
   fn blend_overlay_matches_expected() {
+    let backdrop = solid_pixmap(BACKDROP);
+    let filter_region = backdrop.region;
     let blended = blend_pixmaps(
-      Some(solid_pixmap(BACKDROP)),
+      Some(backdrop),
       Some(solid_pixmap(SOURCE)),
       BlendMode::Overlay,
+      filter_region,
     )
     .unwrap();
-    let pixel = blended.pixel(0, 0).unwrap();
+    let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (100, 125, 212, 255));
   }
 
   #[test]
   fn blend_difference_matches_expected() {
+    let backdrop = solid_pixmap(BACKDROP);
+    let filter_region = backdrop.region;
     let blended = blend_pixmaps(
-      Some(solid_pixmap(BACKDROP)),
+      Some(backdrop),
       Some(solid_pixmap(SOURCE)),
       BlendMode::Difference,
+      filter_region,
     )
     .unwrap();
-    let pixel = blended.pixel(0, 0).unwrap();
+    let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (164, 140, 147, 255));
   }
 
-  fn solid_pixmap(color: (u8, u8, u8, u8)) -> Pixmap {
+  fn solid_pixmap(color: (u8, u8, u8, u8)) -> FilterResult {
     let mut pixmap = Pixmap::new(1, 1).unwrap();
     pixmap.pixels_mut()[0] =
       PremultipliedColorU8::from_rgba(color.0, color.1, color.2, color.3).unwrap();
-    pixmap
+    let filter_region = filter_region_for_pixmap(&pixmap);
+    FilterResult::full_region(pixmap, filter_region)
   }
 
   fn assert_pixel_close(actual: PremultipliedColorU8, expected: (u8, u8, u8, u8)) {
