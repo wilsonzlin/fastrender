@@ -11,7 +11,11 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
 
+mod turbulence;
+
 static FILTER_CACHE: OnceLock<Mutex<HashMap<String, Arc<SvgFilter>>>> = OnceLock::new();
+
+const MAX_TURBULENCE_OCTAVES: u32 = 8;
 
 fn filter_cache() -> &'static Mutex<HashMap<String, Arc<SvgFilter>>> {
   FILTER_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -163,6 +167,7 @@ pub enum FilterPrimitive {
     base_frequency: (f32, f32),
     seed: u32,
     octaves: u32,
+    stitch_tiles: bool,
     kind: TurbulenceType,
   },
   DisplacementMap {
@@ -1039,23 +1044,27 @@ fn parse_fe_tile(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 }
 
 fn parse_fe_turbulence(node: &roxmltree::Node) -> Option<FilterPrimitive> {
-  let base_freq_values: Vec<f32> = node
-    .attribute("baseFrequency")
-    .unwrap_or("0.05")
-    .split_whitespace()
-    .filter_map(|v| v.parse::<f32>().ok())
-    .collect();
+  let base_freq_values = parse_number_list(node.attribute("baseFrequency"));
   let fx = base_freq_values.get(0).copied().unwrap_or(0.05).abs();
   let fy = base_freq_values.get(1).copied().unwrap_or(fx).abs();
-  let seed = node
+  let seed_raw = node
     .attribute("seed")
-    .and_then(|v| v.parse::<u32>().ok())
-    .unwrap_or(0);
+    .and_then(|v| v.parse::<f32>().ok())
+    .unwrap_or(0.0)
+    .round();
+  let seed = if seed_raw < 0.0 { 0 } else { seed_raw as u32 };
   let octaves = node
     .attribute("numOctaves")
     .and_then(|v| v.parse::<u32>().ok())
     .unwrap_or(1)
-    .max(1);
+    .clamp(1, MAX_TURBULENCE_OCTAVES);
+  let stitch_tiles = node
+    .attribute("stitchTiles")
+    .map(|v| {
+      let v = v.trim().to_ascii_lowercase();
+      v == "stitch" || v == "true" || v == "1"
+    })
+    .unwrap_or(false);
   let kind = match node
     .attribute("type")
     .unwrap_or("turbulence")
@@ -1070,6 +1079,7 @@ fn parse_fe_turbulence(node: &roxmltree::Node) -> Option<FilterPrimitive> {
     base_frequency: (fx, fy),
     seed,
     octaves,
+    stitch_tiles,
     kind,
   })
 }
@@ -1419,14 +1429,17 @@ fn apply_primitive(
       base_frequency,
       seed,
       octaves,
+      stitch_tiles,
       kind,
     } => {
-      let pixmap = render_turbulence(
+      let pixmap = turbulence::render_turbulence(
         source.pixmap.width(),
         source.pixmap.height(),
+        filter_region,
         *base_frequency,
         *seed,
         *octaves,
+        *stitch_tiles,
         *kind,
       )?;
       Some(FilterResult::full_region(pixmap, filter_region))
@@ -1838,70 +1851,6 @@ fn tile_pixmap(input: FilterResult, filter_region: Rect) -> Option<FilterResult>
     pixmap: out,
     region: output_region,
   })
-}
-
-fn turbulence_noise(x: f32, y: f32, seed: u32) -> f32 {
-  let xi = x.floor() as i32;
-  let yi = y.floor() as i32;
-  let xf = x - xi as f32;
-  let yf = y - yi as f32;
-  let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
-  let hash = |x: i32, y: i32| -> f32 {
-    let mut h = (x as u32)
-      .wrapping_mul(374761393)
-      .wrapping_add((y as u32).wrapping_mul(668265263))
-      .wrapping_add(seed.wrapping_mul(2147483647));
-    h ^= h >> 13;
-    h = h.wrapping_mul(1274126177);
-    (h & 0xffff) as f32 / 65535.0
-  };
-  let n00 = hash(xi, yi);
-  let n10 = hash(xi + 1, yi);
-  let n01 = hash(xi, yi + 1);
-  let n11 = hash(xi + 1, yi + 1);
-  let u = smooth(xf);
-  let v = smooth(yf);
-  let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-  lerp(lerp(n00, n10, u), lerp(n01, n11, u), v)
-}
-
-fn render_turbulence(
-  width: u32,
-  height: u32,
-  base_frequency: (f32, f32),
-  seed: u32,
-  octaves: u32,
-  kind: TurbulenceType,
-) -> Option<Pixmap> {
-  let mut pixmap = Pixmap::new(width, height)?;
-  let max_octaves = octaves.max(1);
-  for y in 0..height {
-    for x in 0..width {
-      let mut freq_x = base_frequency.0.max(0.0);
-      let mut freq_y = base_frequency.1.max(0.0);
-      let mut amplitude = 1.0;
-      let mut total = 0.0;
-      let mut weight = 0.0;
-      for o in 0..max_octaves {
-        let n = turbulence_noise(x as f32 * freq_x, y as f32 * freq_y, seed + o);
-        let sample = match kind {
-          TurbulenceType::FractalNoise => n,
-          TurbulenceType::Turbulence => n.abs(),
-        };
-        total += sample * amplitude;
-        weight += amplitude;
-        amplitude *= 0.5;
-        freq_x *= 2.0;
-        freq_y *= 2.0;
-      }
-      let value = if weight > 0.0 { total / weight } else { 0.0 };
-      let byte = (value.clamp(0.0, 1.0) * 255.0).round().clamp(0.0, 255.0) as u8;
-      let idx = (y * width + x) as usize;
-      pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(byte, byte, byte, 255)
-        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
-    }
-  }
-  Some(pixmap)
 }
 
 fn apply_displacement_map(
