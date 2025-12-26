@@ -706,6 +706,7 @@ fn inset_rect(rect: Rect, left: f32, top: f32, right: f32, bottom: f32) -> Rect 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::style::types::BorderCornerRadius;
 
   #[test]
   fn clip_path_box_uses_border_radius() {

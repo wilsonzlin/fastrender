@@ -2,7 +2,7 @@ use fastrender::geometry::Rect;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::paint::display_list_renderer::DisplayListRenderer;
 use fastrender::style::position::Position;
-use fastrender::style::types::{ClipComponent, ClipRect, Overflow};
+use fastrender::style::types::{BorderCornerRadius, ClipComponent, ClipRect, Overflow};
 use fastrender::style::values::Length;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::fragment_tree::FragmentNode;
@@ -53,10 +53,11 @@ fn overflow_clip_respects_border_radii_for_children() {
   let mut parent_style = ComputedStyle::default();
   parent_style.overflow_x = Overflow::Hidden;
   parent_style.overflow_y = Overflow::Hidden;
-  parent_style.border_top_left_radius = Length::px(2.0);
-  parent_style.border_top_right_radius = Length::px(2.0);
-  parent_style.border_bottom_right_radius = Length::px(2.0);
-  parent_style.border_bottom_left_radius = Length::px(2.0);
+  let radius = BorderCornerRadius::uniform(Length::px(2.0));
+  parent_style.border_top_left_radius = radius;
+  parent_style.border_top_right_radius = radius;
+  parent_style.border_bottom_right_radius = radius;
+  parent_style.border_bottom_left_radius = radius;
   let parent_style = Arc::new(parent_style);
 
   let mut child_style = ComputedStyle::default();

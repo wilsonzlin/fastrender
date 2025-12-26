@@ -12360,7 +12360,6 @@ mod tests {
   use crate::style::types::BackgroundRepeatKeyword;
   use crate::style::types::BasicShape;
   use crate::style::types::BorderCornerRadius;
-  use crate::style::types::BasicShape;
   use crate::style::types::BoxSizing;
   use crate::style::types::CaseTransform;
   use crate::style::types::FlexDirection;
@@ -15812,10 +15811,11 @@ mod tests {
       16.0,
     );
 
-    assert_eq!(style.border_top_left_radius, Length::px(10.0));
-    assert_eq!(style.border_top_right_radius, Length::px(10.0));
-    assert_eq!(style.border_bottom_right_radius, Length::px(10.0));
-    assert_eq!(style.border_bottom_left_radius, Length::px(10.0));
+    let expected = BorderCornerRadius::uniform(Length::px(10.0));
+    assert_eq!(style.border_top_left_radius, expected);
+    assert_eq!(style.border_top_right_radius, expected);
+    assert_eq!(style.border_bottom_right_radius, expected);
+    assert_eq!(style.border_bottom_left_radius, expected);
   }
 
   #[test]
@@ -15835,10 +15835,22 @@ mod tests {
       16.0,
     );
 
-    assert_eq!(style.border_top_left_radius, Length::px(10.0));
-    assert_eq!(style.border_top_right_radius, Length::px(20.0));
-    assert_eq!(style.border_bottom_right_radius, Length::px(10.0));
-    assert_eq!(style.border_bottom_left_radius, Length::px(20.0));
+    assert_eq!(
+      style.border_top_left_radius,
+      BorderCornerRadius::uniform(Length::px(10.0))
+    );
+    assert_eq!(
+      style.border_top_right_radius,
+      BorderCornerRadius::uniform(Length::px(20.0))
+    );
+    assert_eq!(
+      style.border_bottom_right_radius,
+      BorderCornerRadius::uniform(Length::px(10.0))
+    );
+    assert_eq!(
+      style.border_bottom_left_radius,
+      BorderCornerRadius::uniform(Length::px(20.0))
+    );
   }
 
   #[test]
@@ -15858,10 +15870,22 @@ mod tests {
       16.0,
     );
 
-    assert_eq!(style.border_top_left_radius, Length::px(10.0));
-    assert_eq!(style.border_top_right_radius, Length::px(20.0));
-    assert_eq!(style.border_bottom_right_radius, Length::px(30.0));
-    assert_eq!(style.border_bottom_left_radius, Length::px(20.0));
+    assert_eq!(
+      style.border_top_left_radius,
+      BorderCornerRadius::uniform(Length::px(10.0))
+    );
+    assert_eq!(
+      style.border_top_right_radius,
+      BorderCornerRadius::uniform(Length::px(20.0))
+    );
+    assert_eq!(
+      style.border_bottom_right_radius,
+      BorderCornerRadius::uniform(Length::px(30.0))
+    );
+    assert_eq!(
+      style.border_bottom_left_radius,
+      BorderCornerRadius::uniform(Length::px(20.0))
+    );
   }
 
   #[test]
@@ -15881,10 +15905,22 @@ mod tests {
       16.0,
     );
 
-    assert_eq!(style.border_top_left_radius, Length::px(1.0));
-    assert_eq!(style.border_top_right_radius, Length::px(2.0));
-    assert_eq!(style.border_bottom_right_radius, Length::px(3.0));
-    assert_eq!(style.border_bottom_left_radius, Length::px(4.0));
+    assert_eq!(
+      style.border_top_left_radius,
+      BorderCornerRadius::uniform(Length::px(1.0))
+    );
+    assert_eq!(
+      style.border_top_right_radius,
+      BorderCornerRadius::uniform(Length::px(2.0))
+    );
+    assert_eq!(
+      style.border_bottom_right_radius,
+      BorderCornerRadius::uniform(Length::px(3.0))
+    );
+    assert_eq!(
+      style.border_bottom_left_radius,
+      BorderCornerRadius::uniform(Length::px(4.0))
+    );
   }
 
   #[test]
