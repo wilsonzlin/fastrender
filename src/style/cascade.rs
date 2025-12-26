@@ -2473,6 +2473,36 @@ mod tests {
   }
 
   #[test]
+  fn single_colon_before_behaves_like_pseudo_element() {
+    let dom = element_with_style("");
+    let stylesheet =
+      parse_stylesheet("div:before { content: 'x'; color: rgb(1, 2, 3); }").expect("stylesheet");
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let before = styled
+      .before_styles
+      .as_ref()
+      .expect("generated :before pseudo-element");
+    assert_eq!(before.color, Rgba::rgb(1, 2, 3));
+    assert_eq!(before.content_value, ContentValue::from_string("x"));
+  }
+
+  #[test]
+  fn single_colon_after_behaves_like_pseudo_element() {
+    let dom = element_with_style("");
+    let stylesheet =
+      parse_stylesheet("div:after { content: 'y'; color: rgb(4, 5, 6); }").expect("stylesheet");
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let after = styled
+      .after_styles
+      .as_ref()
+      .expect("generated :after pseudo-element");
+    assert_eq!(after.color, Rgba::rgb(4, 5, 6));
+    assert_eq!(after.content_value, ContentValue::from_string("y"));
+  }
+
+  #[test]
   fn important_overrides_more_specific_normal_declarations() {
     let dom = element_with_id_and_class("target", "item", None);
     let stylesheet = parse_stylesheet(
