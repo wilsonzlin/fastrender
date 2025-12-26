@@ -86,6 +86,7 @@ fn filter_region_respects_bbox_offset() {
       height: SvgLength::Percent(1.0),
       units: SvgFilterUnits::ObjectBoundingBox,
     },
+    filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
   };
   filter.steps.push(FilterStep {

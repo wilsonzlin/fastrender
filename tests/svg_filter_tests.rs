@@ -22,6 +22,7 @@ fn base_filter(steps: Vec<FilterStep>) -> SvgFilter {
       height: SvgLength::Percent(1.2),
       units: SvgFilterUnits::ObjectBoundingBox,
     },
+    filter_res: None,
     primitive_units: SvgFilterUnits::UserSpaceOnUse,
   }
 }

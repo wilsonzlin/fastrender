@@ -60,6 +60,7 @@ fn displacement_filter(scale: f32) -> SvgFilter {
       height: SvgLength::Percent(1.2),
       units: SvgFilterUnits::ObjectBoundingBox,
     },
+    filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
   }
 }

@@ -17,6 +17,7 @@ mod turbulence;
 
 static FILTER_CACHE: OnceLock<Mutex<HashMap<String, Arc<SvgFilter>>>> = OnceLock::new();
 
+const MAX_FILTER_RES: u32 = 4096;
 const MAX_TURBULENCE_OCTAVES: u32 = 8;
 
 fn filter_cache() -> &'static Mutex<HashMap<String, Arc<SvgFilter>>> {
@@ -28,6 +29,7 @@ pub struct SvgFilter {
   pub color_interpolation_filters: ColorInterpolationFilters,
   pub steps: Vec<FilterStep>,
   pub region: SvgFilterRegion,
+  pub filter_res: Option<(u32, u32)>,
   pub primitive_units: SvgFilterUnits,
 }
 
@@ -643,6 +645,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     SvgFilterUnits::ObjectBoundingBox => SvgCoordinateUnits::ObjectBoundingBox,
     SvgFilterUnits::UserSpaceOnUse => SvgCoordinateUnits::UserSpaceOnUse,
   };
+  let filter_res = parse_filter_res(node.attribute("filterRes"));
 
   let mut steps = Vec::new();
   for child in node.children().filter(|c| c.is_element()) {
@@ -703,6 +706,7 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
     color_interpolation_filters: filter_color_interpolation_filters,
     steps,
     region,
+    filter_res,
     primitive_units,
   }))
 }
@@ -887,6 +891,20 @@ fn parse_number_pair(value: Option<&str>) -> (f32, f32) {
   let first = iter.next().unwrap_or(0.0);
   let second = iter.next().unwrap_or(first);
   (first, second)
+}
+
+fn parse_filter_res(value: Option<&str>) -> Option<(u32, u32)> {
+  let mut iter = parse_number_list(value).into_iter();
+  let first = iter.next()?;
+  let second = iter.next().unwrap_or(first);
+  let clamp_dim = |v: f32| -> Option<u32> {
+    if !v.is_finite() || v <= 0.0 {
+      None
+    } else {
+      Some(v.round().clamp(1.0, MAX_FILTER_RES as f32) as u32)
+    }
+  };
+  Some((clamp_dim(first)?, clamp_dim(second)?))
 }
 
 fn parse_color(value: Option<&str>) -> Option<Rgba> {
@@ -1321,24 +1339,114 @@ fn parse_fe_convolve_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 /// `scale` should be the device pixel ratio so that numeric parameters expressed in CSS pixels
 /// (e.g. stdDeviation, dx/dy, radius) are interpreted in device pixels.
 pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: Rect) {
-  let scale = if scale.is_finite() && scale > 0.0 {
-    scale
+  let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
+
+  let Some((_, filter_region)) = resolve_filter_regions(def, scale, scale, bbox) else {
+    for px in pixmap.pixels_mut() {
+      *px = PremultipliedColorU8::TRANSPARENT;
+    }
+    return;
+  };
+
+  let Some((res_w, res_h)) = def.filter_res else {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    return;
+  };
+
+  let target_w = pixmap.width();
+  let target_h = pixmap.height();
+  let res_w = res_w.min(MAX_FILTER_RES);
+  let res_h = res_h.min(MAX_FILTER_RES);
+  if target_w == 0 || target_h == 0 || res_w == 0 || res_h == 0 {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    return;
+  }
+  if res_w == target_w && res_h == target_h {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    return;
+  }
+
+  let Some(mut working_pixmap) = resize_pixmap(pixmap, res_w, res_h) else {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    return;
+  };
+
+  let scale_res_x = res_w as f32 / target_w as f32;
+  let scale_res_y = res_h as f32 / target_h as f32;
+  let bbox_working = Rect::from_xywh(
+    bbox.x() * scale_res_x,
+    bbox.y() * scale_res_y,
+    bbox.width() * scale_res_x,
+    bbox.height() * scale_res_y,
+  );
+
+  apply_svg_filter_scaled(
+    def,
+    &mut working_pixmap,
+    scale * scale_res_x,
+    scale * scale_res_y,
+    bbox_working,
+  );
+
+  let Some(resized_back) = resize_pixmap(&working_pixmap, target_w, target_h) else {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox);
+    return;
+  };
+  *pixmap = resized_back;
+  clip_to_region(pixmap, filter_region);
+}
+
+fn resize_pixmap(source: &Pixmap, width: u32, height: u32) -> Option<Pixmap> {
+  if width == 0 || height == 0 {
+    return None;
+  }
+  if source.width() == width && source.height() == height {
+    return Some(source.clone());
+  }
+  if source.width() == 0 || source.height() == 0 {
+    return None;
+  }
+
+  let mut out = Pixmap::new(width, height)?;
+  let mut paint = PixmapPaint::default();
+  paint.quality = FilterQuality::Bilinear;
+  let transform = Transform::from_scale(
+    width as f32 / source.width() as f32,
+    height as f32 / source.height() as f32,
+  );
+  out.draw_pixmap(0, 0, source.as_ref(), &paint, transform, None);
+  Some(out)
+}
+
+fn resolve_filter_regions(
+  def: &SvgFilter,
+  scale_x: f32,
+  scale_y: f32,
+  bbox: Rect,
+) -> Option<(Rect, Rect)> {
+  let scale_x = if scale_x.is_finite() && scale_x > 0.0 {
+    scale_x
+  } else {
+    1.0
+  };
+  let scale_y = if scale_y.is_finite() && scale_y > 0.0 {
+    scale_y
   } else {
     1.0
   };
 
   let css_bbox = Rect::from_xywh(
-    bbox.x() / scale,
-    bbox.y() / scale,
-    bbox.width() / scale,
-    bbox.height() / scale,
+    bbox.x() / scale_x,
+    bbox.y() / scale_y,
+    bbox.width() / scale_x,
+    bbox.height() / scale_y,
   );
   let css_region = def.resolve_region(css_bbox);
   let filter_region = Rect::from_xywh(
-    css_region.x() * scale,
-    css_region.y() * scale,
-    css_region.width() * scale,
-    css_region.height() * scale,
+    css_region.x() * scale_x,
+    css_region.y() * scale_y,
+    css_region.width() * scale_x,
+    css_region.height() * scale_y,
   );
   if !filter_region.x().is_finite()
     || !filter_region.y().is_finite()
@@ -1347,11 +1455,26 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
     || filter_region.width() <= 0.0
     || filter_region.height() <= 0.0
   {
+    return None;
+  }
+
+  Some((css_bbox, filter_region))
+}
+
+fn apply_svg_filter_scaled(
+  def: &SvgFilter,
+  pixmap: &mut Pixmap,
+  scale_x: f32,
+  scale_y: f32,
+  bbox: Rect,
+) {
+  let Some((css_bbox, filter_region)) = resolve_filter_regions(def, scale_x, scale_y, bbox) else {
     for px in pixmap.pixels_mut() {
       *px = PremultipliedColorU8::TRANSPARENT;
     }
     return;
-  }
+  };
+
   let default_primitive_region = SvgFilterRegion {
     x: def.region.x,
     y: def.region.y,
@@ -1372,10 +1495,10 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
     let primitive_region_spec = step.region.as_ref().unwrap_or(&default_primitive_region);
     let css_prim_region = primitive_region_spec.resolve(css_bbox);
     let mut primitive_region = Rect::from_xywh(
-      css_prim_region.x() * scale,
-      css_prim_region.y() * scale,
-      css_prim_region.width() * scale,
-      css_prim_region.height() * scale,
+      css_prim_region.x() * scale_x,
+      css_prim_region.y() * scale_y,
+      css_prim_region.width() * scale_x,
+      css_prim_region.height() * scale_y,
     );
     primitive_region = clip_region(primitive_region, filter_region);
     let primitive_region_valid = primitive_region.x().is_finite()
@@ -1408,7 +1531,8 @@ pub fn apply_svg_filter(def: &SvgFilter, pixmap: &mut Pixmap, scale: f32, bbox: 
       &source,
       &results,
       &current,
-      scale,
+      scale_x,
+      scale_y,
       primitive_region,
       color_interpolation_filters,
     ) {
@@ -1472,10 +1596,16 @@ fn apply_primitive(
   source: &FilterResult,
   results: &HashMap<String, FilterResult>,
   current: &FilterResult,
-  scale: f32,
+  scale_x: f32,
+  scale_y: f32,
   filter_region: Rect,
   color_interpolation_filters: ColorInterpolationFilters,
 ) -> Option<FilterResult> {
+  let scale_avg = if scale_x.is_finite() && scale_y.is_finite() {
+    0.5 * (scale_x + scale_y)
+  } else {
+    1.0
+  };
   match primitive {
     FilterPrimitive::Flood { color, opacity } => flood(
       source.pixmap.width(),
@@ -1487,8 +1617,8 @@ fn apply_primitive(
     FilterPrimitive::GaussianBlur { input, std_dev } => {
       let mut img = resolve_input(input, source, results, current, filter_region)?;
       let (sx, sy) = filter.resolve_primitive_pair(*std_dev, css_bbox);
-      let sigma_x = sx * scale;
-      let sigma_y = sy * scale;
+      let sigma_x = sx * scale_x;
+      let sigma_y = sy * scale_y;
       if sigma_x != 0.0 || sigma_y != 0.0 {
         apply_gaussian_blur_anisotropic(&mut img.pixmap, sigma_x, sigma_y);
         let expanded = inflate_rect_xy(img.region, sigma_x.abs() * 3.0, sigma_y.abs() * 3.0);
@@ -1497,8 +1627,8 @@ fn apply_primitive(
       Some(img)
     }
     FilterPrimitive::Offset { input, dx, dy } => {
-      let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale;
-      let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale;
+      let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
+      let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale_y;
       resolve_input(input, source, results, current, filter_region)
         .map(|img| offset_result(img, dx, dy, filter_region))
     }
@@ -1532,10 +1662,10 @@ fn apply_primitive(
       color,
       opacity,
     } => resolve_input(input, source, results, current, filter_region).map(|img| {
-      let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale;
-      let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale;
+      let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
+      let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale_y;
       let std_dev = filter.resolve_primitive_pair(*std_dev, css_bbox);
-      let std_dev = (std_dev.0 * scale, std_dev.1 * scale);
+      let std_dev = (std_dev.0 * scale_x, std_dev.1 * scale_y);
       drop_shadow_pixmap(img, dx, dy, std_dev, color, *opacity, filter_region)
     }),
     FilterPrimitive::Blend {
@@ -1551,7 +1681,7 @@ fn apply_primitive(
     FilterPrimitive::Morphology { input, radius, op } => {
       resolve_input(input, source, results, current, filter_region).map(|mut img| {
         let radius = filter.resolve_primitive_pair(*radius, css_bbox);
-        let radius = (radius.0 * scale, radius.1 * scale);
+        let radius = (radius.0 * scale_x, radius.1 * scale_y);
         apply_morphology(&mut img.pixmap, radius, *op);
         img.region = clip_region(
           match op {
@@ -1605,7 +1735,7 @@ fn apply_primitive(
       let output = apply_displacement_map(
         &primary.pixmap,
         &map.pixmap,
-        filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale,
+        filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale_avg,
         *x_channel,
         *y_channel,
       )?;
@@ -2646,28 +2776,30 @@ mod tests {
     PremultipliedColorU8::from_rgba(pm(r), pm(g), pm(b), a).unwrap()
   }
 
-  fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
-    let region = filter_region_for_pixmap(pixmap);
-    let src = FilterResult::full_region(pixmap.clone(), region);
-    let filter = SvgFilter {
-      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
-      steps: Vec::new(),
-      region: SvgFilterRegion::default_for_units(SvgFilterUnits::UserSpaceOnUse),
-      primitive_units: SvgFilterUnits::UserSpaceOnUse,
-    };
-    apply_primitive(
-      &filter,
-      &region,
-      prim,
-      &src,
-      &HashMap::new(),
-      &src,
-      1.0,
-      region,
-      ColorInterpolationFilters::LinearRGB,
-    )
-    .unwrap()
-  }
+	  fn apply_for_test(prim: &FilterPrimitive, pixmap: &Pixmap) -> FilterResult {
+	    let region = filter_region_for_pixmap(pixmap);
+	    let src = FilterResult::full_region(pixmap.clone(), region);
+	    let filter = SvgFilter {
+	      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+	      steps: Vec::new(),
+	      region: SvgFilterRegion::default_for_units(SvgFilterUnits::UserSpaceOnUse),
+	      filter_res: None,
+	      primitive_units: SvgFilterUnits::UserSpaceOnUse,
+	    };
+	    apply_primitive(
+	      &filter,
+	      &region,
+	      prim,
+	      &src,
+	      &HashMap::new(),
+	      &src,
+	      1.0,
+	      1.0,
+	      region,
+	      ColorInterpolationFilters::LinearRGB,
+	    )
+	    .unwrap()
+	  }
 
   #[test]
   fn color_matrix_uses_unpremultiplied_channels() {
@@ -2988,9 +3120,9 @@ mod tests {
     }
 
     let bbox = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
-    let filter = SvgFilter {
-      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
-      steps: vec![
+	    let filter = SvgFilter {
+	      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+	      steps: vec![
         FilterStep {
           result: None,
           color_interpolation_filters: None,
@@ -3017,15 +3149,16 @@ mod tests {
           }),
         },
       ],
-      region: SvgFilterRegion {
-        x: SvgLength::Number(0.0),
-        y: SvgLength::Number(0.0),
-        width: SvgLength::Number(4.0),
-        height: SvgLength::Number(4.0),
-        units: SvgFilterUnits::UserSpaceOnUse,
-      },
-      primitive_units: SvgFilterUnits::UserSpaceOnUse,
-    };
+	      region: SvgFilterRegion {
+	        x: SvgLength::Number(0.0),
+	        y: SvgLength::Number(0.0),
+	        width: SvgLength::Number(4.0),
+	        height: SvgLength::Number(4.0),
+	        units: SvgFilterUnits::UserSpaceOnUse,
+	      },
+	      filter_res: None,
+	      primitive_units: SvgFilterUnits::UserSpaceOnUse,
+	    };
 
     apply_svg_filter(&filter, &mut pixmap, 1.0, bbox);
     assert!(pixmap.pixels().iter().all(|px| px.alpha() == 0));
@@ -3069,6 +3202,94 @@ mod tests {
         assert!((base_frequency.1 - 0.2).abs() < 1e-6);
       }
       _ => panic!("expected turbulence primitive"),
+    }
+  }
+}
+
+#[cfg(test)]
+mod filter_res_tests {
+  use super::*;
+  use base64::engine::general_purpose::STANDARD;
+  use base64::Engine;
+  use tiny_skia::{Color, Pixmap};
+
+  fn data_url(svg: &str) -> String {
+    format!("data:image/svg+xml;base64,{}", STANDARD.encode(svg))
+  }
+
+  fn pixel(pixmap: &Pixmap, x: u32, y: u32) -> (u8, u8, u8, u8) {
+    let px = pixmap.pixel(x, y).unwrap();
+    (px.red(), px.green(), px.blue(), px.alpha())
+  }
+
+  fn basic_source() -> Pixmap {
+    let mut pixmap = Pixmap::new(12, 12).unwrap();
+    pixmap.fill(Color::from_rgba8(0, 0, 0, 0));
+    for y in 4..8 {
+      for x in 4..8 {
+        let idx = (y * 12 + x) as usize;
+        pixmap.pixels_mut()[idx] = PremultipliedColorU8::from_rgba(255, 0, 0, 255)
+          .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+      }
+    }
+    pixmap
+  }
+
+  #[test]
+  fn filter_res_downsamples_filter_graph() {
+    let cache = ImageCache::new();
+    let svg_full = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='12' height='12'><feGaussianBlur stdDeviation='2'/></filter></svg>";
+    let svg_low = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='12' height='12' filterRes='4 4'><feGaussianBlur stdDeviation='2'/></filter></svg>";
+
+    let filter_full = load_svg_filter(&data_url(svg_full), &cache).expect("full res filter");
+    let filter_low = load_svg_filter(&data_url(svg_low), &cache).expect("low res filter");
+
+    let mut high_res = basic_source();
+    let mut low_res = basic_source();
+    let mut low_res_repeat = basic_source();
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 12.0, 12.0);
+    apply_svg_filter(filter_full.as_ref(), &mut high_res, 1.0, bbox);
+    apply_svg_filter(filter_low.as_ref(), &mut low_res, 1.0, bbox);
+    apply_svg_filter(filter_low.as_ref(), &mut low_res_repeat, 1.0, bbox);
+
+    assert_ne!(high_res.data(), low_res.data(), "filterRes should alter filter output");
+    assert_eq!(
+      low_res.data(),
+      low_res_repeat.data(),
+      "filter output with filterRes should be deterministic"
+    );
+    assert!(
+      pixel(&low_res, 6, 6).3 > 0,
+      "filtered output should retain source content at reduced resolution"
+    );
+  }
+
+  #[test]
+  fn filter_res_respects_filter_region_bounds() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' filterRes='2 2'><feOffset dx='0' dy='0'/></filter></svg>";
+    let filter = load_svg_filter(&data_url(svg), &cache).expect("parsed filter");
+
+    let mut pixmap = Pixmap::new(8, 8).unwrap();
+    pixmap.fill(Color::from_rgba8(0, 0, 255, 255));
+    let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox);
+
+    assert!(
+      pixel(&pixmap, 0, 0).3 > 0,
+      "output inside filter region should be preserved"
+    );
+    for y in 0..pixmap.height() {
+      for x in 0..pixmap.width() {
+        if x >= 4 || y >= 4 {
+          assert_eq!(
+            pixel(&pixmap, x, y).3,
+            0,
+            "expected output clipped at ({x},{y})"
+          );
+        }
+      }
     }
   }
 }

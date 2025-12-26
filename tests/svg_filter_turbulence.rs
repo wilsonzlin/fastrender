@@ -21,6 +21,7 @@ fn turbulence_filter(primitive: FilterPrimitive) -> SvgFilter {
       height: SvgLength::Percent(1.0),
       units: SvgFilterUnits::ObjectBoundingBox,
     },
+    filter_res: None,
     primitive_units: SvgFilterUnits::ObjectBoundingBox,
   }
 }
