@@ -275,12 +275,12 @@ impl DisplayListBuilder {
   }
 
   fn rebuild_svg_filter_registry_from_tree(&mut self, tree: &FragmentTree) {
-    let registry = SvgFilterRegistry::from_fragment_tree(&tree.root);
+    let registry = SvgFilterRegistry::from_fragment_tree(tree);
     self.svg_filter_registry = (!registry.is_empty()).then_some(registry);
   }
 
   fn rebuild_svg_filter_registry_from_root(&mut self, root: &FragmentNode) {
-    let registry = SvgFilterRegistry::from_fragment_tree(root);
+    let registry = SvgFilterRegistry::from_fragment_root(root);
     self.svg_filter_registry = (!registry.is_empty()).then_some(registry);
   }
 

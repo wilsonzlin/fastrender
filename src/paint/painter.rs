@@ -1121,7 +1121,7 @@ impl Painter {
     }
 
     // Build display list in stacking-context order then paint
-    let svg_filter_registry = SvgFilterRegistry::from_fragment_tree(&tree.root);
+    let svg_filter_registry = SvgFilterRegistry::from_fragment_tree(tree);
     let registry_ref = (!svg_filter_registry.is_empty()).then_some(&svg_filter_registry);
     let mut items = Vec::new();
     let collect_start = Instant::now();

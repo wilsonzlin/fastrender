@@ -1,7 +1,7 @@
 use crate::image_loader::ImageCache;
 use crate::paint::svg_filter::{parse_svg_filter_from_svg_document, SvgFilter};
 use crate::tree::box_tree::ReplacedType;
-use crate::tree::fragment_tree::{FragmentContent, FragmentNode};
+use crate::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 use roxmltree::Document;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,7 +30,20 @@ impl SvgFilterRegistry {
   ///
   /// Definitions are keyed by their `id` and store the full serialized SVG document string they
   /// were found in. Duplicate IDs keep the first occurrence in document order.
-  pub fn from_fragment_tree(root: &FragmentNode) -> Self {
+  pub fn from_fragment_tree(tree: &FragmentTree) -> Self {
+    let mut definitions = HashMap::new();
+    collect_filters(&tree.root, &mut definitions);
+    for root in &tree.additional_fragments {
+      collect_filters(root, &mut definitions);
+    }
+    Self {
+      definitions,
+      cache: Mutex::new(HashMap::new()),
+    }
+  }
+
+  /// Build a registry from a single fragment root.
+  pub fn from_fragment_root(root: &FragmentNode) -> Self {
     let mut definitions = HashMap::new();
     collect_filters(root, &mut definitions);
     Self {
