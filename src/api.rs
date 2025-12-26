@@ -4468,7 +4468,24 @@ impl FastRender {
     let page_name_hint = find_first_page_name(&styled_tree);
     let mut layout_viewport = fallback_page_size;
     let mut first_page_style = None;
+    let mut page_base_style: Option<Arc<ComputedStyle>> = None;
     if !page_rules.is_empty() {
+      fn find_body_style(node: &crate::style::cascade::StyledNode) -> Option<&ComputedStyle> {
+        if let crate::dom::DomNodeType::Element { tag_name, .. } = &node.node.node_type {
+          if tag_name.eq_ignore_ascii_case("body") {
+            return Some(&node.styles);
+          }
+        }
+        for child in &node.children {
+          if let Some(style) = find_body_style(child) {
+            return Some(style);
+          }
+        }
+        None
+      }
+
+      let base_style = find_body_style(&styled_tree).unwrap_or(&styled_tree.styles);
+      let base_style = Arc::new(base_style.clone());
       let style = resolve_page_style(
         &page_rules,
         0,
@@ -4476,10 +4493,11 @@ impl FastRender {
         PageSide::Right,
         fallback_page_size,
         styled_tree.styles.root_font_size,
-        Some(&styled_tree.styles),
+        Some(base_style.as_ref()),
       );
       layout_viewport = style.content_size;
       first_page_style = Some(style);
+      page_base_style = Some(base_style);
     }
 
     if let Some(start) = stage_start.as_mut() {
@@ -4928,7 +4946,7 @@ impl FastRender {
         &page_rules,
         fallback_page_size,
         &self.font_context,
-        &box_tree.root.style,
+        page_base_style.as_ref().unwrap_or(&box_tree.root.style),
         styled_tree.styles.root_font_size,
         page_name_hint.clone(),
         enable_layout_cache,

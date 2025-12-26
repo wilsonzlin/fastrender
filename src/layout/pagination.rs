@@ -138,6 +138,7 @@ pub fn paginate_fragment_tree(
   let font_generation = font_ctx.font_generation();
   let counter_styles = root_style.counter_styles.clone();
   let mut layouts: HashMap<PageLayoutKey, CachedLayout> = HashMap::new();
+  let base_style_for_margins = Some(root_style.as_ref());
 
   if let Some((style, root)) = initial_layout {
     let key = PageLayoutKey::new(style, style_hash, font_generation);
@@ -153,7 +154,7 @@ pub fn paginate_fragment_tree(
     PageSide::Right,
     fallback_page_size,
     root_font_size,
-    Some(root_style.as_ref()),
+    base_style_for_margins,
   );
   let base_key = PageLayoutKey::new(&base_style, style_hash, font_generation);
   let base_layout = layout_for_style(
@@ -189,7 +190,7 @@ pub fn paginate_fragment_tree(
       side,
       fallback_page_size,
       root_font_size,
-      Some(root_style.as_ref()),
+      base_style_for_margins,
     );
     let mut key = PageLayoutKey::new(&page_style, style_hash, font_generation);
     let mut layout = layout_for_style(
@@ -218,7 +219,7 @@ pub fn paginate_fragment_tree(
         side,
         fallback_page_size,
         root_font_size,
-        Some(root_style.as_ref()),
+        base_style_for_margins,
       );
       key = PageLayoutKey::new(&page_style, style_hash, font_generation);
       layout = layout_for_style(
