@@ -36,7 +36,6 @@ use crate::paint::display_list::ImageFilterQuality;
 use crate::paint::display_list::ImageItem;
 use crate::paint::display_list::LinearGradientItem;
 use crate::paint::display_list::ListMarkerItem;
-use crate::paint::display_list::MaskReferenceRects;
 use crate::paint::display_list::OpacityItem;
 use crate::paint::display_list::OutlineItem;
 use crate::paint::display_list::RadialGradientItem;
@@ -49,7 +48,11 @@ use crate::paint::display_list::TextItem;
 use crate::paint::display_list::TextShadowItem;
 use crate::paint::display_list::Transform3D;
 use crate::paint::display_list::TransformItem;
-use crate::paint::filter_outset::{filter_outset, filter_outset_with_bounds};
+#[cfg(test)]
+use crate::paint::display_list::MaskReferenceRects;
+#[cfg(test)]
+use crate::paint::filter_outset::filter_outset;
+use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
@@ -88,7 +91,6 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_loader::FontContext;
 use crate::text::pipeline::GlyphPosition;
 use rayon::prelude::*;
-use std::sync::Arc;
 use tiny_skia::BlendMode as SkiaBlendMode;
 use tiny_skia::GradientStop as SkiaGradientStop;
 use tiny_skia::IntSize;
@@ -3874,18 +3876,6 @@ fn resolve_border_image_outset(
   }
 }
 
-fn image_data_to_pixmap(data: &ImageData) -> Option<Pixmap> {
-  let mut premul = Vec::with_capacity((data.width * data.height * 4) as usize);
-  for chunk in data.pixels.chunks_exact(4) {
-    let a = chunk[3] as f32 / 255.0;
-    premul.push((chunk[0] as f32 * a).round() as u8);
-    premul.push((chunk[1] as f32 * a).round() as u8);
-    premul.push((chunk[2] as f32 * a).round() as u8);
-    premul.push(chunk[3]);
-  }
-  Pixmap::from_vec(premul, IntSize::from_wh(data.width, data.height).unwrap())
-}
-
 fn normalize_color_stops(stops: &[ColorStop], current_color: Rgba) -> Vec<(f32, Rgba)> {
   if stops.is_empty() {
     return Vec::new();
@@ -4812,6 +4802,7 @@ mod tests {
   use crate::paint::display_list::LinearGradientItem;
   use crate::paint::display_list::OpacityItem;
   use crate::paint::display_list::RadialGradientItem;
+  use crate::paint::display_list::ResolvedMaskLayer;
   use crate::paint::display_list::StackingContextItem;
   use crate::paint::display_list::TextDecorationItem;
   use crate::paint::display_list::TextEmphasis;
