@@ -42,6 +42,115 @@ pub mod disk_cache;
 #[cfg(feature = "disk_cache")]
 pub use disk_cache::{DiskCacheConfig, DiskCachingFetcher};
 
+// ============================================================================
+// Origin and resource policy
+// ============================================================================
+
+/// Simplified origin model for the current document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentOrigin {
+  Http,
+  Https,
+  File,
+  Other(String),
+}
+
+impl DocumentOrigin {
+  /// Return the scheme string for this origin.
+  pub fn scheme(&self) -> &str {
+    match self {
+      DocumentOrigin::Http => "http",
+      DocumentOrigin::Https => "https",
+      DocumentOrigin::File => "file",
+      DocumentOrigin::Other(s) => s,
+    }
+  }
+
+  /// True for HTTPS documents.
+  pub fn is_secure_http(&self) -> bool {
+    matches!(self, DocumentOrigin::Https)
+  }
+
+  /// True for HTTP/HTTPS documents.
+  pub fn is_http_like(&self) -> bool {
+    matches!(self, DocumentOrigin::Http | DocumentOrigin::Https)
+  }
+}
+
+/// Attempt to derive a document origin from a URL string.
+pub fn origin_from_url(url: &str) -> Option<DocumentOrigin> {
+  let parsed = Url::parse(url).ok()?;
+  match parsed.scheme() {
+    "http" => Some(DocumentOrigin::Http),
+    "https" => Some(DocumentOrigin::Https),
+    "file" => Some(DocumentOrigin::File),
+    other => Some(DocumentOrigin::Other(other.to_string())),
+  }
+}
+
+/// Policy controlling which subresources can be loaded for a document.
+#[derive(Debug, Clone)]
+pub struct ResourceAccessPolicy {
+  /// Origin of the current document (if known).
+  pub document_origin: Option<DocumentOrigin>,
+  /// Allow loading file:// resources from HTTP(S) documents.
+  pub allow_file_from_http: bool,
+  /// Block mixed HTTP content when the document is HTTPS.
+  pub block_mixed_content: bool,
+}
+
+impl Default for ResourceAccessPolicy {
+  fn default() -> Self {
+    Self {
+      document_origin: None,
+      allow_file_from_http: false,
+      block_mixed_content: false,
+    }
+  }
+}
+
+impl ResourceAccessPolicy {
+  /// Return a copy of this policy with a different document origin.
+  pub fn for_origin(&self, origin: Option<DocumentOrigin>) -> Self {
+    let mut cloned = self.clone();
+    cloned.document_origin = origin;
+    cloned
+  }
+
+  /// Check whether a subresource URL is allowed under this policy.
+  pub fn allows(&self, target_url: &str) -> std::result::Result<(), PolicyError> {
+    let Some(origin) = &self.document_origin else {
+      return Ok(());
+    };
+
+    // Parse the target URL scheme; if unparseable, allow to avoid over-blocking.
+    let scheme = match Url::parse(target_url) {
+      Ok(parsed) => parsed.scheme().to_ascii_lowercase(),
+      Err(_) => return Ok(()),
+    };
+
+    if origin.is_http_like() && scheme == "file" && !self.allow_file_from_http {
+      return Err(PolicyError {
+        reason: "Blocked file:// resource from HTTP(S) document".to_string(),
+      });
+    }
+
+    if origin.is_secure_http() && self.block_mixed_content && scheme == "http" {
+      return Err(PolicyError {
+        reason: "Blocked mixed HTTP content from HTTPS document".to_string(),
+      });
+    }
+
+    Ok(())
+  }
+}
+
+/// Subresource load blocked by policy.
+#[derive(Debug, Clone)]
+pub struct PolicyError {
+  pub reason: String,
+}
+
 /// Normalize a page identifier (full URL or hostname) to a cache/output stem.
 ///
 /// Strips schemes and leading "www.", lowercases the host, and sanitizes for filenames.

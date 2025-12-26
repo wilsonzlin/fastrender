@@ -22,6 +22,7 @@
 //! using the system's default font.
 
 use crate::api::render_html_with_shared_resources;
+use crate::api::ResourceKind;
 use crate::css;
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
@@ -56,6 +57,7 @@ use crate::paint::text_shadow::resolve_text_shadows;
 use crate::paint::text_shadow::PathBounds;
 use crate::paint::text_shadow::ResolvedTextShadow;
 use crate::render_control::check_active;
+use crate::resource::origin_from_url;
 use crate::resource::ResourceFetcher;
 #[cfg(test)]
 use crate::style::color::Color;
@@ -5141,6 +5143,11 @@ impl Painter {
 
     let html = build_foreign_object_document(info, shared_css);
     let background = info.background.unwrap_or(Rgba::TRANSPARENT);
+    let context = self.image_cache.resource_context();
+    let policy = context
+      .as_ref()
+      .map(|c| c.policy.clone())
+      .unwrap_or_default();
     let pixmap = render_html_with_shared_resources(
       &html,
       width,
@@ -5151,6 +5158,9 @@ impl Painter {
       Arc::clone(self.image_cache.fetcher()),
       self.image_cache.base_url(),
       1.0,
+      policy,
+      context,
+      crate::api::DEFAULT_MAX_IFRAME_DEPTH,
     )
     .ok()?;
 
@@ -5368,6 +5378,11 @@ impl Painter {
     if let Some(base_url) = base_url.clone() {
       image_cache.set_base_url(base_url);
     }
+    let context = image_cache.resource_context();
+    let policy = context
+      .as_ref()
+      .map(|c| c.policy.clone())
+      .unwrap_or_default();
     render_html_with_shared_resources(
       html,
       width,
@@ -5378,6 +5393,9 @@ impl Painter {
       Arc::clone(image_cache.fetcher()),
       base_url,
       self.scale,
+      policy,
+      context,
+      crate::api::DEFAULT_MAX_IFRAME_DEPTH,
     )
     .ok()
   }
@@ -5397,8 +5415,17 @@ impl Painter {
       return None;
     }
 
+    let context = self.image_cache.resource_context();
     let resolved = self.image_cache.resolve_url(src);
     let fetcher = Arc::clone(self.image_cache.fetcher());
+    if let Some(ctx) = context.as_ref() {
+      if ctx
+        .check_allowed(ResourceKind::Document, &resolved)
+        .is_err()
+      {
+        return None;
+      }
+    }
     let resource = fetcher.fetch(&resolved).ok()?;
     let content_type = resource.content_type.as_deref();
     let is_html = content_type
@@ -5421,6 +5448,13 @@ impl Painter {
     let background = style.map(|s| s.background_color).unwrap_or(Rgba::WHITE);
     let mut image_cache = self.image_cache.clone();
     image_cache.set_base_url(resolved.clone());
+    let nested_origin = origin_from_url(resource.final_url.as_deref().unwrap_or(&resolved));
+    let nested_context = context.as_ref().map(|ctx| ctx.for_origin(nested_origin));
+    let policy = nested_context
+      .as_ref()
+      .map(|ctx| ctx.policy.clone())
+      .or_else(|| context.as_ref().map(|ctx| ctx.policy.clone()))
+      .unwrap_or_default();
 
     render_html_with_shared_resources(
       &html,
@@ -5432,6 +5466,9 @@ impl Painter {
       fetcher,
       Some(resolved),
       self.scale,
+      policy,
+      nested_context,
+      crate::api::DEFAULT_MAX_IFRAME_DEPTH,
     )
     .ok()
   }

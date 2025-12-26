@@ -978,11 +978,11 @@ pub struct StyledNode {
   pub node: DomNode,
   pub styles: ComputedStyle,
   /// Styles for ::before pseudo-element (if content is set)
-  pub before_styles: Option<ComputedStyle>,
+  pub before_styles: Option<Box<ComputedStyle>>,
   /// Styles for ::after pseudo-element (if content is set)
-  pub after_styles: Option<ComputedStyle>,
+  pub after_styles: Option<Box<ComputedStyle>>,
   /// Styles for ::marker pseudo-element (list items only)
-  pub marker_styles: Option<ComputedStyle>,
+  pub marker_styles: Option<Box<ComputedStyle>>,
   pub children: Vec<StyledNode>,
 }
 
@@ -1567,7 +1567,15 @@ fn ua_default_rules(node: &DomNode, parent_direction: Direction) -> Vec<MatchedR
   rules
 }
 
-fn apply_styles_internal(
+struct NodeBaseStyles {
+  styles: ComputedStyle,
+  ua_styles: ComputedStyle,
+  current_root_font_size: f32,
+  current_ua_root_font_size: f32,
+}
+
+#[inline(never)]
+fn compute_base_styles<'a>(
   node: &DomNode,
   rules: &RuleIndex<'_>,
   selector_caches: &mut SelectorCaches,
@@ -1578,24 +1586,11 @@ fn apply_styles_internal(
   ua_root_font_size: f32,
   viewport: Size,
   color_scheme_pref: ColorScheme,
-  node_counter: &mut usize,
-  ancestor_ids: &mut Vec<usize>,
+  ancestors: &[&'a DomNode],
+  ancestor_ids: &[usize],
+  node_id: usize,
   container_ctx: Option<&ContainerQueryContext>,
-  container_scope: Option<&HashSet<usize>>,
-  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
-  reuse_counter: Option<&mut usize>,
-  deadline: Option<&RenderDeadline>,
-) -> Result<StyledNode, RenderError> {
-  record_node_visit(node);
-  let mut ancestors: Vec<&DomNode> = Vec::new();
-  let node_id = *node_counter;
-  *node_counter += 1;
-  if let Some(deadline) = deadline {
-    if deadline.is_enabled() && node_id % 64 == 0 {
-      deadline.check(RenderStage::Cascade)?;
-    }
-  }
-
+) -> NodeBaseStyles {
   if !node.is_element() {
     let mut ua_styles = get_default_styles_for_element(node);
     inherit_styles(&mut ua_styles, parent_ua_styles);
@@ -1605,7 +1600,7 @@ fn apply_styles_internal(
     inherit_styles(&mut styles, parent_styles);
     propagate_text_decorations(&mut styles, parent_styles);
 
-    let is_root = is_root_element(&ancestors);
+    let is_root = is_root_element(ancestors);
     let current_root_font_size = if is_root {
       styles.font_size
     } else {
@@ -1623,47 +1618,12 @@ fn apply_styles_internal(
     resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
     resolve_absolute_lengths(&mut styles, current_root_font_size, viewport);
 
-    let mut children = Vec::with_capacity(node.children.len());
-    let mut reuse_counter = reuse_counter;
-
-    ancestors.push(node);
-    ancestor_ids.push(node_id);
-    for child in &node.children {
-      let child_reuse = reuse_counter.as_deref_mut();
-      let child_styled = apply_styles_internal_with_ancestors(
-        child,
-        rules,
-        selector_caches,
-        scratch,
-        &styles,
-        &ua_styles,
-        current_root_font_size,
-        current_ua_root_font_size,
-        viewport,
-        color_scheme_pref,
-        &mut ancestors,
-        node_counter,
-        ancestor_ids,
-        container_ctx,
-        container_scope,
-        reuse_map,
-        child_reuse,
-        deadline,
-      )?;
-      children.push(child_styled);
-    }
-    ancestors.pop();
-    ancestor_ids.pop();
-
-    return Ok(StyledNode {
-      node_id,
-      node: node.clone(),
+    return NodeBaseStyles {
       styles,
-      before_styles: None,
-      after_styles: None,
-      marker_styles: None,
-      children,
-    });
+      ua_styles,
+      current_root_font_size,
+      current_ua_root_font_size,
+    };
   }
 
   let mut ua_styles = get_default_styles_for_element(node);
@@ -1673,7 +1633,7 @@ fn apply_styles_internal(
     rules,
     selector_caches,
     scratch,
-    &ancestors,
+    ancestors,
     ancestor_ids,
     node_id,
     container_ctx,
@@ -1709,7 +1669,7 @@ fn apply_styles_internal(
     ua_styles.language = normalize_language_tag(&lang);
   }
 
-  let is_root = is_root_element(&ancestors);
+  let is_root = is_root_element(ancestors);
 
   finalize_grid_placement(&mut ua_styles);
   resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, is_root);
@@ -1734,12 +1694,7 @@ fn apply_styles_internal(
   inherit_styles(&mut styles, parent_styles);
 
   // Apply matching CSS rules and inline styles with full cascade ordering
-  append_presentational_hints(
-    node,
-    ancestors.as_slice(),
-    parent_styles.direction,
-    &mut matching_rules,
-  );
+  append_presentational_hints(node, ancestors, parent_styles.direction, &mut matching_rules);
   let inline_decls = node
     .get_attribute("style")
     .as_deref()
@@ -1771,403 +1726,12 @@ fn apply_styles_internal(
 
   // Finalize grid placement - resolve named grid lines
   finalize_grid_placement(&mut styles);
-  let is_root = is_root_element(&ancestors);
   resolve_match_parent_text_align_last(&mut styles, parent_styles, is_root);
   resolve_match_parent_text_align(&mut styles, parent_styles, is_root);
   resolve_relative_font_weight(&mut styles, parent_styles);
   propagate_text_decorations(&mut styles, parent_styles);
 
   // Root font size for rem resolution: the document root sets the value for all descendants.
-  let current_root_font_size = if is_root {
-    styles.font_size
-  } else {
-    root_font_size
-  };
-  styles.root_font_size = current_root_font_size;
-  resolve_line_height_length(&mut styles, viewport);
-
-  let selected_scheme = select_color_scheme(&styles.color_scheme, color_scheme_pref);
-
-  if is_root {
-    if let Some(selected) = &selected_scheme {
-      if matches!(selected, ColorSchemeEntry::Dark) {
-        let dark_text = Rgba::rgb(232, 232, 232);
-        let dark_background = Rgba::rgb(16, 16, 16);
-        if styles.color == ua_default_color {
-          styles.color = dark_text;
-        }
-        if ua_styles.color == ua_default_color {
-          ua_styles.color = dark_text;
-        }
-        if styles.background_color == ua_default_background {
-          styles.background_color = dark_background;
-        }
-        if ua_styles.background_color == ua_default_background {
-          ua_styles.background_color = dark_background;
-        }
-      }
-    }
-  }
-
-  apply_color_scheme_palette(
-    &mut styles,
-    &mut ua_styles,
-    ua_default_color,
-    ua_default_background,
-    &selected_scheme,
-    is_root,
-  );
-
-  styles.inert = node_is_inert(node, ancestors.as_slice());
-  if styles.inert {
-    styles.pointer_events = PointerEvents::None;
-  }
-  styles.top_layer = top_layer_kind(node);
-  let mut backdrop_styles = None;
-  if styles.top_layer.is_some()
-    && (styles.top_layer.map(|k| k.is_modal()).unwrap_or(false)
-      || rules.has_pseudo_rules(&PseudoElement::Backdrop))
-  {
-    backdrop_styles = compute_pseudo_element_styles(
-      node,
-      rules,
-      selector_caches,
-      scratch,
-      ancestors.as_slice(),
-      &styles,
-      &ua_styles,
-      current_root_font_size,
-      current_ua_root_font_size,
-      viewport,
-      &PseudoElement::Backdrop,
-    )
-    .map(Arc::new);
-  }
-
-  // Compute pseudo-element styles
-  let pseudo_start = prof.then(|| Instant::now());
-  let before_styles = if rules.has_pseudo_content(&PseudoElement::Before) {
-    compute_pseudo_element_styles(
-      node,
-      rules,
-      selector_caches,
-      scratch,
-      ancestors.as_slice(),
-      &styles,
-      &ua_styles,
-      current_root_font_size,
-      current_ua_root_font_size,
-      viewport,
-      &PseudoElement::Before,
-    )
-  } else {
-    None
-  };
-  let after_styles = if rules.has_pseudo_content(&PseudoElement::After) {
-    compute_pseudo_element_styles(
-      node,
-      rules,
-      selector_caches,
-      scratch,
-      ancestors.as_slice(),
-      &styles,
-      &ua_styles,
-      current_root_font_size,
-      current_ua_root_font_size,
-      viewport,
-      &PseudoElement::After,
-    )
-  } else {
-    None
-  };
-  let marker_styles = compute_marker_styles(
-    node,
-    rules,
-    selector_caches,
-    scratch,
-    ancestors.as_slice(),
-    &styles,
-    &ua_styles,
-    current_root_font_size,
-    current_ua_root_font_size,
-    viewport,
-  );
-  if let (true, Some(start)) = (prof, pseudo_start) {
-    record_pseudo_time(start.elapsed());
-  }
-
-  styles.backdrop = backdrop_styles;
-
-  // Recursively style children (passing current node in ancestors)
-  let mut children = Vec::with_capacity(node.children.len());
-  let mut reuse_counter = reuse_counter;
-  ancestors.push(node);
-  ancestor_ids.push(node_id);
-  for child in &node.children {
-    let child_reuse = reuse_counter.as_deref_mut();
-    let child_styled = apply_styles_internal_with_ancestors(
-      child,
-      rules,
-      selector_caches,
-      scratch,
-      &styles,
-      &ua_styles,
-      current_root_font_size,
-      current_ua_root_font_size,
-      viewport,
-      color_scheme_pref,
-      &mut ancestors,
-      node_counter,
-      ancestor_ids,
-      container_ctx,
-      container_scope,
-      reuse_map,
-      child_reuse,
-      deadline,
-    )?;
-    children.push(child_styled);
-  }
-  ancestors.pop();
-  ancestor_ids.pop();
-
-  Ok(StyledNode {
-    node_id,
-    node: node.clone(),
-    styles,
-    before_styles,
-    after_styles,
-    marker_styles,
-    children,
-  })
-}
-
-fn apply_styles_internal_with_ancestors<'a>(
-  node: &'a DomNode,
-  rules: &RuleIndex<'_>,
-  selector_caches: &mut SelectorCaches,
-  scratch: &mut CascadeScratch,
-  parent_styles: &ComputedStyle,
-  parent_ua_styles: &ComputedStyle,
-  root_font_size: f32,
-  ua_root_font_size: f32,
-  viewport: Size,
-  color_scheme_pref: ColorScheme,
-  ancestors: &mut Vec<&'a DomNode>,
-  node_counter: &mut usize,
-  ancestor_ids: &mut Vec<usize>,
-  container_ctx: Option<&ContainerQueryContext>,
-  container_scope: Option<&HashSet<usize>>,
-  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
-  reuse_counter: Option<&mut usize>,
-  deadline: Option<&RenderDeadline>,
-) -> Result<StyledNode, RenderError> {
-  record_node_visit(node);
-
-  let node_id = *node_counter;
-  *node_counter += 1;
-  if let Some(deadline) = deadline {
-    if deadline.is_enabled() && node_id % 64 == 0 {
-      deadline.check(RenderStage::Cascade)?;
-    }
-  }
-
-  // If this node lies outside any container scope during a container-query recascade,
-  // reuse the prior styled subtree to avoid recomputing unaffected branches.
-  if let (Some(scope), Some(map)) = (container_scope, reuse_map) {
-    if !scope.contains(&node_id) {
-      if let Some(ptr) = map.get(&node_id) {
-        // Safety: pointers are produced from the previous styled tree, which is
-        // alive for the duration of this call. We clone to produce an owned subtree.
-        // This bypasses rule matching and recursion for unaffected nodes.
-        let reused_ref = unsafe { &**ptr };
-        let reused_size = count_styled_nodes(reused_ref);
-        if reused_size > 1 {
-          // Advance the traversal counter so sibling nodes keep the same ids
-          // they had in the first cascade, maintaining alignment with the
-          // reuse map and container scope built from that pass.
-          let advance = reused_size.saturating_sub(1);
-          *node_counter = (*node_counter).saturating_add(advance);
-        }
-        let reused = reused_ref.clone();
-        if let Some(counter) = reuse_counter {
-          *counter += reused_size;
-        }
-        return Ok(reused);
-      }
-    }
-  }
-
-  if !node.is_element() {
-    let mut ua_styles = get_default_styles_for_element(node);
-    inherit_styles(&mut ua_styles, parent_ua_styles);
-    propagate_text_decorations(&mut ua_styles, parent_ua_styles);
-
-    let mut styles = get_default_styles_for_element(node);
-    inherit_styles(&mut styles, parent_styles);
-    propagate_text_decorations(&mut styles, parent_styles);
-
-    let is_root = is_root_element(&ancestors);
-    let current_root_font_size = if is_root {
-      styles.font_size
-    } else {
-      root_font_size
-    };
-    let current_ua_root_font_size = if is_root {
-      ua_styles.font_size
-    } else {
-      ua_root_font_size
-    };
-    ua_styles.root_font_size = current_ua_root_font_size;
-    styles.root_font_size = current_root_font_size;
-    resolve_line_height_length(&mut ua_styles, viewport);
-    resolve_line_height_length(&mut styles, viewport);
-    resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
-    resolve_absolute_lengths(&mut styles, current_root_font_size, viewport);
-
-    let mut children = Vec::with_capacity(node.children.len());
-    let mut reuse_counter = reuse_counter;
-    ancestors.push(node);
-    ancestor_ids.push(node_id);
-    for child in &node.children {
-      let child_reuse = reuse_counter.as_deref_mut();
-      let child_styled = apply_styles_internal_with_ancestors(
-        child,
-        rules,
-        selector_caches,
-        scratch,
-        &styles,
-        &ua_styles,
-        current_root_font_size,
-        current_ua_root_font_size,
-        viewport,
-        color_scheme_pref,
-        ancestors,
-        node_counter,
-        ancestor_ids,
-        container_ctx,
-        container_scope,
-        reuse_map,
-        child_reuse,
-        deadline,
-      )?;
-      children.push(child_styled);
-    }
-    ancestors.pop();
-    ancestor_ids.pop();
-
-    return Ok(StyledNode {
-      node_id,
-      node: node.clone(),
-      styles,
-      before_styles: None,
-      after_styles: None,
-      marker_styles: None,
-      children,
-    });
-  }
-
-  let mut ua_styles = get_default_styles_for_element(node);
-  inherit_styles(&mut ua_styles, parent_ua_styles);
-
-  let mut matching_rules = find_matching_rules(
-    node,
-    rules,
-    selector_caches,
-    scratch,
-    ancestors.as_slice(),
-    ancestor_ids,
-    node_id,
-    container_ctx,
-  );
-  matching_rules.extend(ua_default_rules(node, parent_styles.direction));
-  let ua_matches: Vec<_> = matching_rules
-    .iter()
-    .filter(|r| r.origin == StyleOrigin::UserAgent)
-    .cloned()
-    .collect();
-  let prof = cascade_profile_enabled();
-  let decl_start = prof.then(|| Instant::now());
-  apply_cascaded_declarations(
-    &mut ua_styles,
-    ua_matches,
-    None,
-    parent_ua_styles,
-    parent_ua_styles.font_size,
-    ua_root_font_size,
-    viewport,
-    &ComputedStyle::default(),
-    |_| true,
-  );
-  if let (true, Some(start)) = (prof, decl_start) {
-    record_declaration_time(start.elapsed());
-  }
-
-  if let Some(lang) = node
-    .get_attribute("lang")
-    .or_else(|| node.get_attribute("xml:lang"))
-    .filter(|l| !l.is_empty())
-  {
-    ua_styles.language = normalize_language_tag(&lang);
-  }
-
-  let is_root = is_root_element(&ancestors);
-
-  finalize_grid_placement(&mut ua_styles);
-  resolve_match_parent_text_align_last(&mut ua_styles, parent_ua_styles, is_root);
-  resolve_match_parent_text_align(&mut ua_styles, parent_ua_styles, is_root);
-  resolve_relative_font_weight(&mut ua_styles, parent_ua_styles);
-  propagate_text_decorations(&mut ua_styles, parent_ua_styles);
-
-  let current_ua_root_font_size = if is_root {
-    ua_styles.font_size
-  } else {
-    ua_root_font_size
-  };
-  ua_styles.root_font_size = current_ua_root_font_size;
-  resolve_line_height_length(&mut ua_styles, viewport);
-  let ua_default_color = ua_styles.color;
-  let ua_default_background = ua_styles.background_color;
-  resolve_absolute_lengths(&mut ua_styles, current_ua_root_font_size, viewport);
-
-  let mut styles = get_default_styles_for_element(node);
-
-  // Inherit styles from parent
-  inherit_styles(&mut styles, parent_styles);
-
-  // Apply matching CSS rules and inline styles with full cascade ordering
-  append_presentational_hints(
-    node,
-    ancestors.as_slice(),
-    parent_styles.direction,
-    &mut matching_rules,
-  );
-  let inline_decls = node
-    .get_attribute("style")
-    .as_deref()
-    .map(parse_declarations);
-  let decl_start = prof.then(|| Instant::now());
-  apply_cascaded_declarations(
-    &mut styles,
-    matching_rules,
-    inline_decls,
-    parent_styles,
-    parent_styles.font_size,
-    root_font_size,
-    viewport,
-    &ua_styles,
-    |_| true,
-  );
-  if let (true, Some(start)) = (prof, decl_start) {
-    record_declaration_time(start.elapsed());
-  }
-
-  // Finalize grid placement - resolve named grid lines
-  finalize_grid_placement(&mut styles);
-  resolve_match_parent_text_align_last(&mut styles, parent_styles, is_root);
-  resolve_match_parent_text_align(&mut styles, parent_styles, is_root);
-  resolve_relative_font_weight(&mut styles, parent_styles);
-  propagate_text_decorations(&mut styles, parent_styles);
-
   let current_root_font_size = if is_root {
     styles.font_size
   } else {
@@ -2209,38 +1773,146 @@ fn apply_styles_internal_with_ancestors<'a>(
     is_root,
   );
 
+  styles.inert = node_is_inert(node, ancestors);
+  if styles.inert {
+    styles.pointer_events = PointerEvents::None;
+  }
+  styles.top_layer = top_layer_kind(node);
+
+  NodeBaseStyles {
+    styles,
+    ua_styles,
+    current_root_font_size,
+    current_ua_root_font_size,
+  }
+}
+
+fn apply_styles_internal(
+  node: &DomNode,
+  rules: &RuleIndex<'_>,
+  selector_caches: &mut SelectorCaches,
+  scratch: &mut CascadeScratch,
+  parent_styles: &ComputedStyle,
+  parent_ua_styles: &ComputedStyle,
+  root_font_size: f32,
+  ua_root_font_size: f32,
+  viewport: Size,
+  color_scheme_pref: ColorScheme,
+  node_counter: &mut usize,
+  ancestor_ids: &mut Vec<usize>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  reuse_counter: Option<&mut usize>,
+  deadline: Option<&RenderDeadline>,
+) -> Result<StyledNode, RenderError> {
+  let mut ancestors: Vec<&DomNode> = Vec::new();
+  let styled = apply_styles_internal_with_ancestors(
+    node,
+    rules,
+    selector_caches,
+    scratch,
+    parent_styles,
+    parent_ua_styles,
+    root_font_size,
+    ua_root_font_size,
+    viewport,
+    color_scheme_pref,
+    &mut ancestors,
+    node_counter,
+    ancestor_ids,
+    container_ctx,
+    container_scope,
+    reuse_map,
+    reuse_counter,
+    deadline,
+  )?;
+  Ok(*styled)
+}
+
+#[inline(never)]
+fn clone_styled_subtree_boxed(node: &StyledNode) -> Box<StyledNode> {
+  Box::new(node.clone())
+}
+
+#[inline(never)]
+fn compute_pseudo_styles(
+  node: &DomNode,
+  rules: &RuleIndex<'_>,
+  selector_caches: &mut SelectorCaches,
+  scratch: &mut CascadeScratch,
+  ancestors: &[&DomNode],
+  styles: &mut ComputedStyle,
+  ua_styles: &ComputedStyle,
+  root_font_size: f32,
+  ua_root_font_size: f32,
+  viewport: Size,
+) -> (
+  Option<Box<ComputedStyle>>,
+  Option<Box<ComputedStyle>>,
+  Option<Box<ComputedStyle>>,
+) {
+  if !node.is_element() {
+    styles.backdrop = None;
+    return (None, None, None);
+  }
+
+  let mut backdrop_styles = None;
+  if styles.top_layer.is_some()
+    && (styles.top_layer.map(|k| k.is_modal()).unwrap_or(false)
+      || rules.has_pseudo_rules(&PseudoElement::Backdrop))
+  {
+    backdrop_styles = compute_pseudo_element_styles(
+      node,
+      rules,
+      selector_caches,
+      scratch,
+      ancestors,
+      styles,
+      ua_styles,
+      root_font_size,
+      ua_root_font_size,
+      viewport,
+      &PseudoElement::Backdrop,
+    )
+    .map(Arc::new);
+  }
+
+  let prof = cascade_profile_enabled();
   let pseudo_start = prof.then(|| Instant::now());
-  let before_styles = if rules.has_pseudo_rules(&PseudoElement::Before) {
+  let before_styles = if rules.has_pseudo_content(&PseudoElement::Before) {
     compute_pseudo_element_styles(
       node,
       rules,
       selector_caches,
       scratch,
-      ancestors.as_slice(),
-      &styles,
-      &ua_styles,
-      current_root_font_size,
-      current_ua_root_font_size,
+      ancestors,
+      styles,
+      ua_styles,
+      root_font_size,
+      ua_root_font_size,
       viewport,
       &PseudoElement::Before,
     )
+    .map(Box::new)
   } else {
     None
   };
-  let after_styles = if rules.has_pseudo_rules(&PseudoElement::After) {
+  let after_styles = if rules.has_pseudo_content(&PseudoElement::After) {
     compute_pseudo_element_styles(
       node,
       rules,
       selector_caches,
       scratch,
-      ancestors.as_slice(),
-      &styles,
-      &ua_styles,
-      current_root_font_size,
-      current_ua_root_font_size,
+      ancestors,
+      styles,
+      ua_styles,
+      root_font_size,
+      ua_root_font_size,
       viewport,
       &PseudoElement::After,
     )
+    .map(Box::new)
   } else {
     None
   };
@@ -2249,19 +1921,111 @@ fn apply_styles_internal_with_ancestors<'a>(
     rules,
     selector_caches,
     scratch,
-    ancestors.as_slice(),
-    &styles,
-    &ua_styles,
-    current_root_font_size,
-    current_ua_root_font_size,
+    ancestors,
+    styles,
+    ua_styles,
+    root_font_size,
+    ua_root_font_size,
     viewport,
-  );
+  )
+  .map(Box::new);
   if let (true, Some(start)) = (prof, pseudo_start) {
     record_pseudo_time(start.elapsed());
   }
 
-  let mut children = Vec::with_capacity(node.children.len());
+  styles.backdrop = backdrop_styles;
+
+  (before_styles, after_styles, marker_styles)
+}
+
+#[inline(never)]
+fn try_reuse_styled_subtree(
+  node_id: usize,
+  node_counter: &mut usize,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  reuse_counter: &mut Option<&mut usize>,
+) -> Option<Box<StyledNode>> {
+  let scope = container_scope?;
+  let map = reuse_map?;
+  if scope.contains(&node_id) {
+    return None;
+  }
+  let ptr = map.get(&node_id)?;
+  let reused_ref = unsafe { &**ptr };
+  let reused_size = count_styled_nodes(reused_ref);
+  if reused_size > 1 {
+    let advance = reused_size.saturating_sub(1);
+    *node_counter = (*node_counter).saturating_add(advance);
+  }
+  if let Some(counter) = reuse_counter.as_deref_mut() {
+    *counter += reused_size;
+  }
+  Some(clone_styled_subtree_boxed(reused_ref))
+}
+
+fn apply_styles_internal_with_ancestors<'a>(
+  node: &'a DomNode,
+  rules: &RuleIndex<'_>,
+  selector_caches: &mut SelectorCaches,
+  scratch: &mut CascadeScratch,
+  parent_styles: &ComputedStyle,
+  parent_ua_styles: &ComputedStyle,
+  root_font_size: f32,
+  ua_root_font_size: f32,
+  viewport: Size,
+  color_scheme_pref: ColorScheme,
+  ancestors: &mut Vec<&'a DomNode>,
+  node_counter: &mut usize,
+  ancestor_ids: &mut Vec<usize>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  reuse_counter: Option<&mut usize>,
+  deadline: Option<&RenderDeadline>,
+) -> Result<Box<StyledNode>, RenderError> {
+  record_node_visit(node);
+
+  let node_id = *node_counter;
+  *node_counter += 1;
+  if let Some(deadline) = deadline {
+    if deadline.is_enabled() && node_id % 64 == 0 {
+      deadline.check(RenderStage::Cascade)?;
+    }
+  }
+
   let mut reuse_counter = reuse_counter;
+
+  // If this node lies outside any container scope during a container-query recascade,
+  // reuse the prior styled subtree to avoid recomputing unaffected branches.
+  if let Some(reused) = try_reuse_styled_subtree(
+    node_id,
+    node_counter,
+    container_scope,
+    reuse_map,
+    &mut reuse_counter,
+  ) {
+    return Ok(reused);
+  }
+
+  let mut base = compute_base_styles(
+    node,
+    rules,
+    selector_caches,
+    scratch,
+    parent_styles,
+    parent_ua_styles,
+    root_font_size,
+    ua_root_font_size,
+    viewport,
+    color_scheme_pref,
+    ancestors.as_slice(),
+    ancestor_ids.as_slice(),
+    node_id,
+    container_ctx,
+  );
+
+  let mut children = Vec::with_capacity(node.children.len());
 
   ancestors.push(node);
   ancestor_ids.push(node_id);
@@ -2272,10 +2036,10 @@ fn apply_styles_internal_with_ancestors<'a>(
       rules,
       selector_caches,
       scratch,
-      &styles,
-      &ua_styles,
-      current_root_font_size,
-      current_ua_root_font_size,
+      &base.styles,
+      &base.ua_styles,
+      base.current_root_font_size,
+      base.current_ua_root_font_size,
       viewport,
       color_scheme_pref,
       ancestors,
@@ -2287,12 +2051,32 @@ fn apply_styles_internal_with_ancestors<'a>(
       child_reuse,
       deadline,
     )?;
-    children.push(child_styled);
+    children.push(*child_styled);
   }
   ancestors.pop();
   ancestor_ids.pop();
 
-  Ok(StyledNode {
+  let (before_styles, after_styles, marker_styles) = compute_pseudo_styles(
+    node,
+    rules,
+    selector_caches,
+    scratch,
+    ancestors.as_slice(),
+    &mut base.styles,
+    &base.ua_styles,
+    base.current_root_font_size,
+    base.current_ua_root_font_size,
+    viewport,
+  );
+
+  let NodeBaseStyles {
+    styles,
+    ua_styles: _,
+    current_root_font_size: _,
+    current_ua_root_font_size: _,
+  } = base;
+
+  Ok(Box::new(StyledNode {
     node_id,
     node: node.clone(),
     styles,
@@ -2300,7 +2084,7 @@ fn apply_styles_internal_with_ancestors<'a>(
     after_styles,
     marker_styles,
     children,
-  })
+  }))
 }
 
 fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {

@@ -28,12 +28,16 @@ pub fn build_render_configs(
   dpr: f32,
   css_limit: Option<usize>,
   apply_meta_viewport: bool,
+  allow_file_from_http: bool,
+  block_mixed_content: bool,
   trace_output: Option<PathBuf>,
 ) -> RenderConfigBundle {
   let config = FastRenderConfig::new()
     .with_default_viewport(viewport.0, viewport.1)
     .with_device_pixel_ratio(dpr)
-    .with_meta_viewport(apply_meta_viewport);
+    .with_meta_viewport(apply_meta_viewport)
+    .with_allow_file_from_http(allow_file_from_http)
+    .with_block_mixed_content(block_mixed_content);
 
   let mut options = RenderOptions::new()
     .with_viewport(viewport.0, viewport.1)

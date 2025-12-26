@@ -225,6 +225,8 @@ fn fetch_bundle(args: FetchArgs) -> Result<()> {
     render.device_pixel_ratio,
     None,
     true,
+    false,
+    false,
     None,
   );
   let fetcher: Arc<dyn ResourceFetcher> = Arc::new(recording.clone());
@@ -284,6 +286,8 @@ fn render_bundle(args: RenderArgs) -> Result<()> {
     render.device_pixel_ratio,
     None,
     true,
+    false,
+    false,
     None,
   );
 

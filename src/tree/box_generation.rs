@@ -1376,8 +1376,9 @@ fn create_pseudo_element_box(
 
 fn create_marker_box(styled: &StyledNode, counters: &CounterManager) -> Option<BoxNode> {
   // Prefer authored ::marker styles; fall back to the originating style when absent.
-  let (mut marker_style, has_pseudo_styles) = if let Some(styles) = styled.marker_styles.clone() {
-    (styles, true)
+  let (mut marker_style, has_pseudo_styles) = if let Some(styles) = styled.marker_styles.as_deref()
+  {
+    (styles.clone(), true)
   } else {
     (styled.styles.clone(), false)
   };
@@ -2092,7 +2093,7 @@ mod tests {
       styles: li_style,
       before_styles: None,
       after_styles: None,
-      marker_styles: Some(marker_style),
+      marker_styles: Some(Box::new(marker_style)),
       children: vec![text_node],
     };
 
@@ -2538,7 +2539,7 @@ mod tests {
       styles: li_style,
       before_styles: None,
       after_styles: None,
-      marker_styles: Some(marker_styles),
+      marker_styles: Some(Box::new(marker_styles)),
       children: vec![],
     };
 
@@ -2595,7 +2596,7 @@ mod tests {
       styles: li_style,
       before_styles: None,
       after_styles: None,
-      marker_styles: Some(marker_styles),
+      marker_styles: Some(Box::new(marker_styles)),
       children: vec![],
     };
 
@@ -2633,7 +2634,7 @@ mod tests {
         children: vec![],
       },
       styles: base_style,
-      before_styles: Some(before_style),
+      before_styles: Some(Box::new(before_style)),
       after_styles: None,
       marker_styles: None,
       children: vec![],
@@ -2643,7 +2644,7 @@ mod tests {
     counters.enter_scope();
     let before_box = create_pseudo_element_box(
       &styled,
-      styled.before_styles.as_ref().unwrap(),
+      styled.before_styles.as_deref().unwrap(),
       "before",
       &counters,
     )
@@ -2692,7 +2693,7 @@ mod tests {
         children: vec![],
       },
       styles: base_style,
-      before_styles: Some(before_style),
+      before_styles: Some(Box::new(before_style)),
       after_styles: None,
       marker_styles: None,
       children: vec![],
@@ -2704,7 +2705,7 @@ mod tests {
 
     let before_box = create_pseudo_element_box(
       &styled,
-      styled.before_styles.as_ref().unwrap(),
+      styled.before_styles.as_deref().unwrap(),
       "before",
       &counters,
     )
@@ -2758,7 +2759,7 @@ mod tests {
       styles: base_style,
       before_styles: None,
       after_styles: None,
-      marker_styles: Some(marker_style),
+      marker_styles: Some(Box::new(marker_style)),
       children: vec![],
     };
 
@@ -2795,7 +2796,7 @@ mod tests {
         children: vec![],
       },
       styles: style.clone(),
-      marker_styles: Some(style.clone()),
+      marker_styles: Some(Box::new(style.clone())),
       before_styles: None,
       after_styles: None,
       children: vec![],
@@ -2842,7 +2843,7 @@ mod tests {
         children: vec![],
       },
       styles: style.clone(),
-      marker_styles: Some(style.clone()),
+      marker_styles: Some(Box::new(style.clone())),
       before_styles: None,
       after_styles: None,
       children: vec![],

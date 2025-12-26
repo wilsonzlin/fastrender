@@ -378,9 +378,9 @@ fn snapshot_styled_node(node: &StyledNode) -> StyledNodeSnapshot {
     node_id: node.node_id,
     node: summarize_dom_node(&node.node),
     style: snapshot_style(&node.styles),
-    before: node.before_styles.as_ref().map(snapshot_style),
-    after: node.after_styles.as_ref().map(snapshot_style),
-    marker: node.marker_styles.as_ref().map(snapshot_style),
+    before: node.before_styles.as_deref().map(snapshot_style),
+    after: node.after_styles.as_deref().map(snapshot_style),
+    marker: node.marker_styles.as_deref().map(snapshot_style),
     children: node.children.iter().map(snapshot_styled_node).collect(),
   }
 }

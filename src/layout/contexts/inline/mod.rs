@@ -732,6 +732,15 @@ impl InlineFormattingContext {
             positioned_cb_stack.pop();
           }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
+          if child_items.is_empty()
+            && start_edge == 0.0
+            && end_edge == 0.0
+            && content_offset_y == 0.0
+            && (padding_bottom + border_bottom) == 0.0
+            && !establishes_containing_block
+          {
+            continue;
+          }
           let metrics = compute_inline_box_metrics(
             &child_items,
             content_offset_y,
@@ -943,6 +952,15 @@ impl InlineFormattingContext {
             positioned_cb_stack.pop();
           }
           let fallback_metrics = self.compute_strut_metrics(&child.style);
+          if child_items.is_empty()
+            && start_edge == 0.0
+            && end_edge == 0.0
+            && content_offset_y == 0.0
+            && (padding_bottom + border_bottom) == 0.0
+            && !establishes_containing_block
+          {
+            continue;
+          }
           let metrics = compute_inline_box_metrics(
             &child_items,
             content_offset_y,

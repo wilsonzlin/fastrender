@@ -3,7 +3,7 @@
 //! This module provides image loading from various sources (HTTP, file, data URLs)
 //! with in-memory caching and support for various image formats including SVG.
 
-use crate::api::{RenderDiagnostics, ResourceKind};
+use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
 use crate::error::Error;
 use crate::error::ImageError;
 use crate::error::RenderError;
@@ -1135,6 +1135,8 @@ pub struct ImageCache {
   config: ImageCacheConfig,
   /// Optional diagnostics sink for recording fetch failures.
   diagnostics: Option<Arc<Mutex<RenderDiagnostics>>>,
+  /// Optional resource context (policy + diagnostics).
+  resource_context: Option<ResourceContext>,
 }
 
 impl ImageCache {
@@ -1215,6 +1217,7 @@ impl ImageCache {
       fetcher,
       config,
       diagnostics: None,
+      resource_context: None,
     }
   }
 
@@ -1231,6 +1234,16 @@ impl ImageCache {
   /// Returns the configured base URL for resolving relative paths.
   pub fn base_url(&self) -> Option<String> {
     self.base_url.clone()
+  }
+
+  /// Set the active resource context for policy and diagnostics.
+  pub fn set_resource_context(&mut self, context: Option<ResourceContext>) {
+    self.resource_context = context;
+  }
+
+  /// Retrieve the current resource context.
+  pub fn resource_context(&self) -> Option<ResourceContext> {
+    self.resource_context.clone()
   }
 
   /// Sets the resource fetcher
@@ -1388,6 +1401,17 @@ impl ImageCache {
     let profile_enabled = threshold_ms.is_some();
     let total_start = profile_enabled.then(Instant::now);
     let fetch_start = profile_enabled.then(Instant::now);
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed(ResourceKind::Image, resolved_url) {
+        let blocked = Error::Image(ImageError::LoadFailed {
+          url: resolved_url.to_string(),
+          reason: err.reason,
+        });
+        self.record_image_error(resolved_url, &blocked);
+        return Err(blocked);
+      }
+    }
+
     let resource = match self.fetcher.fetch(resolved_url) {
       Ok(res) => res,
       Err(err) => {
@@ -1504,14 +1528,24 @@ impl ImageCache {
     let profile_enabled = threshold_ms.is_some();
     let total_start = profile_enabled.then(Instant::now);
     let fetch_start = profile_enabled.then(Instant::now);
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed(ResourceKind::Image, resolved_url) {
+        let blocked = Error::Image(ImageError::LoadFailed {
+          url: resolved_url.to_string(),
+          reason: err.reason,
+        });
+        self.record_image_error(resolved_url, &blocked);
+        return Err(blocked);
+      }
+    }
+
     let resource = match self.fetcher.fetch(resolved_url) {
-      Ok(res) => res,
+      Ok(res) => Arc::new(res),
       Err(err) => {
         self.record_image_error(resolved_url, &err);
         return Err(err);
       }
     };
-    let resource = Arc::new(resource);
     let fetch_ms = fetch_start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
     let probe_start = profile_enabled.then(Instant::now);
     let meta = match self.probe_resource(&resource, resolved_url) {
@@ -2443,6 +2477,7 @@ impl Clone for ImageCache {
       fetcher: Arc::clone(&self.fetcher),
       config: self.config,
       diagnostics: self.diagnostics.clone(),
+      resource_context: self.resource_context.clone(),
     }
   }
 }

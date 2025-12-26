@@ -36,6 +36,7 @@ FastRender ships a few small binaries/examples intended for internal debugging a
 - Purpose: fetch one URL (or read one `file://` target) and render to a PNG.
 - Entry: `src/bin/fetch_and_render.rs`
 - Run: `cargo run --release --bin fetch_and_render -- --help`
+- Security defaults mirror the library: `file://` subresources are blocked for HTTP(S) documents. Use `--allow-file-from-http` to override during local testing and `--block-mixed-content` to forbid HTTP under HTTPS.
 
 ## `bundle_page`
 

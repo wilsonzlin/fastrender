@@ -24,6 +24,7 @@
 //! }
 //! ```
 
+use crate::api::{ResourceContext, ResourceKind};
 use crate::css::types::FontDisplay;
 use crate::css::types::FontFaceRule;
 use crate::css::types::FontFaceSource;
@@ -191,6 +192,7 @@ pub struct FontContext {
   pending_async: Arc<(Mutex<usize>, Condvar)>,
   web_used_codepoints: Arc<RwLock<Vec<u32>>>,
   generation: Arc<AtomicU64>,
+  resource_context: Option<ResourceContext>,
 }
 
 impl FontContext {
@@ -328,6 +330,7 @@ impl FontContext {
       pending_async: Arc::new((Mutex::new(0), Condvar::new())),
       web_used_codepoints: Arc::new(RwLock::new(Vec::new())),
       generation: Arc::new(AtomicU64::new(0)),
+      resource_context: None,
     }
   }
 
@@ -363,6 +366,16 @@ impl FontContext {
   #[inline]
   pub fn has_fonts(&self) -> bool {
     !self.db.is_empty()
+  }
+
+  /// Set the active resource context used for remote font fetching.
+  pub fn set_resource_context(&mut self, context: Option<ResourceContext>) {
+    self.resource_context = context;
+  }
+
+  /// Get the current resource context.
+  pub fn resource_context(&self) -> Option<ResourceContext> {
+    self.resource_context.clone()
   }
 
   /// Returns whether there are no usable fonts (system + web).
@@ -824,6 +837,14 @@ impl FontContext {
     start: Instant,
   ) -> Result<LoadOutcome> {
     let resolved = resolve_font_url(url, base_url);
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed(ResourceKind::Font, &resolved) {
+        return Err(Error::Font(crate::error::FontError::LoadFailed {
+          family: family.to_string(),
+          reason: err.reason,
+        }));
+      }
+    }
     let (bytes, content_type) = self.fetcher.fetch(&resolved)?;
     let decoded = decode_font_bytes(bytes, content_type.as_deref())?;
     if !display_allows_use(face.display, start.elapsed()) {

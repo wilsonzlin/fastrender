@@ -122,6 +122,14 @@ struct Args {
   #[arg(long)]
   css_limit: Option<usize>,
 
+  /// Allow HTTP(S) documents to load file:// subresources
+  #[arg(long)]
+  allow_file_from_http: bool,
+
+  /// Block mixed HTTP subresources when rendering HTTPS documents
+  #[arg(long)]
+  block_mixed_content: bool,
+
   /// Enable per-stage timing logs
   #[arg(long)]
   timings: bool,
@@ -305,6 +313,8 @@ fn try_main(args: Args) -> Result<()> {
     args.dpr,
     args.css_limit,
     true,
+    args.allow_file_from_http,
+    args.block_mixed_content,
     args.trace_out.clone(),
   );
 

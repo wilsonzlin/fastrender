@@ -109,7 +109,10 @@ use crate::paint::painter::paint_tree_with_resources_scaled_offset;
 use crate::paint::painter::paint_tree_with_resources_scaled_offset_with_trace;
 use crate::render_control::{CancelCallback, DeadlineGuard, RenderDeadline};
 use crate::resource::CachingFetcherConfig;
-use crate::resource::{CachingFetcher, HttpFetcher, ResourceFetcher, ResourcePolicy};
+use crate::resource::{
+  origin_from_url, CachingFetcher, DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy,
+  ResourceFetcher, ResourcePolicy,
+};
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
 use crate::style::cascade::apply_styles_with_media_target_and_imports_cached;
 use crate::style::cascade::apply_styles_with_media_target_and_imports_cached_with_deadline;
@@ -159,8 +162,8 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 #[cfg(test)]
 use url::Url;
 
-const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 use std::time::{Duration, Instant};
+pub(crate) const DEFAULT_MAX_IFRAME_DEPTH: usize = 3;
 // Re-export Pixmap from tiny-skia for public use
 pub use crate::image_loader::ImageCacheConfig;
 pub use crate::layout::pagination::PageStacking;
@@ -282,6 +285,15 @@ pub struct FastRender {
 
   /// Optional compatibility mode applied during DOM parsing
   dom_compat_mode: DomCompatibilityMode,
+
+  /// Resource loading policy configuration.
+  resource_policy: ResourceAccessPolicy,
+
+  /// Active resource context for the current render.
+  resource_context: Option<ResourceContext>,
+
+  /// Maximum iframe nesting depth when painting nested browsing contexts
+  max_iframe_depth: usize,
 }
 
 impl std::fmt::Debug for FastRender {
@@ -295,6 +307,8 @@ impl std::fmt::Debug for FastRender {
       .field("base_url", &self.base_url)
       .field("compat_profile", &self.compat_profile)
       .field("dom_compat_mode", &self.dom_compat_mode)
+      .field("resource_policy", &self.resource_policy)
+      .field("max_iframe_depth", &self.max_iframe_depth)
       .finish_non_exhaustive()
   }
 }
@@ -338,8 +352,11 @@ pub struct FastRenderConfig {
   /// Maximum iframe nesting depth when painting nested browsing contexts
   pub max_iframe_depth: usize,
 
-  /// Allow http(s) parents to load file:// iframe documents when true (disabled by default)
-  pub allow_file_iframe_from_http: bool,
+  /// Allow http(s) documents to load file:// resources when true (disabled by default)
+  pub allow_file_from_http: bool,
+
+  /// Block mixed HTTP subresources when the document is HTTPS.
+  pub block_mixed_content: bool,
 
   /// Compatibility profile controlling opt-in site-specific behaviors.
   pub compat_profile: CompatProfile,
@@ -365,7 +382,8 @@ impl Default for FastRenderConfig {
       resource_cache: Some(CachingFetcherConfig::default()),
       resource_policy: ResourcePolicy::default(),
       max_iframe_depth: DEFAULT_MAX_IFRAME_DEPTH,
-      allow_file_iframe_from_http: false,
+      allow_file_from_http: false,
+      block_mixed_content: false,
       compat_profile: CompatProfile::default(),
       dom_compat_mode: DomCompatibilityMode::Standard,
       apply_meta_viewport: false,
@@ -441,6 +459,18 @@ impl FastRenderBuilder {
   /// Overrides how fonts are discovered and which bundled set to use.
   pub fn font_sources(mut self, font_config: FontConfig) -> Self {
     self.config.font_config = font_config;
+    self
+  }
+
+  /// Allow loading file:// resources from HTTP(S) documents.
+  pub fn allow_file_from_http(mut self, allow: bool) -> Self {
+    self.config.allow_file_from_http = allow;
+    self
+  }
+
+  /// Block mixed HTTP subresources when rendering HTTPS documents.
+  pub fn block_mixed_content(mut self, block: bool) -> Self {
+    self.config.block_mixed_content = block;
     self
   }
 
@@ -687,6 +717,53 @@ impl RenderDiagnostics {
       .fetch_errors
       .push(ResourceFetchError::new(kind, url, message));
   }
+
+  /// Mark a document-level fetch failure.
+  pub fn set_document_error(&mut self, message: impl Into<String>) {
+    self.document_error = Some(message.into());
+  }
+}
+
+/// Shared diagnostics handle for concurrent render stages.
+#[derive(Clone, Default)]
+pub struct SharedRenderDiagnostics {
+  inner: Arc<Mutex<RenderDiagnostics>>,
+}
+
+impl SharedRenderDiagnostics {
+  /// Construct a new shared diagnostics handle.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Record a failed fetch.
+  pub fn record(&self, kind: ResourceKind, url: impl Into<String>, message: impl Into<String>) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.record_message(kind, url, message);
+    }
+  }
+
+  /// Record a failed fetch using structured error information.
+  pub fn record_error(&self, kind: ResourceKind, url: impl Into<String>, error: &Error) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.record_error(kind, url, error);
+    }
+  }
+
+  /// Record a document-level failure.
+  pub fn set_document_error(&self, message: impl Into<String>) {
+    if let Ok(mut guard) = self.inner.lock() {
+      guard.set_document_error(message);
+    }
+  }
+
+  /// Extract owned diagnostics, cloning when the handle is shared.
+  pub fn into_inner(self) -> RenderDiagnostics {
+    match Arc::try_unwrap(self.inner) {
+      Ok(mutex) => mutex.into_inner().unwrap_or_default(),
+      Err(shared) => shared.lock().map(|g| g.clone()).unwrap_or_default(),
+    }
+  }
 }
 
 /// Error captured while fetching a resource needed for rendering.
@@ -754,6 +831,45 @@ impl ResourceFetchError {
       entry.final_url = Some(entry.url.clone());
     }
     entry
+  }
+}
+
+/// Shared resource-loading context combining policy and diagnostics.
+#[derive(Clone, Default)]
+pub struct ResourceContext {
+  pub policy: ResourceAccessPolicy,
+  pub diagnostics: Option<SharedRenderDiagnostics>,
+}
+
+impl ResourceContext {
+  /// Record a fetch error when diagnostics collection is enabled.
+  pub fn record(&self, kind: ResourceKind, url: impl Into<String>, message: impl Into<String>) {
+    if let Some(diag) = &self.diagnostics {
+      diag.record(kind, url, message);
+    }
+  }
+
+  /// Evaluate whether a URL is allowed by policy, recording a diagnostic on failure.
+  pub fn check_allowed(
+    &self,
+    kind: ResourceKind,
+    url: &str,
+  ) -> std::result::Result<(), PolicyError> {
+    match self.policy.allows(url) {
+      Ok(()) => Ok(()),
+      Err(err) => {
+        self.record(kind, url, err.reason.clone());
+        Err(err)
+      }
+    }
+  }
+
+  /// Clone this context with a different document origin.
+  pub fn for_origin(&self, origin: Option<DocumentOrigin>) -> Self {
+    Self {
+      policy: self.policy.for_origin(origin),
+      diagnostics: self.diagnostics.clone(),
+    }
   }
 }
 
@@ -1360,6 +1476,18 @@ impl FastRenderConfig {
   /// Configures font discovery and bundled font usage.
   pub fn with_font_sources(mut self, font_config: FontConfig) -> Self {
     self.font_config = font_config;
+    self
+  }
+
+  /// Allow loading file:// resources from HTTP(S) documents.
+  pub fn with_allow_file_from_http(mut self, allow: bool) -> Self {
+    self.allow_file_from_http = allow;
+    self
+  }
+
+  /// Block mixed HTTP subresources when rendering HTTPS documents.
+  pub fn with_block_mixed_content(mut self, block: bool) -> Self {
+    self.block_mixed_content = block;
     self
   }
 
@@ -2123,6 +2251,16 @@ impl FastRender {
       base_url: config.base_url.clone(),
       dom_compat_mode: config.dom_compat_mode,
       compat_profile: config.compat_profile,
+      resource_policy: ResourceAccessPolicy {
+        document_origin: config
+          .base_url
+          .as_ref()
+          .and_then(|url| origin_from_url(url)),
+        allow_file_from_http: config.allow_file_from_http,
+        block_mixed_content: config.block_mixed_content,
+      },
+      resource_context: None,
+      max_iframe_depth: config.max_iframe_depth,
     })
   }
 
@@ -2438,6 +2576,14 @@ impl FastRender {
       self.device_pixel_ratio = dpr;
     }
 
+    let shared_diagnostics = self
+      .diagnostics
+      .as_ref()
+      .map(|diag| SharedRenderDiagnostics {
+        inner: Arc::clone(diag),
+      });
+    let context = Some(self.build_resource_context(self.base_url.as_deref(), shared_diagnostics));
+    let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
     let result = self.render_html_internal(
       html,
       width,
@@ -2451,6 +2597,7 @@ impl FastRender {
       stats,
       trace,
     );
+    self.pop_resource_context(prev_self, prev_image, prev_font);
     let result = match result {
       Ok(outputs) => Ok(outputs),
       Err(err) => {
@@ -3482,6 +3629,11 @@ impl FastRender {
     let (width, height) = options
       .viewport
       .unwrap_or((self.default_width, self.default_height));
+    let shared_diagnostics = Some(SharedRenderDiagnostics {
+      inner: Arc::clone(&diagnostics),
+    });
+    let context = Some(self.build_resource_context(Some(&base_url), shared_diagnostics));
+    let (prev_self, prev_image, prev_font) = self.push_resource_context(context);
     let result = (|| -> Result<RenderReport> {
       let html_with_css = {
         let _span = trace_handle.span("css_inline", "style");
@@ -3532,6 +3684,7 @@ impl FastRender {
         artifacts: captured,
       })
     })();
+    self.pop_resource_context(prev_self, prev_image, prev_font);
 
     if !had_sink {
       self.set_diagnostics_sink(None);
@@ -3678,10 +3831,11 @@ impl FastRender {
     let mut combined_rules = Vec::new();
     let sources = extract_css_sources(dom);
     let fetcher = Arc::clone(&self.fetcher);
+    let resource_context = self.resource_context.as_ref();
     let inline_loader = CssImportFetcher::new(
       self.base_url.clone(),
       Arc::clone(&fetcher),
-      self.diagnostics.clone(),
+      self.resource_context.clone(),
     );
 
     for source in sources {
@@ -3726,6 +3880,15 @@ impl FastRender {
             continue;
           };
 
+          if let Some(ctx) = resource_context {
+            if ctx
+              .check_allowed(ResourceKind::Stylesheet, &stylesheet_url)
+              .is_err()
+            {
+              continue;
+            }
+          }
+
           match fetcher.fetch(&stylesheet_url) {
             Ok(resource) => {
               let mut css_text =
@@ -3736,7 +3899,7 @@ impl FastRender {
                 let loader = CssImportFetcher::new(
                   Some(stylesheet_url.clone()),
                   Arc::clone(&fetcher),
-                  self.diagnostics.clone(),
+                  resource_context.cloned(),
                 );
                 let resolved = sheet.resolve_imports_with_cache(
                   &loader,
@@ -3748,8 +3911,12 @@ impl FastRender {
               }
             }
             Err(err) => {
-              self.record_fetch_error(ResourceKind::Stylesheet, &stylesheet_url, err.to_string());
               // Per spec, stylesheet loads are best-effort. On failure, continue.
+              if let Some(diag) = &self.diagnostics {
+                if let Ok(mut guard) = diag.lock() {
+                  guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
+                }
+              }
               continue;
             }
           }
@@ -4829,6 +4996,9 @@ impl FastRender {
       Arc::clone(&self.fetcher),
       self.base_url.clone(),
       self.device_pixel_ratio,
+      self.resource_policy.clone(),
+      self.resource_context.clone(),
+      self.max_iframe_depth,
     )
   }
 
@@ -4903,6 +5073,47 @@ impl FastRender {
     }
   }
 
+  fn build_resource_context(
+    &self,
+    document_url: Option<&str>,
+    diagnostics: Option<SharedRenderDiagnostics>,
+  ) -> ResourceContext {
+    let origin = document_url.and_then(origin_from_url);
+    ResourceContext {
+      policy: self.resource_policy.for_origin(origin),
+      diagnostics,
+    }
+  }
+
+  fn push_resource_context(
+    &mut self,
+    context: Option<ResourceContext>,
+  ) -> (
+    Option<ResourceContext>,
+    Option<ResourceContext>,
+    Option<ResourceContext>,
+  ) {
+    let prev_self = self.resource_context.clone();
+    let prev_image = self.image_cache.resource_context();
+    let prev_font = self.font_context.resource_context();
+
+    self.resource_context = context.clone();
+    self.image_cache.set_resource_context(context.clone());
+    self.font_context.set_resource_context(context);
+
+    (prev_self, prev_image, prev_font)
+  }
+
+  fn pop_resource_context(
+    &mut self,
+    prev_self: Option<ResourceContext>,
+    prev_image: Option<ResourceContext>,
+    prev_font: Option<ResourceContext>,
+  ) {
+    self.resource_context = prev_self;
+    self.image_cache.set_resource_context(prev_image);
+    self.font_context.set_resource_context(prev_font);
+  }
   /// Gets the default background color
   pub fn background_color(&self) -> Rgba {
     self.background_color
@@ -4982,12 +5193,13 @@ impl FastRender {
     deadline: Option<&RenderDeadline>,
     stats: Option<&mut RenderStatsRecorder>,
   ) -> std::result::Result<String, RenderError> {
-    Self::inline_stylesheets_for_html_with_stats(
+    Self::inline_stylesheets_for_html_with_context(
       self.fetcher.as_ref(),
       html,
       base_url,
       media_type,
       css_limit,
+      self.resource_context.as_ref(),
       diagnostics,
       deadline,
       stats,
@@ -5015,6 +5227,30 @@ impl FastRender {
     )
   }
 
+  /// Fetch linked stylesheets using the renderer's fetcher with an explicit resource context.
+  pub fn inline_stylesheets_for_document_with_context(
+    &self,
+    html: &str,
+    base_url: &str,
+    media_type: MediaType,
+    css_limit: Option<usize>,
+    resource_context: Option<&ResourceContext>,
+    diagnostics: &mut RenderDiagnostics,
+    deadline: Option<&RenderDeadline>,
+  ) -> std::result::Result<String, RenderError> {
+    Self::inline_stylesheets_for_html_with_context(
+      self.fetcher.as_ref(),
+      html,
+      base_url,
+      media_type,
+      css_limit,
+      resource_context,
+      diagnostics,
+      deadline,
+      None,
+    )
+  }
+
   /// Fetch linked stylesheets using an arbitrary fetcher and inject them into the HTML.
   pub fn inline_stylesheets_for_html(
     fetcher: &dyn ResourceFetcher,
@@ -5025,24 +5261,27 @@ impl FastRender {
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
   ) -> std::result::Result<String, RenderError> {
-    Self::inline_stylesheets_for_html_with_stats(
+    Self::inline_stylesheets_for_html_with_context(
       fetcher,
       html,
       base_url,
       media_type,
       css_limit,
+      None,
       diagnostics,
       deadline,
       None,
     )
   }
 
-  fn inline_stylesheets_for_html_with_stats(
+  /// Fetch linked stylesheets using an arbitrary fetcher with an explicit resource context.
+  pub fn inline_stylesheets_for_html_with_context(
     fetcher: &dyn ResourceFetcher,
     html: &str,
     base_url: &str,
     media_type: MediaType,
     css_limit: Option<usize>,
+    resource_context: Option<&ResourceContext>,
     diagnostics: &mut RenderDiagnostics,
     deadline: Option<&RenderDeadline>,
     mut stats: Option<&mut RenderStatsRecorder>,
@@ -5069,6 +5308,12 @@ impl FastRender {
       if let Some(rec) = stats.as_deref_mut() {
         rec.record_fetch(ResourceKind::Stylesheet);
       }
+      if let Some(ctx) = resource_context {
+        if let Err(err) = ctx.policy.allows(&css_url) {
+          diagnostics.record_message(ResourceKind::Stylesheet, &css_url, err.reason);
+          continue;
+        }
+      }
       match fetcher.fetch(&css_url) {
         Ok(res) => {
           let css_text = decode_css_bytes(&res.bytes, res.content_type.as_deref());
@@ -5078,6 +5323,12 @@ impl FastRender {
             let mut import_fetch = |u: &str| -> Result<String> {
               if let Some(rec) = stats.as_deref_mut() {
                 rec.record_fetch(ResourceKind::Stylesheet);
+              }
+              if let Some(ctx) = resource_context {
+                if let Err(err) = ctx.policy.allows(u) {
+                  diagnostics.record_message(ResourceKind::Stylesheet, u, &err.reason);
+                  return Err(Error::Resource(ResourceError::new(u.to_string(), err.reason)));
+                }
               }
               match fetcher.fetch(u) {
                 Ok(res) => Ok(decode_css_bytes(&res.bytes, res.content_type.as_deref())),
@@ -5709,19 +5960,19 @@ impl FastRender {
 struct CssImportFetcher {
   base_url: Option<String>,
   fetcher: Arc<dyn ResourceFetcher>,
-  diagnostics: Option<Arc<Mutex<RenderDiagnostics>>>,
+  resource_context: Option<ResourceContext>,
 }
 
 impl CssImportFetcher {
   fn new(
     base_url: Option<String>,
     fetcher: Arc<dyn ResourceFetcher>,
-    diagnostics: Option<Arc<Mutex<RenderDiagnostics>>>,
+    resource_context: Option<ResourceContext>,
   ) -> Self {
     Self {
       base_url,
       fetcher,
-      diagnostics,
+      resource_context,
     }
   }
 
@@ -5740,13 +5991,22 @@ impl CssImportLoader for CssImportFetcher {
       ))
     })?;
 
+    if let Some(ctx) = &self.resource_context {
+      if let Err(err) = ctx.check_allowed(ResourceKind::Stylesheet, &resolved) {
+        return Err(Error::Io(io::Error::new(
+          io::ErrorKind::PermissionDenied,
+          err.reason,
+        )));
+      }
+    }
+
     // Use the fetcher to get the bytes
     let resource = match self.fetcher.fetch(&resolved) {
       Ok(res) => res,
       Err(err) => {
-        if let Some(diag) = &self.diagnostics {
-          if let Ok(mut guard) = diag.lock() {
-            guard.record_error(ResourceKind::Stylesheet, &resolved, &err);
+        if let Some(ctx) = &self.resource_context {
+          if let Some(diag) = &ctx.diagnostics {
+            diag.record_error(ResourceKind::Stylesheet, resolved.as_str(), &err);
           }
         }
         return Err(err);
@@ -6632,13 +6892,13 @@ fn styled_style_map(root: &StyledNode) -> HashMap<usize, Arc<ComputedStyle>> {
     let base = node.node_id << 2;
     out.insert(base, Arc::new(node.styles.clone()));
     if let Some(before) = &node.before_styles {
-      out.insert(base | 1, Arc::new(before.clone()));
+      out.insert(base | 1, Arc::new(before.as_ref().clone()));
     }
     if let Some(after) = &node.after_styles {
-      out.insert(base | 2, Arc::new(after.clone()));
+      out.insert(base | 2, Arc::new(after.as_ref().clone()));
     }
     if let Some(marker) = &node.marker_styles {
-      out.insert(base | 3, Arc::new(marker.clone()));
+      out.insert(base | 3, Arc::new(marker.as_ref().clone()));
     }
     for child in &node.children {
       walk(child, out);
@@ -7201,6 +7461,9 @@ pub(crate) fn render_html_with_shared_resources(
   fetcher: Arc<dyn ResourceFetcher>,
   base_url: Option<String>,
   device_pixel_ratio: f32,
+  resource_policy: ResourceAccessPolicy,
+  resource_context: Option<ResourceContext>,
+  max_iframe_depth: usize,
 ) -> Result<Pixmap> {
   let layout_config = LayoutConfig::for_viewport(Size::new(width as f32, height as f32))
     .with_identifier("foreignObject");
@@ -7220,7 +7483,15 @@ pub(crate) fn render_html_with_shared_resources(
     base_url,
     compat_profile: CompatProfile::default(),
     dom_compat_mode: DomCompatibilityMode::Standard,
+    resource_policy,
+    resource_context: resource_context.clone(),
+    max_iframe_depth,
   };
+
+  renderer
+    .image_cache
+    .set_resource_context(resource_context.clone());
+  renderer.font_context.set_resource_context(resource_context);
 
   let trace = TraceHandle::disabled();
   renderer
