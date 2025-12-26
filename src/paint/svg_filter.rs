@@ -1093,22 +1093,38 @@ fn parse_fe_color_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 fn parse_fe_blend(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let input1 = parse_input(node.attribute("in"));
   let input2 = parse_input(node.attribute("in2"));
-  let mode_attr = node
-    .attribute("mode")
-    .unwrap_or("normal")
-    .to_ascii_lowercase();
-  let mode = match mode_attr.as_str() {
-    "multiply" => BlendMode::Multiply,
-    "screen" => BlendMode::Screen,
-    "darken" => BlendMode::Darken,
-    "lighten" => BlendMode::Lighten,
-    _ => BlendMode::SourceOver,
-  };
+  let mode = parse_blend_mode(node.attribute("mode"));
   Some(FilterPrimitive::Blend {
     input1,
     input2,
     mode,
   })
+}
+
+/// Map SVG `feBlend` modes to tiny-skia blend modes, falling back to normal when unsupported.
+fn parse_blend_mode(mode: Option<&str>) -> BlendMode {
+  match mode.map(|m| m.to_ascii_lowercase()) {
+    Some(mode) => match mode.as_str() {
+      "normal" => BlendMode::SourceOver,
+      "multiply" => BlendMode::Multiply,
+      "screen" => BlendMode::Screen,
+      "darken" => BlendMode::Darken,
+      "lighten" => BlendMode::Lighten,
+      "overlay" => BlendMode::Overlay,
+      "color-dodge" => BlendMode::ColorDodge,
+      "color-burn" => BlendMode::ColorBurn,
+      "hard-light" => BlendMode::HardLight,
+      "soft-light" => BlendMode::SoftLight,
+      "difference" => BlendMode::Difference,
+      "exclusion" => BlendMode::Exclusion,
+      "hue" => BlendMode::Hue,
+      "saturation" => BlendMode::Saturation,
+      "color" => BlendMode::Color,
+      "luminosity" => BlendMode::Luminosity,
+      _ => BlendMode::SourceOver,
+    },
+    None => BlendMode::SourceOver,
+  }
 }
 
 fn parse_fe_morphology(node: &roxmltree::Node) -> Option<FilterPrimitive> {
@@ -3684,5 +3700,83 @@ mod filter_cache_tests {
       "cache should be keyed by resolved URL"
     );
     assert_eq!(filter_cache_len(), 1);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  const BACKDROP: (u8, u8, u8, u8) = (64, 160, 220, 255);
+  const SOURCE: (u8, u8, u8, u8) = (200, 80, 100, 255);
+
+  #[test]
+  fn blend_multiply_matches_expected() {
+    let blended = blend_pixmaps(
+      Some(solid_pixmap(BACKDROP)),
+      Some(solid_pixmap(SOURCE)),
+      BlendMode::Multiply,
+    )
+    .unwrap();
+    let pixel = blended.pixel(0, 0).unwrap();
+    assert_pixel_close(pixel, (50, 50, 86, 255));
+  }
+
+  #[test]
+  fn blend_screen_matches_expected() {
+    let blended = blend_pixmaps(
+      Some(solid_pixmap(BACKDROP)),
+      Some(solid_pixmap(SOURCE)),
+      BlendMode::Screen,
+    )
+    .unwrap();
+    let pixel = blended.pixel(0, 0).unwrap();
+    assert_pixel_close(pixel, (214, 190, 234, 255));
+  }
+
+  #[test]
+  fn blend_overlay_matches_expected() {
+    let blended = blend_pixmaps(
+      Some(solid_pixmap(BACKDROP)),
+      Some(solid_pixmap(SOURCE)),
+      BlendMode::Overlay,
+    )
+    .unwrap();
+    let pixel = blended.pixel(0, 0).unwrap();
+    assert_pixel_close(pixel, (100, 125, 212, 255));
+  }
+
+  #[test]
+  fn blend_difference_matches_expected() {
+    let blended = blend_pixmaps(
+      Some(solid_pixmap(BACKDROP)),
+      Some(solid_pixmap(SOURCE)),
+      BlendMode::Difference,
+    )
+    .unwrap();
+    let pixel = blended.pixel(0, 0).unwrap();
+    assert_pixel_close(pixel, (164, 140, 147, 255));
+  }
+
+  fn solid_pixmap(color: (u8, u8, u8, u8)) -> Pixmap {
+    let mut pixmap = Pixmap::new(1, 1).unwrap();
+    pixmap.pixels_mut()[0] =
+      PremultipliedColorU8::from_rgba(color.0, color.1, color.2, color.3).unwrap();
+    pixmap
+  }
+
+  fn assert_pixel_close(actual: PremultipliedColorU8, expected: (u8, u8, u8, u8)) {
+    let actual_tuple = (actual.red(), actual.green(), actual.blue(), actual.alpha());
+    let expected_tuple = expected;
+    let diff_ok = |a: u8, b: u8| (a as i16 - b as i16).abs() <= 1;
+    assert!(
+      diff_ok(actual_tuple.0, expected_tuple.0)
+        && diff_ok(actual_tuple.1, expected_tuple.1)
+        && diff_ok(actual_tuple.2, expected_tuple.2)
+        && diff_ok(actual_tuple.3, expected_tuple.3),
+      "expected {:?}, got {:?}",
+      expected_tuple,
+      actual_tuple
+    );
   }
 }
