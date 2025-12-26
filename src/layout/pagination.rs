@@ -164,7 +164,7 @@ pub fn paginate_fragment_tree(
   let base_spans = base_layout.page_name_spans.clone();
   let base_root = base_layout.root.clone();
 
-  let mut pages = Vec::new();
+  let mut pages: Vec<(FragmentNode, ResolvedPageStyle)> = Vec::new();
   let mut consumed_base = 0.0f32;
   let mut page_index = 0usize;
 
@@ -284,11 +284,7 @@ pub fn paginate_fragment_tree(
       page_root.children.push(fixed);
     }
 
-    page_root
-      .children
-      .extend(build_margin_box_fragments(&page_style, font_ctx));
-
-    pages.push(page_root);
+    pages.push((page_root, page_style));
     let base_advance = (end / total_height) * base_total_height;
     consumed_base = (consumed_base + base_advance).min(base_total_height);
     page_index += 1;
@@ -303,11 +299,16 @@ pub fn paginate_fragment_tree(
   }
 
   let count = pages.len();
-  for (idx, page) in pages.iter_mut().enumerate() {
-    propagate_fragment_metadata(page, idx, count);
+  let mut page_roots = Vec::with_capacity(count);
+  for (idx, (mut page, style)) in pages.into_iter().enumerate() {
+    page
+      .children
+      .extend(build_margin_box_fragments(&style, font_ctx, idx, count));
+    propagate_fragment_metadata(&mut page, idx, count);
+    page_roots.push(page);
   }
 
-  Ok(pages)
+  Ok(page_roots)
 }
 
 /// Split a laid out fragment tree into pages using the provided @page rules with options.
@@ -473,10 +474,14 @@ fn collect_fixed_fragments(node: &FragmentNode, origin: Point, out: &mut Vec<Fra
 fn build_margin_box_fragments(
   style: &ResolvedPageStyle,
   _font_ctx: &FontContext,
+  page_index: usize,
+  page_count: usize,
 ) -> Vec<FragmentNode> {
   let mut fragments = Vec::new();
   let generator = ContentGenerator::new();
   let mut context = ContentContext::new();
+  context.set_counter("page", (page_index + 1) as i32);
+  context.set_counter("pages", page_count as i32);
 
   for (area, box_style) in &style.margin_boxes {
     if let Some(bounds) = margin_box_bounds(*area, style) {
