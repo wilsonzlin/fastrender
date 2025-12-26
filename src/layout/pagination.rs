@@ -13,6 +13,7 @@ use crate::layout::fragmentation::{
   clip_node, collect_forced_boundaries, propagate_fragment_metadata,
 };
 use crate::style::content::{ContentContext, ContentGenerator};
+use crate::style::counter_styles::CounterStyleRegistry;
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
 use crate::style::position::Position;
 use crate::style::types::WritingMode;
