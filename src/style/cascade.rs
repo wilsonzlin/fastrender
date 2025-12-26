@@ -9,6 +9,7 @@
 use crate::css::parser::parse_declarations;
 use crate::css::parser::parse_stylesheet;
 use crate::css::selectors::FastRenderSelectorImpl;
+use crate::css::selectors::PseudoClass;
 use crate::css::selectors::PseudoElement;
 use crate::css::selectors::TextDirection;
 use crate::css::types::ContainerCondition;
@@ -39,6 +40,7 @@ use crate::style::normalize_language_tag;
 use crate::style::properties::apply_declaration_with_base;
 use crate::style::properties::resolve_pending_logical_properties;
 use crate::style::properties::with_image_set_dpr;
+use crate::style::style_set::StyleSet;
 use crate::style::types::BorderCornerRadius;
 use crate::style::types::ColorSchemeEntry;
 use crate::style::types::ColorSchemePreference;
@@ -464,6 +466,14 @@ struct RuleIndex<'a> {
   pseudo_content: HashSet<PseudoElement>,
 }
 
+struct RuleScopes<'a> {
+  ua: RuleIndex<'a>,
+  document: RuleIndex<'a>,
+  shadows: HashMap<usize, RuleIndex<'a>>,
+  host_rules: HashMap<usize, RuleIndex<'a>>,
+  fallback_document_rules_in_shadow_scopes: bool,
+}
+
 struct MatchIndex {
   positions: Vec<usize>,
   touched: Vec<usize>,
@@ -671,6 +681,44 @@ fn selector_keys(
   selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
 ) -> Vec<SelectorKey> {
   selector_keys_with_polarity(selector, SelectorKeyPolarity::Matches)
+}
+
+fn selector_targets_shadow_host(
+  selector: &Selector<crate::css::selectors::FastRenderSelectorImpl>,
+) -> bool {
+  use selectors::parser::Component;
+
+  let mut iter = selector.iter();
+  loop {
+    while let Some(component) = iter.next() {
+      match component {
+        Component::Host(..) => return true,
+        Component::NonTSPseudoClass(pc) => match pc {
+          PseudoClass::Host(..) | PseudoClass::HostContext(..) => return true,
+          _ => {}
+        },
+        Component::Is(list) | Component::Where(list) | Component::Negation(list) => {
+          if list.slice().iter().any(selector_targets_shadow_host) {
+            return true;
+          }
+        }
+        _ => {}
+      }
+    }
+    if iter.next_sequence().is_none() {
+      break;
+    }
+  }
+
+  false
+}
+
+fn rule_targets_shadow_host(rule: &StyleRule) -> bool {
+  rule
+    .selectors
+    .slice()
+    .iter()
+    .any(selector_targets_shadow_host)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1248,30 +1296,43 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
     author_sheet.collect_style_rules(media_ctx)
   };
 
-  let mut all_rules: Vec<CascadeRule<'_>> = Vec::with_capacity(ua_rules.len() + author_rules.len());
-  for (order, rule) in ua_rules.iter().enumerate() {
-    all_rules.push(CascadeRule {
-      origin: StyleOrigin::UserAgent,
-      order,
-      rule: rule.rule,
-      layer_order: rule.layer_order.clone(),
-      container_conditions: rule.container_conditions.clone(),
-      scopes: rule.scopes.clone(),
-    });
-  }
-  let offset = all_rules.len();
-  for (idx, rule) in author_rules.iter().enumerate() {
-    all_rules.push(CascadeRule {
-      origin: StyleOrigin::Author,
-      order: offset + idx,
-      rule: rule.rule,
-      layer_order: rule.layer_order.clone(),
-      container_conditions: rule.container_conditions.clone(),
-      scopes: rule.scopes.clone(),
-    });
-  }
+  let ua_index = RuleIndex::new(
+    ua_rules
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::UserAgent,
+        order,
+        rule: rule.rule,
+        layer_order: rule.layer_order.clone(),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+      })
+      .collect(),
+  );
 
-  let rule_index = RuleIndex::new(all_rules);
+  let document_author_index = RuleIndex::new(
+    author_rules
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order,
+        rule: rule.rule,
+        layer_order: rule.layer_order.clone(),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+      })
+      .collect(),
+  );
+
+  let rule_scopes = RuleScopes {
+    ua: ua_index,
+    document: document_author_index,
+    shadows: HashMap::new(),
+    host_rules: HashMap::new(),
+    fallback_document_rules_in_shadow_scopes: true,
+  };
 
   let counter_styles = {
     let mut registry = crate::style::counter_styles::CounterStyleRegistry::with_builtins();
@@ -1316,7 +1377,13 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
   let styled = with_target_fragment(target_fragment, || {
     with_image_set_dpr(media_ctx.device_pixel_ratio, || {
       let mut selector_caches = SelectorCaches::default();
-      let mut scratch = CascadeScratch::new(rule_index.rules.len());
+      let max_rules = rule_scopes
+        .ua
+        .rules
+        .len()
+        .max(rule_scopes.document.rules.len())
+        .max(1);
+      let mut scratch = CascadeScratch::new(max_rules);
       let mut node_counter: usize = 1;
       let mut ancestor_ids: Vec<usize> = Vec::new();
       let reuse_counter_opt = if container_scope.is_some() || reuse_map.is_some() {
@@ -1329,7 +1396,328 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
         .unwrap_or(ColorScheme::NoPreference);
       apply_styles_internal(
         dom,
-        &rule_index,
+        &rule_scopes,
+        None,
+        &mut selector_caches,
+        &mut scratch,
+        &base_styles,
+        &base_ua_styles,
+        16.0,
+        16.0,
+        Size::new(media_ctx.viewport_width, media_ctx.viewport_height),
+        color_scheme_pref,
+        &mut node_counter,
+        &mut ancestor_ids,
+        container_ctx,
+        container_scope,
+        reuse_map,
+        reuse_counter_opt,
+        deadline,
+      )
+    })
+  })?;
+
+  if let (true, Some(start)) = (profile_enabled, profile_start) {
+    log_cascade_profile(start.elapsed().as_secs_f64() * 1000.0);
+  }
+  if log_reuse {
+    fn count_nodes(node: &StyledNode) -> usize {
+      1 + node.children.iter().map(count_nodes).sum::<usize>()
+    }
+    let total = count_nodes(&styled);
+    eprintln!(
+      "[container-reuse] total_nodes={} reused_nodes={} reused_pct={:.1}%",
+      total,
+      reuse_counter,
+      if total > 0 {
+        (reuse_counter as f64 / total as f64) * 100.0
+      } else {
+        0.0
+      }
+    );
+  }
+
+  Ok(styled)
+}
+
+/// Apply styles from a `StyleSet` with optional media-query caching to share media evaluation across passes.
+#[allow(clippy::implicit_hasher)]
+pub fn apply_style_set_with_media_target_and_imports(
+  dom: &DomNode,
+  style_set: &StyleSet,
+  media_ctx: &MediaContext,
+  target_fragment: Option<&str>,
+  import_loader: Option<&dyn CssImportLoader>,
+  base_url: Option<&str>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+) -> StyledNode {
+  apply_style_set_with_media_target_and_imports_cached(
+    dom,
+    style_set,
+    media_ctx,
+    target_fragment,
+    import_loader,
+    base_url,
+    container_ctx,
+    container_scope,
+    reuse_map,
+    None,
+  )
+}
+
+/// Apply styles from a `StyleSet` with optional media-query caching to share media evaluation across passes.
+#[allow(clippy::needless_option_as_deref)]
+#[allow(clippy::implicit_hasher)]
+pub fn apply_style_set_with_media_target_and_imports_cached(
+  dom: &DomNode,
+  style_set: &StyleSet,
+  media_ctx: &MediaContext,
+  target_fragment: Option<&str>,
+  import_loader: Option<&dyn CssImportLoader>,
+  base_url: Option<&str>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  mut media_cache: Option<&mut MediaQueryCache>,
+) -> StyledNode {
+  apply_style_set_with_media_target_and_imports_cached_with_deadline(
+    dom,
+    style_set,
+    media_ctx,
+    target_fragment,
+    import_loader,
+    base_url,
+    container_ctx,
+    container_scope,
+    reuse_map,
+    media_cache.as_deref_mut(),
+    None,
+  )
+  // A missing deadline means cancellation is disabled.
+  .expect("deadline-free cascade should not fail")
+}
+
+/// Apply styles from a `StyleSet` with optional media-query caching to share media evaluation across passes.
+#[allow(clippy::needless_option_as_deref)]
+#[allow(clippy::implicit_hasher)]
+pub fn apply_style_set_with_media_target_and_imports_cached_with_deadline(
+  dom: &DomNode,
+  style_set: &StyleSet,
+  media_ctx: &MediaContext,
+  target_fragment: Option<&str>,
+  import_loader: Option<&dyn CssImportLoader>,
+  base_url: Option<&str>,
+  container_ctx: Option<&ContainerQueryContext>,
+  container_scope: Option<&HashSet<usize>>,
+  reuse_map: Option<&HashMap<usize, *const StyledNode>>,
+  mut media_cache: Option<&mut MediaQueryCache>,
+  deadline: Option<&RenderDeadline>,
+) -> Result<StyledNode, RenderError> {
+  let profile_enabled = cascade_profile_enabled();
+  let profile_start = profile_enabled.then(|| Instant::now());
+  if profile_enabled {
+    reset_cascade_profile();
+  }
+  let log_reuse = runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_REUSE");
+  let mut reuse_counter: usize = 0;
+
+  // Parse user-agent stylesheet once
+  let ua_stylesheet = user_agent_stylesheet();
+
+  let resolve_imports = |sheet: &StyleSheet,
+                         loader: Option<&dyn CssImportLoader>,
+                         cache: Option<&mut MediaQueryCache>|
+   -> StyleSheet {
+    if let Some(loader) = loader {
+      sheet.resolve_imports_with_cache(loader, base_url, media_ctx, cache)
+    } else {
+      sheet.clone()
+    }
+  };
+
+  // Collect applicable rules from stylesheets
+  // User-agent rules come first (lower priority)
+  let ua_rules = if let Some(cache) = media_cache.as_deref_mut() {
+    ua_stylesheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+  } else {
+    ua_stylesheet.collect_style_rules(media_ctx)
+  };
+
+  let document_sheet = resolve_imports(&style_set.document, import_loader, media_cache.as_deref_mut());
+  let document_rules = if let Some(cache) = media_cache.as_deref_mut() {
+    document_sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+  } else {
+    document_sheet.collect_style_rules(media_ctx)
+  };
+
+  let mut shadow_sheets: Vec<(usize, Box<StyleSheet>)> = Vec::with_capacity(style_set.shadows.len());
+  if !style_set.shadows.is_empty() {
+    let mut shadow_entries: Vec<_> = style_set.shadows.iter().collect();
+    shadow_entries.sort_by_key(|(host, _)| *host);
+    for (host, sheet) in shadow_entries {
+      let resolved = resolve_imports(sheet, import_loader, media_cache.as_deref_mut());
+      shadow_sheets.push((*host, Box::new(resolved)));
+    }
+  }
+
+  let mut max_author_rules = document_rules.len();
+  for (_host, sheet) in &shadow_sheets {
+    let count = if let Some(cache) = media_cache.as_deref_mut() {
+      sheet.collect_style_rules_with_cache(media_ctx, Some(cache)).len()
+    } else {
+      sheet.collect_style_rules(media_ctx).len()
+    };
+    max_author_rules = max_author_rules.max(count);
+  }
+  let document_order_base = max_author_rules.saturating_add(1);
+
+  let ua_index = RuleIndex::new(
+    ua_rules
+      .iter()
+      .enumerate()
+      .map(|(order, rule)| CascadeRule {
+        origin: StyleOrigin::UserAgent,
+        order,
+        rule: rule.rule,
+        layer_order: rule.layer_order.clone(),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+      })
+      .collect(),
+  );
+
+  let document_author_index = RuleIndex::new(
+    document_rules
+      .iter()
+      .enumerate()
+      .map(|(idx, rule)| CascadeRule {
+        origin: StyleOrigin::Author,
+        order: document_order_base + idx,
+        rule: rule.rule,
+        layer_order: rule.layer_order.clone(),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+      })
+      .collect(),
+  );
+
+  let mut shadow_indices: HashMap<usize, RuleIndex<'_>> = HashMap::new();
+  let mut shadow_host_indices: HashMap<usize, RuleIndex<'_>> = HashMap::new();
+
+  for (host, sheet) in &shadow_sheets {
+    let collected = if let Some(cache) = media_cache.as_deref_mut() {
+      sheet.collect_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      sheet.collect_style_rules(media_ctx)
+    };
+    let mut rules: Vec<CascadeRule<'_>> = Vec::new();
+    let mut host_rules: Vec<CascadeRule<'_>> = Vec::new();
+
+    for (idx, rule) in collected.iter().enumerate() {
+      let cascade_rule = CascadeRule {
+        origin: StyleOrigin::Author,
+        order: idx,
+        rule: rule.rule,
+        layer_order: rule.layer_order.clone(),
+        container_conditions: rule.container_conditions.clone(),
+        scopes: rule.scopes.clone(),
+      };
+      if rule_targets_shadow_host(rule.rule) {
+        host_rules.push(cascade_rule.clone());
+      }
+      rules.push(cascade_rule);
+    }
+
+    shadow_indices.insert(*host, RuleIndex::new(rules));
+    if !host_rules.is_empty() {
+      shadow_host_indices.insert(*host, RuleIndex::new(host_rules));
+    }
+  }
+
+  let rule_scopes = RuleScopes {
+    ua: ua_index,
+    document: document_author_index,
+    shadows: shadow_indices,
+    host_rules: shadow_host_indices,
+    fallback_document_rules_in_shadow_scopes: false,
+  };
+
+  let counter_styles = {
+    let mut registry = crate::style::counter_styles::CounterStyleRegistry::with_builtins();
+
+    let ua_counter_styles = if let Some(cache) = media_cache.as_deref_mut() {
+      ua_stylesheet.collect_counter_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      ua_stylesheet.collect_counter_style_rules(media_ctx)
+    };
+    let author_counter_styles = if let Some(cache) = media_cache.as_deref_mut() {
+      document_sheet.collect_counter_style_rules_with_cache(media_ctx, Some(cache))
+    } else {
+      document_sheet.collect_counter_style_rules(media_ctx)
+    };
+
+    fn register_collected(
+      registry: &mut crate::style::counter_styles::CounterStyleRegistry,
+      mut collected: Vec<crate::css::types::CollectedCounterStyleRule<'_>>,
+    ) {
+      collected.sort_by(|a, b| {
+        a.layer_order
+          .cmp(&b.layer_order)
+          .then(a.order.cmp(&b.order))
+      });
+      for rule in collected {
+        registry.register(rule.rule.clone());
+      }
+    }
+
+    // Cascade order: UA first, then author. Within an origin, layer order and source order decide.
+    register_collected(&mut registry, ua_counter_styles);
+    register_collected(&mut registry, author_counter_styles);
+
+    for (_host, sheet) in &shadow_sheets {
+      let shadow_counter_styles = if let Some(cache) = media_cache.as_deref_mut() {
+        sheet.collect_counter_style_rules_with_cache(media_ctx, Some(cache))
+      } else {
+        sheet.collect_counter_style_rules(media_ctx)
+      };
+      register_collected(&mut registry, shadow_counter_styles);
+    }
+
+    std::sync::Arc::new(registry)
+  };
+
+  let mut base_styles = ComputedStyle::default();
+  base_styles.counter_styles = counter_styles.clone();
+  let mut base_ua_styles = ComputedStyle::default();
+  base_ua_styles.counter_styles = counter_styles;
+
+  let styled = with_target_fragment(target_fragment, || {
+    with_image_set_dpr(media_ctx.device_pixel_ratio, || {
+      let mut selector_caches = SelectorCaches::default();
+      let mut max_rules = rule_scopes.ua.rules.len().max(rule_scopes.document.rules.len());
+      for index in rule_scopes.shadows.values() {
+        max_rules = max_rules.max(index.rules.len());
+      }
+      for index in rule_scopes.host_rules.values() {
+        max_rules = max_rules.max(index.rules.len());
+      }
+      let mut scratch = CascadeScratch::new(max_rules.max(1));
+      let mut node_counter: usize = 1;
+      let mut ancestor_ids: Vec<usize> = Vec::new();
+      let reuse_counter_opt = if container_scope.is_some() || reuse_map.is_some() {
+        Some(&mut reuse_counter)
+      } else {
+        None
+      };
+      let color_scheme_pref = media_ctx
+        .prefers_color_scheme
+        .unwrap_or(ColorScheme::NoPreference);
+      apply_styles_internal(
+        dom,
+        &rule_scopes,
+        None,
         &mut selector_caches,
         &mut scratch,
         &base_styles,
@@ -1583,10 +1971,158 @@ struct NodeBaseStyles {
   current_ua_root_font_size: f32,
 }
 
+fn scope_rule_index<'a>(
+  scopes: &'a RuleScopes<'a>,
+  scope_host: Option<usize>,
+) -> Option<&'a RuleIndex<'a>> {
+  match scope_host {
+    Some(host) => scopes.shadows.get(&host).or_else(|| {
+      scopes
+        .fallback_document_rules_in_shadow_scopes
+        .then_some(&scopes.document)
+    }),
+    None => Some(&scopes.document),
+  }
+}
+
+fn scope_has_pseudo_rules(
+  scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
+  node_id: usize,
+  pseudo: &PseudoElement,
+) -> bool {
+  if scopes.ua.has_pseudo_rules(pseudo) {
+    return true;
+  }
+  if let Some(base) = scope_rule_index(scopes, scope_host) {
+    if base.has_pseudo_rules(pseudo) {
+      return true;
+    }
+  }
+  if let Some(host) = scopes.host_rules.get(&node_id) {
+    if host.has_pseudo_rules(pseudo) {
+      return true;
+    }
+  }
+  false
+}
+
+fn scope_has_pseudo_content(
+  scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
+  node_id: usize,
+  pseudo: &PseudoElement,
+) -> bool {
+  if scopes.ua.has_pseudo_content(pseudo) {
+    return true;
+  }
+  if let Some(base) = scope_rule_index(scopes, scope_host) {
+    if base.has_pseudo_content(pseudo) {
+      return true;
+    }
+  }
+  if let Some(host) = scopes.host_rules.get(&node_id) {
+    if host.has_pseudo_content(pseudo) {
+      return true;
+    }
+  }
+  false
+}
+
+fn collect_matching_rules<'a>(
+  node: &DomNode,
+  scopes: &'a RuleScopes<'a>,
+  scope_host: Option<usize>,
+  selector_caches: &mut SelectorCaches,
+  scratch: &mut CascadeScratch,
+  ancestors: &[&DomNode],
+  ancestor_ids: &[usize],
+  node_id: usize,
+  container_ctx: Option<&ContainerQueryContext>,
+) -> Vec<MatchedRule<'a>> {
+  let mut matches = find_matching_rules(
+    node,
+    &scopes.ua,
+    selector_caches,
+    scratch,
+    ancestors,
+    ancestor_ids,
+    node_id,
+    container_ctx,
+  );
+
+  if let Some(base) = scope_rule_index(scopes, scope_host) {
+    matches.extend(find_matching_rules(
+      node,
+      base,
+      selector_caches,
+      scratch,
+      ancestors,
+      ancestor_ids,
+      node_id,
+      container_ctx,
+    ));
+  }
+
+  if let Some(host) = scopes.host_rules.get(&node_id) {
+    matches.extend(find_matching_rules(
+      node,
+      host,
+      selector_caches,
+      scratch,
+      ancestors,
+      ancestor_ids,
+      node_id,
+      container_ctx,
+    ));
+  }
+
+  matches
+}
+
+fn collect_pseudo_matching_rules<'a>(
+  node: &DomNode,
+  scopes: &'a RuleScopes<'a>,
+  scope_host: Option<usize>,
+  selector_caches: &mut SelectorCaches,
+  scratch: &mut CascadeScratch,
+  ancestors: &[&DomNode],
+  node_id: usize,
+  pseudo: &PseudoElement,
+) -> Vec<MatchedRule<'a>> {
+  let mut matches =
+    find_pseudo_element_rules(node, &scopes.ua, selector_caches, scratch, ancestors, pseudo);
+
+  if let Some(base) = scope_rule_index(scopes, scope_host) {
+    matches.extend(find_pseudo_element_rules(
+      node,
+      base,
+      selector_caches,
+      scratch,
+      ancestors,
+      pseudo,
+    ));
+  }
+
+  if let Some(host) = scopes.host_rules.get(&node_id) {
+    matches.extend(find_pseudo_element_rules(
+      node,
+      host,
+      selector_caches,
+      scratch,
+      ancestors,
+      pseudo,
+    ));
+  }
+
+  matches
+}
+
 #[inline(never)]
 fn compute_base_styles<'a>(
   node: &DomNode,
-  rules: &RuleIndex<'_>,
+  rule_scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   parent_styles: &ComputedStyle,
@@ -1637,9 +2173,10 @@ fn compute_base_styles<'a>(
 
   let mut ua_styles = get_default_styles_for_element(node);
   inherit_styles(&mut ua_styles, parent_ua_styles);
-  let mut matching_rules = find_matching_rules(
+  let mut matching_rules = collect_matching_rules(
     node,
-    rules,
+    rule_scopes,
+    scope_host,
     selector_caches,
     scratch,
     ancestors,
@@ -1803,7 +2340,8 @@ fn compute_base_styles<'a>(
 
 fn apply_styles_internal(
   node: &DomNode,
-  rules: &RuleIndex<'_>,
+  rule_scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   parent_styles: &ComputedStyle,
@@ -1823,7 +2361,8 @@ fn apply_styles_internal(
   let mut ancestors: Vec<&DomNode> = Vec::new();
   let styled = apply_styles_internal_with_ancestors(
     node,
-    rules,
+    rule_scopes,
+    scope_host,
     selector_caches,
     scratch,
     parent_styles,
@@ -1852,10 +2391,12 @@ fn clone_styled_subtree_boxed(node: &StyledNode) -> Box<StyledNode> {
 #[inline(never)]
 fn compute_pseudo_styles(
   node: &DomNode,
-  rules: &RuleIndex<'_>,
+  rule_scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  node_id: usize,
   styles: &mut ComputedStyle,
   ua_styles: &ComputedStyle,
   root_font_size: f32,
@@ -1876,14 +2417,16 @@ fn compute_pseudo_styles(
   let mut backdrop_styles = None;
   if styles.top_layer.is_some()
     && (styles.top_layer.map(|k| k.is_modal()).unwrap_or(false)
-      || rules.has_pseudo_rules(&PseudoElement::Backdrop))
+      || scope_has_pseudo_rules(rule_scopes, scope_host, node_id, &PseudoElement::Backdrop))
   {
     backdrop_styles = compute_pseudo_element_styles(
       node,
-      rules,
+      rule_scopes,
+      scope_host,
       selector_caches,
       scratch,
       ancestors,
+      node_id,
       styles,
       ua_styles,
       root_font_size,
@@ -1899,10 +2442,12 @@ fn compute_pseudo_styles(
   let mut first_line_ua_styles = None;
   let first_line_styles = compute_first_line_styles(
     node,
-    rules,
+    rule_scopes,
+    scope_host,
     selector_caches,
     scratch,
     ancestors,
+    node_id,
     styles,
     ua_styles,
     root_font_size,
@@ -1917,10 +2462,12 @@ fn compute_pseudo_styles(
   let base_first_letter_ua_styles = first_line_ua_styles.as_ref().unwrap_or(ua_styles);
   let first_letter_styles = compute_first_letter_styles(
     node,
-    rules,
+    rule_scopes,
+    scope_host,
     selector_caches,
     scratch,
     ancestors,
+    node_id,
     base_first_letter_styles,
     base_first_letter_ua_styles,
     root_font_size,
@@ -1928,13 +2475,15 @@ fn compute_pseudo_styles(
     viewport,
   )
   .map(Box::new);
-  let before_styles = if rules.has_pseudo_content(&PseudoElement::Before) {
+  let before_styles = if scope_has_pseudo_content(rule_scopes, scope_host, node_id, &PseudoElement::Before) {
     compute_pseudo_element_styles(
       node,
-      rules,
+      rule_scopes,
+      scope_host,
       selector_caches,
       scratch,
       ancestors,
+      node_id,
       styles,
       ua_styles,
       root_font_size,
@@ -1946,13 +2495,15 @@ fn compute_pseudo_styles(
   } else {
     None
   };
-  let after_styles = if rules.has_pseudo_content(&PseudoElement::After) {
+  let after_styles = if scope_has_pseudo_content(rule_scopes, scope_host, node_id, &PseudoElement::After) {
     compute_pseudo_element_styles(
       node,
-      rules,
+      rule_scopes,
+      scope_host,
       selector_caches,
       scratch,
       ancestors,
+      node_id,
       styles,
       ua_styles,
       root_font_size,
@@ -1966,10 +2517,12 @@ fn compute_pseudo_styles(
   };
   let marker_styles = compute_marker_styles(
     node,
-    rules,
+    rule_scopes,
+    scope_host,
     selector_caches,
     scratch,
     ancestors,
+    node_id,
     styles,
     ua_styles,
     root_font_size,
@@ -2020,7 +2573,8 @@ fn try_reuse_styled_subtree(
 
 fn apply_styles_internal_with_ancestors<'a>(
   node: &'a DomNode,
-  rules: &RuleIndex<'_>,
+  rule_scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   parent_styles: &ComputedStyle,
@@ -2064,7 +2618,8 @@ fn apply_styles_internal_with_ancestors<'a>(
 
   let mut base = compute_base_styles(
     node,
-    rules,
+    rule_scopes,
+    scope_host,
     selector_caches,
     scratch,
     parent_styles,
@@ -2083,11 +2638,18 @@ fn apply_styles_internal_with_ancestors<'a>(
 
   ancestors.push(node);
   ancestor_ids.push(node_id);
+  let parent_is_shadow_root = matches!(node.node_type, DomNodeType::ShadowRoot { .. });
   for child in &node.children {
     let child_reuse = reuse_counter.as_deref_mut();
+    let child_scope = match (parent_is_shadow_root, &child.node_type) {
+      (true, _) => scope_host,
+      (false, DomNodeType::ShadowRoot { .. }) => Some(node_id),
+      (false, _) => scope_host,
+    };
     let child_styled = apply_styles_internal_with_ancestors(
       child,
-      rules,
+      rule_scopes,
+      child_scope,
       selector_caches,
       scratch,
       &base.styles,
@@ -2113,10 +2675,12 @@ fn apply_styles_internal_with_ancestors<'a>(
   let (before_styles, after_styles, marker_styles, first_line_styles, first_letter_styles) =
     compute_pseudo_styles(
       node,
-      rules,
+      rule_scopes,
+      scope_host,
       selector_caches,
       scratch,
       ancestors.as_slice(),
+      node_id,
       &mut base.styles,
       &base.ua_styles,
       base.current_root_font_size,
@@ -8005,10 +8569,12 @@ fn selector_contains_host_context(
 /// (i.e., has content property set to something other than 'none' or 'normal')
 fn compute_pseudo_element_styles(
   node: &DomNode,
-  rules: &RuleIndex<'_>,
+  rule_scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  node_id: usize,
   parent_styles: &ComputedStyle,
   ua_parent_styles: &ComputedStyle,
   root_font_size: f32,
@@ -8016,12 +8582,20 @@ fn compute_pseudo_element_styles(
   viewport: Size,
   pseudo: &PseudoElement,
 ) -> Option<ComputedStyle> {
-  if !rules.has_pseudo_rules(pseudo) {
+  if !scope_has_pseudo_rules(rule_scopes, scope_host, node_id, pseudo) {
     return None;
   }
   // Find rules matching this pseudo-element
-  let matching_rules =
-    find_pseudo_element_rules(node, rules, selector_caches, scratch, ancestors, pseudo);
+  let matching_rules = collect_pseudo_matching_rules(
+    node,
+    rule_scopes,
+    scope_host,
+    selector_caches,
+    scratch,
+    ancestors,
+    node_id,
+    pseudo,
+  );
 
   if matching_rules.is_empty() {
     return None;
@@ -8147,26 +8721,30 @@ fn first_letter_allows_property(property: &str) -> bool {
 
 fn compute_first_line_styles(
   node: &DomNode,
-  rules: &RuleIndex<'_>,
+  rule_scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  node_id: usize,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
   ua_root_font_size: f32,
   viewport: Size,
 ) -> Option<(ComputedStyle, ComputedStyle)> {
-  if !rules.has_pseudo_rules(&PseudoElement::FirstLine) {
+  if !scope_has_pseudo_rules(rule_scopes, scope_host, node_id, &PseudoElement::FirstLine) {
     return None;
   }
 
-  let matching_rules = find_pseudo_element_rules(
+  let matching_rules = collect_pseudo_matching_rules(
     node,
-    rules,
+    rule_scopes,
+    scope_host,
     selector_caches,
     scratch,
     ancestors,
+    node_id,
     &PseudoElement::FirstLine,
   );
   if matching_rules.is_empty() {
@@ -8225,26 +8803,30 @@ fn compute_first_line_styles(
 
 fn compute_first_letter_styles(
   node: &DomNode,
-  rules: &RuleIndex<'_>,
+  rule_scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  node_id: usize,
   base_styles: &ComputedStyle,
   base_ua_styles: &ComputedStyle,
   root_font_size: f32,
   ua_root_font_size: f32,
   viewport: Size,
 ) -> Option<ComputedStyle> {
-  if !rules.has_pseudo_rules(&PseudoElement::FirstLetter) {
+  if !scope_has_pseudo_rules(rule_scopes, scope_host, node_id, &PseudoElement::FirstLetter) {
     return None;
   }
 
-  let matching_rules = find_pseudo_element_rules(
+  let matching_rules = collect_pseudo_matching_rules(
     node,
-    rules,
+    rule_scopes,
+    scope_host,
     selector_caches,
     scratch,
     ancestors,
+    node_id,
     &PseudoElement::FirstLetter,
   );
   if matching_rules.is_empty() {
@@ -8305,10 +8887,12 @@ fn compute_first_letter_styles(
 
 fn compute_marker_styles(
   node: &DomNode,
-  rules: &RuleIndex<'_>,
+  rule_scopes: &RuleScopes<'_>,
+  scope_host: Option<usize>,
   selector_caches: &mut SelectorCaches,
   scratch: &mut CascadeScratch,
   ancestors: &[&DomNode],
+  node_id: usize,
   list_item_styles: &ComputedStyle,
   ua_list_item_styles: &ComputedStyle,
   root_font_size: f32,
@@ -8319,13 +8903,15 @@ fn compute_marker_styles(
     return None;
   }
 
-  let matching_rules = if rules.has_pseudo_rules(&PseudoElement::Marker) {
-    find_pseudo_element_rules(
+  let matching_rules = if scope_has_pseudo_rules(rule_scopes, scope_host, node_id, &PseudoElement::Marker) {
+    collect_pseudo_matching_rules(
       node,
-      rules,
+      rule_scopes,
+      scope_host,
       selector_caches,
       scratch,
       ancestors,
+      node_id,
       &PseudoElement::Marker,
     )
   } else {

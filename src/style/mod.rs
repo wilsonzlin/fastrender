@@ -17,6 +17,7 @@ pub mod media;
 pub mod page;
 pub mod position;
 pub mod properties;
+pub mod style_set;
 pub mod types;
 pub mod values;
 pub mod var_resolution;

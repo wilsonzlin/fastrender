@@ -66,7 +66,8 @@ use crate::css::loader::{
   inject_css_into_html, inline_imports_with_diagnostics, resolve_href_with_base,
 };
 use crate::css::parser::{
-  extract_css_sources, parse_stylesheet, rel_list_contains_stylesheet, CssTreeScope, StylesheetSource,
+  extract_css_sources, extract_scoped_css_sources, parse_stylesheet, rel_list_contains_stylesheet,
+  CssTreeScope, StylesheetSource,
 };
 use crate::css::types::{CssImportLoader, StyleSheet};
 use crate::debug;
@@ -117,6 +118,8 @@ use crate::resource::{
   origin_from_url, CachingFetcher, DocumentOrigin, HttpFetcher, PolicyError, ResourceAccessPolicy,
   ResourceFetcher, ResourcePolicy,
 };
+use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached;
+use crate::style::cascade::apply_style_set_with_media_target_and_imports_cached_with_deadline;
 use crate::style::cascade::apply_styles_with_media_target_and_imports;
 use crate::style::cascade::apply_styles_with_media_target_and_imports_cached;
 use crate::style::cascade::apply_styles_with_media_target_and_imports_cached_with_deadline;
@@ -128,6 +131,7 @@ use crate::style::media::MediaType;
 use crate::style::media::{MediaContext, MediaQuery, MediaQueryCache};
 use crate::style::page::resolve_page_style;
 use crate::style::page::PageSide;
+use crate::style::style_set::StyleSet;
 use crate::style::types::ContainerType;
 use crate::style::values::Length;
 use crate::style::ComputedStyle;
@@ -3951,6 +3955,125 @@ impl FastRender {
     )
   }
 
+  fn collect_document_style_set(
+    &self,
+    dom: &DomNode,
+    media_ctx: &MediaContext,
+    media_query_cache: &mut MediaQueryCache,
+  ) -> StyleSet {
+    let scoped_sources = extract_scoped_css_sources(dom);
+    let fetcher = Arc::clone(&self.fetcher);
+    let resource_context = self.resource_context.as_ref();
+    let inline_loader = CssImportFetcher::new(
+      self.base_url.clone(),
+      Arc::clone(&fetcher),
+      self.resource_context.clone(),
+    );
+
+    let collect_from_sources =
+      |sources: &[StylesheetSource], cache: &mut MediaQueryCache| -> StyleSheet {
+        let mut combined_rules = Vec::new();
+
+        for source in sources {
+          match source {
+            StylesheetSource::Inline(inline) => {
+              if inline.disabled || !Self::stylesheet_type_is_css(inline.type_attr.as_deref()) {
+                continue;
+              }
+              if !Self::media_attr_allows(inline.media.as_deref(), media_ctx, cache) {
+                continue;
+              }
+              if inline.css.trim().is_empty() {
+                continue;
+              }
+
+              if let Ok(sheet) = parse_stylesheet(&inline.css) {
+                let resolved = sheet.resolve_imports_with_cache(
+                  &inline_loader,
+                  self.base_url.as_deref(),
+                  media_ctx,
+                  Some(cache),
+                );
+                combined_rules.extend(resolved.rules);
+              }
+            }
+            StylesheetSource::External(link) => {
+              if link.disabled
+                || !rel_list_contains_stylesheet(&link.rel)
+                || !Self::stylesheet_type_is_css(link.type_attr.as_deref())
+              {
+                continue;
+              }
+              if !Self::media_attr_allows(link.media.as_deref(), media_ctx, cache) {
+                continue;
+              }
+              if link.href.trim().is_empty() {
+                continue;
+              }
+
+              let Some(stylesheet_url) = resolve_href_with_base(self.base_url.as_deref(), &link.href)
+              else {
+                continue;
+              };
+
+              if let Some(ctx) = resource_context {
+                if ctx
+                  .check_allowed(ResourceKind::Stylesheet, &stylesheet_url)
+                  .is_err()
+                {
+                  continue;
+                }
+              }
+
+              match fetcher.fetch(&stylesheet_url) {
+                Ok(resource) => {
+                  let mut css_text =
+                    decode_css_bytes(&resource.bytes, resource.content_type.as_deref());
+                  css_text = absolutize_css_urls(&css_text, &stylesheet_url);
+
+                  if let Ok(sheet) = parse_stylesheet(&css_text) {
+                    let loader = CssImportFetcher::new(
+                      Some(stylesheet_url.clone()),
+                      Arc::clone(&fetcher),
+                      resource_context.cloned(),
+                    );
+                    let resolved = sheet.resolve_imports_with_cache(
+                      &loader,
+                      Some(&stylesheet_url),
+                      media_ctx,
+                      Some(cache),
+                    );
+                    combined_rules.extend(resolved.rules);
+                  }
+                }
+                Err(err) => {
+                  // Per spec, stylesheet loads are best-effort. On failure, continue.
+                  if let Some(diag) = &self.diagnostics {
+                    if let Ok(mut guard) = diag.lock() {
+                      guard.record_error(ResourceKind::Stylesheet, &stylesheet_url, &err);
+                    }
+                  }
+                  continue;
+                }
+              }
+            }
+          }
+        }
+
+        StyleSheet {
+          rules: combined_rules,
+        }
+      };
+
+    let document = collect_from_sources(&scoped_sources.document, media_query_cache);
+    let mut shadows = HashMap::new();
+    for (host, sources) in scoped_sources.shadows {
+      shadows.insert(host, collect_from_sources(&sources, media_query_cache));
+    }
+
+    StyleSet { document, shadows }
+  }
+
   fn collect_document_stylesheet(
     &self,
     dom: &DomNode,
@@ -4157,8 +4280,7 @@ impl FastRender {
     .with_device_pixel_ratio(resolved_viewport.device_pixel_ratio)
     .with_env_overrides();
     let mut media_query_cache = MediaQueryCache::default();
-    let stylesheet =
-      self.collect_document_stylesheet(&dom_with_state, &media_ctx, &mut media_query_cache);
+    let style_set = self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache);
     // Style and accessibility tree construction are deeply recursive. Run them on a larger-stack
     // helper thread to avoid stack overflows on debug builds and on documents with deep nesting.
     let result = std::thread::scope(|scope| {
@@ -4167,9 +4289,9 @@ impl FastRender {
         .stack_size(8 * 1024 * 1024)
         .spawn_scoped(scope, || {
           let mut local_media_query_cache = MediaQueryCache::default();
-          let styled_tree = apply_styles_with_media_target_and_imports_cached(
+          let styled_tree = apply_style_set_with_media_target_and_imports_cached(
             &dom_with_state,
-            &stylesheet,
+            &style_set,
             &media_ctx,
             target_fragment.as_deref(),
             None,
@@ -4410,10 +4532,14 @@ impl FastRender {
 
     let css_parse_start = timings_enabled.then(Instant::now);
     let mut media_query_cache = MediaQueryCache::default();
-    let stylesheet = {
+    let style_set = {
       let _span = trace.span("css_parse", "style");
-      self.collect_document_stylesheet(&dom_with_state, &media_ctx, &mut media_query_cache)
+      self.collect_document_style_set(&dom_with_state, &media_ctx, &mut media_query_cache)
     };
+    let mut stylesheet = style_set.document.clone();
+    for sheet in style_set.shadows.values() {
+      stylesheet.rules.extend(sheet.rules.clone());
+    }
     if let Some(start) = css_parse_start {
       eprintln!("timing:css_parse {:?}", start.elapsed());
     }
@@ -4444,9 +4570,9 @@ impl FastRender {
     let style_apply_start = timings_enabled.then(Instant::now);
     let mut styled_tree = {
       let _span = trace.span("cascade", "style");
-      apply_styles_with_media_target_and_imports_cached_with_deadline(
+      apply_style_set_with_media_target_and_imports_cached_with_deadline(
         &dom_with_state,
-        &stylesheet,
+        &style_set,
         &media_ctx,
         target_fragment.as_deref(),
         None,
@@ -4759,9 +4885,9 @@ impl FastRender {
         }
         let log_container_ids = toggles.usize_list("FASTR_LOG_CONTAINER_IDS");
 
-        let new_styled_tree = apply_styles_with_media_target_and_imports(
-          dom,
-          &stylesheet,
+        let new_styled_tree = apply_style_set_with_media_target_and_imports_cached_with_deadline(
+          &dom_with_state,
+          &style_set,
           &media_ctx,
           target_fragment.as_deref(),
           None,
@@ -4769,7 +4895,9 @@ impl FastRender {
           Some(&container_ctx),
           Some(&container_scope),
           Some(&reuse_map),
-        );
+          Some(&mut media_query_cache),
+          deadline,
+        )?;
         svg_filter_defs = crate::tree::box_generation::collect_svg_filter_defs(&new_styled_tree);
 
         if let (true, Some(ids)) = (log_container_pass, log_container_ids.as_ref()) {

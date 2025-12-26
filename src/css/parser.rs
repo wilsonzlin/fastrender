@@ -47,6 +47,7 @@ use cssparser::ToCss;
 use cssparser::Token;
 use selectors::parser::SelectorList;
 use selectors::parser::SelectorParseErrorKind;
+use std::collections::HashMap;
 
 // ============================================================================
 // Main parsing functions
@@ -2699,6 +2700,13 @@ pub struct ScopedStylesheetSource {
   pub source: StylesheetSource,
 }
 
+/// Stylesheet sources grouped by tree scope.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScopedStylesheetSources {
+  pub document: Vec<StylesheetSource>,
+  pub shadows: HashMap<usize, Vec<StylesheetSource>>,
+}
+
 /// Tokenize a `rel` attribute into lowercase relationship values.
 pub fn tokenize_rel_list(rel: &str) -> Vec<String> {
   rel
@@ -2794,6 +2802,71 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
   let mut path = Vec::new();
   walk(dom, &CssTreeScope::Document, &mut path, &mut sources);
   sources
+}
+
+/// Extract stylesheet sources partitioned by document vs shadow tree scopes.
+///
+/// Node ids are assigned in pre-order, matching the styling traversal so that
+/// the returned host ids can be used directly during cascade.
+pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
+  fn walk(
+    node: &DomNode,
+    scope: Option<usize>,
+    counter: &mut usize,
+    out: &mut ScopedStylesheetSources,
+  ) {
+    let node_id = *counter;
+    *counter += 1;
+
+    if let Some(tag) = node.tag_name() {
+      let bucket = match scope {
+        Some(host) => out.shadows.entry(host).or_default(),
+        None => &mut out.document,
+      };
+
+      if tag.eq_ignore_ascii_case("style") {
+        let mut css = String::new();
+        for child in &node.children {
+          if let Some(text) = child.text_content() {
+            css.push_str(text);
+          }
+        }
+
+        bucket.push(StylesheetSource::Inline(InlineStyle {
+          css,
+          media: node.get_attribute("media"),
+          type_attr: node.get_attribute("type"),
+          disabled: node.get_attribute_ref("disabled").is_some(),
+        }));
+      } else if tag.eq_ignore_ascii_case("link") {
+        let rel_attr = node.get_attribute("rel");
+        let href_attr = node.get_attribute("href");
+        if let (Some(rel), Some(href)) = (rel_attr, href_attr) {
+          let rel = tokenize_rel_list(&rel);
+          bucket.push(StylesheetSource::External(StylesheetLink {
+            href,
+            rel,
+            media: node.get_attribute("media"),
+            type_attr: node.get_attribute("type"),
+            disabled: node.get_attribute_ref("disabled").is_some(),
+          }));
+        }
+      }
+    }
+
+    for child in &node.children {
+      let child_scope = match child.node_type {
+        DomNodeType::ShadowRoot { .. } => Some(node_id),
+        _ => scope,
+      };
+      walk(child, child_scope, counter, out);
+    }
+  }
+
+  let mut scoped = ScopedStylesheetSources::default();
+  let mut counter: usize = 1;
+  walk(dom, None, &mut counter, &mut scoped);
+  scoped
 }
 
 /// Extracts CSS from style tags in the DOM

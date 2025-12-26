@@ -630,6 +630,16 @@ impl DomNode {
     }
   }
 
+  pub fn is_shadow_host(&self) -> bool {
+    matches!(
+      self.node_type,
+      DomNodeType::Element { .. } | DomNodeType::Slot { .. }
+    ) && self
+      .children
+      .iter()
+      .any(|c| matches!(c.node_type, DomNodeType::ShadowRoot { .. }))
+  }
+
   pub fn attributes_iter(&self) -> Box<dyn Iterator<Item = (&str, &str)> + '_> {
     match &self.node_type {
       DomNodeType::Element { attributes, .. } => {
