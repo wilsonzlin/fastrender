@@ -82,6 +82,7 @@ use crate::paint::display_list::Transform2D;
 use crate::paint::display_list::Transform3D;
 use crate::paint::object_fit::compute_object_fit;
 use crate::paint::object_fit::default_object_position;
+use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
 use crate::paint::svg_filter_registry::SvgFilterRegistry;
 use crate::paint::text_shadow::resolve_text_shadows;
@@ -518,15 +519,13 @@ impl DisplayListBuilder {
     });
 
     let (neg, non_neg): (Vec<_>, Vec<_>) = children.into_iter().partition(|c| c.z_index < 0);
-    let (zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
+    let ( _zero, pos): (Vec<_>, Vec<_>) = non_neg.into_iter().partition(|c| c.z_index == 0);
 
     // Descendants are positioned relative to the stacking context's origin (the first fragment).
-    let context_origin = context
-      .fragments
-      .first()
-      .map(|f| f.bounds.origin)
-      .unwrap_or(Point::ZERO);
-    let descendant_offset = Point::new(offset.x + context_origin.x, offset.y + context_origin.y);
+    let descendant_offset = Point::new(
+      offset.x + context.offset_from_parent_context.x,
+      offset.y + context.offset_from_parent_context.y,
+    );
 
     let root_fragment = context.fragments.first();
     let root_style = root_fragment.and_then(|f| f.style.as_deref());
@@ -539,12 +538,16 @@ impl DisplayListBuilder {
     let mask_style = root_fragment
       .and_then(|f| f.style.clone())
       .filter(|s| s.mask_layers.iter().any(|layer| layer.image.is_some()));
-    let context_bounds = Rect::from_xywh(
-      context.bounds.x() + offset.x,
-      context.bounds.y() + offset.y,
-      context.bounds.width(),
-      context.bounds.height(),
-    );
+    let root_fragment_offset = root_fragment
+      .map(|fragment| {
+        Point::new(
+          descendant_offset.x - fragment.bounds.origin.x,
+          descendant_offset.y - fragment.bounds.origin.y,
+        )
+      })
+      .unwrap_or(offset);
+    let layer6_items = context.layer6_items();
+    let context_bounds = context.bounds.translate(offset);
 
     let mix_blend_mode = root_style
       .map(|s| Self::convert_blend_mode(s.mix_blend_mode))
@@ -580,7 +583,7 @@ impl DisplayListBuilder {
         crate::paint::display_list::BorderRadii::ZERO,
       ));
     let transform =
-      root_style.and_then(|style| Self::build_transform(style, context.bounds, self.viewport));
+      root_style.and_then(|style| Self::build_transform(style, context_bounds, self.viewport));
     let transform_style = root_style
       .map(|style| style.transform_style)
       .unwrap_or(TransformStyle::Flat);
@@ -700,8 +703,8 @@ impl DisplayListBuilder {
           let style = root_style?;
           let rect = Rect::new(
             Point::new(
-              fragment.bounds.origin.x + offset.x,
-              fragment.bounds.origin.y + offset.y,
+              fragment.bounds.origin.x + root_fragment_offset.x,
+              fragment.bounds.origin.y + root_fragment_offset.y,
             ),
             fragment.bounds.size,
           );
@@ -751,14 +754,19 @@ impl DisplayListBuilder {
         self.build_stacking_context(child, descendant_offset, false);
       }
 
-      self.emit_fragment_list_shallow(&context.fragments, offset, apply_opacity);
+      self.emit_fragment_list_shallow(&context.fragments, root_fragment_offset, apply_opacity);
       self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
       self.emit_fragment_list(&context.layer4_floats, descendant_offset);
       self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
-      self.emit_fragment_list(&context.layer6_positioned, descendant_offset);
-
-      for child in zero {
-        self.build_stacking_context(child, descendant_offset, false);
+      for item in &layer6_items {
+        match item {
+          Layer6Item::Positioned(fragment) => {
+            self.build_fragment(&fragment.fragment, descendant_offset)
+          }
+          Layer6Item::ZeroContext(child) => {
+            self.build_stacking_context(child, descendant_offset, false)
+          }
+        }
       }
 
       for child in pos {
@@ -810,14 +818,19 @@ impl DisplayListBuilder {
       self.build_stacking_context(child, descendant_offset, false);
     }
 
-    self.emit_fragment_list_shallow(&context.fragments, offset, apply_opacity);
+    self.emit_fragment_list_shallow(&context.fragments, root_fragment_offset, apply_opacity);
     self.emit_fragment_list(&context.layer3_blocks, descendant_offset);
     self.emit_fragment_list(&context.layer4_floats, descendant_offset);
     self.emit_fragment_list(&context.layer5_inlines, descendant_offset);
-    self.emit_fragment_list(&context.layer6_positioned, descendant_offset);
-
-    for child in zero {
-      self.build_stacking_context(child, descendant_offset, false);
+    for item in &layer6_items {
+      match item {
+        Layer6Item::Positioned(fragment) => {
+          self.build_fragment(&fragment.fragment, descendant_offset)
+        }
+        Layer6Item::ZeroContext(child) => {
+          self.build_stacking_context(child, descendant_offset, false)
+        }
+      }
     }
 
     for child in pos {
@@ -5022,6 +5035,78 @@ mod tests {
     if let DisplayItem::PushOpacity(opacity) = &items[push_opacity] {
       assert!((opacity.opacity - 0.5).abs() < f32::EPSILON);
     }
+  }
+
+  #[test]
+  fn stacking_context_offsets_include_non_context_ancestors() {
+    let text =
+      FragmentNode::new_text(Rect::from_xywh(3.0, 4.0, 10.0, 10.0), "hello".to_string(), 0.0);
+
+    let mut stacking_style = ComputedStyle::default();
+    stacking_style.opacity = 0.5;
+    let stacking = FragmentNode::new_block_styled(
+      Rect::from_xywh(5.0, 6.0, 20.0, 20.0),
+      vec![text],
+      Arc::new(stacking_style),
+    );
+
+    let intermediate = FragmentNode::new_block(
+      Rect::from_xywh(10.0, 20.0, 50.0, 50.0),
+      vec![stacking],
+    );
+
+    let root =
+      FragmentNode::new_block(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![intermediate]);
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+    let text_item = list.items().iter().find_map(|item| match item {
+      DisplayItem::Text(t) => Some(t),
+      _ => None,
+    });
+
+    let text_item = text_item.expect("text item emitted");
+    assert_eq!(text_item.origin.x, 10.0 + 5.0 + 3.0);
+    assert_eq!(text_item.origin.y, 20.0 + 6.0 + 4.0);
+  }
+
+  #[test]
+  fn zero_z_contexts_interleave_with_positioned_descendants() {
+    let stacking_text =
+      FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), "stack".to_string(), 12.0);
+    let mut stacking_style = ComputedStyle::default();
+    stacking_style.opacity = 0.5;
+    let stacking_context = FragmentNode::new_block_styled(
+      Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+      vec![stacking_text],
+      Arc::new(stacking_style),
+    );
+
+    let positioned_text =
+      FragmentNode::new_text(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), "pos".to_string(), 12.0);
+    let mut positioned_style = ComputedStyle::default();
+    positioned_style.position = Position::Relative;
+    let positioned = FragmentNode::new_block_styled(
+      Rect::from_xywh(20.0, 0.0, 10.0, 10.0),
+      vec![positioned_text],
+      Arc::new(positioned_style),
+    );
+
+    let root = FragmentNode::new_block(
+      Rect::from_xywh(0.0, 0.0, 100.0, 20.0),
+      vec![stacking_context, positioned],
+    );
+
+    let list = DisplayListBuilder::new().build_with_stacking_tree(&root);
+    let origins: Vec<f32> = list
+      .items()
+      .iter()
+      .filter_map(|item| match item {
+        DisplayItem::Text(t) => Some(t.origin.x),
+        _ => None,
+      })
+      .collect();
+
+    assert_eq!(origins, vec![0.0, 20.0]);
   }
 
   #[test]

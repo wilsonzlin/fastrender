@@ -423,7 +423,7 @@ fn test_layer_classification_blocks() {
   let mut style = ComputedStyle::default();
   style.display = Display::Block;
 
-  sc.add_fragment_to_layer(fragment, Some(&style));
+  sc.add_fragment_to_layer(fragment, Some(&style), 0);
 
   assert_eq!(sc.layer3_blocks.len(), 1);
   assert!(sc.layer4_floats.is_empty());
@@ -440,7 +440,7 @@ fn test_layer_classification_inlines() {
   let mut style = ComputedStyle::default();
   style.display = Display::Inline;
 
-  sc.add_fragment_to_layer(fragment, Some(&style));
+  sc.add_fragment_to_layer(fragment, Some(&style), 0);
 
   assert!(sc.layer3_blocks.is_empty());
   assert!(sc.layer5_inlines.len() == 1);
@@ -457,7 +457,7 @@ fn test_layer_classification_positioned() {
   style.position = Position::Relative;
   // z_index = 0 (default), goes to layer 6
 
-  sc.add_fragment_to_layer(fragment, Some(&style));
+  sc.add_fragment_to_layer(fragment, Some(&style), 0);
 
   assert_eq!(sc.layer6_positioned.len(), 1);
 }
@@ -472,7 +472,7 @@ fn test_layer_classification_floats() {
   style.display = Display::Block;
   style.float = Float::Left;
 
-  sc.add_fragment_to_layer(fragment, Some(&style));
+  sc.add_fragment_to_layer(fragment, Some(&style), 0);
 
   assert!(sc.layer3_blocks.is_empty());
   assert_eq!(sc.layer4_floats.len(), 1);
@@ -491,7 +491,7 @@ fn test_layer_classification_floats_ignored_for_positioned() {
   style.float = Float::Left;
   style.position = Position::Absolute;
 
-  sc.add_fragment_to_layer(fragment, Some(&style));
+  sc.add_fragment_to_layer(fragment, Some(&style), 0);
 
   assert!(sc.layer4_floats.is_empty());
   assert_eq!(sc.layer6_positioned.len(), 1);
@@ -506,18 +506,19 @@ fn test_paint_order_with_float_layer() {
 
   let mut block_style = ComputedStyle::default();
   block_style.display = Display::Block;
-  sc.add_fragment_to_layer(block_fragment(10.0, 0.0, 10.0, 10.0), Some(&block_style));
+  sc.add_fragment_to_layer(block_fragment(10.0, 0.0, 10.0, 10.0), Some(&block_style), 0);
 
   let mut float_style = ComputedStyle::default();
   float_style.display = Display::Block;
   float_style.float = Float::Left;
-  sc.add_fragment_to_layer(block_fragment(20.0, 0.0, 10.0, 10.0), Some(&float_style));
+  sc.add_fragment_to_layer(block_fragment(20.0, 0.0, 10.0, 10.0), Some(&float_style), 0);
 
   let mut inline_style = ComputedStyle::default();
   inline_style.display = Display::Inline;
   sc.add_fragment_to_layer(
     text_fragment(30.0, 0.0, 10.0, 10.0, "x"),
     Some(&inline_style),
+    0,
   );
 
   let mut positioned_style = ComputedStyle::default();
@@ -525,6 +526,7 @@ fn test_paint_order_with_float_layer() {
   sc.add_fragment_to_layer(
     block_fragment(40.0, 0.0, 10.0, 10.0),
     Some(&positioned_style),
+    0,
   );
 
   let order: Vec<f32> = sc.iter_paint_order().map(|f| f.bounds.x()).collect();

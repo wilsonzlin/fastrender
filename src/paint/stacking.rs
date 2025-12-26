@@ -56,6 +56,7 @@
 //! let stacking_tree = build_stacking_tree(&fragment_tree.root, None, true);
 //! ```
 
+use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::style::display::Display;
 use crate::style::position::Position;
@@ -95,6 +96,19 @@ impl<'a> StyledFragmentRef<'a> {
       style,
       tree_order,
     }
+  }
+}
+
+/// A fragment paired with its preorder position in the fragment tree.
+#[derive(Debug, Clone)]
+pub struct OrderedFragment {
+  pub fragment: FragmentNode,
+  pub tree_order: usize,
+}
+
+impl OrderedFragment {
+  pub fn new(fragment: FragmentNode, tree_order: usize) -> Self {
+    Self { fragment, tree_order }
   }
 }
 
@@ -203,7 +217,10 @@ pub struct StackingContext {
   pub layer5_inlines: Vec<FragmentNode>,
 
   /// Layer 6: Positioned descendants with z-index 0 or auto (tree order)
-  pub layer6_positioned: Vec<FragmentNode>,
+  pub layer6_positioned: Vec<OrderedFragment>,
+
+  /// Offset from the parent stacking context to this context's origin.
+  pub offset_from_parent_context: Point,
 
   /// Bounds of this stacking context (for culling and hit testing)
   pub bounds: Rect,
@@ -226,6 +243,7 @@ impl StackingContext {
       layer4_floats: Vec::new(),
       layer5_inlines: Vec::new(),
       layer6_positioned: Vec::new(),
+      offset_from_parent_context: Point::ZERO,
       bounds: Rect::from_xywh(0.0, 0.0, 0.0, 0.0),
       reason: StackingContextReason::Root,
       tree_order: 0,
@@ -242,6 +260,7 @@ impl StackingContext {
       layer4_floats: Vec::new(),
       layer5_inlines: Vec::new(),
       layer6_positioned: Vec::new(),
+      offset_from_parent_context: Point::ZERO,
       bounds: Rect::from_xywh(0.0, 0.0, 0.0, 0.0),
       reason,
       tree_order,
@@ -259,12 +278,17 @@ impl StackingContext {
   }
 
   /// Adds a fragment to the appropriate layer based on its properties
-  pub fn add_fragment_to_layer(&mut self, fragment: FragmentNode, style: Option<&ComputedStyle>) {
+  pub fn add_fragment_to_layer(
+    &mut self,
+    fragment: FragmentNode,
+    style: Option<&ComputedStyle>,
+    tree_order: usize,
+  ) {
     if let Some(style) = style {
       // Determine which layer this fragment belongs to
       if is_positioned(style) && !creates_stacking_context(style, None, false) {
         // Layer 6: Positioned with z-index 0 or auto
-        self.layer6_positioned.push(fragment);
+        self.layer6_positioned.push(OrderedFragment::new(fragment, tree_order));
       } else if is_float(style) {
         // Layer 4: Floats
         self.layer4_floats.push(fragment);
@@ -318,6 +342,19 @@ impl StackingContext {
     positive
   }
 
+  /// Returns layer 6 items (positioned fragments and z-index 0 stacking contexts) in tree order.
+  pub fn layer6_items(&self) -> Vec<Layer6Item<'_>> {
+    let mut items: Vec<Layer6Item<'_>> = Vec::new();
+    for frag in &self.layer6_positioned {
+      items.push(Layer6Item::Positioned(frag));
+    }
+    for child in self.children.iter().filter(|c| c.z_index == 0) {
+      items.push(Layer6Item::ZeroContext(child));
+    }
+    items.sort_by_key(|item| item.tree_order());
+    items
+  }
+
   /// Sorts all child stacking contexts by z-index (for paint order)
   pub fn sort_children(&mut self) {
     self
@@ -346,21 +383,26 @@ impl StackingContext {
       None => *current = Some(rect),
     };
 
-    // Union all fragment bounds from all layers
+    // Union all fragment bounds from all layers in the parent stacking context's
+    // coordinate space.
     for frag in &self.fragments {
-      accumulate(frag.bounds, &mut bounds);
+      accumulate(
+        Rect::new(self.offset_from_parent_context, frag.bounds.size),
+        &mut bounds,
+      );
     }
+    let translate = |rect: Rect| rect.translate(self.offset_from_parent_context);
     for frag in &self.layer3_blocks {
-      accumulate(frag.bounds, &mut bounds);
+      accumulate(translate(frag.bounds), &mut bounds);
     }
     for frag in &self.layer4_floats {
-      accumulate(frag.bounds, &mut bounds);
+      accumulate(translate(frag.bounds), &mut bounds);
     }
     for frag in &self.layer5_inlines {
-      accumulate(frag.bounds, &mut bounds);
+      accumulate(translate(frag.bounds), &mut bounds);
     }
     for frag in &self.layer6_positioned {
-      accumulate(frag.bounds, &mut bounds);
+      accumulate(translate(frag.fragment.bounds), &mut bounds);
     }
 
     // Union child stacking context bounds
@@ -368,7 +410,14 @@ impl StackingContext {
       accumulate(child.bounds, &mut bounds);
     }
 
-    self.bounds = bounds.unwrap_or_else(|| Rect::from_xywh(0.0, 0.0, 0.0, 0.0));
+    self.bounds = bounds.unwrap_or_else(|| {
+      Rect::from_xywh(
+        self.offset_from_parent_context.x,
+        self.offset_from_parent_context.y,
+        0.0,
+        0.0,
+      )
+    });
   }
 
   /// Returns total fragment count across all layers
@@ -709,6 +758,7 @@ pub fn build_stacking_tree(
     None,
     is_root_context,
     &mut tree_order_counter,
+    Point::ZERO,
   );
 
   // Sort all children by z-index
@@ -727,6 +777,7 @@ fn build_stacking_tree_internal(
   parent_style: Option<&ComputedStyle>,
   is_root: bool,
   tree_order: &mut usize,
+  offset_from_parent_context: Point,
 ) -> StackingContext {
   let current_order = *tree_order;
   *tree_order += 1;
@@ -754,15 +805,21 @@ fn build_stacking_tree_internal(
       .unwrap_or(StackingContextReason::Root);
 
     let mut context = StackingContext::with_reason(z_index, reason, current_order);
+    context.offset_from_parent_context = offset_from_parent_context;
 
     // Add the root fragment
     context.fragments.push(fragment.clone());
 
     // Process children
+    let base_offset = Point::ZERO;
     for child in &fragment.children {
+      let child_offset = Point::new(
+        base_offset.x + child.bounds.origin.x,
+        base_offset.y + child.bounds.origin.y,
+      );
       let child_context = build_stacking_tree_internal(
         child, None, // We don't have style for children without external mapping
-        style, false, tree_order,
+        style, false, tree_order, child_offset,
       );
 
       let child_creates_context =
@@ -777,7 +834,7 @@ fn build_stacking_tree_internal(
           context.children.extend(child_context.children);
         }
         // Keep the direct child in the appropriate layer; children will be painted via recursion
-        context.add_fragment_to_layer(child.clone(), None);
+        context.add_fragment_to_layer(child.clone(), None, child_context.tree_order);
       }
     }
 
@@ -787,9 +844,11 @@ fn build_stacking_tree_internal(
     let mut context = StackingContext::new(0);
     context.tree_order = current_order;
 
+    context.offset_from_parent_context = offset_from_parent_context;
+
     // Classify this fragment into appropriate layer
     if let Some(s) = style {
-      context.add_fragment_to_layer(fragment.clone(), Some(s));
+      context.add_fragment_to_layer(fragment.clone(), Some(s), current_order);
     } else {
       // Classify based on fragment content
       match &fragment.content {
@@ -805,8 +864,14 @@ fn build_stacking_tree_internal(
     }
 
     // Process children
+    let base_offset = offset_from_parent_context;
     for child in &fragment.children {
-      let child_context = build_stacking_tree_internal(child, None, style, false, tree_order);
+      let child_offset = Point::new(
+        base_offset.x + child.bounds.origin.x,
+        base_offset.y + child.bounds.origin.y,
+      );
+      let child_context =
+        build_stacking_tree_internal(child, None, style, false, tree_order, child_offset);
 
       let child_creates_context =
         child_context.reason != StackingContextReason::Root || child_context.z_index != 0;
@@ -817,7 +882,7 @@ fn build_stacking_tree_internal(
         if !child_context.children.is_empty() {
           context.children.extend(child_context.children);
         }
-        context.add_fragment_to_layer(child.clone(), None);
+        context.add_fragment_to_layer(child.clone(), None, child_context.tree_order);
       }
     }
 
@@ -850,6 +915,7 @@ where
     None,
     true,
     &mut tree_order_counter,
+    Point::ZERO,
     &get_style,
   );
 
@@ -870,6 +936,7 @@ fn build_stacking_tree_with_styles_internal<F>(
   parent_style: Option<&ComputedStyle>,
   is_root: bool,
   tree_order: &mut usize,
+  offset_from_parent_context: Point,
   get_style: &F,
 ) -> StackingContext
 where
@@ -908,8 +975,10 @@ where
       .unwrap_or(StackingContextReason::Root);
 
     let mut context = StackingContext::with_reason(z_index, reason, current_order);
+    context.offset_from_parent_context = offset_from_parent_context;
     context.fragments.push(fragment.clone());
 
+    let base_offset = Point::ZERO;
     for child in &fragment.children {
       let child_style = get_style(child);
       if let Some(s) = child_style.as_deref() {
@@ -917,12 +986,17 @@ where
           continue;
         }
       }
+      let child_offset = Point::new(
+        base_offset.x + child.bounds.origin.x,
+        base_offset.y + child.bounds.origin.y,
+      );
       let child_context = build_stacking_tree_with_styles_internal(
         child,
         child_style.as_ref().map(|s| s.as_ref()),
         style,
         false,
         tree_order,
+        child_offset,
         get_style,
       );
 
@@ -935,7 +1009,7 @@ where
         if !child_context.children.is_empty() {
           context.children.extend(child_context.children);
         }
-        context.add_fragment_to_layer(child.clone(), child_style.as_deref());
+        context.add_fragment_to_layer(child.clone(), child_style.as_deref(), child_context.tree_order);
       }
     }
 
@@ -943,9 +1017,10 @@ where
   } else {
     let mut context = StackingContext::new(0);
     context.tree_order = current_order;
+    context.offset_from_parent_context = offset_from_parent_context;
 
     if let Some(s) = style {
-      context.add_fragment_to_layer(fragment.clone(), Some(s));
+      context.add_fragment_to_layer(fragment.clone(), Some(s), current_order);
     } else {
       match &fragment.content {
         FragmentContent::Text { .. }
@@ -959,6 +1034,7 @@ where
       }
     }
 
+    let base_offset = offset_from_parent_context;
     for child in &fragment.children {
       let child_style = get_style(child);
       if let Some(s) = child_style.as_deref() {
@@ -966,12 +1042,17 @@ where
           continue;
         }
       }
+      let child_offset = Point::new(
+        base_offset.x + child.bounds.origin.x,
+        base_offset.y + child.bounds.origin.y,
+      );
       let child_context = build_stacking_tree_with_styles_internal(
         child,
         child_style.as_ref().map(|s| s.as_ref()),
         style,
         false,
         tree_order,
+        child_offset,
         get_style,
       );
 
@@ -984,11 +1065,27 @@ where
         if !child_context.children.is_empty() {
           context.children.extend(child_context.children);
         }
-        context.add_fragment_to_layer(child.clone(), child_style.as_deref());
+        context.add_fragment_to_layer(child.clone(), child_style.as_deref(), child_context.tree_order);
       }
     }
 
     context
+  }
+}
+
+/// Represents an item in layer 6 when determining paint order.
+#[derive(Clone)]
+pub enum Layer6Item<'a> {
+  Positioned(&'a OrderedFragment),
+  ZeroContext(&'a StackingContext),
+}
+
+impl<'a> Layer6Item<'a> {
+  pub fn tree_order(&self) -> usize {
+    match self {
+      Layer6Item::Positioned(frag) => frag.tree_order,
+      Layer6Item::ZeroContext(ctx) => ctx.tree_order,
+    }
   }
 }
 
@@ -1005,7 +1102,7 @@ enum PaintOrderItem<'a> {
   Layer3(&'a [FragmentNode], usize),
   Layer4(&'a [FragmentNode], usize),
   Layer5(&'a [FragmentNode], usize),
-  Layer6(&'a [FragmentNode], usize),
+  Layer6(Vec<Layer6Item<'a>>, usize),
   Fragments(&'a [FragmentNode], usize),
   NegativeChildren(Vec<&'a StackingContext>, usize),
   PositiveChildren(Vec<&'a StackingContext>, usize),
@@ -1037,10 +1134,9 @@ impl<'a> Iterator for PaintOrderIterator<'a> {
           }
 
           // Layer 6: Positioned with z-index 0 or auto
-          if !ctx.layer6_positioned.is_empty() {
-            self
-              .stack
-              .push(PaintOrderItem::Layer6(&ctx.layer6_positioned, 0));
+          let layer6 = ctx.layer6_items();
+          if !layer6.is_empty() {
+            self.stack.push(PaintOrderItem::Layer6(layer6, 0));
           }
 
           // Layer 5: Inline-level
@@ -1105,10 +1201,15 @@ impl<'a> Iterator for PaintOrderIterator<'a> {
             return Some(&fragments[idx]);
           }
         }
-        PaintOrderItem::Layer6(fragments, idx) => {
-          if idx < fragments.len() {
-            self.stack.push(PaintOrderItem::Layer6(fragments, idx + 1));
-            return Some(&fragments[idx]);
+        PaintOrderItem::Layer6(items, idx) => {
+          if idx < items.len() {
+            self.stack.push(PaintOrderItem::Layer6(items.clone(), idx + 1));
+            match &items[idx] {
+              Layer6Item::Positioned(frag) => return Some(&frag.fragment),
+              Layer6Item::ZeroContext(ctx) => {
+                self.stack.push(PaintOrderItem::Context(ctx));
+              }
+            }
           }
         }
         PaintOrderItem::NegativeChildren(children, idx) => {
@@ -1143,6 +1244,7 @@ impl StackingContext {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::geometry::Point;
   use crate::geometry::Rect;
   use crate::style::types::WillChange;
   use crate::style::types::WillChangeHint;
@@ -1597,6 +1699,28 @@ mod tests {
     assert_eq!(fragments[2].bounds.x(), 30.0); // Positive child (Layer 7)
   }
 
+  #[test]
+  fn paint_order_interleaves_zero_z_contexts_with_positioned() {
+    let mut root = StackingContext::new(0);
+    root
+      .fragments
+      .push(create_block_fragment(0.0, 0.0, 10.0, 10.0));
+
+    let mut zero_child =
+      StackingContext::with_reason(0, StackingContextReason::Opacity, 1);
+    zero_child
+      .fragments
+      .push(create_block_fragment(10.0, 0.0, 10.0, 10.0));
+
+    let positioned = OrderedFragment::new(create_block_fragment(20.0, 0.0, 10.0, 10.0), 2);
+    root.layer6_positioned.push(positioned);
+    root.add_child(zero_child);
+
+    let fragments: Vec<_> = root.iter_paint_order().collect();
+    let origins: Vec<f32> = fragments.iter().map(|f| f.bounds.x()).collect();
+    assert_eq!(origins, vec![0.0, 10.0, 20.0]);
+  }
+
   // Reason tests
 
   #[test]
@@ -1663,6 +1787,21 @@ mod tests {
     assert_eq!(parent.bounds, Rect::from_xywh(10.0, 20.0, 5.0, 5.0));
   }
 
+  #[test]
+  fn test_compute_bounds_respects_child_offset() {
+    let mut parent = StackingContext::new(0);
+    let mut child = StackingContext::new(0);
+    child.offset_from_parent_context = Point::new(5.0, 5.0);
+    child
+      .fragments
+      .push(create_block_fragment(0.0, 0.0, 10.0, 10.0));
+
+    parent.children.push(child);
+    parent.compute_bounds();
+
+    assert_eq!(parent.bounds, Rect::from_xywh(5.0, 5.0, 10.0, 10.0));
+  }
+
   // Layer classification tests
 
   #[test]
@@ -1672,7 +1811,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.display = Display::Block; // Default is Inline, need Block for block layer
 
-    sc.add_fragment_to_layer(fragment, Some(&style));
+    sc.add_fragment_to_layer(fragment, Some(&style), 0);
 
     assert_eq!(sc.layer3_blocks.len(), 1);
   }
@@ -1684,7 +1823,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.display = Display::Inline;
 
-    sc.add_fragment_to_layer(fragment, Some(&style));
+    sc.add_fragment_to_layer(fragment, Some(&style), 0);
 
     assert_eq!(sc.layer5_inlines.len(), 1);
   }
@@ -1697,7 +1836,7 @@ mod tests {
     style.position = Position::Relative;
     // z_index = 0 (default), so goes to layer 6
 
-    sc.add_fragment_to_layer(fragment, Some(&style));
+    sc.add_fragment_to_layer(fragment, Some(&style), 0);
 
     assert_eq!(sc.layer6_positioned.len(), 1);
   }
