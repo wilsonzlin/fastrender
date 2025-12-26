@@ -12,7 +12,8 @@ use crate::layout::fragmentation::{
 };
 use crate::style::content::{ContentContext, ContentGenerator};
 use crate::style::page::{resolve_page_style, PageSide, ResolvedPageStyle};
-use crate::style::ComputedStyle;
+use crate::style::types::WritingMode;
+use crate::style::{block_axis_is_horizontal, ComputedStyle};
 use crate::text::font_loader::FontContext;
 use crate::tree::box_tree::BoxTree;
 use crate::tree::fragment_tree::FragmentNode;
@@ -323,14 +324,7 @@ pub fn paginate_fragment_tree_with_options(
     enable_layout_cache,
   )?;
 
-  if let PageStacking::Stacked { gap } = options.stacking {
-    let gap = gap.max(0.0);
-    let mut offset = 0.0;
-    for page in &mut pages {
-      translate_fragment(page, 0.0, offset);
-      offset += page.bounds.height() + gap;
-    }
-  }
+  apply_page_stacking(&mut pages, root_style.writing_mode, options.stacking);
 
   Ok(pages)
 }
@@ -380,6 +374,35 @@ fn page_name_for_position(
   }
 
   fallback.map(|s| s.to_string())
+}
+
+fn apply_page_stacking(pages: &mut [FragmentNode], writing_mode: WritingMode, stacking: PageStacking) {
+  let PageStacking::Stacked { gap } = stacking else {
+    return;
+  };
+
+  let gap = gap.max(0.0);
+  let horizontal = block_axis_is_horizontal(writing_mode);
+  let mut offset = 0.0;
+  let mut previous_extent: Option<f32> = None;
+
+  for page in pages.iter_mut() {
+    if let Some(extent) = previous_extent {
+      offset += extent + gap;
+    }
+
+    translate_fragment(
+      page,
+      if horizontal { offset } else { 0.0 },
+      if horizontal { 0.0 } else { offset },
+    );
+
+    previous_extent = Some(if horizontal {
+      page.bounds.width()
+    } else {
+      page.bounds.height()
+    });
+  }
 }
 
 fn translate_fragment(node: &mut FragmentNode, dx: f32, dy: f32) {

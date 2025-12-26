@@ -1,4 +1,4 @@
-use fastrender::api::FastRender;
+use fastrender::api::{FastRender, LayoutDocumentOptions, PageStacking};
 use fastrender::tree::fragment_tree::{FragmentContent, FragmentNode, FragmentTree};
 
 fn pages<'a>(tree: &'a FragmentTree) -> Vec<&'a FragmentNode> {
@@ -202,6 +202,61 @@ fn margin_box_content_is_positioned_in_margins() {
 
   assert!(header.bounds.y() < content.bounds.y());
   assert!(footer.bounds.y() > content.bounds.y());
+}
+
+#[test]
+fn paginated_pages_are_stacked_vertically() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 100px 120px; margin: 0; }
+        </style>
+      </head>
+      <body>
+        <div style="height: 250px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2);
+  assert!(page_roots[1].bounds.y() > page_roots[0].bounds.y());
+  assert!(
+    page_roots[1].bounds.y() - page_roots[0].bounds.y()
+      >= page_roots[0].bounds.height() - 0.1
+  );
+}
+
+#[test]
+fn page_stacking_can_be_disabled() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 100px 120px; margin: 0; }
+        </style>
+      </head>
+      <body>
+        <div style="height: 250px"></div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let options = LayoutDocumentOptions::new().with_page_stacking(PageStacking::Untranslated);
+  let tree = renderer
+    .layout_document_with_options(&dom, 200, 200, options)
+    .unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2);
+  assert!((page_roots[0].bounds.y() - page_roots[1].bounds.y()).abs() < 0.01);
 }
 
 fn find_text_position(node: &FragmentNode, needle: &str, origin: (f32, f32)) -> Option<(f32, f32)> {
