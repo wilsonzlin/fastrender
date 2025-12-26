@@ -48,8 +48,6 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::mem;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU64;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -216,17 +214,16 @@ struct LayoutCacheEntry {
 }
 
 thread_local! {
-    static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutCacheKey, LayoutCacheEntry>> =
-        RefCell::new(HashMap::new());
+  static LAYOUT_RESULT_CACHE: RefCell<HashMap<LayoutCacheKey, LayoutCacheEntry>> =
+    RefCell::new(HashMap::new());
+  static LAYOUT_CACHE_ENABLED: Cell<bool> = const { Cell::new(false) };
+  static LAYOUT_CACHE_EPOCH: Cell<usize> = const { Cell::new(1) };
+  static LAYOUT_CACHE_FRAGMENTATION: Cell<u64> = const { Cell::new(0) };
+  static LAYOUT_CACHE_LOOKUPS: Cell<usize> = const { Cell::new(0) };
+  static LAYOUT_CACHE_HITS: Cell<usize> = const { Cell::new(0) };
+  static LAYOUT_CACHE_STORES: Cell<usize> = const { Cell::new(0) };
+  static LAYOUT_CACHE_EVICTIONS: Cell<usize> = const { Cell::new(0) };
 }
-
-static LAYOUT_CACHE_ENABLED: AtomicBool = AtomicBool::new(false);
-static LAYOUT_CACHE_EPOCH: AtomicUsize = AtomicUsize::new(1);
-static LAYOUT_CACHE_FRAGMENTATION: AtomicU64 = AtomicU64::new(0);
-static LAYOUT_CACHE_LOOKUPS: AtomicUsize = AtomicUsize::new(0);
-static LAYOUT_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
-static LAYOUT_CACHE_STORES: AtomicUsize = AtomicUsize::new(0);
-static LAYOUT_CACHE_EVICTIONS: AtomicUsize = AtomicUsize::new(0);
 
 fn pack_viewport_size(size: Size) -> u64 {
   let w = size.width.to_bits() as u64;
@@ -352,7 +349,7 @@ fn fragmentation_fingerprint(options: Option<FragmentationOptions>) -> u64 {
 }
 
 fn is_layout_cacheable(box_node: &BoxNode, fc_type: FormattingContextType) -> bool {
-  if !LAYOUT_CACHE_ENABLED.load(Ordering::Relaxed) {
+  if !LAYOUT_CACHE_ENABLED.with(|enabled| enabled.get()) {
     return false;
   }
   if box_node.id() == 0 || box_node.is_anonymous() {
@@ -391,7 +388,7 @@ fn layout_cache_key(
 
   let style_hash = layout_style_fingerprint(&box_node.style);
   let constraints_hash = layout_constraints_hash(constraints);
-  let fragmentation_hash = LAYOUT_CACHE_FRAGMENTATION.load(Ordering::Relaxed);
+  let fragmentation_hash = LAYOUT_CACHE_FRAGMENTATION.with(|hash| hash.get());
   Some(LayoutCacheKey {
     box_id: box_node.id(),
     fc_type,
@@ -407,7 +404,7 @@ fn layout_cache_clear() {
     let mut map = cache.borrow_mut();
     let evicted = map.len();
     if evicted > 0 {
-      LAYOUT_CACHE_EVICTIONS.fetch_add(evicted, Ordering::Relaxed);
+      LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + evicted));
     }
     map.clear();
   });
@@ -417,10 +414,10 @@ pub(crate) fn layout_cache_reset_counters() {
   LAYOUT_RESULT_CACHE.with(|cache| {
     cache.borrow_mut().clear();
   });
-  LAYOUT_CACHE_LOOKUPS.store(0, Ordering::Relaxed);
-  LAYOUT_CACHE_HITS.store(0, Ordering::Relaxed);
-  LAYOUT_CACHE_STORES.store(0, Ordering::Relaxed);
-  LAYOUT_CACHE_EVICTIONS.store(0, Ordering::Relaxed);
+  LAYOUT_CACHE_LOOKUPS.with(|counter| counter.set(0));
+  LAYOUT_CACHE_HITS.with(|counter| counter.set(0));
+  LAYOUT_CACHE_STORES.with(|counter| counter.set(0));
+  LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(0));
 }
 
 /// Configures the layout cache epoch and run-scoped parameters.
@@ -431,9 +428,13 @@ pub(crate) fn layout_cache_use_epoch(
   fragmentation: Option<FragmentationOptions>,
 ) {
   let epoch = epoch.max(1);
-  let previous = LAYOUT_CACHE_EPOCH.swap(epoch, Ordering::Relaxed);
-  LAYOUT_CACHE_ENABLED.store(enabled, Ordering::Relaxed);
-  LAYOUT_CACHE_FRAGMENTATION.store(fragmentation_fingerprint(fragmentation), Ordering::Relaxed);
+  let previous = LAYOUT_CACHE_EPOCH.with(|cell| {
+    let previous = cell.get();
+    cell.set(epoch);
+    previous
+  });
+  LAYOUT_CACHE_ENABLED.with(|cell| cell.set(enabled));
+  LAYOUT_CACHE_FRAGMENTATION.with(|cell| cell.set(fragmentation_fingerprint(fragmentation)));
 
   if reset_counters || previous != epoch || !enabled {
     layout_cache_reset_counters();
@@ -451,8 +452,8 @@ pub(crate) fn layout_cache_lookup(
   viewport: Size,
 ) -> Option<FragmentNode> {
   let key = layout_cache_key(box_node, fc_type, constraints, viewport)?;
-  LAYOUT_CACHE_LOOKUPS.fetch_add(1, Ordering::Relaxed);
-  let epoch = LAYOUT_CACHE_EPOCH.load(Ordering::Relaxed);
+  LAYOUT_CACHE_LOOKUPS.with(|counter| counter.set(counter.get() + 1));
+  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
 
   let result = LAYOUT_RESULT_CACHE.with(|cache| {
     let mut map = cache.borrow_mut();
@@ -463,14 +464,14 @@ pub(crate) fn layout_cache_lookup(
       // Drop stale entries tied to an old epoch.
       if entry.epoch != epoch {
         map.remove(&key);
-        LAYOUT_CACHE_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+        LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + 1));
       }
     }
     None
   });
 
   if let Some(fragment) = result {
-    LAYOUT_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+    LAYOUT_CACHE_HITS.with(|counter| counter.set(counter.get() + 1));
     return Some((*fragment).clone());
   }
   None
@@ -489,18 +490,18 @@ pub(crate) fn layout_cache_store(
     None => return,
   };
 
-  let epoch = LAYOUT_CACHE_EPOCH.load(Ordering::Relaxed);
+  let epoch = LAYOUT_CACHE_EPOCH.with(|cell| cell.get());
   LAYOUT_RESULT_CACHE.with(|cache| {
     let mut map = cache.borrow_mut();
     // Drop entries for the same box/style from previous epochs to avoid stale reuse when the
     // caller opts into incremental layouts without bumping the epoch.
     map.retain(|existing_key, entry| {
       if entry.epoch != epoch {
-        LAYOUT_CACHE_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+        LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + 1));
         return false;
       }
       if existing_key.box_id == key.box_id && existing_key.style_hash != key.style_hash {
-        LAYOUT_CACHE_EVICTIONS.fetch_add(1, Ordering::Relaxed);
+        LAYOUT_CACHE_EVICTIONS.with(|counter| counter.set(counter.get() + 1));
         return false;
       }
       true
@@ -516,15 +517,15 @@ pub(crate) fn layout_cache_store(
     );
   });
 
-  LAYOUT_CACHE_STORES.fetch_add(1, Ordering::Relaxed);
+  LAYOUT_CACHE_STORES.with(|counter| counter.set(counter.get() + 1));
 }
 
 pub(crate) fn layout_cache_stats() -> (usize, usize, usize, usize) {
   (
-    LAYOUT_CACHE_LOOKUPS.load(Ordering::Relaxed),
-    LAYOUT_CACHE_HITS.load(Ordering::Relaxed),
-    LAYOUT_CACHE_STORES.load(Ordering::Relaxed),
-    LAYOUT_CACHE_EVICTIONS.load(Ordering::Relaxed),
+    LAYOUT_CACHE_LOOKUPS.with(|counter| counter.get()),
+    LAYOUT_CACHE_HITS.with(|counter| counter.get()),
+    LAYOUT_CACHE_STORES.with(|counter| counter.get()),
+    LAYOUT_CACHE_EVICTIONS.with(|counter| counter.get()),
   )
 }
 
