@@ -7,6 +7,7 @@
 //! <https://www.w3.org/TR/CSS21/visuren.html#box-gen>
 
 use crate::compat::CompatProfile;
+use crate::debug::runtime;
 use crate::dom::DomNode;
 use crate::dom::DomNodeType;
 use crate::dom::SVG_NAMESPACE;
@@ -953,7 +954,7 @@ fn generate_boxes_for_styled(
   if let Some(text) = styled.node.text_content() {
     if !text.is_empty() {
       let style = Arc::new(styled.styles.clone());
-      if let Ok(needle) = std::env::var("FASTR_FIND_BOX_TEXT") {
+      if let Some(needle) = runtime::runtime_toggles().get("FASTR_FIND_BOX_TEXT") {
         if text.contains(&needle) {
           eprintln!(
             "[box-gen-text] styled_node_id={} tag={} display={:?} text={:?}",

@@ -1,3 +1,4 @@
+use crate::debug::runtime;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -5,18 +6,11 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
-static ENABLED: OnceLock<bool> = OnceLock::new();
-static HIST_ENABLED: OnceLock<bool> = OnceLock::new();
-static PROGRESS_INTERVAL: OnceLock<u64> = OnceLock::new();
 static PROGRESS_NEXT: AtomicU64 = AtomicU64::new(0);
 static HISTOGRAM: OnceLock<
   std::sync::Mutex<std::collections::HashMap<(usize, (Option<u32>, Option<u32>)), u64>>,
 > = OnceLock::new();
 static NODE_STATS: OnceLock<std::sync::Mutex<HashMap<usize, NodeStats>>> = OnceLock::new();
-static NODE_PROFILE_ENABLED: OnceLock<bool> = OnceLock::new();
-static NODE_PROFILE_LIMIT: OnceLock<usize> = OnceLock::new();
-static NODE_KEY_COUNTS_ENABLED: OnceLock<bool> = OnceLock::new();
-static NODE_KEY_CAP: OnceLock<usize> = OnceLock::new();
 
 static MEASURE_LOOKUPS: AtomicU64 = AtomicU64::new(0);
 static MEASURE_HITS: AtomicU64 = AtomicU64::new(0);
@@ -53,70 +47,31 @@ struct NodeStats {
 }
 
 fn enabled() -> bool {
-  *ENABLED.get_or_init(|| {
-    std::env::var("FASTR_FLEX_PROFILE")
-      .map(|v| v != "0")
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_FLEX_PROFILE")
 }
 
 fn histogram_enabled() -> bool {
-  *HIST_ENABLED.get_or_init(|| {
-    std::env::var("FASTR_FLEX_PROFILE_HIST")
-      .map(|v| v != "0")
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_FLEX_PROFILE_HIST")
 }
 
 fn node_profile_enabled() -> bool {
-  *NODE_PROFILE_ENABLED.get_or_init(|| {
-    std::env::var("FASTR_FLEX_PROFILE_NODES")
-      .map(|v| v != "0")
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_FLEX_PROFILE_NODES")
 }
 
 fn node_key_counts_enabled() -> bool {
-  *NODE_KEY_COUNTS_ENABLED.get_or_init(|| {
-    std::env::var("FASTR_FLEX_PROFILE_NODE_KEYS")
-      .map(|v| v != "0")
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_FLEX_PROFILE_NODE_KEYS")
 }
 
 fn node_key_cap() -> usize {
-  *NODE_KEY_CAP.get_or_init(|| {
-    std::env::var("FASTR_FLEX_PROFILE_NODE_KEY_CAP")
-      .ok()
-      .and_then(|v| v.parse::<usize>().ok())
-      .filter(|v| *v > 0)
-      .unwrap_or(20000)
-  })
+  runtime::runtime_toggles().usize_with_default("FASTR_FLEX_PROFILE_NODE_KEY_CAP", 20000)
 }
 
 fn node_profile_limit() -> usize {
-  *NODE_PROFILE_LIMIT.get_or_init(|| {
-    std::env::var("FASTR_FLEX_PROFILE_NODES_TOP")
-      .ok()
-      .and_then(|v| v.parse::<usize>().ok())
-      .filter(|v| *v > 0)
-      .unwrap_or(10)
-  })
+  runtime::runtime_toggles().usize_with_default("FASTR_FLEX_PROFILE_NODES_TOP", 10)
 }
 
 fn progress_interval() -> Option<u64> {
-  let val = *PROGRESS_INTERVAL.get_or_init(|| {
-    std::env::var("FASTR_FLEX_PROFILE_PROGRESS")
-      .ok()
-      .and_then(|v| {
-        if v.trim().is_empty() {
-          Some(100_000)
-        } else {
-          v.parse().ok()
-        }
-      })
-      .unwrap_or(0)
-  });
+  let val = runtime::runtime_toggles().u64("FASTR_FLEX_PROFILE_PROGRESS")?;
   if val == 0 {
     None
   } else {

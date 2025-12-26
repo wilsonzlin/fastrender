@@ -34,6 +34,7 @@
 use super::baseline::BaselineMetrics;
 use super::baseline::LineBaselineAccumulator;
 use super::baseline::VerticalAlign;
+use crate::debug::runtime;
 use crate::geometry::Size;
 use crate::layout::inline::float_integration::InlineFloatIntegration;
 use crate::layout::inline::float_integration::LineSpaceOptions;
@@ -57,7 +58,6 @@ use crate::tree::fragment_tree::FragmentNode;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use unicode_bidi::BidiInfo;
 use unicode_bidi::Level;
 
@@ -231,12 +231,7 @@ fn allows_soft_wrap(style: &ComputedStyle) -> bool {
 }
 
 pub(crate) fn log_line_width_enabled() -> bool {
-  static FLAG: OnceLock<bool> = OnceLock::new();
-  *FLAG.get_or_init(|| {
-    std::env::var("FASTR_LOG_LINE_WIDTH")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_LOG_LINE_WIDTH")
 }
 
 /// A shaped text item

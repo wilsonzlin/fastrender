@@ -4,6 +4,7 @@
 //! with in-memory caching and support for various image formats including SVG.
 
 use crate::api::{RenderDiagnostics, ResourceContext, ResourceKind};
+use crate::debug::runtime;
 use crate::error::Error;
 use crate::error::ImageError;
 use crate::error::RenderError;
@@ -39,23 +40,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::Condvar;
 use std::sync::Mutex;
-use std::sync::OnceLock;
 use std::time::Instant;
 use url::Url;
 
 fn image_profile_threshold_ms() -> Option<f64> {
-  static THRESHOLD: OnceLock<Option<f64>> = OnceLock::new();
-  THRESHOLD
-    .get_or_init(|| {
-      let raw = std::env::var("FASTR_IMAGE_PROFILE_MS").ok()?;
-      let trimmed = raw.trim();
-      if trimmed.is_empty() {
-        return None;
-      }
-      trimmed.parse::<f64>().ok().filter(|v| *v >= 0.0)
-    })
-    .as_ref()
-    .copied()
+  runtime::runtime_toggles().f64("FASTR_IMAGE_PROFILE_MS")
 }
 
 /// Per-thread image cache diagnostics collection.

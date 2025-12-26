@@ -29,6 +29,7 @@
 use crate::css::types::ColorStop;
 use crate::css::types::RadialGradientShape;
 use crate::css::types::RadialGradientSize;
+use crate::debug::runtime;
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
@@ -158,14 +159,11 @@ struct BackgroundRects {
 }
 
 fn parallel_config_from_env() -> (bool, usize) {
-  let enabled = std::env::var("FASTR_DISPLAY_LIST_PARALLEL")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(true);
-  let min = std::env::var("FASTR_DISPLAY_LIST_PARALLEL_MIN")
-    .ok()
-    .and_then(|v| v.parse::<usize>().ok())
-    .filter(|v| *v > 0)
-    .unwrap_or(32);
+  let toggles = runtime::runtime_toggles();
+  let enabled = toggles.truthy_with_default("FASTR_DISPLAY_LIST_PARALLEL", true);
+  let min = toggles
+    .usize_with_default("FASTR_DISPLAY_LIST_PARALLEL_MIN", 32)
+    .max(1);
   (enabled, min)
 }
 

@@ -43,7 +43,6 @@
 
 use crate::style::values::Length;
 use std::collections::HashMap;
-use std::env;
 use std::fmt;
 
 /// A single media query
@@ -1897,129 +1896,70 @@ impl MediaContext {
   /// - `FASTR_MONOCHROME_DEPTH` = integer bits for monochrome devices (e.g., 1)
   #[allow(clippy::cognitive_complexity)]
   pub fn with_env_overrides(mut self) -> Self {
-    if let Ok(value) = env::var("FASTR_MEDIA_TYPE") {
-      if let Ok(mt) = MediaType::parse(&value) {
-        self.media_type = mt;
-      }
+    let runtime_toggles = crate::debug::runtime::runtime_toggles();
+    let overrides = &runtime_toggles.config().media;
+    if let Some(mt) = overrides.media_type {
+      self.media_type = mt;
     }
 
-    if let Ok(value) = env::var("FASTR_SCRIPTING") {
-      match Scripting::parse(&value) {
-        Ok(script) => self.scripting = script,
-        Err(_) => {
-          let v = value.trim().to_ascii_lowercase();
-          if matches!(v.as_str(), "0" | "false" | "off" | "none") {
-            self.scripting = Scripting::None;
-          } else if matches!(v.as_str(), "1" | "true" | "yes" | "on") {
-            self.scripting = Scripting::Enabled;
-          }
-        }
-      }
+    if let Some(scripting) = overrides.scripting {
+      self.scripting = scripting;
     }
 
-    if let Ok(value) = env::var("FASTR_UPDATE_FREQUENCY") {
-      if let Ok(update) = UpdateFrequency::parse(&value) {
-        self.update_frequency = update;
-      }
+    if let Some(update) = overrides.update_frequency {
+      self.update_frequency = update;
     }
 
-    if let Ok(value) = env::var("FASTR_LIGHT_LEVEL") {
-      if let Ok(level) = LightLevel::parse(&value) {
-        self.light_level = level;
-      }
+    if let Some(level) = overrides.light_level {
+      self.light_level = level;
     }
 
-    if let Ok(value) = env::var("FASTR_DISPLAY_MODE") {
-      if let Ok(mode) = DisplayMode::parse(&value) {
-        self.display_mode = mode;
-      }
+    if let Some(mode) = overrides.display_mode {
+      self.display_mode = mode;
     }
 
-    if let Ok(value) = env::var("FASTR_PREFERS_COLOR_SCHEME") {
-      let v = value.trim().to_ascii_lowercase();
-      self.prefers_color_scheme = match v.as_str() {
-        "light" => Some(ColorScheme::Light),
-        "dark" => Some(ColorScheme::Dark),
-        "no-preference" => Some(ColorScheme::NoPreference),
-        _ => self.prefers_color_scheme,
-      };
+    if let Some(scheme) = overrides.prefers_color_scheme {
+      self.prefers_color_scheme = Some(scheme);
     }
 
-    if let Ok(value) = env::var("FASTR_PREFERS_REDUCED_MOTION") {
-      let v = value.trim().to_ascii_lowercase();
-      self.prefers_reduced_motion =
-        matches!(
-          v.as_str(),
-          "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-        ) || matches!(ReducedMotion::parse(&v), Ok(ReducedMotion::Reduce));
+    if let Some(reduced_motion) = overrides.prefers_reduced_motion {
+      self.prefers_reduced_motion = reduced_motion;
     }
 
-    if let Ok(value) = env::var("FASTR_PREFERS_CONTRAST") {
-      if let Ok(pref) = ContrastPreference::parse(&value) {
-        self.prefers_contrast = pref;
-      }
+    if let Some(pref) = overrides.prefers_contrast {
+      self.prefers_contrast = pref;
     }
 
-    if let Ok(value) = env::var("FASTR_PREFERS_REDUCED_TRANSPARENCY") {
-      let v = value.trim().to_ascii_lowercase();
-      self.prefers_reduced_transparency = matches!(
-        v.as_str(),
-        "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-      ) || matches!(
-        ReducedTransparency::parse(&v),
-        Ok(ReducedTransparency::Reduce)
-      );
+    if let Some(reduced_transparency) = overrides.prefers_reduced_transparency {
+      self.prefers_reduced_transparency = reduced_transparency;
     }
 
-    if let Ok(value) = env::var("FASTR_PREFERS_REDUCED_DATA") {
-      let v = value.trim().to_ascii_lowercase();
-      self.prefers_reduced_data = matches!(
-        v.as_str(),
-        "1" | "true" | "yes" | "on" | "reduce" | "reduced" | "prefer"
-      ) || matches!(ReducedData::parse(&v), Ok(ReducedData::Reduce));
+    if let Some(reduced_data) = overrides.prefers_reduced_data {
+      self.prefers_reduced_data = reduced_data;
     }
 
-    if let Ok(value) = env::var("FASTR_COLOR_GAMUT") {
-      if let Ok(gamut) = ColorGamut::parse(&value) {
-        self.color_gamut = gamut;
-      }
+    if let Some(gamut) = overrides.color_gamut {
+      self.color_gamut = gamut;
     }
 
-    if let Ok(value) = env::var("FASTR_INVERTED_COLORS") {
-      let v = value.trim().to_ascii_lowercase();
-      self.inverted_colors = match InvertedColors::parse(&v) {
-        Ok(state) => state,
-        Err(_) if matches!(v.as_str(), "1" | "true" | "yes" | "on") => InvertedColors::Inverted,
-        Err(_) if matches!(v.as_str(), "0" | "false" | "off" | "none") => InvertedColors::None,
-        _ => self.inverted_colors,
-      };
+    if let Some(inverted) = overrides.inverted_colors {
+      self.inverted_colors = inverted;
     }
 
-    if let Ok(value) = env::var("FASTR_FORCED_COLORS") {
-      let v = value.trim().to_ascii_lowercase();
-      self.forced_colors = match ForcedColors::parse(&v) {
-        Ok(ForcedColors::Active) => true,
-        Ok(ForcedColors::None) => false,
-        Err(_) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
-      };
+    if let Some(forced) = overrides.forced_colors {
+      self.forced_colors = forced;
     }
 
-    if let Ok(value) = env::var("FASTR_COLOR_DEPTH") {
-      if let Ok(bits) = value.trim().parse::<u32>() {
-        self.color_depth = bits;
-      }
+    if let Some(bits) = overrides.color_depth {
+      self.color_depth = bits;
     }
 
-    if let Ok(value) = env::var("FASTR_COLOR_INDEX") {
-      if let Ok(count) = value.trim().parse::<u32>() {
-        self.color_index = count;
-      }
+    if let Some(count) = overrides.color_index {
+      self.color_index = count;
     }
 
-    if let Ok(value) = env::var("FASTR_MONOCHROME_DEPTH") {
-      if let Ok(bits) = value.trim().parse::<u32>() {
-        self.monochrome_depth = bits;
-      }
+    if let Some(bits) = overrides.monochrome_depth {
+      self.monochrome_depth = bits;
     }
 
     self

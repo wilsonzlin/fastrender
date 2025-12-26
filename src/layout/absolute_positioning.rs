@@ -67,7 +67,6 @@ use crate::text::font_loader::FontContext;
 use crate::tree::fragment_tree::FragmentNode;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
 
 /// Result type for position and size calculations
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,13 +80,7 @@ pub struct AbsoluteLayoutResult {
 }
 
 fn log_abs_clamp(kind: &str, min: f32, max: f32, style_min: Length, style_max: Length) {
-  static ENABLED: OnceLock<bool> = OnceLock::new();
-  let enabled = *ENABLED.get_or_init(|| {
-    std::env::var("FASTR_LOG_ABS_CLAMP")
-      .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-      .unwrap_or(false)
-  });
-  if !enabled {
+  if !crate::debug::runtime::runtime_toggles().truthy("FASTR_LOG_ABS_CLAMP") {
     return;
   }
   static COUNTER: AtomicUsize = AtomicUsize::new(0);

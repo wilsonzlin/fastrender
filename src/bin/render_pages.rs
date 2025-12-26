@@ -13,6 +13,7 @@ use common::render_pipeline::{
   RenderConfigBundle,
 };
 use fastrender::dom::{DomNode, DomNodeType};
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::image_output::encode_image;
 use fastrender::paint::display_list::DisplayItem;
 use fastrender::resource::normalize_page_name;
@@ -257,10 +258,7 @@ struct RenderOutcome {
 }
 
 fn main() {
-  if std::env::var("FASTR_LAYOUT_PROFILE")
-    .map(|v| v != "0")
-    .unwrap_or(false)
-  {
+  if RuntimeToggles::from_env().truthy("FASTR_LAYOUT_PROFILE") {
     eprintln!("FASTR_LAYOUT_PROFILE enabled: layout timings will be logged");
   }
 

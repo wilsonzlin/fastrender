@@ -18,6 +18,7 @@ use crate::css::types::PropertyValue;
 use crate::css::types::ScopeContext;
 use crate::css::types::StyleRule;
 use crate::css::types::StyleSheet;
+use crate::debug::runtime;
 use crate::dom::resolve_first_strong_direction;
 use crate::dom::with_target_fragment;
 use crate::dom::DomNode;
@@ -181,9 +182,7 @@ pub(crate) fn cascade_profile_enabled() -> bool {
 
 fn ensure_cascade_profile_initialized() {
   CASCADE_PROFILE_INITIALIZED.get_or_init(|| {
-    let enabled = std::env::var("FASTR_CASCADE_PROFILE")
-      .map(|v| v != "0")
-      .unwrap_or(false);
+    let enabled = runtime::runtime_toggles().truthy("FASTR_CASCADE_PROFILE");
     CASCADE_PROFILE_ENABLED.store(enabled, Ordering::Relaxed);
   });
 }
@@ -1211,9 +1210,7 @@ pub fn apply_styles_with_media_target_and_imports_cached_with_deadline(
   if profile_enabled {
     reset_cascade_profile();
   }
-  let log_reuse = std::env::var("FASTR_LOG_CONTAINER_REUSE")
-    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-    .unwrap_or(false);
+  let log_reuse = runtime::runtime_toggles().truthy("FASTR_LOG_CONTAINER_REUSE");
   let mut reuse_counter: usize = 0;
 
   // Parse user-agent stylesheet once

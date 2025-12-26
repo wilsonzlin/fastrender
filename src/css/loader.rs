@@ -5,6 +5,7 @@
 //! fetched CSS into an HTML document. They are shared by the developer
 //! tooling binaries so cached pages can be rendered with their real styles.
 
+use crate::debug::runtime;
 use crate::error::{RenderError, RenderStage, Result};
 use crate::render_control::RenderDeadline;
 use cssparser::{Parser, ParserInput, Token};
@@ -858,7 +859,7 @@ pub fn extract_css_links(
   media_type: crate::style::media::MediaType,
 ) -> Vec<String> {
   let mut css_urls = Vec::new();
-  let debug = std::env::var("FASTR_LOG_CSS_LINKS").is_ok();
+  let debug = runtime::runtime_toggles().truthy("FASTR_LOG_CSS_LINKS");
 
   let lower = html.to_lowercase();
   let mut pos = 0;

@@ -243,19 +243,9 @@ impl BlockFormattingContext {
     current_y: f32,
     nearest_positioned_cb: &ContainingBlock,
   ) -> Result<(FragmentNode, f32), LayoutError> {
-    static DUMP_CHILD_Y: OnceLock<bool> = OnceLock::new();
-    static LOG_WIDE_FLEX: OnceLock<bool> = OnceLock::new();
-    static LOG_NARROW_FLEX: OnceLock<bool> = OnceLock::new();
-    let dump_child_y = *DUMP_CHILD_Y.get_or_init(|| {
-      std::env::var("FASTR_DUMP_CELL_CHILD_Y")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
-    let log_wide_flex = *LOG_WIDE_FLEX.get_or_init(|| {
-      std::env::var("FASTR_LOG_WIDE_FLEX")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
+    let toggles = crate::debug::runtime::runtime_toggles();
+    let dump_child_y = toggles.truthy("FASTR_DUMP_CELL_CHILD_Y");
+    let log_wide_flex = toggles.truthy("FASTR_LOG_WIDE_FLEX");
     if let BoxType::Replaced(replaced_box) = &child.box_type {
       return self.layout_replaced_child(
         child,
@@ -326,12 +316,8 @@ impl BlockFormattingContext {
       inline_sides,
       inline_positive,
     );
-    static LOG_BLOCK_WIDE: OnceLock<bool> = OnceLock::new();
-    if *LOG_BLOCK_WIDE.get_or_init(|| {
-      std::env::var("FASTR_LOG_BLOCK_WIDE")
-        .map(|v| v != "0")
-        .unwrap_or(false)
-    }) && computed_width.total_width() > containing_width + 0.5
+    if toggles.truthy("FASTR_LOG_BLOCK_WIDE")
+      && computed_width.total_width() > containing_width + 0.5
     {
       let selector = child
         .debug_info
@@ -437,23 +423,10 @@ impl BlockFormattingContext {
 
     // Check if this child establishes a different formatting context
     let fc_type = child.formatting_context();
-    static LOG_FLEX_CHILD: OnceLock<bool> = OnceLock::new();
-    static LOG_FLEX_CHILD_IDS: OnceLock<Vec<usize>> = OnceLock::new();
-    let log_flex_child = *LOG_FLEX_CHILD.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_CHILD")
-        .map(|v| v != "0")
-        .unwrap_or(false)
-    });
-    let log_flex_child_ids = LOG_FLEX_CHILD_IDS.get_or_init(|| {
-      std::env::var("FASTR_LOG_FLEX_CHILD_IDS")
-        .ok()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
+    let log_flex_child = toggles.truthy("FASTR_LOG_FLEX_CHILD");
+    let log_flex_child_ids = toggles
+      .usize_list("FASTR_LOG_FLEX_CHILD_IDS")
+      .unwrap_or_default();
 
     if matches!(
       fc_type,
@@ -522,12 +495,7 @@ impl BlockFormattingContext {
                 );
         }
       }
-      if *LOG_NARROW_FLEX.get_or_init(|| {
-        std::env::var("FASTR_LOG_NARROW_FLEX")
-          .map(|v| v != "0")
-          .unwrap_or(false)
-      }) && computed_width.content_width < 150.0
-      {
+      if toggles.truthy("FASTR_LOG_NARROW_FLEX") && computed_width.content_width < 150.0 {
         // Compute how much auto margins and percentage padding/borders left for content.
         let horiz_edges = computed_width.border_left
           + computed_width.padding_left
@@ -572,9 +540,7 @@ impl BlockFormattingContext {
         );
         let fc = factory.create(fc_type);
 
-        let log_skinny = std::env::var("FASTR_LOG_SKINNY_FLEX")
-          .map(|v| v != "0")
-          .unwrap_or(false);
+        let log_skinny = toggles.truthy("FASTR_LOG_SKINNY_FLEX");
         if log_skinny && computed_width.content_width <= 1.0 {
           let selector = child
             .debug_info
@@ -750,6 +716,7 @@ impl BlockFormattingContext {
         cb_block_base,
       );
 
+      let trace_positioned = trace_positioned_ids();
       for PositionedCandidate {
         node: pos_child,
         source,
@@ -757,7 +724,7 @@ impl BlockFormattingContext {
       } in positioned_children
       {
         let original_style = pos_child.style.clone();
-        if trace_positioned_ids().contains(&pos_child.id) {
+        if trace_positioned.contains(&pos_child.id) {
           eprintln!(
                         "[block-positioned-layout] parent_id={} child_id={} padding_rect=({:.1},{:.1},{:.1},{:.1})",
                         parent.id,
@@ -854,7 +821,7 @@ impl BlockFormattingContext {
         }
         child_fragment.bounds = Rect::new(result.position, result.size);
         child_fragment.style = Some(original_style);
-        if trace_positioned_ids().contains(&pos_child.id) {
+        if trace_positioned.contains(&pos_child.id) {
           let (text_count, total) = count_text_fragments(&child_fragment);
           let mut snippets = Vec::new();
           collect_first_texts(&child_fragment, &mut snippets, 3);
@@ -915,6 +882,8 @@ impl BlockFormattingContext {
   ) -> Result<(FragmentNode, f32), LayoutError> {
     let style = &child.style;
     let font_size = style.font_size;
+    let toggles = crate::debug::runtime::runtime_toggles();
+    let log_wide_flex = toggles.truthy("FASTR_LOG_WIDE_FLEX");
 
     // Percentages on replaced elements resolve against the containing block size (width/height
     // when available). Even if the block height is indefinite, we still have a valid width
@@ -923,7 +892,6 @@ impl BlockFormattingContext {
       containing_width,
       constraints.height().unwrap_or(f32::NAN),
     ));
-    static LOG_WIDE_FLEX: OnceLock<bool> = OnceLock::new();
     let mut used_size =
       compute_replaced_size(style, replaced_box, percentage_base, self.viewport_size);
     // As a final guard, honor resolved min/max constraints against the containing block width/height.
@@ -951,11 +919,6 @@ impl BlockFormattingContext {
     if let Some(min_w) = resolved_min_w {
       used_size.width = used_size.width.max(min_w);
     }
-    let log_wide_flex = *LOG_WIDE_FLEX.get_or_init(|| {
-      std::env::var("FASTR_LOG_WIDE_FLEX")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
     if log_wide_flex && used_size.width > containing_width + 0.5 {
       let selector = child
         .debug_info
@@ -1074,6 +1037,7 @@ impl BlockFormattingContext {
     constraints: &LayoutConstraints,
     nearest_positioned_cb: &ContainingBlock,
   ) -> Result<(Vec<FragmentNode>, f32, Vec<PositionedCandidate>), LayoutError> {
+    let toggles = crate::debug::runtime::runtime_toggles();
     let inline_is_horizontal = inline_axis_is_horizontal(parent.style.writing_mode);
     let inline_space = if inline_is_horizontal {
       constraints.available_width
@@ -1106,12 +1070,7 @@ impl BlockFormattingContext {
         constraints.inline_percentage_base.unwrap_or(0.0)
       }
     };
-    static DUMP_CELL_CHILD_Y: OnceLock<bool> = OnceLock::new();
-    let dump_cell_child_y = *DUMP_CELL_CHILD_Y.get_or_init(|| {
-      std::env::var("FASTR_DUMP_CELL_CHILD_Y")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
+    let dump_cell_child_y = toggles.truthy("FASTR_DUMP_CELL_CHILD_Y");
     let mut fragments = Vec::new();
     let mut current_y: f32 = 0.0;
     let mut content_height: f32 = 0.0;
@@ -1128,26 +1087,13 @@ impl BlockFormattingContext {
       margin_ctx.mark_content_encountered();
     }
     static TRACE_ENV_RAW_LOGGED: OnceLock<bool> = OnceLock::new();
-    if let Ok(val) = std::env::var("FASTR_TRACE_BOXES") {
+    if let Some(val) = toggles.get("FASTR_TRACE_BOXES") {
       TRACE_ENV_RAW_LOGGED.get_or_init(|| {
         eprintln!("[trace-box-env-raw] {}", val);
         true
       });
     }
-    let trace_boxes: Vec<usize> = std::env::var("FASTR_TRACE_BOXES")
-      .ok()
-      .and_then(|s| {
-        let ids: Vec<_> = s
-          .split(',')
-          .filter_map(|p| p.trim().parse::<usize>().ok())
-          .collect();
-        if ids.is_empty() {
-          None
-        } else {
-          Some(ids)
-        }
-      })
-      .unwrap_or_default();
+    let trace_boxes = toggles.usize_list("FASTR_TRACE_BOXES").unwrap_or_default();
     static TRACE_BOXES_LOGGED: OnceLock<bool> = OnceLock::new();
     if !trace_boxes.is_empty() {
       TRACE_BOXES_LOGGED.get_or_init(|| {
@@ -1155,43 +1101,12 @@ impl BlockFormattingContext {
         true
       });
     }
-    let progress_ms = std::env::var("FASTR_LOG_BLOCK_PROGRESS_MS")
-      .ok()
-      .and_then(|v| v.parse().ok())
+    let progress_ms = toggles
+      .usize("FASTR_LOG_BLOCK_PROGRESS_MS")
+      .map(|v| v as u128)
       .unwrap_or(0);
-    let progress_ids = std::env::var("FASTR_LOG_BLOCK_PROGRESS_IDS")
-      .ok()
-      .and_then(|s| {
-        let ids: Vec<_> = s
-          .split(',')
-          .filter_map(|tok| tok.trim().parse::<usize>().ok())
-          .collect();
-        if ids.is_empty() {
-          None
-        } else {
-          Some(ids)
-        }
-      });
-    let progress_match = std::env::var("FASTR_LOG_BLOCK_PROGRESS_MATCH")
-      .ok()
-      .and_then(|s| {
-        let subs: Vec<_> = s
-          .split(',')
-          .filter_map(|tok| {
-            let trimmed = tok.trim();
-            if trimmed.is_empty() {
-              None
-            } else {
-              Some(trimmed.to_string())
-            }
-          })
-          .collect();
-        if subs.is_empty() {
-          None
-        } else {
-          Some(subs)
-        }
-      });
+    let progress_ids = toggles.usize_list("FASTR_LOG_BLOCK_PROGRESS_IDS");
+    let progress_match = toggles.string_list("FASTR_LOG_BLOCK_PROGRESS_MATCH");
     let filters_set = progress_ids.is_some() || progress_match.is_some();
     let passes_filters = |node: &BoxNode| -> bool {
       let id_ok = progress_ids
@@ -1219,23 +1134,19 @@ impl BlockFormattingContext {
     let should_log_progress = progress_ms > 0 && passes_filters(parent);
     let progress_ms = if should_log_progress { progress_ms } else { 0 };
     let progress_max = if progress_ms > 0 {
-      std::env::var("FASTR_LOG_BLOCK_PROGRESS_MAX")
-        .ok()
-        .and_then(|v| v.parse::<u32>().ok())
-        .unwrap_or(10)
+      toggles.usize("FASTR_LOG_BLOCK_PROGRESS_MAX").unwrap_or(10) as u32
     } else {
       0
     };
-    static TOTAL_CAP: OnceLock<Option<u32>> = OnceLock::new();
     static TOTAL_COUNT: OnceLock<std::sync::atomic::AtomicU32> = OnceLock::new();
-    let total_cap = TOTAL_CAP
-      .get_or_init(|| {
-        std::env::var("FASTR_LOG_BLOCK_PROGRESS_TOTAL_MAX")
-          .ok()
-          .and_then(|v| v.parse::<u32>().ok())
-          .or(Some(50))
-      })
-      .to_owned();
+    let total_cap = if should_log_progress {
+      toggles
+        .usize("FASTR_LOG_BLOCK_PROGRESS_TOTAL_MAX")
+        .map(|v| v as u32)
+        .or(Some(50))
+    } else {
+      None
+    };
     let total_counter = TOTAL_COUNT.get_or_init(|| std::sync::atomic::AtomicU32::new(0));
 
     let within_total_cap = total_cap
@@ -1264,10 +1175,9 @@ impl BlockFormattingContext {
     };
     let progress_start = Instant::now();
     let mut progress_last = if progress_ms > 0 {
+      let clamped_ms = progress_ms.min(u128::from(u64::MAX)) as u64;
       progress_start
-        .checked_sub(std::time::Duration::from_millis(
-          progress_ms.min(u128::from(u64::MAX)) as u64,
-        ))
+        .checked_sub(std::time::Duration::from_millis(clamped_ms))
         .unwrap_or(progress_start)
     } else {
       progress_start
@@ -1423,6 +1333,8 @@ impl BlockFormattingContext {
       Ok(())
     };
 
+    let trace_positioned = trace_positioned_ids();
+    let trace_block_text = trace_block_text_ids();
     for (child_idx, child) in parent.children.iter().enumerate() {
       if progress_ms > 0 {
         if let Some(cap) = total_cap {
@@ -1472,9 +1384,7 @@ impl BlockFormattingContext {
             crate::style::types::WhiteSpace::Pre | crate::style::types::WhiteSpace::PreWrap
           )
         {
-          if trace_positioned_ids().contains(&child.id)
-            || trace_block_text_ids().contains(&child.id)
-          {
+          if trace_positioned.contains(&child.id) || trace_block_text.contains(&child.id) {
             eprintln!(
               "[block-text-skip] id={} selector={:?} raw={:?}",
               child.id,
@@ -1484,7 +1394,7 @@ impl BlockFormattingContext {
           }
           continue;
         }
-        if trace_block_text_ids().contains(&child.id) {
+        if trace_block_text.contains(&child.id) {
           eprintln!(
             "[block-text] id={} selector={:?} text={:?} white_space={:?}",
             child.id,
@@ -1497,7 +1407,7 @@ impl BlockFormattingContext {
 
       // Skip out-of-flow positioned boxes (absolute/fixed)
       if is_out_of_flow(child) {
-        if trace_positioned_ids().contains(&child.id) {
+        if trace_positioned.contains(&child.id) {
           eprintln!(
             "[block-positioned] parent_id={} child_id={} selector={} pos={:?}",
             parent.id,
@@ -2292,6 +2202,7 @@ impl FormattingContext for BlockFormattingContext {
       return Ok(cached);
     }
     let style = &box_node.style;
+    let toggles = crate::debug::runtime::runtime_toggles();
     let inline_is_horizontal = inline_axis_is_horizontal(style.writing_mode);
     let _inline_positive = inline_axis_positive(style.writing_mode, style.direction);
     let _block_positive = block_axis_positive(style.writing_mode);
@@ -2305,9 +2216,7 @@ impl FormattingContext for BlockFormattingContext {
     } else {
       self.viewport_size.height
     };
-    let log_skinny = std::env::var("FASTR_LOG_SKINNY_FLEX")
-      .map(|v| v != "0")
-      .unwrap_or(false);
+    let log_skinny = toggles.truthy("FASTR_LOG_SKINNY_FLEX");
     let inline_percentage_base = match inline_space {
       AvailableSpace::Definite(_) => {
         let base = if inline_is_horizontal {
@@ -2509,13 +2418,7 @@ impl FormattingContext for BlockFormattingContext {
         containing_width = inline_viewport;
       }
     }
-    static LOG_SMALL_BLOCK: OnceLock<bool> = OnceLock::new();
-    if *LOG_SMALL_BLOCK.get_or_init(|| {
-      std::env::var("FASTR_LOG_SMALL_BLOCK")
-        .map(|v| v != "0")
-        .unwrap_or(false)
-    }) && containing_width < 150.0
-    {
+    if toggles.truthy("FASTR_LOG_SMALL_BLOCK") && containing_width < 150.0 {
       let selector = box_node
         .debug_info
         .as_ref()
@@ -2558,12 +2461,7 @@ impl FormattingContext for BlockFormattingContext {
       inline_positive,
     );
     if style.shrink_to_fit_inline_size && style_for_width.width.is_none() {
-      static LOG_SHRINK: OnceLock<bool> = OnceLock::new();
-      let log_shrink = *LOG_SHRINK.get_or_init(|| {
-        std::env::var("FASTR_LOG_SHRINK_TO_FIT")
-          .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-          .unwrap_or(false)
-      });
+      let log_shrink = toggles.truthy("FASTR_LOG_SHRINK_TO_FIT");
       let horizontal_edges = computed_width.border_left
         + computed_width.padding_left
         + computed_width.padding_right
@@ -2711,12 +2609,7 @@ impl FormattingContext for BlockFormattingContext {
     if clamped_content_width > self.viewport_size.width {
       clamped_content_width = self.viewport_size.width;
     }
-    static LOG_WIDE_BLOCK: OnceLock<bool> = OnceLock::new();
-    let log_wide_block = *LOG_WIDE_BLOCK.get_or_init(|| {
-      std::env::var("FASTR_LOG_WIDE_FLEX")
-        .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-        .unwrap_or(false)
-    });
+    let log_wide_block = toggles.truthy("FASTR_LOG_WIDE_FLEX");
     if log_wide_block && computed_width.content_width > self.viewport_size.width + 0.5 {
       let selector = box_node
         .debug_info
@@ -3200,17 +3093,9 @@ impl FormattingContext for BlockFormattingContext {
 
     // Inline formatting context contribution (text and inline-level children).
     // Block-level children split inline runs into separate formatting contexts.
-    static LOG_IDS: OnceLock<Vec<usize>> = OnceLock::new();
-    let log_ids = LOG_IDS.get_or_init(|| {
-      std::env::var("FASTR_LOG_INTRINSIC_IDS")
-        .ok()
-        .map(|s| {
-          s.split(',')
-            .filter_map(|tok| tok.trim().parse::<usize>().ok())
-            .collect()
-        })
-        .unwrap_or_default()
-    });
+    let log_ids = crate::debug::runtime::runtime_toggles()
+      .usize_list("FASTR_LOG_INTRINSIC_IDS")
+      .unwrap_or_default();
     let log_children = !log_ids.is_empty() && log_ids.contains(&box_node.id);
 
     let mut inline_width = 0.0f32;
@@ -3470,32 +3355,16 @@ fn collect_first_texts(fragment: &FragmentNode, out: &mut Vec<String>, limit: us
   walk(fragment, out, limit);
 }
 
-fn trace_positioned_ids() -> &'static Vec<usize> {
-  static IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
-  IDS.get_or_init(|| {
-    std::env::var("FASTR_TRACE_POSITIONED")
-      .ok()
-      .map(|v| {
-        v.split(',')
-          .filter_map(|tok| tok.trim().parse::<usize>().ok())
-          .collect::<Vec<_>>()
-      })
-      .unwrap_or_default()
-  })
+fn trace_positioned_ids() -> Vec<usize> {
+  crate::debug::runtime::runtime_toggles()
+    .usize_list("FASTR_TRACE_POSITIONED")
+    .unwrap_or_default()
 }
 
-fn trace_block_text_ids() -> &'static Vec<usize> {
-  static IDS: std::sync::OnceLock<Vec<usize>> = std::sync::OnceLock::new();
-  IDS.get_or_init(|| {
-    std::env::var("FASTR_TRACE_BLOCK_TEXT")
-      .ok()
-      .map(|v| {
-        v.split(',')
-          .filter_map(|tok| tok.trim().parse::<usize>().ok())
-          .collect::<Vec<_>>()
-      })
-      .unwrap_or_default()
-  })
+fn trace_block_text_ids() -> Vec<usize> {
+  crate::debug::runtime::runtime_toggles()
+    .usize_list("FASTR_TRACE_BLOCK_TEXT")
+    .unwrap_or_default()
 }
 
 fn resolve_length_for_width(

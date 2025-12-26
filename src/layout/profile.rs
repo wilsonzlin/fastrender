@@ -1,6 +1,6 @@
+use crate::debug::runtime;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -40,7 +40,6 @@ impl LayoutKind {
 
 const KIND_COUNT: usize = 6;
 
-static ENABLED: OnceLock<bool> = OnceLock::new();
 static TIME_NS: [AtomicU64; KIND_COUNT] = [
   AtomicU64::new(0),
   AtomicU64::new(0),
@@ -59,11 +58,7 @@ static CALLS: [AtomicU64; KIND_COUNT] = [
 ];
 
 fn enabled() -> bool {
-  *ENABLED.get_or_init(|| {
-    std::env::var("FASTR_LAYOUT_PROFILE")
-      .map(|v| v != "0")
-      .unwrap_or(false)
-  })
+  runtime::runtime_toggles().truthy("FASTR_LAYOUT_PROFILE")
 }
 
 pub fn layout_profile_enabled() -> bool {
