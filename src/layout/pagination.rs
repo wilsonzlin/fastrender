@@ -153,6 +153,7 @@ pub fn paginate_fragment_tree(
     PageSide::Right,
     fallback_page_size,
     root_font_size,
+    Some(root_style.as_ref()),
   );
   let base_key = PageLayoutKey::new(&base_style, style_hash, font_generation);
   let base_layout = layout_for_style(
@@ -188,6 +189,7 @@ pub fn paginate_fragment_tree(
       side,
       fallback_page_size,
       root_font_size,
+      Some(root_style.as_ref()),
     );
     let mut key = PageLayoutKey::new(&page_style, style_hash, font_generation);
     let mut layout = layout_for_style(
@@ -216,6 +218,7 @@ pub fn paginate_fragment_tree(
         side,
         fallback_page_size,
         root_font_size,
+        Some(root_style.as_ref()),
       );
       key = PageLayoutKey::new(&page_style, style_hash, font_generation);
       layout = layout_for_style(

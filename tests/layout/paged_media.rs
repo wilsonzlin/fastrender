@@ -303,6 +303,35 @@ fn margin_box_uses_custom_counter_style() {
 }
 
 #[test]
+fn margin_box_inherits_body_color_and_font_size() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          body { color: rgb(200, 0, 0); font-size: 30px; }
+          @page {
+            size: 200px 120px;
+            margin: 10px;
+            @top-center { content: "X"; }
+          }
+        </style>
+      </head>
+      <body></body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 300, 200).unwrap();
+  let page = *pages(&tree).first().expect("at least one page");
+  let header = find_text(page, "X").expect("margin box text");
+  let style = header.get_style().expect("margin text style");
+
+  assert_eq!(style.color, Rgba::rgb(200, 0, 0));
+  assert!((style.font_size - 30.0).abs() < 0.1);
+}
+
+#[test]
 fn margin_box_text_is_shaped() {
   let html = r#"
     <html>

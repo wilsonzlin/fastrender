@@ -2136,7 +2136,7 @@ fn apply_styles_internal_with_ancestors<'a>(
   }))
 }
 
-fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
+pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle) {
   // Reset cascade bookkeeping for the new style; logical pending state should not inherit.
   styles.logical.reset();
   // Typography properties inherit
