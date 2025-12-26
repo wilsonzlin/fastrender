@@ -19,6 +19,7 @@ mod rasterize_test;
 mod stacking_test;
 mod svg_filter_color_interpolation;
 mod svg_filter_test;
+mod svg_inline_css_cdata_test;
 mod svg_inline_test;
 mod text_rasterize_test;
 mod top_layer_test;

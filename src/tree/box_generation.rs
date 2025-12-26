@@ -557,6 +557,20 @@ fn format_css_color(color: crate::style::color::Rgba) -> String {
 fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent {
   const MAX_EMBEDDED_SVG_CSS_BYTES: usize = 64 * 1024;
 
+  fn append_style_with_cdata(out: &mut String, css: &str) {
+    // Ensure embedded document CSS stays XML-safe by wrapping it in CDATA and splitting any
+    // terminators that would otherwise close the section.
+    out.push_str("<style><![CDATA[");
+    let mut last = 0;
+    for (idx, _) in css.match_indices("]]>") {
+      out.push_str(&css[last..idx]);
+      out.push_str("]]]]><![CDATA[>");
+      last = idx + 3;
+    }
+    out.push_str(&css[last..]);
+    out.push_str("]]></style>");
+  }
+
   fn merge_style_attribute(attrs: &mut Vec<(String, String)>, extra: &str) {
     if extra.trim().is_empty() {
       return;
@@ -888,12 +902,8 @@ fn serialize_svg_subtree(styled: &StyledNode, document_css: &str) -> SvgContent 
         fallback_out.push('>');
 
         if is_root && embed_document_css {
-          out.push_str("<style>");
-          out.push_str(document_css);
-          out.push_str("</style>");
-          fallback_out.push_str("<style>");
-          fallback_out.push_str(document_css);
-          fallback_out.push_str("</style>");
+          append_style_with_cdata(out, document_css);
+          append_style_with_cdata(fallback_out, document_css);
         }
 
         for child in &styled.children {

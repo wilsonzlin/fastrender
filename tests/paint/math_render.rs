@@ -1,13 +1,10 @@
-#[path = "../ref/mod.rs"]
-mod r#ref;
-
 use fastrender::math::{layout_mathml, MathNode, MathVariant};
 use fastrender::paint::display_list::DisplayItem;
 use fastrender::paint::display_list_builder::DisplayListBuilder;
 use fastrender::text::font_loader::FontContext;
 use fastrender::tree::box_tree::ReplacedType;
 use fastrender::{FastRender, FragmentContent, FragmentNode};
-use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
+use crate::r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
 use std::path::PathBuf;
 use std::thread;
 
