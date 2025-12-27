@@ -593,6 +593,30 @@ pub fn font_has_feature(font: &LoadedFont, tag: [u8; 4]) -> bool {
   false
 }
 
+fn face_has_color_tables(face: &ttf_parser::Face<'_>) -> bool {
+  let raw = face.raw_face();
+  let has_colr = raw.table(ttf_parser::Tag::from_bytes(b"COLR")).is_some();
+  let has_cpal = raw.table(ttf_parser::Tag::from_bytes(b"CPAL")).is_some();
+  let has_cbdt = raw.table(ttf_parser::Tag::from_bytes(b"CBDT")).is_some();
+  let has_cblc = raw.table(ttf_parser::Tag::from_bytes(b"CBLC")).is_some();
+  let has_sbix = raw.table(ttf_parser::Tag::from_bytes(b"sbix")).is_some();
+  let has_svg = raw.table(ttf_parser::Tag::from_bytes(b"SVG ")).is_some();
+
+  // Treat COLR alone as color-capable to accommodate fonts that embed default palettes without
+  // a CPAL table.
+  (has_colr && has_cpal) || (has_cbdt && has_cblc) || has_sbix || has_svg || has_colr
+}
+
+pub(crate) fn font_name_indicates_emoji(name: &str) -> bool {
+  let name_lower = name.to_lowercase();
+  name_lower.contains("emoji")
+    || name_lower.contains("symbola")
+    || name_lower.contains("noto color")
+    || name_lower.contains("apple color")
+    || name_lower.contains("segoe ui emoji")
+    || name_lower.contains("segoe ui symbol")
+}
+
 /// Generic font families as defined by CSS
 ///
 /// These are abstract font families that map to actual system fonts.
@@ -1216,6 +1240,16 @@ impl FontDatabase {
       .unwrap_or(false)
   }
 
+  /// Returns true if the font advertises any color/emoji-capable tables.
+  ///
+  /// Detection is table-based (COLR/CPAL, CBDT/CBLC, sbix, SVG) instead of relying on family name
+  /// heuristics. Returns None if the font could not be parsed.
+  pub fn is_color_capable_font(&self, id: ID) -> Option<bool> {
+    self
+      .cached_face(id)
+      .map(|face| face_has_color_tables(&face.face))
+  }
+
   /// Checks if a character is an emoji.
   ///
   /// Uses Unicode properties to determine if a character should be
@@ -1233,17 +1267,18 @@ impl FontDatabase {
     let mut emoji_fonts = Vec::new();
 
     for face in self.db.faces() {
-      let is_emoji_font = face.families.iter().any(|(name, _)| {
-        let name_lower = name.to_lowercase();
-        name_lower.contains("emoji")
-          || name_lower.contains("symbola")
-          || name_lower.contains("noto color")
-          || name_lower.contains("apple color")
-          || name_lower.contains("segoe ui emoji")
-          || name_lower.contains("segoe ui symbol")
-      });
+      let is_color_font = self.is_color_capable_font(face.id);
+      if matches!(is_color_font, Some(true)) {
+        emoji_fonts.push(face.id);
+        continue;
+      }
 
-      if is_emoji_font {
+      if is_color_font.is_none()
+        && face
+          .families
+          .iter()
+          .any(|(name, _)| font_name_indicates_emoji(name))
+      {
         emoji_fonts.push(face.id);
       }
     }

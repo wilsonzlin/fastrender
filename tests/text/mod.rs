@@ -2,6 +2,7 @@
 
 mod bidi;
 mod bidi_visual_order;
+mod color_font_detection_test;
 mod emoji_test;
 mod emoji_unified_test;
 mod font_fallback;

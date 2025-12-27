@@ -67,6 +67,7 @@ use crate::style::types::NumericFraction;
 use crate::style::types::NumericSpacing;
 use crate::style::ComputedStyle;
 use crate::text::emoji;
+use crate::text::font_db::FontDatabase;
 use crate::text::font_db::FontStretch as DbFontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::LoadedFont;
@@ -1762,12 +1763,12 @@ fn is_emoji_dominant(text: &str) -> bool {
   saw_emoji
 }
 
-fn font_is_emoji_font(font: &LoadedFont) -> bool {
-  let name = font.family.to_lowercase();
-  name.contains("emoji")
-    || name.contains("color")
-    || name.contains("twemoji")
-    || name.contains("symbola")
+fn font_is_emoji_font(db: &FontDatabase, id: fontdb::ID, font: &LoadedFont) -> bool {
+  if let Some(is_color) = db.is_color_capable_font(id) {
+    return is_color;
+  }
+
+  crate::text::font_db::font_name_indicates_emoji(&font.family)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -2003,7 +2004,7 @@ fn resolve_font_for_char(
               };
               if let Some(id) = db.inner().query(&query) {
                 if let Some(font) = db.load_font(id) {
-                  let is_emoji_font = font_is_emoji_font(&font);
+                  let is_emoji_font = font_is_emoji_font(db, id, &font);
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
                   if db.has_glyph_cached(id, ch) {
@@ -2049,7 +2050,7 @@ fn resolve_font_for_char(
 
           if let Some(id) = db.inner().query(&query) {
             if let Some(font) = db.load_font(id) {
-              let is_emoji_font = font_is_emoji_font(&font);
+              let is_emoji_font = font_is_emoji_font(db, id, &font);
               let idx = picker.bump_order();
               picker.record_any(&font, is_emoji_font, idx);
               if db.has_glyph_cached(id, ch) {
@@ -2076,7 +2077,7 @@ fn resolve_font_for_char(
               };
               if let Some(id) = db.inner().query(&query) {
                 if let Some(font) = db.load_font(id) {
-                  let is_emoji_font = font_is_emoji_font(&font);
+                  let is_emoji_font = font_is_emoji_font(db, id, &font);
                   let idx = picker.bump_order();
                   picker.record_any(&font, is_emoji_font, idx);
                   if db.has_glyph_cached(id, ch) {
@@ -2109,7 +2110,7 @@ fn resolve_font_for_char(
 
   for face in db.faces() {
     if let Some(font) = db.load_font(face.id) {
-      let is_emoji_font = font_is_emoji_font(&font);
+      let is_emoji_font = font_is_emoji_font(db, face.id, &font);
       let idx = picker.bump_order();
       picker.record_any(&font, is_emoji_font, idx);
       if db.has_glyph_cached(face.id, ch) {
@@ -4720,28 +4721,6 @@ mod tests {
   }
 
   #[test]
-  fn emoji_font_classifier_matches_family_names() {
-    let emoji_font = LoadedFont {
-      data: Arc::new(Vec::new()),
-      index: 0,
-      family: "Noto Color Emoji".into(),
-      weight: DbFontWeight::NORMAL,
-      style: DbFontStyle::Normal,
-      stretch: DbFontStretch::Normal,
-    };
-    let text_font = LoadedFont {
-      data: Arc::new(Vec::new()),
-      index: 0,
-      family: "Roboto".into(),
-      weight: DbFontWeight::NORMAL,
-      style: DbFontStyle::Normal,
-      stretch: DbFontStretch::Normal,
-    };
-    assert!(font_is_emoji_font(&emoji_font));
-    assert!(!font_is_emoji_font(&text_font));
-  }
-
-  #[test]
   fn variation_selector_stays_with_current_font_run() {
     let ctx = FontContext::new();
     let style = ComputedStyle::default();
@@ -4824,12 +4803,10 @@ mod tests {
     let emoji_font = dummy_font("Noto Color Emoji");
     let mut picker = FontPreferencePicker::new(EmojiPreference::PreferEmoji);
     let idx = picker.bump_order();
-    assert!(picker
-      .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
-      .is_none());
+    assert!(picker.consider(text_font.clone(), false, idx).is_none());
     let idx = picker.bump_order();
     let chosen = picker
-      .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
+      .consider(emoji_font.clone(), true, idx)
       .expect("should pick emoji font");
     assert_eq!(chosen.family, emoji_font.family);
   }
@@ -4839,9 +4816,7 @@ mod tests {
     let text_font = dummy_font("Example Text");
     let mut picker = FontPreferencePicker::new(EmojiPreference::PreferEmoji);
     let idx = picker.bump_order();
-    assert!(picker
-      .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
-      .is_none());
+    assert!(picker.consider(text_font.clone(), false, idx).is_none());
     let chosen = picker.finish().expect("fallback text font");
     assert_eq!(chosen.family, text_font.family);
   }
@@ -4851,9 +4826,7 @@ mod tests {
     let emoji_font = dummy_font("Twemoji");
     let mut picker = FontPreferencePicker::new(EmojiPreference::AvoidEmoji);
     let idx = picker.bump_order();
-    assert!(picker
-      .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
-      .is_none());
+    assert!(picker.consider(emoji_font.clone(), true, idx).is_none());
     let chosen = picker.finish().expect("fallback emoji font");
     assert_eq!(chosen.family, emoji_font.family);
   }
@@ -4866,12 +4839,10 @@ mod tests {
     assert_eq!(pref, EmojiPreference::AvoidEmoji);
     let mut picker = FontPreferencePicker::new(pref);
     let idx = picker.bump_order();
-    assert!(picker
-      .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
-      .is_none());
+    assert!(picker.consider(emoji_font.clone(), true, idx).is_none());
     let idx = picker.bump_order();
     let chosen = picker
-      .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
+      .consider(text_font.clone(), false, idx)
       .expect("should pick text font when avoiding emoji");
     assert_eq!(chosen.family, text_font.family);
   }
@@ -4884,12 +4855,10 @@ mod tests {
     assert_eq!(pref, EmojiPreference::PreferEmoji);
     let mut picker = FontPreferencePicker::new(pref);
     let idx = picker.bump_order();
-    assert!(picker
-      .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
-      .is_none());
+    assert!(picker.consider(text_font.clone(), false, idx).is_none());
     let idx = picker.bump_order();
     let chosen = picker
-      .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
+      .consider(emoji_font.clone(), true, idx)
       .expect("should pick emoji font for emoji preference");
     assert_eq!(chosen.family, emoji_font.family);
   }
@@ -4902,12 +4871,10 @@ mod tests {
     assert_eq!(pref, EmojiPreference::AvoidEmoji);
     let mut picker = FontPreferencePicker::new(pref);
     let idx = picker.bump_order();
-    assert!(picker
-      .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
-      .is_none());
+    assert!(picker.consider(emoji_font.clone(), true, idx).is_none());
     let idx = picker.bump_order();
     let chosen = picker
-      .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
+      .consider(text_font.clone(), false, idx)
       .expect("unicode text should pick text font for non-emoji chars");
     assert_eq!(chosen.family, text_font.family);
   }
@@ -4920,12 +4887,10 @@ mod tests {
     assert_eq!(pref, EmojiPreference::AvoidEmoji);
     let mut picker = FontPreferencePicker::new(pref);
     let idx = picker.bump_order();
-    assert!(picker
-      .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
-      .is_none());
+    assert!(picker.consider(emoji_font.clone(), true, idx).is_none());
     let idx = picker.bump_order();
     let chosen = picker
-      .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
+      .consider(text_font.clone(), false, idx)
       .expect("FE0E should force text presentation");
     assert_eq!(chosen.family, text_font.family);
   }
@@ -4938,12 +4903,10 @@ mod tests {
     assert_eq!(pref, EmojiPreference::PreferEmoji);
     let mut picker = FontPreferencePicker::new(pref);
     let idx = picker.bump_order();
-    assert!(picker
-      .consider(text_font.clone(), font_is_emoji_font(&text_font), idx)
-      .is_none());
+    assert!(picker.consider(text_font.clone(), false, idx).is_none());
     let idx = picker.bump_order();
     let chosen = picker
-      .consider(emoji_font.clone(), font_is_emoji_font(&emoji_font), idx)
+      .consider(emoji_font.clone(), true, idx)
       .expect("FE0F should prefer emoji font even when property requests text");
     assert_eq!(chosen.family, emoji_font.family);
   }
