@@ -55,6 +55,7 @@ use crate::error::Result;
 use crate::style::color::Rgba;
 use crate::text::color_fonts::{ColorFontRenderer, ColorGlyphRaster};
 use crate::text::font_db::LoadedFont;
+use crate::text::glyph_path::{glyph_transform, GlyphOutlineBuilder, GlyphOutlineMetrics};
 use crate::text::pipeline::GlyphPosition;
 use crate::text::pipeline::ShapedRun;
 use rustybuzz::Variation;
@@ -68,102 +69,9 @@ use tiny_skia::FillRule;
 use tiny_skia::Mask;
 use tiny_skia::Paint;
 use tiny_skia::Path;
-use tiny_skia::PathBuilder;
 use tiny_skia::Pixmap;
 use tiny_skia::PixmapPaint;
 use tiny_skia::Transform;
-
-// ============================================================================
-// Glyph Outline Builder
-// ============================================================================
-
-/// Converts ttf-parser glyph outlines to tiny-skia paths.
-///
-/// Implements the `ttf_parser::OutlineBuilder` trait to receive outline
-/// drawing commands and build a tiny-skia `Path`.
-///
-/// # Font Units vs Pixels
-///
-/// Font outlines are in font design units (typically 1000 or 2048 units per em).
-/// The caller must apply scaling to convert to pixels:
-///
-/// ```text
-/// pixel_size = font_units * (font_size_px / units_per_em)
-/// ```
-struct GlyphOutlineBuilder {
-  /// The path being built
-  builder: PathBuilder,
-  /// Number of outline commands
-  verb_count: usize,
-  /// Number of points added to the outline
-  point_count: usize,
-}
-
-impl GlyphOutlineBuilder {
-  /// Creates a new outline builder.
-  ///
-  /// # Arguments
-  ///
-  /// Outlines are recorded in font design units with no positioning
-  /// or scaling. The caller is responsible for applying any required
-  /// transforms when rasterizing the path.
-  fn new() -> Self {
-    Self {
-      builder: PathBuilder::new(),
-      verb_count: 0,
-      point_count: 0,
-    }
-  }
-
-  /// Consumes the builder and returns the completed path and metrics.
-  fn finish(self) -> (Option<Path>, GlyphOutlineMetrics) {
-    (
-      self.builder.finish(),
-      GlyphOutlineMetrics {
-        verb_count: self.verb_count,
-        point_count: self.point_count,
-      },
-    )
-  }
-}
-
-impl ttf_parser::OutlineBuilder for GlyphOutlineBuilder {
-  fn move_to(&mut self, x: f32, y: f32) {
-    self.verb_count += 1;
-    self.point_count += 1;
-    self.builder.move_to(x, y);
-  }
-
-  fn line_to(&mut self, x: f32, y: f32) {
-    self.verb_count += 1;
-    self.point_count += 1;
-    self.builder.line_to(x, y);
-  }
-
-  fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-    self.verb_count += 1;
-    self.point_count += 2;
-    self.builder.quad_to(x1, y1, x, y);
-  }
-
-  fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-    self.verb_count += 1;
-    self.point_count += 3;
-    self.builder.cubic_to(x1, y1, x2, y2, x, y);
-  }
-
-  fn close(&mut self) {
-    self.verb_count += 1;
-    self.builder.close();
-  }
-}
-
-/// Simple metrics captured while building an outline.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct GlyphOutlineMetrics {
-  verb_count: usize,
-  point_count: usize,
-}
 
 // ============================================================================
 // Glyph Cache
@@ -531,10 +439,6 @@ fn estimate_glyph_size(metrics: &GlyphOutlineMetrics) -> usize {
   // private tiny-skia details.
   let verb_bytes = metrics.verb_count * std::mem::size_of::<u8>();
   point_bytes.saturating_add(verb_bytes)
-}
-
-fn glyph_transform(scale: f32, skew: f32, x: f32, y: f32) -> Transform {
-  Transform::from_row(scale, 0.0, skew * scale, -scale, x, y)
 }
 
 fn rotation_transform(
