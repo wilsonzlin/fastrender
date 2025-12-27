@@ -1025,6 +1025,18 @@ fn accessibility_multi_select_value() {
 }
 
 #[test]
+fn accessibility_textarea_value_strips_leading_newline() {
+  let html = "<html><body><textarea id=\"area\">\nHello</textarea></body></html>";
+
+  let tree = render_accessibility_json(html);
+  let value = find_json_node(&tree, "area")
+    .and_then(|node| node.get("value"))
+    .and_then(|v| v.as_str());
+
+  assert_eq!(value, Some("Hello"));
+}
+
+#[test]
 fn accessibility_fixture_snapshots() {
   let fixtures = [
     "headings_links",

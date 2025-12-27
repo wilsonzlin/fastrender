@@ -1398,13 +1398,7 @@ impl<'a> ElementRef<'a> {
   fn control_value(&self) -> Option<String> {
     let tag = self.node.tag_name()?.to_ascii_lowercase();
     if tag == "textarea" {
-      let mut combined = String::new();
-      for child in &self.node.children {
-        if let DomNodeType::Text { content } = &child.node_type {
-          combined.push_str(content);
-        }
-      }
-      return Some(combined);
+      return Some(textarea_value(self.node));
     }
     if tag == "select" {
       return self.select_value();
@@ -1710,13 +1704,8 @@ impl<'a> ElementRef<'a> {
         return false;
       }
 
-      let mut combined = String::new();
-      for child in &self.node.children {
-        if let DomNodeType::Text { content } = &child.node_type {
-          combined.push_str(content);
-        }
-      }
-      return combined.is_empty();
+      let value = textarea_value(self.node);
+      return value.is_empty();
     }
 
     false
@@ -1806,6 +1795,26 @@ impl<'a> ElementRef<'a> {
 
     false
   }
+}
+
+/// Compute the raw textarea value, normalizing newline conventions and removing the single leading
+/// newline that HTML ignores when contents start with a line break (common with formatted markup).
+fn textarea_value(node: &DomNode) -> String {
+  let mut value = String::new();
+  for child in &node.children {
+    if let DomNodeType::Text { content } = &child.node_type {
+      value.push_str(content);
+    }
+  }
+
+  if value.contains('\r') {
+    value = value.replace("\r\n", "\n").replace('\r', "\n");
+  }
+  if value.starts_with('\n') {
+    value.remove(0);
+  }
+
+  value
 }
 
 fn matches_an_plus_b(a: i32, b: i32, position: i32) -> bool {
@@ -3585,6 +3594,25 @@ mod tests {
       &PseudoClass::PlaceholderShown
     ));
 
+    let newline_only_textarea = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "textarea".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("placeholder".to_string(), "Describe".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Text {
+          content: "\n".to_string(),
+        },
+        children: vec![],
+      }],
+    };
+    assert!(matches(
+      &newline_only_textarea,
+      &[],
+      &PseudoClass::PlaceholderShown
+    ));
+
     let prefilled_textarea = DomNode {
       node_type: DomNodeType::Element {
         tag_name: "textarea".to_string(),
@@ -3600,6 +3628,25 @@ mod tests {
     };
     assert!(!matches(
       &prefilled_textarea,
+      &[],
+      &PseudoClass::PlaceholderShown
+    ));
+
+    let formatted_prefilled_textarea = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "textarea".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("placeholder".to_string(), "Describe".to_string())],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Text {
+          content: "\nHello".to_string(),
+        },
+        children: vec![],
+      }],
+    };
+    assert!(!matches(
+      &formatted_prefilled_textarea,
       &[],
       &PseudoClass::PlaceholderShown
     ));
