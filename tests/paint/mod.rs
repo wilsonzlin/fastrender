@@ -17,6 +17,7 @@ mod math_render;
 mod optimize_test;
 mod paged_media_margin_boxes;
 mod overflow_clip_test;
+mod preserve3d_scene;
 mod picture_source_selection;
 mod projective_mapping;
 mod rasterize_test;

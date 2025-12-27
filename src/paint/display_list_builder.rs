@@ -88,6 +88,7 @@ use crate::paint::object_fit::default_object_position;
 use crate::paint::stacking::Layer6Item;
 use crate::paint::stacking::StackingContext;
 use crate::paint::svg_filter::SvgFilterResolver;
+use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::text_shadow::resolve_text_shadows;
 use crate::style::color::Rgba;
 use crate::style::types::AccentColor;
@@ -501,27 +502,19 @@ impl DisplayListBuilder {
       fragment.bounds.size,
     );
 
-    let backface_culled = if let Some(style) = style_opt {
+    if let Some(style) = style_opt {
       if matches!(style.backface_visibility, BackfaceVisibility::Hidden)
         && (!style.transform.is_empty() || style.perspective.is_some() || style.has_motion_path())
       {
         if let Some(transform) = Self::build_transform(style, absolute_rect, self.viewport) {
-          Self::backface_is_hidden(&transform)
-        } else {
-          false
+          if backface_is_hidden(&transform) {
+            if push_opacity {
+              self.pop_opacity();
+            }
+            return;
+          }
         }
-      } else {
-        false
       }
-    } else {
-      false
-    };
-
-    if backface_culled {
-      if push_opacity {
-        self.pop_opacity();
-      }
-      return;
     }
 
     let (overflow_clip, clip_rect) = if let Some(style) = style_opt {
@@ -2089,10 +2082,6 @@ impl DisplayListBuilder {
     viewport: Option<(f32, f32)>,
   ) -> Option<Transform3D> {
     crate::paint::transform_resolver::resolve_transform3d(style, bounds, viewport)
-  }
-
-  fn backface_is_hidden(transform: &Transform3D) -> bool {
-    crate::paint::transform_resolver::backface_is_hidden(transform)
   }
 
   fn emit_fragment_list(&mut self, fragments: &[FragmentNode], offset: Point) {
@@ -4606,32 +4595,6 @@ pub(crate) fn resolve_transform3d(
   viewport: Option<(f32, f32)>,
 ) -> Option<Transform3D> {
   DisplayListBuilder::build_transform(style, bounds, viewport)
-}
-
-/// Returns true if the local plane of the transform faces away from the viewer.
-pub(crate) fn backface_is_hidden(transform: &Transform3D) -> bool {
-  let project = |x: f32, y: f32, m: &Transform3D| -> [f32; 3] {
-    let (tx, ty, tz, tw) = m.transform_point(x, y, 0.0);
-    if tw.abs() < 1e-6 {
-      [tx, ty, tz]
-    } else {
-      [tx / tw, ty / tw, tz / tw]
-    }
-  };
-
-  let p0 = project(0.0, 0.0, transform);
-  let p1 = project(1.0, 0.0, transform);
-  let p2 = project(0.0, 1.0, transform);
-  let ux = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-  let uy = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-
-  let normal = [
-    ux[1] * uy[2] - ux[2] * uy[1],
-    ux[2] * uy[0] - ux[0] * uy[2],
-    ux[0] * uy[1] - ux[1] * uy[0],
-  ];
-
-  normal[2] < 0.0
 }
 
 // ============================================================================

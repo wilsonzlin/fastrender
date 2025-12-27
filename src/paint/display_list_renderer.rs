@@ -55,6 +55,7 @@ use crate::paint::filter_outset::filter_outset;
 use crate::paint::filter_outset::filter_outset_with_bounds;
 use crate::paint::homography::Homography;
 use crate::paint::projective_warp::warp_pixmap;
+use crate::paint::transform3d::backface_is_hidden;
 use crate::paint::rasterize::fill_rounded_rect;
 use crate::paint::rasterize::render_box_shadow;
 use crate::paint::rasterize::BoxShadow;
@@ -1155,28 +1156,6 @@ impl DisplayListRenderer {
       ),
       valid,
     )
-  }
-
-  fn backface_is_hidden(transform: &Transform3D) -> bool {
-    let Some(p0) = transform.project_point(0.0, 0.0, 0.0) else {
-      return false;
-    };
-    let Some(p1) = transform.project_point(1.0, 0.0, 0.0) else {
-      return false;
-    };
-    let Some(p2) = transform.project_point(0.0, 1.0, 0.0) else {
-      return false;
-    };
-    let ux = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
-    let uy = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
-
-    let normal = [
-      ux[1] * uy[2] - ux[2] * uy[1],
-      ux[2] * uy[0] - ux[0] * uy[2],
-      ux[0] * uy[1] - ux[1] * uy[0],
-    ];
-
-    normal[2] < 0.0
   }
 
   #[inline]
@@ -2796,7 +2775,7 @@ impl DisplayListRenderer {
         });
 
         if matches!(item.backface_visibility, BackfaceVisibility::Hidden)
-          && Self::backface_is_hidden(&combined_transform_3d)
+          && backface_is_hidden(&combined_transform_3d)
         {
           self.culled_depth = 1;
           return Ok(());
