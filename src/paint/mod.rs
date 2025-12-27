@@ -102,6 +102,7 @@ pub mod optimize;
 pub mod painter;
 pub mod projective_warp;
 pub mod rasterize;
+pub mod scene_tree;
 pub mod stacking;
 pub mod svg_filter;
 pub mod svg_filter_registry;
