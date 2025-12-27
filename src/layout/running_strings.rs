@@ -23,6 +23,9 @@ pub fn collect_string_set_events(root: &FragmentNode, box_tree: &BoxTree) -> Vec
   let mut styles_by_id = HashMap::new();
   collect_box_styles(&box_tree.root, &mut styles_by_id);
 
+  let mut parent_by_id = HashMap::new();
+  collect_box_parents(&box_tree.root, None, &mut parent_by_id);
+
   let mut box_text = HashMap::new();
   collect_box_text(&box_tree.root, &mut box_text);
 
@@ -33,6 +36,7 @@ pub fn collect_string_set_events(root: &FragmentNode, box_tree: &BoxTree) -> Vec
     0.0,
     &mut events,
     &styles_by_id,
+    &parent_by_id,
     &box_text,
     &mut seen_boxes,
   );
@@ -43,6 +47,18 @@ fn collect_box_styles(node: &BoxNode, out: &mut HashMap<usize, Arc<crate::style:
   out.insert(node.id, node.style.clone());
   for child in &node.children {
     collect_box_styles(child, out);
+  }
+}
+
+fn collect_box_parents(node: &BoxNode, parent: Option<usize>, out: &mut HashMap<usize, usize>) {
+  if let Some(parent_id) = parent {
+    if node.id != 0 && parent_id != 0 {
+      out.insert(node.id, parent_id);
+    }
+  }
+  let next_parent = if node.id != 0 { Some(node.id) } else { parent };
+  for child in &node.children {
+    collect_box_parents(child, next_parent, out);
   }
 }
 
@@ -71,61 +87,46 @@ fn collect_string_set_events_inner(
   abs_start: f32,
   out: &mut Vec<StringSetEvent>,
   styles_by_id: &HashMap<usize, Arc<crate::style::ComputedStyle>>,
+  parent_by_id: &HashMap<usize, usize>,
   box_text: &HashMap<usize, String>,
   seen_boxes: &mut HashSet<usize>,
 ) {
   let start = abs_start + node.bounds.y();
 
-  let inline_continuation = matches!(
-    &node.content,
-    FragmentContent::Inline {
-      fragment_index, ..
-    } if *fragment_index > 0
-  );
-
-  let eligible_box_id = match &node.content {
-    FragmentContent::Inline {
-      box_id,
-      fragment_index,
-    } => (*fragment_index == 0).then_some(()).and_then(|_| *box_id),
-    FragmentContent::Block { box_id } => *box_id,
-    FragmentContent::Replaced { box_id, .. } => *box_id,
-    _ => None,
-  };
-
   let mut assignments: Option<&[StringSetAssignment]> = None;
+  let fragment_box_id: Option<usize> = fragment_box_id(node);
   let mut assignments_box_id: Option<usize> = None;
-  if let Some(style) = node.style.as_deref() {
-    if !style.string_set.is_empty() {
-      assignments = Some(style.string_set.as_slice());
-      assignments_box_id = eligible_box_id.or_else(|| fragment_box_id(node));
+  if let Some(mut probe) = fragment_box_id {
+    loop {
+      if let Some(style) = styles_by_id.get(&probe) {
+        if !style.string_set.is_empty() {
+          assignments = Some(style.string_set.as_slice());
+          assignments_box_id = Some(probe);
+          break;
+        }
+      }
+      let Some(parent) = parent_by_id.get(&probe).copied() else {
+        break;
+      };
+      probe = parent;
     }
   }
 
   if assignments.is_none() {
-    if let Some(box_id) = fragment_box_id(node) {
-      if let Some(style) = styles_by_id.get(&box_id) {
-        if !style.string_set.is_empty() {
-          assignments = Some(style.string_set.as_slice());
-          assignments_box_id = Some(box_id);
-        }
+    if let Some(style) = node.style.as_deref() {
+      if !style.string_set.is_empty() {
+        assignments = Some(style.string_set.as_slice());
+        assignments_box_id = fragment_box_id;
       }
     }
   }
 
   if let Some(assignments) = assignments {
-    let should_emit = if inline_continuation {
-      false
-    } else if let Some(box_id) = eligible_box_id.or(assignments_box_id) {
-      seen_boxes.insert(box_id)
-    } else {
-      true
-    };
+    let should_emit = assignments_box_id.map(|box_id| seen_boxes.insert(box_id)).unwrap_or(true);
 
     if should_emit {
       for StringSetAssignment { name, value } in assignments {
-        let resolved =
-          resolve_string_set_value(node, value, assignments_box_id, box_text);
+        let resolved = resolve_string_set_value(node, value, assignments_box_id, box_text);
         out.push(StringSetEvent {
           abs_y: start,
           name: name.clone(),
@@ -136,7 +137,15 @@ fn collect_string_set_events_inner(
   }
 
   for child in &node.children {
-    collect_string_set_events_inner(child, start, out, styles_by_id, box_text, seen_boxes);
+    collect_string_set_events_inner(
+      child,
+      start,
+      out,
+      styles_by_id,
+      parent_by_id,
+      box_text,
+      seen_boxes,
+    );
   }
 }
 

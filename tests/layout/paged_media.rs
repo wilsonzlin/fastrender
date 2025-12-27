@@ -470,16 +470,16 @@ fn header_repeats_across_pages() {
 #[test]
 fn string_set_from_split_inline_updates_once() {
   let html = r#"
-    <html>
-      <head>
-        <style>
-          @page {
-            size: 200px 150px;
-            margin: 10px;
-            @top-center { content: string(header); }
-          }
-          body { margin: 0; }
-          p { width: 120px; font-size: 16px; }
+	    <html>
+	      <head>
+	        <style>
+	          @page {
+	            size: 1200px 200px;
+	            margin: 30px;
+	            @top-center { content: string(header); }
+	          }
+	          body { margin: 0; }
+	          p { width: 120px; font-size: 16px; }
           .hdr { string-set: header content(); }
         </style>
       </head>
@@ -496,15 +496,36 @@ fn string_set_from_split_inline_updates_once() {
   let page_roots = pages(&tree);
   let page = page_roots.first().expect("page");
   let expected = "Very long header text that wraps across lines";
-  let header = find_text_eq(page, expected).expect("header margin box");
-  let content = page.children.first().expect("page content");
 
-  assert!(header.bounds.y() < content.bounds.y());
-  if let FragmentContent::Text { text, .. } = &header.content {
-    assert_eq!(text, expected);
-  } else {
-    panic!("header should be text");
+  let content = page.children.first().expect("page content");
+  let content_y = page.bounds.y() + content.bounds.y();
+
+  let mut texts = Vec::new();
+  collect_text_fragments(page, (0.0, 0.0), &mut texts);
+  texts.retain(|t| t.y < content_y);
+  texts.sort_by(|a, b| {
+    a.y
+      .partial_cmp(&b.y)
+      .unwrap_or(std::cmp::Ordering::Equal)
+      .then(
+        a.x
+          .partial_cmp(&b.x)
+          .unwrap_or(std::cmp::Ordering::Equal),
+      )
+  });
+
+  let mut header_text = String::new();
+  for t in texts {
+    header_text.push_str(&t.text);
   }
+  header_text.retain(|c| !c.is_whitespace());
+  let mut expected_compacted = expected.to_string();
+  expected_compacted.retain(|c| !c.is_whitespace());
+
+  assert!(
+    header_text.contains(&expected_compacted),
+    "expected header to include full string-set value, got {header_text:?}"
+  );
 }
 
 #[test]

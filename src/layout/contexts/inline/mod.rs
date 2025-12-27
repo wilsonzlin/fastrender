@@ -2649,7 +2649,7 @@ impl InlineFormattingContext {
       if normalized_text.is_empty() {
         return Ok(Vec::new());
       }
-      return self.create_text_items_with_combine(
+      let mut items = self.create_text_items_with_combine(
         &box_node.style,
         &normalized_text,
         forced_breaks,
@@ -2658,7 +2658,13 @@ impl InlineFormattingContext {
         effective_base_direction,
         bidi_stack,
         boundary,
-      );
+      )?;
+      for item in &mut items {
+        if let InlineItem::Text(text_item) = item {
+          text_item.box_id = box_node.id;
+        }
+      }
+      return Ok(items);
     }
 
     let mut items = Vec::new();
@@ -2683,6 +2689,11 @@ impl InlineFormattingContext {
             next: false,
           },
         )?;
+        for item in &mut produced {
+          if let InlineItem::Text(text_item) = item {
+            text_item.box_id = box_node.id;
+          }
+        }
         items.append(&mut produced);
       }
       let tab = self.create_tab_item(box_node, allow_soft_wrap)?;
@@ -2705,6 +2716,11 @@ impl InlineFormattingContext {
           next: boundary.next,
         },
       )?;
+      for item in &mut produced {
+        if let InlineItem::Text(text_item) = item {
+          text_item.box_id = box_node.id;
+        }
+      }
       items.append(&mut produced);
     }
 
@@ -2732,7 +2748,7 @@ impl InlineFormattingContext {
     );
     let normalized =
       normalize_text_for_white_space(&transformed, style.white_space, style.text_wrap);
-    self.create_text_item_from_normalized(
+    let mut item = self.create_text_item_from_normalized(
       &box_node.style,
       &normalized.text,
       normalized.forced_breaks,
@@ -2740,7 +2756,9 @@ impl InlineFormattingContext {
       false,
       base_direction,
       &[(box_node.style.unicode_bidi, box_node.style.direction)],
-    )
+    )?;
+    item.box_id = box_node.id;
+    Ok(item)
   }
 
   fn create_text_item_from_normalized(
@@ -4310,6 +4328,7 @@ impl InlineFormattingContext {
     match item {
       InlineItem::Text(text_item) => {
         let paint_offset = text_item.paint_offset;
+        let box_id = (text_item.box_id != 0).then_some(text_item.box_id);
         if inline_vertical {
           let width = text_item.metrics.height;
           let height = text_item.advance + paint_offset.abs();
@@ -4318,7 +4337,7 @@ impl InlineFormattingContext {
             bounds,
             FragmentContent::Text {
               text: text_item.text.clone(),
-              box_id: None,
+              box_id,
               baseline_offset: text_item.metrics.baseline_offset,
               shaped: Some(text_item.runs.clone()),
               is_marker: text_item.is_marker,
@@ -4337,7 +4356,7 @@ impl InlineFormattingContext {
             bounds,
             FragmentContent::Text {
               text: text_item.text.clone(),
-              box_id: None,
+              box_id,
               baseline_offset: text_item.metrics.baseline_offset,
               shaped: Some(text_item.runs.clone()),
               is_marker: text_item.is_marker,
@@ -4492,9 +4511,13 @@ impl InlineFormattingContext {
             box_item.metrics.height,
           );
           record_containing_block(bounds, &mut positioned_containing_blocks);
-          FragmentNode::new_inline_styled(
+          let box_id = (box_item.box_id != 0).then_some(box_item.box_id);
+          FragmentNode::new_with_style(
             bounds,
-            box_item.box_index,
+            FragmentContent::Inline {
+              box_id,
+              fragment_index: box_item.box_index,
+            },
             children,
             box_item.style.clone(),
           )
@@ -4584,11 +4607,12 @@ impl InlineFormattingContext {
         let paint_offset = text_item.paint_offset;
         let width = text_item.advance + paint_offset.abs();
         let bounds = Rect::from_xywh(x + paint_offset, y, width, text_item.metrics.height);
+        let box_id = (text_item.box_id != 0).then_some(text_item.box_id);
         FragmentNode::new_with_style(
           bounds,
           FragmentContent::Text {
             text: text_item.text.clone(),
-            box_id: None,
+            box_id,
             baseline_offset: text_item.metrics.baseline_offset,
             shaped: Some(text_item.runs.clone()),
             is_marker: text_item.is_marker,

@@ -237,6 +237,9 @@ pub(crate) fn log_line_width_enabled() -> bool {
 /// A shaped text item
 #[derive(Debug, Clone)]
 pub struct TextItem {
+  /// Identifier for the source text box node (0 when unknown/anonymous).
+  pub box_id: usize,
+
   /// The shaped runs (bidi/script/font-aware)
   pub runs: Vec<ShapedRun>,
 
@@ -312,6 +315,7 @@ impl TextItem {
       .unwrap_or_else(|| runs.iter().map(|r| r.advance).sum());
     let font_size = style.font_size;
     Self {
+      box_id: 0,
       runs,
       advance,
       advance_for_layout: advance,
@@ -511,6 +515,7 @@ impl TextItem {
       self.base_direction,
     )
     .with_vertical_align(self.vertical_align);
+    before_item.box_id = self.box_id;
 
     let mut after_item = TextItem::new(
       after_runs,
@@ -535,6 +540,7 @@ impl TextItem {
       self.base_direction,
     )
     .with_vertical_align(self.vertical_align);
+    after_item.box_id = self.box_id;
 
     if before_item.advance <= 0.0 || after_item.advance <= 0.0 {
       let before_runs = shaper.shape(before_text, &self.style, font_context).ok()?;
@@ -561,6 +567,7 @@ impl TextItem {
         self.base_direction,
       )
       .with_vertical_align(self.vertical_align);
+      before_item.box_id = self.box_id;
 
       after_item = TextItem::new(
         after_runs,
@@ -585,6 +592,7 @@ impl TextItem {
         self.base_direction,
       )
       .with_vertical_align(self.vertical_align);
+      after_item.box_id = self.box_id;
     }
 
     if self.is_marker {
@@ -2514,6 +2522,7 @@ fn reorder_paragraph(
           ctx.direction,
           ctx.unicode_bidi,
         );
+        inline_box.box_id = ctx.box_id;
         inline_box.vertical_align = ctx.vertical_align;
         inline_box.add_child(item);
         item = InlineItem::InlineBox(inline_box);
@@ -2595,6 +2604,7 @@ fn slice_text_item(
       .collect();
 
     return Some(TextItem {
+      box_id: item.box_id,
       runs: Vec::new(),
       advance: width,
       advance_for_layout: if item.is_marker {
@@ -2660,6 +2670,7 @@ fn slice_text_item(
     item.base_direction,
   )
   .with_vertical_align(item.vertical_align);
+  new_item.box_id = item.box_id;
   if item.is_marker {
     new_item.is_marker = true;
     new_item.paint_offset = item.paint_offset;
@@ -2672,6 +2683,7 @@ fn slice_text_item(
 #[derive(Clone)]
 struct BoxContext {
   id: usize,
+  box_id: usize,
   start_edge: f32,
   end_edge: f32,
   content_offset_y: f32,
@@ -2708,6 +2720,7 @@ fn flatten_positioned_item(
       *box_counter += 1;
       let ctx = BoxContext {
         id,
+        box_id: inline_box.box_id,
         start_edge: inline_box.start_edge,
         end_edge: inline_box.end_edge,
         content_offset_y: inline_box.content_offset_y,
