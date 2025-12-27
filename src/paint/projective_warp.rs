@@ -88,6 +88,9 @@ pub fn warp_pixmap(
       }
       let dx = global_x as f32 + 0.5;
       let dy = global_y as f32 + 0.5;
+      if !point_in_quad((dx, dy), dst_quad) {
+        continue;
+      }
       let Some((sx, sy)) = inv.transform_point(dx, dy) else {
         continue;
       };
@@ -126,6 +129,29 @@ pub fn warp_pixmap(
     pixmap: output,
     offset: (min_x_i, min_y_i),
   })
+}
+
+fn point_in_quad(p: (f32, f32), quad: &[(f32, f32); 4]) -> bool {
+  let mut sign = 0.0f32;
+  for i in 0..4 {
+    let (x1, y1) = quad[i];
+    let (x2, y2) = quad[(i + 1) % 4];
+    let cross = (x2 - x1) * (p.1 - y1) - (y2 - y1) * (p.0 - x1);
+    if !cross.is_finite() {
+      return false;
+    }
+    if cross.abs() < 1e-6 {
+      continue;
+    }
+    if sign.abs() < 1e-6 {
+      sign = cross;
+      continue;
+    }
+    if cross * sign < 0.0 {
+      return false;
+    }
+  }
+  true
 }
 
 fn sample_bilinear(src: &Pixmap, x: f32, y: f32) -> PremultipliedColorU8 {

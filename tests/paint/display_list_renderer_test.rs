@@ -632,6 +632,128 @@ fn perspective_depth_changes_projection_size() {
 }
 
 #[test]
+fn perspective_blur_preserves_outsets() {
+  let mut list = DisplayList::new();
+  let transform =
+    Transform3D::perspective(400.0).multiply(&Transform3D::translate(0.0, 0.0, 150.0));
+  let rect = Rect::from_xywh(20.0, 20.0, 20.0, 20.0);
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: rect,
+    plane_rect: rect,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: Some(transform),
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![ResolvedFilter::Blur(10.0)],
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect,
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let pixmap = DisplayListRenderer::new(80, 80, Rgba::WHITE, FontContext::new())
+    .unwrap()
+    .render(&list)
+    .unwrap();
+
+  let Some((min_x, min_y, max_x, max_y)) =
+    bounding_box_for_color(&pixmap, |(r, g, b, a)| a > 0 && r > g && r > b)
+  else {
+    panic!("expected red pixels after blur+perspective");
+  };
+  let width = max_x - min_x + 1;
+  let height = max_y - min_y + 1;
+  assert!(
+    width > 20 && height > 20,
+    "blurred content should extend beyond original bounds: width={width} height={height} bbox=({min_x},{min_y})-({max_x},{max_y})"
+  );
+  assert_ne!(pixel(&pixmap, 15, 15), (255, 255, 255, 255));
+}
+
+#[test]
+fn perspective_rotation_blur_preserves_outsets() {
+  let transform =
+    Transform3D::perspective(500.0).multiply(&Transform3D::rotate_y(std::f32::consts::FRAC_PI_4));
+  let rect = Rect::from_xywh(10.0, 10.0, 20.0, 20.0);
+  let red_predicate = |(r, g, b, a)| a > 0 && r > g && r > b;
+
+  let render = |filters: Vec<ResolvedFilter>| {
+    let mut list = DisplayList::new();
+    list.push(DisplayItem::PushStackingContext(StackingContextItem {
+      z_index: 0,
+      creates_stacking_context: true,
+      bounds: rect,
+      plane_rect: rect,
+      mix_blend_mode: BlendMode::Normal,
+      is_isolated: false,
+      transform: Some(transform),
+      child_perspective: None,
+      transform_style: TransformStyle::Flat,
+      backface_visibility: BackfaceVisibility::Visible,
+      filters,
+      backdrop_filters: Vec::new(),
+      radii: BorderRadii::ZERO,
+      mask: None,
+    }));
+    list.push(DisplayItem::FillRect(FillRectItem {
+      rect,
+      color: Rgba::RED,
+    }));
+    list.push(DisplayItem::PopStackingContext);
+
+    DisplayListRenderer::new(80, 80, Rgba::WHITE, FontContext::new())
+      .unwrap()
+      .render(&list)
+      .unwrap()
+  };
+
+  let baseline = render(Vec::new());
+  let blurred = render(vec![ResolvedFilter::Blur(8.0)]);
+
+  let baseline_bbox =
+    bounding_box_for_color(&baseline, red_predicate).expect("baseline red bbox");
+  let blurred_bbox = bounding_box_for_color(&blurred, red_predicate).expect("blurred red bbox");
+
+  assert!(
+    blurred_bbox.0 <= baseline_bbox.0
+      && blurred_bbox.1 <= baseline_bbox.1
+      && blurred_bbox.2 >= baseline_bbox.2
+      && blurred_bbox.3 >= baseline_bbox.3,
+    "blurred bounds should enclose baseline bounds: baseline={baseline_bbox:?} blurred={blurred_bbox:?}"
+  );
+
+  let mut found_outset = false;
+  for y in 0..blurred.height() {
+    for x in 0..blurred.width() {
+      if x >= baseline_bbox.0
+        && x <= baseline_bbox.2
+        && y >= baseline_bbox.1
+        && y <= baseline_bbox.3
+      {
+        continue;
+      }
+      let rgba = pixel(&blurred, x, y);
+      if red_predicate(rgba) {
+        found_outset = true;
+        break;
+      }
+    }
+    if found_outset {
+      break;
+    }
+  }
+  assert!(found_outset, "expected some blurred pixels outside baseline bbox");
+}
+
+#[test]
 fn many_perspective_layers_use_cropped_surfaces() {
   let renderer = DisplayListRenderer::new(4000, 4000, Rgba::WHITE, FontContext::new()).unwrap();
   let mut list = DisplayList::new();
@@ -2973,7 +3095,8 @@ fn perspective_rotate_y_renders_projective_shape() {
 
   let renderer = DisplayListRenderer::new(80, 80, Rgba::WHITE, FontContext::new()).unwrap();
   let pixmap = renderer.render(&list).expect("render");
-  let bbox = bounding_box_for_color(&pixmap, |(_, _, _, a)| a > 0).expect("red pixels");
+  let bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| r != 255 || g != 255 || b != 255)
+    .expect("red pixels");
   let actual_width = (bbox.2 as i32 - bbox.0 as i32 + 1) as f32;
   let actual_height = (bbox.3 as i32 - bbox.1 as i32 + 1) as f32;
 
@@ -3072,7 +3195,8 @@ fn rotate_y_without_perspective_stays_affine() {
 
   let renderer = DisplayListRenderer::new(60, 60, Rgba::WHITE, FontContext::new()).unwrap();
   let pixmap = renderer.render(&list).expect("render");
-  let bbox = bounding_box_for_color(&pixmap, |(_, _, _, a)| a > 0).expect("blue pixels");
+  let bbox = bounding_box_for_color(&pixmap, |(r, g, b, _)| r != 255 || g != 255 || b != 255)
+    .expect("blue pixels");
   let actual_width = (bbox.2 as i32 - bbox.0 as i32 + 1) as f32;
 
   let expected_width = rect.width() * std::f32::consts::FRAC_PI_4.cos();

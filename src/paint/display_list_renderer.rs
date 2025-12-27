@@ -3193,10 +3193,12 @@ impl DisplayListRenderer {
         };
 
         let parent_transform = self.canvas.transform();
+        let mut local_skia_transform: Option<Transform> = None;
         let mut combined_transform = parent_transform;
         if projective_transform.is_none() && item.transform.is_some() {
           let (t, valid) = self.to_skia_transform_checked(&local_transform);
           if valid {
+            local_skia_transform = Some(t);
             combined_transform = combined_transform.post_concat(t);
           }
         }
@@ -3214,13 +3216,14 @@ impl DisplayListRenderer {
           .unwrap_or(perspective_base);
         self.perspective_stack.push(next_perspective);
 
-        let backdrop_transform = if projective_transform.is_some() {
-          parent_transform
-        } else {
-          combined_transform
-        };
         let pending_backdrop = if has_backdrop {
-          let backdrop_bounds = transform_rect(bounds, &backdrop_transform);
+          let backdrop_bounds = if let Some(projective_transform) = projective_transform.as_ref() {
+            let projected_css = projective_transform.transform_rect(css_bounds);
+            let projected_device = self.ds_rect(projected_css);
+            transform_rect(projected_device, &parent_transform)
+          } else {
+            transform_rect(bounds, &combined_transform)
+          };
           Some(PendingBackdrop {
             bounds: backdrop_bounds,
             filters: scaled_backdrop.clone(),
@@ -3255,6 +3258,11 @@ impl DisplayListRenderer {
             )
           })
           .flatten();
+        let layer_origin = if needs_layer && !has_backdrop {
+          layer_bounds.map(|rect| (rect.min_x().floor(), rect.min_y().floor()))
+        } else {
+          None
+        };
         if needs_layer {
           let bounded_rect = if has_backdrop { None } else { layer_bounds };
           if manual_blend.is_some() {
@@ -3298,8 +3306,12 @@ impl DisplayListRenderer {
           pending_backdrop,
         });
 
-        if projective_transform.is_none() && item.transform.is_some() {
-          self.canvas.set_transform(combined_transform);
+        if let Some(t) = local_skia_transform {
+          let mut layer_transform = parent_transform.post_concat(t);
+          if let Some((origin_x, origin_y)) = layer_origin {
+            layer_transform = layer_transform.post_translate(-origin_x, -origin_y);
+          }
+          self.canvas.set_transform(layer_transform);
         }
       }
       DisplayItem::PopStackingContext => {
@@ -3398,11 +3410,29 @@ impl DisplayListRenderer {
           }
 
           if let Some(projective_transform) = record.projective_transform {
+            let warp_bounds = if record.filters.is_empty() {
+              record.css_bounds
+            } else {
+              let (out_l, out_t, out_r, out_b) =
+                filter_outset_with_bounds(&record.filters, 1.0, Some(record.css_bounds)).as_tuple();
+              let expanded = Rect::from_xywh(
+                record.css_bounds.x() - out_l,
+                record.css_bounds.y() - out_t,
+                record.css_bounds.width() + out_l + out_r,
+                record.css_bounds.height() + out_t + out_b,
+              );
+              if expanded.width() > 0.0 && expanded.height() > 0.0 {
+                expanded
+              } else {
+                record.css_bounds
+              }
+            };
+
             let corners = [
-              (record.css_bounds.min_x(), record.css_bounds.min_y()),
-              (record.css_bounds.max_x(), record.css_bounds.min_y()),
-              (record.css_bounds.max_x(), record.css_bounds.max_y()),
-              (record.css_bounds.min_x(), record.css_bounds.max_y()),
+              (warp_bounds.min_x(), warp_bounds.min_y()),
+              (warp_bounds.max_x(), warp_bounds.min_y()),
+              (warp_bounds.max_x(), warp_bounds.max_y()),
+              (warp_bounds.min_x(), warp_bounds.max_y()),
             ];
             let mut src_quad = [Point::ZERO; 4];
             let mut dst_quad_points = [Point::ZERO; 4];
