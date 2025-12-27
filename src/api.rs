@@ -4595,26 +4595,39 @@ impl FastRender {
     let fallback_page_size = viewport_size;
     let page_rules =
       stylesheet.collect_page_rules_with_cache(&media_ctx, Some(&mut media_query_cache));
-    let page_name_hint = find_first_page_name(&styled_tree);
+    let mut page_name_hint = None;
     let mut layout_viewport = fallback_page_size;
     let mut first_page_style = None;
     let mut page_base_style: Option<Arc<ComputedStyle>> = None;
     if !page_rules.is_empty() {
-      fn find_body_style(node: &crate::style::cascade::StyledNode) -> Option<&ComputedStyle> {
+      fn find_body_node(node: &crate::style::cascade::StyledNode) -> Option<&crate::style::cascade::StyledNode> {
         if let crate::dom::DomNodeType::Element { tag_name, .. } = &node.node.node_type {
           if tag_name.eq_ignore_ascii_case("body") {
-            return Some(&node.styles);
+            return Some(node);
           }
         }
         for child in &node.children {
-          if let Some(style) = find_body_style(child) {
-            return Some(style);
+          if let Some(node) = find_body_node(child) {
+            return Some(node);
           }
         }
         None
       }
 
-      let base_style = find_body_style(&styled_tree).unwrap_or(&styled_tree.styles);
+      let body_node = find_body_node(&styled_tree);
+      let base_style = body_node.map(|node| &node.styles).unwrap_or(&styled_tree.styles);
+      page_name_hint = body_node
+        .and_then(|node| {
+          if node.styles.page.is_some() {
+            return node.styles.page.clone();
+          }
+          node
+            .children
+            .iter()
+            .find(|child| matches!(child.node.node_type, crate::dom::DomNodeType::Element { .. }))
+            .and_then(|child| child.styles.page.clone())
+        })
+        .or_else(|| styled_tree.styles.page.clone());
       let base_style = Arc::new(base_style.clone());
       let style = resolve_page_style(
         &page_rules,
@@ -7189,18 +7202,6 @@ fn styled_style_map(root: &StyledNode) -> HashMap<usize, Arc<ComputedStyle>> {
   let mut map = HashMap::new();
   walk(root, &mut map);
   map
-}
-
-fn find_first_page_name(node: &StyledNode) -> Option<String> {
-  if let Some(name) = &node.styles.page {
-    return Some(name.clone());
-  }
-  for child in &node.children {
-    if let Some(name) = find_first_page_name(child) {
-      return Some(name);
-    }
-  }
-  None
 }
 
 fn styled_summary_map(root: &StyledNode) -> HashMap<usize, String> {

@@ -64,7 +64,11 @@ struct CachedLayout {
 }
 
 impl CachedLayout {
-  fn from_root(root: FragmentNode, style: &ResolvedPageStyle) -> Self {
+  fn from_root(
+    root: FragmentNode,
+    style: &ResolvedPageStyle,
+    fallback_page_name: Option<&str>,
+  ) -> Self {
     let mut spans = Vec::new();
     collect_page_name_spans(&root, 0.0, &mut spans);
     spans.sort_by(|a, b| {
@@ -74,6 +78,7 @@ impl CachedLayout {
     });
 
     let mut forced = collect_forced_boundaries(&root, 0.0);
+    forced.extend(page_name_boundaries(&spans, fallback_page_name));
     let mut atomic_ranges = Vec::new();
     collect_atomic_ranges(&root, 0.0, &mut atomic_ranges);
     normalize_atomic_ranges(&mut atomic_ranges);
@@ -147,12 +152,13 @@ pub fn paginate_fragment_tree(
   let font_generation = font_ctx.font_generation();
   let mut layouts: HashMap<PageLayoutKey, CachedLayout> = HashMap::new();
   let base_style_for_margins = Some(root_style.as_ref());
+  let fallback_page_name = initial_page_name.as_deref();
 
   if let Some((style, root)) = initial_layout {
     let key = PageLayoutKey::new(style, style_hash, font_generation);
     layouts
       .entry(key)
-      .or_insert_with(|| CachedLayout::from_root(root.clone(), style));
+      .or_insert_with(|| CachedLayout::from_root(root.clone(), style, fallback_page_name));
   }
 
   let base_style = resolve_page_style(
@@ -171,6 +177,7 @@ pub fn paginate_fragment_tree(
     &mut layouts,
     box_tree,
     font_ctx,
+    fallback_page_name,
     enable_layout_cache,
   )?;
   let base_total_height = base_layout.total_height.max(EPSILON);
@@ -213,6 +220,7 @@ pub fn paginate_fragment_tree(
       &mut layouts,
       box_tree,
       font_ctx,
+      fallback_page_name,
       enable_layout_cache,
     )?;
 
@@ -242,6 +250,7 @@ pub fn paginate_fragment_tree(
         &mut layouts,
         box_tree,
         font_ctx,
+        fallback_page_name,
         enable_layout_cache,
       )?;
       total_height = layout.total_height;
@@ -453,15 +462,30 @@ fn page_name_for_position(
     return Some(span.name.clone());
   }
 
-  if let Some(next) = spans.iter().filter(|s| s.start >= pos).min_by(|a, b| {
-    a.start
-      .partial_cmp(&b.start)
-      .unwrap_or(std::cmp::Ordering::Equal)
-  }) {
-    return Some(next.name.clone());
+  fallback.map(|s| s.to_string())
+}
+
+fn page_name_boundaries(spans: &[PageNameSpan], fallback: Option<&str>) -> Vec<f32> {
+  if spans.is_empty() {
+    return Vec::new();
   }
 
-  fallback.map(|s| s.to_string())
+  let mut points: Vec<f32> = spans.iter().flat_map(|s| [s.start, s.end]).collect();
+  points.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+  points.dedup_by(|a, b| (*a - *b).abs() < EPSILON);
+
+  let mut boundaries = Vec::new();
+  for pos in points {
+    let before_pos = if pos > EPSILON { pos - EPSILON } else { 0.0 };
+    let after_pos = pos + EPSILON;
+    let before = page_name_for_position(spans, before_pos, fallback);
+    let after = page_name_for_position(spans, after_pos, fallback);
+    if before != after {
+      boundaries.push(pos);
+    }
+  }
+
+  boundaries
 }
 
 fn apply_page_stacking(
@@ -755,6 +779,7 @@ fn layout_for_style<'a>(
   cache: &'a mut HashMap<PageLayoutKey, CachedLayout>,
   box_tree: &BoxTree,
   font_ctx: &FontContext,
+  fallback_page_name: Option<&str>,
   enable_layout_cache: bool,
 ) -> Result<&'a CachedLayout, LayoutError> {
   if !cache.contains_key(&key) {
@@ -763,7 +788,7 @@ fn layout_for_style<'a>(
     let engine = LayoutEngine::with_font_context(config, font_ctx.clone());
     let _hint = set_fragmentainer_block_size_hint(Some(style.content_size.height));
     let layout_tree = engine.layout_tree(box_tree)?;
-    let layout = CachedLayout::from_root(layout_tree.root, style);
+    let layout = CachedLayout::from_root(layout_tree.root, style, fallback_page_name);
     cache.insert(key, layout);
   }
 

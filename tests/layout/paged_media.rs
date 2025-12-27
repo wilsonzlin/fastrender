@@ -336,6 +336,43 @@ fn named_pages_change_page_size() {
 }
 
 #[test]
+fn page_name_change_forces_page_boundary() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page { size: 200px 200px; margin: 0; }
+          @page chapter { size: 300px 200px; margin: 0; }
+          body { margin: 0; }
+          #preface { height: 150px; }
+          #chapter { page: chapter; height: 300px; }
+        </style>
+      </head>
+      <body>
+        <div id="preface">Preface</div>
+        <div id="chapter">Chapter</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 400, 400).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(page_roots.len() >= 2);
+  assert!((page_roots[0].bounds.width() - 200.0).abs() < 0.1);
+  assert!((page_roots[1].bounds.width() - 300.0).abs() < 0.1);
+
+  let first_page = page_roots[0];
+  assert!(find_text(first_page, "Preface").is_some());
+  assert!(find_text(first_page, "Chapter").is_none());
+
+  let second_page = page_roots[1];
+  assert!(find_text(second_page, "Chapter").is_some());
+}
+
+#[test]
 fn margin_box_content_is_positioned_in_margins() {
   let html = r#"
     <html>
