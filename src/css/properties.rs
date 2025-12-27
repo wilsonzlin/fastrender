@@ -1196,7 +1196,7 @@ pub(crate) fn supports_parsed_declaration_is_valid(
       )
     }
     "text-combine-upright" => {
-      if let PropertyValue::Keyword(kw) = parsed {
+      let keyword_is_valid = |kw: &str| -> bool {
         let lower = kw.to_ascii_lowercase();
         if lower == "none" || lower == "all" || lower == "digits" {
           return true;
@@ -1207,8 +1207,40 @@ pub(crate) fn supports_parsed_declaration_is_valid(
             .map(|n| (2..=4).contains(&n))
             .unwrap_or(false);
         }
-      }
-      return false;
+        false
+      };
+
+      return match parsed {
+        PropertyValue::Keyword(kw) => keyword_is_valid(kw),
+        PropertyValue::Multiple(values) => {
+          if values.is_empty() {
+            return false;
+          }
+          if let PropertyValue::Keyword(first) = &values[0] {
+            if first.eq_ignore_ascii_case("digits") {
+              if values.len() == 1 {
+                return true;
+              }
+              if values.len() == 2 {
+                let count = match &values[1] {
+                  PropertyValue::Number(n) if n.fract() == 0.0 => Some(*n as i32),
+                  PropertyValue::Keyword(kw) => kw.parse::<i32>().ok(),
+                  _ => None,
+                };
+                return count.is_some_and(|n| (2..=4).contains(&n));
+              }
+              return false;
+            }
+          }
+          if values.len() == 1 {
+            if let PropertyValue::Keyword(kw) = &values[0] {
+              return keyword_is_valid(kw);
+            }
+          }
+          false
+        }
+        _ => false,
+      };
     }
     "writing-mode" => {
       return keyword_in_list(

@@ -1896,8 +1896,8 @@ impl MediaContext {
   /// - `FASTR_MONOCHROME_DEPTH` = integer bits for monochrome devices (e.g., 1)
   #[allow(clippy::cognitive_complexity)]
   pub fn with_env_overrides(mut self) -> Self {
-    let runtime_toggles = crate::debug::runtime::runtime_toggles();
-    let overrides = &runtime_toggles.config().media;
+    let toggles = crate::debug::runtime::RuntimeToggles::from_env();
+    let overrides = &toggles.config().media;
     if let Some(mt) = overrides.media_type {
       self.media_type = mt;
     }
