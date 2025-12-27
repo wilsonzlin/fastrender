@@ -7254,7 +7254,6 @@ fn collect_fragment_sizes(fragment: &FragmentNode, sizes: &mut HashMap<usize, (f
     | FragmentContent::Replaced { box_id, .. } => *box_id,
     FragmentContent::RunningAnchor { .. } => None,
     FragmentContent::Line { .. } => None,
-    FragmentContent::RunningAnchor { .. } => None,
   };
 
   if let Some(id) = box_id {
@@ -7530,7 +7529,6 @@ fn fragment_box_id(fragment: &FragmentNode) -> Option<usize> {
     | FragmentContent::Replaced { box_id, .. } => *box_id,
     FragmentContent::RunningAnchor { .. } => None,
     FragmentContent::Line { .. } => None,
-    FragmentContent::RunningAnchor { .. } => None,
   }
 }
 

@@ -776,7 +776,6 @@ impl Default for ComputedStyle {
       scroll_margin_right: Length::px(0.0),
       scroll_margin_bottom: Length::px(0.0),
       scroll_margin_left: Length::px(0.0),
-      running_position: None,
       scrollbar_gutter: ScrollbarGutter::default(),
       overflow_anchor: OverflowAnchor::Auto,
       pointer_events: PointerEvents::Auto,

@@ -286,7 +286,6 @@ fn fragment_box_id(fragment: &FragmentNode) -> Option<usize> {
     | FragmentContent::Replaced { box_id, .. } => *box_id,
     FragmentContent::RunningAnchor { .. } => None,
     FragmentContent::Line { .. } => None,
-    FragmentContent::RunningAnchor { .. } => None,
   }
 }
 

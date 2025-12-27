@@ -192,6 +192,8 @@ pub fn paginate_fragment_tree(
   initial_page_name: Option<String>,
   enable_layout_cache: bool,
 ) -> Result<Vec<FragmentNode>, LayoutError> {
+  let log_running_elements =
+    crate::debug::runtime::runtime_toggles().truthy("FASTR_LOG_RUNNING_ELEMENTS");
   if rules.is_empty() {
     if let Some((_, root)) = initial_layout {
       return Ok(vec![root.clone()]);
@@ -375,6 +377,48 @@ pub fn paginate_fragment_tree(
           page_style.content_origin.y,
         );
         page_running_elements = collect_running_elements_for_page(&content);
+        if log_running_elements {
+          let mut counts: HashMap<String, usize> = HashMap::new();
+          fn collect(node: &FragmentNode, out: &mut HashMap<String, usize>) {
+            if let FragmentContent::RunningAnchor { name, .. } = &node.content {
+              *out.entry(name.clone()).or_insert(0) += 1;
+            }
+            for child in &node.children {
+              collect(child, out);
+            }
+          }
+          fn first_text(node: &FragmentNode) -> Option<String> {
+            match &node.content {
+              FragmentContent::Text { text, .. } => Some(text.clone()),
+              _ => {
+                for child in &node.children {
+                  if let Some(found) = first_text(child) {
+                    return Some(found);
+                  }
+                }
+                None
+              }
+            }
+          }
+          collect(&content, &mut counts);
+          let mut previews: HashMap<String, Vec<String>> = HashMap::new();
+          for (name, snapshots) in &page_running_elements {
+            let mut texts = Vec::new();
+            for snap in snapshots {
+              if let Some(text) = first_text(snap) {
+                let preview: String = text.chars().take(80).collect();
+                texts.push(preview);
+              }
+            }
+            previews.insert(name.clone(), texts);
+          }
+          eprintln!(
+            "[paginate-running] page={} anchors={:?} selected={:?}",
+            page_index,
+            counts,
+            previews
+          );
+        }
         page_root.children.push(content);
       }
 

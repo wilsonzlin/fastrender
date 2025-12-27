@@ -32,6 +32,20 @@ fn find_in_margin_boxes<'a>(page: &'a FragmentNode, needle: &str) -> Option<&'a 
     .find_map(|child| find_text(child, needle))
 }
 
+fn strip_ws(s: &str) -> String {
+  s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+fn margin_boxes_contain_text(page: &FragmentNode, needle: &str) -> bool {
+  let needle = strip_ws(needle);
+  page
+    .children
+    .iter()
+    .skip(1)
+    .map(collected_text_compacted)
+    .any(|text| text.contains(&needle))
+}
+
 fn find_text_eq<'a>(node: &'a FragmentNode, needle: &str) -> Option<&'a FragmentNode> {
   if let FragmentContent::Text { text, .. } = &node.content {
     if text == needle {
@@ -464,11 +478,11 @@ fn running_header_carries_forward() {
   let page2 = page_roots[1];
 
   assert!(
-    find_in_margin_boxes(page1, "Chapter Title").is_some(),
+    margin_boxes_contain_text(page1, "Chapter Title"),
     "page 1 should show running header in margin"
   );
   assert!(
-    find_in_margin_boxes(page2, "Chapter Title").is_some(),
+    margin_boxes_contain_text(page2, "Chapter Title"),
     "page 2 should carry forward running header"
   );
 }
@@ -500,15 +514,20 @@ fn element_last_uses_last_anchor_on_page() {
   let tree = renderer.layout_document(&dom, 400, 400).unwrap();
   let page = pages(&tree)[0];
 
-  let margin_header = find_in_margin_boxes(page, "Header").expect("margin header");
-  if let FragmentContent::Text { text, .. } = &margin_header.content {
-    assert!(
-      text.contains("Second"),
-      "element(header, last) should pick the last running element on the page"
-    );
-  } else {
-    panic!("expected text fragment for margin header");
-  }
+  let margin_texts: Vec<String> = page
+    .children
+    .iter()
+    .skip(1)
+    .map(collected_text_compacted)
+    .collect();
+  assert!(
+    margin_texts.iter().any(|text| text.contains("SecondHeader")),
+    "element(header, last) should pick the last running element on the page"
+  );
+  assert!(
+    !margin_texts.iter().any(|text| text.contains("FirstHeader")),
+    "element(header, last) should not pick the first running element"
+  );
 }
 
 #[test]
